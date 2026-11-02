@@ -59,7 +59,7 @@ export const SKY_SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { keys: ["drag"], what: "Move a line by its bar (the selected ones go together)" },
       { keys: ["Alt", "drag"], what: "Move without snapping to the others" },
-      { keys: ["T"], what: "Tidy: every line back in its place" },
+      { keys: ["T"], what: "Tidy: every line back in its place, every window minimised" },
       { keys: ["Ctrl", "N"], what: "A new session block (Alt+N in a browser tab)" },
       { keys: ["Ctrl", "Y"], what: "Switch between the grid and the sky" },
     ],

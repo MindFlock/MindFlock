@@ -15,6 +15,34 @@ const timers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
 const MAIN_ID = "cs-toast";
 const HELD_ID = "cs-toast-held";
 
+/** The toast's resting height over the window's foot, and how far the held
+ * slot sits above the newest one (the CSS defaults: 18px and 60px). */
+const BASE_BOTTOM = 18;
+const HELD_STEP = 42;
+/** Half the width a toast is judged by when checking what it would cover. */
+const HALF_WIDTH = 180;
+
+/** How high the toasts sit: 18px over the window's foot, or clear of a bar
+ * along the foot that marks itself `data-toast-clear` (the Sky's shelf of
+ * stops) when it is on screen under the centred toast — an Undo must never
+ * cover the controls the next action needs. Measured at show time, so a
+ * folded, hidden or resized bar is read as it is now. */
+export function toastBottom(): number {
+  let lift = BASE_BOTTOM;
+  if (typeof document === "undefined" || typeof window === "undefined" || !document.querySelectorAll) return lift;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const cx = vw / 2;
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-toast-clear]"))) {
+    const r = el.getBoundingClientRect();
+    // Hidden (a kept-alive pane), off to one side, or not along the foot.
+    if (!r.height || !r.width || r.right < cx - HALF_WIDTH || r.left > cx + HALF_WIDTH) continue;
+    if (r.top < vh / 2 || r.top >= vh) continue;
+    lift = Math.max(lift, Math.round(vh - r.top + 10));
+  }
+  return lift;
+}
+
 /** A real button inside the toast — the thing to press, rather than the whole
  * toast being the click target. */
 export interface ToastAction {
@@ -96,6 +124,7 @@ export function toast(msg: string, opts?: ToastOpts) {
     dropHeld();
     el.id = HELD_ID;
     el.classList.add("held");
+    if (el.style) el.style.bottom = toastBottom() + HELD_STEP + "px";
     el = null;
   }
   if (!el) {
@@ -104,6 +133,7 @@ export function toast(msg: string, opts?: ToastOpts) {
     document.body.appendChild(el);
   }
   const box = el as HTMLElement;
+  if (box.style) box.style.bottom = toastBottom() + "px";
   const err = o.error ?? looksLikeError(msg);
   // A live region: read out when it changes — politely, or at once for an error.
   box.setAttribute?.("role", err ? "alert" : "status");

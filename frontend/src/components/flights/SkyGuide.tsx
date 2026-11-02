@@ -59,7 +59,7 @@ export const SKY_GUIDE_KEYS: readonly (readonly [string, string])[] = [
   ["0", "Fit every line, titles still readable"],
   ["1", "Fit the focused line to the window"],
   ["+ / −", "Zoom in / out (Ctrl+wheel too)"],
-  ["T", "Tidy: every line back in its place"],
+  ["T", "Tidy: every line back in its place, every window minimised"],
   ["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
   ["Delete", "Remove the selected box"],
   ["Esc", "Clear the selection, fold an open session, cancel a pick"],
@@ -253,7 +253,7 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
     <>
       <p>Each session draws as a <b>frame</b> — a soft box in the session's own colour — round its <b>chain</b>. The frame's <b>bar</b> carries the session's name, its branch, its state and a <b>⋯</b> menu (open it here, open it in the grid, show only this chain, add a stop, close the session); a double-click on the bar renames it.</p>
       <p>Inside, the first tile is the session's <b>agent</b> ("Claude", "Codex"…): what it is doing now, its state and the bird. A click opens its real terminal in the tile's place (a double-click on the card's top folds it back); a right-click offers <b>Open terminal</b>, <b>Send a prompt…</b> and <b>Stop</b>, then the session's own menu. Its out port starts the chain: its stops follow as free-floating <b>tiles</b> joined by <b>wires</b>. A <b>sub-session</b> is a small frame of its own under its parent's agent — its own agent, its state, and its own chain when it flies one; click its agent to open it in place.</p>
-      <p>Drag a session by its frame's bar (or its agent tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place; the ⋯'s <b>Tidy this line</b> does one.</p>
+      <p>Drag a session by its frame's bar (or its agent tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place and minimises every open window back to its box; the ⋯'s <b>Tidy this line</b> does one.</p>
       <p>Every tile has an <b>in port</b> (the square on its left) and an <b>out port</b> (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The <b>+</b> after the last tile does the same — or just click it. Grab a wire by a tile's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own.</p>
     </>
   ),

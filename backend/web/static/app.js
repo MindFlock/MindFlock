@@ -24633,6 +24633,23 @@ function nudgeUsage(now, lastRefreshAt, trailingQueued, coalesceMs = USAGE_COALE
 var timers$1 = /* @__PURE__ */ new WeakMap();
 var MAIN_ID = "cs-toast";
 var HELD_ID = "cs-toast-held";
+var BASE_BOTTOM = 18;
+var HELD_STEP = 42;
+var HALF_WIDTH = 180;
+function toastBottom() {
+	let lift = BASE_BOTTOM;
+	if (typeof document === "undefined" || typeof window === "undefined" || !document.querySelectorAll) return lift;
+	const vw = window.innerWidth;
+	const vh = window.innerHeight;
+	const cx = vw / 2;
+	for (const el of Array.from(document.querySelectorAll("[data-toast-clear]"))) {
+		const r = el.getBoundingClientRect();
+		if (!r.height || !r.width || r.right < cx - HALF_WIDTH || r.left > cx + HALF_WIDTH) continue;
+		if (r.top < vh / 2 || r.top >= vh) continue;
+		lift = Math.max(lift, Math.round(vh - r.top + 10));
+	}
+	return lift;
+}
 var ACTION_LINGER_MS = 2e3;
 function looksLikeError(msg) {
 	return /^(couldn[’']t|could not|can[’']t|cannot|error\b)|\bfailed\b/i.test(String(msg || "").trim());
@@ -24668,6 +24685,7 @@ function toast(msg, opts) {
 		dropHeld();
 		el.id = HELD_ID;
 		el.classList.add("held");
+		if (el.style) el.style.bottom = toastBottom() + HELD_STEP + "px";
 		el = null;
 	}
 	if (!el) {
@@ -24676,6 +24694,7 @@ function toast(msg, opts) {
 		document.body.appendChild(el);
 	}
 	const box = el;
+	if (box.style) box.style.bottom = toastBottom() + "px";
 	const err = o.error ?? looksLikeError(msg);
 	box.setAttribute?.("role", err ? "alert" : "status");
 	box.setAttribute?.("aria-live", err ? "assertive" : "polite");
@@ -82806,6 +82825,20 @@ function tidySkyLayout(all, title, store = local()) {
 	}
 	return saveSkyLayout(next, store);
 }
+function closeSkyWindows(all, titles, store = local()) {
+	const next = {};
+	let changed = false;
+	for (const [k, v] of Object.entries(all)) {
+		if (!v.open || k === INTAKE_KEY || titles && !titles.includes(k)) {
+			next[k] = v;
+			continue;
+		}
+		changed = true;
+		const { open: _o, ...rest } = v;
+		if (Object.keys(rest).length) next[k] = rest;
+	}
+	return changed ? saveSkyLayout(next, store) : all;
+}
 function pinnedPositions(all) {
 	const out = {};
 	for (const [k, v] of Object.entries(all)) if (v.pinned && Number.isFinite(v.x) && Number.isFinite(v.y)) out[k] = {
@@ -92577,7 +92610,7 @@ var SKY_GUIDE_KEYS = [
 	["0", "Fit every line, titles still readable"],
 	["1", "Fit the focused line to the window"],
 	["+ / −", "Zoom in / out (Ctrl+wheel too)"],
-	["T", "Tidy: every line back in its place"],
+	["T", "Tidy: every line back in its place, every window minimised"],
 	["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
 	["Delete", "Remove the selected box"],
 	["Esc", "Clear the selection, fold an open session, cancel a pick"],
@@ -93170,7 +93203,7 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
 			" (",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
-			") puts every chain back in its place; the ⋯'s ",
+			") puts every chain back in its place and minimises every open window back to its box; the ⋯'s ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy this line" }),
 			" does one."
 		] }),
@@ -130959,6 +130992,7 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "sky-shelf" + (folded ? " folded" : " open"),
 		"data-tour": "sky-shelf",
+		"data-toast-clear": true,
 		"aria-label": "The shelf of stops",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -137397,12 +137431,12 @@ function SkyView() {
 	}, [shelfAsk, plansLoaded]);
 	const newHere = () => setNewAt(middle());
 	const onLayout = (0, import_react.useCallback)((id, patch) => {
-		setLayout((l) => patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch));
+		setLayout((l) => patch.pinned === false ? closeSkyWindows(tidySkyLayout(l, id), [id]) : patchSkyLine(l, id, patch));
 	}, []);
 	const tidyTimer = (0, import_react.useRef)(void 0);
 	const tidy = () => {
 		setAutoPos({});
-		setLayout((l) => tidySkyLayout(l));
+		setLayout((l) => closeSkyWindows(tidySkyLayout(l)));
 		if (motionOff) return;
 		setTidying(true);
 		clearTimeout(tidyTimer.current);
@@ -137410,7 +137444,7 @@ function SkyView() {
 	};
 	const tidyThese = (ids) => {
 		setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !ids.includes(id))));
-		setLayout((l) => ids.reduce((acc, id) => tidySkyLayout(acc, id), l));
+		setLayout((l) => closeSkyWindows(ids.reduce((acc, id) => tidySkyLayout(acc, id), l), ids));
 		clearSel();
 		if (motionOff) return;
 		setTidying(true);

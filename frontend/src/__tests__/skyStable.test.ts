@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { code, css } from "./sourceText";
-import { LINES_LEFT, NEW_SESSION_MIME, SKY_GAP, SKY_MARGIN, assignSpots, tidySkyLayout, type LineBox, type PlacedLine, type Pos } from "../lib/skyLayout";
+import { LINES_LEFT, NEW_SESSION_MIME, SKY_GAP, SKY_MARGIN, assignSpots, closeSkyWindows, tidySkyLayout, type LineBox, type PlacedLine, type Pos } from "../lib/skyLayout";
 
 const AREA = { width: 2000, left: LINES_LEFT, top: SKY_MARGIN };
 const overlap = (a: PlacedLine, b: PlacedLine) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -89,7 +89,7 @@ describe("assignSpots", () => {
     const store = { getItem: () => null, setItem: () => {} };
     expect(tidySkyLayout({ b: { x: 50, y: 1400, pinned: true, size: "wide" } }, undefined, store)).toEqual({ b: { size: "wide" } });
     const sky = code("components/flights/SkyView.tsx");
-    expect(sky).toMatch(/const tidy = \(\) => \{\s*setAutoPos\(\{\}\);\s*setLayout\(\(l\) => tidySkyLayout\(l\)\);/);
+    expect(sky).toMatch(/const tidy = \(\) => \{\s*setAutoPos\(\{\}\);\s*setLayout\(\(l\) => closeSkyWindows\(tidySkyLayout\(l\)\)\);/);
   });
 });
 
@@ -184,5 +184,33 @@ describe("the Session chip drags onto the sky", () => {
     const sheet = css("components/flights/NewSessionBlock.css");
     expect(sheet).toMatch(/\.sky-new-head\.is-movable \{[^}]*cursor: move;/);
     expect(sheet).toMatch(/\.light \.sky-new\.fl-form \{/);
+  });
+});
+
+/** The owner, 2026-11-02: "when we tidy we minimize all open windows in sky
+ * mode". Tidy forgets the spots AND closes every session window back to its
+ * box; the pane keeps its size for the next open, the intake drawer stays. */
+describe("Tidy minimises the open windows", () => {
+  const mem = () => {
+    const m = new Map<string, string>();
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) };
+  };
+  it("closes every line's window, keeps its pane size, leaves the intake lane", () => {
+    const all = { a: { open: true, paneW: 700 }, b: { open: true }, c: { size: "wide" as const }, intake: { open: true } };
+    expect(closeSkyWindows(all, undefined, mem())).toEqual({ a: { paneW: 700 }, c: { size: "wide" }, intake: { open: true } });
+  });
+  it("closes only the named lines' windows", () => {
+    const all = { a: { open: true }, b: { open: true } };
+    expect(closeSkyWindows(all, ["b"], mem())).toEqual({ a: { open: true } });
+  });
+  it("hands back the same map when nothing was open", () => {
+    const all = { a: { size: "wide" as const } };
+    expect(closeSkyWindows(all, undefined, mem())).toBe(all);
+  });
+  it("every Tidy minimises: T, Tidy these, Tidy this line", () => {
+    const sky = code("components/flights/SkyView.tsx");
+    expect(sky).toContain("setLayout((l) => closeSkyWindows(tidySkyLayout(l)));");
+    expect(sky).toContain("closeSkyWindows(ids.reduce((acc, id) => tidySkyLayout(acc, id), l), ids)");
+    expect(sky).toContain("closeSkyWindows(tidySkyLayout(l, id), [id])");
   });
 });

@@ -625,6 +625,25 @@ export function tidySkyLayout(all: Readonly<SkyLayoutMap>, title?: string, store
   return saveSkyLayout(next, store);
 }
 
+/** Tidy's other half: every open session window on the sky minimised back to
+ * its box — every line's, or just `titles`'. The pane's size is kept, so the
+ * window opens again as it was; the intake lane is a drawer, not a window,
+ * and stays as it is. */
+export function closeSkyWindows(all: Readonly<SkyLayoutMap>, titles?: readonly string[], store: Store | null = local()): SkyLayoutMap {
+  const next: SkyLayoutMap = {};
+  let changed = false;
+  for (const [k, v] of Object.entries(all)) {
+    if (!v.open || k === INTAKE_KEY || (titles && !titles.includes(k))) {
+      next[k] = v;
+      continue;
+    }
+    changed = true;
+    const { open: _o, ...rest } = v;
+    if (Object.keys(rest).length) next[k] = rest;
+  }
+  return changed ? saveSkyLayout(next, store) : (all as SkyLayoutMap);
+}
+
 /** The positions placeLines keeps: the pinned lines'. */
 export function pinnedPositions(all: Readonly<SkyLayoutMap>): Record<string, Pos> {
   const out: Record<string, Pos> = {};

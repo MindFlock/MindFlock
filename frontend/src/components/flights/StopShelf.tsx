@@ -470,7 +470,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
   };
 
   return (
-    <section className={"sky-shelf" + (folded ? " folded" : " open")} data-tour="sky-shelf" aria-label="The shelf of stops">
+    <section className={"sky-shelf" + (folded ? " folded" : " open")} data-tour="sky-shelf" data-toast-clear aria-label="The shelf of stops">
       <span className="sky-shelf-tabs">
         <button
           type="button"

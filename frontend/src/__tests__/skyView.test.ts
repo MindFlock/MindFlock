@@ -295,7 +295,7 @@ describe("the layout store", () => {
     expect(sky.tidySkyLayout(all, "b", s)).toEqual({ a: all.a, c: { open: true } });
     expect(sky.pinnedPositions(all)).toEqual({ a: { x: 1, y: 2 }, b: { x: 3, y: 4 } });
     // The host reads `{ pinned: false }` from a line as "Tidy this line".
-    expect(code("components/flights/SkyView.tsx")).toContain("patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch)");
+    expect(code("components/flights/SkyView.tsx")).toContain("patch.pinned === false ? closeSkyWindows(tidySkyLayout(l, id), [id]) : patchSkyLine(l, id, patch)");
   });
 
   it("sizes cycle compact → normal → wide, and a line's layout fills the defaults", () => {

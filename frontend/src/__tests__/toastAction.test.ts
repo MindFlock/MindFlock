@@ -4,7 +4,7 @@
  * older whole-toast onClick keeps working for the callers that use it. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { looksLikeError, toast, toastDuration } from "../lib/toast";
+import { looksLikeError, toast, toastBottom, toastDuration } from "../lib/toast";
 import { CLOSED_UNDO_HINT } from "../lib/sessionActions";
 import { code, normCode } from "./sourceText";
 
@@ -14,6 +14,7 @@ class FakeEl {
   type = "";
   className = "";
   title = "";
+  style: Record<string, string> = {};
   tagName: string;
   children: FakeEl[] = [];
   attrs: Record<string, string> = {};
@@ -260,5 +261,52 @@ describe("the Close toast uses it", () => {
     expect(css).toContain("#cs-toast .cs-toast-act:focus-visible, #cs-toast-held .cs-toast-act:focus-visible {");
     // The held slot sits one slot up, on the same card.
     expect(css).toContain("#cs-toast-held {");
+  });
+});
+
+/** The Sky's shelf of stops sits along the window's foot; an Undo toast at the
+ * usual 18px covered it — the very controls the next action needs. A bar that
+ * marks itself `data-toast-clear` now pushes the toasts up over it. */
+describe("toasts clear a bar along the foot", () => {
+  const w = globalThis as unknown as { window?: unknown };
+  let prevWin: unknown;
+  let bars: { getBoundingClientRect(): { top: number; left: number; right: number; width: number; height: number } }[];
+  const bar = (top: number, left = 0, right = 1000) => ({
+    getBoundingClientRect: () => ({ top, left, right, width: right - left, height: top < 800 ? 800 - top : 0 }),
+  });
+  beforeEach(() => {
+    prevWin = w.window;
+    w.window = { innerWidth: 1000, innerHeight: 800 };
+    bars = [];
+    (g.document as Record<string, unknown>).querySelectorAll = (q: string) => (q === "[data-toast-clear]" ? bars : []);
+  });
+  afterEach(() => {
+    if (prevWin === undefined) delete w.window;
+    else w.window = prevWin;
+  });
+
+  it("sits 18px up with no bar", () => {
+    expect(toastBottom()).toBe(18);
+    toast("Saved");
+    expect(box().style.bottom).toBe("18px");
+  });
+
+  it("rises 10px over a shelf under it, and the held Undo steps up from there", () => {
+    bars = [bar(700)];
+    expect(toastBottom()).toBe(110);
+    toast("Removed “x”", { action: { label: "Undo", onClick: () => {} } });
+    expect(box().style.bottom).toBe("110px");
+    toast("Saved");
+    expect(body.children.find((c) => c.id === "cs-toast-held")!.style.bottom).toBe("152px");
+    expect(box().style.bottom).toBe("110px");
+  });
+
+  it("ignores a hidden bar, one off to the side, and one not along the foot", () => {
+    bars = [bar(800), bar(700, 0, 200), bar(100)];
+    expect(toastBottom()).toBe(18);
+  });
+
+  it("the shelf marks itself", () => {
+    expect(code("components/flights/StopShelf.tsx")).toContain('data-tour="sky-shelf" data-toast-clear');
   });
 });

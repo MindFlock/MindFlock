@@ -194,6 +194,7 @@ import {
   skyLineTitles,
   spotNear,
   tidySkyLayout,
+  closeSkyWindows,
   toPlane,
   zoomAt,
   type PlacedLine,
@@ -901,25 +902,27 @@ export function SkyView() {
 
   const onLayout = useCallback((id: string, patch: Partial<SkyLineLayout>) => {
     // `{ pinned: false }` is "Tidy this line": its spot is forgotten.
-    setLayout((l) => (patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch)));
+    setLayout((l) => (patch.pinned === false ? closeSkyWindows(tidySkyLayout(l, id), [id]) : patchSkyLine(l, id, patch)));
   }, []);
   /** Every line back to its organized spot: the pins and the given spots
    * are forgotten, every line is placed again, and they glide there — the
    * only glide on the sky (`data-tidying` turns the slots' transition on for
-   * a moment). The camera stays where it is. */
+   * a moment), and every open session window is minimised back to its box.
+   * The camera stays where it is. */
   const tidyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const tidy = () => {
     setAutoPos({});
-    setLayout((l) => tidySkyLayout(l));
+    setLayout((l) => closeSkyWindows(tidySkyLayout(l)));
     if (motionOff) return;
     setTidying(true);
     clearTimeout(tidyTimer.current);
     tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
   };
-  /** Tidy these (the selection bar): only their spots are forgotten. */
+  /** Tidy these (the selection bar): only their spots are forgotten, only
+   * their windows minimised. */
   const tidyThese = (ids: string[]) => {
     setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !ids.includes(id))));
-    setLayout((l) => ids.reduce((acc, id) => tidySkyLayout(acc, id), l));
+    setLayout((l) => closeSkyWindows(ids.reduce((acc, id) => tidySkyLayout(acc, id), l), ids));
     clearSel();
     if (motionOff) return;
     setTidying(true);
