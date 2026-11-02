@@ -196,6 +196,19 @@ export function spotNear(want: Pos, taken: readonly Rect[], size: { w: number; h
   return (within && search(true)) || search(false) || { x: Math.round(want.x), y: Math.round(want.y) };
 }
 
+/** What a sky object that GREW where it sits now covers: the placed lines
+ * `movable` (the caller passes only lines it may move — auto-placed, never
+ * pinned) that overlap it at its new size and did not at its old one. The
+ * lane grows when a source or items arrive or the owner expands it (▸ / ▾);
+ * those lines make way (they are placed again, clear of it). Moved (a drag,
+ * a drop) or not grown: nothing — the sky never shoves a line for a move. */
+export function grownOver(was: Rect | null, now: Rect | null, movable: readonly PlacedLine[]): string[] {
+  if (!was || !now || was.x !== now.x || was.y !== now.y || (now.w <= was.w && now.h <= was.h)) return [];
+  return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
+}
+
+/** The lane's room: the frame the owner gave it, else its measure (at full
+ * detail — `FULL_DETAIL_LODS`), else a guess. */
 export function intakeSize(stored: StoredLine | undefined, measured?: { w: number; h: number }): { w: number; h: number } {
   const frame = intakeFrame(stored);
   if (frame) return frame;
@@ -391,6 +404,21 @@ export const LOD_MID = 0.62;
 export const LOD_NEAR = 1.15;
 
 export const lodFor = (z: number): Lod => (!(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near");
+
+/** The intake lane's room, once measured, is its measure (unless the owner
+ * sized its frame) — and that measure must be its FULL-detail size, whatever
+ * the zoom draws now: the lane's level of detail (`.sky-intake[data-lod]`,
+ * IntakeLane.css) hides its badges, chips and waiting items at far and grows
+ * its type at mid, so the Fit lane is a fraction of the 100 % one. Lines are
+ * placed once (`assignSpots`), so a lane measured compact would let lines
+ * settle where the full lane later draws over them. The view measures the
+ * lane at each of these (a hidden copy of its drawn lane, same width) and
+ * keeps the tallest, with what it draws now: mid at the zoom its type grows
+ * most, and plain near. */
+export const FULL_DETAIL_LODS: ReadonlyArray<{ lod: Lod; z: number }> = [
+  { lod: "mid", z: LOD_MID },
+  { lod: "near", z: 1 },
+];
 
 /** The lines of a near box's longer texts (its summary, its detail): more the
  * closer the camera — the plane type shrinks as the zoom grows, so the box's
