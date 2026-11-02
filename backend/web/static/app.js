@@ -84938,8 +84938,8 @@ function chainGraph(d, opts) {
 			} : n,
 			x: pos ? pos.x : 0,
 			y: pos ? pos.y : 0,
-			w: NODE_W,
-			h: NODE_H,
+			w: Math.max(NODE_W, opts.big?.[n.id]?.w ?? 0),
+			h: Math.max(NODE_H, opts.big?.[n.id]?.h ?? 0),
 			pinned: !!pos,
 			inPort: editable || first,
 			outPort: canFollow(n, insertFrom)
@@ -85148,17 +85148,33 @@ function autoPlace(nodes) {
 		const split = n.node.branch ? byId.get(n.node.branch.from) : void 0;
 		if (isBranchRow(n.node)) {
 			const from = n.node.branch?.from || "";
-			const k = rows.get(from) ?? 0;
-			rows.set(from, k + 1);
 			const at = split || prev;
-			const row = Math.floor(k / BRANCH_COLS);
-			const col = k % BRANCH_COLS;
-			const x = (at ? at.x : 0) + PITCH_X / 2 + col * PITCH_X;
+			let st = rows.get(from);
+			if (!st) {
+				const x0 = (at ? at.x : 0) + PITCH_X / 2;
+				st = {
+					col: 0,
+					x0,
+					x: x0,
+					y: (at ? at.y : 0) + BRANCH_Y,
+					rowH: 0
+				};
+				rows.set(from, st);
+			}
+			if (st.col >= BRANCH_COLS) {
+				st.col = 0;
+				st.x = st.x0;
+				st.y += st.rowH;
+				st.rowH = 0;
+			}
 			next = n.pinned ? { ...n } : {
 				...n,
-				x,
-				y: (at ? at.y : 0) + BRANCH_Y + PITCH_Y * row
+				x: st.x,
+				y: st.y
 			};
+			st.x += Math.max(PITCH_X, n.w + 18);
+			st.rowH = Math.max(st.rowH, PITCH_Y, n.h + 10);
+			st.col++;
 		} else {
 			next = n.pinned ? { ...n } : {
 				...n,
@@ -85673,7 +85689,7 @@ function SkyChain(p) {
 			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
 			"st-" + dn.state,
 			"sky-fam-" + fam,
-			isHead && dn.chip ? "tone-" + dn.chip.tone : "",
+			dn.chip ? "tone-" + dn.chip.tone : "",
 			dn.kind === "group" ? "is-group" : "",
 			dn.perch ? "is-perch" : "",
 			n.inPort || n.outPort ? "" : "is-fixed",
@@ -85689,6 +85705,20 @@ function SkyChain(p) {
 			title: head.title,
 			sub: head.sub
 		} : dn, isHead);
+		const opened = !isHead && p.renderOpen ? p.renderOpen(dn) : null;
+		if (opened) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			role: "listitem",
+			className: "sky-node sky-node-open",
+			"data-node": n.id,
+			"data-diagram-node": dn.id,
+			"aria-label": said,
+			style: {
+				transform: `translate(${n.x}px, ${n.y}px)`,
+				width: n.w,
+				height: n.h
+			},
+			children: opened
+		}, n.id);
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			role: "listitem",
 			tabIndex: 0,
@@ -85799,10 +85829,24 @@ function SkyChain(p) {
 						className: "sky-head-chip tone-" + dn.chip.tone,
 						children: dn.chip.label
 					}) : null
+				}) : dn.chip && !isStopish(dn) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-extra",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-head-chip tone-" + dn.chip.tone,
+						children: dn.chip.label
+					})
 				}) : p.renderInBox && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "sky-node-extra",
 					"data-no-drag": true,
 					children: p.renderInBox(dn)
+				}),
+				!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
+					tone: dn.chip.tone === "working" ? "working" : "you",
+					x: n.w / 2,
+					y: 0,
+					size: 18,
+					label: dn.title + " — " + dn.chip.label,
+					className: "sky-kid-bird"
 				})
 			]
 		}, n.id);
@@ -89211,7 +89255,6 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
 	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
 	const badge = threadBadge(family.children, threadSeen, effectiveActivity);
-	const flightShown = hasSessionDiagram(allRows ?? [], title);
 	const flightNeeds = rowWaitsOnYou(inst.flight) || inst.flight?.state === "halted";
 	const newestReport = newestReportTs(family.children);
 	const seenAt = (0, import_react.useCallback)(() => codemapSeenAt(title), [title]);
@@ -89698,7 +89741,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		calm,
 		queueBusy: pending > 0 || holding,
 		mapBusy: mapHasState(inst, rzChip),
-		flight: flightShown,
+		flight: true,
 		ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu)
 	});
 	const shows = (id) => items.buttons.includes(id);
@@ -133277,15 +133320,28 @@ function SkyLine(p) {
 		p.title,
 		sessionNode
 	]);
+	const big = (0, import_react.useMemo)(() => {
+		const out = {};
+		for (const [t, ks] of Object.entries(kids)) {
+			const c = clampPane(ks.w, ks.h);
+			out["child:" + t] = {
+				w: c.w,
+				h: c.h + CARD_HEAD_H
+			};
+		}
+		return out;
+	}, [kids]);
 	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
 		head,
 		key: p.title,
-		flightId: line.flight?.id || ""
+		flightId: line.flight?.id || "",
+		big
 	}), [
 		moves.diagram,
 		head,
 		p.title,
-		line.flight?.id
+		line.flight?.id,
+		big
 	]);
 	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
 	useTourHooks(wrapRef, {
@@ -133462,9 +133518,10 @@ function SkyLine(p) {
 		}, row.title)
 	}) : null;
 	const cardShift = own ? Math.max(0, own.w - (NODE_W + TILE) / 2) : 0;
+	const onChain = new Set(graph.nodes.map((n) => n.node.session).filter(Boolean));
 	for (const [t, ks] of Object.entries(kids)) {
 		const kid = rowOf(t);
-		if (kid) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+		if (kid && !onChain.has(t)) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
 			inst: kid,
 			w: ks.w,
 			h: ks.h,
@@ -133479,6 +133536,26 @@ function SkyLine(p) {
 			onClose: () => foldKid(t)
 		}, t));
 	}
+	const renderOpen = (n) => {
+		const t = n.session;
+		const ks = t ? kids[t] : void 0;
+		const kid = t && ks ? rowOf(t) : void 0;
+		if (!t || !ks || !kid) return null;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+			inst: kid,
+			w: ks.w,
+			h: ks.h,
+			zoom: p.zoom,
+			onSize: (w, h) => setKids((k) => ({
+				...k,
+				[t]: {
+					w,
+					h
+				}
+			})),
+			onClose: () => foldKid(t)
+		}, t);
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
 		className: "skl skl-chainline" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
@@ -133584,6 +133661,7 @@ function SkyLine(p) {
 						onNodeMove: moves.move,
 						onPortDown: p.onPortDown,
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						renderOpen,
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
 						renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
@@ -134445,10 +134523,10 @@ function GroundedLine(p) {
 						}
 					}
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-box-chip skl-chip " + (head.kind === "trigger" ? "tone-working" : "tone-idle"),
-					title: head.kind === "trigger" ? head.title + " — " + head.sub : "These stops do nothing until a session flies them: wire a session's out port to the first one",
-					children: head.kind === "trigger" ? "Started by a chain" : "No session"
+				head.kind === "trigger" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-box-chip skl-chip tone-working",
+					title: head.title + " — " + head.sub,
+					children: "Started by a chain"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-menu",
@@ -135330,6 +135408,129 @@ function SkyShortcuts(p) {
 	return typeof document !== "undefined" && document.body ? (0, import_react_dom.createPortal)(sheet, document.body) : sheet;
 }
 //#endregion
+//#region src/components/flights/QuickAdd.tsx
+function quickRows(kinds, plans, q) {
+	const all = [...kinds.map((k) => ({
+		key: "k:" + k.kind,
+		label: k.label,
+		hint: k.summary || "",
+		icon: k.kind,
+		pick: { kind: k.kind },
+		words: [
+			k.label,
+			k.summary,
+			k.kind,
+			k.family
+		].join(" ")
+	})), ...plans.map((p) => ({
+		key: "p:" + p.id,
+		label: p.name,
+		hint: "saved stop · " + p.steps.length + (p.steps.length === 1 ? " step" : " steps"),
+		icon: "group",
+		pick: { plan: p },
+		words: [
+			p.name,
+			"saved stop",
+			p.steps.map((s) => s.title).join(" ")
+		].join(" ")
+	}))];
+	const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+	return (terms.length ? all.filter((r) => terms.every((t) => r.words.toLowerCase().includes(t))) : all).map(({ words: _w, ...r }) => r);
+}
+function QuickAdd(p) {
+	const [q, setQ] = (0, import_react.useState)("");
+	const [at, setAt] = (0, import_react.useState)(0);
+	const rows = (0, import_react.useMemo)(() => quickRows(p.kinds, p.plans, q), [
+		p.kinds,
+		p.plans,
+		q
+	]);
+	const sel = Math.min(at, Math.max(0, rows.length - 1));
+	const onKey = (e) => {
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			setAt((i) => Math.min(rows.length - 1, i + 1));
+		} else if (e.key === "ArrowUp") {
+			e.preventDefault();
+			setAt((i) => Math.max(0, i - 1));
+		} else if (e.key === "Enter") {
+			e.preventDefault();
+			if (rows[sel]) p.onPick(rows[sel].pick);
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			p.onClose();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-ground-menu sky-quick-add",
+		role: "dialog",
+		"aria-label": "Add a block here",
+		style: {
+			left: p.x,
+			top: p.y
+		},
+		onContextMenu: (e) => e.preventDefault(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				className: "sky-quick-field",
+				autoFocus: true,
+				placeholder: "Add a block…",
+				"aria-label": "Search blocks",
+				value: q,
+				onChange: (e) => {
+					setQ(e.target.value);
+					setAt(0);
+				},
+				onKeyDown: onKey
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-quick-list",
+				role: "listbox",
+				"aria-label": "Blocks",
+				children: [rows.slice(0, 40).map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					role: "option",
+					"aria-selected": i === sel,
+					className: "fl-stopmenu-item sky-quick-row" + (i === sel ? " is-sel" : ""),
+					onMouseEnter: () => setAt(i),
+					onClick: () => p.onPick(r.pick),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-quick-icon",
+						"aria-hidden": "true",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
+							kind: r.icon,
+							size: 16
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-quick-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-quick-label",
+							children: r.label
+						}), r.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-quick-hint",
+							children: r.hint
+						})]
+					})]
+				}, r.key)), !rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-quick-none",
+					children: [
+						"No block matches “",
+						q,
+						"”"
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-stopmenu-item sky-quick-note",
+				onClick: p.onNote,
+				children: "Add a note"
+			})
+		]
+	});
+}
+//#endregion
 //#region src/lib/skyReveal.ts
 function revealCamera(c, r, vw, vh, margin = .8) {
 	const k = Math.min(1, r.w > 0 ? vw * margin / r.w : 1, r.h > 0 ? vh * margin / r.h : 1);
@@ -135410,25 +135611,6 @@ function chainSize(d, head) {
 		w: Math.max(LINE_MIN_W, Math.max(1, n) * PITCH_X + 60),
 		h: NODE_H + CHAIN_LABEL_H + 24
 	};
-}
-function GhostLine({ name, pos, diagram }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-line sky-line-leaving",
-		style: { transform: `translate(${pos.x}px, ${pos.y}px)` },
-		"aria-hidden": "true",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-line-bar",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-line-name",
-				children: name
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
-			diagram,
-			label: name,
-			vertical: false,
-			className: "sky-canvas"
-		})]
-	});
 }
 var NO_KINDS = [];
 var NO_PLANS = [];
@@ -135968,27 +136150,6 @@ function SkyView() {
 		rectOf,
 		vp.w,
 		vp.h
-	]);
-	const last = (0, import_react.useRef)(/* @__PURE__ */ new Map());
-	const [ghosts, setGhosts] = (0, import_react.useState)([]);
-	(0, import_react.useEffect)(() => {
-		const now = new Map(lines.map((l) => [l.id, {
-			id: l.id,
-			name: l.name,
-			pos: place[l.id],
-			diagram: l.diagram
-		}]));
-		const gone = [...last.current.values()].filter((g) => !now.has(g.id) && !lineAlive(g.id));
-		last.current = now;
-		if (!gone.length || narrow) return;
-		const ids = new Set(gone.map((g) => g.id));
-		setGhosts((cur) => [...cur.filter((g) => !ids.has(g.id)), ...gone]);
-		setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
-	}, [
-		lines,
-		place,
-		lineAlive,
-		narrow
 	]);
 	const pressedLine = (0, import_react.useRef)("");
 	const openedFor = (0, import_react.useRef)("");
@@ -137789,7 +137950,6 @@ function SkyView() {
 										band: wiring.band,
 										wires: xwires
 									}),
-									ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
 									newBlock,
 									guides.map((g, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 										className: "sky-guide",
@@ -137818,23 +137978,20 @@ function SkyView() {
 									height: marq.h
 								}
 							}),
-							groundMenu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "sky-ground-menu",
-								role: "menu",
-								style: {
-									left: groundMenu.x,
-									top: groundMenu.y
+							groundMenu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuickAdd, {
+								x: groundMenu.x,
+								y: groundMenu.y,
+								kinds,
+								plans,
+								onPick: (pick) => {
+									dropGrounded(pick, groundMenu.at);
+									setGroundMenu(null);
 								},
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "fl-stopmenu-item",
-									role: "menuitem",
-									onClick: () => {
-										addNote(groundMenu.at);
-										setGroundMenu(null);
-									},
-									children: "Add a note"
-								})
+								onNote: () => {
+									addNote(groundMenu.at);
+									setGroundMenu(null);
+								},
+								onClose: () => setGroundMenu(null)
 							}),
 							selBar,
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OffscreenHints, {

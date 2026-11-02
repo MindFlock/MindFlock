@@ -115,6 +115,9 @@ export interface ChainGraphOpts {
   /** The line key and its flight. */
   key: string;
   flightId: string;
+  /** Nodes drawn bigger than a tile (an open sub-session's card, by node
+   * id): their box, so the branches around them make room. */
+  big?: Readonly<Record<string, { w: number; h: number }>>;
 }
 
 // --- Building a chain ---------------------------------------------------------------
@@ -179,8 +182,8 @@ export function chainGraph(d: Diagram, opts: ChainGraphOpts): ChainGraph {
       node: n.branch ? { ...n, branch: { ...n.branch, from: idOf(n.branch.from), to: idOf(n.branch.to) } } : n,
       x: pos ? pos.x : 0,
       y: pos ? pos.y : 0,
-      w: NODE_W,
-      h: NODE_H,
+      w: Math.max(NODE_W, opts.big?.[n.id]?.w ?? 0),
+      h: Math.max(NODE_H, opts.big?.[n.id]?.h ?? 0),
       pinned: !!pos,
       inPort: editable || first,
       outPort: canFollow(n, insertFrom),
@@ -339,24 +342,35 @@ export const BRANCH_Y = PITCH_Y + 50;
 export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
   const out: GraphNode[] = [];
   const byId = new Map<string, GraphNode>();
-  const rows = new Map<string, number>();
   // Branches spread in rows of BRANCH_COLS under their parent, instead of
-  // one tall column.
+  // one tall column — each place as wide / tall as its node (an open card
+  // pushes its neighbours along), a tile's place a pitch.
+  const rows = new Map<string, { col: number; x0: number; x: number; y: number; rowH: number }>();
   let prev: GraphNode | null = null;
   for (const n of nodes) {
     let next: GraphNode;
     const split = n.node.branch ? byId.get(n.node.branch.from) : undefined;
     if (isBranchRow(n.node)) {
       const from = n.node.branch?.from || "";
-      const k = rows.get(from) ?? 0;
-      rows.set(from, k + 1);
       const at = split || prev;
       // Left-aligned under the parent (centring would push a head's first
       // children left of the chain's origin, outside its slot).
-      const row = Math.floor(k / BRANCH_COLS);
-      const col = k % BRANCH_COLS;
-      const x = (at ? at.x : 0) + PITCH_X / 2 + col * PITCH_X;
-      next = n.pinned ? { ...n } : { ...n, x, y: (at ? at.y : 0) + BRANCH_Y + PITCH_Y * row };
+      let st = rows.get(from);
+      if (!st) {
+        const x0 = (at ? at.x : 0) + PITCH_X / 2;
+        st = { col: 0, x0, x: x0, y: (at ? at.y : 0) + BRANCH_Y, rowH: 0 };
+        rows.set(from, st);
+      }
+      if (st.col >= BRANCH_COLS) {
+        st.col = 0;
+        st.x = st.x0;
+        st.y += st.rowH;
+        st.rowH = 0;
+      }
+      next = n.pinned ? { ...n } : { ...n, x: st.x, y: st.y };
+      st.x += Math.max(PITCH_X, n.w + (PITCH_X - NODE_W));
+      st.rowH = Math.max(st.rowH, PITCH_Y, n.h + (PITCH_Y - NODE_H));
+      st.col++;
     } else {
       next = n.pinned ? { ...n } : { ...n, x: prev ? prev.x + PITCH_X : 0, y: prev ? prev.y : 0 };
       prev = next;

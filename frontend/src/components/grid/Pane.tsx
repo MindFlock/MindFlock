@@ -53,7 +53,6 @@ import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
 import { PaneFlightStrip } from "../flights/FlightStrip";
 import { SessionFlight } from "../flights/SessionFlight";
-import { hasSessionDiagram } from "../../lib/flightDiagram";
 import { flightDrives, rowWaitsOnYou } from "../../lib/flights";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
@@ -190,7 +189,6 @@ export function Pane({
   // (a flight, workers, a parent, an armed fast-track — lib/flightDiagram);
   // ⋯ → "Fly a flyway…" opens it on any session. Its badge: perched on you,
   // or halted.
-  const flightShown = hasSessionDiagram(allRows ?? [], title);
   const flightNeeds = rowWaitsOnYou(inst.flight) || inst.flight?.state === "halted";
   const newestReport = newestReportTs(family.children);
   // The Map tab's badge: the rail row's zone chip (a breach, an unseen block,
@@ -813,7 +811,9 @@ export function Pane({
     calm,
     queueBusy: pending > 0 || holding,
     mapBusy: mapHasState(inst, rzChip),
-    flight: flightShown,
+    // Every session's pane has its Flight tab (the owner: "I want all to show"):
+    // building a chain starts there even before the session has one.
+    flight: true,
     ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu),
   });
   const shows = (id: PaneButtonId) => items.buttons.includes(id);

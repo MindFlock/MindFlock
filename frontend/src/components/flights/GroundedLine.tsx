@@ -314,12 +314,13 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             }}
           />
         )}
-        <span
-          className={"fl-box-chip skl-chip " + (head.kind === "trigger" ? "tone-working" : "tone-idle")}
-          title={head.kind === "trigger" ? head.title + " — " + head.sub : "These stops do nothing until a session flies them: wire a session's out port to the first one"}
-        >
-          {head.kind === "trigger" ? "Started by a chain" : "No session"}
-        </span>
+        {/* A block on its own is just a block (the owner: it must not look as if
+            it waits for a session) — only a chain another chain starts says so. */}
+        {head.kind === "trigger" && (
+          <span className="fl-box-chip skl-chip tone-working" title={head.title + " — " + head.sub}>
+            Started by a chain
+          </span>
+        )}
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>

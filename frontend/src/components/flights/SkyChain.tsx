@@ -60,6 +60,10 @@ export interface SkyChainProps {
   onPlus?(after: GraphNode | null): void;
   /** Extra content in or under a tile (a perch's Done / Skip …). */
   renderInBox?(n: DiagramNode): ReactNode;
+  /** A node drawn open instead of as a tile (an open sub-session's card):
+   * its content, else null for the tile. The graph gives it the room
+   * (`ChainGraphOpts.big`). */
+  renderOpen?(n: DiagramNode): ReactNode;
   /** The head tile's own content (the session's chip, ⋯) — the host's. */
   renderHead?(): ReactNode;
   className?: string;
@@ -242,7 +246,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
       "st-" + dn.state,
       "sky-fam-" + fam,
-      isHead && dn.chip ? "tone-" + dn.chip.tone : "",
+      // A session-like tile (the head, a sub-session, a worker) wears its
+      // session's state: working glows, asking is gold.
+      dn.chip ? "tone-" + dn.chip.tone : "",
       dn.kind === "group" ? "is-group" : "",
       dn.perch ? "is-perch" : "",
       n.inPort || n.outPort ? "" : "is-fixed",
@@ -256,6 +262,13 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       .filter(Boolean)
       .join(" ");
     const said = tileLabel(isHead ? { ...dn, title: head.title, sub: head.sub } : dn, isHead);
+    const opened = !isHead && p.renderOpen ? p.renderOpen(dn) : null;
+    if (opened)
+      return (
+        <div key={n.id} role="listitem" className="sky-node sky-node-open" data-node={n.id} data-diagram-node={dn.id} aria-label={said} style={{ transform: `translate(${n.x}px, ${n.y}px)`, width: n.w, height: n.h }}>
+          {opened}
+        </div>
+      );
     return (
       <div
         key={n.id}
@@ -332,8 +345,17 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           <div className="sky-head-extra" data-no-drag>
             {p.renderHead ? p.renderHead() : dn.chip ? <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span> : null}
           </div>
+        ) : dn.chip && !isStopish(dn) ? (
+          // A sub-session / worker: its state, always (the owner: "I should be
+          // able to see the states of the sub-sessions, always").
+          <div className="sky-node-extra">
+            <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span>
+          </div>
         ) : (
           p.renderInBox && <div className="sky-node-extra" data-no-drag>{p.renderInBox(dn)}</div>
+        )}
+        {!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && (
+          <BirdMarker tone={dn.chip.tone === "working" ? "working" : "you"} x={n.w / 2} y={0} size={18} label={dn.title + " — " + dn.chip.label} className="sky-kid-bird" />
         )}
       </div>
     );

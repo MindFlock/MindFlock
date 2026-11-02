@@ -232,7 +232,6 @@ import {
 import { ChipRow, TextField } from "./controls";
 import { OverflowMenu } from "../OverflowMenu";
 import { liveBoxParts } from "./FlightStrip";
-import { FlywayCanvas } from "./FlywayCanvas";
 import { IntakeLane } from "./IntakeLane";
 import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
@@ -249,8 +248,8 @@ import { Minimap, OffscreenHints, type MinimapRect } from "./Minimap";
 import { ZoomMenu } from "./ZoomMenu";
 import { SkyShortcuts } from "./SkyShortcuts";
 import { TakeoffDialog } from "./TakeoffDialog";
-import { Bird } from "./Bird";
 import { TourButton } from "../onboarding/TourButton";
+import { QuickAdd } from "./QuickAdd";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
 import { useAutoTour } from "../onboarding/useAutoTour";
@@ -366,25 +365,6 @@ export function chainSize(d: Diagram, head: boolean): { w: number; h: number } {
 
 /** A closed session's line (or removed stops) on its way out: the last
  * picture of it, fading. */
-function GhostLine({ name, pos, diagram }: { name: string; pos: Pos; diagram: Diagram }) {
-  return (
-    <div className="sky-line sky-line-leaving" style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }} aria-hidden="true">
-      <div className="sky-line-bar">
-        <Bird size={13} />
-        <span className="sky-line-name">{name}</span>
-      </div>
-      <FlywayCanvas diagram={diagram} label={name} vertical={false} className="sky-canvas" />
-    </div>
-  );
-}
-
-interface Ghost {
-  id: string;
-  name: string;
-  pos: Pos;
-  diagram: Diagram;
-}
-
 /** Where the new-session block sits, and what it is for: `attach` = the
  * grounded flight it makes a session for; `flying` = the guessed title of
  * the session it is making (the block hides while its line shows). */
@@ -852,18 +832,8 @@ export function SkyView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- layout/onLayout/rows are read once per pick
   }, [focusLine, rectOf, vp.w, vp.h]);
 
-  // A closed (or deleted) session's line leaves: the last picture fades out.
-  const last = useRef(new Map<string, Ghost>());
-  const [ghosts, setGhosts] = useState<Ghost[]>([]);
-  useEffect(() => {
-    const now = new Map<string, Ghost>(lines.map((l) => [l.id, { id: l.id, name: l.name, pos: place[l.id], diagram: l.diagram }]));
-    const gone = [...last.current.values()].filter((g) => !now.has(g.id) && !lineAlive(g.id));
-    last.current = now;
-    if (!gone.length || narrow) return;
-    const ids = new Set(gone.map((g) => g.id));
-    setGhosts((cur) => [...cur.filter((g) => !ids.has(g.id)), ...gone]);
-    setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
-  }, [lines, place, lineAlive, narrow]);
+  // A line that leaves is gone at once (the owner: deletes must disappear
+  // right away); round 18 dropped the fade, which drew the old row format.
 
   /** Select a line's session — the same selection a pane click makes. A
    * press on the line itself is remembered, so the selection effect above
@@ -2574,9 +2544,6 @@ export function SkyView() {
               })}
               {/* Round 18: the wires between chains and the one being drawn. */}
               <SkyWires band={wiring.band} wires={xwires} />
-              {ghosts.map((g) => (
-                <GhostLine key={"ghost:" + g.id} {...g} />
-              ))}
               {newBlock}
               {/* Round 17: the alignment guides of the drag under way — 1 screen
                   px of accent, from the moving box to the one it aligned with. */}
@@ -2596,19 +2563,22 @@ export function SkyView() {
             </div>
             {marq && <div className="sky-marquee" aria-hidden="true" style={{ transform: `translate(${marq.x}px, ${marq.y}px)`, width: marq.w, height: marq.h }} />}
             {groundMenu && (
-              <div className="sky-ground-menu" role="menu" style={{ left: groundMenu.x, top: groundMenu.y }}>
-                <button
-                  type="button"
-                  className="fl-stopmenu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    addNote(groundMenu.at);
-                    setGroundMenu(null);
-                  }}
-                >
-                  Add a note
-                </button>
-              </div>
+              // Right-click on empty sky: add a block by search, right there.
+              <QuickAdd
+                x={groundMenu.x}
+                y={groundMenu.y}
+                kinds={kinds}
+                plans={plans}
+                onPick={(pick) => {
+                  void dropGrounded(pick, groundMenu.at);
+                  setGroundMenu(null);
+                }}
+                onNote={() => {
+                  addNote(groundMenu.at);
+                  setGroundMenu(null);
+                }}
+                onClose={() => setGroundMenu(null)}
+              />
             )}
             {selBar}
             {/* Round 17: the minimap (folded to its glyph or open, remembered)

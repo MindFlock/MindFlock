@@ -399,7 +399,18 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     () => ({ kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
     [name, headSub, p.title, sessionNode]
   );
-  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || "" }), [moves.diagram, head, p.title, line.flight?.id]);
+  // An open sub-session's card takes its tile's place: the graph gives it a
+  // card-sized box and the other branches make room (the owner: sub-sessions
+  // should open like the session does, not below).
+  const big = useMemo(() => {
+    const out: Record<string, { w: number; h: number }> = {};
+    for (const [t, ks] of Object.entries(kids)) {
+      const c = clampPane(ks.w, ks.h);
+      out["child:" + t] = { w: c.w, h: c.h + CARD_HEAD_H };
+    }
+    return out;
+  }, [kids]);
+  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || "", big }), [moves.diagram, head, p.title, line.flight?.id, big]);
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
   useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head)": "sky-stop" });
   const gc = line.graphCanvas;
@@ -526,10 +537,20 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     ) : null;
   // The head's out port (chain-local) lands on the card's right edge.
   const cardShift = own ? Math.max(0, own.w - (NODE_W + TILE) / 2) : 0;
+  // A worker that is not drawn on the chain (no tile to open in) keeps the
+  // row under it; the ones on the chain open in their tile's place.
+  const onChain = new Set(graph.nodes.map((n) => n.node.session).filter(Boolean));
   for (const [t, ks] of Object.entries(kids)) {
     const kid = rowOf(t);
-    if (kid) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
+    if (kid && !onChain.has(t)) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
   }
+  const renderOpen = (n: DiagramNode): ReactNode => {
+    const t = n.session;
+    const ks = t ? kids[t] : undefined;
+    const kid = t && ks ? rowOf(t) : undefined;
+    if (!t || !ks || !kid) return null;
+    return <PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />;
+  };
 
   return (
     <div
@@ -628,6 +649,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             onNodeMove={moves.move}
             onPortDown={p.onPortDown}
             onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+            renderOpen={renderOpen}
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
             renderHead={() =>
               line.flight?.state === "ready" ? (

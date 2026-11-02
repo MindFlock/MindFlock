@@ -535,7 +535,8 @@ describe("the wiring outside Flights", () => {
     const pane = code("components/grid/Pane.tsx");
     expect(pane).toContain('data-tab="flight"');
     expect(pane).toContain("<SessionFlight inst={inst} />");
-    expect(pane).toContain("const flightShown = hasSessionDiagram(allRows ?? [], title);");
+    // Every session's pane has the tab (the owner wants it on all of them).
+    expect(pane).toContain("flight: true,");
     expect(code("lib/paneHeader.ts")).toContain('!(id === "flight" && !ctx.flight && ctx.active !== "flight")');
   });
 

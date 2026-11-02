@@ -1105,3 +1105,17 @@
   background: transparent;
   box-shadow: none;
 }
+
+/* A stops-only chain is free-floating blocks: its label (name, ⋯ — the drag
+   handle) shows on hover, focus or selection, not as a frame waiting for a
+   session. */
+.skl-chainline.skl-grounded > .skl-bar.skl-label {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.skl-chainline.skl-grounded:hover > .skl-bar.skl-label,
+.skl-chainline.skl-grounded:focus-within > .skl-bar.skl-label,
+.skl-chainline.skl-grounded.is-selected > .skl-bar.skl-label,
+.skl-chainline.skl-grounded.is-focused > .skl-bar.skl-label {
+  opacity: 1;
+}

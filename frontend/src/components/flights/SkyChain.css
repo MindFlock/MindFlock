@@ -223,7 +223,8 @@
 /* --- States on the tile ------------------------------------------------------ */
 
 .sky-node.st-current .sky-tile,
-.sky-head.tone-working .sky-tile {
+.sky-head.tone-working .sky-tile,
+.sky-node.tone-working .sky-tile {
   border-color: var(--tone-working);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--tone-working) 20%, transparent),
@@ -231,7 +232,8 @@
 }
 
 .sky-node.st-perched .sky-tile,
-.sky-head.tone-attention .sky-tile {
+.sky-head.tone-attention .sky-tile,
+.sky-node.tone-attention .sky-tile {
   border-color: var(--tone-attention);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--tone-attention) 22%, transparent),
@@ -662,4 +664,22 @@
 .sky-start-on {
   font-size: 10.5px;
   color: var(--muted);
+}
+
+/* A working / asking sub-session's own bird, perched on its tile. */
+.sky-kid-bird {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* The empty socket on a stops-only chain's first block: only while a wire is
+   being dragged (it is a target) or the chain is hovered — at rest a block
+   is just a block. */
+.sky-socket {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sky-chain:hover .sky-socket,
+.sky-socket.is-target {
+  opacity: 1;
 }

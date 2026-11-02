@@ -163,7 +163,7 @@ describe("the line", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('const head: ChainHead = useMemo(');
     expect(src).toContain('kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode');
-    expect(src).toContain("chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || \"\" })");
+    expect(src).toContain("chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || \"\", big })");
     // No pane until a box is opened.
     expect(html).not.toContain("pane-embedded");
   });

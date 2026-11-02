@@ -4269,7 +4269,8 @@ a.fl-waiting-ref:hover {
 /* --- States on the tile ------------------------------------------------------ */
 
 .sky-node.st-current .sky-tile,
-.sky-head.tone-working .sky-tile {
+.sky-head.tone-working .sky-tile,
+.sky-node.tone-working .sky-tile {
   border-color: var(--tone-working);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--tone-working) 20%, transparent),
@@ -4277,7 +4278,8 @@ a.fl-waiting-ref:hover {
 }
 
 .sky-node.st-perched .sky-tile,
-.sky-head.tone-attention .sky-tile {
+.sky-head.tone-attention .sky-tile,
+.sky-node.tone-attention .sky-tile {
   border-color: var(--tone-attention);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--tone-attention) 22%, transparent),
@@ -4708,6 +4710,24 @@ a.fl-waiting-ref:hover {
 .sky-start-on {
   font-size: 10.5px;
   color: var(--muted);
+}
+
+/* A working / asking sub-session's own bird, perched on its tile. */
+.sky-kid-bird {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* The empty socket on a stops-only chain's first block: only while a wire is
+   being dragged (it is a target) or the chain is hovered — at rest a block
+   is just a block. */
+.sky-socket {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sky-chain:hover .sky-socket,
+.sky-socket.is-target {
+  opacity: 1;
 }
 /* The sky (SkyView.tsx) — prefix sky-.
  *
@@ -5700,6 +5720,86 @@ details.fl-group-waiting > summary {
 /* While a wire is drawn nothing on the plane takes a hover but the tiles. */
 .sky-plane[data-wiring] {
   cursor: crosshair;
+}
+
+/* Right-click on empty sky: add a block by search (QuickAdd). */
+.sky-quick-add {
+  width: 280px;
+  max-height: 380px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 4px;
+}
+.sky-quick-field {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.sky-quick-field:focus {
+  border-color: var(--accent);
+}
+.sky-quick-list {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+}
+.sky-quick-add .sky-quick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.sky-quick-add .sky-quick-row.is-sel {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.sky-quick-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  flex: none;
+}
+.sky-quick-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.sky-quick-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.sky-quick-hint {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sky-quick-none {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sky-quick-note {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
 }
 /* The stop palette, the stop inspector, Describe a stop…, and a flyway's
  * trigger (FlywayInspector.tsx) — prefix fl-. Shared by the flyway card on
@@ -12225,6 +12325,20 @@ details.fl-group-waiting > summary {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
+}
+
+/* A stops-only chain is free-floating blocks: its label (name, ⋯ — the drag
+   handle) shows on hover, focus or selection, not as a frame waiting for a
+   session. */
+.skl-chainline.skl-grounded > .skl-bar.skl-label {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.skl-chainline.skl-grounded:hover > .skl-bar.skl-label,
+.skl-chainline.skl-grounded:focus-within > .skl-bar.skl-label,
+.skl-chainline.skl-grounded.is-selected > .skl-bar.skl-label,
+.skl-chainline.skl-grounded.is-focused > .skl-bar.skl-label {
+  opacity: 1;
 }
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
