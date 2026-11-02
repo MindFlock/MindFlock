@@ -79382,6 +79382,15 @@ function liftLoops(line) {
 function loopAtWork(d) {
 	return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
 }
+function findNode(d, id) {
+	if (!id) return null;
+	for (const n of d.nodes) {
+		if (n.id === id) return n;
+		const sub = n.group?.nodes.find((x) => x.id === id);
+		if (sub) return sub;
+	}
+	return d.edges.find((e) => e.via?.id === id)?.via || null;
+}
 function loopIdlePill(m, via) {
 	if (m.times > 0) return "↻ ×" + m.times;
 	const until = String(via?.step?.config?.until ?? "").trim();
@@ -84713,15 +84722,7 @@ function useSessionLine(title, src, opts) {
 	const end = flight ? flight.steps.length : 0;
 	const latest = (0, import_react.useRef)(flight);
 	latest.current = flight;
-	const find = (id) => {
-		if (!id) return null;
-		for (const n of line.nodes) {
-			if (n.id === id) return n;
-			const sub = n.group?.nodes.find((s) => s.id === id);
-			if (sub) return sub;
-		}
-		return null;
-	};
+	const find = (id) => findNode(line, id);
 	const own = (n) => find(n.id) || n;
 	const open = dialog ? find(dialog.id) : null;
 	(0, import_react.useEffect)(() => {
@@ -130130,7 +130131,7 @@ function useGroundedLine(flight, src) {
 	const kindOf = (0, import_react.useMemo)(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
 	const stops = diagram.nodes.filter((n) => n.kind === "stop");
 	const end = flight.steps.length;
-	const find = (id) => id ? diagram.nodes.find((n) => n.id === id) || null : null;
+	const find = (id) => id ? diagram.nodes.find((n) => n.id === id) || findNode(diagram, id) : null;
 	const sel = find(selected);
 	const open = dialog ? find(dialog.id) : null;
 	const latest = (0, import_react.useRef)(flight);

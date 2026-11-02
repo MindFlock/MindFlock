@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "../../lib/toast";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
-import { collapseGroups, drawnCanvas, type DiagramNode } from "../../lib/flightDiagram";
+import { collapseGroups, drawnCanvas, findNode, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
 import { dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, tackOn, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
@@ -46,7 +46,8 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
   const stops = diagram.nodes.filter((n) => n.kind === "stop");
   const end = flight.steps.length;
-  const find = (id: string | null | undefined): DiagramNode | null => (id ? diagram.nodes.find((n) => n.id === id) || null : null);
+  // A Loop has no box: it is found on its return wire.
+  const find = (id: string | null | undefined): DiagramNode | null => (id ? diagram.nodes.find((n) => n.id === id) || findNode(diagram, id) : null);
   const sel = find(selected);
   const open = dialog ? find(dialog.id) : null;
   const latest = useRef(flight);

@@ -2806,9 +2806,9 @@
   left: 0;
   top: 0;
   z-index: 1;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1;
-  padding: 3px 7px;
+  padding: 4px 9px;
   border-radius: 999px;
   border: 1px solid var(--tone-working);
   color: var(--fl-ink-working);

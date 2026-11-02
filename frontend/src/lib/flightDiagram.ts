@@ -365,6 +365,18 @@ export function loopAtWork(d: Pick<Diagram, "edges">): DiagramEdge | null {
   return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
 }
 
+/** A node by id: the line's own, a sub-step of one of its group boxes, or
+ * a Loop riding a return wire (`edge.via` — it has no box). */
+export function findNode(d: Pick<Diagram, "nodes" | "edges">, id: string | null | undefined): DiagramNode | null {
+  if (!id) return null;
+  for (const n of d.nodes) {
+    if (n.id === id) return n;
+    const sub = n.group?.nodes.find((x) => x.id === id);
+    if (sub) return sub;
+  }
+  return d.edges.find((e) => e.via?.id === id)?.via || null;
+}
+
 /** The pill on a Loop's wire before it runs: "↻ ×3", "↻ until checks
  * green", "↻ until stopped". */
 export function loopIdlePill(m: LoopMark, via?: Pick<DiagramNode, "step"> | null): string {

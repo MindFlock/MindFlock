@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
-import { drawnCanvas, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
+import { drawnCanvas, findNode, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
   dropStop,
@@ -248,16 +248,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const latest = useRef(flight);
   latest.current = flight;
 
-  /** A node by id: the line's own, or a sub-step of one of its group boxes. */
-  const find = (id: string | null | undefined): DiagramNode | null => {
-    if (!id) return null;
-    for (const n of line.nodes) {
-      if (n.id === id) return n;
-      const sub = n.group?.nodes.find((s) => s.id === id);
-      if (sub) return sub;
-    }
-    return null;
-  };
+  /** A node by id: the line's own, a sub-step of one of its group boxes, or
+   * a Loop on its return wire. */
+  const find = (id: string | null | undefined): DiagramNode | null => findNode(line, id);
   /** The line's own node for one the canvas hands back. */
   const own = (n: DiagramNode) => find(n.id) || n;
   const open = dialog ? find(dialog.id) : null;
