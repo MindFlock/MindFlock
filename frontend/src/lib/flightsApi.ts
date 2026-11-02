@@ -281,6 +281,8 @@ export function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
   if (step.when) out.when = step.when;
   // Round 18: where the Sky draws it (a stop dropped at a spot keeps it).
   if (step.pos) out.pos = step.pos;
+  // Round 20: its parallel group rides along (a copied row keeps its forks).
+  if (step.parallel) out.parallel = step.parallel;
   return out;
 }
 
@@ -305,8 +307,49 @@ export async function tackOnNew(title: string, steps: FlightStep[], startOn?: Fl
 
 /** Tack one stop onto a live flight: appended, or at `at` (only after its
  * current stop — the server refuses anything earlier). */
-export function tackOn(flightId: string, step: FlightStep, at?: number): Promise<boolean> {
-  return flightAction("Tack on", flightPath(flightId, "/steps"), { step: wireStep(step), ...(at === undefined ? {} : { at }) });
+export function tackOn(flightId: string, step: FlightStep, at?: number, opts: TackOnOpts = {}): Promise<boolean> {
+  return flightAction("Tack on", flightPath(flightId, "/steps"), {
+    step: wireStep(step),
+    ...(at === undefined ? {} : { at }),
+    ...(opts.parallel_with ? { parallel_with: opts.parallel_with } : {}),
+  });
+}
+
+/** Round 20: how a stop is tacked on — `parallel_with` (a step id) puts it in
+ * that step's parallel group, making one when it has none. */
+export interface TackOnOpts {
+  parallel_with?: string;
+}
+
+/** Round 20: a stop that flies side by side with `withSid` (after the group's
+ * last member; `at` within the group). 400 `not_parallel_safe` names a kind
+ * that can't (the error card says "use a Split for agents"). */
+export function tackOnParallel(flightId: string, step: FlightStep, withSid: string, at?: number): Promise<boolean> {
+  return tackOn(flightId, step, at, { parallel_with: withSid });
+}
+
+async function patchParallel(flightId: string, stepId: string, body: { parallel: null } | { parallel_with: string }): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: body });
+    return true;
+  } catch (err) {
+    errorPop("Saving the stop failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
+}
+
+/** Round 20: a stop still ahead leaves its parallel group (it then flies
+ * right after the group). */
+export function leaveParallel(flightId: string, stepId: string): Promise<boolean> {
+  return patchParallel(flightId, stepId, { parallel: null });
+}
+
+/** Round 20: a stop still ahead joins `withSid`'s parallel group (making one),
+ * moving to after its last member — the Sky's Shift-drop. */
+export function joinParallel(flightId: string, stepId: string, withSid: string): Promise<boolean> {
+  return patchParallel(flightId, stepId, { parallel_with: withSid });
 }
 
 /** Every stop of a flyway, appended to a live flight in order. */

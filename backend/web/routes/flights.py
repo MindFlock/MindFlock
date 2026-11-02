@@ -179,7 +179,11 @@ async def _start_intake(body: dict, subject: dict) -> JSONResponse:
 
 def _bad_step(err: _flights.PlanError) -> JSONResponse:
     return JSONResponse(
-        {"error": "bad_step", "detail": err.message, "field": err.field},
+        {
+            "error": getattr(err, "code", "") or "bad_step",
+            "detail": err.message,
+            "field": err.field,
+        },
         status_code=400,
     )
 
@@ -277,7 +281,10 @@ def flights_step_add(flight_id: str, payload: Optional[dict] = None) -> JSONResp
     unless the flight is running, waiting on you, paused or grounded.
     ``{"plan_id", "at"?}`` adds that saved stop's steps as one new group (404
     ``unknown_plan``); ``{"steps": [Step], "at"?, "group"?: {name}}`` adds
-    several, one new group when ``group`` is given."""
+    several, one new group when ``group`` is given. ``{"step", "parallel_with":
+    sid, "at"?}`` (round 20) puts the step in ``sid``'s parallel group (one
+    is made when ``sid`` has none): after its last member, or at ``at``
+    within it; 400 ``not_parallel_safe`` names a kind that can't."""
     body = payload or {}
     if body.get("plan_id"):
         return _change(
@@ -295,6 +302,14 @@ def flights_step_add(flight_id: str, payload: Optional[dict] = None) -> JSONResp
         )
     if not isinstance(body.get("step"), dict):
         return _bad_step(_flights.PlanError("step is an object", "step"))
+    if body.get("parallel_with"):
+        return _change(
+            flight_id,
+            "add_parallel",
+            str(body["parallel_with"]),
+            raw=body["step"],
+            at=body.get("at"),
+        )
     return _change(flight_id, "add", raw=body["step"], at=body.get("at"))
 
 
@@ -305,7 +320,10 @@ def flights_step_edit(
     """``{title?, config?, on_fail?, halt?, when?, group?}`` on a step still ahead →
     ``{"flight"}``; ``{halt}`` alone may also mark / clear the current step;
     ``group: {name}`` renames the step's group, ``null`` takes the step out.
-    ``{pos: {x, y} | null}`` is layout only: allowed on ANY step."""
+    ``{pos: {x, y} | null}`` is layout only: allowed on ANY step.
+    ``{parallel: null}`` takes the step out of its parallel group (it flies
+    right after it); ``{parallel_with: sid}`` moves it into ``sid``'s group
+    (making one) — round 20, steps still ahead only."""
     return _change(flight_id, "edit", step_id, raw=payload or {})
 
 

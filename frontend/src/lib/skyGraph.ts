@@ -5,12 +5,19 @@
  * `wireIntent` — what dropping a wire somewhere means. SkyChain draws it; the
  * Sky (SkyView) places chain origins and runs the wire drags.
  *
+ * Round 20 (parallel stops, docs/flights-r20-parallel.md): a parallel group's
+ * members (`node.parallel`) stand in one column — the first where the group's
+ * place is, the rest `PITCH_Y` below (unless pinned) — the line forks into
+ * them and joins out of them (béziers out→in, `fan` / `join`), the + trails
+ * the last member's row, and `wireIntent` knows `parallel`.
+ *
  * Coordinates are chain-local plane px: (0, 0) is the head's top-left (with
  * no head, the slot's origin). A node's box is `NODE_W × NODE_H`; its tile
  * (`TILE` square) sits centred at the box's top, the label area under it.
  */
 
 import { firstStepOf, loopSlotAfter, type Diagram, type DiagramEdge, type DiagramNode, type LoopMark } from "./flightDiagram";
+import { isParallelSafe, type StepKindDef } from "./flights";
 import type { Pos, Rect } from "./skyLayout";
 
 /** Tile metrics (plane px). The tile is the square; the node's box adds the
@@ -218,7 +225,15 @@ export function chainGraph(d: Diagram, opts: ChainGraphOpts): ChainGraph {
     if (!kind) continue;
     push({ from, to, kind, ...(e.loop ? { loop: e.loop } : {}), ...(e.via ? { via: e.via } : {}), ...(e.done ? { done: true } : {}) });
   }
-  if (hn && main.length && !specs.some((s) => s.from === HEAD_ID)) push({ from: HEAD_ID, to: main[0].id, kind: "head" });
+  if (hn && main.length && !specs.some((s) => s.from === HEAD_ID)) {
+    // Round 20: a first parallel group forks out of the head, one per member.
+    const pid = main[0].parallel?.id;
+    let end = 1;
+    while (pid && end < main.length && main[end].parallel?.id === pid) end++;
+    const first = main.slice(0, end);
+    if (first.length > 1) for (const n of first) push({ from: HEAD_ID, to: n.id, kind: "fan" });
+    else push({ from: HEAD_ID, to: main[0].id, kind: "head" });
+  }
   const hasAdd = d.nodes.some((n) => n.kind === "add");
   if (hasAdd && !addFrom) addFrom = main.length ? main[main.length - 1].id : hn ? HEAD_ID : null;
   if (addFrom) push({ from: addFrom, to: "add", kind: "add" });
@@ -347,6 +362,11 @@ export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
   // pushes its neighbours along), a tile's place a pitch.
   const rows = new Map<string, { col: number; x0: number; x: number; y: number; rowH: number }>();
   let prev: GraphNode | null = null;
+  // Round 20: the column of the parallel group being placed — its first
+  // member (where the line goes on from) and its lowest member so far.
+  let col: { id: string; head: GraphNode; last: GraphNode } | null = null;
+  // The lowest auto-placed member: branch rows start under it.
+  let colLow = -Infinity;
   for (const n of nodes) {
     let next: GraphNode;
     const split = n.node.branch ? byId.get(n.node.branch.from) : undefined;
@@ -358,7 +378,7 @@ export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
       let st = rows.get(from);
       if (!st) {
         const x0 = (at ? at.x : 0) + PITCH_X / 2;
-        st = { col: 0, x0, x: x0, y: (at ? at.y : 0) + BRANCH_Y, rowH: 0 };
+        st = { col: 0, x0, x: x0, y: Math.max((at ? at.y : 0) + BRANCH_Y, colLow + BRANCH_Y), rowH: 0 };
         rows.set(from, st);
       }
       if (st.col >= BRANCH_COLS) {
@@ -371,9 +391,15 @@ export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
       st.x += Math.max(PITCH_X, n.w + (PITCH_X - NODE_W));
       st.rowH = Math.max(st.rowH, PITCH_Y, n.h + (PITCH_Y - NODE_H));
       st.col++;
+    } else if (n.node.parallel && col && col.id === n.node.parallel.id && n.node.parallel.index > 0) {
+      // A later member: under the one before it, in the group's column.
+      next = n.pinned ? { ...n } : { ...n, x: col.head.x, y: col.last.y + Math.max(PITCH_Y, col.last.h + (PITCH_Y - NODE_H)) };
+      col.last = next;
+      if (!n.pinned) colLow = Math.max(colLow, next.y);
     } else {
       next = n.pinned ? { ...n } : { ...n, x: prev ? prev.x + PITCH_X : 0, y: prev ? prev.y : 0 };
       prev = next;
+      col = n.node.parallel && n.node.parallel.size > 1 ? { id: n.node.parallel.id, head: next, last: next } : null;
     }
     byId.set(next.id, next);
     out.push(next);
@@ -529,11 +555,20 @@ export type WireIntent =
   | { op: "attach"; session: string; chain: string }
   | { op: "palette"; chain: string; after: DiagramNode | null; at: Pos }
   | { op: "split"; chain: string; step: DiagramNode; at: Pos }
+  /** Round 20: a stop side by side with `with` (X's next): dropped on empty
+   * sky, a NEW one (`at`: where, plane px — the palette, then
+   * `parallel_with: with`); Shift-dropped on a stop `step` of the same chain,
+   * that stop joins `with`'s group (`PATCH {parallel_with}`). `after` is X. */
+  | { op: "parallel"; chain: string; after: DiagramNode; with: DiagramNode; at?: Pos; step?: DiagramNode }
   | { op: "none" };
 
 export interface WireIntentCtx {
-  /** Shift held: a drop on another chain's head asks for a handoff. */
+  /** Shift held: a drop on another chain's head asks for a handoff; on a
+   * stop of the same chain, that stop runs in parallel with X's next. */
   shift?: boolean;
+  /** The kinds list (its `parallel_safe`); without it the client's own
+   * `PARALLEL_UNSAFE` decides. */
+  kinds?: readonly Pick<StepKindDef, "kind" | "parallel_safe">[] | null;
 }
 
 const NONE: WireIntent = { op: "none" };
@@ -545,6 +580,41 @@ const stopsOnlyChain = (c: ChainGraph) => c.head.kind !== "session";
 const isChainStart = (c: ChainGraph, n: GraphNode) => isHead(n) || n.id === firstNodeOf(c)?.id;
 const insertFromOf = (c: ChainGraph) => c.insertFrom ?? 0;
 
+/** The line's nodes in order (no branches, no head). */
+const lineOf = (c: Pick<ChainGraph, "nodes">) => c.nodes.filter((n) => !isBranchRow(n.node));
+
+/** Round 20: `n` itself, or the last member of the parallel group it is in
+ * — what "after n" means for a member (after the whole group). */
+export function groupLast(c: Pick<ChainGraph, "nodes">, n: GraphNode): GraphNode {
+  const pid = n.node.parallel?.id;
+  if (!pid) return n;
+  const line = lineOf(c);
+  let k = line.findIndex((m) => m.id === n.id);
+  if (k < 0) return n;
+  while (k + 1 < line.length && line[k + 1].node.parallel?.id === pid) k++;
+  return line[k];
+}
+
+/** Round 20: the node after `n` on its chain's line (past `n`'s parallel
+ * group), or null when it is the last. */
+export function nextOf(c: Pick<ChainGraph, "nodes">, n: GraphNode): GraphNode | null {
+  const line = lineOf(c);
+  if (n.id === HEAD_ID) return line[0] || null;
+  const k = line.findIndex((m) => m.id === groupLast(c, n).id);
+  return k >= 0 ? line[k + 1] || null : null;
+}
+
+/** Round 20: may a stop join `next`'s parallel group (making one with it)?
+ * A stop of a parallel-safe kind, and one that can still change — or one
+ * already in a group still ahead of the flight. */
+export function parallelOk(c: Pick<ChainGraph, "nodes" | "insertFrom">, next: GraphNode | null, kinds?: WireIntentCtx["kinds"]): next is GraphNode {
+  if (!next || next.node.kind !== "stop" || !next.node.step) return false;
+  if (!isParallelSafe(next.node.step.kind, kinds)) return false;
+  if (next.node.editable) return true;
+  if (!next.node.parallel) return false;
+  const last = groupLast(c, next).node;
+  return last.index !== undefined && last.index + 1 >= (c.insertFrom ?? 0);
+}
 /** What dropping a wire from `src` on `dst` does. Every intent names chains
  * by their KEY (`ChainGraph.key`: a session title or `"flight:<id>"`); a
  * handoff's `target` is `"flight:<id>"` (the API's own form). Only targets
@@ -572,21 +642,37 @@ export function wireIntent(src: WireEnd, dst: WireEnd, ctx: WireIntentCtx = {}):
     return { op: "attach", session: A.head.session, chain: B.key };
   }
   if (!canFollow(X.node, insertFromOf(A))) return NONE;
-  if ("sky" in dst) return { op: "palette", chain: A.key, after: X.node, at: dst.sky };
+  // Round 20: X's next — when X already has one, a wire to empty sky adds
+  // a stop in parallel with it.
+  const N = nextOf(A, X);
+  const Xa = groupLast(A, X).node; // "after X" = after X's whole group
+  if ("sky" in dst) {
+    if (parallelOk(A, N, ctx.kinds)) return { op: "parallel", chain: A.key, after: Xa, with: N.node, at: dst.sky };
+    return { op: "palette", chain: A.key, after: Xa, at: dst.sky };
+  }
 
   const B = dst.chain;
   const Y = dst.node;
+  if (B.key === A.key && ctx.shift) {
+    // Shift-drop on a stop of the same chain: it runs beside X's next.
+    if (isHead(Y) || isBranchRow(Y.node) || Y.node.kind !== "stop" || !Y.node.step || !Y.node.editable) return NONE;
+    if (!parallelOk(A, N, ctx.kinds) || Y.id === N.id || Y.id === X.id) return NONE;
+    if (Y.node.parallel && Y.node.parallel.id === N.node.parallel?.id) return NONE;
+    if (!isParallelSafe(Y.node.step.kind, ctx.kinds)) return NONE;
+    return { op: "parallel", chain: A.key, after: Xa, with: N.node, step: Y.node };
+  }
   if (B.key === A.key) {
     if (isHead(Y) || Y.node.index === undefined || X.node.index === undefined || isBranchRow(Y.node)) return NONE;
     if (Y.node.index > X.node.index) {
       // Y right after X: a stop that can change, not already there.
       if (Y.node.kind !== "stop" || !Y.node.editable) return NONE;
-      if (Y.node.index === loopSlotAfter(X.node)) return NONE;
-      return { op: "move", chain: A.key, step: Y.node, after: X.node };
+      if (Y.node.parallel && Y.node.parallel.id === X.node.parallel?.id) return NONE; // X's own group
+      if (Y.node.index === loopSlotAfter(Xa)) return NONE;
+      return { op: "move", chain: A.key, step: Y.node, after: Xa };
     }
     // At or before X (X itself too): a Loop after X back to Y.
     if (!loopable(X.node) || !loopable(Y.node)) return NONE;
-    return { op: "loop", chain: A.key, from: X.node, to: Y.node };
+    return { op: "loop", chain: A.key, from: Xa, to: Y.node };
   }
 
   // Another chain: only a stops-only chain, by where it starts.
@@ -594,10 +680,10 @@ export function wireIntent(src: WireEnd, dst: WireEnd, ctx: WireIntentCtx = {}):
   const asks = !!ctx.shift || B.head.kind === "trigger";
   if (asks) {
     if (A.head.kind !== "session" || !B.flightId) return NONE;
-    return { op: "handoff", chain: A.key, from: X.node, target: "flight:" + B.flightId };
+    return { op: "handoff", chain: A.key, from: Xa, target: "flight:" + B.flightId };
   }
   if (isHead(Y)) return NONE;
-  return { op: "merge", chain: A.key, after: X.node, from: B.key };
+  return { op: "merge", chain: A.key, after: Xa, from: B.key };
 }
 
 /** Every node of `chains` a wire from `src` could land on (`wireIntent` not
