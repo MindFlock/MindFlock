@@ -193,7 +193,7 @@ describe("the line", () => {
 
   it("the session tile says what the session is on (or where its flight is)", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain('const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");');
+    expect(src).toContain('const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");');
   });
 
   it("focus draws the ring; a pin shows when pinned", () => {

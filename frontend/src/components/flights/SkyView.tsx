@@ -140,7 +140,7 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { attachGrounded, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
@@ -1074,7 +1074,7 @@ export function SkyView() {
   /** The live flight on a session's line, if any. */
   const liveFlightOf = (title: string): Flight | null => {
     const fl = rows.find((r) => r.title === title)?.flight as FlightRow | null | undefined;
-    return fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+    return fl && isShown(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
   };
   /** A saved stop dropped on `title`'s line. A line with a flight in the air
    * takes it as one more stop (one group) at the end; one without starts
@@ -1083,7 +1083,7 @@ export function SkyView() {
   const onFly = (plan: FlightPlan, title: string) => {
     const live = liveFlightOf(title);
     if (live) void tackOnPlan(live.id, plan.id);
-    else void startFlightOn(title, plan.id);
+    else void startFlightOn(title, plan.id, "prompt");
   };
   /** A grounded flight takes off on `title` (its ⋯ Fly on a session…). */
   const onAttach = (f: Flight, title: string) => {
@@ -1280,7 +1280,8 @@ export function SkyView() {
     // Their spots were their own chain's: they are placed afresh here.
     const bare = steps.map(({ pos: _pos, ...st }) => st as FlightStep);
     let ok = false;
-    if (!live) ok = !!(await attachGrounded(f.id, { title }));
+    // Round 19: wired / dropped onto a session it waits there, ready.
+    if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: "prompt" }));
     else if (await tackOnSteps(live.id, bare, at !== undefined && at < live.steps.length ? at : undefined, name || undefined)) ok = await deleteFlight(f.id);
     if (!ok) return;
     const n = steps.length;

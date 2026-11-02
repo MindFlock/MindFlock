@@ -44,6 +44,7 @@ import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import {
   isLive,
+  isShown,
   newStep,
   perchLabel,
   stepActor,
@@ -462,8 +463,9 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
 /** A flight's stops with their live state. */
 export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): DiagramNode[] {
   const live = isLive(f);
-  // Stops with no session yet: nothing has flown, every one can change.
-  const grounded = f.state === "grounded";
+  // Stops with no session yet, or built and not yet flying (round 19 ready):
+  // nothing has flown, every one can change.
+  const grounded = f.state === "grounded" || f.state === "ready";
   return f.steps.map((s, i) => {
     const st = stepStateOf(f, s, i);
     const atCursor = i === f.cursor && live;
@@ -539,7 +541,7 @@ export function receiptOf(detail: Record<string, unknown> | null | undefined): s
  * while it is in the air. */
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
   const { line, loops } = liftLoops(flightStops(f, kinds));
-  if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
+  if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
@@ -577,7 +579,7 @@ export function ladderRungs(row: Pick<Instance, "stage"> & { autopilot?: Autopil
 /** A mini ladder for a child box: its flight's dots, else its fast-track's. */
 function miniDots(row: Instance): string {
   const fl = row.flight as FlightRow | null | undefined;
-  if (fl && isLive(fl)) return stripDots(fl);
+  if (fl && isShown(fl)) return stripDots(fl);
   return ladderRungs(row)
     .map((r) => (r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○"))
     .join("");
@@ -648,10 +650,11 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
   let insertFrom = 0;
   let loops: DiagramEdge[] = [];
   const fl = row.flight as FlightRow | null | undefined;
-  if (fl && isLive(fl)) {
+  if (fl && isShown(fl)) {
     mode = "flight";
     flightId = fl.id;
-    insertFrom = fl.cursor + 1;
+    // A ready flight (round 19) takes stops anywhere, its first one too.
+    insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
     const full = opts.flights?.find((f) => f.id === fl.id);
     if (full) {
       const lifted = liftLoops(flightStops(full, opts.kinds));
@@ -1156,7 +1159,7 @@ const BRANCH_NODE_STATE: Record<BranchState, DiagramNodeState> = {
  * fast-track's rungs), "" when it has neither. */
 export function innerSummary(row: Instance): string {
   const fl = row.flight as FlightRow | null | undefined;
-  if (fl && isLive(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+  if (fl && isShown(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
   const rungs = ladderRungs(row);
   if (!rungs.length) return "";
   const done = rungs.filter((r) => r.state === "done").length;
@@ -1239,7 +1242,7 @@ export function hasSessionDiagram(rows: readonly Instance[], title: string): boo
   const row = rows.find((r) => r.title === title);
   if (!row) return false;
   const fl = row.flight as FlightRow | null | undefined;
-  return !!(fl && isLive(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+  return !!(fl && isShown(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
 }
 
 // --- The bird -------------------------------------------------------------------

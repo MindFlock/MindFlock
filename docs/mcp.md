@@ -366,7 +366,7 @@ it.
 | `describe_flight` | read (runs the server's one-shot model; starts nothing) | **no** |
 | `start_flight` | write, flies stops that may push or merge | **no** |
 | `flight_status` | read | **no** |
-| `control_flight` | write (pause, resume, cancel, skip, retry, jump, done) | **no** |
+| `control_flight` | write (run, pause, resume, cancel, skip, retry, jump, done) | **no** |
 | `edit_flight` | write (add, remove, rename stops) | **no** |
 | `save_flight_plan` | write (a saved stop on the shelf) | **no** |
 
@@ -1198,6 +1198,9 @@ shrink, then the stops far ahead fold too.
   `step` defaults to the current stop. `done` is for a perch (a `you` stop,
   or a verify stop waiting on a person) and takes an optional `note`.
 - `jump` → `POST /api/flights/{id}/jump {step}`, which needs `step`.
+- `run` → `POST /api/flights/{id}/run`: a **ready** flight (built on its
+  session, waiting for ▶ Run or the session's next prompt — round 19) takes
+  off now; anything else is 409 `not_ready`.
 
 The scope rule above applies. A grounded flight answers 409 `grounded` to
 everything but `cancel`. The tool says so: nothing happens until the user

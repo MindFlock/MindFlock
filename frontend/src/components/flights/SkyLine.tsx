@@ -70,6 +70,7 @@ import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
 import { pillAimer, useChainMenu } from "./useChainMenu";
+import { ReadyHead, startWord } from "./ReadyHead";
 import { SkyChain } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
@@ -393,7 +394,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const where = row ? lineWhere(line.diagram) : "";
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-  const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
     [name, headSub, p.title, sessionNode]
@@ -619,7 +620,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             onPortDown={p.onPortDown}
             onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
-            renderHead={() => (
+            renderHead={() =>
+              line.flight?.state === "ready" ? (
+                <ReadyHead flight={line.flight} />
+              ) : (
               <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
                 {ss.label}
               </span>

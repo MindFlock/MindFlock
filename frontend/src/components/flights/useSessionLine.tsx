@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
-import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
+import { isShown, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
@@ -242,7 +242,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
 
   const row = rows.find((r) => r.title === title);
   const flRow = row?.flight as FlightRow | null | undefined;
-  const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+  const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
   // The line in the flight's own indexes (what every handler below speaks).
   const line = useMemo(() => sessionDiagram(rows, title, { flights, kinds, family, foldFlown, expandedGroups }), [rows, title, flights, kinds, family, foldFlown, expandedGroups]);
   const cancel = useCancelAsk(flight);
@@ -291,9 +291,11 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
         if ((await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where))) && openIt) setSelectIndex(where ?? end);
       } else {
-        const f = await tackOnNew(title, [step]);
+        // Round 19: building a chain on a session doesn't fly it — it waits,
+        // ready, for ▶ Run or the session's next prompt.
+        const f = await tackOnNew(title, [step], "prompt");
         if (f) {
-          toast("Took off: " + (f.plan_name || "a new flight"));
+          toast("Ready: " + (f.plan_name || "a new chain") + " — it runs on ▶ Run or your next prompt");
           if (openIt) setSelectIndex(f.steps.length - 1);
         }
       }
@@ -314,7 +316,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         const fid = flight.id;
         const go = () => tackOnPlan(fid, plan.id, where);
         if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
-      } else await takeOff({ plan_id: plan.id, title });
+      } else await takeOff({ plan_id: plan.id, title, start_on: "prompt" });
     } finally {
       setBusy(false);
     }
@@ -434,7 +436,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         if (await tackOnPlan(flight.id, plan.id)) toast("Tacked on “" + plan.name + "” — " + plan.steps.length + " stops");
-      } else await takeOff({ plan_id: plan.id, title });
+      } else await takeOff({ plan_id: plan.id, title, start_on: "prompt" });
     } finally {
       setBusy(false);
     }

@@ -14,6 +14,7 @@ import { deriveSessionState } from "../../lib/sessionState";
 import { chainColor, chainGraph, wireIntent, HEAD_ID, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { windowName } from "../../lib/windowName";
 import type { StepKindDef } from "../../lib/flights";
+import { ReadyHead, startWord } from "./ReadyHead";
 import { SkyChain } from "./SkyChain";
 import { pillAimer, useChainMenu } from "./useChainMenu";
 import { useNodeMoves } from "./useSkyWiring";
@@ -28,7 +29,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const where = row ? lineWhere(line.diagram) : "";
-  const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: windowName(title), sub: headSub, session: title, color: chainColor(title), node: sessionNode }),
     [title, headSub, sessionNode]
@@ -115,7 +116,10 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
         onPortDown={onPortDown}
         onPlus={(after) => (after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
         renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
-        renderHead={() => (
+        renderHead={() =>
+          line.flight?.state === "ready" ? (
+            <ReadyHead flight={line.flight} />
+          ) : (
           <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
             {ss.label}
           </span>

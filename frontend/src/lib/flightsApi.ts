@@ -164,6 +164,8 @@ export async function openWhenReady(title: string, tries = 8, waitMs = 750): Pro
 
 export interface StartBody {
   plan_id: string;
+  /** Round 19: "prompt" / "run" = built, waiting (ready); absent = take off now. */
+  start_on?: FlightStartOn;
   title?: string;
   subject?: { kind: string; source: string; id: string };
   repo_path?: string;
@@ -191,8 +193,8 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
 }
 
 /** Fly a saved flyway on an existing session (a line on the Sky). */
-export function startFlightOn(title: string, planId: string): Promise<Flight | null> {
-  return takeOff({ plan_id: planId, title });
+export function startFlightOn(title: string, planId: string, startOn?: FlightStartOn): Promise<Flight | null> {
+  return takeOff({ plan_id: planId, title, ...(startOn ? { start_on: startOn } : {}) });
 }
 
 /** What a waiting item's Fly posts: the Intake start routes with their bodies

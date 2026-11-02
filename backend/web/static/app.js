@@ -24183,6 +24183,9 @@ var MAIN_TRIGGERS = ["main_push", "main_red"];
 function isLive(f) {
 	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
 }
+function isShown(f) {
+	return isLive(f) || f.state === "ready";
+}
 function flightDrives(f) {
 	return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
 }
@@ -37741,8 +37744,26 @@ function jumpFlight(flightId, stepId, title = "") {
 	return flightAction("Jump", flightPath(flightId, "/jump"), { step: stepId }, title ? "Jumped to " + title : "");
 }
 function controlFlight(flightId, verb) {
-	const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : "Flight cancelled — its session is kept";
-	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : "Cancel", flightPath(flightId, "/" + verb), {}, said);
+	const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : verb === "run" ? "Chain started" : "Flight cancelled — its session is kept";
+	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Cancel", flightPath(flightId, "/" + verb), {}, said);
+}
+function runFlight(flightId) {
+	return controlFlight(flightId, "run");
+}
+async function setStartOn(flightId, startOn) {
+	try {
+		await api(flightPath(flightId), {
+			method: "PATCH",
+			json: { start_on: startOn }
+		});
+		return true;
+	} catch (err) {
+		errorPop("Changing how it starts failed", errMsg(err));
+		return false;
+	} finally {
+		refreshFlights();
+		refreshInstances();
+	}
 }
 async function setHalt(flightId, stepId, halt) {
 	try {
@@ -37785,10 +37806,11 @@ async function takeOff(body) {
 		return null;
 	}
 }
-function startFlightOn(title, planId) {
+function startFlightOn(title, planId, startOn) {
 	return takeOff({
 		plan_id: planId,
-		title
+		title,
+		...startOn ? { start_on: startOn } : {}
 	});
 }
 function flyRequest(t, plan, extra = {}) {
@@ -37865,12 +37887,13 @@ function wireStep(step) {
 	if (step.pos) out.pos = step.pos;
 	return out;
 }
-async function tackOnNew(title, steps) {
+async function tackOnNew(title, steps, startOn) {
 	try {
 		return (await api("/api/flights/start", { json: {
 			title,
 			steps: steps.map(wireStep),
-			absorb_fasttrack: true
+			absorb_fasttrack: true,
+			...startOn ? { start_on: startOn } : {}
 		} }))?.flight || null;
 	} catch (err) {
 		errorPop("Tack on failed", errMsg(err));
@@ -80945,7 +80968,7 @@ function flywayDiagram(steps, kinds) {
 }
 function flightStops(f, kinds) {
 	const live = isLive(f);
-	const grounded = f.state === "grounded";
+	const grounded = f.state === "grounded" || f.state === "ready";
 	return f.steps.map((s, i) => {
 		const st = stepStateOf(f, s, i);
 		const atCursor = i === f.cursor && live;
@@ -81004,7 +81027,7 @@ function receiptOf(detail) {
 }
 function flightDiagram(f, kinds) {
 	const { line, loops } = liftLoops(flightStops(f, kinds));
-	if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
+	if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
@@ -81057,7 +81080,7 @@ function ladderRungs(row) {
 }
 function miniDots(row) {
 	const fl = row.flight;
-	if (fl && isLive(fl)) return stripDots(fl);
+	if (fl && isShown(fl)) return stripDots(fl);
 	return ladderRungs(row).map((r) => r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○").join("");
 }
 function sessionBox(row, kind, rowAt) {
@@ -81112,10 +81135,10 @@ function sessionDiagram(rows, title, opts = {}) {
 	let insertFrom = 0;
 	let loops = [];
 	const fl = row.flight;
-	if (fl && isLive(fl)) {
+	if (fl && isShown(fl)) {
 		mode = "flight";
 		flightId = fl.id;
-		insertFrom = fl.cursor + 1;
+		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
 		const full = opts.flights?.find((f) => f.id === fl.id);
 		if (full) {
 			const lifted = liftLoops(flightStops(full, opts.kinds));
@@ -81587,7 +81610,7 @@ var BRANCH_NODE_STATE = {
 };
 function innerSummary(row) {
 	const fl = row.flight;
-	if (fl && isLive(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+	if (fl && isShown(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
 	const rungs = ladderRungs(row);
 	if (!rungs.length) return "";
 	const done = rungs.filter((r) => r.state === "done").length;
@@ -81663,7 +81686,7 @@ function hasSessionDiagram(rows, title) {
 	const row = rows.find((r) => r.title === title);
 	if (!row) return false;
 	const fl = row.flight;
-	return !!(fl && isLive(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+	return !!(fl && isShown(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
 }
 var STOP_TONE = {
 	current: "working",
@@ -85341,6 +85364,51 @@ function wireIntent(src, dst, ctx = {}) {
 	};
 }
 //#endregion
+//#region src/components/flights/ReadyHead.tsx
+function startWord(f) {
+	return f.start_on === "run" ? "runs when you press ▶ Run" : "runs on your next prompt";
+}
+function ReadyHead({ flight }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const run = async () => {
+		setBusy(true);
+		try {
+			if (await runFlight(flight.id)) toast("Running “" + (flight.plan_name || "the chain") + "”");
+		} finally {
+			setBusy(false);
+		}
+	};
+	const flip = () => void setStartOn(flight.id, flight.start_on === "run" ? "prompt" : "run");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "sky-ready",
+		"data-no-drag": true,
+		onPointerDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-head-chip tone-ready",
+				title: "Built, not flying yet",
+				children: "Ready"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-icon-btn sky-run",
+				disabled: busy,
+				title: "Run this chain now",
+				"aria-label": "Run this chain now",
+				onClick: () => void run(),
+				children: "▶ Run"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike sky-start-on",
+				title: "Change how this chain starts",
+				onClick: flip,
+				children: startWord(flight)
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/flights/StopIcons.tsx
 var FAMILY = {
 	agent: "work",
@@ -86704,7 +86772,8 @@ function FlightChain({ title, line, kinds, label }) {
 	const flightId = line.flight?.id || "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const headSub = (row ? lineWhere(line.diagram) : "") || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const where = row ? lineWhere(line.diagram) : "";
+	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
 		title: windowName(title),
@@ -86821,7 +86890,7 @@ function FlightChain({ title, line, kinds, label }) {
 				onPortDown,
 				onPlus: (after) => after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true),
 				renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
-				renderHead: () => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sky-head-chip fl-box-chip tone-" + ss.tone,
 					title: ss.hint,
 					children: ss.label
@@ -88468,7 +88537,7 @@ function useSessionLine(title, src, opts) {
 	const [expandedGroups, setExpandedGroups] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
 	const row = rows.find((r) => r.title === title);
 	const flRow = row?.flight;
-	const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+	const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
 	const line = (0, import_react.useMemo)(() => sessionDiagram(rows, title, {
 		flights,
 		kinds,
@@ -88520,9 +88589,9 @@ function useSessionLine(title, src, opts) {
 				const where = at !== null && at < end ? at : void 0;
 				if (await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where)) && openIt) setSelectIndex(where ?? end);
 			} else {
-				const f = await tackOnNew(title, [step]);
+				const f = await tackOnNew(title, [step], "prompt");
 				if (f) {
-					toast("Took off: " + (f.plan_name || "a new flight"));
+					toast("Ready: " + (f.plan_name || "a new chain") + " — it runs on ▶ Run or your next prompt");
 					if (openIt) setSelectIndex(f.steps.length - 1);
 				}
 			}
@@ -88542,7 +88611,8 @@ function useSessionLine(title, src, opts) {
 				if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
 			} else await takeOff({
 				plan_id: plan.id,
-				title
+				title,
+				start_on: "prompt"
 			});
 		} finally {
 			setBusy(false);
@@ -88646,7 +88716,8 @@ function useSessionLine(title, src, opts) {
 				if (await tackOnPlan(flight.id, plan.id)) toast("Tacked on “" + plan.name + "” — " + plan.steps.length + " stops");
 			} else await takeOff({
 				plan_id: plan.id,
-				title
+				title,
+				start_on: "prompt"
 			});
 		} finally {
 			setBusy(false);
@@ -133181,7 +133252,7 @@ function SkyLine(p) {
 	const where = row ? lineWhere(line.diagram) : "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const headSub = where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
 		title: name,
@@ -133493,7 +133564,7 @@ function SkyLine(p) {
 						onPortDown: p.onPortDown,
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
-						renderHead: () => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
 							title: ss.hint,
 							children: ss.label
@@ -136132,12 +136203,12 @@ function SkyView() {
 	};
 	const liveFlightOf = (title) => {
 		const fl = rows.find((r) => r.title === title)?.flight;
-		return fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+		return fl && isShown(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
 	};
 	const onFly = (plan, title) => {
 		const live = liveFlightOf(title);
 		if (live) tackOnPlan(live.id, plan.id);
-		else startFlightOn(title, plan.id);
+		else startFlightOn(title, plan.id, "prompt");
 	};
 	const onAttach = (f, title) => {
 		setAttachPick(null);
@@ -136339,7 +136410,10 @@ function SkyView() {
 		const live = into || liveFlightOf(title);
 		const bare = steps.map(({ pos: _pos, ...st }) => st);
 		let ok = false;
-		if (!live) ok = !!await attachGrounded(f.id, { title });
+		if (!live) ok = !!await attachGrounded(f.id, {
+			title,
+			start_on: "prompt"
+		});
 		else if (await tackOnSteps(live.id, bare, at !== void 0 && at < live.steps.length ? at : void 0, name || void 0)) ok = await deleteFlight(f.id);
 		if (!ok) return;
 		const n = steps.length;

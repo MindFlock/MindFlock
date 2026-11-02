@@ -197,6 +197,12 @@ export function isLive(f: Pick<Flight, "state">): boolean {
   return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
 }
 
+/** Round 19: a flight a session's line draws — one in the air (`isLive`), or
+ * one built and waiting for ▶ Run or the session's next prompt (`ready`). */
+export function isShown(f: Pick<Flight, "state">): boolean {
+  return isLive(f) || f.state === "ready";
+}
+
 /** The flight drives its session's ship ladder right now: running, parked on
  * you, or paused. The pane hides its guided next-step button and its ⏩
  * fast-track toggle meanwhile (a toggle mid-flight would fight the flight);
