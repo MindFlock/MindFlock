@@ -4044,6 +4044,54 @@ a.fl-waiting-ref:hover {
   background-size: 18px 18px;
   min-height: 190px;
 }
+
+/* Round 20: the Flight tab draws the session as the Sky does — a frame round
+   its chain, its bar the name · branch · state · where; the agent is the
+   chain's first tile (SkyChain.css). */
+.fl-chain-frame {
+  position: relative;
+  width: max-content;
+  min-width: 260px;
+  border: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 38%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 5%, var(--bg));
+}
+.fl-chain-frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 26%, transparent);
+  border-radius: 14px 14px 0 0;
+  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 11%, transparent);
+  font-size: 12.5px;
+}
+.fl-chain-frame-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fl-chain-frame-branch,
+.fl-chain-frame-where {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fl-chain-frame-branch {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.fl-chain-frame-chip {
+  flex: none;
+}
+.fl-chain-frame-body {
+  width: max-content;
+  padding: 14px 16px 12px;
+}
 /* Round 18 — a chain in the Sky, n8n-style (SkyChain.tsx, lib/skyGraph):
  * free-floating icon tiles with the name and a muted summary UNDER them, a
  * square in-port on the left, a round out-port on the right, bézier wires,
@@ -4728,6 +4776,159 @@ a.fl-waiting-ref:hover {
 .sky-chain:hover .sky-socket,
 .sky-socket.is-target {
   opacity: 1;
+}
+
+/* --- Round 20: the agent tile, sub-session frames ---------------------------
+   (docs/flights.md "Round 20" A). The session's chain starts at its AGENT:
+   the sparkle in the session's colour on a plain rounded tile (no more
+   session "pill" shape — the frame round the chain is the session). */
+
+.sky-head.sky-agent .sky-tile {
+  border-radius: 16px;
+}
+
+.sky-head.sky-agent .sky-node-sub {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+/* A sub-session: a small frame in its own colour — its name on the bar, its
+   agent tile inside, its own chain as a strip of mini stops. */
+.sky-node.sky-subframe {
+  box-sizing: border-box;
+  justify-content: flex-start;
+  padding: 0 8px 8px;
+  border: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 6%, var(--bg, transparent));
+}
+
+.sky-node.sky-subframe:hover {
+  border-color: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 65%, transparent);
+}
+
+.sky-node.sky-subframe.is-selected,
+.sky-node.sky-subframe.is-highlighted {
+  border-color: var(--accent);
+}
+
+.sky-subframe-bar {
+  box-sizing: border-box;
+  flex: none;
+  width: calc(100% + 16px);
+  height: 22px;
+  margin: 0 -8px 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 24%, transparent);
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 12%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-subframe .sky-tile {
+  border-radius: 16px;
+}
+
+.sky-subframe .sky-tile-icon {
+  color: var(--sky-sub-color, var(--accent));
+}
+
+/* The bus down from the parent's agent to each sub-session's frame. */
+.sky-wire-fan.sky-wire-bus {
+  stroke-dasharray: 4 4;
+}
+
+/* A sub-session's own chain, small: a square per stop on a thin line. */
+.sky-mini-chain {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sky-mini-chain::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 50%;
+  border-top: 1.5px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 45%, transparent);
+}
+.sky-mini {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--sky-tile-line);
+  background: var(--sky-tile-bg);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1;
+}
+.sky-mini.st-done {
+  border-color: color-mix(in srgb, var(--tone-working) 55%, transparent);
+  color: var(--fl-ink-working, var(--tone-working));
+}
+.sky-mini.st-current {
+  border-color: var(--tone-working);
+  color: var(--fl-ink-working, var(--tone-working));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone-working) 22%, transparent);
+}
+.sky-mini.st-perched {
+  border-color: var(--tone-attention);
+  color: var(--tone-attention);
+}
+.sky-mini.st-failed,
+.sky-mini.st-halted {
+  border-color: var(--red, var(--tone-broken));
+  color: var(--red, var(--tone-broken));
+}
+.sky-mini-more {
+  width: auto;
+  padding: 0 4px;
+}
+
+/* The agent's Send a prompt… composer, at the pointer (a portal on the page). */
+.sky-agent-prompt {
+  position: fixed;
+  z-index: 81;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 320px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--sky-shadow-raised, 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34));
+  font-size: 12.5px;
+}
+.sky-agent-prompt-head {
+  font-weight: 600;
+}
+.sky-agent-prompt textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+}
+.sky-agent-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+.sky-agent-prompt-row .muted {
+  margin-right: auto;
 }
 /* The sky (SkyView.tsx) — prefix sky-.
  *
@@ -12317,11 +12518,12 @@ details.fl-group-waiting > summary {
   top: 0;
   z-index: 3;
 }
-.skl-chain-wrap.has-card .sky-head > :not(.sky-tile),
-.skl-chain-wrap.has-card .sky-head .sky-tile > :not(.sky-port-out) {
+/* (Only this chain's own head: the card's Flight tab draws a chain too.) */
+.skl-chain-wrap.has-card > .sky-chain > .sky-head > :not(.sky-tile),
+.skl-chain-wrap.has-card > .sky-chain > .sky-head .sky-tile > :not(.sky-port-out) {
   visibility: hidden;
 }
-.skl-chain-wrap.has-card .sky-head .sky-tile {
+.skl-chain-wrap.has-card > .sky-chain > .sky-head .sky-tile {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -12339,6 +12541,116 @@ details.fl-group-waiting > summary {
 .skl-chainline.skl-grounded.is-selected > .skl-bar.skl-label,
 .skl-chainline.skl-grounded.is-focused > .skl-bar.skl-label {
   opacity: 1;
+}
+
+/* --- Round 20: a session is a FRAME round its chain ------------------------
+   (docs/flights.md "Round 20" A, docs/flights-r20-frames.md). A soft rounded
+   box in the session's colour at low alpha (`.skl-frame-box`, drawn behind
+   the chain and grown to a tile dragged left of / above the origin), its
+   title bar on the frame's top edge: name · branch · state chip · where ·
+   ⋯ — the drag handle (double-click renames). The chain's first tile is the
+   agent (SkyChain.css `.sky-agent`). A stops-only chain (`.skl-grounded`)
+   has no frame. */
+
+.skl.skl-chainline.skl-frame {
+  padding: 0 16px 12px;
+  min-width: 200px;
+}
+
+.skl-frame-box {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+  border: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 38%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 5%, transparent);
+  pointer-events: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.skl-frame > .skl-chain-wrap,
+.skl-frame > .skl-ruler,
+.skl-frame > .skl-cards,
+.skl-frame > .skl-close-confirm {
+  position: relative;
+  z-index: 1;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  box-sizing: border-box;
+  width: auto;
+  max-width: none;
+  height: 30px;
+  margin: 0 -16px 12px;
+  padding: 0 6px 0 12px;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 26%, transparent);
+  border-radius: 14px 14px 0 0;
+  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 11%, transparent);
+  outline: none;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-name {
+  flex: 0 1 auto;
+  max-width: 260px;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-menu {
+  margin-left: auto;
+}
+
+.skl-frame-bar .skl-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-state-chip {
+  flex: none;
+  height: auto;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.skl-frame-bar .skl-name-input {
+  width: 200px;
+  height: 22px;
+  font-size: 12.5px;
+}
+
+/* Focus, selection, a grounded chain dropped on it: the frame lights. */
+.skl-chainline.skl-frame.is-focused > .skl-frame-box,
+.skl-chainline.skl-frame:focus-visible > .skl-frame-box {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.skl-chainline.skl-frame.is-selected > .skl-frame-box {
+  border-color: var(--accent);
+}
+.skl.skl-chainline.skl-frame.is-merge-target {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+.skl-chainline.skl-frame.is-merge-target > .skl-frame-box,
+.skl-chainline.skl-frame.is-drop > .skl-frame-box {
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: 0 0 0 calc(4px / var(--sky-z, 1)) rgba(var(--accent-rgb), 0.4);
+}
+.skl-chainline.skl-frame.is-merge-target .sky-head,
+.skl-chainline.skl-frame.is-drop .sky-head {
+  outline: none;
 }
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS

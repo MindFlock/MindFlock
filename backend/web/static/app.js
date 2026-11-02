@@ -46497,13 +46497,13 @@ var TOURS = {
 			},
 			{
 				target: "[data-tour=\"sky-line-bar\"], [data-tour=\"sky-line\"] .skl-bar",
-				title: "One chain per session",
-				body: "Drag a chain by its label to put it anywhere; its ⋯ opens the session here, shows only this chain, tacks on a stop or closes it."
+				title: "A session is a frame",
+				body: "Drag a session's frame by its bar to put it anywhere (double-click renames); its ⋯ shows only this chain or closes it."
 			},
 			{
 				target: "[data-tour=\"sky-session-box\"], .sky-head",
-				title: "The session starts its chain",
-				body: "The session's tile, in its own colour, starts the chain — click it to open its real terminal on the sky."
+				title: "The agent starts the chain",
+				body: "The first tile is the session's agent: click it for its terminal right here, right-click to send it a prompt or stop it."
 			},
 			{
 				target: "[data-tour=\"flights-bird\"]",
@@ -46533,7 +46533,7 @@ var TOURS = {
 			{
 				target: "[data-tour=\"sky-grounded\"], .sky-socket, [data-tour=\"sky-shelf\"]",
 				title: "Stops with no session yet",
-				body: "A block dropped on empty sky floats as its own stops-only chain; wire a session's port into its socket to run it."
+				body: "A block dropped on empty sky floats as a stops-only chain with no frame; wire an agent's port into its socket to run it."
 			},
 			{
 				target: "[data-tour=\"sky-selbar\"], .sky-selbar",
@@ -73026,16 +73026,16 @@ function pick(v, sx, sy) {
 	}
 	return null;
 }
-var MINI = /* @__PURE__ */ new WeakMap();
+var MINI$1 = /* @__PURE__ */ new WeakMap();
 function buildMini(v, canvas) {
 	const M = v.M, P = v.P;
 	const r = canvas.getBoundingClientRect();
 	const W = Math.max(1, r.width), H = Math.max(1, r.height), d = 2;
 	if (W < 4 || H < 4) {
-		MINI.delete(canvas);
+		MINI$1.delete(canvas);
 		return false;
 	}
-	const cur = MINI.get(canvas);
+	const cur = MINI$1.get(canvas);
 	if (cur && cur.W === W && cur.H === H && cur.M === M && cur.pkey === P.key) return true;
 	canvas.width = Math.round(W * d);
 	canvas.height = Math.round(H * d);
@@ -73092,15 +73092,15 @@ function buildMini(v, canvas) {
 		g.lineTo(b.x1, b.y1);
 		g.stroke();
 	}
-	MINI.set(canvas, st);
+	MINI$1.set(canvas, st);
 	return true;
 }
 function drawMini(v, canvas, screenToWorld) {
 	if (!canvas.offsetParent) return;
-	let m = MINI.get(canvas);
+	let m = MINI$1.get(canvas);
 	if (!m || m.M !== v.M || m.pkey !== v.P.key) {
 		if (!buildMini(v, canvas)) return;
-		m = MINI.get(canvas);
+		m = MINI$1.get(canvas);
 	}
 	if (!m) return;
 	const P = v.P;
@@ -85544,6 +85544,130 @@ function TileIcon({ kind, size = 28 }) {
 }
 //#endregion
 //#region src/components/flights/SkyChain.tsx
+function agentTitle(provider) {
+	const p = String(provider || "").trim();
+	return p ? agentName(p).replace(/ Code$/, "") : "Agent";
+}
+function agentDoing(row) {
+	if (!row) return "";
+	return firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "");
+}
+var MINI = 18;
+var MINI_GAP = 6;
+var MINI_MAX = 8;
+var SUB_W = NODE_W + 24;
+var SUB_H = 182;
+function subFrameSize(sf) {
+	const n = Math.min(sf?.stops.length || 0, 9);
+	if (!n) return {
+		w: SUB_W,
+		h: SUB_H
+	};
+	return {
+		w: Math.max(SUB_W, 16 + n * MINI + (n - 1) * MINI_GAP),
+		h: 212
+	};
+}
+var MINI_KINDS = /* @__PURE__ */ new Set([
+	"stop",
+	"group",
+	"rung",
+	"flown"
+]);
+function subFramesOf(rows, parent, flights, kinds) {
+	const out = {};
+	for (const k of rows) {
+		if (k.parent !== parent || k.title === parent) continue;
+		const d = sessionDiagram(rows, k.title, {
+			family: false,
+			flights: flights || void 0,
+			kinds: kinds || void 0
+		});
+		const stops = d.mode === "none" ? [] : d.nodes.filter((n) => n.row === "main" && MINI_KINDS.has(n.kind)).map((n) => ({
+			id: n.id,
+			title: n.title,
+			state: n.state,
+			icon: n.perch ? "perch" : n.icon
+		}));
+		out[k.title] = {
+			agent: agentTitle(k.provider || k.program),
+			stops
+		};
+	}
+	return out;
+}
+function subFrameBoxes(nodes, frames, open = {}) {
+	const out = {};
+	for (const n of nodes) {
+		if (!isSubSession(n)) continue;
+		out[n.id] = open[n.session] || subFrameSize(frames[n.session]);
+	}
+	return out;
+}
+function hangFromAgent(d) {
+	const me = d.nodes.find((n) => n.kind === "session" && n.row === "main");
+	const below = d.nodes.filter((n) => n.kind === "child" && n.row === "below" && n.branch && n.branch.from !== me?.id);
+	if (!me || !below.length) return d;
+	const moved = new Set(below.map((n) => n.id));
+	const hang = below[0].branch.from;
+	const next = below[0].branch.to;
+	const nodes = d.nodes.map((n) => moved.has(n.id) ? {
+		...n,
+		branch: {
+			...n.branch,
+			from: me.id
+		}
+	} : n);
+	const edges = d.edges.map((e) => e.kind === "branch" && moved.has(e.to) ? {
+		...e,
+		from: me.id
+	} : e);
+	const nextNode = d.nodes.find((n) => n.id === next);
+	if (nextNode && !edges.some((e) => e.from === hang && e.to === next && (e.kind === "line" || e.kind === "add"))) edges.push({
+		from: hang,
+		to: next,
+		kind: nextNode.kind === "add" ? "add" : "line"
+	});
+	return {
+		...d,
+		nodes,
+		edges
+	};
+}
+var isSubSession = (n) => (n.kind === "child" || n.kind === "branch") && !!n.session;
+var MINI_WORD = {
+	done: "done",
+	current: "flying now",
+	perched: "waiting on you",
+	halted: "halted",
+	paused: "paused",
+	failed: "failed",
+	skipped: "skipped",
+	pending: "to come"
+};
+function MiniChain({ stops }) {
+	const shown = stops.length > 9 ? stops.slice(0, MINI_MAX) : stops;
+	const more = stops.length - shown.length;
+	const at = stops.findIndex((s) => s.state === "current" || s.state === "perched" || s.state === "halted" || s.state === "paused");
+	const said = stops.length + (stops.length === 1 ? " stop" : " stops") + (at >= 0 ? ", at “" + stops[at].title + "”" : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-mini-chain",
+		role: "img",
+		"aria-label": "Its own chain: " + said,
+		title: stops.map((s) => s.title + (MINI_WORD[s.state] ? " — " + MINI_WORD[s.state] : "")).join("\n"),
+		children: [shown.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sky-mini st-" + s.state,
+			"data-mini": s.id,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
+				kind: s.icon,
+				size: 11
+			})
+		}, s.id)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "sky-mini sky-mini-more",
+			children: ["+", more]
+		})]
+	});
+}
 var DRAG_MIN = 4;
 var STATE_WORD = {
 	done: "done",
@@ -85564,7 +85688,7 @@ function tileSub(n) {
 	return n.sub;
 }
 function tileLabel(n, head = false) {
-	if (head) return (n.title || "Session") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
+	if (head) return (n.title || "Agent") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
 	const word = STATE_WORD[n.state] ?? "";
 	const sub = tileSub(n);
 	return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
@@ -85697,12 +85821,17 @@ function SkyChain(p) {
 	const tile = (n) => {
 		const isHead = n.id === HEAD_ID;
 		const dn = n.node;
+		const isAgent = isHead && head.kind === "session";
+		const sub_ = !isHead && isSubSession(dn);
+		const frame = sub_ ? p.subFrames?.[dn.session] : void 0;
 		const fam = nodeFamily(dn, p.kinds);
 		const halt = isHead ? null : haltMark(dn);
 		const sub = isHead ? head.sub : tileSub(dn);
 		const cls = [
 			"sky-node",
 			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
+			isAgent ? "sky-agent" : "",
+			sub_ ? "sky-subframe" : "",
 			"st-" + dn.state,
 			"sky-fam-" + fam,
 			dn.chip ? "tone-" + dn.chip.tone : "",
@@ -85716,7 +85845,7 @@ function SkyChain(p) {
 			drag?.live && drag.id === n.id ? "is-dragging" : "",
 			draggable(n) ? "is-draggable" : ""
 		].filter(Boolean).join(" ");
-		const said = tileLabel(isHead ? {
+		const said = sub_ ? "Sub-session " + dn.title + " — its agent" + (frame ? " (" + frame.agent + ")" : "") + (dn.chip ? " " + dn.chip.label.toLowerCase() : "") + (sub ? ", " + sub : "") : (isAgent ? "Agent: " : "") + tileLabel(isHead ? {
 			...dn,
 			title: head.title,
 			sub: head.sub
@@ -85743,13 +85872,15 @@ function SkyChain(p) {
 			"data-diagram-node": dn.id,
 			"aria-label": said,
 			"aria-current": isSel(n) ? "true" : void 0,
-			title: isHead ? void 0 : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
+			title: isHead ? void 0 : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
 			style: {
 				transform: `translate(${n.x}px, ${n.y}px)`,
 				width: n.w,
 				height: n.h,
-				...isHead ? { ["--sky-head-color"]: head.color } : {}
+				...isHead ? { ["--sky-head-color"]: head.color } : {},
+				...sub_ ? { ["--sky-sub-color"]: chainColor(dn.session) } : {}
 			},
+			"data-agent": isAgent || sub_ ? "" : void 0,
 			onPointerDown: (e) => onDown(e, n),
 			onPointerMove: onMove,
 			onPointerUp: onUp,
@@ -85775,6 +85906,11 @@ function SkyChain(p) {
 				});
 			},
 			children: [
+				sub_ && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-subframe-bar",
+					title: dn.title,
+					children: dn.title
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-tile",
 					style: {
@@ -85785,7 +85921,7 @@ function SkyChain(p) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-tile-icon",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
-								kind: isHead ? head.kind === "trigger" ? "handoff" : "session" : dn.perch ? "perch" : dn.icon,
+								kind: isAgent || sub_ ? "agent" : isHead ? head.kind === "trigger" ? "handoff" : "session" : dn.perch ? "perch" : dn.icon,
 								size: 28
 							})
 						}),
@@ -85817,8 +85953,8 @@ function SkyChain(p) {
 							role: "img",
 							children: "if"
 						}),
-						port(n, "in", wiredIn.has(n.id)),
-						port(n, "out", wiredOut.has(n.id)),
+						!sub_ && port(n, "in", wiredIn.has(n.id)),
+						!sub_ && port(n, "out", wiredOut.has(n.id)),
 						!isHead && dn.risk && dn.risk.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-risk",
 							title: riskTitle(dn.risk),
@@ -85831,7 +85967,7 @@ function SkyChain(p) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "sky-node-title",
-					children: isHead ? head.title : dn.title
+					children: isHead ? head.title : sub_ ? frame?.agent || "Agent" : dn.title
 				}),
 				sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "sky-node-sub",
@@ -85856,10 +85992,11 @@ function SkyChain(p) {
 					"data-no-drag": true,
 					children: p.renderInBox(dn)
 				}),
+				sub_ && frame && frame.stops.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MiniChain, { stops: frame.stops }),
 				!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
 					tone: dn.chip.tone === "working" ? "working" : "you",
 					x: n.w / 2,
-					y: 0,
+					y: sub_ ? 30 : 0,
 					size: 18,
 					label: dn.title + " — " + dn.chip.label,
 					className: "sky-kid-bird"
@@ -85870,9 +86007,11 @@ function SkyChain(p) {
 	const wireClass = (w) => {
 		const to = byId.get(w.to)?.node;
 		const live = (w.kind === "line" || w.kind === "head" || w.kind === "fan") && to && (to.state === "current" || to.state === "perched");
+		const bus = w.kind === "fan" && !!to && isSubSession(to) && isBranchRow(to);
 		return [
 			"sky-wire",
 			"sky-wire-" + w.kind,
+			bus ? "sky-wire-bus" : "",
 			w.done ? "is-done" : "",
 			live ? "is-live" : "",
 			w.loop ? "sky-loop-" + w.loop.state : ""
@@ -85894,7 +86033,7 @@ function SkyChain(p) {
 		"data-flight": g.flightId || void 0,
 		"data-head": head.kind,
 		role: "list",
-		"aria-label": (head.kind === "session" ? "Chain in " + head.title : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it",
+		"aria-label": (head.kind === "session" ? "Chain in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "sky-wires",
@@ -86218,6 +86357,197 @@ function pillAimer(graph, onLoopTo) {
 		window.addEventListener("pointerup", up);
 		window.addEventListener("pointercancel", stop);
 		window.addEventListener("keydown", key, true);
+	};
+}
+function agentMenuItems(row, opts) {
+	if (!row) return [];
+	const paused = row.status === "paused";
+	return [
+		{
+			key: "agent-open",
+			label: opts.opened ? "Fold the terminal" : "Open terminal",
+			title: opts.opened ? "Back to the agent's tile" : "Its real terminal, here in the tile's place",
+			onSelect: opts.openTerminal
+		},
+		{
+			key: "agent-prompt",
+			label: "Send a prompt…",
+			title: "Type a prompt for this agent and send it",
+			disabled: paused,
+			onSelect: opts.compose
+		},
+		paused ? {
+			key: "agent-resume",
+			label: "Resume",
+			title: "Start the agent again in the same worktree",
+			onSelect: () => void resumeSession(row.title)
+		} : {
+			key: "agent-stop",
+			label: "Stop",
+			title: "Stop the agent — the session stays (Resume starts it again)",
+			danger: true,
+			onSelect: () => void pauseSession(row.title)
+		}
+	];
+}
+async function sendPrompt(title, text) {
+	const t = text.trim();
+	if (!t) return false;
+	try {
+		await api("/api/instances/" + encodeURIComponent(title) + "/send", {
+			method: "POST",
+			json: {
+				text: t,
+				dialog_safe: true
+			}
+		});
+		toast("Sent to " + windowName(title));
+		return true;
+	} catch (err) {
+		toast("Couldn't send: " + errMsg(err));
+		return false;
+	}
+}
+function PromptComposer({ title, x, y, onClose }) {
+	const [text, setText] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const ref = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const onDown = (e) => {
+			if (ref.current && !ref.current.contains(e.target)) onClose();
+		};
+		document.addEventListener("pointerdown", onDown, true);
+		return () => document.removeEventListener("pointerdown", onDown, true);
+	}, [onClose]);
+	const send = async () => {
+		if (busy || !text.trim()) return;
+		setBusy(true);
+		const ok = await sendPrompt(title, text);
+		setBusy(false);
+		if (ok) onClose();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		ref,
+		className: "sky-agent-prompt",
+		style: {
+			left: x,
+			top: y
+		},
+		role: "dialog",
+		"aria-label": "Send a prompt to " + windowName(title),
+		"data-no-drag": true,
+		onPointerDown: (e) => e.stopPropagation(),
+		onSubmit: (e) => {
+			e.preventDefault();
+			send();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "sky-agent-prompt-head",
+				htmlFor: "sky-agent-prompt-text",
+				children: ["Prompt for ", windowName(title)]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				id: "sky-agent-prompt-text",
+				className: "fl-input",
+				rows: 3,
+				autoFocus: true,
+				value: text,
+				placeholder: "What should the agent do?",
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: (e) => {
+					e.stopPropagation();
+					if (e.key === "Escape") {
+						e.preventDefault();
+						onClose();
+					} else if (e.key === "Enter" && !e.shiftKey) {
+						e.preventDefault();
+						send();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-agent-prompt-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "Enter sends · Shift+Enter new line"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: onClose,
+						children: "Cancel"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						className: "fl-btn btn-primary",
+						disabled: busy || !text.trim(),
+						children: "Send"
+					})
+				]
+			})
+		]
+	});
+}
+function useAgentMenu() {
+	const [state, setState] = (0, import_react.useState)(null);
+	const [composer, setComposer] = (0, import_react.useState)(null);
+	const open = (title, at, items) => setState({
+		title,
+		x: at.clientX,
+		y: at.clientY,
+		items
+	});
+	const compose = (title, at) => setComposer({
+		title,
+		x: Math.max(8, Math.min(at.clientX, (typeof window === "undefined" ? 1e4 : window.innerWidth) - 340)),
+		y: Math.max(8, Math.min(at.clientY, (typeof window === "undefined" ? 1e4 : window.innerHeight) - 180))
+	});
+	if (typeof document === "undefined" || !state && !composer) return {
+		open,
+		compose,
+		menu: null
+	};
+	return {
+		open,
+		compose,
+		menu: (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-chain-menu",
+			style: {
+				position: "fixed",
+				left: 0,
+				top: 0,
+				width: 0,
+				height: 0,
+				zIndex: 80,
+				["--sky-z"]: 1
+			},
+			children: [state && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
+				x: state.x,
+				y: state.y,
+				label: "The agent of “" + windowName(state.title) + "” — what you can do",
+				items: state.items.map((it) => ({
+					key: it.key,
+					label: it.label,
+					title: it.title,
+					danger: it.danger,
+					disabled: it.disabled,
+					note: it.note
+				})),
+				onPick: (key) => {
+					const it = state.items.find((i) => i.key === key);
+					setState(null);
+					it?.onSelect?.();
+				},
+				onClose: () => setState(null)
+			}), composer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptComposer, {
+				title: composer.title,
+				x: composer.x,
+				y: composer.y,
+				onClose: () => setComposer(null)
+			})]
+		}), document.body)
 	};
 }
 //#endregion
@@ -86844,31 +87174,45 @@ function FlightChain({ title, line, kinds, label }) {
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
 	const where = row ? lineWhere(line.diagram) : "";
-	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const agent = agentTitle(row?.provider || row?.program);
+	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : agentDoing(row);
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
-		title: windowName(title),
+		title: agent,
 		sub: headSub,
 		session: title,
 		color: chainColor(title),
 		node: sessionNode
 	}), [
+		agent,
 		title,
 		headSub,
 		sessionNode
 	]);
-	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
+	const rows = useInstances().data;
+	const flights = useFlights().data;
+	const subFrames = (0, import_react.useMemo)(() => subFramesOf(rows || [], title, flights, kinds), [
+		rows,
+		title,
+		flights,
+		kinds
+	]);
+	const big = (0, import_react.useMemo)(() => subFrameBoxes(moves.diagram.nodes, subFrames), [moves.diagram, subFrames]);
+	const graph = (0, import_react.useMemo)(() => chainGraph(hangFromAgent(moves.diagram), {
 		head,
 		key: title,
-		flightId
+		flightId,
+		big
 	}), [
 		moves.diagram,
 		head,
 		title,
-		flightId
+		flightId,
+		big
 	]);
 	const gc = line.graphCanvas;
 	const chainMenu = useChainMenu(gc, flightId);
+	const agentMenu = useAgentMenu();
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const rootRef = (0, import_react.useRef)(null);
 	const [band, setBand] = (0, import_react.useState)(null);
@@ -86938,36 +87282,86 @@ function FlightChain({ title, line, kinds, label }) {
 		window.addEventListener("pointerup", up);
 		window.addEventListener("pointercancel", stop);
 	};
-	const onOpen = (n) => gc.onOpen?.(n);
+	const openTerminal = (t) => {
+		if (t === title) useUi.getState().setLastTab(title, "agent");
+		else selectSession(t);
+	};
+	const onOpen = (n) => n.kind === "session" ? openTerminal(title) : gc.onOpen?.(n);
+	const onMenu = (n, at) => {
+		const t = n.kind === "session" ? title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
+		if (!t) return chainMenu.onMenu(n, at);
+		const r = t === title ? row : rows?.find((x) => x.title === t);
+		agentMenu.open(t, at, agentMenuItems(r, {
+			openTerminal: () => openTerminal(t),
+			compose: () => agentMenu.compose(t, at)
+		}));
+	};
+	const shift = {
+		marginLeft: -Math.min(0, Math.floor(graph.bbox.x)),
+		marginTop: -Math.min(0, Math.floor(graph.bbox.y))
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
 		className: "fl-chain-view sky-own-scroll",
 		"aria-label": label,
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
-				graph,
-				zoom: 1,
-				selected: gc.selected,
-				bird: birdPerch(moves.diagram),
-				kinds,
-				onSelect: gc.onSelect,
-				onEdit: gc.onEdit,
-				onOpen,
-				onRemove: gc.onRemove,
-				onLoopPill: (via) => gc.onEdit?.(via),
-				onPillDown,
-				onMenu: chainMenu.onMenu,
-				onNodeMove: moves.move,
-				onPortDown,
-				onPlus: (after) => after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true),
-				renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
-				renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-head-chip fl-box-chip tone-" + ss.tone,
-					title: ss.hint,
-					children: ss.label
-				})
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-chain-frame",
+				style: { ["--sky-chain-color"]: head.color },
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-chain-frame-bar",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-chain-frame-name",
+							children: windowName(title)
+						}),
+						row?.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-chain-frame-branch",
+							title: "Branch " + row.branch,
+							children: row.branch
+						}),
+						row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-box-chip fl-chain-frame-chip tone-" + ss.tone,
+							title: ss.hint,
+							children: ss.label
+						}),
+						where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-chain-frame-where",
+							title: where,
+							children: where
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fl-chain-frame-body",
+					style: shift,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
+						graph,
+						zoom: 1,
+						selected: gc.selected,
+						bird: birdPerch(moves.diagram),
+						kinds,
+						onSelect: gc.onSelect,
+						onEdit: gc.onEdit,
+						onOpen,
+						onRemove: gc.onRemove,
+						onLoopPill: (via) => gc.onEdit?.(via),
+						onPillDown,
+						onMenu,
+						subFrames,
+						onNodeMove: moves.move,
+						onPortDown,
+						onPlus: (after) => after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
+						renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
+							title: ss.hint,
+							children: ss.label
+						})
+					})
+				})]
 			}),
 			chainMenu.menu,
+			agentMenu.menu,
 			band && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "sky-connect" + (band.over ? " is-over" : ""),
 				"aria-hidden": "true",
@@ -91877,8 +92271,16 @@ var SKETCHES = {
 		]
 	}),
 	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A chain: its label on top, the session tile, then its stop tiles joined by wires, and a + to add one",
+		label: "A session's frame: its bar on top, the agent tile first inside, then its stop tiles joined by wires, and a + to add one",
 		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box",
+				x: 4,
+				y: 8,
+				width: 260,
+				height: 96,
+				rx: 10
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
 				x: 12,
 				y: 30,
@@ -91888,13 +92290,13 @@ var SKETCHES = {
 				className: "sg-text",
 				x: 12,
 				y: 22,
-				children: "bar · drag me · ⋯"
+				children: "name · branch · state · ⋯"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
 				className: "sg-text",
 				x: 12,
 				y: 92,
-				children: "session"
+				children: "agent"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
 				className: "sg-text",
@@ -92325,19 +92727,34 @@ var WORDS = {
 	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"Each session draws as a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "frame" }),
+			" — a soft box in the session's own colour — round its ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "chain" }),
-			": its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "session tile" }),
-			" first (its name, its state and the bird, in the session's own colour — a click opens the real terminal in a card under it, a double-click on the card's top folds it back), then its stops as free-floating ",
+			". The frame's ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bar" }),
+			" carries the session's name, its branch, its state and a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⋯" }),
+			" menu (open it here, open it in the grid, show only this chain, add a stop, close the session); a double-click on the bar renames it."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Inside, the first tile is the session's ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "agent" }),
+			" (\"Claude\", \"Codex\"…): what it is doing now, its state and the bird. A click opens its real terminal in the tile's place (a double-click on the card's top folds it back); a right-click offers ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Open terminal" }),
+			", ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Send a prompt…" }),
+			" and ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Stop" }),
+			", then the session's own menu. Its out port starts the chain: its stops follow as free-floating ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "tiles" }),
 			" joined by ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "wires" }),
-			". The small label above a chain carries its name and a ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⋯" }),
-			" menu: open the session, open it in the grid, show only this chain, add a stop, close the session."
+			". A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "sub-session" }),
+			" is a small frame of its own under its parent's agent — its own agent, its state, and its own chain when it flies one; click its agent to open it in place."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Drag a chain by its label (or its session tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. ",
+			"Drag a session by its frame's bar (or its agent tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
 			" (",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
@@ -92412,12 +92829,12 @@ var WORDS = {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "no session" }),
-			": no head tile, just an empty socket on its first tile — ",
+			": no frame and no agent, just free tiles and an empty socket on the first one — ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "wire a session's out port here to run it" }),
 			". Nothing runs until it has a session."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Give it one by wiring a session tile's out port (or its +) to that socket, by dropping the shelf's ",
+			"Give it one by wiring an agent tile's out port (or its +) to that socket, by dragging the chain into a session's frame, by dropping the shelf's ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
 			" chip on it (a new session is made and the stops take off), or with its ⋯ → ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly on a session…" }),
@@ -133322,32 +133739,43 @@ function SkyLine(p) {
 	const where = row ? lineWhere(line.diagram) : "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const agent = agentTitle(row?.provider || row?.program);
+	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
-		title: name,
+		title: agent,
 		sub: headSub,
 		session: p.title,
 		color: chainColor(p.title),
 		node: sessionNode
 	}), [
-		name,
+		agent,
 		headSub,
 		p.title,
 		sessionNode
 	]);
+	const subFrames = (0, import_react.useMemo)(() => subFramesOf(p.rows, p.title, flights, kinds), [
+		p.rows,
+		p.title,
+		flights,
+		kinds
+	]);
 	const big = (0, import_react.useMemo)(() => {
-		const out = {};
+		const open = {};
 		for (const [t, ks] of Object.entries(kids)) {
 			const c = clampPane(ks.w, ks.h);
-			out["child:" + t] = {
+			open[t] = {
 				w: c.w,
 				h: c.h + CARD_HEAD_H
 			};
 		}
-		return out;
-	}, [kids]);
-	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
+		return subFrameBoxes(moves.diagram.nodes, subFrames, open);
+	}, [
+		kids,
+		moves.diagram,
+		subFrames
+	]);
+	const graph = (0, import_react.useMemo)(() => chainGraph(hangFromAgent(moves.diagram), {
 		head,
 		key: p.title,
 		flightId: line.flight?.id || "",
@@ -133360,12 +133788,15 @@ function SkyLine(p) {
 		big
 	]);
 	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+	const frameX = Math.min(0, Math.floor(graph.bbox.x));
+	const frameY = Math.min(0, Math.floor(graph.bbox.y));
 	useTourHooks(wrapRef, {
 		".sky-head": "sky-session-box",
-		".sky-node:not(.sky-head)": "sky-stop"
+		".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop"
 	});
 	const gc = line.graphCanvas;
 	const chainMenu = useChainMenu(gc, line.flight?.id || "");
+	const agentMenu = useAgentMenu();
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const foldKid = (t) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
 	const press = (0, import_react.useRef)({
@@ -133374,29 +133805,51 @@ function SkyLine(p) {
 		shift: false,
 		moved: false
 	});
+	const toggleKid = (t) => {
+		if (kids[t]) foldKid(t);
+		else setKids((k) => ({
+			...k,
+			[t]: {
+				w: PANE_W,
+				h: PANE_H
+			}
+		}));
+	};
 	const onOpen = (n) => {
 		if (n.kind === "session" && press.current.moved) return;
 		if (n.kind === "flown") setFoldFlown((x) => !x);
 		else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
-		else if ((n.kind === "child" || n.kind === "branch") && n.session) {
-			const t = n.session;
-			if (kids[t]) foldKid(t);
-			else setKids((k) => ({
-				...k,
-				[t]: {
-					w: PANE_W,
-					h: PANE_H
-				}
-			}));
-		} else gc.onOpen?.(n);
+		else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);
+		else gc.onOpen?.(n);
 	};
 	const onSelect = (n) => {
 		if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
 		else gc.onSelect?.(n);
 	};
+	const setAlias = useUi((s) => s.setAlias);
+	const [naming, setNaming] = (0, import_react.useState)(null);
+	const named = (0, import_react.useRef)(false);
+	const startRename = () => {
+		named.current = false;
+		setNaming(name);
+	};
+	const endRename = (save) => {
+		if (named.current) return;
+		named.current = true;
+		const next = (naming ?? "").trim();
+		setNaming(null);
+		rootRef.current?.focus({ preventScroll: true });
+		if (!save || !next || next === name) return;
+		if (nameTakenBy(p.title, next)) {
+			toast("Another session is already named “" + next + "”");
+			return;
+		}
+		setAlias(p.title, next === p.title ? "" : next);
+		toast("Renamed to “" + next + "”");
+	};
 	const onBarDown = (e) => {
 		if (e.button !== 0) return;
-		if (e.target.closest("button, summary, a, input, [data-no-drag]")) return;
+		if (e.target.closest("button, summary, a, input, textarea, [data-no-drag]")) return;
 		rootRef.current?.focus({ preventScroll: true });
 		if (p.draggable === false) return;
 		p.onDragStart?.(e);
@@ -133453,12 +133906,12 @@ function SkyLine(p) {
 		p.layout.open ? {
 			key: "open",
 			label: "Fold the session back",
-			title: "Back to its tile on the chain",
+			title: "Back to its agent's tile in the frame",
 			onSelect: () => p.onLayout({ open: false })
 		} : {
 			key: "open",
 			label: "Open session",
-			title: "Open the session here, in a card under its chain",
+			title: "Its agent's terminal, here in the agent tile's place",
 			onSelect: () => p.onLayout({ open: true })
 		},
 		{
@@ -133514,6 +133967,42 @@ function SkyLine(p) {
 			onSelect: () => askClose(p.title)
 		}
 	];
+	const agentItems = (t, at) => {
+		const own = t === p.title;
+		const mine = agentMenuItems(own ? row : rowOf(t), {
+			opened: own ? p.layout.open : !!kids[t],
+			openTerminal: () => own ? p.onLayout({ open: !p.layout.open }) : toggleKid(t),
+			compose: () => agentMenu.compose(t, at)
+		});
+		if (!own) return [...mine, {
+			key: "agent-go",
+			label: "Open in the grid",
+			title: "Switch to the grid with " + windowName(t) + " selected",
+			onSelect: () => (selectSession(t), setView("grid"))
+		}];
+		const session = items.filter((i) => i.key !== "open").map((i) => ({
+			key: "s-" + i.key,
+			label: i.label,
+			title: i.title || "",
+			danger: i.danger,
+			onSelect: i.onSelect
+		}));
+		return [
+			...mine,
+			{
+				key: "s-note",
+				label: "Session “" + name + "”",
+				title: "The session round this agent",
+				note: true
+			},
+			...session
+		];
+	};
+	const onMenu = (n, at) => {
+		const t = n.kind === "session" ? p.title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
+		if (t) agentMenu.open(t, at, agentItems(t, at));
+		else chainMenu.onMenu(n, at);
+	};
 	const segments = (0, import_react.useMemo)(() => segmentsFor(line.flight), [line.flight]);
 	const age = ageOf(row?.activity_since);
 	const still = ageWord(row?.activity_since);
@@ -133574,7 +134063,7 @@ function SkyLine(p) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-chainline" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-chainline skl-frame" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
 		"data-line": p.title,
 		"data-lod": lod,
 		"data-age": age || void 0,
@@ -133591,16 +134080,63 @@ function SkyLine(p) {
 			if (!p.focused) p.onFocus();
 		},
 		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "skl-frame-box",
+				"aria-hidden": "true",
+				style: {
+					left: frameX,
+					top: frameY
+				}
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "skl-bar skl-label",
+				className: "skl-bar skl-label skl-frame-bar",
 				"data-tour": "sky-line-bar",
-				title: p.draggable === false ? "Click to focus this chain (drag mode moves it: V)" : "Drag to move this chain",
+				style: frameX || frameY ? {
+					marginLeft: frameX,
+					transform: frameY ? `translateY(${frameY}px)` : void 0
+				} : void 0,
+				title: (p.draggable === false ? "Click to focus this session (drag mode moves it: V)" : "Drag to move this session") + " · double-click to rename",
 				onPointerDown: onBarDown,
+				onDoubleClick: (e) => {
+					if (e.target.closest("button, summary, a, input, [data-no-drag]")) return;
+					e.preventDefault();
+					e.stopPropagation();
+					startRename();
+				},
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-name",
 						children: name
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "fl-input skl-name-input",
+						"aria-label": "Rename “" + name + "”",
+						value: naming,
+						maxLength: 120,
+						autoFocus: true,
+						"data-no-drag": true,
+						onChange: (e) => setNaming(e.target.value),
+						onFocus: (e) => e.target.select(),
+						onBlur: () => endRename(true),
+						onKeyDown: (e) => {
+							e.stopPropagation();
+							if (e.key === "Enter") {
+								e.preventDefault();
+								endRename(true);
+							} else if (e.key === "Escape") {
+								e.preventDefault();
+								endRename(false);
+							}
+						}
+					}),
+					row?.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-branch",
+						title: "Branch " + row.branch,
+						children: row.branch
+					}),
+					row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-chip fl-box-chip skl-state-chip tone-" + ss.tone,
+						title: ss.hint,
+						children: ss.label
 					}),
 					where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-where",
@@ -133672,8 +134208,9 @@ function SkyLine(p) {
 						onRemove: gc.onRemove,
 						onLoopPill: (via) => gc.onEdit?.(via),
 						onPillDown,
-						onMenu: chainMenu.onMenu,
+						onMenu,
 						kinds,
+						subFrames,
 						onNodeMove: moves.move,
 						onPortDown: p.onPortDown,
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
@@ -133686,6 +134223,7 @@ function SkyLine(p) {
 						})
 					}),
 					chainMenu.menu,
+					agentMenu.menu,
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
 						graph,
 						anchor: line.anchor,
