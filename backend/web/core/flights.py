@@ -153,9 +153,12 @@ CHECKS_NONE_GRACE_S = 120.0
 #: Flight states. ``grounded`` is a row of stops on the board with no session
 #: yet (nothing drives it until one is attached); ``paused`` is held by a
 #: person (resume carries on where it was); ``halted`` is stopped on a failure
-#: (retry / skip / resume); ``done``/``cancelled`` are final.
+#: (retry / skip / resume); ``done``/``cancelled`` are final. ``ready``
+#: (docs/flights.md "Round 19") is attached to a session but not flying yet:
+#: it takes off on Run, or on the session's next prompt (``start_on``).
 STATES = (
     "grounded",
+    "ready",
     "running",
     "waiting_you",
     "paused",
@@ -164,11 +167,25 @@ STATES = (
     "cancelled",
 )
 GROUNDED = "grounded"
+READY = "ready"
 #: States the driver moves.
 ACTIVE = frozenset({"running", "waiting_you"})
 #: States that hold their session (a new start is 409 ``in_flight``).
-HOLDING = frozenset({"running", "waiting_you", "paused"})
-UNFINISHED = frozenset({"grounded", "running", "waiting_you", "paused", "halted"})
+HOLDING = frozenset({"ready", "running", "waiting_you", "paused"})
+UNFINISHED = frozenset(
+    {"grounded", "ready", "running", "waiting_you", "paused", "halted"}
+)
+#: How a chain built on a session takes off (``flight.start_on``):
+#: ``prompt`` — on Run or the session's next prompt; ``run`` — only on Run;
+#: ``now`` — at once (today's behaviour; never stored as ready).
+START_ON = ("prompt", "run", "now")
+#: Who took a ready flight off (history ``took_off``'s ``by``).
+TOOK_OFF_BY = ("run", "prompt")
+#: A ready flight that took off on a prompt waits for that prompt's turn to
+#: start this long; a turn that never shows up then counts as over.
+AFTER_TURN_START_S = 600.0
+#: An agent stop that counts as the prompt's own turn says so.
+YOUR_PROMPT = "your prompt"
 FINAL = frozenset({"done", "cancelled"})
 STEP_STATES = ("pending", "running", "waiting_you", "done", "skipped", "failed")
 HISTORY_EVENTS = (
@@ -188,6 +205,7 @@ HISTORY_EVENTS = (
     "halted_at",
     "attached",
     "looped",
+    "took_off",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = (
@@ -1553,17 +1571,19 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
     hist = []
     for h in raw.get("history") if isinstance(raw.get("history"), list) else []:
         if isinstance(h, dict) and h.get("event") in HISTORY_EVENTS:
-            hist.append(
-                {
-                    "at": _float(h.get("at")),
-                    "step": _text(h.get("step"), 32),
-                    "event": h["event"],
-                    "note": _text(h.get("note"), 1000),
-                }
-            )
+            entry = {
+                "at": _float(h.get("at")),
+                "step": _text(h.get("step"), 32),
+                "event": h["event"],
+                "note": _text(h.get("note"), 1000),
+            }
+            if h.get("by"):
+                entry["by"] = _text(h.get("by"), 16)
+            hist.append(entry)
     by = _text(raw.get("by"), 200) or "user"
     if by not in BY_KINDS and not by.startswith("agent:"):
         by = "user"
+    start_on = _text(raw.get("start_on"), 16) or "now"
     out = {
         "id": fid,
         "plan_id": _text(raw.get("plan_id"), 64),
@@ -1594,6 +1614,10 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
         "boot": _text(raw.get("boot"), 64),
         "owner": _text(raw.get("owner"), 64),
         "owner_at": _float(raw.get("owner_at")),
+        # Round 19: how a chain built on a session takes off, and when it
+        # became ready (a turn that started before then never counts).
+        "start_on": start_on if start_on in START_ON else "now",
+        "ready_since": _float(raw.get("ready_since")),
     }
     trig = _normalize_triggered_by(raw.get("triggered_by"))
     if trig is not None:
@@ -1794,8 +1818,15 @@ def take_off(
     branch: str = "",
     now: Optional[float] = None,
     replaced: Optional[list] = None,
+    start_on: str = "now",
 ) -> dict:
     """Create a ``running`` flight of ``plan`` bound to ``session``.
+
+    * ``start_on`` ``"prompt"`` / ``"run"`` (docs/flights.md "Round 19"): the
+      flight is stored ``ready`` instead — cursor 0, nothing skipped, nothing
+      started (``attach``, ``start_at`` and ``seeded`` do not apply) — and
+      takes off on Run (:func:`op_take_off`) or, for ``"prompt"``, the
+      session's next prompt (:func:`on_prompt`).
 
     * ``attach`` (an EXISTING session): the cursor starts at ``start_at`` or at
       the first non-``agent`` step — the work the agent did is the agent step.
@@ -1810,7 +1841,8 @@ def take_off(
     """
     ts = float(now if now is not None else time.time())
     steps = copy.deepcopy(plan["steps"])
-    cursor = start_cursor(plan, start_at, attach)
+    ready = start_on in ("prompt", "run")
+    cursor = 0 if ready else start_cursor(plan, start_at, attach)
     flight = _normalize_flight(
         "pending",
         {
@@ -1822,15 +1854,19 @@ def take_off(
             "session": session,
             "repo_root": repo_root,
             "branch": branch,
-            "state": "running",
+            "state": READY if ready else "running",
             "cursor": cursor,
             "started": ts,
             "updated": ts,
             "by": by,
+            "start_on": start_on if ready else "now",
+            "ready_since": ts if ready else 0.0,
         },
     )
     if flight is None:
         raise FlightError("bad_plan", 400, "the plan has no steps")
+    if ready:
+        return _put_new(flight, replaced)
     for i, s in enumerate(flight["steps"][:cursor]):
         flight["step_states"][s["id"]]["state"] = "skipped"
         flight["step_states"][s["id"]]["since"] = ts
@@ -2250,6 +2286,15 @@ def event_data(flight: dict) -> dict:
         )
     elif flight["state"] == "paused":
         detail = "%s: paused" % (flight["session"] or flight["plan_name"])
+    elif flight["state"] == READY:
+        detail = "%s: ready · %s" % (
+            flight["session"] or flight["plan_name"],
+            (
+                "runs on your next prompt"
+                if flight.get("start_on") == "prompt"
+                else "runs when you press Run"
+            ),
+        )
     elif flight["state"] in ("halted", "cancelled") and flight["reason"]:
         detail = "%s: %s" % (flight["plan_name"], flight["reason"])
     elif flight["state"] == "done":
@@ -3095,6 +3140,11 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
     if st == "pending":
         if _armed_halt(step, ss):
             return {"action": "hold", "note": HALT_POINT}
+        if ss["detail"].get("after_turn"):
+            # Round 19: took off on a prompt — fly after that prompt's turn.
+            gate = _after_turn(flight, step, ss, sess, now)
+            if gate is not None:
+                return gate
         skip = _when_verdict(step, obs)
         if skip is not None:
             return skip
@@ -3389,6 +3439,16 @@ def _airborne(flight: dict) -> None:
         raise FlightError(
             "grounded", 409, "this flight has no session yet — fly it on one first"
         )
+    if flight["state"] == READY:
+        raise FlightError(
+            "not_running", 409, "this chain has not started yet — press Run first"
+        )
+
+
+def _on_ground(flight: dict) -> bool:
+    """Not flying yet (grounded, or ready on its session): no current step,
+    so every stop may change and a removal never pauses anything."""
+    return flight["state"] in (GROUNDED, READY)
 
 
 def op_done(
@@ -3652,9 +3712,9 @@ def _editable(flight: dict) -> None:
 
 def _first_open(flight: dict) -> int:
     """The first index a step may be edited, moved or placed at: every one on
-    a grounded flight (it has no current step), else the one after the
-    cursor."""
-    return 0 if flight["state"] == GROUNDED else flight["cursor"] + 1
+    a grounded or ready flight (it has no current step), else the one after
+    the cursor."""
+    return 0 if _on_ground(flight) else flight["cursor"] + 1
 
 
 def _pending_index(flight: dict, sid: str) -> int:
@@ -3879,7 +3939,7 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
         _not_final(flight)
         i = _step_index(flight, sid)
         st = flight["step_states"][sid]["state"]
-        if flight["state"] != GROUNDED and (
+        if not _on_ground(flight) and (
             i < flight["cursor"]
             or st in ("done", "skipped")
             or (i > flight["cursor"] and st != "pending")
@@ -4029,9 +4089,9 @@ def _remove_at(flight: dict, i: int, now: float) -> dict:
     step = flight["steps"].pop(i)
     flight["step_states"].pop(step["id"], None)
     note = step["title"]
-    if flight["state"] != GROUNDED and i < flight["cursor"]:
+    if not _on_ground(flight) and i < flight["cursor"]:
         flight["cursor"] -= 1
-    elif flight["state"] != GROUNDED and i == flight["cursor"]:
+    elif not _on_ground(flight) and i == flight["cursor"]:
         flight["state"] = "paused"
         flight["reason"] = STOP_REMOVED
         note = "removed %s while it flew" % step["title"]
@@ -4190,13 +4250,16 @@ def op_attach(
     seeded: bool = False,
     now: Optional[float] = None,
     triggered_by: Optional[dict] = None,
+    start_on: str = "now",
 ) -> dict:
     """Bind a grounded ``flight`` to session ``title`` and take off from its
     cursor: ``running`` (history ``attached``), or ``paused`` at a halt point
     on that step. ``seeded``: the session was just created with the first
     (agent) step as its initial prompt, so that step is already running —
     :func:`take_off`'s rule. ``triggered_by`` (a Handoff stop started it):
-    recorded on the flight. 409 ``not_grounded`` on any other flight."""
+    recorded on the flight. ``start_on`` ``"prompt"`` / ``"run"``
+    (docs/flights.md "Round 19"): bound but left ``ready`` (nothing started,
+    ``seeded`` ignored). 409 ``not_grounded`` on any other flight."""
     ts = float(now if now is not None else time.time())
     if flight["state"] != GROUNDED:
         raise FlightError("not_grounded", 409, "this flight already has a session")
@@ -4213,6 +4276,11 @@ def op_attach(
     flight["gone_since"] = 0.0
     cur = _current(flight)
     _hist(flight, ts, cur["id"] if cur else "", "attached", "attached to %s" % title)
+    if start_on in ("prompt", "run") and cur is not None:
+        flight["state"] = READY
+        flight["start_on"] = start_on
+        flight["ready_since"] = ts
+        return flight
     if cur is None:
         _finish(flight, "done", "", ts)
     elif seeded and cur["kind"] == "agent":
@@ -4234,6 +4302,7 @@ def attach(
     seeded: bool = False,
     now: Optional[float] = None,
     triggered_by: Optional[dict] = None,
+    start_on: str = "now",
 ) -> dict:
     """:func:`op_attach` under the store lock, refusing (404 ``unknown_flight``,
     409 ``not_grounded``, 409 ``in_flight`` when ``title`` already has an
@@ -4252,7 +4321,7 @@ def attach(
                     409,
                     "%s is already on a flight (%s)" % (title, g["plan_name"]),
                 )
-        op_attach(f, title, repo_root, branch, seeded, now, triggered_by)
+        op_attach(f, title, repo_root, branch, seeded, now, triggered_by, start_on)
         f = _normalize_flight(f["id"], f) or f
         flights[f["id"]] = f
         _save_flights_locked(flights)
@@ -4339,6 +4408,176 @@ def split_off(
         flights[chain["id"]] = chain
         _save_flights_locked(flights)
     return copy.deepcopy(f), copy.deepcopy(chain)
+
+
+# --------------------------------------------------------------------------- #
+# Ready chains (docs/flights.md "Round 19: a chain starts when you say so")
+# --------------------------------------------------------------------------- #
+def normalize_start_on(raw) -> str:
+    """A body's ``start_on``: absent / null / ``""`` is ``"now"`` (today's
+    behaviour); anything outside :data:`START_ON` is 400 ``bad_start_on``."""
+    if raw is None or raw == "":
+        return "now"
+    value = str(raw).strip().lower()
+    if value not in START_ON:
+        raise FlightError(
+            "bad_start_on", 400, "start_on is one of %s" % " | ".join(START_ON)
+        )
+    return value
+
+
+def _not_ready(flight: dict) -> None:
+    if flight["state"] != READY:
+        raise FlightError(
+            "not_ready",
+            409,
+            "this chain is not waiting to start (it is %s)" % flight["state"],
+        )
+
+
+def op_take_off(flight: dict, by: str = "run", now: Optional[float] = None) -> dict:
+    """A ``ready`` flight takes off at cursor 0: ``running``, history
+    ``took_off`` with ``by`` (``"run"`` | ``"prompt"``). ``by="prompt"``: it
+    flies AFTER the session's turn — the first stop carries
+    ``detail.after_turn`` (and ``turn_from``, the take-off time) and waits
+    for that turn to end (:func:`_after_turn`); a halt point on it still
+    holds first. Every stop is validated as a plan's first
+    (:class:`PlanError`). 409 ``not_ready`` on any other state."""
+    ts = float(now if now is not None else time.time())
+    _not_ready(flight)
+    validate_for_takeoff(flight)
+    who = by if by in TOOK_OFF_BY else "run"
+    flight["state"] = "running"
+    flight["reason"] = ""
+    flight["cursor"] = 0
+    flight["updated"] = ts
+    cur = _current(flight)
+    flight["history"].append(
+        {
+            "at": ts,
+            "step": cur["id"] if cur else "",
+            "event": "took_off",
+            "note": "on your next prompt" if who == "prompt" else "Run pressed",
+            "by": who,
+        }
+    )
+    if len(flight["history"]) > MAX_HISTORY:
+        del flight["history"][: len(flight["history"]) - MAX_HISTORY]
+    if cur is None:
+        _finish(flight, "done", "", ts)
+        return flight
+    if who == "prompt":
+        d = flight["step_states"][cur["id"]]["detail"]
+        d["after_turn"] = True
+        d["turn_from"] = ts
+    _hit_halt_point(flight, ts)
+    return flight
+
+
+def op_start_on(flight: dict, value, now: Optional[float] = None) -> dict:
+    """``PATCH /api/flights/{id} {start_on}`` on a ``ready`` flight (else 409
+    ``not_ready``): ``"prompt"`` / ``"run"`` change how it starts;
+    ``"now"`` runs it (:func:`op_take_off` by Run). 400 ``bad_start_on``."""
+    ts = float(now if now is not None else time.time())
+    if value is None or value == "":
+        raise FlightError(
+            "bad_start_on", 400, "start_on is one of %s" % " | ".join(START_ON)
+        )
+    want = normalize_start_on(value)
+    _not_ready(flight)
+    if want == "now":
+        return op_take_off(flight, "run", ts)
+    if want != flight["start_on"]:
+        flight["start_on"] = want
+        flight["updated"] = ts
+        _hist(
+            flight,
+            ts,
+            "",
+            "edited",
+            "starts %s"
+            % ("on your next prompt" if want == "prompt" else "when you press Run"),
+        )
+    return flight
+
+
+def on_prompt(title: str, now: Optional[float] = None) -> Optional[Tuple[dict, dict]]:
+    """A prompt went into session ``title`` (a server send path): its
+    ``ready`` flight with ``start_on: "prompt"`` takes off after that turn
+    (:func:`op_take_off` by ``prompt``) → ``(before, after)``, else None.
+    A flight whose stops are not ready to fly (a :class:`PlanError`) stays
+    ready. Never raises a refusal."""
+    if not title:
+        return None
+    ts = float(now if now is not None else time.time())
+    with _LOCK:
+        flights = _load_flights_locked()
+        f = None
+        for g in flights.values():
+            if g["session"] == title and g["state"] == READY:
+                if f is None or g["started"] > f["started"]:
+                    f = g
+        if f is None or f["start_on"] != "prompt":
+            return None
+        before = copy.deepcopy(f)
+        after = copy.deepcopy(f)
+        try:
+            op_take_off(after, "prompt", ts)
+        except (FlightError, PlanError):
+            return None
+        after = _normalize_flight(after["id"], after) or after
+        flights[after["id"]] = after
+        _save_flights_locked(flights)
+    return before, copy.deepcopy(after)
+
+
+def ready_turn_started(flight: dict, row: dict) -> bool:
+    """The driver tick's catch for a turn typed straight into the terminal:
+    ``flight`` is ``ready`` on ``start_on: "prompt"`` and its session's
+    ``row`` (``/api/instances`` facts) is working on a turn that started
+    AFTER it became ready (``activity_since`` > ``ready_since``). A turn
+    already under way then does not count. Pure."""
+    if flight.get("state") != READY or flight.get("start_on") != "prompt":
+        return False
+    if str((row or {}).get("activity") or "") != "working":
+        return False
+    since = _float((row or {}).get("activity_since"))
+    return since > float(flight.get("ready_since") or 0.0) > 0.0
+
+
+def _your_turn_is_it(flight: dict, step: dict) -> bool:
+    """The first stop is an Agent stop with no prompt of its own (nor a fresh
+    session of its own): the prompt that took the flight off IS that stop."""
+    return (
+        step["kind"] == "agent"
+        and not step["config"].get("fresh")
+        and not fill_prompt(step["config"].get("prompt") or "", flight).strip()
+    )
+
+
+def _after_turn(flight: dict, step: dict, ss: dict, sess: dict, now: float):
+    """The gate on the first stop of a flight that took off on a prompt
+    (``detail.after_turn``): a visible wait while that prompt's turn has not
+    started (up to :data:`AFTER_TURN_START_S`) or is still going, else
+    None — or, when that stop is an empty Agent stop, its ``done`` with
+    receipt :data:`YOUR_PROMPT`."""
+    d = ss["detail"]
+    since = float(d.get("turn_from") or 0.0)
+    held = _settle(d, sess, since, now, need_work=True, deadline=AFTER_TURN_START_S)
+    activity = "idle" if sess.get("sleeping") else str(sess.get("activity") or "")
+    if held is not None and held["action"] != "fail":
+        if activity == "clarify" and (
+            d.get("worked_at") or held.get("detail", {}).get("worked_at")
+        ):
+            held = None  # the turn stopped on a question for you: it is over
+        else:
+            held["note"] = "after your turn — %s" % held["note"]
+            return held
+    if _your_turn_is_it(flight, step):
+        return _receipt(
+            {"action": "done", "note": "your prompt's turn settled"}, YOUR_PROMPT
+        )
+    return None
 
 
 def next_until(spec: str, now: float) -> float:

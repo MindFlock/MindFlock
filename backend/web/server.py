@@ -6858,6 +6858,11 @@ async def instance_send(
         if asleep:
             body["woke"] = True  # it was asleep: it goes in once the agent is back
         return JSONResponse(body)
+    if enter or (submit and not dictating):
+        # A prompt went in: a ready chain waiting on the next prompt takes
+        # off after its turn (docs/flights.md "Round 19"). A queued one does
+        # when the drain types it.
+        await asyncio.to_thread(_flight_driver.on_prompt, title)
     if enter:
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
     if dictating:
