@@ -52,3 +52,16 @@ describe("a Loop first on a session's chain", () => {
     expect(d.nodes.some((n) => n.id === "stop:s1")).toBe(false);
   });
 });
+
+describe("a flight that landed", () => {
+  it("stays on its session's line, its stops flown, until the next chain", () => {
+    const done = { ...ready(), id: "f9", state: "done", finished: 5, step_states: { s1: { state: "done", since: 1, note: "", detail: {}, rounds: 0 }, s2: { state: "done", since: 2, note: "", detail: {}, rounds: 0 } } } as unknown as Flight;
+    const r = { ...row(done), flight: null } as unknown as Instance;
+    const d = sessionDiagram([r], "me", { flights: [done] });
+    expect(d.mode).toBe("flight");
+    expect(d.nodes.filter((n) => n.kind === "stop").map((n) => [n.id, n.state, !!n.editable])).toEqual([
+      ["stop:s1", "done", false],
+      ["stop:s2", "done", false],
+    ]);
+  });
+});

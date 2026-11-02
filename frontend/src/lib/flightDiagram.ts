@@ -609,6 +609,17 @@ function sessionBox(row: Instance, kind: "parent" | "session" | "child", rowAt: 
   };
 }
 
+/** The session's most recent flight that has landed (done or cancelled), from
+ * the flights query (it keeps the last finished ones), else null. */
+export function landedFlightOf(title: string, flights?: readonly Flight[] | null): Flight | null {
+  let best: Flight | null = null;
+  for (const f of flights || []) {
+    if (f.session !== title || (f.state !== "done" && f.state !== "cancelled")) continue;
+    if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
+  }
+  return best;
+}
+
 export interface SessionDiagramOpts {
   /** The full flights (the shared flights query), so the session's stops carry
    * their titles and states; without them the row's own `flight` draws them. */
@@ -684,6 +695,17 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
           reason: cur && fl.state === "halted" ? (fl as FlightRow & { reason?: string }).reason || "" : "",
         });
       }
+  } else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
+    // A flight that landed stays on its session's line, its stops flown (the
+    // owner: the stops must not go away from the flow once they finish) —
+    // until the session builds or flies its next chain.
+    const done = landedFlightOf(title, opts.flights)!;
+    mode = "flight";
+    flightId = done.id;
+    insertFrom = done.steps.length;
+    const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
+    line.push(...lifted.line);
+    loops = lifted.loops;
   } else {
     const rungs = ladderRungs(row);
     if (rungs.length) {

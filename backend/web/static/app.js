@@ -81111,6 +81111,14 @@ function sessionBox(row, kind, rowAt) {
 		dots: kind === "child" ? miniDots(row) : void 0
 	};
 }
+function landedFlightOf(title, flights) {
+	let best = null;
+	for (const f of flights || []) {
+		if (f.session !== title || f.state !== "done" && f.state !== "cancelled") continue;
+		if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
+	}
+	return best;
+}
 function sessionDiagram(rows, title, opts = {}) {
 	const row = rows.find((r) => r.title === title);
 	const empty = {
@@ -81170,6 +81178,14 @@ function sessionDiagram(rows, title, opts = {}) {
 				reason: cur && fl.state === "halted" ? fl.reason || "" : ""
 			});
 		}
+	} else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
+		const done = landedFlightOf(title, opts.flights);
+		mode = "flight";
+		flightId = done.id;
+		insertFrom = done.steps.length;
+		const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
+		line.push(...lifted.line);
+		loops = lifted.loops;
 	} else {
 		const rungs = ladderRungs(row);
 		if (rungs.length) {
