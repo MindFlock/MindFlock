@@ -419,7 +419,10 @@ def scratch_tmux(monkeypatch):
             text=True,
             env=env,
         ).stdout.strip()
-        assert sock.startswith(d), "scratch tmux escaped to %r" % sock
+        # realpath both: macOS reports /tmp/… as /private/tmp/….
+        assert os.path.realpath(sock).startswith(os.path.realpath(d)), (
+            "scratch tmux escaped to %r" % sock
+        )
 
     yield new
     for name in made:

@@ -492,7 +492,12 @@ def test_literal_keys_argv_round_trips_through_real_tmux(tmp_path):
     import subprocess
     import time
 
-    sock = str(tmp_path / "t.sock")
+    import tempfile
+
+    # A short dir under /tmp: macOS's pytest tmp_path (/private/var/folders/…)
+    # is longer than a unix socket path may be, and tmux refuses to start.
+    short = tempfile.mkdtemp(prefix="mft", dir="/tmp")
+    sock = os.path.join(short, "t.sock")
     env = {k: v for k, v in os.environ.items() if k != "TMUX"}
     base = ["tmux", "-S", sock]
     subprocess.run(

@@ -382,10 +382,11 @@ class TestBudgetMath:
 
     def test_a_line_budget_chains_off_the_live_line_ahead(self, chain, monkeypatch):
         """budget = host_budget(this) + the budgets of the live lines ahead:
-        three 0.5 s lines on a serial host with a 0.55 s budget each. Alone,
-        the third (answered at ~1.5 s) would be cut at 0.55 s; chained it
-        has 1.65 s, and all three come back in the host's voice."""
-        _budget(monkeypatch, 0.55)
+        three 0.5 s lines on a serial host with a 0.8 s budget each. Alone,
+        the third (answered at ~1.5 s) would be cut at 0.8 s; chained it has
+        2.4 s, and all three come back in the host's voice. (0.8, not 0.55:
+        a slow CI runner ate the 50 ms of slack per line.)"""
+        _budget(monkeypatch, 0.8)
         fake = chain.serve("serial", floor=0.5)
         out = _at_once(
             chain.c.speak, [(chain.host, "A."), (chain.host, "B."), (chain.host, "C.")]

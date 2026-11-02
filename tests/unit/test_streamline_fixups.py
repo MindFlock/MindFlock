@@ -134,8 +134,11 @@ def test_resume_relaunch_uses_resume_command():
 
     from backend.session import instance as inst_mod
 
-    src = inspect.getsource(inst_mod.Instance.Resume)
-    # Both current-scheme relaunch branches reconfigure with resume=True.
+    # Resume hands the relaunch to _relaunch_in_worktree (round 12 moved it
+    # there so MoveWorkspace shares it); both of its branches reconfigure with
+    # resume=True.
+    assert "_relaunch_in_worktree()" in inspect.getsource(inst_mod.Instance.Resume)
+    src = inspect.getsource(inst_mod.Instance._relaunch_in_worktree)
     assert src.count("_configure_launch_command(resume=True)") == 2
     sig = inspect.signature(inst_mod.Instance._configure_launch_command)
     assert sig.parameters["resume"].default is False
