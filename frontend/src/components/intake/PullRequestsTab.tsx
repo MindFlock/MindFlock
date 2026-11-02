@@ -310,7 +310,6 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
 
   return (
     <>
-      {addFlow}
       <div className="caps-gate" data-caps-gate="git">
         <p>
           Install <strong>Git</strong> to use this — a session checks out your PR's branch.
@@ -391,6 +390,8 @@ export function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }: Ta
         </div>
       </details>
       ) : null}
+      {/* Under the work, where the new repository's group will appear. */}
+      {addFlow}
     </>
   );
 }
