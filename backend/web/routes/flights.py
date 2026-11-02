@@ -206,7 +206,10 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     ``steps`` draws the flight here (after the plan's when ``plan_id`` comes
     too); the session's own running fast-track becomes its leading ship
     steps unless ``absorb_fasttrack`` is false. A ticket / PR / issue
-    ``subject`` (``{kind, source, id}``) starts through Intake."""
+    ``subject`` (``{kind, source, id}``) starts through Intake.
+    ``start_on`` (round 19; absent = ``"now"``): ``"prompt"`` / ``"run"``
+    store the flight ``ready`` instead of starting it (400
+    ``bad_start_on``)."""
     body = payload or {}
     if body.get("grounded"):
         return await _start_grounded(body)
@@ -344,7 +347,9 @@ async def flights_attach(
     """``{"title"}`` → ``{"flight"}``: a grounded flight bound to that live
     session takes off (404 ``unknown_session``; 409 ``in_flight`` /
     ``not_grounded``). ``{"title": "", "repo_path", "program"?, "model"?,
-    "in_place"?, "prompt"?}`` creates the session first."""
+    "in_place"?, "prompt"?}`` creates the session first. ``start_on``
+    (round 19; absent = ``"now"``): ``"prompt"`` / ``"run"`` bind it
+    ``ready`` — nothing starts, a created session gets no prompt."""
     try:
         flight = await _driver.attach(flight_id, payload or {})
     except _flights.PlanError as err:
@@ -452,10 +457,39 @@ def flights_cancel(flight_id: str) -> JSONResponse:
     return _op(flight_id, "cancel")
 
 
+@router.post("/api/flights/{flight_id}/run")
+def flights_run(flight_id: str) -> JSONResponse:
+    """▶ Run (docs/flights.md "Round 19"): a ``ready`` flight takes off at
+    its first stop → ``{"flight"}`` (409 ``not_ready`` otherwise; 400
+    ``bad_step`` naming a stop not ready to fly)."""
+    try:
+        flight = _driver.run(flight_id)
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+    return JSONResponse({"flight": flight})
+
+
 @router.patch("/api/flights/{flight_id}")
 def flights_rename(flight_id: str, payload: dict) -> JSONResponse:
-    """The flight's own name (docs/flights.md "Round 13"): ``{plan_name}``."""
-    return _op(flight_id, "rename", "", str((payload or {}).get("plan_name") or ""))
+    """The flight's own name (docs/flights.md "Round 13"): ``{plan_name}``;
+    and how a ready flight starts (round 19): ``{start_on: "prompt" | "run"
+    | "now"}`` — ready only (409 ``not_ready``), ``"now"`` runs it."""
+    body = payload or {}
+    if "start_on" not in body:
+        return _op(flight_id, "rename", "", str(body.get("plan_name") or ""))
+    if "plan_name" in body:
+        renamed = _op(flight_id, "rename", "", str(body.get("plan_name") or ""))
+        if renamed.status_code != 200:
+            return renamed
+    try:
+        flight = _driver.set_start_on(flight_id, body.get("start_on"))
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+    return JSONResponse({"flight": flight})
 
 
 # A plug-in kind's own routes (an inbound hook, a listing), next to these.

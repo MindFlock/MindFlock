@@ -46,11 +46,11 @@ __all__ = [
 ]
 
 #: control_flight's ops: the flight-wide ones and the per-step ones.
-FLIGHT_OPS = ("pause", "resume", "cancel")
+FLIGHT_OPS = ("pause", "resume", "cancel", "run")
 STEP_OPS = ("skip", "retry", "jump", "done")
 CONTROL_OPS = FLIGHT_OPS + STEP_OPS
 #: Flights still in the air (or on the board): docs/flights.md "Flight".
-UNFINISHED = ("grounded", "running", "waiting_you", "paused", "halted")
+UNFINISHED = ("grounded", "ready", "running", "waiting_you", "paused", "halted")
 #: The one-shot describe runs ≤60 s server-side.
 DESCRIBE_TIMEOUT_S = 90.0
 START_TIMEOUT_S = 120.0
@@ -85,15 +85,16 @@ D_START = (
     "steps, session}; then flight_status / control_flight."
 )
 D_STATUS = (
-    "A flight, compact: state (grounded|running|waiting_you|paused|halted|"
-    "done|cancelled), cursor (the current stop), reason, every stop as one "
+    "A flight, compact: state (grounded|ready|running|waiting_you|paused|"
+    "halted|done|cancelled; ready = built on its session, not started), cursor (the current stop), reason, every stop as one "
     "line (id, state, kind, title, note, receipt, when) and the last 10 "
     "history lines. id, or title (that session's live flight, else its "
     "latest); neither = your own session's flight."
 )
 D_CONTROL = (
-    "Steer a flight on you or a descendant (or a grounded one). op: pause | "
-    "resume | cancel (the session is kept) | skip (a stop) | retry (a failed "
+    "Steer a flight on you or a descendant (or a grounded one). op: run (a "
+    "ready flight takes off now) | pause | resume | cancel (the session is "
+    "kept) | skip (a stop) | retry (a failed "
     "stop) | jump (move the cursor to step) | done (a perch — a stop waiting on "
     "a person — with an optional note). skip/retry/done default to the current "
     "stop; jump needs step. id, or title for that session's live flight. "
@@ -336,6 +337,8 @@ def compact_flight(f: dict, now: float, budget: int = STATUS_BUDGET) -> dict:
         head["reason"] = _cut(f["reason"], 200)
     if f.get("by") and f.get("by") != "user":
         head["by"] = f["by"]
+    if f.get("state") == "ready":
+        head["start_on"] = f.get("start_on") or "prompt"
     history = [h for h in f.get("history") or [] if isinstance(h, dict)]
     keep = HISTORY_LINES
 

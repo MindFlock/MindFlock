@@ -519,7 +519,7 @@ def _ok(api, method, path, sink):
 
 
 class TestControl:
-    @pytest.mark.parametrize("op", ["pause", "resume", "cancel"])
+    @pytest.mark.parametrize("op", ["pause", "resume", "cancel", "run"])
     def test_flight_ops(self, op):
         box, api, clock = _box(flights=[_flight()])
         hit = []
