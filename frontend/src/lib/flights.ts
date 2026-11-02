@@ -47,6 +47,9 @@ export interface FlightStep {
    * stop whose `when` is false is skipped, never run. Omitted when it has
    * none. */
   when?: string;
+  /** Round 18: where the Sky draws this stop, chain-local plane px (relative
+   * to the chain's origin); omitted = auto-placed. Layout only. */
+  pos?: { x: number; y: number };
 }
 
 export interface StepGroup {
@@ -106,6 +109,8 @@ export interface FlightHistoryEntry {
 }
 
 export interface Flight {
+  /** Round 18: started by another chain's Handoff stop. */
+  triggered_by?: { flight: string; step: string; session: string };
   id: string;
   plan_id: string;
   plan_name: string;
