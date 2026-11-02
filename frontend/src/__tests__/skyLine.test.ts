@@ -149,10 +149,11 @@ describe("box sizes", () => {
 });
 
 describe("the line", () => {
-  it("round 18: draws its label and its chain — the session tile heads it, no card around it", () => {
+  it("round 20: draws its frame (bar on top) round its chain — the agent tile heads it", () => {
     const html = line();
-    expect(html).toContain('class="skl skl-chainline"');
-    expect(html).toContain('class="skl-bar skl-label"');
+    expect(html).toContain('class="skl skl-chainline skl-frame"');
+    expect(html).toContain('class="skl-frame-box"');
+    expect(html).toContain('class="skl-bar skl-label skl-frame-bar"');
     expect(html).toContain('<span class="skl-name">me</span>');
     // The chain (SkyChain) under the label, keyed by the session's title,
     // headed by the session tile (its chip is the line's: renderHead).
@@ -162,8 +163,8 @@ describe("the line", () => {
     expect(html).toContain('aria-label="Actions for me"');
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('const head: ChainHead = useMemo(');
-    expect(src).toContain('kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode');
-    expect(src).toContain("chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || \"\", big })");
+    expect(src).toContain('kind: "session", title: agent, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode');
+    expect(src).toContain("chainGraph(hangFromAgent(moves.diagram), { head, key: p.title, flightId: line.flight?.id || \"\", big })");
     // No pane until a box is opened.
     expect(html).not.toContain("pane-embedded");
   });
@@ -178,7 +179,10 @@ describe("the line", () => {
     expect(html).toContain('data-chain="me"');
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain("const kid = rowOf(t);");
-    expect(src).toContain('else if ((n.kind === "child" || n.kind === "branch") && n.session) {');
+    expect(src).toContain('else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);');
+    // Round 20: each sub-session draws as a small frame round its agent.
+    expect(html).toContain("sky-subframe");
+    expect(html).toContain('class="sky-subframe-bar"');
   });
 
   it("the size control cycles compact → normal → wide → compact", () => {
@@ -191,13 +195,15 @@ describe("the line", () => {
     expect(presetPatch("wide")).toEqual({ size: "wide", boxW: 330, boxH: 120 });
   });
 
-  it("the session tile says what the session is on (or where its flight is)", () => {
+  it("the agent tile says what the agent is doing; where the flight is goes on the frame's bar", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain('const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");');
+    expect(src).toContain('const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";');
+    expect(src).toContain('<span className="skl-where" title={where}>');
   });
 
   it("focus draws the ring; a pin shows when pinned", () => {
-    expect(line({}, { focused: true })).toContain("skl skl-chainline is-focused");
+    expect(line({}, { focused: true })).toContain("skl skl-chainline skl-frame is-focused");
+    expect(css("components/flights/SkyLine.css")).toMatch(/\.skl-chainline\.skl-frame\.is-focused > \.skl-frame-box/);
     expect(css("components/flights/SkyLine.css")).toMatch(/\.skl-chainline\.is-focused > \.skl-bar\.skl-label/);
     expect(line({ pinned: true })).toContain('class="skl-pin"');
     expect(line()).not.toContain('class="skl-pin"');

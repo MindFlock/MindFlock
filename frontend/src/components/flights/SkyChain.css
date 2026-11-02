@@ -683,3 +683,156 @@
 .sky-socket.is-target {
   opacity: 1;
 }
+
+/* --- Round 20: the agent tile, sub-session frames ---------------------------
+   (docs/flights.md "Round 20" A). The session's chain starts at its AGENT:
+   the sparkle in the session's colour on a plain rounded tile (no more
+   session "pill" shape — the frame round the chain is the session). */
+
+.sky-head.sky-agent .sky-tile {
+  border-radius: 16px;
+}
+
+.sky-head.sky-agent .sky-node-sub {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+/* A sub-session: a small frame in its own colour — its name on the bar, its
+   agent tile inside, its own chain as a strip of mini stops. */
+.sky-node.sky-subframe {
+  box-sizing: border-box;
+  justify-content: flex-start;
+  padding: 0 8px 8px;
+  border: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 6%, var(--bg, transparent));
+}
+
+.sky-node.sky-subframe:hover {
+  border-color: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 65%, transparent);
+}
+
+.sky-node.sky-subframe.is-selected,
+.sky-node.sky-subframe.is-highlighted {
+  border-color: var(--accent);
+}
+
+.sky-subframe-bar {
+  box-sizing: border-box;
+  flex: none;
+  width: calc(100% + 16px);
+  height: 22px;
+  margin: 0 -8px 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 24%, transparent);
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 12%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-subframe .sky-tile {
+  border-radius: 16px;
+}
+
+.sky-subframe .sky-tile-icon {
+  color: var(--sky-sub-color, var(--accent));
+}
+
+/* The bus down from the parent's agent to each sub-session's frame. */
+.sky-wire-fan.sky-wire-bus {
+  stroke-dasharray: 4 4;
+}
+
+/* A sub-session's own chain, small: a square per stop on a thin line. */
+.sky-mini-chain {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sky-mini-chain::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 50%;
+  border-top: 1.5px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 45%, transparent);
+}
+.sky-mini {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--sky-tile-line);
+  background: var(--sky-tile-bg);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1;
+}
+.sky-mini.st-done {
+  border-color: color-mix(in srgb, var(--tone-working) 55%, transparent);
+  color: var(--fl-ink-working, var(--tone-working));
+}
+.sky-mini.st-current {
+  border-color: var(--tone-working);
+  color: var(--fl-ink-working, var(--tone-working));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone-working) 22%, transparent);
+}
+.sky-mini.st-perched {
+  border-color: var(--tone-attention);
+  color: var(--tone-attention);
+}
+.sky-mini.st-failed,
+.sky-mini.st-halted {
+  border-color: var(--red, var(--tone-broken));
+  color: var(--red, var(--tone-broken));
+}
+.sky-mini-more {
+  width: auto;
+  padding: 0 4px;
+}
+
+/* The agent's Send a prompt… composer, at the pointer (a portal on the page). */
+.sky-agent-prompt {
+  position: fixed;
+  z-index: 81;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 320px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--sky-shadow-raised, 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34));
+  font-size: 12.5px;
+}
+.sky-agent-prompt-head {
+  font-weight: 600;
+}
+.sky-agent-prompt textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+}
+.sky-agent-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+.sky-agent-prompt-row .muted {
+  margin-right: auto;
+}

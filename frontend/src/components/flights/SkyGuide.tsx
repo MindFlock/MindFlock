@@ -119,10 +119,11 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   lines: (
-    <Sketch label="A chain: its label on top, the session tile, then its stop tiles joined by wires, and a + to add one">
+    <Sketch label="A session's frame: its bar on top, the agent tile first inside, then its stop tiles joined by wires, and a + to add one">
+      <rect className="sg-box" x={4} y={8} width={260} height={96} rx={10} />
       <Line x={12} y={30} n={4} />
-      <text className="sg-text" x={12} y={22}>bar · drag me · ⋯</text>
-      <text className="sg-text" x={12} y={92}>session</text>
+      <text className="sg-text" x={12} y={22}>name · branch · state · ⋯</text>
+      <text className="sg-text" x={12} y={92}>agent</text>
       <text className="sg-text" x={70} y={92}>stops →</text>
       <rect className="sg-box sg-dash" x={228} y={44} width={26} height={26} rx={5} />
       <text className="sg-text" x={236} y={62}>+</text>
@@ -250,8 +251,9 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   lines: (
     <>
-      <p>Each session draws as a <b>chain</b>: its <b>session tile</b> first (its name, its state and the bird, in the session's own colour — a click opens the real terminal in a card under it, a double-click on the card's top folds it back), then its stops as free-floating <b>tiles</b> joined by <b>wires</b>. The small label above a chain carries its name and a <b>⋯</b> menu: open the session, open it in the grid, show only this chain, add a stop, close the session.</p>
-      <p>Drag a chain by its label (or its session tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place; the ⋯'s <b>Tidy this line</b> does one.</p>
+      <p>Each session draws as a <b>frame</b> — a soft box in the session's own colour — round its <b>chain</b>. The frame's <b>bar</b> carries the session's name, its branch, its state and a <b>⋯</b> menu (open it here, open it in the grid, show only this chain, add a stop, close the session); a double-click on the bar renames it.</p>
+      <p>Inside, the first tile is the session's <b>agent</b> ("Claude", "Codex"…): what it is doing now, its state and the bird. A click opens its real terminal in the tile's place (a double-click on the card's top folds it back); a right-click offers <b>Open terminal</b>, <b>Send a prompt…</b> and <b>Stop</b>, then the session's own menu. Its out port starts the chain: its stops follow as free-floating <b>tiles</b> joined by <b>wires</b>. A <b>sub-session</b> is a small frame of its own under its parent's agent — its own agent, its state, and its own chain when it flies one; click its agent to open it in place.</p>
+      <p>Drag a session by its frame's bar (or its agent tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place; the ⋯'s <b>Tidy this line</b> does one.</p>
       <p>Every tile has an <b>in port</b> (the square on its left) and an <b>out port</b> (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The <b>+</b> after the last tile does the same — or just click it. Grab a wire by a tile's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own.</p>
     </>
   ),
@@ -277,8 +279,8 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   grounded: (
     <>
-      <p>Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with <b>no session</b>: no head tile, just an empty socket on its first tile — <i>wire a session's out port here to run it</i>. Nothing runs until it has a session.</p>
-      <p>Give it one by wiring a session tile's out port (or its +) to that socket, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops take off), or with its ⋯ → <b>Fly on a session…</b>. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
+      <p>Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with <b>no session</b>: no frame and no agent, just free tiles and an empty socket on the first one — <i>wire a session's out port here to run it</i>. Nothing runs until it has a session.</p>
+      <p>Give it one by wiring an agent tile's out port (or its +) to that socket, by dragging the chain into a session's frame, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops take off), or with its ⋯ → <b>Fly on a session…</b>. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
       <p>One chain can <b>start another</b>: hold <kbd>Shift</kbd> while you drop a wire from a stop onto a stops-only chain, and a <b>Start a chain</b> stop goes in there. The other chain then shows a trigger tile — <i>When &lt;chain&gt; reaches &lt;stop&gt;</i> — and a dashed wire in the first session's colour; when the flight gets there, that chain takes off on a new session (or the one its dialog names), and the wire follows it there.</p>
     </>
   ),

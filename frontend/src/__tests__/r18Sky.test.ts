@@ -390,7 +390,8 @@ describe("the sky wires it", () => {
   it("keeps the coach tour's hooks on the chain markup", () => {
     expect(line).toContain('data-tour="sky-line-bar"');
     expect(line).toContain('".sky-head": "sky-session-box"');
-    expect(line).toContain('".sky-node:not(.sky-head)": "sky-stop"');
+    // Round 20: the head is the agent tile; a sub-session's frame is no stop.
+    expect(line).toContain('".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop"');
     expect(grounded).toContain('data-tour="sky-grounded"');
     expect(sky).toContain('data-tour={l.flight ? undefined : "sky-line"}');
   });

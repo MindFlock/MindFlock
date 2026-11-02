@@ -4,9 +4,15 @@
  * Done, Skip, Retry. Order is the wires here, so no Earlier / Later. Drawn in
  * a portal on the page (the Sky's plane is zoomed, and a fixed box inside a
  * transformed one is not fixed), at the pointer. */
-import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { api } from "../../api/client";
+import type { Instance } from "../../api/types";
 import type { DiagramNode } from "../../lib/flightDiagram";
+import { errMsg } from "../../lib/format";
+import { pauseSession, resumeSession } from "../../lib/sessionActions";
+import { toast } from "../../lib/toast";
+import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
 import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
@@ -130,4 +136,159 @@ export function pillAimer(graph: ChainGraph, onLoopTo?: (loop: DiagramNode, to: 
     window.addEventListener("pointercancel", stop);
     window.addEventListener("keydown", key, true);
   };
+}
+
+// --- Round 20: the agent tile's menu ----------------------------------------------
+
+/** One line of an agent tile's menu: what it says and what it does. A
+ * `note` is a label line (the session's part of the menu starts with one). */
+export interface AgentMenuItem {
+  key: string;
+  label: string;
+  title: string;
+  danger?: boolean;
+  disabled?: boolean;
+  note?: boolean;
+  onSelect?(): void;
+}
+
+/** The agent's own items (docs/flights.md "Round 20" A): Open terminal, Send a
+ * prompt…, and Stop (Pause: the agent stops, the session stays — Resume
+ * while it is paused). `openTerminal` is the host's (the card in the tile's
+ * place, or the pane's Agent tab); `compose` opens the composer. */
+export function agentMenuItems(row: Pick<Instance, "title" | "status"> | null | undefined, opts: { openTerminal(): void; compose(): void; opened?: boolean }): AgentMenuItem[] {
+  if (!row) return [];
+  const paused = row.status === "paused";
+  return [
+    { key: "agent-open", label: opts.opened ? "Fold the terminal" : "Open terminal", title: opts.opened ? "Back to the agent's tile" : "Its real terminal, here in the tile's place", onSelect: opts.openTerminal },
+    { key: "agent-prompt", label: "Send a prompt…", title: "Type a prompt for this agent and send it", disabled: paused, onSelect: opts.compose },
+    paused
+      ? { key: "agent-resume", label: "Resume", title: "Start the agent again in the same worktree", onSelect: () => void resumeSession(row.title) }
+      : { key: "agent-stop", label: "Stop", title: "Stop the agent — the session stays (Resume starts it again)", danger: true, onSelect: () => void pauseSession(row.title) },
+  ];
+}
+
+/** Send `text` to a session's agent (POST /api/instances/{title}/send — typed
+ * and submitted as if at its terminal). True when it went. */
+export async function sendPrompt(title: string, text: string): Promise<boolean> {
+  const t = text.trim();
+  if (!t) return false;
+  try {
+    await api("/api/instances/" + encodeURIComponent(title) + "/send", { method: "POST", json: { text: t, dialog_safe: true } });
+    toast("Sent to " + windowName(title));
+    return true;
+  } catch (err) {
+    toast("Couldn't send: " + errMsg(err));
+    return false;
+  }
+}
+
+/** A small composer at the pointer: a prompt for one agent (Enter sends,
+ * Shift+Enter is a new line, Esc or a press outside closes it). */
+function PromptComposer({ title, x, y, onClose }: { title: string; x: number; y: number; onClose(): void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const ref = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    const onDown = (e: Event) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [onClose]);
+  const send = async () => {
+    if (busy || !text.trim()) return;
+    setBusy(true);
+    const ok = await sendPrompt(title, text);
+    setBusy(false);
+    if (ok) onClose();
+  };
+  return (
+    <form
+      ref={ref}
+      className="sky-agent-prompt"
+      style={{ left: x, top: y }}
+      role="dialog"
+      aria-label={"Send a prompt to " + windowName(title)}
+      data-no-drag
+      onPointerDown={(e) => e.stopPropagation()}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send();
+      }}
+    >
+      <label className="sky-agent-prompt-head" htmlFor="sky-agent-prompt-text">
+        Prompt for {windowName(title)}
+      </label>
+      <textarea
+        id="sky-agent-prompt-text"
+        className="fl-input"
+        rows={3}
+        autoFocus
+        value={text}
+        placeholder="What should the agent do?"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+          } else if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <div className="sky-agent-prompt-row">
+        <span className="muted">Enter sends · Shift+Enter new line</span>
+        <button type="button" className="linklike" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="submit" className="fl-btn btn-primary" disabled={busy || !text.trim()}>
+          Send
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** The agent tile's right-click menu (and its Send a prompt… composer), in a
+ * portal on the page at the pointer, as the stops' menu is. */
+export function useAgentMenu(): {
+  open(title: string, at: { clientX: number; clientY: number }, items: readonly AgentMenuItem[]): void;
+  compose(title: string, at: { clientX: number; clientY: number }): void;
+  menu: ReactNode;
+} {
+  const [state, setState] = useState<{ title: string; x: number; y: number; items: readonly AgentMenuItem[] } | null>(null);
+  const [composer, setComposer] = useState<{ title: string; x: number; y: number } | null>(null);
+  const open = (title: string, at: { clientX: number; clientY: number }, items: readonly AgentMenuItem[]) => setState({ title, x: at.clientX, y: at.clientY, items });
+  // The composer stays on screen (it is ~330 × 170 px).
+  const compose = (title: string, at: { clientX: number; clientY: number }) =>
+    setComposer({
+      title,
+      x: Math.max(8, Math.min(at.clientX, (typeof window === "undefined" ? 1e4 : window.innerWidth) - 340)),
+      y: Math.max(8, Math.min(at.clientY, (typeof window === "undefined" ? 1e4 : window.innerHeight) - 180)),
+    });
+  if (typeof document === "undefined" || (!state && !composer)) return { open, compose, menu: null };
+  const menu = createPortal(
+    <div className="sky-chain-menu" style={{ position: "fixed", left: 0, top: 0, width: 0, height: 0, zIndex: 80, ["--sky-z" as string]: 1 }}>
+      {state && (
+        <StopMenu
+          x={state.x}
+          y={state.y}
+          label={"The agent of “" + windowName(state.title) + "” — what you can do"}
+          items={state.items.map((it) => ({ key: it.key as SkyMenuItem["key"], label: it.label, title: it.title, danger: it.danger, disabled: it.disabled, note: it.note }))}
+          onPick={(key) => {
+            const it = state.items.find((i) => i.key === key);
+            setState(null);
+            it?.onSelect?.();
+          }}
+          onClose={() => setState(null)}
+        />
+      )}
+      {composer && <PromptComposer title={composer.title} x={composer.x} y={composer.y} onClose={() => setComposer(null)} />}
+    </div>,
+    document.body
+  );
+  return { open, compose, menu };
 }

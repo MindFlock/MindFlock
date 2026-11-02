@@ -109,9 +109,12 @@ describe("SkyChain markup", () => {
     expect(html).toContain("↻ ×3");
   });
 
-  it("the head: the session tile with its colour, chip (or the host's renderHead), and the bird", () => {
+  it("the head: the agent tile with its session's colour, chip (or the host's renderHead), and the bird", () => {
     const html = render(liveGraph(), { bird: { nodeId: "session:lead", tone: "working" } });
-    expect(html).toMatch(/class="sky-node sky-head sky-head-session st-session sky-fam-work tone-working/);
+    // Round 20: a session's head is its AGENT (the sparkle, `sky-agent`).
+    expect(html).toMatch(/class="sky-node sky-head sky-head-session sky-agent st-session sky-fam-work tone-working/);
+    expect(html).toMatch(/aria-label="Agent: lead — Working/);
+    expect(html).toContain('data-agent=""');
     expect(html).toContain("--sky-head-color:hsl");
     expect(html).toContain('class="sky-head-dot"');
     expect(html).toContain('class="sky-head-chip tone-working">Working<');

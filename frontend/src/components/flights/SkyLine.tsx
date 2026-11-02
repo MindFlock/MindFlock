@@ -47,12 +47,24 @@
  * the host this line's Delete: a stop or group box leaves the line through
  * the canvas's own Remove (the undoable toast), a session's box or the line
  * itself asks inline to close that session. A press on the bar focuses the
- * line, so Delete has somewhere to land. */
+ * line, so Delete has somewhere to land.
+ *
+ * Round 20 (docs/flights.md "Round 20" A, docs/flights-r20-frames.md): the
+ * session is a FRAME round its chain — a soft rounded box in the session's
+ * colour (`.skl-frame-box`, grown to every tile's box when one is dragged
+ * left of / above the origin), its title bar the session's name · branch ·
+ * state chip · where it is · ⋯ (the drag handle; a double-click renames).
+ * The chain's first tile is the AGENT (SkyChain `sky-agent`): its name, what
+ * it is doing now, its chip (or round 19's Ready + ▶ Run), the bird; a click
+ * opens the terminal in its place, a right-click its menu (Open terminal,
+ * Send a prompt…, Stop, then the session's own ⋯ items). Sub-sessions are
+ * small frames under it (`subFramesOf` / `subFrameBoxes`). */
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { setView, showInSky } from "../../lib/viewMode";
 import { BOX_PRESETS, boxScale, clampBox, lodFor, nearLines } from "../../lib/skyLayout";
-import { windowName } from "../../lib/windowName";
+import { nameTakenBy, windowName } from "../../lib/windowName";
+import { toast } from "../../lib/toast";
 import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
 import { queryClient, useFlightKinds, useFlights } from "../../state/queries";
@@ -69,13 +81,12 @@ import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
-import { pillAimer, useChainMenu } from "./useChainMenu";
+import { agentMenuItems, pillAimer, useAgentMenu, useChainMenu, type AgentMenuItem } from "./useChainMenu";
 import { ReadyHead, startWord } from "./ReadyHead";
-import { SkyChain } from "./SkyChain";
+import { SkyChain, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
 import { nodeIndexes, useSessionLine, type LineSource } from "./useSessionLine";
-import { Bird } from "./Bird";
 import "./SkyLine.css";
 import "./SkyVisibility.css";
 
@@ -394,51 +405,89 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const where = row ? lineWhere(line.diagram) : "";
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  // The head is the session's AGENT (round 20): its name, what it is doing
+  // now; where the flight is goes on the frame's bar.
+  const agent = agentTitle(row?.provider || row?.program);
+  // (the task headline — read from its newest meaningful prompt — else the
+  // create task, else the last prompt).
+  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";
   const head: ChainHead = useMemo(
-    () => ({ kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
-    [name, headSub, p.title, sessionNode]
+    () => ({ kind: "session", title: agent, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
+    [agent, headSub, p.title, sessionNode]
   );
+  // Each sub-session's frame: its agent and its own chain, if it flies one.
+  const subFrames = useMemo(() => subFramesOf(p.rows, p.title, flights, kinds), [p.rows, p.title, flights, kinds]);
   // An open sub-session's card takes its tile's place: the graph gives it a
   // card-sized box and the other branches make room (the owner: sub-sessions
   // should open like the session does, not below).
+  // Every other sub-session takes its small frame's box.
   const big = useMemo(() => {
-    const out: Record<string, { w: number; h: number }> = {};
+    const open: Record<string, { w: number; h: number }> = {};
     for (const [t, ks] of Object.entries(kids)) {
       const c = clampPane(ks.w, ks.h);
-      out["child:" + t] = { w: c.w, h: c.h + CARD_HEAD_H };
+      open[t] = { w: c.w, h: c.h + CARD_HEAD_H };
     }
-    return out;
-  }, [kids]);
-  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || "", big }), [moves.diagram, head, p.title, line.flight?.id, big]);
+    return subFrameBoxes(moves.diagram.nodes, subFrames, open);
+  }, [kids, moves.diagram, subFrames]);
+  const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: p.title, flightId: line.flight?.id || "", big }), [moves.diagram, head, p.title, line.flight?.id, big]);
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
-  useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head)": "sky-stop" });
+  // The frame grows to a tile dragged left of / above the chain's origin.
+  const frameX = Math.min(0, Math.floor(graph.bbox.x));
+  const frameY = Math.min(0, Math.floor(graph.bbox.y));
+  useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
   const chainMenu = useChainMenu(gc, line.flight?.id || "");
+  const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
 
   const foldKid = (t: string) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
   // A press on the head that moved was the line's drag, not a click on it.
   const press = useRef<{ x: number; y: number; shift: boolean; moved: boolean }>({ x: 0, y: 0, shift: false, moved: false });
+  const toggleKid = (t: string) => {
+    if (kids[t]) foldKid(t);
+    else setKids((k) => ({ ...k, [t]: { w: PANE_W, h: PANE_H } }));
+  };
   const onOpen = (n: DiagramNode) => {
     if (n.kind === "session" && press.current.moved) return;
     if (n.kind === "flown") setFoldFlown((x) => !x);
     else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
-    else if ((n.kind === "child" || n.kind === "branch") && n.session) {
-      const t = n.session;
-      if (kids[t]) foldKid(t);
-      else setKids((k) => ({ ...k, [t]: { w: PANE_W, h: PANE_H } }));
-    } else gc.onOpen?.(n);
+    else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);
+    else gc.onOpen?.(n);
   };
   const onSelect = (n: DiagramNode) => {
     if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
     else gc.onSelect?.(n);
   };
 
+  // Round 20: the frame's bar renames on a double-click (as the rail's row
+  // does: an alias, refused when another session already has that name).
+  const setAlias = useUi((s) => s.setAlias);
+  const [naming, setNaming] = useState<string | null>(null);
+  const named = useRef(false);
+  const startRename = () => {
+    named.current = false;
+    setNaming(name);
+  };
+  const endRename = (save: boolean) => {
+    if (named.current) return;
+    named.current = true;
+    const next = (naming ?? "").trim();
+    setNaming(null);
+    rootRef.current?.focus({ preventScroll: true });
+    if (!save || !next || next === name) return;
+    const taken = nameTakenBy(p.title, next);
+    if (taken) {
+      toast("Another session is already named “" + next + "”");
+      return;
+    }
+    setAlias(p.title, next === p.title ? "" : next);
+    toast("Renamed to “" + next + "”");
+  };
+
   const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
-    if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
+    if ((e.target as Element).closest("button, summary, a, input, textarea, [data-no-drag]")) return;
     // Delete next lands on the line (its close question), not on the page.
     rootRef.current?.focus({ preventScroll: true });
     if (p.draggable === false) return;
@@ -497,8 +546,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
     p.layout.open
-      ? { key: "open", label: "Fold the session back", title: "Back to its tile on the chain", onSelect: () => p.onLayout({ open: false }) }
-      : { key: "open", label: "Open session", title: "Open the session here, in a card under its chain", onSelect: () => p.onLayout({ open: true }) },
+      ? { key: "open", label: "Fold the session back", title: "Back to its agent's tile in the frame", onSelect: () => p.onLayout({ open: false }) }
+      : { key: "open", label: "Open session", title: "Its agent's terminal, here in the agent tile's place", onSelect: () => p.onLayout({ open: true }) },
     {
       key: "grid",
       label: "Open in the grid",
@@ -518,6 +567,25 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     { key: "flyway", label: "Add a stop…", title: "A stop or a saved stop, at the end of the chain", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => askClose(p.title) },
   ];
+  // Round 20: the agent tile's right-click menu — the agent's own items, then
+  // the session's ⋯ (under a label line). A sub-session's agent: its own.
+  const agentItems = (t: string, at: { clientX: number; clientY: number }): AgentMenuItem[] => {
+    const own = t === p.title;
+    const r = own ? row : rowOf(t);
+    const mine = agentMenuItems(r, {
+      opened: own ? p.layout.open : !!kids[t],
+      openTerminal: () => (own ? p.onLayout({ open: !p.layout.open }) : toggleKid(t)),
+      compose: () => agentMenu.compose(t, at),
+    });
+    if (!own) return [...mine, { key: "agent-go", label: "Open in the grid", title: "Switch to the grid with " + windowName(t) + " selected", onSelect: () => (selectSession(t), setView("grid")) }];
+    const session = items.filter((i) => i.key !== "open").map((i): AgentMenuItem => ({ key: "s-" + i.key, label: i.label, title: i.title || "", danger: i.danger, onSelect: i.onSelect }));
+    return [...mine, { key: "s-note", label: "Session “" + name + "”", title: "The session round this agent", note: true }, ...session];
+  };
+  const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => {
+    const t = n.kind === "session" ? p.title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
+    if (t) agentMenu.open(t, at, agentItems(t, at));
+    else chainMenu.onMenu(n, at);
+  };
   // Round 15: the time under the chain, and how long the row has been quiet.
   const segments = useMemo(() => segmentsFor(line.flight), [line.flight]);
   const age = ageOf(row?.activity_since);
@@ -556,7 +624,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     <div
       ref={rootRef}
       className={
-        "skl skl-chainline" +
+        "skl skl-chainline skl-frame" +
         (p.focused ? " is-focused" : "") +
         (p.selected ? " is-selected" : "") +
         (p.layout.open ? " is-open" : "") +
@@ -578,11 +646,59 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         if (!p.focused) p.onFocus();
       }}
     >
-      {/* The chain's label: its handle (drag) and its ⋯ — a small tag over
-          the chain, no card around it. */}
-      <div className="skl-bar skl-label" data-tour="sky-line-bar" title={p.draggable === false ? "Click to focus this chain (drag mode moves it: V)" : "Drag to move this chain"} onPointerDown={onBarDown}>
-        <Bird size={14} />
-        <span className="skl-name">{name}</span>
+      {/* Round 20: the session's frame — a soft box round the chain (grown to
+          a tile dragged left of / above the origin) — and its title bar: the
+          handle (drag), the name (double-click renames), the branch, the
+          session's state, where the flight is, the ⋯. */}
+      <div className="skl-frame-box" aria-hidden="true" style={{ left: frameX, top: frameY }} />
+      <div
+        className="skl-bar skl-label skl-frame-bar"
+        data-tour="sky-line-bar"
+        style={frameX || frameY ? { marginLeft: frameX, transform: frameY ? `translateY(${frameY}px)` : undefined } : undefined}
+        title={(p.draggable === false ? "Click to focus this session (drag mode moves it: V)" : "Drag to move this session") + " · double-click to rename"}
+        onPointerDown={onBarDown}
+        onDoubleClick={(e) => {
+          if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          startRename();
+        }}
+      >
+        {naming === null ? (
+          <span className="skl-name">{name}</span>
+        ) : (
+          <input
+            className="fl-input skl-name-input"
+            aria-label={"Rename “" + name + "”"}
+            value={naming}
+            maxLength={120}
+            autoFocus
+            data-no-drag
+            onChange={(e) => setNaming(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onBlur={() => endRename(true)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                endRename(true);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                endRename(false);
+              }
+            }}
+          />
+        )}
+        {row?.branch && (
+          <span className="skl-branch" title={"Branch " + row.branch}>
+            {row.branch}
+          </span>
+        )}
+        {row && (
+          <span className={"skl-chip fl-box-chip skl-state-chip tone-" + ss.tone} title={ss.hint}>
+            {ss.label}
+          </span>
+        )}
         {where && (
           <span className="skl-where" title={where}>
             {where}
@@ -644,8 +760,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             onRemove={gc.onRemove}
             onLoopPill={(via) => gc.onEdit?.(via)}
             onPillDown={onPillDown}
-            onMenu={chainMenu.onMenu}
+            onMenu={onMenu}
             kinds={kinds}
+            subFrames={subFrames}
             onNodeMove={moves.move}
             onPortDown={p.onPortDown}
             onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
@@ -661,7 +778,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             )}
           />
           {chainMenu.menu}
-            <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
+          {agentMenu.menu}
+          <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
             {line.palette}
             {line.inspector}
           </ChainPanels>

@@ -182,7 +182,7 @@ describe("the tours registry", () => {
     expect(steps.some((s) => /flights-tab|flights-plans/.test(s.target))).toBe(false);
     // every surface the contract names has its step
     const words = steps.map((s) => s.title + " " + s.body).join(" ");
-    for (const w of ["Grid · Sky", "label", "terminal", "bird", "duplicate", "dialog", "port", "loop", "All blocks…", "stops-only", "Group into a stop", "Save to the shelf", "V ", "H ", "Space", "Delete", "intake", "Fit", "0 ", "guide"])
+    for (const w of ["Grid · Sky", "frame", "agent", "terminal", "bird", "duplicate", "dialog", "port", "loop", "All blocks…", "stops-only", "Group into a stop", "Save to the shelf", "V ", "H ", "Space", "Delete", "intake", "Fit", "0 ", "guide"])
       expect(words, w).toContain(w);
   });
 });

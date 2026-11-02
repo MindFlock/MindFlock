@@ -1,5 +1,5 @@
 /** The Sky tour (round 12): every surface of the Sky in the order a newcomer
- * meets it — the Grid · Sky toggle, a chain and its label, the session tile,
+ * meets it — the Grid · Sky toggle, a session's frame and its bar, the agent tile,
  * the bird, free tiles, wires, a stop's dialog, the shelf, a stops-only chain
  * (round 18: free-floating chains), selection, the
  * Drag / Click tools, Delete, the intake lane, the zoom, and the ? that opens
@@ -27,13 +27,13 @@ export const SKY_TOUR: TourDef = {
     },
     {
       target: '[data-tour="sky-line-bar"], [data-tour="sky-line"] .skl-bar',
-      title: "One chain per session",
-      body: "Drag a chain by its label to put it anywhere; its ⋯ opens the session here, shows only this chain, tacks on a stop or closes it.",
+      title: "A session is a frame",
+      body: "Drag a session's frame by its bar to put it anywhere (double-click renames); its ⋯ shows only this chain or closes it.",
     },
     {
       target: '[data-tour="sky-session-box"], .sky-head',
-      title: "The session starts its chain",
-      body: "The session's tile, in its own colour, starts the chain — click it to open its real terminal on the sky.",
+      title: "The agent starts the chain",
+      body: "The first tile is the session's agent: click it for its terminal right here, right-click to send it a prompt or stop it.",
     },
     {
       target: '[data-tour="flights-bird"]',
@@ -63,7 +63,7 @@ export const SKY_TOUR: TourDef = {
     {
       target: '[data-tour="sky-grounded"], .sky-socket, [data-tour="sky-shelf"]',
       title: "Stops with no session yet",
-      body: "A block dropped on empty sky floats as its own stops-only chain; wire a session's port into its socket to run it.",
+      body: "A block dropped on empty sky floats as a stops-only chain with no frame; wire an agent's port into its socket to run it.",
     },
     {
       target: '[data-tour="sky-selbar"], .sky-selbar',
