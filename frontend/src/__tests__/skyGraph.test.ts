@@ -374,9 +374,13 @@ describe("wireIntent — the Wiring table", () => {
     const other = chainGraph(flightDiagram(flight(GROUNDED, 0, { id: "f_o" })), { head: sessionHead("other"), key: "other", flightId: "f_o" });
     expect(wireIntent(at(g, "stop:s3"), at(other, "stop:g1"))).toEqual({ op: "none" });
     expect(wireIntent(at(g, "stop:s3"), at(other, HEAD_ID), { shift: true })).toEqual({ op: "none" });
-    // From the sky, or onto the own head.
+    // From the sky; onto the own head (its AGENT) a stop's wire is a Loop
+    // back to the agent (round 21) — but never a Loop's own out.
     expect(wireIntent(sky, sky)).toEqual({ op: "none" });
-    expect(wireIntent(at(g, "stop:s3"), at(g, HEAD_ID))).toEqual({ op: "none" });
+    expect(wireIntent(at(g, "stop:s3"), at(g, HEAD_ID))).toMatchObject({ op: "loop", agent: true, to: g.headNode!.node });
+    // A stops-only chain has no agent: its trigger head takes no Loop.
+    const t = T();
+    expect(wireIntent(at(t, "stop:g2"), at(t, HEAD_ID))).toEqual({ op: "none" });
     // An in port dropped on a node.
     expect(wireIntent(at(g, "stop:s3", "in"), at(g, "stop:s5"))).toEqual({ op: "none" });
     // A trigger head's out on the sky.
@@ -387,7 +391,8 @@ describe("wireIntent — the Wiring table", () => {
     const g = A();
     const b = B();
     const t = wireTargets(at(g, "stop:s3"), [g, b]);
-    expect([...t.get("lead")!].sort()).toEqual(["stop:s1", "stop:s2", "stop:s3", "stop:s5"]);
+    // The agent tile (head) too: a Loop back to the agent (round 21).
+    expect([...t.get("lead")!].sort()).toEqual(["head", "stop:s1", "stop:s2", "stop:s3", "stop:s5"]);
     expect([...t.get("flight:f_b")!]).toEqual(["stop:g1"]);
   });
 });

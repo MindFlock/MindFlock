@@ -47,7 +47,7 @@ import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
-import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
+import { LOOP_AGENT, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
   dropGroup,
   deleteFlight,
@@ -641,20 +641,25 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     onToggleHalt: flight ? (n) => toggleHalt(own(n)) : undefined,
     onToggleGroup: toggleGroup,
     // A loop drawn by hand (only on a flight: the Loop needs stops to repeat).
+    // The session box as `to` (its agent tile on the Sky): back to the AGENT
+    // — `back_to: "agent"`, the agent runs again (round 21).
     onLoopFrom: flight
       ? (from, to) => {
           const def = kindOf.get("loop");
-          const target = firstStepOf(to);
+          const target = to.kind === "session" ? LOOP_AGENT : firstStepOf(to);
           const at = loopSlotAfter(from);
-          if (!def || !target || at === undefined) return void toast("This server has no Loop stop");
-          void tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : undefined).then((ok) => ok && toast("Loops back to “" + target.title + "”"));
+          if (!def) return void toast("This server has no Loop stop");
+          if (!target || at === undefined) return;
+          const said = target === LOOP_AGENT ? "Loops back to the agent — it runs again after “" + from.title + "”" : "Loops back to “" + target.title + "”";
+          void tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : undefined).then((ok) => ok && toast(said));
         }
       : undefined,
     onLoopTo: flight
       ? (loop, to) => {
-          const target = firstStepOf(to);
-          if (!loop.step || !target || loop.step.config?.back_to === target.id) return;
-          void patchStop(flight.id, loop.step.id, { config: { ...loop.step.config, back_to: target.id } }).then((ok) => ok && toast("Loops back to “" + target.title + "” now"));
+          const back = loopBackTo(to);
+          if (!loop.step || !back || loop.step.config?.back_to === back) return;
+          const said = back === LOOP_AGENT ? "Loops back to the agent now" : "Loops back to “" + (firstStepOf(to)?.title || to.title) + "” now";
+          void patchStop(flight.id, loop.step.id, { config: { ...loop.step.config, back_to: back } }).then((ok) => ok && toast(said));
         }
       : undefined,
     onDropStop: (drop: StopDrop, at) => {
@@ -674,6 +679,11 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   };
   // The canvas counts a group box (and the flown pill) as one place.
   const shown = drawnCanvas(line, raw);
+  // Round 21: a stop's ⋯ "Loop back to…" (the Sky's chain menu): the agent
+  // first, then every stop at or before it — the line in flight indexes.
+  const sessionBox = line.nodes.find((n) => n.kind === "session" && n.row === "main") || null;
+  const loopChoicesOf = (n: DiagramNode): LoopChoice[] =>
+    flight ? loopChoices(own(n), line.nodes.filter((m) => m.row === "main"), { session: sessionBox, insertFrom: line.insertFrom }) : [];
 
   const palette: ReactNode =
     paletteAt !== null ? (
@@ -763,6 +773,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         def={def}
         lineSteps={flight?.steps}
+        loopAgent
         busy={busy}
         note={[why, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
         onClose={close}
@@ -838,7 +849,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     /** Round 18: the line in the FLIGHT's indexes and its handlers (the Sky's
      * chain speaks them: lib/skyGraph `chainGraph` / `wireIntent`). */
     graphDiagram: line,
-    graphCanvas: raw,
+    graphCanvas: { ...raw, loopChoicesOf },
     paletteAfter,
     paletteParallel,
     /** Where the open palette / dialog hangs: a node id, "" = the end of the

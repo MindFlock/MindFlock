@@ -17,7 +17,7 @@
 
 import { loadNodePos, saveNodePos } from "../../lib/skyNodePos";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { firstStepOf, loopSlotAfter, loopStepTo, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { LOOP_AGENT, firstStepOf, loopSlotAfter, loopStepTo, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { joinParallel, moveStop, queueStopPos, saveStopPositions, splitOffChain, tackOn, tackOnNew } from "../../lib/flightsApi";
 import type { Flight, StepKindDef } from "../../lib/flights";
 import { HANDOFF_KIND, groundedKey, handoffStepFor, sessionWord } from "../../lib/groundedLines";
@@ -138,6 +138,57 @@ export interface WireBand {
   side: "in" | "out";
   /** The drop under the pointer means something. */
   over: boolean;
+  /** A short hint by the pointer: what letting go here does, else where a
+   * wire can go (`wireHint`). */
+  hint?: string;
+}
+
+// --- The drag's hint (docs/flights-loop-agent-sky.md) --------------------------------
+
+const q = (t: string) => "“" + t + "”";
+
+/** What a drop does, in a few words (the hint by the pointer while it is
+ * over a target), "" for none. */
+export function intentHint(intent: WireIntent): string {
+  switch (intent.op) {
+    case "loop":
+      return intent.agent ? "↺ Loop back to the agent" : "↺ Loop back to " + q(intent.to.title);
+    case "move":
+      return "Move " + q(intent.step.title) + " here";
+    case "merge":
+      return "Join that chain on here";
+    case "attach":
+      return "Run that chain on this session";
+    case "handoff":
+      return "Start that chain from here";
+    case "parallel":
+      return intent.step ? "Run " + q(intent.step.title) + " beside " + q(intent.with.title) : "Add a stop beside " + q(intent.with.title);
+    case "palette":
+      return "Add a stop here";
+    case "split":
+      return "Split off a chain here";
+    default:
+      return "";
+  }
+}
+
+/** The hint by the pointer before it is over anything: where a wire from
+ * `src` can go — a stop's out port on a chain that can loop says so ("Drop on
+ * an earlier stop or the agent to loop"). `targets` are the drag's lit nodes
+ * (`wireTargetsOf`). */
+export function dragHint(src: WireEnd, targets: ReadonlyMap<string, ReadonlySet<string>>): string {
+  if ("sky" in src) return "";
+  if (src.side === "in") return "Drop on empty sky to split it off";
+  const own = targets.get(src.chain.key);
+  const g = src.chain;
+  const agent = !!own?.has(HEAD) && src.node.id !== HEAD && g.head.kind === "session";
+  // An earlier stop (or this one) lit: a drop there is a Loop.
+  const at = src.node.node.index;
+  const earlier = at !== undefined && g.nodes.some((n) => own?.has(n.id) && n.node.index !== undefined && n.node.index <= at && n.node.kind !== "child" && n.node.kind !== "branch");
+  if (agent && earlier) return "Drop on an earlier stop or the agent to loop";
+  if (agent) return "Drop on the agent to loop";
+  if (earlier) return "Drop on an earlier stop to loop";
+  return "Drop on empty sky to add a stop";
 }
 
 export interface SkyWiringOpts {
@@ -176,8 +227,10 @@ export function useSkyWiring(opts: SkyWiringOpts) {
     const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
     let shift = e.shiftKey;
     const kindsNow = () => optsRef.current.kinds?.() || null;
-    setTargets(wireTargetsOf(src, chains.values(), shift, kindsNow()));
-    setBand({ from, to: from, side, over: false });
+    let lit = wireTargetsOf(src, chains.values(), shift, kindsNow());
+    let base = dragHint(src, lit);
+    setTargets(lit);
+    setBand({ from, to: from, side, over: false, hint: base });
     setOver(null);
     const pid = e.pointerId;
     const sx = e.clientX;
@@ -194,13 +247,16 @@ export function useSkyWiring(opts: SkyWiringOpts) {
       const to = now.planeAt(ev.clientX, ev.clientY);
       if (ev.shiftKey !== shift) {
         shift = ev.shiftKey;
-        setTargets(wireTargetsOf(src, now.chains().values(), shift, kindsNow()));
+        lit = wireTargetsOf(src, now.chains().values(), shift, kindsNow());
+        base = dragHint(src, lit);
+        setTargets(lit);
       }
       const h = hit(ev).node;
       const hc = h ? now.chains().get(h.key) : null;
-      const ok = !!h && !!hc && wireIntent(src, { chain: hc.graph, node: h.node, side: "in" }, { shift, kinds: kindsNow() }).op !== "none";
+      const it: WireIntent = h && hc ? wireIntent(src, { chain: hc.graph, node: h.node, side: "in" }, { shift, kinds: kindsNow() }) : { op: "none" };
+      const ok = it.op !== "none";
       setOver((cur) => (ok ? (cur?.key === h!.key && cur.node === h!.node.id ? cur : { key: h!.key, node: h!.node.id }) : null));
-      setBand({ from, to, side, over: ok });
+      setBand({ from, to, side, over: ok, hint: (ok && intentHint(it)) || base });
     };
     const end = (commit: boolean, ev?: PointerEvent) => {
       window.removeEventListener("pointermove", move);
@@ -344,10 +400,12 @@ export async function runWireIntent(intent: WireIntent, ctx: { src: WireEnd; at:
   }
   if (intent.op === "loop") {
     const def = d.kinds.find((k) => k.kind === "loop");
-    const target = firstStepOf(intent.to);
+    // Its own agent tile: `back_to: "agent"` — the agent runs again.
+    const target = intent.agent ? LOOP_AGENT : firstStepOf(intent.to);
     const at = loopSlotAfter(intent.from);
-    if (!def || !target || at === undefined) return void toast("This server has no Loop stop");
-    if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast("Loops back to “" + target.title + "”");
+    if (!def) return void toast("This server has no Loop stop");
+    if (!target || at === undefined) return;
+    if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast(target === LOOP_AGENT ? "Loops back to the agent — it runs again after “" + intent.from.title + "”" : "Loops back to “" + target.title + "”");
     return;
   }
   if (intent.op === "split") {

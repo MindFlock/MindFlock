@@ -897,3 +897,68 @@
   opacity: 0;
   pointer-events: none;
 }
+
+/* === Loop back to the agent + easier wires (docs/flights-loop-agent-sky.md) ===
+   Its own block (another worker edits the `.sky-ready*` rules above).
+   - The out port's hit area is bigger than its dot (an invisible ring).
+   - While a wire is drawn (`.is-wiring`: the chain has lit drop targets),
+     every lit tile is a generous drop: an invisible pad round its box, a
+     tinted tile; the one under the pointer glows (`.is-over`).
+   - The agent tile as a drop says "↺" (a Loop back to the agent).
+   - The hint by the pointer (SkyWires `.sky-band-hint`), screen-sized. */
+.sky-port-out::before {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+}
+
+.sky-chain.is-wiring .sky-node.is-target::after {
+  content: "";
+  position: absolute;
+  inset: -18px;
+  border-radius: 18px;
+  pointer-events: auto;
+}
+
+.sky-chain.is-wiring .sky-node.is-target .sky-tile {
+  background: color-mix(in srgb, var(--accent) 12%, var(--sky-tile-bg, var(--panel)));
+}
+
+.sky-chain.is-wiring .sky-node.is-target.is-over::after {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  outline: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.sky-node.is-agent-target .sky-tile::after {
+  content: "↺";
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.sky-band-hint {
+  font-size: calc(12px / var(--sky-z, 1));
+  font-weight: 600;
+  fill: var(--text);
+  stroke: var(--sky-bg, var(--bg));
+  stroke-width: calc(4px / var(--sky-z, 1));
+  stroke-linejoin: round;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+.sky-band.is-over .sky-band-hint {
+  fill: var(--accent);
+}
+/* === end: loop back to the agent + easier wires === */
