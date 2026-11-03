@@ -172,3 +172,26 @@
 .pb-menu .pb-foot b {
   color: var(--text);
 }
+
+/* While the session's stops decide: how far they go, said in place of the
+   rungs ("This session's stops go as far as Push"). */
+.pb-menu .ft-flight {
+  margin: 6px 4px 4px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.pb-menu .ft-flight-head {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pb-menu .ft-flight-desc {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}

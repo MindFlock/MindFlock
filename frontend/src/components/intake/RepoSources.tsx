@@ -39,7 +39,6 @@ import {
 } from "../../state/queries";
 import { useSettings } from "../settings/useSettings";
 import { useAutosave } from "./autosave";
-import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
 import {
   AddFlowShell,
   ArmButton,
@@ -262,9 +261,14 @@ export function RepoFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedKey]);
   const o = ((blocks[repo] || {}) as RepoOverride) || {};
-  const save = (field: string, value: string) => {
+  const save = (field: string, value: string) => saveFields({ [field]: value });
+  // Several fields in ONE save ("Goes as far as": a rung writes the depth and
+  // clears the plan together, so the two never land out of order).
+  const saveFields = (fields: Record<string, string>) => {
     const before = blocksRef.current;
-    const { patch, blocks: next } = fieldPatch(before, use, repo, field, value);
+    let patch: Record<string, Json> = {};
+    let next = before;
+    for (const [field, value] of Object.entries(fields)) ({ patch, blocks: next } = fieldPatch(next, use, repo, field, value));
     setBlocks(next);
     void s.saveGroups(patch, "Saved " + repo).then((ok) => {
       // "Save failed" is toasted; put the editor back on what is stored.
@@ -344,11 +348,9 @@ export function RepoFields({
   }
 
   const agent = o.agent || "";
-  // A stored "agent" rung is Off in the one ladder (see lib/autopilot's normalizeLane).
-  const depth = o.depth === "agent" ? "" : o.depth || "";
   return (
     <div className="ik-fields" data-use={use} key={repo}>
-      <div className="ik-grid ik-grid-3">
+      <div className="ik-grid ik-grid-2">
         <label className="set-row">
           <span className="set-label">Agent</span>
           <select data-repo-field="agent" value={agent} onChange={(e) => save("agent", e.target.value)}>
@@ -361,19 +363,6 @@ export function RepoFields({
           </select>
           <span className="set-hint">Works this repository's sessions.</span>
         </label>
-        <label className="set-row">
-          <span className="set-label">Fast-track to</span>
-          <select data-repo-field="depth" value={depth} onChange={(e) => save("depth", e.target.value)}>
-            {/* One ladder: Off / Commit / Push / Open a PR. Merge is per item only. */}
-            <option value="">{LANE_LABEL.leave}</option>
-            {SOURCE_DEPTHS.map((d) => (
-              <option key={d} value={d}>
-                {LANE_LABEL[d]}
-              </option>
-            ))}
-          </select>
-          <span className="set-hint">After the agent finishes.</span>
-        </label>
         <BlockInput
           label={use === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)"}
           field="min_age_minutes"
@@ -384,13 +373,16 @@ export function RepoFields({
           onSave={save}
         />
       </div>
-      {/* Beside Fast-track: the flyway this repo's PRs / issues fly
-          ("" = the built-in, cut at that depth). */}
+      {/* "Goes as far as": the ONE control for how far this repo's PRs /
+          issues go (PlanSelect). A rung writes the depth and clears the plan
+          in one save; a saved stop writes the plan. */}
       <PlanSelect
         kind={use === "pr" ? "prs" : "issues"}
         field={{ attr: "data-repo-field" }}
-        value={o.plan || ""}
-        onChange={(id) => save(PLAN_FIELD, id)}
+        target={repo}
+        depth={o.depth || ""}
+        plan={o.plan || ""}
+        onChange={(patch) => saveFields("depth" in patch ? { depth: patch.depth, [PLAN_FIELD]: "" } : { [PLAN_FIELD]: patch.plan })}
       />
       <div className={"ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1")}>
         {use === "pr" && (

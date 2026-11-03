@@ -86,17 +86,25 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
   });
 
   it("resolves the default flyway: the source's own, else the kind's built-in", () => {
-    expect(blocks[0].flyway).toEqual({ id: "p_mine", name: "Mine", own: true });
-    expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false });
-    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false });
-    expect(blocks[3].flyway).toEqual({ id: "p_mine", name: "Mine", own: true });
+    expect(blocks[0].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
+    expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false, words: "Stop after the agent" });
+    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false, words: "Stop after the agent" });
+    expect(blocks[3].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
     // No builtin:issue on this server: an issue is worked like a ticket.
     expect(blocks[4].flyway.id).toBe("builtin:ticket");
   });
 
-  it("a flyway the list no longer has keeps its id as its name", () => {
-    const b = sourceBlocks({ ticketing: { sources: [{ id: "sc", plan: "p_gone" }] } }, [], [], { plans: PLANS });
-    expect(b[0].flyway).toEqual({ id: "p_gone", name: "p_gone", own: true });
+  it("a flyway the list no longer has: the server goes by the depth, and so do the words", () => {
+    const b = sourceBlocks({ ticketing: { sources: [{ id: "sc", plan: "p_gone", depth: "push" }] } }, [], [], { plans: PLANS });
+    expect(b[0].flyway).toMatchObject({ id: "builtin:ticket", own: false, words: "Push" });
+    // Plans not loaded yet: a named one is trusted, by its id.
+    const early = sourceBlocks({ ticketing: { sources: [{ id: "sc", plan: "p_gone" }] } }, [], [], { plans: null });
+    expect(early[0].flyway).toEqual({ id: "p_gone", name: "p_gone", own: true, words: "p_gone" });
+  });
+
+  it("names where a source goes in the card's words: its depth's rung", () => {
+    const b = sourceBlocks({ ticketing: { sources: [{ id: "sc", depth: "pr" }] }, github: { repos: ["acme/app"], repo_settings: { "acme/app": { depth: "commit" } } } }, [], [], { plans: PLANS });
+    expect(b.map((x) => x.flyway.words)).toEqual(["Open PR", "Commit"]);
   });
 
   it("an item from a source settings doesn't name still gets a block", () => {

@@ -25,8 +25,8 @@ const { FlywayCanvas } = await import("../components/flights/FlywayCanvas");
 const { SessionFlight, featuredPlans, SAVED_SHOWN } = await import("../components/flights/SessionFlight");
 const { flightDiagram, flywayDiagram } = await import("../lib/flightDiagram");
 const { SkyView } = await import("../components/flights/SkyView");
-const { PlanSelect } = await import("../components/flights/PlanSelect");
-const { planChoices } = await import("../lib/flights");
+const { PlanSelect, reachSummary } = await import("../components/flights/PlanSelect");
+const { planChoices, sourcePlanOptions, sourceReach } = await import("../lib/flights");
 const { putBody } = await import("../components/intake/sourceForm");
 const { fieldPatch } = await import("../components/intake/repoUses");
 
@@ -494,20 +494,74 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     expect(planChoices(PLANS, "tickets", "p_gone").at(-1)).toEqual({ value: "p_gone", label: "p_gone (not found)" });
   });
 
-  it("renders on the card as chips with the stored flyway on, and nothing on a server without flights", () => {
+  it("is ONE \"Goes as far as\" control: the rungs, a divider, the saved stops, Edit in the Sky…, and the stops it resolves to", () => {
     const html = withClient(
-      createElement(PlanSelect, { kind: "tickets", value: "p_mine", onChange: () => {}, className: "tk-plan", field: { attr: "data-tk-field" } }),
+      createElement(PlanSelect, { kind: "tickets", target: "sc", depth: "push", plan: "p_mine", onChange: () => {}, className: "tk-depth", field: { attr: "data-tk-field" } }),
       (c) => c.setQueryData(["flight-plans"], PLANS)
     );
-    expect(html).toContain('data-tk-field="plan"');
-    expect(html).toMatch(/<button type="button" role="radio" aria-checked="true" class="fl-pick on"[^>]*data-value="p_mine">Mine<\/button>/);
-    expect(html).toContain(">Default · Ticket to merge<");
+    expect(html).toContain(">Goes as far as<");
+    expect(html).toContain('data-tk-field="reach"');
+    for (const w of ["Stop after the agent", "Commit", "Push", "Open PR"]) expect(html, w).toContain(">" + w + "</button>");
+    // A saved stop decides: its chip is on, the depth's isn't.
+    expect(html).toMatch(/<button type="button" role="radio" aria-checked="true" class="fl-pick fl-reach-plan on"[^>]*data-value="plan:p_mine">Mine<\/button>/);
+    expect(html).toMatch(/aria-checked="false" class="fl-pick" data-value="push">Push</);
+    expect(html).toContain('class="fl-reach-sep"');
+    expect(html).toContain(">Edit in the Sky…</button>");
+    expect(html).not.toContain("Fast-track");
     expect(html).not.toContain("<select");
+    // A rung: its chip on, and the ladder in words underneath.
+    const rung = withClient(
+      createElement(PlanSelect, { kind: "prs", target: "acme/api", depth: "pr", plan: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
+      (c) => c.setQueryData(["flight-plans"], PLANS)
+    );
+    expect(rung).toMatch(/aria-checked="true" class="fl-pick on" data-value="pr">Open PR</);
+    expect(rung).toContain("Agent → Commit → Push → Open PR");
+    // No flights routes on this server: the rungs still show, no saved stops, no Sky.
     const none = withClient(
-      createElement(PlanSelect, { kind: "prs", value: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
+      createElement(PlanSelect, { kind: "prs", target: "acme/api", depth: "", plan: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
       (c) => c.setQueryData(["flight-plans"], null)
     );
-    expect(none).toBe("");
+    expect(none).toMatch(/aria-checked="true" class="fl-pick on" data-value="leave">Stop after the agent</);
+    expect(none).not.toContain("Edit in the Sky");
+    // A card the server doesn't hold yet can't open its editor.
+    const draft = withClient(
+      createElement(PlanSelect, { kind: "tickets", target: "", depth: "", plan: "", onChange: () => {}, field: { attr: "data-tk-field" } }),
+      (c) => c.setQueryData(["flight-plans"], PLANS)
+    );
+    expect(draft).toMatch(/<button type="button" class="linklike fl-reach-edit" disabled=""/);
+  });
+
+  it("resolves the way the server does: its own saved stop while it exists, else the built-in ladder at its depth", () => {
+    const P = [
+      { id: "p_pay", name: "Payments stops", steps: [{ ...STEPS[0], kind: "agent", title: "Agent works it" }, { ...STEPS[0], kind: "verify", title: "Verify" }] },
+    ] as FlightPlan[];
+    expect(sourceReach("tickets", { plan: "p_pay", depth: "push" }, P)).toMatchObject({ choice: "plan:p_pay", words: "Payments stops", own: true, steps: ["Agent", "Verify"], planId: "p_pay" });
+    // A rung: the words every surface shows, the plan id the server answers with.
+    expect(sourceReach("tickets", { depth: "push" }, P)).toMatchObject({ choice: "push", words: "Push", own: false, steps: ["Agent", "Commit", "Push"], planId: "builtin:ticket@push" });
+    expect(sourceReach("prs", { depth: "" }, P)).toMatchObject({ choice: "leave", words: "Stop after the agent", steps: ["Agent"], planId: "" });
+    expect(sourceReach("issues", { depth: "agent" }, P).words).toBe("Stop after the agent");
+    // A source may not merge: a hand-edited merge reads as Open PR (server._cap_source_depth).
+    expect(sourceReach("tickets", { depth: "merge" }, P)).toMatchObject({ choice: "pr", planId: "builtin:ticket@pr" });
+    // A saved stop that's gone: the server goes by the depth, and the card says so.
+    const gone = sourceReach("tickets", { plan: "p_gone", depth: "commit" }, P);
+    expect(gone).toMatchObject({ choice: "commit", own: false, missing: "p_gone" });
+    expect(reachSummary(gone)).toBe("Its saved stops “p_gone” are gone, so: Agent → Commit");
+    // Plans not known here: a named plan is trusted.
+    expect(sourceReach("tickets", { plan: "p_x" }, undefined)).toMatchObject({ choice: "plan:p_x", own: true });
+    expect(reachSummary(sourceReach("prs", {}, P))).toBe("Agent, then nothing more. You take it from there");
+  });
+
+  it("lists your saved stops, then our built-ins made for that kind of item", () => {
+    const P = [
+      { ...PLAN, id: "builtin:ticket", name: "Ticket to merge" },
+      { ...PLAN, id: "builtin:pr", name: "Pull request", trigger: { ...PLAN.trigger, kind: "pr" } },
+      { ...PLAN, id: "builtin:nightly", name: "Nightly chores", trigger: { ...PLAN.trigger, kind: "schedule" } },
+      { ...PLAN, id: "p_mine", name: "Mine", builtin: false },
+    ] as FlightPlan[];
+    expect(sourcePlanOptions(P, "tickets").map((o) => o.label)).toEqual(["Mine", "Ticket to merge"]);
+    expect(sourcePlanOptions(P, "prs").map((o) => o.label)).toEqual(["Mine", "Pull request"]);
+    expect(sourcePlanOptions(P, "issues").map((o) => o.label)).toEqual(["Mine", "Ticket to merge"]);
+    expect(sourcePlanOptions(null, "tickets")).toEqual([]);
   });
 
   it("round-trips: a ticket source saves `plan` on the source, a repo card under its override map", () => {
@@ -518,10 +572,19 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     expect(issue.patch).toEqual({ github: { issue_repo_settings: { "acme/api": { depth: "push", plan: "p_mine" } } } });
     // Back to the default: the key goes, the depth stays.
     expect(fieldPatch(issue.blocks, "issue", "acme/api", "plan", "").blocks).toEqual({ "acme/api": { depth: "push" } });
-    // The cards wire it: the ticket card beside Fast-track, the repo card too.
-    expect(code("components/intake/TicketsTab.tsx")).toContain("onChange={(plan) => onChange({ plan })}");
-    expect(code("components/intake/RepoSources.tsx")).toContain("onChange={(id) => save(PLAN_FIELD, id)}");
-    expect(code("components/intake/RepoSources.tsx")).toContain('kind={use === "pr" ? "prs" : "issues"}');
+    // The cards wire it: ONE control each. A rung writes the depth AND clears
+    // the plan (one save on a repo card); a saved stop writes the plan.
+    const tickets = code("components/intake/TicketsTab.tsx");
+    expect(tickets).toContain("onChange={(patch) => onChange(patch)}");
+    expect(tickets).not.toContain("Fast-track to");
+    const repos = code("components/intake/RepoSources.tsx");
+    expect(repos).toContain('saveFields("depth" in patch ? { depth: patch.depth, [PLAN_FIELD]: "" } : { [PLAN_FIELD]: patch.plan })');
+    expect(repos).toContain('kind={use === "pr" ? "prs" : "issues"}');
+    expect(repos).not.toContain("Fast-track to");
+    expect(code("components/flights/PlanSelect.tsx")).toContain('onChange({ depth: l === "leave" ? "" : l, plan: "" })');
+    // Both fields in one patch, depth set and plan gone.
+    const both = fieldPatch(fieldPatch({ "acme/api": { plan: "p_mine" } }, "pr", "acme/api", "depth", "push").blocks, "pr", "acme/api", "plan", "");
+    expect(both.patch).toEqual({ github: { repo_settings: { "acme/api": { depth: "push" } } } });
   });
 
   it("the drawer's waiting rows: a kind heading, a badge on every row, Fly, and the flyway chips on the source's flyway", () => {

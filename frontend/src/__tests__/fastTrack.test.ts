@@ -4,6 +4,7 @@
  * paste. The ⏩ button's own descriptor is pinned in autopilot.test.ts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Caps, Instance } from "../api/types";
+import { SRC } from "./sourceText";
 
 const api = vi.fn();
 const instApi = vi.fn();
@@ -290,5 +291,39 @@ describe("the calls", () => {
     const mod = L as unknown as Record<string, unknown>;
     for (const gone of ["shipNow", "shipMenuModel", "shipEntries", "runShipEntry", "openShipMenu", "LANE_MENU"])
       expect(mod[gone], gone).toBeUndefined();
+  });
+});
+
+describe("the ⏩ picker while the session's stops decide", () => {
+  const row = (state: string, plan_name = "Ship it") => ({ id: "f1", plan_name, state }) as never;
+  const ship = (lane: string) => ({ kind: "ship", config: { lane } });
+
+  it("a flight that is built, waiting to take off or flying decides; halted, done and cancelled hand back to ⏩", () => {
+    for (const s of ["grounded", "ready", "running", "waiting_you", "paused"]) expect(L.flightDecides(row(s)), s).toBe(true);
+    for (const s of ["halted", "done", "cancelled"]) expect(L.flightDecides(row(s)), s).toBe(false);
+    expect(L.flightDecides(null)).toBe(false);
+    // The branch-only dto (no id) is not a flight of its own.
+    expect(L.flightDecides({ id: "", state: "ready" } as never)).toBe(false);
+  });
+
+  it("says how far the stops go — the last ship stop — never Off", () => {
+    const r = L.flightReach(row("ready"), [{ kind: "agent", config: {} }, { kind: "verify", config: {} }, ship("push")]);
+    expect(r.head).toBe("This session's stops go as far as Push");
+    expect(r.lane).toBe("push");
+    expect(r.desc).toBe("Its stops (“Ship it”) decide, not Fast-track. To change how far it goes, edit them.");
+    expect(L.flightReach(row("ready"), [ship("commit"), ship("pr")]).head).toBe("This session's stops go as far as Open PR");
+    expect(L.flightReach(row("ready"), [{ kind: "agent", config: {} }]).head).toBe("This session's stops don't commit anything");
+    // Its steps not loaded yet: no guess.
+    expect(L.flightReach(row("ready", ""), undefined)).toEqual({ lane: "", head: "This session's stops decide how far it goes", desc: "Its stops decide, not Fast-track. To change how far it goes, edit them." });
+  });
+
+  it("the picker swaps its rungs for the stops' reach and two doors: its Flight tab and the Sky", () => {
+    const menu = SRC["components/grid/FastTrackMenu.tsx"];
+    expect(menu).toContain("const flightRow = inst && flightDecides(inst.flight) ? inst.flight : null;");
+    expect(menu).toContain('? [{ kind: "stops" as const }, { kind: "sky" as const }]');
+    expect(menu).toContain('if (e.kind === "stops") ui.setLastTab(title, "flight");');
+    expect(menu).toContain("else ui.showSky(title);");
+    expect(menu).toContain('{e.kind === "stops" ? "Edit its stops" : "Open in the Sky"}');
+    expect(menu).toContain('<div className="ft-flight-head">{reach.head}</div>');
   });
 });

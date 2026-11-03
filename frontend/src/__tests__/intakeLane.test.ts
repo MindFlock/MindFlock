@@ -90,8 +90,9 @@ describe("the intake lane", () => {
     expect(html).toContain('class="sky-lane-auto on">auto-start on · every 20 s<');
     expect(html).toContain('class="sky-lane-auto">manual<');
     expect(html).toMatch(/class="sky-lane-flyway own"[^>]*>Mine</);
-    // A built-in default says so, not the plan's name (that echoed the badge).
-    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>built-in</);
+    // A built-in default says where it goes in Intake's words (no depth: the
+    // agent alone), not the plan's name (that echoed the badge).
+    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Stop after the agent</);
     expect(html).not.toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
     expect(html).not.toContain("<select");
   });

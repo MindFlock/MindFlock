@@ -10,6 +10,7 @@
  * the top-bar badge read one rule each and are pinned by tests without a DOM. */
 
 import { relTime } from "./format";
+import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
 
 // --- The contract's shapes ---------------------------------------------------
 
@@ -727,6 +728,96 @@ export function planChoices(
   for (const p of ordered) out.push({ value: p.id, label: p.name, builtin: p.builtin });
   if (value && !plans.some((p) => p.id === value)) out.push({ value, label: value + " (not found)" });
   return out;
+}
+
+// --- A source's "Goes as far as" ---------------------------------------------
+// ONE control per Intake source (components/flights/PlanSelect.tsx): the rungs
+// (Stop after the agent · Commit · Push · Open PR) or one of its saved stops.
+// The server's chain (server._intake_plan) is unchanged: a source's own saved
+// stop, when it still exists, wins; else the built-in ship ladder cut at its
+// depth (flights._ladder_plan: the agent, then commit → push → pr). A rung
+// pick writes the depth AND clears the plan, so a depth can no longer sit
+// ignored beside a plan.
+
+/** The ship ladder a depth means, in the words a ship step's title uses. */
+const SHIP_WORD: Record<string, string> = { commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge" };
+
+/** A ship lane in the words a ship step's title uses ("Open PR", "Merge"). */
+export function shipWord(lane: string): string {
+  return SHIP_WORD[lane] || lane;
+}
+const LADDER: readonly Lane[] = ["commit", "push", "pr", "merge"];
+
+/** A row of steps in words, for one line: "Agent → Commit → Push → Open PR".
+ * The agent step reads "Agent"; every other step by its title. */
+export function stopsSummaryWords(steps: readonly Pick<FlightStep, "kind" | "title" | "config">[] | null | undefined): string[] {
+  return (steps || []).map((s) =>
+    s.kind === "agent" ? "Agent" : String(s.title || "").trim() || (s.kind === "ship" ? SHIP_WORD[String(s.config?.lane || "")] || "" : "") || s.kind
+  );
+}
+
+/** Where a source's items go, as every surface names it (the Intake card,
+ * the Sky lane's chip). */
+export interface SourceReach {
+  /** The control's chip that is on: a rung ("leave", "commit", "push", "pr")
+   * or "plan:<id>" for a saved stop. */
+  choice: string;
+  /** THE words: "Open PR", "Payments stops", "Stop after the agent". */
+  words: string;
+  /** A saved stop decides (not the rungs). */
+  own: boolean;
+  /** The depth as the server reads it (lib/autopilot capSourceDepth). */
+  rung: Lane;
+  /** A saved stop the source names that no longer exists: the server goes by
+   * the rung instead. "" when none. */
+  missing: string;
+  /** The stops it resolves to, in words (`stopsSummaryWords`); [] when the
+   * saved stop's steps aren't known here. */
+  steps: string[];
+  /** The plan id a new item flies (what GET /api/flights/intake-default
+   * answers as `plan_id`): the saved stop, `builtin:<kind>@<depth>`, or "". */
+  planId: string;
+}
+
+/** The built-in a source's ladder is cut from (flights._BUILTIN_FOR_KIND). */
+const LADDER_BASE: Record<WaitingKind, string> = { tickets: "builtin:ticket", issues: "builtin:ticket", prs: "builtin:pr" };
+
+/** Where a source with this `plan` and `depth` sends its items (the server's
+ * chain, minus a per-start pick). `plans` undefined/null = not known here:
+ * a named plan is then trusted to exist. */
+export function sourceReach(
+  kind: WaitingKind,
+  src: { plan?: string | null; depth?: string | null },
+  plans: ReadonlyArray<Pick<FlightPlan, "id" | "name"> & { steps?: FlightStep[] }> | null | undefined
+): SourceReach {
+  const rung = capSourceDepth(src.depth);
+  const plan = String(src.plan || "").trim();
+  const found = plan && plans ? plans.find((p) => p.id === plan) : undefined;
+  if (plan && (found || !plans))
+    return { choice: "plan:" + plan, words: found?.name || plan, own: true, rung, missing: "", steps: found ? stopsSummaryWords(found.steps) : [], planId: plan };
+  const ship = rung === "leave" ? [] : LADDER.slice(0, LADDER.indexOf(rung) + 1);
+  return {
+    choice: rung,
+    words: sourceRungLabel(rung),
+    own: false,
+    rung,
+    missing: plan,
+    steps: ["Agent", ...ship.map((l) => SHIP_WORD[l])],
+    planId: rung === "leave" ? "" : LADDER_BASE[kind] + "@" + rung,
+  };
+}
+
+/** The saved stops a source can pick, after the rungs: your own saved stops
+ * (by name), then our built-ins made for this kind of item ("Ticket to merge"
+ * — the full built-in, with its reviews, checks and your OK before merging). */
+export function sourcePlanOptions(
+  plans: readonly Pick<FlightPlan, "id" | "name" | "builtin" | "trigger">[] | null | undefined,
+  kind: WaitingKind
+): Array<{ value: string; label: string; builtin: boolean }> {
+  const triggers: Record<WaitingKind, string[]> = { tickets: ["ticket"], prs: ["pr"], issues: ["issue", "ticket"] };
+  const mine = (plans || []).filter((p) => !p.builtin);
+  const ours = (plans || []).filter((p) => p.builtin && triggers[kind].includes(String(p.trigger?.kind || "")));
+  return [...mine, ...ours].map((p) => ({ value: p.id, label: p.name, builtin: !!p.builtin }));
 }
 
 /** The per-source setting's key: `TicketingSource.plan`,

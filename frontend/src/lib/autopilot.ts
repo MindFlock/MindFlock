@@ -39,6 +39,29 @@ export const SESSION_DEPTHS: readonly Lane[] = ["commit", "push", "pr", "merge"]
  * available on an individual item. */
 export const SOURCE_DEPTHS: readonly Lane[] = ["commit", "push", "pr"];
 
+/** A SOURCE's bottom rung, in words. A source set to Off still runs the agent
+ * on every item; it just stops there. So Intake's "Goes as far as" control and
+ * the Sky lane's chip say "Stop after the agent", where a session's ⏩ says Off. */
+export const SOURCE_OFF_LABEL = "Stop after the agent";
+
+/** The rungs a source's "Goes as far as" offers, nearest first. */
+export const SOURCE_RUNGS: readonly Lane[] = ["leave", ...SOURCE_DEPTHS];
+
+/** A source's stored depth as the server reads it (server._cap_source_depth):
+ * blank / off / agent is "leave". A source may not merge, so a hand-edited
+ * "merge" (or a word the ladder doesn't know) is read as Open PR. */
+export function capSourceDepth(v: string | null | undefined): Lane {
+  if (!String(v || "").trim()) return "leave";
+  const lane = normalizeLane(v);
+  if (lane === "leave") return "leave";
+  return lane && SOURCE_DEPTHS.includes(lane) ? lane : "pr";
+}
+
+/** A source rung in words: "Stop after the agent", "Commit", "Push", "Open PR". */
+export function sourceRungLabel(lane: Lane): string {
+  return lane === "leave" ? SOURCE_OFF_LABEL : LANE_LABEL[lane];
+}
+
 /** THE user-facing word for each rung. */
 export const LANE_LABEL: Record<Lane, string> = {
   leave: "Off",

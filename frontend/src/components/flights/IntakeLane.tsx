@@ -21,8 +21,9 @@
  * lib/skyIntake.ts `sourceBlocks`; the Fly request is the Board's own
  * (`flyRequest`, with the source's saved stop).
  *
- * The stops chip ("Stops  built-in ✎", "Stops  Payments stops ✎") is a
- * button: "Edit the default stops for <source>" — the source's default as a
+ * The stops chip ("Stops  Open PR ✎", "Stops  Payments stops ✎", "Stops
+ * Stop after the agent ✎" — the words Intake's "Goes as far as" shows for the
+ * source, lib/skyIntake `stopsWords`) is a button: "Edit the default stops for <source>" — the source's default as a
  * grounded chain on the board that edits it (`openDefaultEditor`;
  * GroundedLine draws it with Save as default). While that chain is on the
  * board (`editorFor`) the chip stays lit and says "editing…". Editing one
