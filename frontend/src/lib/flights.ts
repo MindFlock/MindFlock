@@ -199,6 +199,36 @@ export interface Flight {
   start_on?: FlightStartOn;
   /** Round 19: when it became `ready` (0 when it never was). */
   ready_since?: number;
+  /** The stops that may send work back to the agent, by step id — the
+   * server's `returns_of` (docs/vision/fixwire.md): each draws a return wire
+   * with its case on it. Only on flights the API sends. */
+  returns?: Record<string, FlightReturn>;
+}
+
+/** Where a stop's failure goes back to and why (the server's `returns_of`):
+ * `to` an Agent stop's id or `"agent"` (the session's agent tile), `case`
+ * the words on its wire ("if pre-commit fails"), `of` the most rounds
+ * (null: no cap), `kinds` the lane fix kinds a Ship stop covers. */
+export interface FlightReturn {
+  to: string;
+  case: string;
+  of: number | null;
+  kinds?: string[];
+}
+
+/** A stop's fix (`step_states[id].detail.fix`): the agent is fixing what the
+ * stop found (`active`), round `round` of `of`; once over it stays with
+ * `outcome` "fixed" / "halted". */
+export interface StepFix {
+  active: boolean;
+  round: number;
+  rounds?: number;
+  of: number | null;
+  reason: string;
+  since: number;
+  to: string;
+  kind?: string;
+  outcome?: "fixed" | "halted";
 }
 
 export type FieldType = "text" | "textarea" | "int" | "bool" | "select" | "duration";

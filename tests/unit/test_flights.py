@@ -785,9 +785,10 @@ def test_on_fail_agent_hands_off_retries_then_halts():
     a = F.next_action(f, {"session": sess()}, NOW + 40)
     assert a["action"] == "run" and a["retry"]
     f = F.apply(f, a, NOW + 40)
-    assert (
-        f["step_states"]["s1"]["detail"] == {} and f["step_states"]["s1"]["rounds"] == 1
-    )
+    # The retry keeps only the fix it came from, over (docs/vision/fixwire.md).
+    d1 = f["step_states"]["s1"]["detail"]
+    assert set(d1) == {"fix"} and d1["fix"]["active"] is False
+    assert f["step_states"]["s1"]["rounds"] == 1
     f["step_states"]["s1"]["rounds"] = F.MAX_FIX_ROUNDS
     a = F.next_action(f, {"session": sess(), "checks": {"verdict": "failed"}}, NOW + 50)
     assert a["then"] == "halt" and "after 2 fix rounds" in a["reason"]

@@ -61,8 +61,10 @@ import {
   stripDots,
   youItems,
   type Flight,
+  type FlightReturn,
   type FlightRow,
   type FlightStep,
+  type StepFix,
   type StepKindDef,
   type StepRunState,
 } from "./flights";
@@ -182,6 +184,22 @@ export interface DiagramNode {
   /** The Behaviors tile (docs/behaviors.md §1): the `behaviors` node, or the
    * chain's Verify stop standing in for it — the session's behaviors in brief. */
   behaviors?: BehaviorsMark;
+  /** A stop that may send work back to the agent (docs/vision/fixwire.md):
+   * where to, why, and the fix under way or just over (its return wire). */
+  ret?: ReturnMark;
+}
+
+/** A stop's return wire as drawn: the server's `returns` entry (`to`,
+ * `case`, `of`), the stop's `detail.fix` when it has one, and what the wire
+ * says now — `case` (quiet: why it would go back), `fixing` (the agent is
+ * fixing it), `fixed` (just fixed, until the route passes the next stop),
+ * `halted` (it ran out of rounds). */
+export interface ReturnMark {
+  to: string;
+  case: string;
+  of: number | null;
+  fix?: StepFix;
+  shown: "case" | "fixing" | "fixed" | "halted";
 }
 
 /** A session's behaviors as its tile draws them (lib/behaviors
@@ -215,7 +233,7 @@ export interface LoopMark {
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
  * join point, `loop` from the last stop a Loop repeats back to the first one
  * (a return wire under the line — the Loop itself draws no box). */
-export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join" | "loop";
+export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join" | "loop" | "fix";
 
 export interface DiagramEdge {
   from: string;
@@ -228,6 +246,8 @@ export interface DiagramEdge {
   /** A `loop` edge: the Loop stop it stands for (in the flight's indexes) —
    * the wire's pill opens, edits and removes it. */
   via?: DiagramNode;
+  /** A `fix` edge (a stop's return wire back to the agent): its mark. */
+  ret?: ReturnMark;
 }
 
 export interface Diagram {
@@ -536,9 +556,124 @@ export function findNode(d: Pick<Diagram, "nodes" | "edges">, id: string | null 
 /** The pill on a Loop's wire before it runs: "↻ ×3", "↻ until checks
  * green", "↻ until stopped". */
 export function loopIdlePill(m: LoopMark, via?: Pick<DiagramNode, "step"> | null): string {
-  if (m.times > 0) return "↻ ×" + m.times;
+  const pace = loopPace(via);
+  if (m.times > 0) return "↻ repeat ×" + m.times + pace;
   const until = String(via?.step?.config?.until ?? "").trim();
-  return until ? "↻ until " + clip(until, 18) : "↻ until stopped";
+  return (until ? "↻ until " + clip(until, 18) : "↻ until stopped") + pace;
+}
+
+/** " · every 30 min" for a paced Loop (`every_seconds`, else the older
+ * `every_minutes`), "" otherwise. */
+function loopPace(via?: Pick<DiagramNode, "step"> | null): string {
+  const c = via?.step?.config || {};
+  let secs = Math.floor(num(c.every_seconds, 0));
+  if (secs <= 0) secs = Math.floor(num(c.every_minutes, 0)) * 60;
+  return secs > 0 ? " · every " + durationWord(secs) : "";
+}
+
+/** The case on a running Loop's wire, beside its "2 / 3" pill — what the
+ * count does not say: its `until`, its pace ("until checks green · every 30
+ * min"); "" when the count says it all. */
+export function loopCaption(m: LoopMark, via?: Pick<DiagramNode, "step"> | null): string {
+  if (m.state === "pending" && m.runs === 0) return "";
+  const until = String(via?.step?.config?.until ?? "").trim();
+  const pace = loopPace(via);
+  if (until) return "until " + clip(until, 18) + pace;
+  return pace ? pace.slice(3) : m.times > 0 ? "" : "until stopped";
+}
+
+// --- A stop's return wire back to the agent (docs/vision/fixwire.md) ------------
+
+/** A stop's `detail.fix`, read defensively; undefined when it has none. */
+export function fixOf(detail: Record<string, unknown> | null | undefined): StepFix | undefined {
+  const f = detail?.fix as Partial<StepFix> | undefined;
+  if (!f || typeof f !== "object") return undefined;
+  const round = Math.max(1, Math.floor(num(f.round, 1)));
+  const of = f.of === null || f.of === undefined ? null : Math.max(0, Math.floor(num(f.of, 0))) || null;
+  return {
+    active: !!f.active,
+    round,
+    rounds: Math.max(round, Math.floor(num(f.rounds, round))),
+    of,
+    reason: String(f.reason ?? ""),
+    since: num(f.since, 0),
+    to: String(f.to ?? "") || LOOP_AGENT,
+    ...(f.kind ? { kind: String(f.kind) } : {}),
+    ...(f.outcome === "fixed" || f.outcome === "halted" ? { outcome: f.outcome } : {}),
+  };
+}
+
+/** Stop `i`'s return mark: the server's `returns` entry and its fix (either
+ * makes a wire). `passedNext`: the route is past the stop after it — a fix
+ * it just finished goes quiet again. */
+export function returnMark(ret: FlightReturn | null | undefined, fix: StepFix | undefined, stopState: DiagramNodeState, passedNext: boolean): ReturnMark | undefined {
+  if (!ret && !fix) return undefined;
+  const shown: ReturnMark["shown"] = fix?.active
+    ? "fixing"
+    : fix?.outcome === "fixed" && !passedNext
+      ? "fixed"
+      : fix?.outcome === "halted" && (stopState === "halted" || stopState === "failed")
+        ? "halted"
+        : "case";
+  return {
+    to: ret?.to || fix?.to || LOOP_AGENT,
+    case: ret?.case || "if it fails",
+    of: ret ? ret.of : (fix?.of ?? null),
+    ...(fix ? { fix } : {}),
+    shown,
+  };
+}
+
+/** "fixing 1/2", "fixing round 3" — a fix's round as its label says it. */
+export function fixingWord(m: Pick<ReturnMark, "of">, fix: Pick<StepFix, "round">): string {
+  return "fixing " + (m.of ? fix.round + "/" + m.of : "round " + fix.round);
+}
+
+/** The text on a stop's return wire: quiet, the case ("if pre-commit
+ * fails"); while fixing the real reason and the round ("pre-commit failed
+ * at ruff · fixing 1/2"); just after, "fixed after 1 round"; out of rounds,
+ * "halted after 2 rounds". */
+export function returnLabel(m: ReturnMark): string {
+  const f = m.fix;
+  if (m.shown === "fixing" && f) return (f.reason ? clip(f.reason, 40) + " · " : "") + fixingWord(m, f);
+  if (m.shown === "fixed" && f) return "fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
+  if (m.shown === "halted" && f) return "halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
+  return m.case;
+}
+
+/** The wire's tooltip: the case, and the whole reason while it fixes. */
+export function returnTitle(m: ReturnMark, to = "the agent"): string {
+  const f = m.fix;
+  const cap = m.of ? " (at most " + m.of + (m.of === 1 ? " round)" : " rounds)") : "";
+  const base = "If it fails: Let the agent fix it — " + m.case + ", back to " + to + cap;
+  if (m.shown === "fixing" && f) return (f.reason || "It failed") + " — the agent is fixing it (round " + f.round + (m.of ? " of " + m.of : "") + ")";
+  if (m.shown === "fixed" && f) return "Fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
+  if (m.shown === "halted" && f) return "Halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
+  return base;
+}
+
+/** The face of a stop whose failure is with the agent: "Agent fixing ·
+ * round 1". */
+export function fixFace(fix: StepFix): string {
+  return "Agent fixing · round " + fix.round;
+}
+
+/** The line's return wires back to the agent: for every stop of `line` with
+ * a return mark (`ret`), an edge from it back to its `to` — an Agent stop
+ * drawn before it, else the session tile (`head`). With no head and no such
+ * stop it draws none. */
+export function returnEdges(line: readonly DiagramNode[], head?: string): DiagramEdge[] {
+  const stops = line.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group"));
+  const out: DiagramEdge[] = [];
+  stops.forEach((n, i) => {
+    const m = n.ret;
+    if (!m) return;
+    const target = m.to === LOOP_AGENT ? undefined : stops.slice(0, i).find((b) => b.step?.id === m.to || b.group?.steps.some((s) => s.id === m.to));
+    const to = target ? target.id : head;
+    if (!to) return;
+    out.push({ from: n.id, to, kind: "fix", ret: m });
+  });
+  return out;
 }
 
 /** A stop's title as its box says it: a perch reads "Perch: <title>". */
@@ -673,12 +808,16 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     if (loop && state === "current" && live && i > f.cursor) state = "pending";
     const flown = state === "done" || state === "skipped" || state === "failed";
     const looping = !!loop && !flown && (loop.runs > 0 || (atCursor && state !== "pending"));
+    const fix = fixOf(rec?.detail);
+    const next = f.steps[i + 1];
+    const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
+    const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
     return {
       id: stopId(s, i),
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
-      sub: looping ? loopLine(s, rec) : stopSummary(s),
+      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSummary(s),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",
@@ -689,6 +828,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
+      ...(ret ? { ret } : {}),
       ...(!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}),
       ...parallelMark(f.steps, i),
     };
@@ -734,11 +874,12 @@ export function receiptOf(detail: Record<string, unknown> | null | undefined): s
  * while it is in the air. */
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
   const { line, loops } = liftLoops(flightStops(f, kinds));
+  const rets = returnEdges(line);
   if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
-  edges.push(...loops);
+  edges.push(...loops, ...rets);
   return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.state === "grounded" || f.state === "ready" ? f.cursor + 1 : insertFromOf(f) };
 }
 
@@ -866,7 +1007,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
       if (fl.state !== "ready") insertFrom = Math.max(insertFrom, insertFromOf(full));
       const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
       line.push(...lifted.line);
-      loops = lifted.loops;
+      loops = [...lifted.loops, ...returnEdges(line, me.id)];
     } else
       for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
         const cur = i === fl.cursor;
@@ -894,7 +1035,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
     insertFrom = done.steps.length;
     const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
     line.push(...lifted.line);
-    loops = lifted.loops;
+    loops = [...lifted.loops, ...returnEdges(line, me.id)];
   } else {
     const rungs = ladderRungs(row);
     if (rungs.length) {
@@ -1520,6 +1661,10 @@ export function birdPerch(d: Diagram): BirdPerch | null {
   const stop: Pick<DiagramNode, "id" | "state"> | undefined =
     main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]) || (lp ? { id: lp.from, state: lp.via!.state } : undefined);
   const me = main.find((n) => n.kind === "session");
+  // A stop's failure is with the agent (its return wire is lit): the bird
+  // sits on the agent it went back to while it fixes.
+  const fixing = d.edges.find((e) => e.kind === "fix" && e.ret?.shown === "fixing" && main.some((n) => n.id === e.from && n.state === "current"));
+  if (fixing) return { nodeId: fixing.to, tone: "working" };
   // The bird follows the work: a flight halted or paused at a stop while
   // the agent itself is busy puts the bird on the session box, not on the
   // stop it is parked at (the owner: "why is the bird on Commit when the
@@ -1817,7 +1962,9 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     // A child hung off the line: its `branch` wire runs the way a fan-out does.
     const kind: DiagramEdgeKind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
     let path = "";
-    if (kind === "loop") {
+    if (kind === "loop" || kind === "fix") {
+      // A stop's return wire back to the agent (`fix`) arcs back the way a
+      // Loop's does (the Sky draws its words; this canvas only the arc).
       const arc = loopArc(a, b, anchorOf, !!opts.vertical, boxes);
       wires.push({ from: e.from, to: e.to, kind, d: arc.d, apex: arc.apex, ...(e.loop ? { loop: e.loop } : {}), ...(e.via ? { via: e.via } : {}) });
       continue;

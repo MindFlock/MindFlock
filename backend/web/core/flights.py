@@ -3046,6 +3046,14 @@ def _judge_ship(flight, step, ss, obs, now) -> dict:
         }
     if not _ours(flight, rec, lane):
         return _wait(_BUSY_NOTE)
+    out = _judge_ship_lane(step, rec, lane)
+    fix = lane_fix(flight, step, rec)
+    if fix is not None:
+        out["fix"] = fix
+    return out
+
+
+def _judge_ship_lane(step, rec, lane) -> dict:
     state = rec.get("state")
     if state == "done" and _awaiting_go(rec):
         return _wait("waiting for your go — Fast-track asks before it ships")
@@ -3638,6 +3646,8 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         return flight
     sid = step["id"]
     ss = flight["step_states"][sid]
+    was = ss["detail"].get("fix")
+    old_fix = dict(was) if isinstance(was, dict) else None
     note = str(action.get("note") or "")
     upd = action.get("detail") if isinstance(action.get("detail"), dict) else {}
     gss = flight["step_states"].get(str(action.get("guard") or ""))
@@ -3659,6 +3669,10 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             ss["state"] = "running"
             ss["since"] = now
             ss["detail"] = dict(hit, **upd)
+            if old_fix is not None:
+                # A retry after the agent's fix: the fix is over (its turn
+                # ended), its record stays on the stop.
+                ss["detail"]["fix"] = dict(old_fix, active=False)
             ss["note"] = note
             _hist(
                 flight,
@@ -3743,6 +3757,18 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             ss["detail"] = {"phase": "fix", "reason": reason}
             _hist(flight, now, sid, "failed", reason + " — handed to the agent")
             flight["state"] = "running"
+            action = dict(
+                action,
+                fix={
+                    "active": True,
+                    "round": ss["rounds"],
+                    "rounds": ss["rounds"],
+                    "of": MAX_FIX_ROUNDS,
+                    "reason": short_reason(reason),
+                    "since": now,
+                    "to": fix_target(flight, step),
+                },
+            )
         elif then == "you":
             ss["state"] = "waiting_you"
             ss["since"] = now
@@ -3758,6 +3784,8 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             flight["reason"] = reason
             _hist(flight, now, sid, "failed", reason)
             _hist(flight, now, sid, "halted", reason)
+    if flight["step_states"].get(sid) is ss:
+        _track_fix(flight, step, ss, old_fix, action, now)
     return flight
 
 
@@ -4040,6 +4068,224 @@ def loop_back(
     flight["reason"] = ""
     flight["updated"] = now
     return flight
+
+
+# --------------------------------------------------------------------------- #
+# Going back to the agent: which stops can, and the fix under way
+# (docs/flights.md "As built: return wires explain themselves")
+# --------------------------------------------------------------------------- #
+#: How many failures one Ship stop's lane hands back to the agent before it
+#: halts instead (``autopilot.MAX_FIX_ROUNDS``; a lane's record is fresh per
+#: arm, so the count is per stop).
+LANE_FIX_ROUNDS = 2
+#: What the commit lane hands back to the agent at each rung it climbs
+#: (autopilot ``_ladder`` / ``_interrupt_action`` / ``_blocker_fix``): a failed
+#: pre-commit hook at commit, a failed verification check before the push,
+#: red CI or a conflicting branch before the merge. Opening the PR hands
+#: nothing back.
+LANE_RUNG_FIXES: Dict[str, Tuple[str, ...]] = {
+    "commit": ("precommit",),
+    "push": ("check",),
+    "pr": (),
+    "merge": ("ci", "conflict"),
+}
+#: A lane fix kind as the case on its return wire ("if " + the cases joined).
+FIX_CASE = {
+    "precommit": "pre-commit fails",
+    "check": "the checks fail",
+    "ci": "CI fails",
+    "conflict": "the branch conflicts",
+}
+#: The case of an ``on_fail: agent`` stop, by kind ("if it fails" otherwise).
+ON_FAIL_CASE = {
+    "checks": "if CI checks fail",
+    "command": "if the command fails",
+    "test": "if the tests fail",
+    "sync": "if the sync conflicts",
+}
+#: Kinds that themselves never go back to the agent (they ARE the agent, or
+#: hold no work it could fix).
+_NO_RETURN = frozenset({"agent", "loop", "split", "join", "you"})
+
+
+def _lane_rungs(steps: Sequence[dict], i: int) -> Tuple[str, ...]:
+    """The rungs Ship stop ``steps[i]`` climbs: from past the lane of the
+    Ship stop before it on the route (from the bottom when there is none) up
+    to its own lane."""
+    lane = str(steps[i]["config"].get("lane") or "")
+    if lane not in SHIP_LANES:
+        return ()
+    top = SHIP_LANES.index(lane)
+    low = 0
+    for s in reversed(steps[:i]):
+        if s["kind"] == "ship" and s["config"].get("lane") in SHIP_LANES:
+            low = SHIP_LANES.index(s["config"]["lane"]) + 1
+            break
+    if low > top:
+        low = top  # a second Ship to the same rung: that rung again
+    return SHIP_LANES[low : top + 1]
+
+
+def fix_target(flight: dict, step: dict) -> str:
+    """Where a failure at ``step`` goes back to: the nearest Agent stop
+    before it on the route (its id), else the session's agent
+    (:data:`LOOP_AGENT`, the agent tile — as a Loop back to the agent)."""
+    steps = flight["steps"]
+    i = _step_index(flight, step["id"])
+    for s in reversed(steps[: max(0, i)]):
+        if s["kind"] == "agent":
+            return s["id"]
+    return LOOP_AGENT
+
+
+def returns_of(flight: dict, lane_notes: bool = True) -> Dict[str, dict]:
+    """Every stop of ``flight`` that may send work back to the agent, by step
+    id: ``{to, case, of, kinds}`` — ``to`` (:func:`fix_target`), ``case`` the
+    words on its return wire ("if pre-commit fails"), ``of`` the most rounds
+    (None: no cap), ``kinds`` the lane fix kinds it covers (Ship stops).
+
+    A Ship stop returns for what its lane really hands back on the rungs it
+    climbs (:data:`LANE_RUNG_FIXES`; ``lane_notes`` false — the owner turned
+    the failure notes off — and it hands nothing back); a Reviews stop always
+    (new comments go to the agent); any other stop only with ``on_fail:
+    agent``. A route running in a folder (a free chain with no session) has
+    no agent to go back to: none. Pure."""
+    if not flight.get("session") and flight.get("free"):
+        if flight.get("state") != GROUNDED:
+            return {}
+    steps = flight.get("steps") or []
+    out: Dict[str, dict] = {}
+    for i, s in enumerate(steps):
+        kind = s.get("kind")
+        if kind in _NO_RETURN:
+            continue
+        ret: Optional[dict] = None
+        if kind == "ship":
+            kinds = (
+                [k for r in _lane_rungs(steps, i) for k in LANE_RUNG_FIXES[r]]
+                if lane_notes
+                else []
+            )
+            if kinds:
+                ret = {
+                    "case": "if " + " or ".join(FIX_CASE[k] for k in kinds),
+                    "of": LANE_FIX_ROUNDS,
+                    "kinds": kinds,
+                }
+        elif kind == "reviews":
+            ret = {
+                "case": "if reviewers ask for changes",
+                "of": _int((s.get("config") or {}).get("max_rounds"), 5, 1, 50),
+            }
+        if ret is None and s.get("on_fail") == "agent":
+            ret = {"case": ON_FAIL_CASE.get(kind, "if it fails"), "of": MAX_FIX_ROUNDS}
+        if ret is not None:
+            ret.setdefault("kinds", [])
+            ret["to"] = fix_target(flight, s)
+            out[s["id"]] = ret
+    return out
+
+
+def with_returns(flight: dict, lane_notes: bool = True) -> dict:
+    """``flight`` as the API sends it: plus ``returns`` (:func:`returns_of`).
+    A shallow copy — the stored flight never carries it."""
+    return dict(flight, returns=returns_of(flight, lane_notes))
+
+
+def short_reason(text) -> str:
+    """A failure reason on one short line (a wire's label, its pill)."""
+    line = next((ln.strip() for ln in str(text or "").splitlines() if ln.strip()), "")
+    line = re.sub(r"\s+", " ", line)
+    return line if len(line) <= 90 else line[:89].rstrip() + "…"
+
+
+def lane_fix(flight: dict, step: dict, rec: dict) -> Optional[dict]:
+    """A Ship stop's fix from its lane's record (the lane's own fix loop:
+    ``fixing`` / ``fix_rounds`` / ``fix_reason`` / ``fix_since``), None when
+    the lane has handed nothing back."""
+    rounds = _int(rec.get("fix_rounds"), 0, 0, 1000)
+    if rounds <= 0:
+        return None
+    active = bool(rec.get("fixing")) and rec.get("state") == "running"
+    out = {
+        "active": active,
+        "round": rounds,
+        "rounds": rounds,
+        "of": LANE_FIX_ROUNDS,
+        "reason": short_reason(rec.get("fix_reason")),
+        "since": float(rec.get("fix_since") or 0.0),
+        "to": fix_target(flight, step),
+    }
+    if rec.get("fixing"):
+        out["kind"] = str(rec["fixing"])
+    return out
+
+
+def _reviews_fix(flight: dict, step: dict, ss: dict) -> Optional[dict]:
+    """A Reviews stop's fix: its comments are with the agent (phase
+    ``agent``), round ``review_rounds`` of ``max_rounds``."""
+    d = ss["detail"]
+    rounds = _int(d.get("review_rounds"), 0, 0, 1000)
+    if rounds <= 0:
+        return None
+    return {
+        "active": d.get("phase") == "agent" and ss["state"] == "running",
+        "round": rounds,
+        "rounds": rounds,
+        "of": _int(step["config"].get("max_rounds"), 5, 1, 50),
+        "reason": "new review comments",
+        "since": float(d.get("phase_since") or ss["since"] or 0.0),
+        "to": fix_target(flight, step),
+    }
+
+
+def fix_note(fix: dict) -> str:
+    """``fixing`` history: "pre-commit failed at ruff — the agent is fixing
+    it (round 1 of 2)"."""
+    rnd = _int(fix.get("round"), 1, 1, 1000)
+    of = fix.get("of")
+    return "%s — the agent is fixing it (round %d%s)" % (
+        fix.get("reason") or "it failed",
+        rnd,
+        " of %d" % of if of else "",
+    )
+
+
+def _track_fix(
+    flight: dict, step: dict, ss: dict, old: Optional[dict], action: dict, now: float
+) -> None:
+    """Keep ``detail.fix`` of the step ``apply`` just moved: the fix a Ship
+    judge read off its lane (``action["fix"]``), a Reviews stop's rounds, an
+    ``on_fail: agent`` hand-off (set by ``apply``). The history gets one
+    ``fixing`` per round and one ``fixed`` when the stop then passes — never
+    one per driver pass. A fix that is over stays on the step (``active``
+    false, ``outcome`` "fixed" / "halted")."""
+    d = ss["detail"]
+    new = action.get("fix") if isinstance(action.get("fix"), dict) else None
+    if new is None and step["kind"] == "reviews":
+        new = _reviews_fix(flight, step, ss)
+    if new is not None:
+        d["fix"] = dict(old or {}, **new)
+    elif old is not None and not isinstance(d.get("fix"), dict):
+        d["fix"] = dict(old)
+    fix = d.get("fix")
+    if not isinstance(fix, dict):
+        return
+    if ss["state"] != "running" and fix.get("active"):
+        fix["active"] = False
+    if fix.get("active"):
+        fix.pop("outcome", None)
+        if not (old and old.get("active") and old.get("round") == fix.get("round")):
+            _hist(flight, now, step["id"], "fixing", fix_note(fix))
+        return
+    if fix.get("outcome"):
+        return
+    if ss["state"] == "done":
+        fix["outcome"] = "fixed"
+        n = _int(fix.get("rounds") or fix.get("round"), 1, 1, 1000)
+        _hist(flight, now, step["id"], "fixed", "fixed after " + plural(n, "round"))
+    elif ss["state"] == "failed":
+        fix["outcome"] = "halted"
 
 
 def op_pause(flight: dict, now: Optional[float] = None) -> dict:

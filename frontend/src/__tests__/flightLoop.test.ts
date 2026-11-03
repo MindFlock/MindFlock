@@ -204,7 +204,7 @@ describe("the Loop's count, the pill and the box's line", () => {
   });
 
   it("before it runs the pill says what it will do", () => {
-    expect(loopIdlePill({ runs: 0, times: 3, state: "pending" })).toBe("↻ ×3");
+    expect(loopIdlePill({ runs: 0, times: 3, state: "pending" })).toBe("↻ repeat ×3");
     expect(loopIdlePill({ runs: 0, times: 0, state: "pending" })).toBe("↻ until stopped");
     expect(loopIdlePill({ runs: 0, times: 0, state: "pending" }, { step: step("l", "loop", "L", { until: "checks green" }) })).toBe("↻ until checks green");
   });
@@ -294,7 +294,7 @@ describe("the canvas draws the wire", () => {
   it("pending: a dashed wire under the line with an arrowhead, its pill saying what it will do, a button for the Loop", () => {
     const html = render(flywayDiagram(LINE(), KINDS));
     expect(html).toMatch(/<path class="fl-wire fl-wire-loop fl-edge-loop fl-loop-pending" d="M [^"]+ V [^"]+ Q [^"]+" marker-end="url\(#[^)]+-arrow\)"/);
-    expect(html).toMatch(/<span class="fl-loop-pill fl-loop-pending fl-st-edit" style="[^"]+" data-node="stop:s4" title="Loop: 3 runs — click to change it" aria-label="[^"]+" role="button" tabindex="0">↻ ×3<\/span>/);
+    expect(html).toMatch(/<span class="fl-loop-pill fl-loop-pending fl-st-edit" style="[^"]+" data-node="stop:s4" title="Loop: 3 runs — click to change it" aria-label="[^"]+" role="button" tabindex="0">↻ repeat ×3<\/span>/);
     // No Loop box.
     expect(html).not.toMatch(/class="fl-box[^"]*" data-node="stop:s4"/);
   });

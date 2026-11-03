@@ -16,7 +16,7 @@
  * (`TILE` square) sits centred at the box's top, the label area under it.
  */
 
-import { firstStepOf, loopSlotAfter, type Diagram, type DiagramEdge, type DiagramNode, type LoopMark } from "./flightDiagram";
+import { firstStepOf, fixingWord, loopCaption, loopIdlePill, loopPill, loopSlotAfter, returnLabel, returnTitle, type Diagram, type DiagramEdge, type DiagramNode, type LoopMark, type ReturnMark } from "./flightDiagram";
 import { isParallelSafe, type StepKindDef } from "./flights";
 import type { Pos, Rect } from "./skyLayout";
 
@@ -41,6 +41,15 @@ export const BEHAVIORS_GAP = 40;
 export const LOOP_CLEAR = 16;
 export const LOOP_LANE = 20;
 export const LOOP_HOOK = 40;
+/** A return wire's label: font px (plane), the width per character it is
+ * measured by, and its side padding. */
+export const LABEL_PX = 10;
+export const LABEL_CHAR = 5.8;
+export const LABEL_PAD = 8;
+/** A Loop pill's width estimate (11px text + its padding), for the caption
+ * beside it. */
+const PILL_CHAR = 6.4;
+const PILL_PAD = 20;
 /** The id every chain's head node goes by. */
 export const HEAD_ID = "head";
 
@@ -83,7 +92,7 @@ export interface GraphNode {
   outPort: boolean;
 }
 
-export type GraphWireKind = "line" | "loop" | "fan" | "join" | "add" | "head";
+export type GraphWireKind = "line" | "loop" | "fan" | "join" | "add" | "head" | "fix";
 
 export interface GraphWire {
   id: string;
@@ -99,6 +108,24 @@ export interface GraphWire {
   done?: boolean;
   /** A loop wire's lane (0 = nearest the tiles; nested loops go lower). */
   lane?: number;
+  /** A `fix` wire (a stop's return wire back to the agent): its mark. */
+  ret?: ReturnMark;
+  /** A return wire's (loop / fix) arrowhead at the stop it goes back to: a
+   * closed SVG path, chain-local. */
+  arrow?: string;
+  /** The words on a return wire (`wireLabel`): a fix wire's case / reason,
+   * a running Loop's caption beside its pill. None when they do not fit. */
+  label?: WireLabel;
+}
+
+/** Text sitting on a return wire's run, chain-local (its centre), at the
+ * label's plane size (`LABEL_PX`): never wider than the run, so wires that
+ * share a span — a lane apart — never overlap their words. */
+export interface WireLabel {
+  text: string;
+  title: string;
+  at: Pos;
+  w: number;
 }
 
 export interface ChainGraph {
@@ -226,7 +253,7 @@ export function chainGraph(d: Diagram, opts: ChainGraphOpts): ChainGraph {
     if (!ids.has(from) || !ids.has(to)) continue;
     const kind = wireKindOf(e, from);
     if (!kind) continue;
-    push({ from, to, kind, ...(e.loop ? { loop: e.loop } : {}), ...(e.via ? { via: e.via } : {}), ...(e.done ? { done: true } : {}) });
+    push({ from, to, kind, ...marksOf(e) });
   }
   if (hn && main.length && !specs.some((s) => s.from === HEAD_ID)) {
     // Round 20: a first parallel group forks out of the head, one per member.
@@ -252,7 +279,16 @@ interface WireSpec {
   loop?: LoopMark;
   via?: DiagramNode;
   done?: boolean;
+  ret?: ReturnMark;
 }
+
+/** A spec's optional marks, as carried onto its wire (and back). */
+const marksOf = (s: Pick<WireSpec, "loop" | "via" | "done" | "ret">) => ({
+  ...(s.loop ? { loop: s.loop } : {}),
+  ...(s.via ? { via: s.via } : {}),
+  ...(s.done ? { done: true } : {}),
+  ...(s.ret ? { ret: s.ret } : {}),
+});
 
 function wireKindOf(e: DiagramEdge, from: string): GraphWireKind | null {
   switch (e.kind) {
@@ -265,6 +301,8 @@ function wireKindOf(e: DiagramEdge, from: string): GraphWireKind | null {
       return "join";
     case "loop":
       return "loop";
+    case "fix":
+      return "fix";
     default:
       return null;
   }
@@ -277,8 +315,9 @@ function assemble(base: Pick<ChainGraph, "key" | "flightId" | "head" | "insertFr
   const order = new Map(all.map((n, i) => [n.id, i]));
   const wires: GraphWire[] = [];
   let plus: ChainGraph["plus"] = null;
-  // Loops nest: a loop whose span holds another runs a lane lower.
-  const loops = specs.filter((s) => s.kind === "loop");
+  // Loops nest: a loop whose span holds another runs a lane lower. A stop's
+  // return wire back to the agent (`fix`) stacks with them the same way.
+  const loops = specs.filter((s) => s.kind === "loop" || s.kind === "fix");
   const spanOf = (s: WireSpec) => {
     const a = order.get(s.from) ?? 0;
     const b = order.get(s.to) ?? 0;
@@ -308,8 +347,8 @@ function assemble(base: Pick<ChainGraph, "key" | "flightId" | "head" | "insertFr
     }
     const b = byId.get(s.to);
     if (!b) continue;
-    const extra = { ...(s.loop ? { loop: s.loop } : {}), ...(s.via ? { via: s.via } : {}), ...(s.done ? { done: true } : {}) };
-    if (s.kind === "loop") {
+    const extra = marksOf(s);
+    if (s.kind === "loop" || s.kind === "fix") {
       const [lo, hi] = spanOf(s);
       const between = all.filter((n) => {
         const i = order.get(n.id)!;
@@ -317,7 +356,10 @@ function assemble(base: Pick<ChainGraph, "key" | "flightId" | "head" | "insertFr
       });
       const lane = laneOf.get(s) ?? 0;
       const r = loopWirePathG(a, b, between, lane, all);
-      wires.push({ id: "loop:" + (s.via?.id || s.from + ">" + s.to), from: a.id, to: b.id, kind: "loop", d: r.d, mid: r.mid, lane, ...extra });
+      const id = s.kind === "fix" ? "fix:" + s.from + ">" + s.to : "loop:" + (s.via?.id || s.from + ">" + s.to);
+      const w: GraphWire = { id, from: a.id, to: b.id, kind: s.kind, d: r.d, mid: r.mid, lane, arrow: arrowAt(inPortOf(b)), ...extra };
+      const label = wireLabel(w, outPortOf(a).x, inPortOf(b).x, b.id === HEAD_ID ? "the agent" : b.node.title);
+      wires.push(label ? { ...w, label } : w);
       continue;
     }
     // Sub-sessions hang under their parent the n8n way: a dashed bus down from
@@ -427,7 +469,7 @@ export function moveNode(g: ChainGraph, id: string, pos: Pos): ChainGraph {
   if (!all.some((n) => n.id === id) || id === HEAD_ID) return g;
   const placed = autoPlace(all.map((n) => (n.id === id ? { ...n, x: Math.round(pos.x), y: Math.round(pos.y), pinned: true } : n)));
   const hn = g.headNode ? placed[0] : null;
-  const specs: WireSpec[] = g.wires.map((w) => ({ from: w.from, to: w.to, kind: w.kind, ...(w.loop ? { loop: w.loop } : {}), ...(w.via ? { via: w.via } : {}), ...(w.done ? { done: true } : {}) }));
+  const specs: WireSpec[] = g.wires.map((w) => ({ from: w.from, to: w.to, kind: w.kind, ...marksOf(w) }));
   return assemble({ key: g.key, flightId: g.flightId, head: g.head, insertFrom: g.insertFrom }, hn, hn ? placed.slice(1) : placed, specs);
 }
 
@@ -456,7 +498,7 @@ export function chainBBox(g: Pick<ChainGraph, "nodes" | "headNode" | "wires" | "
   if (g.plus) take(g.plus.at.x - PLUS_SIZE / 2, g.plus.at.y - PLUS_SIZE / 2, g.plus.at.x + PLUS_SIZE / 2, g.plus.at.y + PLUS_SIZE / 2);
   const byId = new Map(all.map((n) => [n.id, n]));
   for (const w of g.wires) {
-    if (w.kind !== "loop") continue;
+    if (w.kind !== "loop" && w.kind !== "fix") continue;
     const a = byId.get(w.from);
     const b = byId.get(w.to);
     if (!a || !b) continue;
@@ -523,6 +565,58 @@ export function loopWirePathG(a: GraphNode, b: GraphNode, others: readonly Graph
   const top = Math.min(a.y, b.y, ...others.map((n) => n.y), ...reach.map((n) => n.y));
   const over = top - LOOP_CLEAR - lane * LOOP_LANE;
   return loopHits(o, i, over, rest) < hitsUnder ? path(over) : path(under);
+}
+
+/** A return wire's arrowhead into the in port `i` (the wire arrives there
+ * heading right): a small closed triangle. */
+export function arrowAt(i: Pos): string {
+  return `M ${i.x - 7} ${i.y - 4} L ${i.x} ${i.y} L ${i.x - 7} ${i.y + 4} Z`;
+}
+
+/** A label's width at `LABEL_PX`. */
+export const labelWidth = (text: string) => Math.ceil(text.length * LABEL_CHAR + LABEL_PAD * 2);
+
+/** `text` cut (with "…") to at most `w` px of label, "" when not even a
+ * few characters fit. */
+export function fitLabel(text: string, w: number): string {
+  if (labelWidth(text) <= w) return text;
+  const n = Math.floor((w - LABEL_PAD * 2) / LABEL_CHAR) - 1;
+  return n >= 6 ? text.slice(0, n).trimEnd() + "…" : "";
+}
+
+/** The words on a return wire whose run goes from `ox` (the stop it leaves,
+ * right) back to `ix` (where it lands, left), or null:
+ * - a fix wire: its case / reason (`returnLabel`) centred on the run;
+ * - a Loop: its caption (`loopCaption`, only while it runs) right of its pill.
+ * Always inside the run (cut with "…", dropped when even that does not fit),
+ * so labels of wires stacked a lane apart never overlap. */
+export function wireLabel(w: Pick<GraphWire, "kind" | "mid" | "ret" | "loop" | "via">, ox: number, ix: number, toTitle = "the agent"): WireLabel | null {
+  const x0 = Math.min(ix, ox) + 6;
+  const x1 = Math.max(ix, ox) - 6;
+  if (w.kind === "fix" && w.ret) {
+    const room = x1 - x0;
+    const f = w.ret.fix;
+    let text = fitLabel(returnLabel(w.ret), room);
+    if (w.ret.shown === "fixing" && f && labelWidth(returnLabel(w.ret)) > room) {
+      // Short of room the round stays whole; the reason gives way.
+      const tail = fixingWord(w.ret, f);
+      const why = f.reason ? fitLabel(f.reason, room - tail.length * LABEL_CHAR - 3 * LABEL_CHAR) : "";
+      text = why ? why + " · " + tail : fitLabel(tail, room);
+    }
+    if (!text) return null;
+    return { text, title: returnTitle(w.ret, toTitle === "the agent" ? toTitle : "“" + toTitle + "”"), at: { x: (x0 + x1) / 2, y: w.mid.y }, w: labelWidth(text) };
+  }
+  if (w.kind === "loop" && w.loop) {
+    const cap = loopCaption(w.loop, w.via);
+    if (!cap) return null;
+    const pill = (loopPill(w.loop) || loopIdlePill(w.loop, w.via)).length * PILL_CHAR + PILL_PAD;
+    const from = w.mid.x + pill / 2 + 4;
+    const text = fitLabel(cap, x1 - from);
+    if (!text) return null;
+    const lw = labelWidth(text);
+    return { text, title: "Loop: " + cap, at: { x: from + lw / 2, y: w.mid.y }, w: lw };
+  }
+  return null;
 }
 
 /** How many boxes of `boxes` a loop wire out of `o`, along `y`, back into

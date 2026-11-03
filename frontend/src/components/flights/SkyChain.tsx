@@ -429,6 +429,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       dn.chip ? "tone-" + dn.chip.tone : "",
       dn.kind === "group" ? "is-group" : "",
       dn.perch ? "is-perch" : "",
+      // Its failure is with the agent (its return wire is lit).
+      !isHead && dn.ret?.shown === "fixing" && dn.state === "current" ? "is-fixing" : "",
       n.inPort || n.outPort ? "" : "is-fixed",
       isSel(n) ? "is-selected" : "",
       p.highlighted?.has(n.id) || (isHead && headNodeId && p.highlighted?.has(headNodeId)) ? "is-highlighted" : "",
@@ -588,7 +590,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const live = (w.kind === "line" || w.kind === "head" || w.kind === "fan") && to && (to.state === "current" || to.state === "perched");
     // The bus down to a sub-session's frame is dashed (round 20).
     const bus = w.kind === "fan" && !!to && isSubSession(to) && isBranchRow(to);
-    return ["sky-wire", "sky-wire-" + w.kind, bus ? "sky-wire-bus" : "", w.done ? "is-done" : "", live ? "is-live" : "", w.loop ? "sky-loop-" + w.loop.state : ""].filter(Boolean).join(" ");
+    return ["sky-wire", "sky-wire-" + w.kind, bus ? "sky-wire-bus" : "", w.done ? "is-done" : "", live ? "is-live" : "", w.loop ? "sky-loop-" + w.loop.state : "", w.ret ? "sky-ret-" + w.ret.shown : ""].filter(Boolean).join(" ");
   };
   const tinted = (w: GraphWire) => w.kind === "line" || w.kind === "head";
 
@@ -610,6 +612,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         {g.wires.map((w) => (
           <path key={w.id} className={wireClass(w)} d={w.d} data-wire={w.kind} data-from={w.from} data-to={w.to} style={tinted(w) ? { stroke: head.color } : undefined} />
         ))}
+        {/* A return wire (a Loop, a stop going back to the agent) ends in an arrowhead. */}
+        {g.wires.map((w) => (w.arrow ? <path key={"arrow:" + w.id} className={wireClass(w) + " sky-wire-arrow"} d={w.arrow} data-arrow={w.id} /> : null))}
         {socket && <path className="sky-wire sky-wire-socket" d={`M ${socket.x - 16} ${socket.y} H ${socket.x}`} />}
       </svg>
       {all.map(tile)}
@@ -745,6 +749,24 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           </span>
         );
       })}
+      {g.wires.map((w) =>
+        w.label ? (
+          // The words on a return wire: why it goes back (quiet), or the real
+          // reason and round while the agent fixes it. Plane-sized, inside its
+          // own run (lib/skyGraph `wireLabel`).
+          <span
+            key={"label:" + w.id}
+            className={"sky-ret-label sky-ret-label-" + w.kind + (w.ret ? " sky-ret-" + w.ret.shown : w.loop ? " sky-loop-" + w.loop.state : "")}
+            style={{ left: w.label.at.x, top: w.label.at.y, maxWidth: w.label.w }}
+            data-label={w.id}
+            title={w.label.title}
+            aria-label={w.label.title}
+            role="img"
+          >
+            {w.label.text}
+          </span>
+        ) : null,
+      )}
       {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The route is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
     </div>
   );

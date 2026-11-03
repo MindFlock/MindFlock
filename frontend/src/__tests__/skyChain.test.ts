@@ -106,7 +106,7 @@ describe("SkyChain markup", () => {
   it("the loop pill: a button for the Loop, screen-sized", () => {
     const html = render(liveGraph(), { selected: "stop:s4" });
     expect(html).toMatch(/<span role="button" tabindex="0" class="sky-loop-pill sky-loop-pending st-pending is-selected"[^>]*data-node="stop:s4"/);
-    expect(html).toContain("↻ ×3");
+    expect(html).toContain("↻ repeat ×3");
   });
 
   it("the head: the agent tile with its session's colour, chip (or the host's renderHead), and the bird", () => {

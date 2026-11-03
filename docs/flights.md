@@ -7557,3 +7557,26 @@ is `PUT {from_flight: <its id>}`. A split-off piece is a plain chain.
 - **Tuning knobs:** `FILL_GAIN` (1.1) and the 24-step count live in
   `fillWidth` in `frontend/src/lib/skyLayout.ts`; the 2 s Tidy-fit disarm is
   `tidyFitTimer` in `frontend/src/components/flights/SkyView.tsx`.
+
+## As built: return wires explain themselves
+
+Every stop that can send work back to the agent draws a return wire on the
+Sky and in the pane's Route tab (docs/vision/fixwire.md): an arrowhead into
+the Agent stop before it (else the session's agent tile) and the case on the
+wire — "if pre-commit fails" (a Commit stop: what its lane really hands back
+on the rungs it climbs), "if the checks fail", "if CI checks fail" (any stop
+set to **If it fails: Let the agent fix it**), "if reviewers ask for changes".
+Quiet until it happens; then the wire turns the warning tone with the real
+reason and round ("pre-commit failed at ruff · fixing 1/2"), the stop says
+"Agent fixing · round 1" and the bird sits on the agent; after, "fixed after 1
+round" until the route passes the next stop. Loops say their case in words
+too ("↻ repeat ×3 · every 30 min"), and every return wire has an arrowhead.
+
+- Server: `flights.returns_of` (pure; the API adds it as `returns` — the store
+  never does), `detail.fix = {active, round, rounds, of, reason, since, to,
+  outcome}` on the step (`lane_fix` from a Ship stop's lane record, the
+  `on_fail: agent` hand-off, a Reviews stop's rounds), one `fixing` / `fixed`
+  history event each (`_track_fix`).
+- Client: edge kind `fix` (`returnEdges`), routed and stacked with the Loop
+  wires (`loopWirePathG`, shared lanes), `arrowAt`, `wireLabel` (inside its
+  own run, cut or dropped, never overlapping).
