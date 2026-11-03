@@ -20,7 +20,7 @@
  * ones read there.
  *
  * With nothing on the line yet the tab also offers the saved stops as cards
- * ("Fly these stops") — the first `SAVED_SHOWN` (`featuredPlans`: yours,
+ * ("Run these stops") — the first `SAVED_SHOWN` (`featuredPlans`: yours,
  * newest first, then the built-ins), the rest behind "More…" so a pane isn't
  * a gallery — and "Describe stops…" to make some from a sentence
  * and fly it right away. The line's editing (the +, the palette, the
@@ -58,7 +58,7 @@ export function featuredPlans(plans: readonly FlightPlan[], all: boolean): { sho
   return { shown, more: ranked.length - shown.length };
 }
 
-/** One saved stop as a card: its name, its stops as tiny boxes, "Fly these stops". */
+/** One saved stop as a card: its name, its stops as tiny boxes, "Run these stops". */
 function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: readonly StepKindDef[]; onFly(): void; busy: boolean }) {
   const d = flywayDiagram(plan.steps, kinds);
   return (
@@ -78,7 +78,7 @@ function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: rea
           ))}
       </ol>
       <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={onFly}>
-        Fly these stops
+        Run these stops
       </button>
     </div>
   );
@@ -112,25 +112,25 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
             <strong>{flight.plan_name}</strong>
             <span className="muted">
               {prog!.done}/{prog!.total} stops
-              {flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · perched on you" : ""}
+              {flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · needs you" : ""}
             </span>
             <FlightMenu flight={flight} onCancelAsk={cancel.ask} openSession={false} />
           </>
         ) : diagram.mode === "ladder" ? (
           <>
             <strong>Fast-track</strong>
-            <span className="muted">tack a stop on and the flight takes over its rungs</span>
+            <span className="muted">tack a stop on and the chain takes over its rungs</span>
           </>
         ) : (
           <>
-            <strong>No flight yet</strong>
-            <span className="muted">tack a stop onto the line, or fly a saved stop below</span>
+            <strong>No chain yet</strong>
+            <span className="muted">tack a stop onto the chain, or run a saved chain below</span>
           </>
         )}
         <button
           type="button"
           className="linklike fl-open-sky"
-          title="Switch to the sky on this session's line, with the bird where it is"
+          title="Switch to the Sky on this session's chain, with the bird where it is"
           onClick={() => showInSky(title)}
         >
           Open in the Sky
@@ -142,8 +142,8 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (
-        <section className="fl-flyway-cards" aria-label="Saved stops">
-          <h4 className="fl-group-head">Saved stops</h4>
+        <section className="fl-flyway-cards" aria-label="Saved chains">
+          <h4 className="fl-group-head">Saved chains</h4>
           {ordered.length ? (
             <>
               <div className="fl-flyway-grid">
@@ -158,7 +158,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
               )}
             </>
           ) : (
-            <p className="fl-note muted">No saved stops on this server yet.</p>
+            <p className="fl-note muted">No saved chains on this server yet.</p>
           )}
           <DescribeField
             want="plan"
@@ -171,7 +171,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
                 const words = steps.map((s) => s.title).join(" → ");
                 const plan = await savePlan({
                   id: "",
-                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described stops",
+                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described chain",
                   description: "",
                   builtin: false,
                   trigger: { kind: "manual", schedule: null, paused: false },

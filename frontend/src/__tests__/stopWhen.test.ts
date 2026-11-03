@@ -288,7 +288,7 @@ describe("kind names", () => {
   it("someone is Someone, you is a Perch, the rest their label", () => {
     expect(kindName({ kind: "someone", label: "Someone else" })).toBe("Someone");
     expect(kindName(undefined, "someone")).toBe("Someone");
-    expect(kindName({ kind: "you", label: "You" })).toBe("Perch");
+    expect(kindName({ kind: "you", label: "You" })).toBe("Wait for me");
     expect(kindName(CHECKS)).toBe("Checks");
     expect(kindName(undefined, "judge")).toBe("judge");
   });

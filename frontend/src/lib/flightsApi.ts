@@ -97,13 +97,13 @@ export function jumpFlight(flightId: string, stepId: string, title = ""): Promis
 export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel" | "run"): Promise<boolean> {
   const said =
     verb === "pause"
-      ? "Flight halted — Carry on picks it up again"
+      ? "Chain halted — Carry on picks it up again"
       : verb === "resume"
-        ? "Flight carrying on"
+        ? "Chain carrying on"
         : verb === "run"
           ? "Chain started"
-          : "Flight cancelled — its session is kept";
-  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Cancel";
+          : "Chain stopped — its session is kept";
+  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the chain";
   return flightAction(what, flightPath(flightId, "/" + verb), {}, said);
 }
 
@@ -132,7 +132,7 @@ export async function setStartOn(flightId: string, startOn: FlightStartOn): Prom
 export async function setHalt(flightId: string, stepId: string, halt: boolean): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: { halt } });
-    toast(halt ? "Halt point set — the flight stops before this stop" : "Halt point taken off");
+    toast(halt ? "Halt point set — the chain stops before this stop" : "Halt point taken off");
     return true;
   } catch (err) {
     errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
@@ -182,12 +182,12 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
     const flight = d?.flight || null;
     void refreshFlights();
     if (flight?.session) {
-      toast("Took off: " + flight.plan_name);
+      toast("Started: " + flight.plan_name);
       void openWhenReady(flight.session);
     }
     return flight;
   } catch (err) {
-    errorPop("Take off failed", errMsg(err));
+    errorPop("Starting the chain failed", errMsg(err));
     return null;
   }
 }
@@ -474,7 +474,7 @@ export async function attachGrounded(
     const d = await api<{ flight?: Flight }>(flightPath(flightId, "/attach"), { json: body });
     return d?.flight || null;
   } catch (err) {
-    errorPop("Flying the stops failed", errMsg(err));
+    errorPop("Running the stops failed", errMsg(err));
     return null;
   } finally {
     void refreshFlights();

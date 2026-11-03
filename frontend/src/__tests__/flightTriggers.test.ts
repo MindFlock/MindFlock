@@ -83,7 +83,7 @@ describe("Takes off: the three triggers' fields", () => {
     expect(html).toContain('id="fl-trigger-repo"');
     expect(html).toContain('value="/home/me/repo"');
     expect(html).toContain("Watches");
-    expect(html).toContain("a new tip takes off");
+    expect(html).toContain("a new tip starts it");
     expect(html).toContain('aria-label="Quiet minutes (min)"');
     expect(html).toContain("Paused");
     // Its own session: the Repository / Agent / Model fields follow.
@@ -96,7 +96,7 @@ describe("Takes off: the three triggers' fields", () => {
 
   it("When main is red says what it watches", () => {
     const html = fields({ kind: "main_red", schedule: null, paused: true, repo: "/r", quiet_minutes: 15 });
-    expect(html).toContain("red takes off");
+    expect(html).toContain("red starts it");
     expect(html).toContain('value="15"');
     expect(html).toContain('aria-pressed="true"');
   });

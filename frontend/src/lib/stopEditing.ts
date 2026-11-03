@@ -185,16 +185,16 @@ const FLIGHT_HERE: ReadonlySet<DiagramNode["state"]> = new Set(["current", "perc
 export function haltToggle(n: DiagramNode): StopMenuItem {
   if (n.kind === "group") n = groupHaltStep(n) || n;
   return n.step?.halt
-    ? { key: "halt", label: "Carry on past here", title: "Take the halt point off this stop — the flight flies on through it" }
-    : { key: "halt", label: "Halt here", title: "Make this stop a halt point — the flight stops when it gets here, before doing it" };
+    ? { key: "halt", label: "Carry on past here", title: "Take the halt point off this stop — the chain goes on through it" }
+    : { key: "halt", label: "Halt here", title: "Make this stop a halt point — the chain stops when it gets here, before doing it" };
 }
 
 /** ⏹ Halt now (the flight under way or waiting on you) or ▶ Carry on (held),
  * on the flight's current stop; none on a stop halted by a failure (Retry). */
 export function flightHold(n: DiagramNode): StopMenuItem | null {
-  if (n.state === "paused") return { key: "resume", label: "Carry on", title: "Fly on from this stop" };
+  if (n.state === "paused") return { key: "resume", label: "Carry on", title: "Go on from this stop" };
   if (n.state === "halted") return null;
-  return { key: "pause", label: "Halt now", title: "Stop the flight where it is — Carry on picks it up again" };
+  return { key: "pause", label: "Halt now", title: "Halt the chain where it is — Carry on picks it up again" };
 }
 
 /** The badge a halt point wears in its corner (null on any other box). */
@@ -205,8 +205,8 @@ export function haltMark(n: DiagramNode): { glyph: string; title: string } | nul
   }
   if (n.kind !== "stop" || !n.step?.halt) return null;
   return n.state === "paused"
-    ? { glyph: "⏸", title: "Halt point — the flight stopped here. Carry on to fly on" }
-    : { glyph: "⏸", title: "Halt point — the flight stops here before doing this stop" };
+    ? { glyph: "⏸", title: "Halt point — the chain stopped here. Carry on to go on" }
+    : { glyph: "⏸", title: "Halt point — the chain stops here before doing this stop" };
 }
 
 const note = (label: string): StopMenuItem => ({ key: "note", label, title: label, note: true });
@@ -217,11 +217,11 @@ const note = (label: string): StopMenuItem => ({ key: "note", label, title: labe
 export function removeTool(n: DiagramNode, here = false): StopMenuItem {
   if (n.kind === "group") {
     const k = n.group?.total || 0;
-    return { key: "remove", label: "Remove", title: "Remove this stop and its " + k + (k === 1 ? " sub-step" : " sub-steps") + " from the line", danger: true };
+    return { key: "remove", label: "Remove", title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the chain", danger: true };
   }
-  if (here) return { key: "remove", label: "Remove — the flight halts here", title: "Remove this stop — the flight halts right before the stop that followed it", danger: true };
-  if (flownState(n.state)) return { key: "remove", label: "Remove from the line", title: "Take this flown stop off the line", danger: true };
-  return { key: "remove", label: "Remove", title: "Take this stop off the line (Delete)", danger: true };
+  if (here) return { key: "remove", label: "Remove — the chain halts here", title: "Remove this stop — the chain halts right before the stop that followed it", danger: true };
+  if (flownState(n.state)) return { key: "remove", label: "Remove from the chain", title: "Take this finished stop off the chain", danger: true };
+  return { key: "remove", label: "Remove", title: "Take this stop off the chain (Delete)", danger: true };
 }
 
 /** A group box's menu: Halt now / Carry on while the flight is in it, its
@@ -234,16 +234,16 @@ function groupItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   // The flight is in it: Halt now / Carry on.
   const hold = ctx.here && ctx.live && FLIGHT_HERE.has(n.state) ? flightHold(n) : null;
   if (hold) items.push(hold);
-  if (can.edit) items.push({ key: "edit", label: n.editable ? "Edit" : "Details", title: "Open this stop and its sub-steps (Enter)" });
+  if (can.edit) items.push({ key: "edit", label: n.editable ? "Edit" : "Details", title: "Open this group and its stops (Enter)" });
   if (can.group)
     items.push(
       ctx.expanded
-        ? { key: "expand", label: "Fold its sub-steps", title: "Draw it as one box again" }
-        : { key: "expand", label: "Show its sub-steps", title: "Draw each of its sub-steps on the line" }
+        ? { key: "expand", label: "Fold its stops", title: "Draw it as one stop again" }
+        : { key: "expand", label: "Show its stops", title: "Draw each of its stops on the chain" }
     );
   if (can.halt && canHalt(n)) items.push(haltToggle(n));
   if (can.remove) items.push(removeTool(n));
-  if (!n.editable && n.state !== "done" && n.state !== "skipped") items.push(note("The flight is in this stop — only what is still ahead can change"));
+  if (!n.editable && n.state !== "done" && n.state !== "skipped") items.push(note("The chain is in this group — only what is still ahead can change"));
   return items;
 }
 /** A box's right-click menu: an editable stop is edited, moved, duplicated,
@@ -261,11 +261,11 @@ export function menuItemsFor(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   return items;
 }
 
-const JUMP_ITEM: StopMenuItem = { key: "jump", label: "Jump the bird here", title: "Fly the flight to this stop — the halt points after it are armed again" };
+const JUMP_ITEM: StopMenuItem = { key: "jump", label: "Jump the bird here", title: "Move the chain to this stop — the halt points after it are armed again" };
 
 function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const { can } = ctx;
-  if (n.kind === "add") return can.open ? [{ key: "tackon", label: "Tack on a stop", title: "Pick a stop to tack onto the end of the line" }] : [];
+  if (n.kind === "add") return can.open ? [{ key: "tackon", label: "Tack on a stop", title: "Pick a stop to tack onto the end of the chain" }] : [];
   if (n.kind === "rung") return [note("A fast-track rung — it moves as the session ships")];
   if (n.kind === "group") return groupItems(n, ctx);
   if (n.kind !== "stop") return can.open ? [{ key: "open", label: "Open", title: n.session ? "Go to " + n.session : "Open it" }] : [];
@@ -273,8 +273,8 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
     const items: StopMenuItem[] = [];
     if (can.edit) items.push({ key: "edit", label: "Edit", title: "Open this stop in the inspector (Enter)" });
     if (can.move) {
-      items.push({ key: "earlier", label: "Earlier", title: "Move this stop one place earlier on the line (←)", disabled: !ctx.earlier });
-      items.push({ key: "later", label: "Later", title: "Move this stop one place later on the line (→)", disabled: !ctx.later });
+      items.push({ key: "earlier", label: "Earlier", title: "Move this stop one place earlier on the chain (←)", disabled: !ctx.earlier });
+      items.push({ key: "later", label: "Later", title: "Move this stop one place later on the chain (→)", disabled: !ctx.later });
     }
     if (can.duplicate) items.push({ key: "duplicate", label: "Duplicate", title: "The same stop again, right after this one" });
     if (can.halt && canHalt(n)) items.push(haltToggle(n));
@@ -284,9 +284,9 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   if (flownState(n.state)) {
     // A flown stop: read it, take it off a live line.
     const items: StopMenuItem[] = [];
-    if (can.edit) items.push({ key: "edit", label: "Details", title: "Open this stop (it has flown: read-only)" });
+    if (can.edit) items.push({ key: "edit", label: "Details", title: "Open this stop (it has run: read-only)" });
     if (can.remove && ctx.live) items.push(removeTool(n));
-    items.push(note("This stop has flown"));
+    items.push(note("This stop has run"));
     return items;
   }
   if (!ctx.here && (n.state === "pending" || n.state === "edit")) return [note("Still to come — it can't change here")];
@@ -295,14 +295,14 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const hold = ctx.here && ctx.live ? flightHold(n) : null;
   if (hold) items.push(hold);
   if (ctx.live) {
-    if (n.state === "perched") items.push({ key: "done", label: "Done", title: "Mark this perch done — the bird flies on" });
+    if (n.state === "perched") items.push({ key: "done", label: "Done", title: "Mark this stop done — the bird flies on" });
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
     items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
   }
   if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
-  if (can.edit) items.push({ key: "edit", label: "Details", title: "Open this stop (the flight is here: read-only)" });
+  if (can.edit) items.push({ key: "edit", label: "Details", title: "Open this stop (the chain is here: read-only)" });
   if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
-  items.push(note("The flight is here — it can't change now"));
+  items.push(note("The chain is here — it can't change now"));
   return items;
 }
 
@@ -314,9 +314,9 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
  * fast-track rung): there is nothing to halt. */
 export function birdAction(tone: BirdTone, onFlight: boolean): { key: "pause" | "resume" | "retry"; label: string; title: string } | null {
   if (!onFlight) return null;
-  if (tone === "paused") return { key: "resume", label: "Carry on", title: "Carry on — the flight flies on from this stop" };
+  if (tone === "paused") return { key: "resume", label: "Carry on", title: "Carry on — the chain goes on from this stop" };
   if (tone === "halted") return { key: "retry", label: "Retry", title: "Retry — run this stop again" };
-  return { key: "pause", label: "Halt the flight here", title: "Halt the flight here — Carry on picks it up again" };
+  return { key: "pause", label: "Halt the chain here", title: "Halt the chain here — Carry on picks it up again" };
 }
 
 /** The flight a bird is dragged on: its id and the step it is at (null when

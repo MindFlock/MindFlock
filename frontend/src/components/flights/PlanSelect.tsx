@@ -34,8 +34,8 @@ export type ReachPatch = { depth: string; plan: "" } | { plan: string };
 /** The summary line for a reach. */
 export function reachSummary(r: Pick<SourceReach, "steps" | "missing" | "words">, serverSteps?: string[] | null): string {
   const steps = serverSteps && serverSteps.length ? serverSteps : r.steps;
-  const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved stops “" + r.words + "”";
-  return r.missing ? "Its saved stops “" + r.missing + "” are gone, so: " + line : line;
+  const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved chain “" + r.words + "”";
+  return r.missing ? "Its saved chain “" + r.missing + "” is gone, so: " + line : line;
 }
 
 export function PlanSelect({
@@ -113,7 +113,7 @@ export function PlanSelect({
                 role="radio"
                 aria-checked={on}
                 className={"fl-pick fl-reach-plan" + (on ? " on" : "")}
-                title={p.builtin ? "Our built-in stops for these items" : "Your saved stops"}
+                title={p.builtin ? "Our built-in chain for these items" : "Your saved chain"}
                 data-value={"plan:" + p.value}
                 onClick={() => onChange({ plan: p.value })}
               >
@@ -133,7 +133,7 @@ export function PlanSelect({
             type="button"
             className="linklike fl-reach-edit"
             disabled={!target}
-            title={target ? "Edit this source's default stops with the blocks, in the Sky" : "Save the source first"}
+            title={target ? "Edit this source's default stops in the Sky" : "Save the source first"}
             onClick={() => void editInSky()}
           >
             Edit in the Sky…

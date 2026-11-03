@@ -173,7 +173,7 @@ describe("SkyChain markup", () => {
   it("labels and summaries", () => {
     const g = liveGraph();
     const s2 = g.nodes.find((n) => n.id === "stop:s2")!.node;
-    expect(tileLabel(s2)).toBe("Screenshot — flying now, npm run shots");
+    expect(tileLabel(s2)).toBe("Screenshot — running now, npm run shots");
     expect(tileLabel({ ...me, title: "lead", sub: "Opus" }, true)).toBe("lead — Working, Opus");
     expect(tileSub({ ...s2, receipt: "ok" })).toBe("ok");
     expect(g.headNode!.id).toBe(HEAD_ID);

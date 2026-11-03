@@ -202,7 +202,7 @@ export function hangFromAgent(d: Diagram): Diagram {
 /** A sub-session (or a worker branched off a stop): a small frame. */
 export const isSubSession = (n: Pick<DiagramNode, "kind" | "session">) => (n.kind === "child" || n.kind === "branch") && !!n.session;
 
-const MINI_WORD: Record<string, string> = { done: "done", current: "flying now", perched: "waiting on you", halted: "halted", paused: "paused", failed: "failed", skipped: "skipped", pending: "to come" };
+const MINI_WORD: Record<string, string> = { done: "done", current: "running now", perched: "needs you", halted: "halted", paused: "paused", failed: "failed", skipped: "skipped", pending: "to come" };
 
 /** A sub-session's own chain, small: one square per stop, a line through them. */
 function MiniChain({ stops }: { stops: readonly MiniStop[] }): JSX.Element {
@@ -226,8 +226,8 @@ const DRAG_MIN = 4;
 
 const STATE_WORD: Record<string, string> = {
   done: "done",
-  current: "flying now",
-  perched: "waiting on you",
+  current: "running now",
+  perched: "needs you",
   halted: "halted",
   paused: "paused",
   pending: "to come",
@@ -552,7 +552,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       data-flight={g.flightId || undefined}
       data-head={head.kind}
       role="list"
-      aria-label={(head.kind === "session" ? "Chain in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it"}
+      aria-label={(head.kind === "session" ? "Chain in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Chain with no session yet") + " — drag a stop to move it, drag a port to wire it"}
     >
       <svg className="sky-wires" aria-hidden="true" focusable="false" style={{ left: b.x, top: b.y }} width={Math.max(1, b.w)} height={Math.max(1, b.h)} viewBox={`${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`}>
         {g.wires.map((w) => (
@@ -693,7 +693,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           </span>
         );
       })}
-      {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
+      {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The chain is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
     </div>
   );
 }

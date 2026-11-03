@@ -195,17 +195,17 @@ describe("a paused flight", () => {
 
 describe("a perch's words", () => {
   it("Perch: is added once, never twice (nor after the old You:)", () => {
-    expect(perchLabel("Approve the merge")).toBe("Perch: Approve the merge");
-    expect(perchLabel("Perch: approve the merge")).toBe("Perch: approve the merge");
-    expect(perchLabel("You: approve the merge")).toBe("Perch: approve the merge");
-    expect(perchLabel("you:check it")).toBe("Perch: check it");
-    expect(perchLabel("")).toBe("Perch");
+    expect(perchLabel("Approve the merge")).toBe("Wait for me: Approve the merge");
+    expect(perchLabel("Perch: approve the merge")).toBe("Wait for me: approve the merge");
+    expect(perchLabel("You: approve the merge")).toBe("Wait for me: approve the merge");
+    expect(perchLabel("you:check it")).toBe("Wait for me: check it");
+    expect(perchLabel("")).toBe("Wait for me");
   });
 
   it("the bell says Perched on you", () => {
-    expect(perchedOnYou("Approve the merge")).toBe("Perched on you: Approve the merge");
-    expect(perchedOnYou("Perch: approve")).toBe("Perched on you: approve");
-    expect(perchedOnYou("")).toBe("Perched on you");
+    expect(perchedOnYou("Approve the merge")).toBe("Needs you: Approve the merge");
+    expect(perchedOnYou("Perch: approve")).toBe("Needs you: approve");
+    expect(perchedOnYou("")).toBe("Needs you");
   });
 
   it("a perch's checklist reads a list or the editor's lines", () => {
@@ -234,8 +234,8 @@ describe("the pane strip's line", () => {
     expect(rowWaitsOnYou(null)).toBe(false);
   });
 
-  it("says Landed once it is done", () => {
-    expect(stripLabel(flight({ state: "done", cursor: 6 }), NOW_MS)).toMatch(/· Landed$/);
+  it("says Finished once it is done", () => {
+    expect(stripLabel(flight({ state: "done", cursor: 6 }), NOW_MS)).toMatch(/· Finished$/);
   });
 });
 

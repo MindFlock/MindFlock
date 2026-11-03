@@ -389,9 +389,9 @@ describe("Split and Join on the line", () => {
     expect(stopSummary(step("x", "join", "Join", { of: "spawned", on_failed: "continue" }))).toBe("waits for its split's workers · goes on past a failure");
   });
 
-  it("the palette lists Split and Join under “The flock does” (the registry's)", () => {
+  it("the palette lists Split and Join under “MindFlock does” (the registry's)", () => {
     const html = renderToStaticMarkup(createElement(StopPalette, { kinds: KINDS, onPick: () => {}, onClose: () => {} }));
-    const flock = html.slice(html.indexOf("The flock does"), html.indexOf("You do"));
+    const flock = html.slice(html.indexOf("MindFlock does"), html.indexOf("You do"));
     expect(flock).toContain(">Split<");
     expect(flock).toContain(">Join<");
   });
@@ -514,9 +514,9 @@ describe("every child a parallel row, each with its own bird (round 12)", () => 
     const html = render({ bird: birdPerch(d), onOpen: () => {} });
     const birds = [...html.matchAll(/<span class="(fl-bird-marker[^"]*)"[^>]*role="(\w+)" aria-label="([^"]*)"[^>]*title="([^"]*)"/g)].map((m) => [m[1], m[2], m[3], m[4]]);
     expect(birds).toEqual([
-      ["fl-bird-marker tone-working", "button", "The bird: flying Push", expect.stringMatching(/^Halt the flight here/)],
+      ["fl-bird-marker tone-working", "button", "The bird: flying Push", expect.stringMatching(/^Halt the chain here/)],
       ["fl-bird-marker tone-working fl-bird-branch", "button", "a’s bird: working", "Open a — working"],
-      ["fl-bird-marker tone-you fl-bird-branch", "button", "b’s bird: waiting on you", "Open b — waiting on you"],
+      ["fl-bird-marker tone-you fl-bird-branch", "button", "b’s bird: needs you", "Open b — needs you"],
     ]);
     // A branch's bird is smaller and never a drag.
     expect(html).toMatch(/fl-bird-branch"[^>]*><span class="fl-bird-big fl-sprite-bird fl-flapping" style="width:18px/);

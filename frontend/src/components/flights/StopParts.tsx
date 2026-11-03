@@ -28,7 +28,7 @@ import "./StopParts.css";
  * Someone (round 15). */
 export function kindName(def: Pick<StepKindDef, "kind" | "label"> | undefined, kind = ""): string {
   const k = def?.kind || kind;
-  if (k === "you") return "Perch";
+  if (k === "you") return "Wait for me";
   if (k === "someone") return "Someone";
   return def?.label || kind;
 }
@@ -50,7 +50,7 @@ export function StopPalette({
   extra?: ReactNode;
 }) {
   const groups: Array<[string, string, StepKindDef[]]> = [
-    ["robot", "The flock does", kinds.filter((k) => k.actor !== "you")],
+    ["robot", "MindFlock does", kinds.filter((k) => k.actor !== "you")],
     ["you", "You do", kinds.filter((k) => k.actor === "you")],
   ];
   return (
@@ -72,7 +72,7 @@ export function StopPalette({
           ✕
         </button>
       </div>
-      {kinds.length === 0 && <p className="fl-note muted">The stop list didn't load — this server may not know Flights yet.</p>}
+      {kinds.length === 0 && <p className="fl-note muted">The stop list didn't load — this server may not know chains yet.</p>}
       <div className="fl-palette-groups">
         {groups.map(([id, head, list]) =>
           list.length ? (
@@ -144,8 +144,8 @@ export const boardDynamic = (f: Pick<StepKindField, "dynamic">): BoardDynamic | 
  * copy). */
 export function chainChoices(flights: readonly Flight[] | null | undefined, plans: readonly FlightPlan[] | null | undefined): StopChoice[] {
   const out: StopChoice[] = [];
-  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Stops", group: "On the board" });
-  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved stops — a fresh copy each time" });
+  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Chain", group: "On the board" });
+  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved chains — a fresh copy each time" });
   return out;
 }
 
@@ -262,7 +262,7 @@ export function StopsBeforeField({
   if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: "a stop no longer before this one" }] });
   const pick = (x: string) => !readOnly && onChange(x);
   return (
-    <FlField label={label} wide hint="The flight goes back to this stop for each new run.">
+    <FlField label={label} wide hint="The chain goes back to this stop for each new run.">
       <div className="fl-stops-before" data-dynamic="stops_before">
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
@@ -270,7 +270,7 @@ export function StopsBeforeField({
             <ChipRow
               label={r.group ? label + " — " + r.group : label}
               value={value}
-              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the line (or this group) starts" }))}
+              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the chain (or this group) starts" }))}
               onChange={pick}
             />
           </div>
@@ -307,11 +307,11 @@ export function BoardChoiceField({
   }
   if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: kind === "chains" ? "a chain no longer on the board" : value }] });
   const pick = (x: string) => !readOnly && onChange(x);
-  const hint = kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved stop starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.";
+  const hint = kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved chain starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.";
   return (
     <FlField label={label} wide hint={hint}>
       <div className="fl-stops-before fl-board-choice" data-dynamic={kind}>
-        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No stops-only chain on the board yet — drop some stops on empty sky first." : "No session yet."}</p>}
+        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No chain on the board yet — drop some stops on empty sky first." : "No session yet."}</p>}
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
             {r.group && <span className="fl-stops-before-name">{r.group}</span>}
@@ -537,7 +537,7 @@ function WhenHelp({ onClose }: { onClose(): void }) {
       }}
     >
       <div className="fl-when-help-top">
-        <strong>The stop flies only when…</strong>
+        <strong>The stop runs only when…</strong>
         <button type="button" className="fl-icon-btn" aria-label="Close" title="Close" autoFocus onClick={onClose}>
           ✕
         </button>

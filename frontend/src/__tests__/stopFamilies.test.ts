@@ -114,7 +114,7 @@ describe("the cards by family (catalogCards)", () => {
   it("a filter hides the groups it empties (and keeps grouping by every kind, not the matches)", () => {
     expect(groupsOf(catalogCards(KINDS, [], "ship").groups)).toEqual(["ship:ship"]);
     expect(groupsOf(catalogCards(KINDS, [], "wait perch").groups)).toEqual([]);
-    expect(groupsOf(catalogCards(KINDS, [], "perch").groups)).toEqual(["people:you"]);
+    expect(groupsOf(catalogCards(KINDS, [], "for me").groups)).toEqual(["people:you"]);
     const c = catalogCards(KINDS, [TICKET], "nothing at all");
     expect(c.groups).toEqual([]);
     expect(c.grouped).toBe(true);

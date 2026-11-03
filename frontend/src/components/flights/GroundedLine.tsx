@@ -122,7 +122,7 @@ export const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly {
   const given = (f.plan_name || "").trim();
   if (given && given !== "Stops") return given;
   const steps = f.steps || [];
-  if (!steps.length) return "Stops";
+  if (!steps.length) return "Chain";
   return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
 };
 
@@ -144,7 +144,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const name = ed ? "Default stops · " + edLabel : groundedName(flight);
   // Its bar names the source ("Jira — payments"); the kind rides the tag.
   const edTitle = editorTitle(edLabel);
-  const edHint = "New items from " + (edTitle.name || "this source") + " fly these stops";
+  const edHint = "New items from " + (edTitle.name || "this source") + " run these stops";
   const lod = lodFor(p.zoom || 1);
   // Whether the source has its own default now (Reset to default only then),
   // and the steps it flies now — Save as default only once these differ.
@@ -212,7 +212,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         label: (reset ? "Reset the default stops for " : "Save the default stops for ") + label,
         undo: () => setIntakeDefault({ ...ref, plan_id: prev }),
       });
-      toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " fly these stops", {
+      toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " run these stops", {
         action: undoAction(entry, "Undo: " + label + " back on the stops it had"),
       });
     } finally {
@@ -249,12 +249,12 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
 
   const updates = !!sourcePlanId(flight.steps, p.plans);
   const items: MenuItem[] = [
-    { key: "add", label: "Add a stop…", title: "One stop, or a saved stop, at the end of the line", onSelect: () => line.togglePalette(true) },
+    { key: "add", label: "Add a stop…", title: "One stop, or a saved chain, at the end of the chain", onSelect: () => line.togglePalette(true) },
     ...(ed ? [] : [{ key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn }]),
     {
       key: "save",
       label: "Save to the shelf",
-      title: updates ? "Update the saved stop these came from" : "Keep these stops on the shelf as a saved stop",
+      title: updates ? "Update the saved chain these came from" : "Keep these stops on the shelf as a saved chain",
       className: "skl-mi-group",
       onSelect: () => void save(),
     },
@@ -379,7 +379,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       role="group"
       tabIndex={0}
       data-sky-box
-      aria-label={name + (ed ? " — new items from this source fly these" : head.kind === "trigger" ? " — " + head.title : " — stops with no session yet")}
+      aria-label={name + (ed ? " — new items from this source run these" : head.kind === "trigger" ? " — " + head.title : " — a chain with no session yet")}
       onKeyDown={onKey}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
@@ -396,10 +396,10 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         <Bird size={14} />
         {ed ? (
           <>
-            <span className="skl-name skl-default-name" title={"Default stops for " + edLabel + ". New items from this source fly these."}>
+            <span className="skl-name skl-default-name" title={"Default stops for " + edLabel + ". New items from this source run these."}>
               {edTitle.name}
             </span>
-            <span className="fl-box-chip skl-chip skl-default-tag" title={"You are editing the stops new items from " + edLabel + " fly"}>
+            <span className="fl-box-chip skl-chip skl-default-tag" title={"You are editing the stops new items from " + edLabel + " run"}>
               {edTitle.kind ? "Default · " + edTitle.kind : "Default"}
             </span>
           </>
@@ -440,7 +440,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             stop, where a run starts (n8n's trigger button) — SkyChain `run`. */}
         {running && (
           <span className={"fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused")} title={flight.repo_root ? "Running in " + flight.repo_root : undefined}>
-            {flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"}
+            {flight.state === "waiting_you" ? "Needs you" : flight.state === "running" ? "Running" : "Paused"}
           </span>
         )}
         {!running && flight.last_run && (() => {
@@ -460,7 +460,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
               type="button"
               className="btn-primary fl-btn skl-default-save"
               disabled={busy || !flight.steps.length || !changed}
-              title={changed ? edHint : "These are the stops " + edLabel + " flies now — change one to save"}
+              title={changed ? edHint : "These are the stops " + edLabel + " runs now — change one to save"}
               onClick={() => void writeDefault(false)}
             >
               {changed ? "Save as default" : "No changes"}

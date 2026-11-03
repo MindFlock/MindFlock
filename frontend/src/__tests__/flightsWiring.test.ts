@@ -38,20 +38,20 @@ describe("a flight perched on you is Needs you", () => {
 
   it("on the rail, labelled Perch: <stop title>, in the bell, under its own notify rule", () => {
     const ss = deriveSessionState(row(fl), { activity: "idle" });
-    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Perch: Approve the merge", inBell: true });
+    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Wait for me: Approve the merge", inBell: true });
     expect(notifyRuleFor(ss)).toBe("flight_needs_you");
-    expect(flightYouLabel("")).toBe("Perch");
+    expect(flightYouLabel("")).toBe("Wait for me");
     // A robot step running, or a flight that is merely in the air, is not.
     expect(deriveSessionState(row({ ...fl, state: "running" }), { activity: "idle" }).reason).toBeUndefined();
     expect(deriveSessionState(row({ ...fl, step: { ...fl.step, actor: "robot" } }), { activity: "idle" }).reason).toBeUndefined();
     // A stop already titled "Perch: …" (or the old "You: …") is not prefixed again.
-    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Perch: approve" } }), { activity: "idle" }).label).toBe("Perch: approve");
-    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("Perch: approve");
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Perch: approve" } }), { activity: "idle" }).label).toBe("Wait for me: approve");
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("Wait for me: approve");
     // Its chip is capped with an ellipsis (the full words in its title), and
     // a click opens the bell, where Done is.
     const chip = chipState(row(fl) as Instance, ss);
     expect(chip.cls).toContain("chip-flight");
-    expect(chip.title).toContain("Perch: Approve the merge");
+    expect(chip.title).toContain("Wait for me: Approve the merge");
     expect(needsYouAction(ss)?.act).toBe("bell");
     expect(css("components/sidebar/SidebarRow.css")).toMatch(
       /\.inst \.stagechip\.chip-flight \{[^}]*max-width: 9\.5em;[^}]*text-overflow: ellipsis;/
@@ -74,7 +74,7 @@ describe("a flight perched on you is Needs you", () => {
         key: "flight:f_1",
         title: "a",
         kind: "flight_you",
-        reason: "Perched on you: Approve the merge",
+        reason: "Needs you: Approve the merge",
         text: "Ticket to merge",
         actions: ["done", "skip", "open"],
       },
