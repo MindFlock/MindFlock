@@ -87,7 +87,7 @@ describe("lib/groundedLines: the default-stops editor", () => {
     expect(G.editorLabel(editor({ plan_name: "Default · " }))).toBe("Default ·");
   });
 
-  it("an editor is a chain with edits_default; one source is kind + target", () => {
+  it("an editor is a route with edits_default; one source is kind + target", () => {
     expect(G.isDefaultEditor(editor())).toBe(true);
     expect(G.isDefaultEditor(flight())).toBe(false);
     expect(G.isDefaultEditor(null)).toBe(false);
@@ -97,7 +97,7 @@ describe("lib/groundedLines: the default-stops editor", () => {
     expect(G.sameSource(SHORTCUT, undefined)).toBe(false);
   });
 
-  it("editorFor finds the one editor on the board for a source (grounded only)", () => {
+  it("editorFor finds the one editor on the Sky for a source (grounded only)", () => {
     const fs = [flight(), editor({ id: "prs", edits_default: { kind: "prs", target: "o/r" } }), editor({ id: "gone", state: "done" }), editor()];
     expect(G.editorFor(fs, SHORTCUT)?.id).toBe("f_ed");
     expect(G.editorFor(fs, { kind: "prs", target: "o/r" })?.id).toBe("prs");
@@ -105,7 +105,7 @@ describe("lib/groundedLines: the default-stops editor", () => {
     expect(G.editorFor(null, SHORTCUT)).toBeNull();
   });
 
-  it("chainRunFor: no ▶ on an editor, on a chain another starts, or on no stops", () => {
+  it("chainRunFor: no ▶ on an editor, on a route another starts, or on no stops", () => {
     const make = () => ({ run: true });
     expect(G.chainRunFor(editor(), "none", make)).toBeNull();
     expect(G.chainRunFor(flight(), "trigger", make)).toBeNull();
@@ -121,7 +121,7 @@ describe("the lane's stops chip opens the editor", () => {
     vi.mocked(API.startGrounded).mockReset().mockResolvedValue(editor({ id: "f_new" }));
   });
 
-  it("makes a grounded chain of the source's default, named for it, that edits it", async () => {
+  it("makes a grounded route of the source's default, named for it, that edits it", async () => {
     const made = vi.fn();
     const f = await openDefaultEditor(SHORTCUT, [flight()], { made });
     expect(API.getIntakeDefault).toHaveBeenCalledWith(SHORTCUT);
@@ -130,7 +130,7 @@ describe("the lane's stops chip opens the editor", () => {
     expect(made).toHaveBeenCalledWith(f, dflt);
   });
 
-  it("never a second: the editor already on the board is handed back instead", async () => {
+  it("never a second: the editor already on the Sky is handed back instead", async () => {
     const existing = vi.fn();
     const made = vi.fn();
     const f = await openDefaultEditor(SHORTCUT, [editor()], { existing, made });
@@ -151,7 +151,7 @@ describe("the lane's stops chip opens the editor", () => {
     const lane = code("components/flights/IntakeLane.tsx");
     expect(lane).toContain('className="fl-icon-btn sky-lane-flyway-btn"');
     expect(lane).toContain('<span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{stopsWords(block.flyway)}</span>');
-    expect(lane).toContain('aria-label={"Edit the default chain for " + block.label}');
+    expect(lane).toContain('aria-label={"Edit the default route for " + block.label}');
     expect(lane).toContain("onClick={() => onEditDefault({ kind: block.kind, target: block.id }, block.label)}");
     expect(lane).toContain("else void openDefaultEditor(ref, flights);");
     const sky = code("components/flights/SkyView.tsx");
@@ -167,7 +167,7 @@ describe("the lane's stops chip opens the editor", () => {
   });
 });
 
-describe("the editor chain", () => {
+describe("the editor route", () => {
   const html = render(editor());
 
   it("its bar names the source (the kind on its Default tag), the hint a caption under it, and it is not renamed", () => {
@@ -221,7 +221,7 @@ describe("the editor chain", () => {
     expect(src).toContain("onClick={() => void discard()}");
   });
 
-  it("its stops edit as any grounded chain's — the same hook, not a fork", () => {
+  it("its stops edit as any grounded route's — the same hook, not a fork", () => {
     const src = code("components/flights/GroundedLine.tsx");
     expect(src).toContain("const line = useGroundedLine(flight, { kinds: p.kinds, plans: p.plans });");
     expect(html).toContain("Fix it");

@@ -160,8 +160,8 @@ export function promoteWords(src: Pick<IntakeDefault, "kind" | "label" | "target
   const name = intakeSourceName(src);
   return {
     label: "Use these stops for every " + w.one + " from " + name,
-    title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this chain's stops. This " + w.one + " keeps running as it is.",
-    done: "New " + w.many + " from " + name + " run this chain",
+    title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this route's stops. This " + w.one + " keeps running as it is.",
+    done: "New " + w.many + " from " + name + " run this route",
   };
 }
 
@@ -175,7 +175,7 @@ export async function promoteStops(flightId: string): Promise<boolean> {
   const back = { kind: res.kind, target: res.target, plan_id: res.previous_plan_id };
   // One undo, two roads: the toast's button and Ctrl+Z in the sky.
   const promoted = pushUndo({ label: words.label, undo: () => setIntakeDefault(back) });
-  toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " run the chain they did before") });
+  toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " run the route they did before") });
   return true;
 }
 
@@ -199,8 +199,8 @@ export function usePromoteStops(flight: Pick<Flight, "id" | "subject"> | null | 
 /** The toast after a stop came off: removing the one the flight was at
  * pauses the flight right before the stop that followed (or at the end). */
 export function removedToast(title: string, wasHere: boolean, next: string | null | undefined): string {
-  if (!wasHere) return "Removed “" + title + "” from the chain";
-  return "Removed “" + title + "” — the chain is paused " + (next ? "before “" + next + "”" : "at the end");
+  if (!wasHere) return "Removed “" + title + "” from the route";
+  return "Removed “" + title + "” — the route is paused " + (next ? "before “" + next + "”" : "at the end");
 }
 
 /** The saved stop a group's "Save to the shelf" writes: the plan it came
@@ -385,7 +385,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         // ready, for ▶ Run or the session's next prompt.
         const f = await tackOnNew(title, [step], "prompt");
         if (f) {
-          toast("Ready: " + (f.plan_name || "a new chain") + " — it runs on ▶ Run or your next prompt");
+          toast("Ready: " + (f.plan_name || "a new route") + " — it runs on ▶ Run or your next prompt");
           if (openIt) setSelectIndex(f.steps.length - 1);
         }
       }
@@ -433,7 +433,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     toast(removedToast(step.title, wasHere, next), {
       action: {
         label: "Undo",
-        ariaLabel: "Undo: put “" + step.title + "” back on the chain",
+        ariaLabel: "Undo: put “" + step.title + "” back on the route",
         // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
           if (takeUndo(entry)) void entry.undo();
@@ -464,7 +464,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     toast(removedToast(g.name, wasHere, next), {
       action: {
         label: "Undo",
-        ariaLabel: "Undo: put “" + g.name + "” back on the chain",
+        ariaLabel: "Undo: put “" + g.name + "” back on the route",
         // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
           if (takeUndo(entry)) void entry.undo();
@@ -482,7 +482,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const clearLanded = async (): Promise<boolean> => {
     if (!landedId) return false;
     const ok = await optimisticDelete(landedId, () => deleteFlight(landedId));
-    if (ok) toast("Cleared the finished chain");
+    if (ok) toast("Cleared the finished route");
     return ok;
   };
 
@@ -505,7 +505,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     <div className="skl-close-confirm skl-remove-confirm" data-no-drag>
       <InlineConfirm
         title={"Remove “" + askName + "”?"}
-        body={"The chain is at it right now: it pauses before what follows. Undo puts it back."}
+        body={"The route is at it right now: it pauses before what follows. Undo puts it back."}
         confirmLabel="Remove"
         busy={busy}
         onConfirm={() => {
@@ -674,13 +674,13 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     onDropStop: (drop: StopDrop, at) => {
       if ("planId" in drop) {
         const plan = plans.find((p) => p.id === drop.planId);
-        if (plan || flight) void tackPlan(plan || { id: drop.planId, name: "the saved chain" }, at);
-        else toast("That saved chain isn't on this server any more");
+        if (plan || flight) void tackPlan(plan || { id: drop.planId, name: "the saved route" }, at);
+        else toast("That saved route isn't on this server any more");
         return;
       }
       const def = kindOf.get(drop.kind);
       if (def) void tackOne(def, at);
-      else toast("This chain has no “" + drop.kind + "” stop to tack on");
+      else toast("This route has no “" + drop.kind + "” stop to tack on");
     },
     renderInBox: parts.renderInBox,
     sizeOf: parts.sizeOf,
@@ -705,7 +705,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
           setPaletteHang(null);
         }}
         saved={savedStops(paletteAt >= end ? null : paletteAt)}
-        savedHead="Saved chains — tack one on as a group"
+        savedHead="Saved routes — tack one on as a group"
       />
     ) : null;
 
@@ -729,7 +729,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         kindOf={kindOf}
         busy={busy}
-        note={open.editable ? undefined : open.state === "done" || open.state === "skipped" ? "This stop has finished." : "The chain is in this stop — only its stops still ahead can change."}
+        note={open.editable ? undefined : open.state === "done" || open.state === "skipped" ? "This stop has finished." : "The route is in this stop — only its stops still ahead can change."}
         onClose={close}
         onRename={
           flight && changeable
@@ -780,8 +780,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const editable = !!flight && !!open.editable && !!open.step;
     const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
     const rec = flight && open.step ? flight.step_states?.[open.step.id] : undefined;
-    const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The chain is at this stop — it can't change while it is here." : "It can't change here.";
-    const clears = !flight && landedId ? "Remove clears the finished chain." : "";
+    const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The route is at this stop — it can't change while it is here." : "It can't change here.";
+    const clears = !flight && landedId ? "Remove clears the finished route." : "";
     const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : undefined;
     inspector = (
       <StopDialog
@@ -832,7 +832,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             )}
             {offerJoin && (
               <div className="fl-chiprow fl-join-offer">
-                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the chain waits until every worker is done" onClick={() => void addJoin()}>
+                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the route waits until every worker is done" onClick={() => void addJoin()}>
                   + Join
                 </button>
               </div>

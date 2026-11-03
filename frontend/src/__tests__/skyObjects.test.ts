@@ -65,7 +65,7 @@ describe("the registry", () => {
     expect(O.newNoteId()).not.toBe(O.newNoteId());
   });
 
-  it("which objects are on the board: the lane when on, the palette when floating, the strip and blocks in All / Mine / Perched, never on a phone or in This session, a note per note", () => {
+  it("which objects are on the Sky: the lane when on, the palette when floating, the strip and blocks in All / Mine / Perched, never on a phone or in This session, a note per note", () => {
     const d = data({ links: [link()], devices: [device(), device({ device: "pi", host: "pi" })], notes: [note(), note({ id: "n2" })] });
     expect(O.skyObjects(d).map((o) => o.key)).toEqual(["intake", "landing", "device:mini", "device:pi", "person:L1", "note:n1", "note:n2"]);
     expect(O.skyObjects({ ...d, paletteOn: true }).map((o) => o.key).slice(0, 2)).toEqual(["intake", "palette"]);
@@ -233,10 +233,10 @@ describe("a person block", () => {
 
   it("names the peer, the state dot, and invites a drop", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-block sky-person" data-person="L1" data-state="verified" role="group" aria-label="Bob — drop a chain here to share its session">/);
+    expect(h).toMatch(/^<div class="sky-block sky-person" data-person="L1" data-state="verified" role="group" aria-label="Bob — drop a route here to share its session">/);
     expect(h).toContain('<div class="sky-block-head" data-sky-head="true" title="Drag to move">');
     expect(h).toContain('<strong class="sky-block-name">Bob</strong>');
-    expect(h).toContain("Drop a chain to share it");
+    expect(h).toContain("Drop a route to share it");
     expect(html({ connected: false })).toContain('data-state="offline"');
     expect(html({ sas_verified: false })).toContain('data-state="unverified"');
   });
@@ -271,9 +271,9 @@ describe("a person block", () => {
 describe("a device drop target", () => {
   const html = (over: Partial<Device> = {}, dropped = "", target = false) => renderToStaticMarkup(createElement(DeviceBlock, { device: device(over), dropped, target, onDone() {} }));
 
-  it("says where the chain goes and what is there; a dropped line asks to move with the mid-turn tick", () => {
+  it("says where the route goes and what is there; a dropped line asks to move with the mid-turn tick", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-device" data-device="mini" data-state="on" role="group" aria-label="Move to mac-mini — drop the chain here">/);
+    expect(h).toMatch(/^<div class="sky-device" data-device="mini" data-state="on" role="group" aria-label="Move to mac-mini — drop the route here">/);
     expect(h).toContain('<span class="sky-device-title" title="mini">Move to mac-mini</span>');
     expect(h).toContain('<div class="sky-device-sub">2 sessions there · darwin</div>');
     expect(html({}, "", true)).toMatch(/^<div class="sky-device is-over"/);
@@ -291,18 +291,18 @@ describe("a device drop target", () => {
     expect(deviceBlockReason({ connected: true })).toBe("");
   });
 
-  it("the dock: every device while a chain is dragged, only the asked one after a drop, nothing otherwise", () => {
+  it("the dock: every device while a route is dragged, only the asked one after a drop, nothing otherwise", () => {
     const keyOf = (d: string) => "device:" + d;
     const dock = (dragging: boolean, dropped: Record<string, string> = {}) =>
       renderToStaticMarkup(createElement(DeviceDock, { devices: [device(), device({ device: "pi", host: "pi" })], dragging, over: "", dropped, keyOf, onDone() {}, targetRef() {} }));
     expect(dock(false)).toBe("");
     const drag = dock(true);
     expect(drag).toContain('<div class="sky-device-dock is-dragging" role="region" aria-label="Move the session to another device" data-no-drag="true">');
-    expect(drag).toContain("Drop the chain on a device to move the session there");
+    expect(drag).toContain("Drop the route on a device to move the session there");
     expect([...drag.matchAll(/data-device="([^"]+)"/g)].map((m) => m[1])).toEqual(["mini", "pi"]);
     const asked = dock(false, { "device:pi": "fix-login" });
     expect([...asked.matchAll(/data-device="([^"]+)"/g)].map((m) => m[1])).toEqual(["pi"]);
-    expect(asked).not.toContain("Drop the chain");
+    expect(asked).not.toContain("Drop the route");
   });
 
   it("the calm sky-object look (SKY_OBJECT_STYLE): one hairline, radius 14, a 30px bar, 13px / 600 title, muted 11.5px second line", () => {

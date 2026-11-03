@@ -245,7 +245,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       const d = readDrop(drop);
       if ("planId" in d) {
         const plan = plans.find((p) => p.id === d.planId);
-        void tackPlan(plan || { id: d.planId, name: "the saved chain" }, at);
+        void tackPlan(plan || { id: d.planId, name: "the saved route" }, at);
         return;
       }
       const def = kindOf.get(d.kind);

@@ -80,7 +80,7 @@ export function withLoopItem(items: readonly SkyMenuItem[], choices: readonly Lo
  * agent first), and ← Back. */
 export function loopMenuItems(choices: readonly LoopChoice[]): SkyMenuItem[] {
   return [
-    { key: "loop-note" as SkyMenuItem["key"], label: "Loop back to…", title: "Where the chain goes back to after this stop", note: true },
+    { key: "loop-note" as SkyMenuItem["key"], label: "Loop back to…", title: "Where the route goes back to after this stop", note: true },
     ...choices.map((c) => ({ key: c.key as SkyMenuItem["key"], label: c.label, title: c.title })),
     { key: "loop-cancel" as SkyMenuItem["key"], label: "← Back", title: "Back to the stop's menu" },
   ];

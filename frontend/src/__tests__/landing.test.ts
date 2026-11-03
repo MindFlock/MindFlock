@@ -68,7 +68,7 @@ describe("the strip", () => {
     expect(html).toContain('<span class="sky-landing-title">Finished</span>');
     expect(html).not.toContain("FINISHED");
     expect(html).toMatch(/<span class="sky-landing-count" title="4 merged today">4 today<\/span>/);
-    expect(html).toContain('<p class="sky-landing-explain">Each repo&#x27;s main branch: its CI and its last merge — and chains merged today</p>');
+    expect(html).toContain('<p class="sky-landing-explain">Each repo&#x27;s main branch: its CI and its last merge — and routes merged today</p>');
     const repos = [...html.matchAll(/data-repo="([^"]+)"/g)].map((m) => m[1]);
     expect(repos).toEqual(["/home/me/app", "/home/me/site"]);
     expect(html).toContain('<span class="sky-landing-dot is-green" title="checks green · 0123456" aria-label="checks green"></span>');
@@ -99,7 +99,7 @@ describe("the strip", () => {
     expect(html).toContain("sc-8");
     expect(html).not.toContain("more — expand");
     expect(html).toContain('aria-expanded="true" aria-label="Fold the Finished strip&#x27;s rows"');
-    expect(render()).toContain('aria-expanded="false" aria-label="Expand the Finished strip: every finished chain"');
+    expect(render()).toContain('aria-expanded="false" aria-label="Expand the Finished strip: every finished route"');
   });
 
   it("the title bar drags it (when the host lets it), its quiet × hides it, the corner sizes it", () => {
@@ -173,7 +173,7 @@ describe("hidden by default; the ⋯ toggle", () => {
     expect(v).toContain("onSelect: () => setFinishedOn(!finishedOn),");
     expect(v).toContain("cloneElement(drawn as ReactElement<LandingStripProps>, { onHide: () => setFinishedOn(false) })");
   });
-  it("hidden, it is not on the board — not placed, no room kept in the right column", () => {
+  it("hidden, it is not on the Sky — not placed, no room kept in the right column", () => {
     expect(v).toContain('skyObjects(objData).filter((o) => o.def.kind !== "device" && (o.def.kind !== "landing" || finishedOn))');
     // The right column is built from `objects` only.
     expect(v).toContain('const rightItems = objects.filter((o) => o.def.place === "right").map((o) => ({ id: o.key, ...objectBox(o) }));');

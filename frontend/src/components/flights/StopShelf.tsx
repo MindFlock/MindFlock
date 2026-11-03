@@ -72,15 +72,15 @@ function onStopDrag(e: DragEvent, def: StepKindDef) {
 
 /** What a click on a chip does, in its title: put it on the board (`place`),
  * tack it onto the focused line, or nothing (it only drags). */
-const PLACE_HOW = "Click to put it on the board, or drag it onto a chain or the sky";
-const clickHow = (click: boolean, place: boolean, tack: string) => (!click ? "Drag onto a chain or the sky" : place ? PLACE_HOW : tack);
+const PLACE_HOW = "Click to put it on the Sky, or drag it onto a route or the sky";
+const clickHow = (click: boolean, place: boolean, tack: string) => (!click ? "Drag onto a route or the sky" : place ? PLACE_HOW : tack);
 
 /** A kind's chip (the shelf, the floating palette). `onClick` with `place`
  * puts it on the board; without `place` it tacks onto the focused line. */
 export function StopChip({ def, onClick, place = false, onMenu }: { def: StepKindDef; onClick?(kind: string): void; place?: boolean; onMenu?(def: StepKindDef, x: number, y: number): void }) {
   const name = kindName(def);
   const perch = def.actor === "you";
-  const how = clickHow(!!onClick, place, "Click to tack it onto the focused chain, or drag it onto a chain or the sky");
+  const how = clickHow(!!onClick, place, "Click to tack it onto the focused route, or drag it onto a route or the sky");
   const cd = useClickOrDouble(onClick && (() => onClick(def.kind)));
   const props = {
     className: "sky-stop-chip" + (perch ? " perch" : "") + (onClick ? "" : " drag-only"),
@@ -109,7 +109,7 @@ export function StopChip({ def, onClick, place = false, onMenu }: { def: StepKin
   return (
     <span role="listitem" className="sky-stop-item">
       {onClick ? (
-        <button type="button" {...props} aria-label={place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused chain"} onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
+        <button type="button" {...props} aria-label={place ? "Put “" + name + "” on the Sky" : "Tack “" + name + "” onto the focused route"} onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
           {body}
         </button>
       ) : (
@@ -263,7 +263,7 @@ export function SavedChip({
       </span>
     </>
   );
-  const how = clickHow(!!onClick, place, "Click to add it to the focused chain, or drag it onto a chain or the sky");
+  const how = clickHow(!!onClick, place, "Click to add it to the focused route, or drag it onto a route or the sky");
   const props = {
     className: "sky-stop-chip sky-saved-chip" + (plan.builtin ? " builtin" : "") + (onClick ? "" : " drag-only") + (renaming ? " is-renaming" : ""),
     "data-plan": plan.id,
@@ -279,7 +279,7 @@ export function SavedChip({
   return (
     <span role="listitem" className="sky-stop-item">
       {onClick && !renaming ? (
-        <button type="button" {...props} aria-label={place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused chain"} onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
+        <button type="button" {...props} aria-label={place ? "Put “" + plan.name + "” on the Sky" : "Add “" + plan.name + "” to the focused route"} onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
           {body}
         </button>
       ) : (
@@ -384,7 +384,7 @@ export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick)
   const confirm = deleting ? (
     <InlineConfirm
       title={"Delete “" + deleting.name + "”?"}
-      body="It leaves the shelf. Stops already on the board stay."
+      body="It leaves the shelf. Stops already on the Sky stay."
       confirmLabel="Delete"
       busy={busy}
       onConfirm={() => void remove()}
@@ -482,7 +482,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
           Stops {folded ? "▴" : "▾"}
         </button>
         {onFloat && (
-          <button type="button" className="sky-shelf-fold sky-shelf-float" aria-label="Float the stops" title="Float the stops — a palette on the board you can move and size" onClick={onFloat}>
+          <button type="button" className="sky-shelf-fold sky-shelf-float" aria-label="Float the stops" title="Float the stops — a palette on the Sky you can move and size" onClick={onFloat}>
             ⤢
           </button>
         )}
@@ -490,7 +490,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
       {!folded && (
         <div className="sky-stops" role="group" aria-label="Stops">
           <span className="sky-stops-head">
-            <strong>Stops</strong> <span className="sky-stops-hint">— drag onto the sky or a chain</span>
+            <strong>Stops</strong> <span className="sky-stops-hint">— drag onto the sky or a route</span>
           </span>
           {kinds !== undefined && !kinds?.length ? (
             <p className="sky-stops-empty muted">The stop list didn't load — this server may be too old for the Sky.</p>
@@ -508,9 +508,9 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
               {saved.length > 0 && (
                 <>
                   <span className="sky-stops-divider" aria-hidden="true" />
-                  <div className="sky-stops-region" data-region="multi" role="list" aria-label="Saved chains">
+                  <div className="sky-stops-region" data-region="multi" role="list" aria-label="Saved routes">
                     <span className="sky-stops-label" aria-hidden="true">
-                      Saved chains
+                      Saved routes
                     </span>
                     {saved.map((p) => (
                       <SavedChip
@@ -535,7 +535,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                 data-tour="sky-catalog"
                 aria-haspopup={onCatalog ? undefined : "dialog"}
                 aria-expanded={onCatalog ? undefined : catalog}
-                title={onCatalog ? "Every stop and saved chain, in a palette on the board you can filter and drag from" : "Every stop and every saved chain, in a list you can filter"}
+                title={onCatalog ? "Every stop and saved route, in a palette on the Sky you can filter and drag from" : "Every stop and every saved route, in a list you can filter"}
                 onClick={() => (onCatalog ? onCatalog() : setCatalog(true))}
               >
                 <span className="sky-stop-icon" aria-hidden="true">

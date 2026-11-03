@@ -202,7 +202,7 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
         head={(filter) => (
           <div className={"sky-palette-head" + (moveHint ? " movable" : "")} data-sky-head title={moveHint} onPointerDown={headDown}>
             <strong className="sky-palette-title">Stops</strong>
-            <span className="sky-palette-count" title={count + " stops and saved chains — ★ puts one on the bottom shelf"}>
+            <span className="sky-palette-count" title={count + " stops and saved routes — ★ puts one on the bottom shelf"}>
               {count}
             </span>
             {filter}

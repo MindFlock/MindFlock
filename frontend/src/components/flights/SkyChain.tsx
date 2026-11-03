@@ -219,7 +219,7 @@ function MiniChain({ stops }: { stops: readonly MiniStop[] }): JSX.Element {
   const at = stops.findIndex((s) => s.state === "current" || s.state === "perched" || s.state === "halted" || s.state === "paused");
   const said = stops.length + (stops.length === 1 ? " stop" : " stops") + (at >= 0 ? ", at “" + stops[at].title + "”" : "");
   return (
-    <div className="sky-mini-chain" role="img" aria-label={"Its own chain: " + said} title={stops.map((s) => s.title + (MINI_WORD[s.state] ? " — " + MINI_WORD[s.state] : "")).join("\n")}>
+    <div className="sky-mini-chain" role="img" aria-label={"Its own route: " + said} title={stops.map((s) => s.title + (MINI_WORD[s.state] ? " — " + MINI_WORD[s.state] : "")).join("\n")}>
       {shown.map((s) => (
         <span key={s.id} className={"sky-mini st-" + s.state} data-mini={s.id}>
           <TileIcon kind={s.icon} size={11} />
@@ -381,9 +381,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
     const title =
       side === "in"
-        ? "Drag from here to pull this stop and the ones after it off into a chain of their own"
+        ? "Drag from here to pull this stop and the ones after it off into a route of their own"
         : n.id === HEAD_ID
-          ? "Drag from here to wire it to a stop, another chain or empty sky"
+          ? "Drag from here to wire it to a stop, another route or empty sky"
           : "Drag from here: drop on an earlier stop or the agent to loop, on empty sky to add a stop";
     return live ? (
       <span className={cls} data-port={side} data-node={n.id} title={title} onPointerDown={(e) => portDown(e, n, side)} />
@@ -604,7 +604,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       data-flight={g.flightId || undefined}
       data-head={head.kind}
       role="list"
-      aria-label={(head.kind === "session" ? "Chain in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Chain with no session yet") + " — drag a stop to move it, drag a port to wire it"}
+      aria-label={(head.kind === "session" ? "Route in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Route with no session yet") + " — drag a stop to move it, drag a port to wire it"}
     >
       <svg className="sky-wires" aria-hidden="true" focusable="false" style={{ left: b.x, top: b.y }} width={Math.max(1, b.w)} height={Math.max(1, b.h)} viewBox={`${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`}>
         {g.wires.map((w) => (
@@ -745,7 +745,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           </span>
         );
       })}
-      {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The chain is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
+      {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The route is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
     </div>
   );
 }
@@ -938,7 +938,7 @@ export function useBehaviorsTile(
     );
   };
   const items: SkyMenuItem[] = [
-    { key: "open", label: mode === "card" ? "Fold the behaviors back" : "Open the behaviors", title: mode === "card" ? "Back to the tile" : "Read, answer and edit them here, in the tile's place" },
+    { key: "open", label: mode === "card" ? "Fold the behaviors back" : "Open the behaviors", title: mode === "card" ? "Back to the stop" : "Read, answer and edit them here, in the tile's place" },
     { key: "delete" as SkyMenuItem["key"], label: "Delete these behaviors", title: "They go for good, with every answer to them", danger: true },
   ];
   const menu =

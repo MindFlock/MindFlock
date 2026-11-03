@@ -148,10 +148,10 @@ const families = (html: string) => [...html.matchAll(/data-family="([^"]+)"/g)].
 const kindsIn = (html: string) => [...html.matchAll(/data-kind="([^"]+)"/g)].map((m) => m[1]);
 
 describe("StopCatalogBody by family", () => {
-  it("a thin label row per family — Work · Ship · Outside · People — then Saved chains after them", () => {
+  it("a thin label row per family — Work · Ship · Outside · People — then Saved routes after them", () => {
     const html = body({ onAdd() {} });
     expect(html).toContain('class="sky-catalog-list sky-own-scroll grouped" id="sky-catalog-list" role="listbox"');
-    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Saved chains"]);
+    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Saved routes"]);
     expect(families(html)).toEqual(["work", "ship", "outside", "people"]);
     expect(html).toContain('<div class="sky-catalog-family" data-family="work"><h3 class="sky-catalog-label">Work</h3><div class="sky-catalog-grid"><div id="sky-catalog-row-0"');
     expect(kindsIn(html)).toEqual(["agent", "split", "join", "ship", "checks", "wait", "notify", "you", "verify"]);
@@ -179,7 +179,7 @@ describe("StopCatalogBody by family", () => {
     const html = body({ kinds: FLAT });
     expect(html).toContain('class="sky-catalog-list sky-own-scroll" id="sky-catalog-list"');
     expect(html).not.toContain("data-family");
-    expect(labels(html)).toEqual(["Stops", "Saved chains"]);
+    expect(labels(html)).toEqual(["Stops", "Saved routes"]);
     expect(html.match(/<div class="sky-catalog-grid">/g)).toHaveLength(2);
   });
 
@@ -204,10 +204,10 @@ describe("the palette groups; the bottom shelf stays flat", () => {
   it("the floating palette: Session first in Work, every family, then the saved stops", () => {
     const html = render(createElement(SkyPalette, { onPlace() {}, onSession() {} }), KINDS);
     expect(html).toContain('class="sky-catalog-list sky-own-scroll compact grouped sky-palette-body" id="sky-palette-list"');
-    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Saved chains"]);
+    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Saved routes"]);
     expect(html).toMatch(/data-family="work"><h3 class="sky-catalog-label">Work<\/h3><div class="sky-catalog-grid"><div role="option" aria-selected="false" class="sky-catalog-card sky-catalog-session"/);
     // The count is every block still.
-    expect(html).toContain('<span class="sky-palette-count" title="11 stops and saved chains — ★ puts one on the bottom shelf">11</span>');
+    expect(html).toContain('<span class="sky-palette-count" title="11 stops and saved routes — ★ puts one on the bottom shelf">11</span>');
   });
 
   it("the shelf: the ★ pick, flat, exactly as an older server's", () => {

@@ -97,13 +97,13 @@ export function jumpFlight(flightId: string, stepId: string, title = ""): Promis
 export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel" | "run"): Promise<boolean> {
   const said =
     verb === "pause"
-      ? "Chain halted — Carry on picks it up again"
+      ? "Route halted — Carry on picks it up again"
       : verb === "resume"
-        ? "Chain carrying on"
+        ? "Route carrying on"
         : verb === "run"
-          ? "Chain started"
-          : "Chain stopped — its session is kept";
-  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the chain";
+          ? "Route started"
+          : "Route stopped — its session is kept";
+  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the route";
   return flightAction(what, flightPath(flightId, "/" + verb), {}, said);
 }
 
@@ -132,7 +132,7 @@ export async function setStartOn(flightId: string, startOn: FlightStartOn): Prom
 export async function setHalt(flightId: string, stepId: string, halt: boolean): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: { halt } });
-    toast(halt ? "Halt point set — the chain stops before this stop" : "Halt point taken off");
+    toast(halt ? "Halt point set — the route stops before this stop" : "Halt point taken off");
     return true;
   } catch (err) {
     errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
@@ -187,7 +187,7 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
     }
     return flight;
   } catch (err) {
-    errorPop("Starting the chain failed", errMsg(err));
+    errorPop("Starting the route failed", errMsg(err));
     return null;
   }
 }
@@ -536,7 +536,7 @@ export async function splitOffChain(flightId: string, stepId: string, pos?: { x:
     const d = await api<{ chain?: Flight }>(flightPath(flightId, "/steps/" + enc(stepId) + "/split_off"), { json: pos ? { pos } : {} });
     return d?.chain || null;
   } catch (err) {
-    errorPop("Splitting the chain failed", errMsg(err));
+    errorPop("Splitting the route failed", errMsg(err));
     return null;
   } finally {
     void refreshFlights();

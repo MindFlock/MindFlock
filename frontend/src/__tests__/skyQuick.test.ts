@@ -54,18 +54,18 @@ describe("sub-sessions keep their spot per device", () => {
   });
 });
 
-describe("a stops-only chain's name", () => {
+describe("a stops-only route's name", () => {
   it("is the one it was given, else its first stop and how many more — never the placeholder 'Stops'", async () => {
     const { groundedName } = await import("../components/flights/GroundedLine");
     expect(groundedName({ plan_name: "Iterate on the sky" })).toBe("Iterate on the sky");
     expect(groundedName({ plan_name: "Stops", steps: [{ title: "Commit" }] })).toBe("Commit");
     expect(groundedName({ plan_name: "", steps: [{ title: "Loop ×3" }, { title: "Commit" }, { title: "Push" }] })).toBe("Loop ×3 + 2 more");
-    expect(groundedName({ plan_name: "" })).toBe("Chain");
+    expect(groundedName({ plan_name: "" })).toBe("Route");
   });
 });
 
-describe("a landed chain's blocks come off", () => {
-  it("removing one clears the finished chain (Delete and the menu's Remove)", async () => {
+describe("a landed route's blocks come off", () => {
+  it("removing one clears the finished route (Delete and the menu's Remove)", async () => {
     const src = (await import("../components/flights/useSessionLine.tsx?raw")).default;
     expect(src).toContain("if (!flight && landedId) return clearLanded();");
     expect(src).toContain("landedId ? () => void clearLanded() : undefined");

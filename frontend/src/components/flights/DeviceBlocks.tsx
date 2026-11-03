@@ -103,7 +103,7 @@ export function DeviceBlock({ device, dropped = "", onDone, target = false, targ
       data-device={device.device}
       data-state={state}
       role="group"
-      aria-label={"Move to " + name + " — drop the chain here"}
+      aria-label={"Move to " + name + " — drop the route here"}
     >
       <div className="sky-device-bar">
         <span className={"sky-device-dot is-" + state} title={device.connected ? "connected" : "not connected"} />
@@ -172,7 +172,7 @@ export function DeviceDock({ devices, dragging, over, dropped, keyOf, onDone, ta
   if (!shown.length) return null;
   return (
     <div className={"sky-device-dock" + (dragging ? " is-dragging" : "")} role="region" aria-label="Move the session to another device" data-no-drag>
-      {dragging && <span className="sky-device-dock-hint">Drop the chain on a device to move the session there</span>}
+      {dragging && <span className="sky-device-dock-hint">Drop the route on a device to move the session there</span>}
       <div className="sky-device-dock-row">
         {shown.map((d) => {
           const key = keyOf(d.device);

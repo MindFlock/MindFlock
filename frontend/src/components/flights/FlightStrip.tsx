@@ -88,7 +88,7 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
       type="button"
       className="test-btn fl-btn fl-skip"
       disabled={busy}
-      title={"Skip “" + step.title + "” — the chain goes on without it"}
+      title={"Skip “" + step.title + "” — the route goes on without it"}
       onClick={() => {
         setBusy(true);
         void stepSkip(flight.id, step.id).finally(() => setBusy(false));
@@ -175,7 +175,7 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
             type="button"
             className="btn-primary fl-btn fl-done"
             disabled={busy || !allTicked}
-            title={allTicked ? "Mark “" + step.title + "” done — the chain goes on" : "Tick every item first"}
+            title={allTicked ? "Mark “" + step.title + "” done — the route goes on" : "Tick every item first"}
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
             Done
@@ -185,7 +185,7 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
           type="button"
           className="test-btn fl-btn fl-skip"
           disabled={busy}
-          title={"Skip “" + step.title + "” — the chain goes on without it"}
+          title={"Skip “" + step.title + "” — the route goes on without it"}
           onClick={() => void run(() => stepSkip(flight.id, step.id))}
         >
           Skip
@@ -215,13 +215,13 @@ export function FlightMenu({
     items.push(
       flight.state === "halted" || flight.state === "paused"
         ? { key: "resume", label: "Carry on", title: "Go on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Halt now", title: "Halt the chain at its current stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
+        : { key: "pause", label: "Halt now", title: "Halt the route at its current stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
     );
-    items.push({ key: "cancel", label: "Stop the chain", danger: true, title: "End this chain — its session is kept", onSelect: onCancelAsk });
+    items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   }
   return (
     <span onClick={stop} className="fl-menu" data-no-drag>
-      <OverflowMenu label="Chain actions" items={items} />
+      <OverflowMenu label="Route actions" items={items} />
     </span>
   );
 }
@@ -234,16 +234,16 @@ export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () =>
   if (!step) return [];
   const items: MenuItem[] = [];
   const atCursor = n.index === flight.cursor;
-  if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the chain to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
+  if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the route to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
   if (n.state === "halted" || n.state === "failed")
     items.push({ key: "retry", label: "Retry", title: "Run this stop again", onSelect: () => void stepRetry(flight.id, step.id) });
   if (atCursor)
     items.push(
       flight.state === "halted" || flight.state === "paused"
         ? { key: "resume", label: "Carry on", title: "Go on from here", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Halt now", title: "Halt the chain at this stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
+        : { key: "pause", label: "Halt now", title: "Halt the route at this stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
     );
-  items.push({ key: "cancel", label: "Stop the chain", danger: true, title: "End this chain — its session is kept", onSelect: onCancelAsk });
+  items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   return items;
 }
 
@@ -255,9 +255,9 @@ export function useCancelAsk(flight: Flight | null) {
     asking && flight ? (
       <div onClick={stop}>
         <InlineConfirm
-          title="Stop this chain?"
+          title="Stop this route?"
           body="It stops where it is. Its session, branch and work are kept."
-          confirmLabel="Stop the chain"
+          confirmLabel="Stop the route"
           cancelLabel="Keep it running"
           busy={busy}
           onCancel={() => setAsking(false)}
@@ -388,7 +388,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
               <span className="fl-now-title">{you ? perchLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
               {flight.state === "paused" && (
-                <span className="fl-now-paused" title={flight.reason === "halt point" ? "The chain reached a halt point and stopped before this stop — Carry on to go on" : "Halted by you — Carry on to go on"}>
+                <span className="fl-now-paused" title={flight.reason === "halt point" ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Halted by you — Carry on to go on"}>
                   {flight.reason === "halt point" ? "Paused at a halt point" : "Paused"}
                 </span>
               )}
@@ -438,7 +438,7 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
         <button
           type="button"
           className="fl-strip-line"
-          title={"Open the Chain tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
+          title={"Open the Route tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
           onClick={() => openFlightTab(inst.title)}
         >
           <Bird size={13} />

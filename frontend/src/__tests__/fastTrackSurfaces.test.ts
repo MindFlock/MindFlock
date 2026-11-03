@@ -306,8 +306,8 @@ describe("the ⏩ button and its picker", () => {
   it("the picker offers every rung and ask-first", () => {
     const menu = mod(MENU);
     expect(menu).toContain('id="fast-track-menu"');
-    expect(menu).toContain("<b>⏩ Fast-track</b>");
-    expect(menu).toContain(">When the agent is done, go as far as<");
+    expect(menu).toContain("<b>⏩ Goes as far as</b>");
+    expect(menu).toContain(">When the agent is done, it goes as far as<");
     expect(menu).toContain("ASK_FIRST_LABEL");
     expect(menu).toContain("fastTrackModel(inst || {})");
     // Each pick is ONE call, through the server.

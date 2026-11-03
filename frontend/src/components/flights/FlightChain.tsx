@@ -155,7 +155,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
             </span>
           )}
           {behaviors.mark?.tone === "you" && ss.tone !== "attention" && (
-            <span className="fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors tile to answer it">
+            <span className="fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors stop to answer it">
               Needs you
             </span>
           )}
