@@ -49,8 +49,8 @@ After the fixes below (✗→✓ marks a stop that failed before them):
 | **2. Route** Agent → Commit → Push | ✗→✓ (Agent stop never saw it start) | ✓ done | ✓ done | ✓ done |
 | commit message | aider's own commit (its model) — the Commit stop reads "done by the agent — already committed" | opencode's one-shot | cline's one-shot | ✗→✓ goose's one-shot (subject was its banner) |
 | push to the remote | ✓ | ✓ | ✓ | ✓ |
-| **3. MindFlock MCP** | n/a: aider has no MCP client | not attached (env-only) | not attached (env-only) | ✗→✓ attached per launch |
-| **4. Needs you** on a dialog | ✓ parsed ("Create new file?"), answered via the API | ✓ (goldens) | ✓ (goldens) | ✓ (goldens) |
+| **3. MindFlock MCP** | n/a: aider has no MCP client | not attached (env-only) | not attached (env-only) | ✗→✓ attached per launch: `mcp_attached: true`, the agent called `whoami` and got its own session back |
+| **4. Needs you** on a dialog | ✓ live: parsed "Create new file?", answered via the API | ✓ live: its question tool → Needs you | ✓ live: `ask_question` → Needs you; both promos dismissed | ✓ (goldens) |
 | **5. Claude-only features** | no "Claude" on its rows; no errors in the server log | same | same | same |
 
 Evidence: the flights `done` with all three stops `done`; `git log` on the
@@ -92,7 +92,8 @@ the mock's request log were checked at every step. Run logs:
    `[launch] git_excludes`): `.aider*` goes into the repository's
    `info/exclude` before each launch (aider checks `git check-ignore`). The
    question is never asked and the project's `.gitignore` is untouched.
-6. **cline: the "Try ClinePass" promo on first launch** ("Press Enter to open,
+6. **cline: the "Try ClinePass" promo on first launch** (and "Get Cline
+   Desktop" on a later one, the same popup) ("Press Enter to open,
    any other key to close"). The typed task vanished into it (the first key
    closed it, the rest went nowhere), and Enter would open a browser. It is now a
    trust gate with a new `esc` keystroke; cline records it as shown.
@@ -135,6 +136,13 @@ and updated pins in `test_dialogs_cli.py`, `test_provider_activity_patterns.py`,
 - **Setup (the vz-copilot-only worker's share):** with `[local_model]` on, aider
   and goose need no key, but "Sign in to your agent" stays to-do. Sent to that
   worker.
+- goose names the extension after the command's first word, so the MindFlock
+  tools show up as `env__whoami` and so on, not `mindflock__…`. `env(1)` is
+  there because goose drops `PYTHONPATH`. Models find the tools by their
+  description either way.
+- The usage breakdown lists Claude, Codex and Antigravity rows on a machine
+  that has none of them (the pill itself reads a neutral "Usage ~$0.00" for a
+  goose/opencode/cline default). Cosmetic.
 - The Commit and Push stops each wait out the 30 s idle settle again, so a
   three-stop route takes ~2–3 min even on a 5 s task. This is not
   provider-specific.
