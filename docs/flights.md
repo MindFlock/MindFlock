@@ -7420,3 +7420,20 @@ instead"), which covers `POST /attach` with a session, `"@default"` / a folder
 (refused before anything is started), and a Handoff aimed at it. Adding,
 moving and removing its stops work as on any grounded chain; Save as default
 is `PUT {from_flight: <its id>}`. A split-off piece is a plain chain.
+
+## Calm Sky objects; devices on drag; Finished on request (2026-11-03)
+
+- **One look** for every Sky object (the intake lane, the Finished strip, the
+  device targets): the session frame's — a hairline border, a 30px tinted
+  title bar in normal case, quiet rows instead of filled cards, small muted
+  kind tags, and text that scales like the frames' (no ballooning at far zoom).
+- **Devices are drop targets only while you drag.** No standing device block:
+  dragging a session's chain by its frame bar shows a dock along the top of
+  the view — "Move to <device> · N sessions there" — and dropping asks inline,
+  then calls `POST /api/instances/{title}/move` as before.
+- **The Finished strip is off by default.** The Sky's ⋯ → "Show the Finished
+  strip" (per device, `mf_sky_finished`); × on the strip hides it. Shown, it
+  says what it is: each repo's main branch (its CI and last merge) and the
+  chains merged today. Hidden, it is never placed, keeps no room, and
+  `/api/sky/landing` is not polled.
+- The board's off-screen pointers hide while any dialog or menu is open.

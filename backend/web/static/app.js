@@ -103107,7 +103107,7 @@ function Block({ block, onFly, open, editing, onEditDefault }) {
 		]
 	});
 }
-var headPress$5 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
 function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
 	const flights = useFlights().data;
 	const editDefault = (ref, label) => {
@@ -103197,7 +103197,7 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 	};
 	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
 	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$5(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress$4(e)) onHeadDown(e);
 	};
 	const moveHint = draggable && onHeadDown ? "Drag to move the intake lane" : "";
 	if (collapsed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
@@ -130902,40 +130902,28 @@ function deviceBlockReason(d) {
 	if (!d.connected) return "Not connected — pair or wake it in Settings › Your devices.";
 	return "";
 }
-var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, label, summary, [data-no-drag]");
-function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown, draggable = true, onMeasure }) {
-	const rootRef = (0, import_react.useRef)(null);
+var deviceName = (d) => d.host || d.device;
+function deviceTargetWords(d) {
+	if (!d.connected) return "Not connected";
+	return [typeof d.sessions === "number" ? d.sessions === 0 ? "No sessions there" : d.sessions + (d.sessions === 1 ? " session there" : " sessions there") : "", d.os || ""].filter(Boolean).join(" · ") || "Drop to move the session here";
+}
+function DeviceBlock({ device, dropped = "", onDone, target = false, targetRef }) {
 	const [force, setForce] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [err, setErr] = (0, import_react.useState)("");
-	const measureRef = (0, import_react.useRef)(onMeasure);
-	measureRef.current = onMeasure;
-	(0, import_react.useEffect)(() => {
-		const el = rootRef.current;
-		if (!el || typeof ResizeObserver === "undefined") return;
-		const read = () => {
-			if (el.offsetWidth > 0 && el.offsetHeight > 0) measureRef.current?.(el.offsetWidth, el.offsetHeight);
-		};
-		read();
-		const ro = new ResizeObserver(read);
-		ro.observe(el);
-		return () => ro.disconnect();
-	}, []);
 	(0, import_react.useEffect)(() => {
 		setErr("");
 		setForce(false);
 	}, [dropped]);
-	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$4(e)) onHeadDown(e);
-	};
 	const reason = dropped ? deviceBlockReason(device) : "";
+	const name = deviceName(device);
 	const move = async () => {
 		if (!dropped || reason || busy) return;
 		setBusy(true);
 		setErr("");
 		try {
 			await moveSessionToDevice(dropped, device.device, force);
-			toast(`Moving “${windowName(dropped)}” to ${device.host || device.device}…`);
+			toast(`Moving “${windowName(dropped)}” to ${name}…`);
 			onDone?.();
 		} catch (e) {
 			setErr(deviceMoveError(e));
@@ -130944,43 +130932,31 @@ function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown,
 		}
 	};
 	const state = device.connected ? "on" : "off";
-	const name = device.host || device.device;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		ref: rootRef,
-		className: "sky-block sky-device" + (target ? " is-merge-target" : ""),
+		ref: targetRef,
+		className: "sky-device" + (target ? " is-over" : "") + (dropped ? " is-asking" : ""),
 		"data-device": device.device,
 		"data-state": state,
 		role: "group",
-		"aria-label": name + " — drop a chain here to move its session there",
+		"aria-label": "Move to " + name + " — drop the chain here",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-block-head",
-				"data-sky-head": true,
-				title: draggable && onHeadDown ? "Drag to move" : void 0,
-				onPointerDown: headDown,
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-block-glyph",
-						"aria-hidden": "true",
-						children: "▣"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
-						className: "sky-block-name",
-						title: device.device,
-						children: name
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-block-dot is-" + state,
-						title: device.connected ? "connected" : "not connected"
-					})
-				]
+				className: "sky-device-bar",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-device-dot is-" + state,
+					title: device.connected ? "connected" : "not connected"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-device-title",
+					title: device.device,
+					children: ["Move to ", name]
+				})]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-block-body muted",
-				children: [device.os ? device.os + " · " : "", typeof device.sessions === "number" ? device.sessions + (device.sessions === 1 ? " session" : " sessions") : "Drop a chain to move it here"]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-device-sub",
+				children: deviceTargetWords(device)
 			}),
 			dropped && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-				className: "sky-block-ask fl-form",
+				className: "sky-device-ask fl-form",
 				"data-no-drag": true,
 				onSubmit: (e) => {
 					e.preventDefault();
@@ -130995,21 +130971,21 @@ function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown,
 						"? Its agent pauses while it moves."
 					] }),
 					reason ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "sky-block-err",
+						className: "sky-device-err",
 						children: reason
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "sky-block-choice",
+						className: "sky-device-choice",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							type: "checkbox",
 							checked: force,
 							onChange: (e) => setForce(e.target.checked)
 						}), " Even if it is mid-turn"]
 					}), err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "sky-block-err",
+						className: "sky-device-err",
 						children: err
 					})] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "sky-block-btns",
+						className: "sky-device-btns",
 						children: [!reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "submit",
 							className: "fl-btn btn-primary",
@@ -131027,21 +131003,36 @@ function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown,
 		]
 	});
 }
+function DeviceDock({ devices, dragging, over, dropped, keyOf, onDone, targetRef }) {
+	const asked = devices.filter((d) => dropped[keyOf(d.device)]);
+	const shown = dragging ? devices : asked;
+	if (!shown.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-device-dock" + (dragging ? " is-dragging" : ""),
+		role: "region",
+		"aria-label": "Move the session to another device",
+		"data-no-drag": true,
+		children: [dragging && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sky-device-dock-hint",
+			children: "Drop the chain on a device to move the session there"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-device-dock-row",
+			children: shown.map((d) => {
+				const key = keyOf(d.device);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceBlock, {
+					device: d,
+					dropped: dropped[key] || "",
+					target: over === key,
+					onDone: () => onDone(key),
+					targetRef: (el) => targetRef(key, el)
+				}, key);
+			})
+		})]
+	});
+}
 //#endregion
 //#region src/components/flights/LandingStrip.tsx
-var FOLDED_KEY = "mf_sky_landing_folded";
-var readFolded = () => {
-	try {
-		return typeof localStorage !== "undefined" && localStorage.getItem(FOLDED_KEY) === "1";
-	} catch {
-		return false;
-	}
-};
-var writeFolded = (v) => {
-	try {
-		localStorage.setItem(FOLDED_KEY, v ? "1" : "0");
-	} catch {}
-};
+var FINISHED_EXPLAIN = "Each repo's main branch: its CI and its last merge — and chains merged today";
 var LANDED_FOLDED = 3;
 function checksWords(tone) {
 	switch (tone) {
@@ -131068,8 +131059,7 @@ function shownLanded(repo, open) {
 }
 var landedCount = (data) => (data?.repos || []).reduce((n, r) => n + (r.landed || []).length, 0);
 var headPress$3 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function LandingStrip({ data, error = "", width, height, zoom = 1, open = false, onToggleOpen, onHeadDown, draggable = true, onResize, onMeasure, now }) {
-	const [folded, setFolded] = (0, import_react.useState)(readFolded);
+function LandingStrip({ data, error = "", width, height, zoom = 1, open = false, onToggleOpen, onHide, onHeadDown, draggable = true, onResize, onMeasure, now }) {
 	const rootRef = (0, import_react.useRef)(null);
 	const [live, setLive] = (0, import_react.useState)(null);
 	const grab = (0, import_react.useRef)(null);
@@ -131123,44 +131113,15 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 		const ro = new ResizeObserver(read);
 		ro.observe(el);
 		return () => ro.disconnect();
-	}, [folded]);
-	const fold = (v) => {
-		setFolded(v);
-		writeFolded(v);
-	};
+	}, []);
 	const headDown = (e) => {
 		if (draggable && onHeadDown && headPress$3(e)) onHeadDown(e);
 	};
 	const moveHint = draggable && onHeadDown ? "Drag to move the Finished strip" : "";
 	const total = landedCount(data);
-	if (folded) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-		ref: rootRef,
-		className: "sky-lane sky-lane-rail sky-landing",
-		"aria-label": "Finished",
-		"data-collapsed": "true",
-		title: moveHint || void 0,
-		onPointerDown: headDown,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "sky-lane-toggle",
-			"aria-expanded": false,
-			title: "Open the Finished strip",
-			onClick: () => fold(false),
-			children: "›"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			type: "button",
-			className: "sky-lane-rail-icon fl-kind-badge sky-landing-glyph",
-			title: "Finished — " + (total ? total + " merged today" : "nothing merged today"),
-			onClick: () => fold(false),
-			children: ["⤓", total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-lane-rail-count",
-				children: total
-			})]
-		})]
-	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 		ref: rootRef,
-		className: "sky-lane sky-landing",
+		className: "sky-landing",
 		"aria-label": "Finished",
 		"data-open": open ? "" : void 0,
 		style: {
@@ -131169,7 +131130,7 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-lane-head",
+				className: "sky-landing-bar",
 				"data-sky-head": true,
 				title: [moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || void 0,
 				onPointerDown: headDown,
@@ -131180,49 +131141,58 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 				},
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-lane-title",
+						className: "sky-landing-title",
 						children: "Finished"
 					}),
-					total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-count",
+					total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-landing-count",
 						title: total + " merged today",
-						children: total
+						children: [total, " today"]
 					}),
-					onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "sky-lane-toggle sky-lane-expand",
-						"aria-expanded": open,
-						"aria-label": open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain",
-						title: open ? "Fold: the first rows of each repo" : "Expand: every finished chain",
-						onClick: onToggleOpen,
-						children: open ? "▾" : "▸"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "sky-lane-toggle",
-						"aria-expanded": true,
-						title: "Fold the Finished strip",
-						onClick: () => fold(true),
-						children: "‹"
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-landing-tools",
+						children: [onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "fl-icon-btn sky-landing-expand",
+							"aria-expanded": open,
+							"aria-label": open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain",
+							title: open ? "Fold: the first rows of each repo" : "Expand: every finished chain",
+							onClick: onToggleOpen,
+							children: open ? "▾" : "▸"
+						}), onHide && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "fl-icon-btn sky-landing-hide",
+							"aria-label": "Hide the Finished strip",
+							title: "Hide the Finished strip — ⋯ › Show the Finished strip brings it back",
+							onClick: onHide,
+							children: "×"
+						})]
 					})
 				]
 			}),
-			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "sky-lane-empty muted",
-				children: error
-			}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "sky-lane-empty muted",
-				children: "Looking at the repos…"
-			}) : !(data.repos || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "sky-lane-empty muted",
-				children: "No repo in the sky yet."
-			}) : data.repos.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoRow, {
-				repo: r,
-				open,
-				now
-			}, r.root)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "sky-landing-explain",
+				children: FINISHED_EXPLAIN
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-landing-rows",
+				children: error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-landing-empty",
+					children: error
+				}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-landing-empty",
+					children: "Looking at the repos…"
+				}) : !(data.repos || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-landing-empty",
+					children: "No repo in the sky yet."
+				}) : data.repos.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoRow, {
+					repo: r,
+					open,
+					now
+				}, r.root))
+			}),
 			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-lane-resize skl-resize",
+				className: "sky-landing-resize skl-resize",
 				role: "separator",
 				tabIndex: 0,
 				"data-no-drag": true,
@@ -131263,43 +131233,51 @@ function RepoRow({ repo, open, now }) {
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "sky-landing-merge muted",
+				className: "sky-landing-merge",
 				title: "The default branch's last merge (or, with none yet, its last commit)",
 				children: mergeWords(repo.last_merge_at, now, repo.last_merge_kind ?? void 0)
 			}),
 			(repo.landed || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 				className: "sky-landing-landed",
 				"aria-label": "Merged today in " + repo.name,
-				children: [shown.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "sky-landing-flight",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-landing-flight-name",
-							title: l.title,
-							children: windowName(l.title)
-						}),
-						l.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-							className: "sky-landing-pr",
-							href: l.pr_url,
-							target: "_blank",
-							rel: "noreferrer",
-							title: l.pr_url,
-							"data-no-drag": true,
-							children: "PR ↗"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-landing-at muted",
-							children: relTime(l.at, { now })
-						})
-					]
-				}, l.flight)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "sky-landing-more muted",
-					children: [
-						"+",
-						more,
-						" more — expand ▸"
-					]
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "sky-landing-landed-cap",
+						"aria-hidden": "true",
+						children: "Merged today"
+					}),
+					shown.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "sky-landing-flight",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-landing-flight-name",
+								title: l.title,
+								children: windowName(l.title)
+							}),
+							l.pr_url && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+								className: "sky-landing-pr",
+								href: l.pr_url,
+								target: "_blank",
+								rel: "noreferrer",
+								title: l.pr_url,
+								"data-no-drag": true,
+								children: "PR ↗"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-landing-at",
+								children: relTime(l.at, { now })
+							})
+						]
+					}, l.flight)),
+					more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "sky-landing-more",
+						children: [
+							"+",
+							more,
+							" more — expand ▸"
+						]
+					})
+				]
 			})
 		]
 	});
@@ -138236,6 +138214,7 @@ var PAN_STEP = 80;
 var SHELF_FOLD_KEY = "mf_sky_stops_folded";
 var TIDY_MS = 350;
 var MINIMAP_KEY = "mf_sky_minimap";
+var FINISHED_KEY = "mf_sky_finished";
 var TOOL_CHIPS = {
 	drag: {
 		label: "✥ Drag",
@@ -138350,6 +138329,11 @@ function SkyView() {
 	const [focusMode, setFocusMode] = (0, import_react.useState)(false);
 	const [shortcutsOpen, setShortcutsOpen] = (0, import_react.useState)(false);
 	const [minimapOpen, setMinimapOpen] = (0, import_react.useState)(() => readPref(MINIMAP_KEY) !== "0");
+	const [finishedOn, setFinishedOnState] = (0, import_react.useState)(() => readPref(FINISHED_KEY) === "1");
+	const setFinishedOn = (0, import_react.useCallback)((v) => {
+		setFinishedOnState(v);
+		writePref(FINISHED_KEY, v ? "1" : "0");
+	}, []);
 	const [filterFocus, setFilterFocus] = (0, import_react.useState)(false);
 	const [cam, setCamState] = (0, import_react.useState)(() => memo?.cam || {
 		x: 0,
@@ -138398,7 +138382,7 @@ function SkyView() {
 	const [drop, setDrop] = (0, import_react.useState)(null);
 	const dragged = (0, import_react.useRef)(null);
 	const [flash, setFlash] = (0, import_react.useState)("");
-	const landingQ = useLandingData(!narrow && mode !== "one");
+	const landingQ = useLandingData(!narrow && mode !== "one" && finishedOn);
 	const linksQ = usePeerLinks();
 	const devicesQ = useDevices();
 	const notesQ = useSkyNotesQuery();
@@ -138420,6 +138404,8 @@ function SkyView() {
 	}, []);
 	const [editingNote, setEditingNote] = (0, import_react.useState)("");
 	const [dropped, setDropped] = (0, import_react.useState)({});
+	const [sessionDrag, setSessionDrag] = (0, import_react.useState)(false);
+	const deviceEls = (0, import_react.useRef)(/* @__PURE__ */ new Map());
 	const [groundMenu, setGroundMenu] = (0, import_react.useState)(null);
 	const [spaceHeld, setSpaceHeld] = (0, import_react.useState)(false);
 	const space = (0, import_react.useRef)(false);
@@ -138526,7 +138512,7 @@ function SkyView() {
 		devices,
 		notes
 	]);
-	const objects = (0, import_react.useMemo)(() => skyObjects(objData), [objData]);
+	const objects = (0, import_react.useMemo)(() => skyObjects(objData).filter((o) => o.def.kind !== "device" && (o.def.kind !== "landing" || finishedOn)), [objData, finishedOn]);
 	const objectById = (0, import_react.useMemo)(() => new Map(objects.map((o) => [o.key, o])), [objects]);
 	const objectBox = (0, import_react.useCallback)((o) => o.def.kind === "note" ? noteSize(o.data) : o.def.size(layout[o.key], measured[o.key]), [layout, measured]);
 	const shownIds = (0, import_react.useMemo)(() => /* @__PURE__ */ new Set([...lines.map((l) => l.id), ...intakeOn ? [INTAKE_KEY] : []]), [lines, intakeOn]);
@@ -139099,10 +139085,20 @@ function SkyView() {
 				h: l.h
 			}
 		})) : [];
-		const mergeAt = (ev) => merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? hitAt(planeAt(ev.clientX, ev.clientY), blocks) : toLine ? hitAt(planeAt(ev.clientX, ev.clientY), lineRects) : "";
+		const toDevice = toBlock && devices.length > 0 && mode !== "one";
+		const deviceAt = (ev) => {
+			if (!toDevice) return "";
+			for (const [key, el] of deviceEls.current) {
+				const r = el.getBoundingClientRect();
+				if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) return key;
+			}
+			return "";
+		};
+		const mergeAt = (ev) => merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? deviceAt(ev) || hitAt(planeAt(ev.clientX, ev.clientY), blocks) : toLine ? hitAt(planeAt(ev.clientX, ev.clientY), lineRects) : "";
 		const move = (ev) => {
 			if (ev.pointerId !== g.pid) return;
 			if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
+			if (!g.moved && toDevice) setSessionDrag(true);
 			g.moved = true;
 			const d = delta(ev);
 			g.dx = d.dx;
@@ -139126,6 +139122,7 @@ function SkyView() {
 			setDrag(null);
 			setGuides([]);
 			setMergeOver("");
+			setSessionDrag(false);
 			const landed = g.moved && ev.type !== "pointercancel" ? mergeAt(ev) : "";
 			const into = merging ? landed : "";
 			if (into) {
@@ -140331,17 +140328,27 @@ function SkyView() {
 			}),
 			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 				label: "More",
-				items: [{
-					key: "note",
-					label: "Add a note",
-					title: "A sticky note in the middle of the view",
-					onSelect: () => addNote(middle())
-				}, {
-					key: "keys",
-					label: "Keyboard shortcuts…",
-					title: "Every key the sky knows (?)",
-					onSelect: () => setShortcutsOpen(true)
-				}]
+				items: [
+					{
+						key: "note",
+						label: "Add a note",
+						title: "A sticky note in the middle of the view",
+						onSelect: () => addNote(middle())
+					},
+					{
+						key: "keys",
+						label: "Keyboard shortcuts…",
+						title: "Every key the sky knows (?)",
+						onSelect: () => setShortcutsOpen(true)
+					},
+					{
+						key: "finished",
+						label: (finishedOn ? "✓ " : "") + "Show the Finished strip",
+						title: "Each repo's main branch — its CI and its last merge — and the chains merged today, in a strip right of the chains",
+						className: "sky-finished-toggle",
+						onSelect: () => setFinishedOn(!finishedOn)
+					}
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "sky" })
 		]
@@ -140652,6 +140659,8 @@ function SkyView() {
 	const objectFor = (o) => {
 		const host = hostFor(o);
 		if (o.def.kind === "intake" || o.def.kind === "palette") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.Fragment, { children: o.def.render(host) }, o.key);
+		const drawn = o.def.render(host);
+		const body = o.def.kind === "landing" && (0, import_react.isValidElement)(drawn) ? (0, import_react.cloneElement)(drawn, { onHide: () => setFinishedOn(false) }) : drawn;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: objectClass(o.def, {
 				dragging: host.dragging,
@@ -140665,7 +140674,7 @@ function SkyView() {
 				transform: `translate(${host.pos.x}px, ${host.pos.y}px)`,
 				"--sky-z": cam.z
 			},
-			children: o.def.render(host)
+			children: body
 		}, o.key);
 	};
 	if (narrow) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
@@ -140801,6 +140810,18 @@ function SkyView() {
 								onClose: () => setGroundMenu(null)
 							}),
 							selBar,
+							mode !== "one" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceDock, {
+								devices,
+								dragging: sessionDrag,
+								over: mergeOver,
+								dropped,
+								keyOf: deviceKey,
+								onDone: objView.answerDrop,
+								targetRef: (key, el) => {
+									if (el) deviceEls.current.set(key, el);
+									else deviceEls.current.delete(key);
+								}
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OffscreenHints, {
 								rects: mapRects,
 								cam,
