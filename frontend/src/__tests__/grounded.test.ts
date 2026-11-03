@@ -149,9 +149,9 @@ describe("the grounded line", () => {
     expect(html).toContain('data-flight="f_1"');
     expect(html).toContain('class="skl-name skl-name-edit" title="Click to rename (F2)">Ticket to merge<');
     expect(html).not.toContain(">No session<");
-    expect(html).toContain('aria-label="Ticket to merge — stops with no session yet"');
+    expect(html).toContain('aria-label="Ticket to merge — a chain with no session yet"');
     expect(html).toContain('tabindex="0"');
-    expect(groundedName({ plan_name: "" })).toBe("Stops");
+    expect(groundedName({ plan_name: "" })).toBe("Chain");
   });
 
   it("round 18: no head box — a headless chain of its stops under a small label", () => {

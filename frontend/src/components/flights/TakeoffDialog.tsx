@@ -107,11 +107,11 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
   const isHook = plan.trigger.kind === "hook";
   const quiet = plan.trigger.quiet_minutes ?? 60;
   return (
-    <section className="fl-section fl-trigger" aria-label="Where its flights come from">
+    <section className="fl-section fl-trigger" aria-label="What starts it">
       <div className="fl-form">
-        <FlField label="Takes off" wide>
+        <FlField label="Starts" wide>
           <Seg
-            label="Takes off"
+            label="Starts"
             value={plan.trigger.kind}
             options={(Object.keys(TRIGGER_LABEL) as TriggerKind[]).map((k) => ({ v: k, label: TRIGGER_LABEL[k] }))}
             onChange={(kind) =>
@@ -144,12 +144,12 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
               on={plan.trigger.paused}
               onChange={(paused) => onChange({ trigger: { ...plan.trigger, paused } })}
               label="Paused"
-              title="A paused schedule takes off nothing"
+              title="A paused schedule starts nothing"
             />
           </FlField>
         )}
         {watchesMain && (
-          <FlField label="Watches" wide hint={plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip takes off." : "The checks of its default branch's tip, once per commit; red takes off."}>
+          <FlField label="Watches" wide hint={plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip starts it." : "The CI checks of its default branch's tip, once per commit; red starts it."}>
             <PathField
               id="fl-trigger-repo"
               value={plan.trigger.repo || ""}
@@ -160,13 +160,13 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
           </FlField>
         )}
         {isHook && (
-          <FlField label="Hook" wide hint="POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the flight.">
+          <FlField label="Hook" wide hint="POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the run.">
             <HookUrlRow plan={plan} />
           </FlField>
         )}
         {(watchesMain || isHook) && (
           <>
-            <FlField label="Quiet" hint="No second take-off inside this many minutes">
+            <FlField label="Quiet" hint="No second start inside this many minutes">
               <NumberField label="Quiet minutes" unit="min" value={quiet} onChange={(v) => onChange({ trigger: { ...plan.trigger, quiet_minutes: v === "" ? 0 : v } })} />
             </FlField>
             <FlField label="Paused">
@@ -174,7 +174,7 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
                 on={plan.trigger.paused}
                 onChange={(paused) => onChange({ trigger: { ...plan.trigger, paused } })}
                 label="Paused"
-                title="A paused trigger takes off nothing"
+                title="A paused trigger starts nothing"
               />
             </FlField>
           </>
@@ -185,7 +185,7 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
               <PathField
                 id="fl-plan-repo"
                 value={plan.session.repo_path}
-                placeholder="Ask when it takes off"
+                placeholder="Ask when it starts"
                 pickerTitle="The repository these stops' sessions start in"
                 onChange={(v) => onChange({ session: { ...plan.session, repo_path: v } })}
               />
@@ -246,8 +246,8 @@ export function TakeoffDialog({ plan, onClose }: { plan: FlightPlan; onClose(): 
           void save();
         }}
       >
-        <h2>“{plan.name}” takes off</h2>
-        <p className="muted fl-takeoff-lede">When it flies by itself, and the session it starts in.</p>
+        <h2>When “{plan.name}” starts</h2>
+        <p className="muted fl-takeoff-lede">What starts it by itself, and the session it runs in.</p>
         <TakeoffFields plan={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
         {error && (
           <p className="error fl-error" role="alert">

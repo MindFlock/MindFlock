@@ -171,14 +171,14 @@ describe("the editor chain", () => {
   const html = render(editor());
 
   it("its bar names the source (the kind on its Default tag), the hint a caption under it, and it is not renamed", () => {
-    expect(html).toContain('class="skl-name skl-default-name" title="Default stops for Tickets · Shortcut. New items from this source fly these.">Shortcut<');
+    expect(html).toContain('class="skl-name skl-default-name" title="Default stops for Tickets · Shortcut. New items from this source run these.">Shortcut<');
     expect(html).toContain('class="fl-box-chip skl-chip skl-default-tag"');
     expect(html).toContain(">Default · Tickets<");
     expect(html).not.toContain("skl-name-edit");
-    expect(html).toContain('<div class="skl-default-hint">New items from Shortcut fly these stops</div>');
+    expect(html).toContain('<div class="skl-default-hint">New items from Shortcut run these stops</div>');
     expect(html).toContain("is-default-editor");
     expect(html).toContain('data-edits-default="tickets:sc"');
-    expect(html).toContain('aria-label="Default stops · Tickets · Shortcut — new items from this source fly these"');
+    expect(html).toContain('aria-label="Default stops · Tickets · Shortcut — new items from this source run these"');
   });
 
   it("Save as default (primary) and a quiet × Discard on its bar; Reset only while the source has its own", () => {
@@ -214,7 +214,7 @@ describe("the editor chain", () => {
     expect(src).toContain("await optimisticDelete(flight.id, () => deleteFlight(flight.id));");
     expect(src).toContain('const prev = res.previous_plan_id || "";');
     expect(src).toContain("undo: () => setIntakeDefault({ ...ref, plan_id: prev }),");
-    expect(src).toContain('toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " fly these stops", {');
+    expect(src).toContain('toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " run these stops", {');
     expect(src).toContain("action: undoAction(entry,");
     expect(src).toContain("onClick={() => void writeDefault(false)}");
     expect(src).toContain("onClick={() => void writeDefault(true)}");

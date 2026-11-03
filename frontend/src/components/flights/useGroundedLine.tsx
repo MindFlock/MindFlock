@@ -191,7 +191,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const ordered = orderedPlans(plans);
   const savedChips = (
     <div className="fl-palette-flyways">
-      <div className="fl-palette-head">A saved stop — all of its steps</div>
+      <div className="fl-palette-head">A saved chain — all of its stops</div>
       <div className="fl-chiprow">
         {ordered.map((p) => (
           <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void tackPlan(p, paletteAt)}>
@@ -248,7 +248,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       const d = readDrop(drop);
       if ("planId" in d) {
         const plan = plans.find((p) => p.id === d.planId);
-        void tackPlan(plan || { id: d.planId, name: "the saved stop" }, at);
+        void tackPlan(plan || { id: d.planId, name: "the saved chain" }, at);
         return;
       }
       const def = kindOf.get(d.kind);

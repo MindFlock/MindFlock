@@ -129,7 +129,7 @@ describe("the flyway canvas", () => {
     // Draggable stops; the perch drawn as one.
     expect(boxes(html).filter(([, c]) => c.includes("fl-draggable"))).toHaveLength(4);
     expect(boxes(html).find(([id]) => id === "stop:s3")![1]).toContain("fl-perch");
-    expect(html).toContain(">Perch: Approve the merge<");
+    expect(html).toContain(">Wait for me: Approve the merge<");
     expect(html).toContain('aria-label="Stops — drag a stop, or ← → on a selected one, to reorder it"');
   });
 
@@ -181,7 +181,7 @@ describe("a flight's card", () => {
   });
 
   it("perched on you (Needs you): the perch opens wide — its checklist, Done held until every item is ticked, Skip", () => {
-    expect(html).toContain("Perch: Approve the merge");
+    expect(html).toContain("Wait for me: Approve the merge");
     expect(html).toContain('class="fl-now-elapsed">5m<');
     expect(html).toContain("Look at the PR first");
     expect(html).toContain("Read the diff");
@@ -196,7 +196,7 @@ describe("a flight's card", () => {
     const pending = html.slice(html.indexOf('data-node="stop:s4"'));
     expect(pending).toContain('aria-label="Actions for Merge"');
     expect(pending).toContain(">Jump here</button>");
-    expect(html).toContain(">Cancel flight</button>");
+    expect(html).toContain(">Stop the chain</button>");
   });
 
   it("a halted flight offers Retry, not Done", () => {
@@ -221,7 +221,7 @@ describe("a flight's card", () => {
   it("never says Perch: twice", () => {
     const steps = STEPS.map((s) => (s.id === "s3" ? { ...s, title: "Perch: approve the merge" } : s));
     const h = card(flight({ steps }));
-    expect(h).toContain(">Perch: approve the merge<");
+    expect(h).toContain(">Wait for me: approve the merge<");
     expect(h).not.toContain("Perch: Perch:");
   });
 
@@ -248,7 +248,7 @@ describe("the pane strip", () => {
       c.setQueryData(["flight-kinds"], KINDS);
     });
     expect(html).toContain('class="fl-strip-text">Ticket to merge · ●●●○ · Approve the merge (5m)<');
-    expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Flight tab — [^"]*"><svg class="fl-bird"/);
+    expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Chain tab — [^"]*"><svg class="fl-bird"/);
     expect(html).toContain('class="fl-strip fl-state-waiting_you fl-needs"');
     expect(html).toContain(">Done</button>");
     expect(html).toContain(">Skip</button>");
@@ -312,7 +312,7 @@ describe("the pane's Flight tab: the session diagram", () => {
     const html = render([rowOf("me")], "me");
     expect(tiles(html)).toEqual(["session:me"]);
     expect(html).toContain("data-plus");
-    expect(html).toContain(">Fly these stops</button>");
+    expect(html).toContain(">Run these stops</button>");
     expect(html).toContain('class="fl-mini-box fl-perch"');
     expect(html).toContain(">Describe stops</button>");
     // Its line in the Sky, one press away; no bird while the session idles.
@@ -337,7 +337,7 @@ describe("the pane's Flight tab: the session diagram", () => {
       c.setQueryData(["flight-kinds"], KINDS);
       c.setQueryData(["flight-plans"], plans);
     });
-    expect(html.match(/>Fly these stops<\/button>/g)).toHaveLength(3);
+    expect(html.match(/>Run these stops<\/button>/g)).toHaveLength(3);
     expect(html).toMatch(/<button type="button" class="test-btn fl-flyway-more" aria-expanded="false">More… \(3\)<\/button>/);
   });
 });
@@ -415,7 +415,7 @@ describe("the sky", () => {
     const drawer = html.slice(html.indexOf('class="sky-drawer open"'));
     expect(drawer).toContain('id="fl-group-needs-h"');
     expect(drawer).toContain(">Fix the login</button>");
-    expect(drawer).toContain("Perch: Approve the merge");
+    expect(drawer).toContain("Wait for me: Approve the merge");
     expect(drawer).toMatch(/class="btn-primary fl-btn fl-done"[^>]*>Done<\/button>/);
     expect(drawer.indexOf("Perched on you")).toBeLessThan(drawer.indexOf("Waiting to fly"));
     // The running flight isn't perched: not in the drawer.
@@ -545,7 +545,7 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     // A saved stop that's gone: the server goes by the depth, and the card says so.
     const gone = sourceReach("tickets", { plan: "p_gone", depth: "commit" }, P);
     expect(gone).toMatchObject({ choice: "commit", own: false, missing: "p_gone" });
-    expect(reachSummary(gone)).toBe("Its saved stops “p_gone” are gone, so: Agent → Commit");
+    expect(reachSummary(gone)).toBe("Its saved chain “p_gone” is gone, so: Agent → Commit");
     // Plans not known here: a named plan is trusted.
     expect(sourceReach("tickets", { plan: "p_x" }, undefined)).toMatchObject({ choice: "plan:p_x", own: true });
     expect(reachSummary(sourceReach("prs", {}, P))).toBe("Agent, then nothing more. You take it from there");

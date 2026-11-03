@@ -62,8 +62,8 @@ const byId = (d: Diagram, id: string) => d.nodes.find((n) => n.id === id)!;
 
 describe("a click on the bird", () => {
   it("halts the flight while it flies or waits on you, carries on while held, retries a failed stop", () => {
-    expect(birdAction("working", true)).toMatchObject({ key: "pause", label: "Halt the flight here" });
-    expect(birdAction("you", true)).toMatchObject({ key: "pause", label: "Halt the flight here" });
+    expect(birdAction("working", true)).toMatchObject({ key: "pause", label: "Halt the chain here" });
+    expect(birdAction("you", true)).toMatchObject({ key: "pause", label: "Halt the chain here" });
     expect(birdAction("paused", true)).toMatchObject({ key: "resume", label: "Carry on" });
     expect(birdAction("halted", true)).toMatchObject({ key: "retry", label: "Retry" });
   });
@@ -155,14 +155,14 @@ describe("the bird's markup", () => {
   it("a flying bird is a button: Halt the flight here, and drag it to jump", () => {
     const m = marker(render(flight()));
     expect(m).toMatch(/^<span class="fl-bird-marker tone-working" style="left:[^"]*" role="button" aria-label="The bird: flying Step s2"/);
-    expect(m).toContain('aria-description="Halt the flight here — Carry on picks it up again · Drag the bird to another stop to jump there"');
+    expect(m).toContain('aria-description="Halt the chain here — Carry on picks it up again · Drag the bird to another stop to jump there"');
     expect(m).toContain('tabindex="0"');
-    expect(m).toMatch(/title="Halt the flight here/);
+    expect(m).toMatch(/title="Halt the chain here/);
   });
 
   it("perched on you: Halt the flight here too", () => {
     const f = flight({ state: "waiting_you", step_states: { s2: { state: "waiting_you", since: NOW_S, note: "", detail: {}, rounds: 0 } } });
-    expect(marker(render(f))).toMatch(/class="fl-bird-marker tone-you"[^>]*role="button"[^>]*title="Halt the flight here/);
+    expect(marker(render(f))).toMatch(/class="fl-bird-marker tone-you"[^>]*role="button"[^>]*title="Halt the chain here/);
   });
 
   it("paused: Carry on, perched still (no flap)", () => {

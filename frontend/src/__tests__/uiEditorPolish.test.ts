@@ -130,7 +130,7 @@ describe("the default-stops editor", () => {
     expect(html).toMatch(/class="fl-box-chip skl-chip skl-default-tag"[^>]*>Default · Tickets</);
   });
   it("the hint is a caption under the bar, not in it", () => {
-    expect(html).toContain('<div class="skl-default-hint">New items from Jira — payments fly these stops</div>');
+    expect(html).toContain('<div class="skl-default-hint">New items from Jira — payments run these stops</div>');
     const bar = html.slice(html.indexOf('class="skl-bar skl-label"'), html.indexOf('class="skl-default-hint"'));
     // (Tooltips may say it; no text in the bar does.)
     expect(bar).not.toContain(">New items from");

@@ -107,7 +107,7 @@ describe("a flyway being drawn", () => {
   it("calls a you stop a perch", () => {
     const perch = d.nodes.find((n) => n.id === "stop:s3")!;
     expect(perch.perch).toBe(true);
-    expect(perch.title).toBe("Perch: Approve the merge");
+    expect(perch.title).toBe("Wait for me: Approve the merge");
     expect(perch.sub).toBe("2 items to tick");
   });
 

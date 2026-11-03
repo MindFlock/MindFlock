@@ -991,7 +991,7 @@ export function collapseFlown(d: Diagram): Diagram {
     id: FLOWN_ID,
     kind: "flown",
     row: "main",
-    title: run.length + " flown",
+    title: run.length + " done",
     sub: first.title + " … " + last.title,
     state: "done",
     icon: "flown",
@@ -1219,9 +1219,11 @@ export function lineWhere(d: Diagram): string {
     b = { nodeId: parked.id, tone: STOP_TONE[parked.state]! };
   }
   if (!b) return "";
-  const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+  const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
   const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
-  return head + n.title + (tail ? " · " + tail : "");
+  // "needs you at" already says whose stop it is: no "Wait for me:" after it.
+  const title = b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title;
+  return head + title + (tail ? " · " + tail : "");
 }
 
 /** How many stops a line's `flown` pill folds (0: none). The canvas speaks

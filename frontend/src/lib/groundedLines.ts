@@ -74,7 +74,7 @@ export function sourcePlanId(steps: readonly Pick<FlightStep, "group">[], plans:
 export function planToSave(name: string, steps: readonly FlightStep[], plans: readonly FlightPlan[]): FlightPlan {
   const id = sourcePlanId(steps, plans);
   const base = id ? plans.find((p) => p.id === id)! : null;
-  const fresh = planFromSteps(base ? base.name : name || "Stops", steps, base?.trigger);
+  const fresh = planFromSteps(base ? base.name : name || "New chain", steps, base?.trigger);
   if (!base) return { ...fresh, id: "", updated: 0 };
   return { ...fresh, id: base.id, builtin: base.builtin, description: base.description, session: { ...base.session }, updated: base.updated };
 }
@@ -105,10 +105,10 @@ export type RenameCheck = { ok: true; name: string } | { ok: false; error: strin
  * shelf never shows two chips you can't tell apart. */
 export function checkRename(raw: string, plans: readonly Pick<FlightPlan, "id" | "name">[], selfId: string): RenameCheck {
   const name = raw.trim();
-  if (!name) return { ok: false, error: "A saved stop needs a name" };
+  if (!name) return { ok: false, error: "A saved chain needs a name" };
   if (name.length > NAME_MAX) return { ok: false, error: "Keep the name under " + NAME_MAX + " characters" };
   const clash = plans.find((p) => p.id !== selfId && p.name.trim().toLowerCase() === name.toLowerCase());
-  if (clash) return { ok: false, error: "Another saved stop is already called “" + clash.name.trim() + "”" };
+  if (clash) return { ok: false, error: "Another saved chain is already called “" + clash.name.trim() + "”" };
   return { ok: true, name };
 }
 

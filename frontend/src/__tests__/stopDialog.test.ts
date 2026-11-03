@@ -62,7 +62,7 @@ describe("a stop that can change", () => {
     expect(html).toContain(">Lane<");
     expect(html).toContain(">If it fails<");
     expect(html).toMatch(/class="fl-toggle"[^>]*aria-pressed="false"/);
-    expect(html).toContain("Halt point — the flight stops here, before doing this stop");
+    expect(html).toContain("Halt point — the chain stops here, before doing this stop");
     // No inline inspector panel.
     expect(html).not.toContain('class="fl-inspector');
   });
@@ -92,11 +92,11 @@ describe("a stop that can't change", () => {
   it("the current one: what the menu offers — Done on a perch, Skip; Retry when halted; its halt point set at once", () => {
     const perch = stop({ state: "perched", editable: false, step: { ...push, kind: "you", title: "Approve" }, icon: "you" });
     const html = render({ node: perch, def: YOU, onRemove: () => {}, onDone: () => {}, onSkip: () => {}, onToggleHalt: () => {} });
-    expect(html).toContain("<strong>Perch</strong>");
+    expect(html).toContain("<strong>Wait for me</strong>");
     expect(html).toContain("stop-dialog-perch");
-    expect(html).toContain(">Perched on you<");
+    expect(html).toContain(">Needs you<");
     expect(buttons(html).filter((b) => ["Remove", "Done", "Retry", "Skip", "Close"].includes(b))).toEqual(["Remove", "Done", "Skip", "Close"]);
-    expect(html).toContain("Halt point — the flight stops here");
+    expect(html).toContain("Halt point — the chain stops here");
     const halted = render({ node: stop({ state: "halted", editable: false }), def: SHIP, onRetry: () => {}, onSkip: () => {} });
     expect(buttons(halted)).toContain("Retry");
   });
@@ -123,9 +123,9 @@ describe("a group's dialog", () => {
   const html = render({ node: group, kindOf: new Map([["ship", SHIP]]), onRename: () => {}, onOpenSub: () => {}, onRemoveSub: () => {}, onUngroup: () => {}, onSaveShelf: () => {}, onRemove: () => {} });
 
   it("its name, and what it is", () => {
-    expect(html).toContain('aria-label="Stop name"');
+    expect(html).toContain('aria-label="Group name"');
     expect(html).toContain('value="Ticket to merge"');
-    expect(html).toContain("A stop with 3 sub-steps");
+    expect(html).toContain("A group of 3 stops");
     expect(html).toContain("1 of 3 done");
   });
 

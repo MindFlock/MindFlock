@@ -60,7 +60,7 @@ describe("the stops row", () => {
     expect(html.match(/draggable="true"/g)).toHaveLength(6);
     const perch = html.slice(html.indexOf('data-kind="you"'));
     expect(html).toMatch(/class="sky-stop-chip perch" data-kind="you"/);
-    expect(perch).toContain('<span class="sky-stop-name">Perch</span>');
+    expect(perch).toContain('<span class="sky-stop-name">Wait for me</span>');
     expect(perch).toContain("fl-stop-icon-perch");
     expect(html).not.toContain(">You<");
     // One region, its tiny label first, the Session chip, then the kinds.
@@ -192,7 +192,7 @@ describe("the stops row", () => {
     ]);
     expect(stopDragData(kind("you", "You", "you"))).toEqual([
       ["application/x-mindflock-stop", "you"],
-      ["text/plain", "Perch"],
+      ["text/plain", "Wait for me"],
     ]);
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toMatch(/for \(const \[type, value\] of stopDragData\(def\)\) e\.dataTransfer\.setData\(type, value\)/);

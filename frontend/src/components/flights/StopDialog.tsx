@@ -34,10 +34,10 @@ export const STOP_STATE_WORD: Partial<Record<DiagramNode["state"], string>> = {
   failed: "Failed",
   halted: "Halted",
   current: "Under way",
-  perched: "Perched on you",
+  perched: "Needs you",
   paused: "Paused here",
   pending: "Still to come",
-  edit: "Not flown yet",
+  edit: "Not run yet",
 };
 
 /** What a stop's Save sends: only what a stop IS. */
@@ -148,8 +148,8 @@ function StepDialog(p: StopDialogProps) {
           <div className="stop-dialog-halt">
             <Toggle
               on={!!(editable ? draft.halt : n.step?.halt)}
-              label="Halt point — the flight stops here, before doing this stop"
-              title="Like a breakpoint: Carry on flies on through it"
+              label="Halt point — the chain stops here, before doing this stop"
+              title="Like a breakpoint: Carry on goes on through it"
               onChange={(v) => (editable ? setDraft((d) => (d ? { ...d, halt: v || undefined } : d)) : p.onToggleHalt?.())}
             />
           </div>
@@ -213,14 +213,14 @@ function GroupDialog(p: StopDialogProps) {
           if (p.onRename && renamed && !p.busy) void p.onRename(next);
         }}
       >
-        <h2>{p.onRename ? "Edit stop" : "Stop"}</h2>
+        <h2>{p.onRename ? "Edit group" : "Group"}</h2>
         <div className="stop-dialog-kind">
           <span className="fl-box-icon">
             <StopIcon kind="group" />
           </span>
           <span className="stop-dialog-kind-words">
-            <strong>A stop with {g?.total || 0} sub-steps</strong>
-            <span className="muted">the flight flies them one by one{g?.current ? " — " + g.done + " of " + g.total + " done" : ""}</span>
+            <strong>A group of {g?.total || 0} stops</strong>
+            <span className="muted">the chain runs them one by one{g?.current ? " — " + g.done + " of " + g.total + " done" : ""}</span>
           </span>
         </div>
         {p.note && (
@@ -229,9 +229,9 @@ function GroupDialog(p: StopDialogProps) {
           </p>
         )}
         <FlField label="Name" wide={false}>
-          <TextField label="Stop name" value={name} onChange={(t) => p.onRename && setName(t)} />
+          <TextField label="Group name" value={name} onChange={(t) => p.onRename && setName(t)} />
         </FlField>
-        <ol className="stop-dialog-subs" aria-label={"The sub-steps of " + n.title}>
+        <ol className="stop-dialog-subs" aria-label={"The stops in " + n.title}>
           {(g?.nodes || []).map((s) => {
             const def = s.step ? p.kindOf?.get(s.step.kind) : undefined;
             const perch = (def?.actor || (s.step?.kind === "you" ? "you" : "robot")) === "you";
@@ -243,12 +243,12 @@ function GroupDialog(p: StopDialogProps) {
                 <span className="stop-dialog-sub-title">{s.title}</span>
                 <span className="stop-dialog-sub-state">{STOP_STATE_WORD[s.state] || ""}</span>
                 {p.onOpenSub && (
-                  <button type="button" className="fl-icon-btn" aria-label={"Edit “" + s.title + "”"} title={s.editable ? "Edit this sub-step" : "Open this sub-step (read-only)"} onClick={() => p.onOpenSub!(s)}>
+                  <button type="button" className="fl-icon-btn" aria-label={"Edit “" + s.title + "”"} title={s.editable ? "Edit this stop" : "Open this stop (read-only)"} onClick={() => p.onOpenSub!(s)}>
                     ✎
                   </button>
                 )}
                 {p.onRemoveSub && (
-                  <button type="button" className="fl-icon-btn stop-dialog-danger" aria-label={"Remove “" + s.title + "”"} title="Remove this sub-step from the line" disabled={p.busy} onClick={() => p.onRemoveSub!(s)}>
+                  <button type="button" className="fl-icon-btn stop-dialog-danger" aria-label={"Remove “" + s.title + "”"} title="Remove this stop from the chain" disabled={p.busy} onClick={() => p.onRemoveSub!(s)}>
                     🗑
                   </button>
                 )}
@@ -264,12 +264,12 @@ function GroupDialog(p: StopDialogProps) {
               </button>
             )}
             {p.onUngroup && (
-              <button type="button" className="test-btn" disabled={p.busy} title="Its sub-steps become stops of their own" onClick={p.onUngroup}>
+              <button type="button" className="test-btn" disabled={p.busy} title="Its stops go back on the chain one by one" onClick={p.onUngroup}>
                 Ungroup
               </button>
             )}
             {p.onSaveShelf && (
-              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops on the shelf, to drag onto any line" onClick={() => void p.onSaveShelf!(next)}>
+              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops on the shelf as a saved chain, to drag onto any chain" onClick={() => void p.onSaveShelf!(next)}>
                 Save to the shelf
               </button>
             )}

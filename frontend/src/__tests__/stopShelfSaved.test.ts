@@ -152,9 +152,9 @@ describe("rename rules (checkRename)", () => {
   const plans = [MINE, TICKET];
   it("trimmed; empty, too long, or another's name refused; its own name fine", () => {
     expect(checkRename("  Ship it  ", plans, "p_mine")).toEqual({ ok: true, name: "Ship it" });
-    expect(checkRename("   ", plans, "p_mine")).toEqual({ ok: false, error: "A saved stop needs a name" });
+    expect(checkRename("   ", plans, "p_mine")).toEqual({ ok: false, error: "A saved chain needs a name" });
     expect(checkRename("x".repeat(NAME_MAX + 1), plans, "p_mine").ok).toBe(false);
-    expect(checkRename("ticket TO merge", plans, "p_mine")).toEqual({ ok: false, error: "Another saved stop is already called “Ticket to merge”" });
+    expect(checkRename("ticket TO merge", plans, "p_mine")).toEqual({ ok: false, error: "Another saved chain is already called “Ticket to merge”" });
     expect(checkRename("Mine", plans, "p_mine")).toEqual({ ok: true, name: "Mine" });
   });
   it("built-ins first, then yours", () => {
@@ -166,8 +166,8 @@ describe("Takes off… (TakeoffDialog)", () => {
   it("a Modal: its heading, the trigger chips, Save and Cancel", () => {
     const html = render(createElement(TakeoffDialog, { plan: MINE, onClose() {} }));
     expect(html).toContain('id="takeoff-dialog"');
-    expect(html).toContain("<h2>“Mine” takes off</h2>");
-    expect(html).toContain("Takes off");
+    expect(html).toContain("<h2>When “Mine” starts</h2>");
+    expect(html).toContain(">Starts<");
     expect(html).toContain('class="modal-actions"');
     expect(html).toContain(">Cancel</button>");
     expect(html).toContain(">Save</button>");

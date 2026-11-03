@@ -160,7 +160,7 @@ describe("the stops a flight has flown fold into one pill — when the line asks
     const d = diagramAt(3, { fold: true });
     expect(mainIds(d)).toEqual(["session:me", "flown", "stop:s4", "stop:s5", "stop:s6", "add"]);
     const pill = d.nodes.find((n) => n.kind === "flown")!;
-    expect(pill).toMatchObject({ id: "flown", kind: "flown", row: "main", title: "3 flown", sub: "Work the ticket … Push", state: "done", count: 3 });
+    expect(pill).toMatchObject({ id: "flown", kind: "flown", row: "main", title: "3 done", sub: "Work the ticket … Push", state: "done", count: 3 });
     expect(pill.flown).toEqual(["Work the ticket", "Commit", "Push"]);
     // The line chains through it.
     expect(edge(d, "session:me", "flown")?.kind).toBe("line");
@@ -194,7 +194,7 @@ describe("the stops a flight has flown fold into one pill — when the line asks
   it("from the row alone (no full flight cached): the numbered stops fold the same way", () => {
     const d = sessionDiagram([me(3)], "me", { foldFlown: true });
     const pill = d.nodes.find((n) => n.kind === "flown")!;
-    expect(pill.title).toBe("3 flown");
+    expect(pill.title).toBe("3 done");
     expect(pill.sub).toBe("Stop 1 … Stop 3");
     expect(mainIds(d)).toEqual(["session:me", "flown", "stop:i3", "stop:i4", "stop:i5", "add"]);
   });
@@ -290,7 +290,7 @@ describe("lineWhere: the bar's 'at <stop>'", () => {
   });
 
   it("perched on you, halted with the reason", () => {
-    expect(lineWhere(diagramAt(4, { state: "waiting_you" }))).toBe("waiting on you at Perch: Approve the merge · waits for your Done");
+    expect(lineWhere(diagramAt(4, { state: "waiting_you" }))).toBe("needs you at Approve the merge · waits for your Done");
     expect(lineWhere(diagramAt(3, { state: "halted" }))).toBe("halted at Reviews settle · Checks went red");
   });
 

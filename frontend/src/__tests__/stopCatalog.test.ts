@@ -91,9 +91,9 @@ describe("the filter", () => {
     expect(catalogMatch("ship", undefined, "Ship")).toBe(true);
   });
 
-  it("kinds by label (Perch for you), kind and summary", () => {
+  it("kinds by label (Wait for me for you), kind and summary", () => {
     const kinds = catalogKinds(KINDS);
-    expect(filterKinds(kinds, "perch").map((k) => k.kind)).toEqual(["you"]);
+    expect(filterKinds(kinds, "for me").map((k) => k.kind)).toEqual(["you"]);
     expect(filterKinds(kinds, "notify").map((k) => k.kind)).toEqual(["notify"]);
     expect(filterKinds(kinds, "slack").map((k) => k.kind)).toEqual(["notify"]);
     expect(filterKinds(kinds, "prompt").map((k) => k.kind)).toEqual(["agent"]);
@@ -122,7 +122,7 @@ describe("a row's drag carries its chip's MIME", () => {
     ]);
     expect(stopDragData(KINDS[4])).toEqual([
       [STOP_MIME, "you"],
-      ["text/plain", "Perch"],
+      ["text/plain", "Wait for me"],
     ]);
     expect(savedDragData(TICKET)).toEqual([
       [FLYWAY_MIME, "builtin:ticket"],
@@ -141,7 +141,7 @@ describe("the cards (catalogCards)", () => {
     expect(c.multi.map((k) => k.key)).toEqual(["plan:builtin:ticket", "plan:p_mine"]);
     expect(c.all.map((k) => k.drop)).toEqual(catalogRows(catalogKinds(KINDS), [TICKET, MINE]));
     const perch = c.blocks[1];
-    expect(perch).toMatchObject({ section: "blocks", name: "Perch", perch: true, drop: { kind: "you" } });
+    expect(perch).toMatchObject({ section: "blocks", name: "Wait for me", perch: true, drop: { kind: "you" } });
     expect(c.multi[0]).toMatchObject({ section: "multi", name: "Ticket to merge", builtin: true, path: "Work the ticket → Push → Approve", drop: { planId: "builtin:ticket" } });
     expect(c.multi[1]).toMatchObject({ builtin: false, path: "Fix" });
   });
@@ -231,7 +231,7 @@ describe("StopCatalog", () => {
     );
     const perch = blocks.slice(blocks.indexOf('data-kind="you"'));
     expect(blocks).toMatch(/class="sky-catalog-card perch" data-kind="you" draggable="true"/);
-    expect(perch).toContain('<span class="sky-catalog-name"><span class="sky-catalog-title">Perch</span><span class="sky-catalog-badge actor-you">you</span></span>');
+    expect(perch).toContain('<span class="sky-catalog-name"><span class="sky-catalog-title">Wait for me</span><span class="sky-catalog-badge actor-you">you</span></span>');
     expect(perch).toContain("fl-stop-icon-perch");
     // A kind card has no ⋯ (only the ★, when the host passes the pick).
     expect(blocks).not.toContain("vf-menu");
@@ -265,7 +265,7 @@ describe("StopCatalog", () => {
     expect(html.match(/draggable="true"/g)).toHaveLength(9);
     expect(html).toContain('<div id="sky-catalog-row-0" role="option" aria-selected="true" class="sky-catalog-card active" data-kind="agent" draggable="true"');
     expect(html).toContain('id="sky-catalog-row-7" role="option" aria-selected="false" class="sky-catalog-card sky-catalog-plan" data-plan="builtin:ticket"');
-    expect(html).toContain('<button type="button" class="test-btn sky-catalog-add" tabindex="-1" aria-label="Add “Perch”">Add</button>');
+    expect(html).toContain('<button type="button" class="test-btn sky-catalog-add" tabindex="-1" aria-label="Add “Wait for me”">Add</button>');
     expect(html).toContain('aria-label="Add “Ticket to merge”"');
     expect(html.match(/sky-catalog-add/g)).toHaveLength(9);
   });

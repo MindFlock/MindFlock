@@ -60,7 +60,7 @@ describe("a stops-only chain's name", () => {
     expect(groundedName({ plan_name: "Iterate on the sky" })).toBe("Iterate on the sky");
     expect(groundedName({ plan_name: "Stops", steps: [{ title: "Commit" }] })).toBe("Commit");
     expect(groundedName({ plan_name: "", steps: [{ title: "Loop ×3" }, { title: "Commit" }, { title: "Push" }] })).toBe("Loop ×3 + 2 more");
-    expect(groundedName({ plan_name: "" })).toBe("Stops");
+    expect(groundedName({ plan_name: "" })).toBe("Chain");
   });
 });
 

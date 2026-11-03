@@ -331,7 +331,7 @@ describe("the Handoff dialog's board-filled selects", () => {
     const plans = [{ id: "p_1", name: "Ticket to merge" }] as never;
     expect(SP.chainChoices([FA, FB], plans)).toEqual([
       { value: "flight:f_b", label: "Release", group: "On the board" },
-      { value: "plan:p_1", label: "Ticket to merge", group: "Saved stops — a fresh copy each time" },
+      { value: "plan:p_1", label: "Ticket to merge", group: "Saved chains — a fresh copy each time" },
     ]);
     expect(SP.sessionChoices([{ title: "sc-1" }], (t) => t + "!")).toEqual([
       { value: "new", label: "a new session" },

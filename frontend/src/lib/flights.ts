@@ -276,16 +276,16 @@ export function flightDrives(f: Pick<Flight, "state"> | null | undefined): boole
 export function perchLabel(title: string | null | undefined): string {
   const t = String(title || "")
     .trim()
-    .replace(/^(you|perch):\s*/i, "");
-  return t ? "Perch: " + t : "Perch";
+    .replace(/^(you|perch|wait for me):\s*/i, "");
+  return t ? "Wait for me: " + t : "Wait for me";
 }
 
 /** The bell's words for a flight perched on you: "Perched on you: <stop>". */
 export function perchedOnYou(stepTitle: string | null | undefined): string {
   const t = String(stepTitle || "")
     .trim()
-    .replace(/^(you|perch):\s*/i, "");
-  return "Perched on you" + (t ? ": " + t : "");
+    .replace(/^(you|perch|wait for me):\s*/i, "");
+  return "Needs you" + (t ? ": " + t : "");
 }
 
 /** A step's chip glyph: done ✓ · current ● · pending ○ · failed ✗ · skipped –. */
@@ -387,7 +387,7 @@ export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   const elapsed = "steps" in f ? currentElapsed(f, now) : "";
   const tail =
     f.state === "done"
-      ? "Landed"
+      ? "Finished"
       : f.state === "cancelled"
         ? "Cancelled"
         : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
@@ -575,7 +575,7 @@ export function planDirty(a: FlightPlan | null, b: FlightPlan | null): boolean {
 export function blankPlan(): FlightPlan {
   return {
     id: "",
-    name: "New stops",
+    name: "New chain",
     description: "",
     builtin: false,
     trigger: { kind: "manual", schedule: null, paused: false },
@@ -596,7 +596,7 @@ export function planFromSteps(
   trigger?: FlightPlan["trigger"]
 ): Omit<FlightPlan, "id" | "updated"> {
   return {
-    name: name.trim() || "New stops",
+    name: name.trim() || "New chain",
     description: "",
     builtin: false,
     trigger: trigger ? { ...trigger } : { kind: "manual", schedule: null, paused: false },

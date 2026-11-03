@@ -99,7 +99,7 @@ const REPO_CHIPS = 6;
 /** The saved-stop chips: "No stops" first, then built-ins, then the owner's. */
 export function savedStopChoices(plans: readonly Pick<FlightPlan, "id" | "name" | "builtin">[]): Array<{ value: string; label: string }> {
   const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
-  return [{ value: "", label: "No stops" }, ...ordered.map((p) => ({ value: p.id, label: p.name }))];
+  return [{ value: "", label: "Nothing more" }, ...ordered.map((p) => ({ value: p.id, label: p.name }))];
 }
 
 /** The repository chips: the suggestions, recent first, one per path. */
@@ -403,7 +403,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     const flew = attach ? await attachGrounded(attach.id, { title }) : plan ? await startFlightOn(title, plan) : true;
     if (!flew) {
       setMade(title);
-      setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't take off — the error card says why.");
+      setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't start — the error card says why.");
       setBusy(false);
       onFailed?.();
       return;
@@ -425,7 +425,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     >
       <div
         className={"sky-new-head" + (onMove ? " is-movable" : "")}
-        title={onMove ? "Drag to move this block — the session starts where it sits" : undefined}
+        title={onMove ? "Drag to move this — the session starts where it sits" : undefined}
         onPointerDown={onBarDown}
       >
         <Bird size={13} />
@@ -469,15 +469,15 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           aria-label="Task"
           rows={3}
           value={prompt}
-          placeholder="What should the agent do? Enter flies, Shift+Enter for a new line."
+          placeholder="What should the agent do? Enter runs it, Shift+Enter for a new line."
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => promptKey(e, () => void fly())}
         />
       </div>
       {plans.length > 0 && !attach && (
         <div className="fl-fld fl-fld-wide">
-          <span className="fl-fld-label">Stops</span>
-          <ChipRow className="sky-new-stops" label="Stops" value={plan} options={savedStopChoices(plans)} onChange={setPlan} />
+          <span className="fl-fld-label">Then run</span>
+          <ChipRow className="sky-new-stops" label="Then run" value={plan} options={savedStopChoices(plans)} onChange={setPlan} />
         </div>
       )}
       {names.length > 1 && (
@@ -548,10 +548,10 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           type="button"
           className="btn-primary fl-btn sky-new-fly"
           disabled={busy || !!blocked}
-          title={blocked || (attach ? "Start the session and fly “" + attach.name + "” on it" : plan ? "Start the session and fly the stops" : "Start the session")}
+          title={blocked || (attach ? "Start the session and run “" + attach.name + "” on it" : plan ? "Start the session, then run the saved chain" : "Start the session")}
           onClick={() => void fly()}
         >
-          {busy ? "Taking off…" : made ? "Open session" : "Fly"}
+          {busy ? "Starting…" : made ? "Open session" : "Run"}
         </button>
       </div>
     </div>
