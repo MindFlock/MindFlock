@@ -85956,7 +85956,10 @@ function wireIntent(src, dst, ctx = {}) {
 //#endregion
 //#region src/components/flights/ReadyHead.tsx
 function startWord(f) {
-	return f.start_on === "run" ? "runs when you press ▶ Run" : "runs on your next prompt";
+	return f.start_on === "run" ? "starts on ▶ Run" : "starts on next prompt";
+}
+function startTitle(f) {
+	return f.start_on === "run" ? "Starts only when you press ▶ Run. Click to start it on this session's next prompt too." : "Starts on this session's next prompt (or ▶ Run). Click to start it only on ▶ Run.";
 }
 function ReadyHead({ flight }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -85973,29 +85976,28 @@ function ReadyHead({ flight }) {
 		className: "sky-ready",
 		"data-no-drag": true,
 		onPointerDown: (e) => e.stopPropagation(),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "sky-ready-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-head-chip tone-ready",
 				title: "Built, not running yet",
 				children: "Ready"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
-				className: "fl-icon-btn sky-run",
+				className: "sky-ready-run",
 				disabled: busy,
 				title: "Run this chain now",
 				"aria-label": "Run this chain now",
 				onClick: () => void run(),
 				children: "▶ Run"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "linklike sky-start-on",
-				title: "Change how this chain starts",
-				onClick: flip,
-				children: startWord(flight)
-			})
-		]
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "sky-start-on",
+			title: startTitle(flight),
+			onClick: flip,
+			children: startWord(flight)
+		})]
 	});
 }
 //#endregion
@@ -87868,7 +87870,7 @@ function FlightChain({ title, line, kinds, label }) {
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
 	const where = row ? lineWhere(line.diagram) : "";
 	const agent = agentTitle(row?.provider || row?.program, row?.program);
-	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : agentDoing(row);
+	const headSub = agentDoing(row);
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
 		title: agent,
@@ -135309,7 +135311,7 @@ function SkyLine(p) {
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
 	const agent = agentTitle(row?.provider || row?.program, row?.program);
-	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
+	const headSub = row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
 		title: agent,

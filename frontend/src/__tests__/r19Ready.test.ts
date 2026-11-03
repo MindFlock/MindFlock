@@ -56,7 +56,7 @@ describe("a ready flight", () => {
     expect(sheet).toMatch(/\.sky-start-on \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;[^}]*\}/);
     expect(sheet).not.toMatch(/\.sky-start-on \{[^}]*text-decoration: underline/);
     // The session tile's sub: one line, and nothing under the tile shrinks under the next.
-    expect(sheet).toMatch(/\.sky-head > \.sky-node-sub \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/);
+    expect(sheet).toMatch(/\.sky-head:has\(\.sky-ready\) > \.sky-node-sub \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/);
     expect(sheet).toMatch(/\.sky-head > \.sky-head-extra \{\s*flex-shrink: 0;/);
   });
   it("while ready, the tile's sub-line does not repeat it (Sky and the Flight tab)", () => {
