@@ -130322,6 +130322,7 @@ function TakeoffDialog({ plan, onClose }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "takeoff-dialog",
+		portal: true,
 		onClose,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			className: "fl-takeoff",

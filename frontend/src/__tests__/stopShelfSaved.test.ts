@@ -185,6 +185,6 @@ describe("Takes off… (TakeoffDialog)", () => {
     const src = code("components/flights/TakeoffDialog.tsx");
     expect(src).toContain("const saved = await savePlan(draft);");
     expect(src).toContain("setError(errMsg(err));");
-    expect(src).toContain('<Modal id="takeoff-dialog" onClose={onClose}>');
+    expect(src).toContain('<Modal id="takeoff-dialog" portal onClose={onClose}>');
   });
 });

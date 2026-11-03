@@ -251,7 +251,7 @@ export function TakeoffDialog({ plan, onClose }: { plan: FlightPlan; onClose(): 
   };
 
   return (
-    <Modal id="takeoff-dialog" onClose={onClose}>
+    <Modal id="takeoff-dialog" portal onClose={onClose}>
       <form
         className="fl-takeoff"
         onSubmit={(e) => {
