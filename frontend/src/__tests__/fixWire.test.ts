@@ -198,3 +198,28 @@ describe("the wires on the Sky", () => {
     expect(g.wires.find((w) => w.kind === "fix")?.to).toBe(HEAD_ID);
   });
 });
+
+describe("done by the agent", () => {
+  it("a Ship stop the agent did itself says so on its face", () => {
+    const states = {
+      s1: rec("done"),
+      s2: rec("done", { by: "agent", receipt: "already committed · 3 commits" }),
+      s3: rec("done", { by: "agent", receipt: "already pushed" }),
+      s4: rec("done", { by: "agent", receipt: "PR #123", url: "https://github.com/o/r/pull/123" }),
+    };
+    const f = { ...flight(ROUTE, 4, states), state: "done" as const };
+    const d = flightDiagram(f);
+    const by = d.nodes.filter((n) => n.by === "agent").map((n) => n.id);
+    expect(by).toEqual(["stop:s2", "stop:s3", "stop:s4"]);
+    const g = chainGraph(d, { head, key: "sc-25355", flightId: "f_1" });
+    const html = renderToStaticMarkup(createElement(SkyChain, { graph: g, zoom: 1 }));
+    expect(html.split('class="sky-node-by"').length - 1).toBe(3);
+    expect(html).toContain("already committed · 3 commits");
+    expect(html).toMatch(/aria-label="Commit — done by the agent, already committed · 3 commits"/);
+  });
+
+  it("a stop the lane did has no by-line", () => {
+    const d = flightDiagram(flight(ROUTE, 2, { s1: rec("done"), s2: rec("done", { receipt: "committed" }) }));
+    expect(d.nodes.find((n) => n.id === "stop:s2")?.by).toBeUndefined();
+  });
+});

@@ -3046,11 +3046,66 @@ def _judge_ship(flight, step, ss, obs, now) -> dict:
         }
     if not _ours(flight, rec, lane):
         return _wait(_BUSY_NOTE)
+    if (
+        rec.get("state") == "running"
+        and not int(rec.get("commits") or 0)
+        and not rec.get("step")
+    ):
+        # The lane has not acted ("already at pr — waiting for new work"):
+        # when git says the agent did this rung itself, the stop is done.
+        did = agent_did(step, obs)
+        if did is not None:
+            return did
     out = _judge_ship_lane(step, rec, lane)
     fix = lane_fix(flight, step, rec)
     if fix is not None:
         out["fix"] = fix
     return out
+
+
+#: The Ship lane a session's git stage proves is done (autopilot
+#: ``_STAGE_ACHIEVED``, from ``agent_state._session_stage``): a clean tree with
+#: commits ahead of its base is ``committed``, origin holding HEAD is
+#: ``pushed``, an open PR for the branch is ``pr``. A dirty tree is ``agent``
+#: (nothing proven) — uncommitted work means Commit still has work. Merge is
+#: never proven by a stage.
+STAGE_RUNG = {"committed": "commit", "pushed": "push", "pr": "pr"}
+
+
+def agent_did(step: dict, obs: dict) -> Optional[dict]:
+    """A Ship stop the agent already did itself (docs/vision/fixwire.md "Done
+    by the agent"): a ``done`` action with ``by_agent`` and ``detail.by`` =
+    "agent", when the session's git stage (``obs["git"]``: ``stage``,
+    ``pr_url``, ``ahead``) is at or past the stop's lane and the agent is not
+    mid-turn; None otherwise. Pure."""
+    lane = str(step["config"].get("lane") or "")
+    git = obs.get("git") if isinstance(obs.get("git"), dict) else {}
+    got = STAGE_RUNG.get(str(git.get("stage") or ""))
+    if lane not in SHIP_LANES or lane == "merge" or not got:
+        return None
+    if SHIP_LANES.index(got) < SHIP_LANES.index(lane):
+        return None
+    if (obs.get("session") or {}).get("activity") == "working":
+        return None  # its turn may still add work: let the lane wait for it
+    url = str(git.get("pr_url") or (obs.get("session") or {}).get("pr_url") or "")
+    ahead = _int(git.get("ahead"), 0, 0, 10**6)
+    if lane == "commit":
+        receipt = "already committed" + (
+            " · " + plural(ahead, "commit") if ahead else ""
+        )
+    elif lane == "push":
+        receipt = "already pushed"
+    else:
+        receipt = ship_receipt("pr", url)
+    detail: dict = {"by": "agent", "receipt": receipt}
+    if url and lane == "pr":
+        detail["url"] = url
+    return {
+        "action": "done",
+        "note": "done by the agent — " + receipt,
+        "detail": detail,
+        "by_agent": True,
+    }
 
 
 def _judge_ship_lane(step, rec, lane) -> dict:
@@ -3484,6 +3539,13 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
         tripped = _guard_trip(flight, ss, obs, now, sess)
         if tripped is not None:
             return tripped
+        if step["kind"] == "ship":
+            # The agent already did this rung (committed, pushed, opened the
+            # PR itself): done without arming the lane — and the route rolls
+            # on through every Ship stop after it that is done too.
+            did = agent_did(step, obs)
+            if did is not None:
+                return did
         return {"action": "run", "note": "starting %s" % step["title"]}
     if hold is not None:
         return hold

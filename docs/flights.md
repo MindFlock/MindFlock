@@ -7580,3 +7580,16 @@ too ("↻ repeat ×3 · every 30 min"), and every return wire has an arrowhead.
 - Client: edge kind `fix` (`returnEdges`), routed and stacked with the Loop
   wires (`loopWirePathG`, shared lanes), `arrowAt`, `wireLabel` (inside its
   own run, cut or dropped, never overlapping).
+
+### Done by the agent
+
+A Ship stop whose rung git already proves is done (the agent committed,
+pushed or opened the PR itself) is **done by the agent**: `flights.agent_did`
+reads the session's git stage (`flight_driver._ship_git_obs`; a dirty tree
+proves nothing) for a pending Ship stop before it arms its lane, and for a
+running one whose lane has not acted, never while the agent is mid-turn. The
+pass rolls on through every following Ship stop that is done too (Commit,
+Push, Open PR in one pass), each with `detail.by = "agent"`, a receipt
+("already committed · 3 commits", "already pushed", "PR #123") and one
+history event "done by the agent — …"; the face shows the agent glyph and
+"by the agent" under the receipt.

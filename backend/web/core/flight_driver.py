@@ -314,6 +314,31 @@ def _session_obs(flight: dict, now: float, agent: bool) -> dict:
     return out
 
 
+def _ship_git_obs(title: str) -> dict:
+    """``{stage, pr_url, ahead}``: the session's git stage — the one the lane
+    climbs by (``agent_state._session_stage``) — and its commits ahead of the
+    base, for a Ship stop the agent may already have done (blocking; ``{}``
+    when unreadable)."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        return {}
+    try:
+        st = srv._session_stage(inst) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {"stage": str(st.get("stage") or ""), "pr_url": str(st.get("pr_url") or "")}
+    if out["stage"] in _flights.STAGE_RUNG:
+        try:
+            wt = inst.GetWorktreePath()
+            out["ahead"] = int(
+                srv._commits_beyond_base(wt, srv._session_base_branch(inst)) or 0
+            )
+        except Exception:  # noqa: BLE001 — the receipt just omits the count
+            pass
+    return out
+
+
 def _repo_root(title: str) -> str:
     inst = _server().ENGINE.instances.get(title)
     if inst is None:
@@ -733,6 +758,9 @@ async def observe(flight: dict, now: float) -> dict:
     )
     sess = await asyncio.to_thread(_session_obs, flight, now, agent)
     obs: dict = {"now": now, "session": sess}
+    if kind == "ship" and ss["state"] in ("pending", "running") and sess.get("present"):
+        # What git says is already done (the agent may have shipped itself).
+        obs["git"] = await asyncio.to_thread(_ship_git_obs, flight["session"])
     if ss["state"] in ("pending", "running"):
         await _guard_obs(flight, sess, now, obs)
     if ss["state"] == "pending" and step.get("when"):
@@ -1866,6 +1894,10 @@ async def _step_member(
         after = await asyncio.to_thread(_apply_if_unchanged, fid, f, action, now, i)
     if after is None or _same(f, after):
         return None
+    if action.get("by_agent") and cur is not None and cur["kind"] == "ship":
+        # Done by the agent while this stop's lane waited "for new work": the
+        # lane has nothing left to do for this flight.
+        await asyncio.to_thread(_disarm_ours, fid, f["session"])
     if (
         cur is not None
         and cur["kind"] == "command"
