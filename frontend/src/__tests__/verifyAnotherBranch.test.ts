@@ -60,13 +60,13 @@ describe("Another branch…", () => {
     expect(api).toHaveBeenCalledWith("/api/test-plans/branch", {
       json: { repo: "/r/shop", branch: "feature/x" },
     });
-    expect(toast.mock.calls[0][0]).toContain("it'll appear in Verify");
+    expect(toast.mock.calls[0][0]).toContain("they'll appear in Verify");
   });
 
   it("says so when the branch already has one", async () => {
     api.mockReset().mockResolvedValue({ plan: "sc-7", existing: true });
     toast.mockReset();
     await writePlanForBranch({ name: "shop", root: "/r/shop" }, "feature/x");
-    expect(toast.mock.calls[0][0]).toBe("feature/x already has a checklist — it's in Verify");
+    expect(toast.mock.calls[0][0]).toBe("feature/x already has behaviors — they're in Verify");
   });
 });

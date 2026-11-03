@@ -60,7 +60,7 @@ describe("a flight perched on you is Needs you", () => {
 
   it("a paused flight is a calm Paused flight, out of the bell", () => {
     const ss = deriveSessionState(row({ ...fl, state: "paused", step: { ...fl.step, state: "pending" } }), { activity: "idle" });
-    expect(ss).toMatchObject({ state: "idle", label: "Paused flight", tone: "neutral", inBell: false });
+    expect(ss).toMatchObject({ state: "idle", label: "Paused route", tone: "neutral", inBell: false });
     expect(ss.reason).toBeUndefined();
     expect(withFlightYou([], [{ ...row({ ...fl, state: "paused" }), title: "a" } as Instance])).toEqual([]);
   });

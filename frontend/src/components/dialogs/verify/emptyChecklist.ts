@@ -39,12 +39,12 @@ async function post(path: string, json: unknown, name: string): Promise<string> 
     await refreshTestPlans();
     toast(
       r.existing
-        ? name + " already has a checklist — add your steps to it"
-        : "Started an empty checklist for " + name + " — add the steps to check",
+        ? name + " already has behaviors — add yours to them"
+        : "Started empty behaviors for " + name + " — add what it should do",
     );
     return r.plan || "";
   } catch (err) {
-    errorPop("Couldn't start the checklist", errMsg(err));
+    errorPop("Couldn't start the behaviors", errMsg(err));
     return "";
   }
 }

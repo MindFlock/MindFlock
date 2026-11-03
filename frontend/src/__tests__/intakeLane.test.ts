@@ -92,7 +92,7 @@ describe("the intake lane", () => {
     expect(html).toMatch(/class="sky-lane-flyway own"[^>]*>Mine</);
     // A built-in default says where it goes in Intake's words (no depth: the
     // agent alone), not the plan's name (that echoed the badge).
-    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Stop after the agent</);
+    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Agent only</);
     expect(html).not.toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
     expect(html).not.toContain("<select");
   });

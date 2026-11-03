@@ -455,7 +455,7 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
                 type="button"
                 className="btn-primary pr-review-btn"
                 disabled={busy}
-                title={"Mark “" + fl.step.title + "” done — the flight goes on"}
+                title={"Mark “" + fl.step.title + "” done — the route goes on"}
                 onClick={() => void run(() => stepDone(fl.id, fl.step.id))}
               >
                 Done
@@ -464,7 +464,7 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
                 type="button"
                 className="test-btn"
                 disabled={busy}
-                title={"Skip “" + fl.step.title + "” — the flight goes on without it"}
+                title={"Skip “" + fl.step.title + "” — the route goes on without it"}
                 onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
               >
                 Skip

@@ -39,7 +39,7 @@ const NOTES: Record<string, BarNote> = {
     link: { label: "Intake → GitHub issues", dialog: "intake", target: "issues" },
   },
   verify: {
-    text: "Appears once Verify tracks a repository or has a checklist",
+    text: "Appears once Verify tracks a repository or has behaviors to check",
     link: { label: "Open Verify", dialog: "verify" },
   },
   assistant: { text: "Chat, a todo list, and its editable agent file" },

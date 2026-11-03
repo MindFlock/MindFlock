@@ -95,8 +95,8 @@ describe("Verify keeps an edit or a retry when the server refused", () => {
     const va = squash(code("lib/verifyActions.ts"));
     expect(va).toContain("fields: Partial<TestStep> ): Promise<boolean> {");
     expect(va).toContain("export async function writePlanFor(target: string): Promise<boolean> {");
-    expect(va).toMatch(/errorPop\("Couldn't change that step", errMsg\(err\)\); return false;/);
-    expect(fn("lib/verifyActions.ts", "writePlanFor")).toMatch(/errorPop\("Couldn't write a checklist", errMsg\(err\)\);\s*return false;/);
+    expect(va).toMatch(/errorPop\("Couldn't change that behavior", errMsg\(err\)\); return false;/);
+    expect(fn("lib/verifyActions.ts", "writePlanFor")).toMatch(/errorPop\("Couldn't write the behaviors", errMsg\(err\)\);\s*return false;/);
   });
 
   it("the step editor closes, and the banner clears, only on success", () => {

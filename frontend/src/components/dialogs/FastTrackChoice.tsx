@@ -81,7 +81,7 @@ export function FastTrackChoice({
   askReason?: string;
 }) {
   const askWhy =
-    askReason || (askFirstApplies(value) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you");
+    askReason || (askFirstApplies(value) ? "" : "Goes as far as Agent only: nothing is committed, pushed or merged for you");
   return (
     <>
       <Seg
@@ -110,7 +110,7 @@ export function FastTrackChoice({
         {ASK_FIRST_LABEL}
         {/* Greyed because fast-track is Off: said on its face, not only in
             a tooltip, so it doesn't read as broken. */}
-        {askWhy && !askReason && <span className="muted"> (needs fast-track)</span>}
+        {askWhy && !askReason && <span className="muted"> (needs Commit or further)</span>}
       </label>
     </>
   );

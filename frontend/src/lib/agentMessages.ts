@@ -424,11 +424,11 @@ export interface ShipTask {
   sameFolder?: boolean;
 }
 
-/** How the lane names itself at the head of the line. "leave" is Fast-track's
- * Off rung (a group member's line still shows it; its group carries it) —
- * said as the ladder says it, never "agent only". */
+/** How the lane names itself at the head of the line. "leave" is Goes as far
+ * as's Agent only rung (a group member's line still shows it; its group
+ * carries it) — said as the ladder says it. */
 export const LANE_HEAD: Record<string, string> = {
-  leave: "fast-track off",
+  leave: "agent only",
   commit: "→ commit",
   push: "→ push",
   pr: "→ PR",
@@ -562,7 +562,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   const head = (LANE_HEAD[target] || "→ " + target) + (lane?.ask_first ? ", asks first" : "");
   const copy = lane?.owner && lane.owner !== row.title ? "\nThis session shares its branch with “" + lane.owner + "”, which carries it." : "";
   const means = (LANE_MEANS[target] || "") + (lane?.ask_first ? ", and asks you first in the bell before anything leaves this machine" : "");
-  const base = { restCls: "", title: (means ? "Fast-track: " + means + "." : "") + copy };
+  const base = { restCls: "", title: (means ? "Goes as far as: " + means + "." : "") + copy };
   const line = (lead: string, rest: string, cls: string, state: ShipLine["state"], why = ""): ShipLine => ({
     ...base,
     lead,
@@ -580,7 +580,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
   if (tstate === "failed")
     return line("! failed", reason ? " — " + escalationText(reason) : " — open the bell", "rep-blocked", "escalated", "This line failed" + (reason ? ": " + reason : "") + ".");
   if (ap && ap.state === "halted")
-    return line("! fast-track stopped", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Fast-track stopped" + (ap.reason ? ": " + ap.reason : "") + ".");
+    return line("! shipping halted", ap.reason ? " — " + ap.reason : "", "rep-blocked", "escalated", "Shipping halted" + (ap.reason ? ": " + ap.reason : "") + ".");
 
   // A one-for-all / split line merges back into its lead's branch: that IS
   // its outcome (its own lane is only "commit"), so say so before the lane.
@@ -619,7 +619,7 @@ export function shipLine(row: ShipRow, opts: { act?: string; now?: number; task?
       const ck = checksText(row);
       return { ...line("✓ " + pr, ck.text ? " · " + ck.text : "", "rep-done", "shipped", "Its PR is open."), restCls: ck.bad ? "bad" : "" };
     }
-    return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: its fast-track ends at " + target + ".");
+    return line(target === "push" ? "✓ pushed" : "✓ committed", "", "rep-done", "shipped", "Done: it goes as far as " + target + ".");
   }
 
   // MindFlock is carrying it now: the next outward step, by what git says.

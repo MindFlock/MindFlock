@@ -187,7 +187,7 @@ export const SESSION_ACTIONS = {
   // Opens the pane's ⏩ picker — the ONE fast-track control, never a second
   // copy of its choices; each item acts at once, nothing is pasted.
   fastTrack: {
-    label: "Fast-track…",
+    label: "Goes as far as…",
     keys: "Ctrl+K F",
     chord: "f",
     note: (c) => (c.inst ? LANE_LABEL[laneChoice(c.inst).lane] : ""),

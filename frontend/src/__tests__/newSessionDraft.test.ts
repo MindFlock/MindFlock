@@ -204,7 +204,7 @@ describe("one vocabulary and one set of controls, New and Templates", () => {
     // its own control (and "Ask me before it ships" says why it is grey).
     expect(TEMPLATE_EDITOR).toContain('id="tpl-autopilot"');
     expect(TEMPLATE_EDITOR).toContain("AUTOPILOT_CHOICES.map");
-    expect(FASTTRACK).toContain("(needs fast-track)");
+    expect(FASTTRACK).toContain("(needs Commit or further)");
   });
 
   it("Auto-split and Plan first get one plain line each", () => {

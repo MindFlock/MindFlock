@@ -92,7 +92,7 @@ export function FooterActions({
               id="new-describe-skip"
               className="nf-quiet"
               data-tour="new-more"
-              title="The full form — folder, agent, task, name and Fast-track — with what you typed as the task"
+              title="The full form — folder, agent, task, name and how far it goes — with what you typed as the task"
               onClick={setUpMyself}
             >
               Set it up myself
@@ -189,7 +189,7 @@ export function SaveTemplateRow({ saveTpl }: { saveTpl: SaveTemplateUi }) {
           id="new-save-tpl"
           className="linklike"
           aria-expanded={false}
-          title="Save this whole setup — folder, agent, where it works, task and Fast-track — to start again in one click or on a schedule"
+          title="Save this whole setup — folder, agent, where it works, task and how far it goes — to start again in one click or on a schedule"
           onClick={() => saveTpl.setName("")}
         >
           Save as template…
@@ -233,7 +233,7 @@ export function SaveTemplateRow({ saveTpl }: { saveTpl: SaveTemplateUi }) {
           </button>
           <span className="muted nf-save-tpl-hint">
             {saveTpl.blocked ||
-              "Saves the folder, agent, where it works, task and Fast-track. Run it from Templates, now or on a schedule."}
+              "Saves the folder, agent, where it works, task and how far it goes. Run it from Templates, now or on a schedule."}
           </span>
         </div>
       )}

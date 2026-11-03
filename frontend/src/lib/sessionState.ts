@@ -214,7 +214,7 @@ export function flightYouLabel(stepTitle: string | null | undefined): string {
 
 /** The rail chip of a session whose flight is paused: a calm idle state,
  * not a needs-you one — whoever paused it resumes it. */
-export const PAUSED_FLIGHT_LABEL = "Paused flight";
+export const PAUSED_FLIGHT_LABEL = "Paused route";
 
 /** The rail's word for a sleeping session. */
 export const SLEEPING_LABEL = "Sleeping";
@@ -275,7 +275,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
     return {
       ...needsYou(
         "flight_you",
-        flightYouLabel(fl.step.title) + " — chain “" + fl.plan_name + "” needs you; press Done on its strip, the Sky or the bell"
+        flightYouLabel(fl.step.title) + " — route “" + fl.plan_name + "” needs you; press Done on its strip, the Sky or the bell"
       ),
       label: flightYouLabel(fl.step.title),
     };
@@ -327,7 +327,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       tone: "neutral",
       inBell: false,
       restartable: false,
-      hint: "Flight “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current step") + " — Resume it from its strip's ⋯",
+      hint: "Route “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current stop") + " — Resume it from its strip's ⋯",
     };
   // Idle. In the bell only once it has sat on uncommitted work for a while:
   // an agent that stopped in the middle of something with nobody typing. A

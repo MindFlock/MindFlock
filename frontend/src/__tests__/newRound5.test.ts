@@ -99,7 +99,7 @@ describe("density (finding 6 and the can't-use-yet list)", () => {
   });
 
   it("one Fast-track label list for every screen", () => {
-    expect(FAST_TRACK_LEVELS.map((l) => l.label)).toEqual(["Off", "Commit", "Push", "Open PR", "Merge when green"]);
+    expect(FAST_TRACK_LEVELS.map((l) => l.label)).toEqual(["Agent only", "Commit", "Push", "Open PR", "Merge when green"]);
   });
 });
 

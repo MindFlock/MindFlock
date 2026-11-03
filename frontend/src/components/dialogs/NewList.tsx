@@ -379,7 +379,7 @@ function rememberOptionsOpen(on: boolean) {
 /** The folded Options line: what a closed fold is holding, so nothing it hides
  * is a surprise. */
 export function optionsSummary(lane: Lane, askFirst: boolean): string {
-  return "Options · Fast-track: " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
+  return "Options · Goes as far as " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
 }
 
 /** Everything under the list: the fast-track (always), the batch rows (two or
@@ -435,11 +435,11 @@ export function RunOptions({
   const body = (
     <>
       <div className="rt-row rt-row-top">
-        <span className="rt-label">{many ? "Fast-track each to" : "Fast-track to"}</span>
+        <span className="rt-label">{many ? "Each goes as far as" : "Goes as far as"}</span>
         <div className="rt-ctl">
           <FastTrackChoice
             id="new-lane"
-            label={many ? "Fast-track each to" : "Fast-track to"}
+            label={many ? "Each goes as far as" : "Goes as far as"}
             value={draft.lane}
             onChange={draft.setLane}
             askFirst={draft.askFirst}

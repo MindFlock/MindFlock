@@ -341,7 +341,7 @@ export async function editPlanStep(
     void refreshTestPlans();
     return true;
   } catch (err) {
-    errorPop("Couldn't change that step", errMsg(err));
+    errorPop("Couldn't change that behavior", errMsg(err));
     return false;
   }
 }
@@ -400,13 +400,13 @@ export async function writePlanForBranch(repo: VerifyRepo, branch: string): Prom
     });
     toast(
       r.existing
-        ? branch + " already has a checklist — it's in Verify"
-        : "Asked the agent for a checklist for " + branch + " — it'll appear in Verify (up to three minutes)"
+        ? branch + " already has behaviors — they're in Verify"
+        : "Asked the agent to write the behaviors for " + branch + " — they'll appear in Verify (up to three minutes)"
     );
     refreshTestPlans();
     return true;
   } catch (err) {
-    errorPop("Couldn't write a checklist", errMsg(err));
+    errorPop("Couldn't write the behaviors", errMsg(err));
     return false;
   }
 }
@@ -427,17 +427,17 @@ export async function writePlanFor(target: string): Promise<boolean> {
     toast(
       r.existing
         ? (r.plan && r.plan !== target
-            ? target + "'s branch already has a checklist — it's under " + r.plan
-            : target + " already has a checklist") + " — it's in Verify"
+            ? target + "'s branch already has behaviors — they're under " + r.plan
+            : target + " already has behaviors") + " — they're in Verify"
         // "up to three minutes", matching the row this press creates and the
         // server's own budget. It used to promise "a minute" 200px above a row
         // saying three, which makes the faster of the two promises a broken one.
-        : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)"
+        : "Asked the agent to write the behaviors for " + target + " — they'll appear in Verify (up to three minutes)"
     );
     refreshTestPlans();
     return true;
   } catch (err) {
-    errorPop("Couldn't write a checklist", errMsg(err));
+    errorPop("Couldn't write the behaviors", errMsg(err));
     return false;
   }
 }

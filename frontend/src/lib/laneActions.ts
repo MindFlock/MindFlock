@@ -159,10 +159,10 @@ export function laneLockReason(
     const group = run.name || "its team run";
     if (run.role === "lead") return `It leads ${group} — the team run ships it once, through the team run's release`;
     if (run.grouping === "together")
-      return `Its work merges into ${group}'s one PR — move it out of the team run to fast-track it on its own`;
+      return `Its work merges into ${group}'s one PR — move it out of the team run to set how far it goes on its own`;
   }
   const owner = inst.lane?.owner;
-  if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set its fast-track from that session`;
+  if (owner && inst.title && owner !== inst.title) return `${owner} drives this branch — set how far it goes from that session`;
   return "";
 }
 
@@ -203,7 +203,7 @@ export function fastTrackModel(
     })),
     ask: {
       on: cur.askFirst && askFirstApplies(cur.lane),
-      why: lock || (askFirstApplies(cur.lane) ? "" : "Fast-track is off — pick how far it goes first"),
+      why: lock || (askFirstApplies(cur.lane) ? "" : "It goes as far as Agent only — pick how far it goes first"),
     },
   };
 }
@@ -236,7 +236,7 @@ export function flightReach(
   steps?: readonly Pick<FlightStep, "kind" | "config">[] | null
 ): FlightReach {
   const named = String(row.plan_name || "").trim();
-  const desc = (named ? "Its stops (“" + named + "”)" : "Its stops") + " decide, not Fast-track. To change how far it goes, edit them.";
+  const desc = (named ? "Its stops (“" + named + "”)" : "Its stops") + " decide how far it goes — edit them to change it.";
   if (!steps) return { lane: "", head: "This session's stops decide how far it goes", desc };
   const ships = steps.filter((s) => s.kind === "ship");
   const lane = String(ships[ships.length - 1]?.config?.lane || "");
@@ -249,8 +249,8 @@ export function flightReach(
 
 /** The sentence a pick is confirmed with. */
 export function fastTrackSaid(name: string, lane: Lane, askFirst: boolean): string {
-  if (lane === "leave") return `${name}: fast-track off — MindFlock won't commit anything`;
-  return `${name}: fast-track → ${LANE_LABEL[lane]}${askFirstApplies(lane) && askFirst ? ", asks first" : ""}`;
+  if (lane === "leave") return `${name}: goes as far as Agent only — MindFlock won't commit anything`;
+  return `${name}: goes as far as ${LANE_LABEL[lane]}${askFirstApplies(lane) && askFirst ? ", asks first" : ""}`;
 }
 
 // --- Talking to the server ----------------------------------------------------
@@ -310,7 +310,7 @@ export async function pickFastTrack(
     if (!opts.quiet)
       toast(
         r?.held
-          ? `${name}: its team run is paused — fast-track → ${LANE_LABEL[lane]} starts when it resumes`
+          ? `${name}: its team run is paused — going as far as ${LANE_LABEL[lane]} starts when it resumes`
           : fastTrackSaid(name, lane, askFirst),
         { duration: 4500 }
       );
@@ -370,7 +370,7 @@ export async function splitSession(
   const cur = laneChoice(inst);
   await startSplitOf(inst, name, cur.lane === "leave" ? "pr" : cur.lane, cur.askFirst);
   useUi.getState().threadOpen(inst.title);
-  return `${name} is proposing the pieces — approve the plan in its Thread tab`;
+  return `${name} is proposing its workers — approve the split in its Thread tab`;
 }
 
 /** The fast-track a new single session was given in the New dialog, applied
@@ -393,7 +393,7 @@ export async function setLaneWhenReady(
     } catch (err) {
       const retry = err instanceof ApiError && err.status === 409 && i < delays.length;
       if (!retry) {
-        toast(`Couldn't fast-track ${title} to “${LANE_LABEL[lane]}”: ${errMsg(err)}`, {
+        toast(`Couldn't set ${title} to go as far as “${LANE_LABEL[lane]}”: ${errMsg(err)}`, {
           duration: 7000,
         });
         return false;

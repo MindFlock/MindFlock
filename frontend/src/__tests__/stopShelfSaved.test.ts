@@ -155,9 +155,9 @@ describe("rename rules (checkRename)", () => {
   const plans = [MINE, TICKET];
   it("trimmed; empty, too long, or another's name refused; its own name fine", () => {
     expect(checkRename("  Ship it  ", plans, "p_mine")).toEqual({ ok: true, name: "Ship it" });
-    expect(checkRename("   ", plans, "p_mine")).toEqual({ ok: false, error: "A saved chain needs a name" });
+    expect(checkRename("   ", plans, "p_mine")).toEqual({ ok: false, error: "A saved route needs a name" });
     expect(checkRename("x".repeat(NAME_MAX + 1), plans, "p_mine").ok).toBe(false);
-    expect(checkRename("ticket TO merge", plans, "p_mine")).toEqual({ ok: false, error: "Another saved chain is already called “Ticket to merge”" });
+    expect(checkRename("ticket TO merge", plans, "p_mine")).toEqual({ ok: false, error: "Another saved route is already called “Ticket to merge”" });
     expect(checkRename("Mine", plans, "p_mine")).toEqual({ ok: true, name: "Mine" });
   });
   it("built-ins first, then yours", () => {

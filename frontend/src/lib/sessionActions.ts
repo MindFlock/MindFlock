@@ -637,7 +637,7 @@ export const MOVE_MID_TURN = "The agent is mid-turn — tick the box to move any
 const MOVE_REFUSALS: Record<MoveRefusal, string> = {
   working: MOVE_MID_TURN + ".",
   exists: "Something is already at that path — pick a folder that doesn't exist yet.",
-  in_flight: "Its flight or fast-track is running — pause it first, or tick the box to move anyway.",
+  in_flight: "Its route is running — pause it first, or tick the box to move anyway.",
   remote: "That session lives on another device — move it from there.",
   bad_dest: "Give a full path to a new folder outside the session's own.",
   unknown_session: "MindFlock couldn't find that session — it may have just been removed.",

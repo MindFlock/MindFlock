@@ -323,7 +323,7 @@ export function RepoFields({
           onSave={save}
         />
         <label className="set-row">
-          <span className="set-label">Notes for the checklist writer (optional)</span>
+          <span className="set-label">Notes for the behaviors writer (optional)</span>
           <textarea
             className="vf-repo-prompt"
             rows={3}
@@ -341,7 +341,7 @@ export function RepoFields({
             onChange={(e) => promptSave.schedule(e.target.value)}
             onBlur={() => promptSave.flush()}
           />
-          <span className="set-hint">Added to every checklist for this repo.</span>
+          <span className="set-hint">Added whenever behaviors are written for this repo.</span>
         </label>
       </div>
     );
@@ -590,7 +590,7 @@ export function NoRemoteOptIn() {
       <div className="pr-advanced-body">
         <p className="set-hint">
           Commit this as <code>.mindflock.toml</code> at the repository's root — each new branch
-          pushed there then gets a checklist.
+          pushed there then gets its behaviors written.
         </p>
         <div className="vf-snippet">
           <pre>{OPT_IN_SNIPPET}</pre>
@@ -798,7 +798,7 @@ export function AddRepoFlow({
               ))}
             </datalist>
             <span className="set-hint">
-              {only === "verify" ? "Each new branch pushed in it gets a checklist. " : ""}
+              {only === "verify" ? "Each new branch pushed in it gets its behaviors written. " : ""}
               {suggestions.length
                 ? "Any clone counts. Known: " + suggestions.slice(0, 3).join(", ") + (suggestions.length > 3 ? "…" : "")
                 : "Any clone of it counts — it is matched by its GitHub remote, not its path."}

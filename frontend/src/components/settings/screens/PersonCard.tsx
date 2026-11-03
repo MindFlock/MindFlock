@@ -97,7 +97,7 @@ export function PersonCardView({
           onChange={set("git_email")}
         />
         <span className="set-hint">
-          What MindFlock's own commits (fast-track, team-run merges, peer exports) are authored as.
+          What MindFlock's own commits (Goes as far as, team-run merges, peer exports) are authored as.
           Blank: the repo's git config decides. Your agents' commits are never changed.
         </span>
       </label>

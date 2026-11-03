@@ -217,7 +217,7 @@ export function templateMeta(t: Template): string {
         : "separate worktree"
   );
   if (t.init_repo) bits.push("git init");
-  if (t.autopilot) bits.push("Fast-track: " + (AUTOPILOT_THEN[t.autopilot] || t.autopilot));
+  if (t.autopilot) bits.push("goes as far as " + (AUTOPILOT_THEN[t.autopilot] || t.autopilot));
   return bits.join(" · ");
 }
 
@@ -239,7 +239,7 @@ export function historyLine(h: TemplateRunEntry, now: Date = new Date()): string
   let line = bits.join(" · ");
   if (h.skipped) line += " — skipped: " + h.skipped;
   else if (failedRow(h)) line += " — failed: " + (h.error || "it couldn't start");
-  else if (h.session) line += " → " + h.session + (h.autopilot ? " (Fast-track: " + levelWord(h.autopilot) + ")" : "");
+  else if (h.session) line += " → " + h.session + (h.autopilot ? " (goes as far as " + levelWord(h.autopilot) + ")" : "");
   return line;
 }
 
@@ -905,7 +905,7 @@ export function TemplatesDialogView(p: ViewProps) {
     const { t, info, status: st } = planAsTemplate(f);
     const scheduled = hasSchedule(t);
     const paused = scheduled && !!(t.schedule?.paused || info.paused);
-    const stops = "Saved chain · " + f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+    const stops = "Saved route · " + f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
     const schedOpen = p.planSched?.id === f.id;
     const folderOpen = p.planFolder?.id === f.id;
     const noFolder = !(f.session?.repo_path || "").trim();

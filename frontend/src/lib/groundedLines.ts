@@ -74,7 +74,7 @@ export function sourcePlanId(steps: readonly Pick<FlightStep, "group">[], plans:
 export function planToSave(name: string, steps: readonly FlightStep[], plans: readonly FlightPlan[]): FlightPlan {
   const id = sourcePlanId(steps, plans);
   const base = id ? plans.find((p) => p.id === id)! : null;
-  const fresh = planFromSteps(base ? base.name : name || "New chain", steps, base?.trigger);
+  const fresh = planFromSteps(base ? base.name : name || "New route", steps, base?.trigger);
   if (!base) return { ...fresh, id: "", updated: 0 };
   return { ...fresh, id: base.id, builtin: base.builtin, description: base.description, session: { ...base.session }, updated: base.updated };
 }
@@ -105,10 +105,10 @@ export type RenameCheck = { ok: true; name: string } | { ok: false; error: strin
  * shelf never shows two chips you can't tell apart. */
 export function checkRename(raw: string, plans: readonly Pick<FlightPlan, "id" | "name">[], selfId: string): RenameCheck {
   const name = raw.trim();
-  if (!name) return { ok: false, error: "A saved chain needs a name" };
+  if (!name) return { ok: false, error: "A saved route needs a name" };
   if (name.length > NAME_MAX) return { ok: false, error: "Keep the name under " + NAME_MAX + " characters" };
   const clash = plans.find((p) => p.id !== selfId && p.name.trim().toLowerCase() === name.toLowerCase());
-  if (clash) return { ok: false, error: "Another saved chain is already called “" + clash.name.trim() + "”" };
+  if (clash) return { ok: false, error: "Another saved route is already called “" + clash.name.trim() + "”" };
   return { ok: true, name };
 }
 
@@ -148,7 +148,7 @@ export function handoffLinks(flights: readonly Flight[] | null | undefined): Han
       const target = child || (isGroundedKey(raw) ? groundedIdOf(raw) : "");
       if (!target) continue;
       const session = String((child && typeof detail.session === "string" ? detail.session : st.config?.session) || "new");
-      out.push({ fromFlight: f.id, fromStep: st.id, stepTitle: st.title || "Start a chain", fromSession: f.session || "", fromName: f.plan_name || "", target, started: !!child, session });
+      out.push({ fromFlight: f.id, fromStep: st.id, stepTitle: st.title || "Start a route", fromSession: f.session || "", fromName: f.plan_name || "", target, started: !!child, session });
     }
   return out;
 }
@@ -162,7 +162,7 @@ export const sessionWord = (s: string, nameOf: (t: string) => string = (t) => t)
 export function triggerHeadFor(f: Pick<Flight, "id">, flights: readonly Flight[] | null | undefined, nameOf: (t: string) => string = (t) => t): ChainHead | null {
   const link = handoffLinks(flights).find((l) => l.target === f.id && !l.started);
   if (!link) return null;
-  const chain = link.fromSession ? nameOf(link.fromSession) : link.fromName || "a chain";
+  const chain = link.fromSession ? nameOf(link.fromSession) : link.fromName || "a route";
   return {
     kind: "trigger",
     title: "When " + chain + " reaches " + link.stepTitle,

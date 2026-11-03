@@ -279,7 +279,7 @@ describe("the sentence", () => {
     const sp = summarySentence({ ...base, n: 1, lane: "pr", split: true, maxPieces: 4 })!;
     expect(sp.lead).toMatch(/^One session/);
     expect(sp.lead).toMatch(/it does the task itself/);
-    expect(sp.lead).toMatch(/up to 4 pieces/);
+    expect(sp.lead).toMatch(/up to 4 workers/);
     expect(sp.lead).toMatch(/Thread tab/);
   });
 
@@ -315,8 +315,8 @@ describe("the single-session Options fold", () => {
   it("names the rung it is hiding, and says when it will ask first", () => {
     // A closed fold must still say what a start does: New's first page is
     // one box, and the summary is the only trace of the choice under it.
-    expect(optionsSummary("leave", false)).toBe("Options · Fast-track: Off");
-    expect(optionsSummary("pr", false)).toBe("Options · Fast-track: Open PR");
-    expect(optionsSummary("commit", true)).toBe("Options · Fast-track: Commit, asks first");
+    expect(optionsSummary("leave", false)).toBe("Options · Goes as far as Agent only");
+    expect(optionsSummary("pr", false)).toBe("Options · Goes as far as Open PR");
+    expect(optionsSummary("commit", true)).toBe("Options · Goes as far as Commit, asks first");
   });
 });

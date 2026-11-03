@@ -331,7 +331,7 @@ export function PlainWorksIn({
             title="Just run in the folder"
             desc={
               laneNeedsWorktree
-                ? "Turns Fast-track off — there is no repo to commit to"
+                ? "Sets Goes as far as to Agent only — there is no repo to commit to"
                 : "The agent edits the files as they are; no diff, commit or PR"
             }
           />
@@ -398,7 +398,7 @@ export function WorksIn({
         splitOn
           ? "Turns “Let it split into workers” off — a split works in its own worktree"
           : laneNeedsWorktree
-          ? "Turns fast-track off (it commits for this session, so it needs its own worktree)"
+          ? "Sets Goes as far as to Agent only (it commits for this session, so it needs its own worktree)"
           : IN_PLACE_HINT
       }
       underWorktree={

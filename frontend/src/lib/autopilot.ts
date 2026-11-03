@@ -42,7 +42,7 @@ export const SOURCE_DEPTHS: readonly Lane[] = ["commit", "push", "pr"];
 /** A SOURCE's bottom rung, in words. A source set to Off still runs the agent
  * on every item; it just stops there. So Intake's "Goes as far as" control and
  * the Sky lane's chip say "Stop after the agent", where a session's ⏩ says Off. */
-export const SOURCE_OFF_LABEL = "Stop after the agent";
+export const SOURCE_OFF_LABEL = "Agent only";
 
 /** The rungs a source's "Goes as far as" offers, nearest first. */
 export const SOURCE_RUNGS: readonly Lane[] = ["leave", ...SOURCE_DEPTHS];
@@ -64,7 +64,7 @@ export function sourceRungLabel(lane: Lane): string {
 
 /** THE user-facing word for each rung. */
 export const LANE_LABEL: Record<Lane, string> = {
-  leave: "Off",
+  leave: "Agent only",
   commit: "Commit",
   push: "Push",
   pr: "Open PR",
@@ -90,7 +90,7 @@ export const LANE_DESC: Record<Lane, string> = {
   merge: "Commit, push, open a PR and merge it once its checks pass",
 };
 
-/** The picker's letters: Off, Commit, pUsh, PR, Merge (A is "ask first"). */
+/** The picker's letters: agent Only, Commit, pUsh, PR, Merge (A is "ask first"). */
 export const LANE_KEY: Record<Lane, string> = {
   leave: "O",
   commit: "C",
@@ -131,9 +131,9 @@ export function autopilotChipTitle(run: AutopilotRun): string {
   const target = laneLabel(run.depth);
   if (run.state === "halted")
     // A halt's `note` is set only when the agent was sent a fix-it note.
-    return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
+    return "Shipping halted: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
   if (run.state === "done")
-    return "Fast-track finished at " + target + " and switched itself off.";
+    return "Went as far as " + target + " — done; it is back to Agent only.";
   // Prefer the server's own sentence for what this pass is waiting on — it knows
   // whether it is the agent, the prompt queue, checks or a usage limit. Guessing
   // from an empty `step` made every legitimate pause read as "waiting on the
@@ -146,7 +146,7 @@ export function autopilotChipTitle(run: AutopilotRun): string {
   const skipped = run.skipped?.length
     ? "\nSkipped hooks: " + run.skipped.join(", ")
     : "";
-  return "Fast-tracking to " + target + where + skipped;
+  return "Going as far as " + target + where + skipped;
 }
 
 /** A short header label naming WHY a PR cannot merge.

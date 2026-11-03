@@ -268,7 +268,7 @@ describe("active", () => {
     expect(html).toContain('class="peer-joint-check" data-verdict="needs_you"');
     // The joint check's card (JointCheck.tsx, r6w-joint-verify): steps by
     // side with who checks them; read-only without a link id.
-    expect(html).toContain("Needs Bea — 1 step");
+    expect(html).toContain("Needs Bea — 1 behavior");
     expect(html).toContain("Your side");
     expect(html).toContain("Bea&#x27;s side");
     expect(html).toMatch(/peer-joint-actor-human">person</);
