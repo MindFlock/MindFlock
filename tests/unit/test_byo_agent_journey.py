@@ -194,9 +194,12 @@ def test_toml_declares_tail_lines_and_excludes():
 # --------------------------------------------------------------------------- #
 # cline: the first-launch ClinePass promo                                      #
 # --------------------------------------------------------------------------- #
-def test_the_clinepass_promo_is_a_gate_closed_with_escape():
+@pytest.mark.parametrize("name", ["cline_clinepass_w120", "cline_desktop_w120"])
+def test_the_clinepass_promo_is_a_gate_closed_with_escape(name):
+    """Its first launch shows "Try ClinePass", a later one "Get Cline Desktop":
+    the same popup, the same footer."""
     spec = providers.resolve("cline").trust_prompt()
-    screen = _screen("cline_clinepass_w120")
+    screen = _screen(name)
     assert spec.on_screen(screen) is True
     # Enter would open a browser; Escape closes it and types nothing.
     assert spec.keystroke == b"\x1b"
