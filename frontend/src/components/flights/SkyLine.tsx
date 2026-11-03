@@ -82,7 +82,7 @@ import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
 import { agentMenuItems, pillAimer, useAgentMenu, useChainMenu, type AgentMenuItem } from "./useChainMenu";
-import { ReadyHead, startWord } from "./ReadyHead";
+import { ReadyHead } from "./ReadyHead";
 import { SkyChain, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
@@ -408,9 +408,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // The head is the session's AGENT (round 20): its name, what it is doing
   // now; where the flight is goes on the frame's bar.
   const agent = agentTitle(row?.provider || row?.program, row?.program);
+  // While ready, ReadyHead says so; the sub never repeats it
   // (the task headline — read from its newest meaningful prompt — else the
   // create task, else the last prompt).
-  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";
+  const headSub = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: agent, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
     [agent, headSub, p.title, sessionNode]

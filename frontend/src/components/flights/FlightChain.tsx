@@ -19,7 +19,7 @@ import { deriveSessionState } from "../../lib/sessionState";
 import { chainColor, chainGraph, wireIntent, HEAD_ID, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { windowName } from "../../lib/windowName";
 import type { StepKindDef } from "../../lib/flights";
-import { ReadyHead, startWord } from "./ReadyHead";
+import { ReadyHead } from "./ReadyHead";
 import { SkyChain, agentDoing, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from "./SkyChain";
 import { agentMenuItems, pillAimer, useAgentMenu, useChainMenu } from "./useChainMenu";
 import { useFlights, useInstances } from "../../state/queries";
@@ -37,8 +37,9 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const where = row ? lineWhere(line.diagram) : "";
+  // While ready, ReadyHead says so; the sub never repeats it.
   const agent = agentTitle(row?.provider || row?.program, row?.program);
-  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : agentDoing(row);
+  const headSub = agentDoing(row);
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: agent, sub: headSub, session: title, color: chainColor(title), node: sessionNode }),
     [agent, title, headSub, sessionNode]

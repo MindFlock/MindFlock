@@ -6752,8 +6752,9 @@ logic needs expanding out." Building a chain on a session is not running it.
 ### UI (integrator, after the backend lands)
 The head tile of a ready chain wears a "Ready" chip and a ▶ Run button; its
 ⋯ (and the chain's) says how it starts: "On your next prompt" / "Only when I
-press Run" / "Run it now". `lineWhere` says "ready · runs on your next
-prompt". Building a chain in the Sky no longer starts anything.
+press Run" / "Run it now". The ready wording lives only in `ReadyHead`; the
+tile's subtitle stays the session's own line (`lineWhere` / task headline).
+Building a chain in the Sky no longer starts anything.
 
 ### Round 19 — as built (2026-11-02)
 
@@ -6785,7 +6786,11 @@ so". Everything below is live on the server. The frontend types are in place
 - A ready flight whose session goes away is pruned and cancelled like any
   other unfinished flight.
 - `flight.*` event `detail`: `"<session>: ready · runs on your next prompt"`
-  or `"<session>: ready · runs when you press Run"`.
+  or `"<session>: ready · runs when you press Run"`. This deliberately
+  differs from the tile's start-on line ("starts on next prompt" /
+  "starts on ▶ Run", 2026-11-03): a notification names the session and must
+  read alone, while the tile already shows the Ready chip. Change both
+  together if either moves.
 
 ##### New flight fields (stored, and in every flight dto)
 
@@ -6935,9 +6940,36 @@ start_on: "prompt"})`).
   {start_on: "prompt"})`). The Intake Fly, ⋯ Fly on a session…, the new
   session block, schedules and MCP still take off at once.
 - The session tile of a ready chain (Sky and Flight tab): `ReadyHead` — a
-  "Ready" chip, ▶ Run (`runFlight`), and how it starts ("runs on your next
-  prompt" / "runs when you press ▶ Run"; a press flips it via `setStartOn`);
-  its subtitle says "ready · …".
+  "Ready" chip, ▶ Run (`runFlight`), and how it starts ("starts on next
+  prompt" / "starts on ▶ Run"; a press flips it via `setStartOn`); its
+  subtitle is the session's own line. ~~"runs on your next prompt" / "runs
+  when you press ▶ Run"; subtitle "ready · …"~~ (round-19 first cut, see
+  below).
+  - **Fixed 2026-11-03 (ready head layout)**: the head said "ready" three
+    times, the text collided, and ▶ Run was invisible. The button wore
+    `.sky-run`, and `.sky-chain .sky-run` (the free chain's hover-only ▶
+    circle, `opacity: 0`) caught it. Now: the subtitle is the session's own
+    line (`where` / task headline), never "ready · …", in SkyLine and
+    FlightChain alike. Under the name sits ONE row "[Ready] [▶ Run]", the
+    button `.sky-ready-run` (a pill; never `.sky-run`), and below it one
+    small, muted, un-underlined line, `.sky-start-on` ("starts on ▶ Run" /
+    "starts on next prompt"; it still flips `start_on`, and its title says
+    what a click does). The head's subtitle is one line with an ellipsis
+    (`.sky-head > .sky-node-sub`), its name is one line while ready, and its
+    rows never shrink (`flex-shrink: 0`). `.sky-node-sub`'s `overflow:
+    hidden` used to let it shrink in the 132×140 box, so the next row
+    drew over it. Budget at 100%: tile 64 + name 24 + sub 15 + head 4 + 18 +
+    1 + 13 = 139 of 140, so any extra row or bigger font overflows.
+  - The start-on toggle's tooltip comes from the exported `startTitle()`
+    (ReadyHead.tsx): "Starts only when you press ▶ Run. Click to start it on
+    this session's next prompt too." / "Starts on this session's next prompt
+    (or ▶ Run). Click to start it only on ▶ Run." It is a plain button, not
+    `.linklike`: `.sky button.linklike` is accent-coloured and underlined.
+  - **Rule for CSS work:** a control rendered inside `.sky-chain` gets its
+    own class and never reuses `.sky-run` or another free-chain class. The
+    chain's descendant rules (SkyChain.css: `.sky-chain .sky-plus`, the
+    hover-only `.sky-socket` at `opacity: 0`) style whatever wears those
+    names, wherever it sits in the chain.
 
 ## Round 20: a session is a frame, the agent is a tile; parallel stops — contract
 

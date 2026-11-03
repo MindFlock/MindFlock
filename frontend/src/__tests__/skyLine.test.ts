@@ -197,7 +197,7 @@ describe("the line", () => {
 
   it("the agent tile says what the agent is doing; where the flight is goes on the frame's bar", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain('const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";');
+    expect(src).toContain('const headSub = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";');
     expect(src).toContain('<span className="skl-where" title={where}>');
   });
 
