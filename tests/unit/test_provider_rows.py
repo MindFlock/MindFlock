@@ -376,7 +376,9 @@ class TestReferencedAgents:
         )
         aider = rows["agent-auth-aider"]
         assert aider.status == "warn" and aider.cmd == ""  # API keys: nothing to run
-        assert rows["agent-auth-goose"].status == "info"  # declares no sources
+        # goose names config.yaml (`goose configure` writes it): a real verdict.
+        goose = rows["agent-auth-goose"]
+        assert goose.status == "warn"  # off PATH here, so no command to offer
 
     def test_default_row_is_unchanged_and_the_rows_reach_run_checks(self, monkeypatch):
         monkeypatch.setattr(

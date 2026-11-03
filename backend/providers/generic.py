@@ -142,6 +142,7 @@ class GenericProvider(BaseProvider):
         return TrustSpec(
             patterns=tuple(self.cfg.trust_patterns),
             keystroke=self.cfg.keystroke_bytes(),
+            tail_lines=int(self.cfg.trust_tail_lines or 0),
         )
 
     def idle_prompt_pattern(self) -> Optional[str]:
@@ -195,12 +196,18 @@ class GenericProvider(BaseProvider):
         from the payload's ``session_id`` and clobber it.
         """
         cfg = self.cfg
-        if not cfg.activity_hooks_file or not cfg.activity_hook_events:
-            return
         import os
         from pathlib import Path
 
         from . import activity_markers
+
+        # The CLI's own work-tree files (``git_excludes``: aider's .aider*),
+        # ignored before it starts — whether or not it has hooks.
+        if cfg.git_excludes and workdir and os.path.isdir(workdir):
+            for rel in cfg.git_excludes:
+                activity_markers.ensure_git_excluded(workdir, rel)
+        if not cfg.activity_hooks_file or not cfg.activity_hook_events:
+            return
 
         try:
             if not workdir or not session_name or not os.path.isdir(workdir):
@@ -354,6 +361,26 @@ class GenericProvider(BaseProvider):
                 out.append(template[i])
                 i += 1
         return "".join(out)
+
+    # --- MindFlock MCP auto-attach ----------------------------------------- #
+    def mcp_launch_args(self, spec) -> tuple:
+        """The config's ``mcp_args`` filled in for ``spec`` (a
+        :class:`backend.providers.mcp_attach.McpSpec`), or ``()`` when it has
+        none — the base "can't be auto-attached"."""
+        if not self.cfg.mcp_args:
+            return ()
+        from types import SimpleNamespace
+
+        from . import mcp_attach
+
+        view = SimpleNamespace(
+            command=spec.command(),
+            args=tuple(spec.args()),
+            env={k: str(v) for k, v in spec.env().items()},
+            server_name=mcp_attach.SERVER_NAME,
+            tool_names=(),
+        )
+        return tuple(self._peer_render(a, view) for a in self.cfg.mcp_args)
 
     def _peer_config_file(self, spec) -> str:
         name, content = self.cfg.peer_mcp_file

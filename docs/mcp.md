@@ -118,10 +118,18 @@ returns the calling session without an approval prompt.
 **The Assistant window** is attached too, as an *external client*: it is not a
 session, so it has no title. See [External clients](#external-clients).
 
-**Other CLIs** (antigravity, aider, opencode, cline, goose, your own TOML
-providers) are not attached automatically. Register the server with them by
-hand ([below](#using-it-from-your-own-client)). A provider can opt in by
-overriding `mcp_launch_args(spec)`. `GET /api/config` → `caps.agent_mcp.providers`
+**Goose** gets one more stdio extension for the launch, next to your own:
+`goose session --with-extension "env MINDFLOCK_…=… <python> -P -m backend.mcp"`
+(its config's `mcp_args`; `env(1)` because goose drops `PYTHONPATH` from an
+extension's env).
+
+**Other CLIs** (antigravity, aider, opencode, cline, your own TOML providers
+without `mcp_args`) are not attached automatically. aider has no MCP client;
+opencode (`OPENCODE_CONFIG_CONTENT`) and cline (`CLINE_MCP_SETTINGS_PATH`, which
+replaces your own MCP settings file) take an extra server only through an
+environment variable, and the attach is per-launch argv. Register the server with them by hand
+([below](#using-it-from-your-own-client)). A provider can opt in with
+`mcp_args` templates or by overriding `mcp_launch_args(spec)`. `GET /api/config` → `caps.agent_mcp.providers`
 lists the providers that do.
 
 ### What the server process is given

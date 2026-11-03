@@ -436,6 +436,8 @@ SAME_DIALOG = [
 #: printed, the user's own numbered input.
 NOT_A_DIALOG = [
     "aider_answered_w60",
+    "aider_create_answered_w80",
+    "aider_docgate_answered_w80",
     "opencode_printed_list_w80",
     "opencode_idle_w80",
     "goose_denied_w80",

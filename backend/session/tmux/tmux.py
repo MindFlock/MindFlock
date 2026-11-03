@@ -311,7 +311,7 @@ class TmuxSession:
         from backend import providers  # lazy: avoid import cycle
 
         spec = providers.resolve(self.program).trust_prompt()
-        if spec and any(p in content for p in spec.patterns):
+        if spec and spec.on_screen(content):
             try:
                 self.ptmx.write(spec.keystroke)
             except Exception as e:  # noqa: BLE001

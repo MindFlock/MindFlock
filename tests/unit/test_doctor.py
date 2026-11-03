@@ -454,11 +454,12 @@ class TestAgentAuth:
         assert "auth.json" in c.detail
 
     def test_provider_declaring_no_credential_sources_never_nags(self, monkeypatch):
-        # goose keeps its credentials somewhere MindFlock does not read, so
+        # agy keeps its credentials somewhere MindFlock does not read, so
         # finding nothing proves nothing: info with no fix, even with the CLI off
-        # PATH, because a warn here could never be cleared.
-        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "goose")
-        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "goose")
+        # PATH, because a warn here could never be cleared. (goose used to be
+        # this case; it now names config.yaml, which `goose configure` writes.)
+        monkeypatch.setattr(doctor, "_default_provider_name", lambda: "antigravity")
+        monkeypatch.setattr(doctor, "_resolve_agent_binary", lambda name: "agy")
         monkeypatch.setattr(doctor.shutil, "which", _which({}))
         c = doctor.check_agent_auth()
         assert c.status == "info"
