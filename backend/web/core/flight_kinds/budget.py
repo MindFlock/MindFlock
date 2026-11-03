@@ -42,7 +42,9 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
     scope = F._text(raw.get("scope"), 8).lower() or "flight"
     if scope not in SCOPES:
         if strict:
-            raise F.PlanError("scope is flight or here", where + ".scope")
+            raise F.PlanError(
+                "scope is flight (the whole route) or here", where + ".scope"
+            )
         scope = "flight"
     # No limit at all is allowed (a block just placed): it passes, "no limit set".
     return {
@@ -174,8 +176,8 @@ KIND = register(
         spec={
             "label": "Budget",
             "actor": "robot",
-            "summary": "Check the flight is within a budget (dollars, minutes or "
-            "tokens); with scope flight it keeps watching every later stop.",
+            "summary": "Check the route is within a budget (dollars, minutes or "
+            "tokens); checking the whole route, it keeps watching every later stop.",
             "default_title": "Budget",
             "family": "outside",
             "risk": [],
@@ -188,7 +190,7 @@ KIND = register(
                     default="",
                     placeholder="e.g. 5 — empty or 0 = no limit",
                 ),
-                F._f("max_minutes", "int", "Most minutes in the air", default=0),
+                F._f("max_minutes", "int", "Most minutes running", default=0),
                 F._f("max_tokens", "int", "Most tokens", default=0),
                 F._f("scope", "select", "Checks", default="flight", options=SCOPES),
             ],

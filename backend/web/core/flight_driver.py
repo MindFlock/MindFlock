@@ -942,7 +942,7 @@ def _ensure_default_place() -> str:
             with open(readme, "w", encoding="utf-8") as fh:
                 fh.write(
                     "# MindFlock's default place\n\n"
-                    "Chains run here when no session is picked.\n"
+                    "Routes run here when no session is picked.\n"
                 )
         git = [
             "git",
@@ -1082,7 +1082,7 @@ def _arm(flight: dict, lane: str, ask_first: bool = False, message: str = "") ->
         raise _StepFailed("the session is gone")
     try:
         if srv._peer_guard.refusal(inst, "autopilot") is not None:
-            raise _StepFailed("a peer's session can't be fast-tracked from here")
+            raise _StepFailed("a peer's session can't ship by itself from here")
     except _StepFailed:
         raise
     except Exception:  # noqa: BLE001
@@ -1123,7 +1123,7 @@ def _ensure_checklist(flight: dict) -> dict:
     try:
         srv._ensure_test_plan(title, manual=True)
     except Exception as err:  # noqa: BLE001
-        raise _StepFailed("could not ask for the checklist: %s" % err)
+        raise _StepFailed("could not ask for the behaviors: %s" % err)
     return {}
 
 
@@ -1138,7 +1138,7 @@ async def _start_verify_run(plan_id: str) -> None:
             msg = _json.loads(resp.body).get("error") or ""
         except Exception:  # noqa: BLE001
             msg = ""
-        raise _StepFailed(msg or "the checklist run could not start")
+        raise _StepFailed(msg or "the behaviors check could not start")
 
 
 def _start_command(flight: dict, step: dict, folder: str) -> None:
@@ -1699,7 +1699,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
 
 def _fix_note(step: dict, action: dict) -> str:
     return (
-        "[MindFlock flight] %s failed: %s\nFix it; the flight retries the step "
+        "[MindFlock route] %s failed: %s\nFix it; the route retries the stop "
         "once you are done." % (step["title"], action.get("reason") or "failed")
     )
 
@@ -2111,7 +2111,7 @@ def restore_on_reopen(snap: Optional[dict], title: str) -> Optional[dict]:
                     time.time(),
                     "",
                     "halted",
-                    "not restored: another chain is live on the reopened session",
+                    "not restored: another route is live on the reopened session",
                 ),
             )
         except _flights.FlightError:
@@ -2152,16 +2152,16 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     adhoc = body.get("steps") is not None
     plan = _flights.get_plan(plan_id) if plan_id or not adhoc else None
     if plan is None and (plan_id or not adhoc):
-        raise _flights.FlightError("unknown_plan", 404, "no such plan")
+        raise _flights.FlightError("unknown_plan", 404, "no such saved route")
     if adhoc:
         if plan is None and not title and not str(body.get("repo_path") or "").strip():
             raise _flights.FlightError(
-                "needs_title", 400, "an ad-hoc flight needs a session (or a folder)"
+                "needs_title", 400, "an ad-hoc route needs a session (or a folder)"
             )
         plan = _flights.adhoc_plan(
             body.get("steps"),
             plan,
-            subject.get("title") or ("Flight on %s" % title if title else ""),
+            subject.get("title") or ("Route on %s" % title if title else ""),
         )
     if title and title not in srv.ENGINE.instances:
         raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
@@ -2211,7 +2211,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
             _session_payload(plan["session"], repo, prompt)
         )
         if adhoc and not plan_id and not subject.get("title"):
-            plan = dict(plan, name="Flight on %s" % new_title)
+            plan = dict(plan, name="Route on %s" % new_title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
                 plan,
@@ -2275,7 +2275,7 @@ def _take_over(flight: dict, rec: dict, lead: List[dict]) -> dict:
     title = flight["session"]
     ids = [s["id"] for s in flight["steps"][flight["cursor"] :][: len(lead)]]
     halted = (
-        str(rec.get("reason") or "Fast-track stopped")
+        str(rec.get("reason") or "shipping stopped")
         if rec.get("state") == "halted"
         else ""
     )
@@ -2334,7 +2334,7 @@ def _verify_done(flight: dict, sid: str, note: str) -> None:
     for step in _tp.open_human_steps(plan):
         try:
             _tp.record_result(
-                pid, step["id"], "pass", note=note or "Done on the chain", by="human"
+                pid, step["id"], "pass", note=note or "Done on the route", by="human"
             )
         except Exception as err:  # noqa: BLE001
             _log("flight %s: could not record %s: %v", flight["id"], step["id"], err)
@@ -2345,7 +2345,7 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     :class:`flights.FlightError` (404 unknown flight, 409 refusals)."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     fn = _OPS[op]
     if op == "done" and not before["step_states"].get(step, {}).get("detail", {}).get(
         "failed_reason"
@@ -2370,7 +2370,7 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
 
     after = _flights.mutate(flight_id, _do)
     if after is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     _announce(before, after)
     wake()
     return after
@@ -2382,10 +2382,10 @@ def _changed(flight_id: str, fn) -> dict:
     not move — and wake the loop."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     after = _flights.mutate(flight_id, fn)
     if after is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     if _view_key(before) == _view_key(after):
         _emit("flight.changed", after)
     _announce(before, after)
@@ -2414,7 +2414,7 @@ def change_steps(
     if op == "add_plan":
         plan = _flights.get_plan(str(raw or ""))
         if plan is None:
-            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+            raise _flights.FlightError("unknown_plan", 404, "no such saved route")
 
     def _do(f: dict) -> None:
         if op == "add":
@@ -2453,7 +2453,7 @@ def split_off(flight_id: str, sid: str, pos=None) -> Tuple[dict, dict]:
     (:func:`flights.split_off`), both announced, the loop woken."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     after, chain = _flights.split_off(flight_id, sid, pos)
     if _view_key(before) == _view_key(after):
         _emit("flight.changed", after)
@@ -2528,7 +2528,7 @@ async def ground(body: dict) -> dict:
     if plan_id:
         plan = _flights.get_plan(plan_id)
         if plan is None:
-            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+            raise _flights.FlightError("unknown_plan", 404, "no such saved route")
     flight = await asyncio.to_thread(
         _flights.ground,
         plan,
@@ -2556,10 +2556,10 @@ async def attach(flight_id: str, body: dict) -> dict:
     ready = start_on != "now"
     f = _flights.get(flight_id)
     if f is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     if f["state"] != _flights.GROUNDED:
         raise _flights.FlightError(
-            "not_grounded", 409, "this flight already has a session"
+            "not_grounded", 409, "this route already has a session"
         )
     _flights.validate_for_takeoff(f)
     title = str(body.get("title") or "").strip()
@@ -2599,7 +2599,7 @@ async def attach(flight_id: str, body: dict) -> dict:
             raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
         if _flights.for_session(title) is not None:
             raise _flights.FlightError(
-                "in_flight", 409, "%s is already on a flight" % title
+                "in_flight", 409, "%s is already on a route" % title
             )
     else:
         plan = _flights.get_plan(f["plan_id"]) or {}
@@ -2661,7 +2661,7 @@ def step_op(flight_id: str, step_id: str, name: str, body: Optional[dict]) -> di
     ``unknown_op``."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     step = next((s for s in before["steps"] if s["id"] == step_id), None)
     if step is None:
         raise _flights.FlightError("unknown_step", 404, "no such stop")
@@ -2684,10 +2684,10 @@ def remove(flight_id: str) -> None:
     only — a running, waiting or paused one must be cancelled first."""
     f = _flights.get(flight_id)
     if f is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     if f["state"] in _flights.HOLDING and f["state"] != _flights.READY:
         # A ready chain has not started anything: it goes at once.
-        raise _flights.FlightError("in_flight", 409, "cancel the flight first")
+        raise _flights.FlightError("in_flight", 409, "stop the route first")
     try:
         # A checkpoint stop pins work under refs/mindflock/flights/<fid>/…
         from backend.web.core.flight_kinds import checkpoint as _checkpoint

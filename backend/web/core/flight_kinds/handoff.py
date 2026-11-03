@@ -1,4 +1,4 @@
-"""The ``handoff`` stop, "Start a chain" (docs/flights.md "Round 18: One chain
+"""The ``handoff`` stop, "Start a route" (docs/flights.md "Round 18: One chain
 triggers another"): one chain starts another chain on a session — an existing
 one, or a new worker of this flight's session — and either carries on at once
 or waits for that chain to land.
@@ -54,7 +54,7 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
             )
         target = ""
     if strict and not target:
-        raise F.PlanError("pick the chain to start", where + ".target")
+        raise F.PlanError("pick the route to start", where + ".target")
     session = F._text(c.get("session"), 300) or NEW
     return {
         "target": target,
@@ -65,12 +65,12 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
 
 def _title(config: dict) -> str:
     sess = config.get("session") or NEW
-    head = "Start a chain" + ("" if sess == NEW else " on %s" % sess)
+    head = "Start a route" + ("" if sess == NEW else " on %s" % sess)
     return head + (" and wait" if config.get("wait") else "")
 
 
 def _name(f: dict) -> str:
-    return f.get("plan_name") or f.get("id") or "the chain"
+    return f.get("plan_name") or f.get("id") or "the route"
 
 
 def _judge(flight, step, ss, obs, now) -> dict:
@@ -82,10 +82,10 @@ def _judge(flight, step, ss, obs, now) -> dict:
         receipt = str(d.get("receipt") or "started")
         return F._receipt({"action": "done", "note": receipt}, receipt)
     if not child:
-        return {"action": "fail", "reason": "no chain was started"}
+        return {"action": "fail", "reason": "no route was started"}
     o = obs.get("handoff")
     if not isinstance(o, dict):
-        return F._wait("checking the chain it started")
+        return F._wait("checking the route it started")
     if o.get("failed"):
         return {"action": "fail", "reason": str(o["failed"])}
     name = str(o.get("name") or d.get("child_name") or child)
@@ -94,7 +94,7 @@ def _judge(flight, step, ss, obs, now) -> dict:
     state = str(o.get("state") or "")
     reason = str(o.get("reason") or "")
     if state == "done":
-        receipt = "%s landed" % name
+        receipt = "%s finished" % name
         return F._receipt({"action": "done", "note": receipt}, receipt)
     if state in ("halted", "cancelled"):
         word = "was cancelled" if state == "cancelled" else "halted"
@@ -102,7 +102,7 @@ def _judge(flight, step, ss, obs, now) -> dict:
             "action": "fail",
             "reason": "%s %s%s" % (name, word, ": %s" % reason if reason else ""),
         }
-    return F._wait("waiting for %s to land" % name)
+    return F._wait("waiting for %s to finish" % name)
 
 
 def _ours(target: dict, flight: dict, step: dict) -> bool:
@@ -131,7 +131,7 @@ def _started(child: dict, title: str, wait: bool, action: dict) -> dict:
         "receipt": receipt,
     }
     if wait:
-        return dict(action, note="waiting for %s to land" % name, detail=detail)
+        return dict(action, note="waiting for %s to finish" % name, detail=detail)
     return {"action": "done", "note": receipt, "detail": detail}
 
 
@@ -141,14 +141,14 @@ async def _run(flight, step, action, now) -> dict:
     cfg = step["config"]
     kind, ident = parse_target(cfg.get("target") or "")
     if not kind:
-        raise _kinds.StepFailed("pick the chain to start")
+        raise _kinds.StepFailed("pick the route to start")
     wait = bool(cfg.get("wait"))
     target: Optional[dict] = None
     plan: Optional[dict] = None
     if kind == "flight":
         target = await asyncio.to_thread(F.get, ident)
         if target is None:
-            raise _kinds.StepFailed("the chain to start is gone")
+            raise _kinds.StepFailed("the route to start is gone")
         if target["state"] != F.GROUNDED:
             if _ours(target, flight, step):
                 # A retry (or a restart mid-run): it is already ours.
@@ -157,7 +157,7 @@ async def _run(flight, step, action, now) -> dict:
                 "%s is already %s"
                 % (
                     _name(target),
-                    "over" if target["state"] in F.FINAL else "flying",
+                    "over" if target["state"] in F.FINAL else "running",
                 )
             )
         try:
@@ -167,14 +167,14 @@ async def _run(flight, step, action, now) -> dict:
     else:
         plan = await asyncio.to_thread(F.get_plan, ident)
         if plan is None:
-            raise _kinds.StepFailed("the saved stop %s is gone" % ident)
+            raise _kinds.StepFailed("the saved route %s is gone" % ident)
     srv = D._server()
     title = str(cfg.get("session") or NEW)
     if title != NEW:
         if title not in srv.ENGINE.instances:
             raise _kinds.StepFailed("no session %s" % title)
         if await asyncio.to_thread(F.for_session, title) is not None:
-            raise _kinds.StepFailed("%s is already on a flight" % title)
+            raise _kinds.StepFailed("%s is already on a route" % title)
     if plan is not None:
         target = await asyncio.to_thread(F.ground, plan, None, "", flight["by"])
     assert target is not None
@@ -248,11 +248,11 @@ KIND = _kinds.register(
     _kinds.Kind(
         kind="handoff",
         spec={
-            "label": "Start a chain",
+            "label": "Start a route",
             "actor": "robot",
-            "summary": "Start another chain on a session (a new one by default), "
-            "and carry on or wait for it to land",
-            "default_title": "Start a chain",
+            "summary": "Start another route on a session (a new one by default), "
+            "and carry on or wait for it to finish",
+            "default_title": "Start a route",
             "family": "flow",
             "risk": [],
             "default_on_fail": "halt",
@@ -260,7 +260,7 @@ KIND = _kinds.register(
                 F._f(
                     "target",
                     "select",
-                    "Chain to start",
+                    "Route to start",
                     default="",
                     options=[],
                     dynamic="chains",
@@ -273,7 +273,7 @@ KIND = _kinds.register(
                     options=[NEW],
                     dynamic="sessions",
                 ),
-                F._f("wait", "bool", "Wait for it to land", default=False),
+                F._f("wait", "bool", "Wait for it to finish", default=False),
             ],
         },
         config=_config,

@@ -132,7 +132,7 @@ def test_a_chain_live_on_the_title_is_not_clobbered():
     assert D.restore_on_reopen(snap, "s") is None
     assert F.get(old["id"])["state"] == "cancelled"
     assert F.for_session("s")["id"] == new["id"]
-    assert "another chain is live" in F.get(old["id"])["history"][-1]["note"]
+    assert "another route is live" in F.get(old["id"])["history"][-1]["note"]
 
 
 def test_a_chain_you_cancelled_stays_cancelled():

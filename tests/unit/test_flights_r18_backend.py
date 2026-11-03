@@ -299,7 +299,7 @@ def test_handoff_dto_row():
     r = client.get("/api/flights/kinds")
     row = next(k for k in r.json()["kinds"] if k["kind"] == "handoff")
     assert (row["label"], row["family"], row["actor"]) == (
-        "Start a chain",
+        "Start a route",
         "flow",
         "robot",
     )
@@ -312,7 +312,7 @@ def test_handoff_dto_row():
     assert fields["wait"] == {
         "name": "wait",
         "type": "bool",
-        "label": "Wait for it to land",
+        "label": "Wait for it to finish",
         "default": False,
     }
     assert "handoff" in F.SESSION_KINDS and "handoff" not in F.AGENT_KINDS
@@ -322,7 +322,7 @@ def test_handoff_dto_row():
 def test_handoff_config_and_titles():
     s = F.normalize_step({"kind": "handoff", "config": {"target": "flight:f_abc"}})
     assert s["config"] == {"target": "flight:f_abc", "session": "new", "wait": False}
-    assert s["title"] == "Start a chain"
+    assert s["title"] == "Start a route"
     s = F.normalize_step(
         {
             "kind": "handoff",
@@ -330,7 +330,7 @@ def test_handoff_config_and_titles():
         }
     )
     assert s["config"]["target"] == "plan:builtin:review@push"
-    assert s["title"] == "Start a chain on w and wait"
+    assert s["title"] == "Start a route on w and wait"
     s = F.normalize_step(
         {"kind": "handoff", "config": {"target": "flight:f_1", "session": "NEW"}}
     )
@@ -376,7 +376,7 @@ def _running_handoff(wait=True, child="f_c", session="s"):
     [
         ({"present": True, "state": "running", "name": "Kid"}, "wait", "Kid"),
         ({"present": True, "state": "paused", "name": "Kid"}, "wait", "Kid"),
-        ({"present": True, "state": "done", "name": "Kid"}, "done", "Kid landed"),
+        ({"present": True, "state": "done", "name": "Kid"}, "done", "Kid finished"),
         (
             {"present": True, "state": "halted", "reason": "tests red", "name": "Kid"},
             "fail",
@@ -549,12 +549,12 @@ def test_handoff_refusals_fail_with_a_sentence(srv, spawned):
     assert "gone" in first_fail({"target": "plan:p_gone"})
     flying = fly(CMD, session="busy")
     srv.ENGINE.instances["busy"] = FakeInst()
-    assert "already flying" in first_fail({"target": "flight:" + flying["id"]})
+    assert "already running" in first_fail({"target": "flight:" + flying["id"]})
     g = grounded(CMD)
     assert "no session nobody" in first_fail(
         {"target": "flight:" + g["id"], "session": "nobody"}
     )
-    assert "already on a flight" in first_fail(
+    assert "already on a route" in first_fail(
         {"target": "flight:" + g["id"], "session": "busy"}
     )
     bad = grounded({"kind": "handoff", "config": {}}, name="Half")
@@ -589,11 +589,11 @@ def test_handoff_with_wait_runs_until_the_child_lands(srv, spawned):
     assert ss["state"] == "running" and ss["detail"]["child"] == child["id"]
     got = _step(f["id"], passes=2)
     assert got["step_states"]["s1"]["state"] == "running"
-    assert "waiting for Kid to land" in got["step_states"]["s1"]["note"]
+    assert "waiting for Kid to finish" in got["step_states"]["s1"]["note"]
     F.mutate(child["id"], lambda x: F._finish(x, "done", "", NOW))
     got = _step(f["id"])
     ss = got["step_states"]["s1"]
-    assert ss["state"] == "done" and ss["detail"]["receipt"] == "Kid landed"
+    assert ss["state"] == "done" and ss["detail"]["receipt"] == "Kid finished"
     assert got["cursor"] == 1
 
 

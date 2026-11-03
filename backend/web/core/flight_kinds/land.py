@@ -142,11 +142,11 @@ def _check(flight: dict, step: dict) -> dict:
     from backend.web.core import flight_driver as D
 
     if flight["steps"][-1]["id"] != step["id"]:
-        raise StepFailed("a Land stop is the last stop")
+        raise StepFailed("a Finish stop is the last stop")
     sess = D._session_obs(flight, time.time(), False)
     folder, branch = sess.get("folder") or "", sess.get("branch") or ""
     if not sess.get("present") or not folder or not branch:
-        raise StepFailed("no session branch to land")
+        raise StepFailed("no session branch to finish")
     merged, main = _merged(folder, branch)
     if not merged:
         raise StepFailed("not merged into %s" % main)
@@ -179,14 +179,14 @@ def _check(flight: dict, step: dict) -> dict:
 
 async def _run(flight, step, action, now) -> dict:
     plan = await asyncio.to_thread(_check, flight, step)
-    note = "landed on %s" % plan["main"]
+    note = "finished on %s" % plan["main"]
     if plan["why"]:
         note += " — closing, not deleting: %s" % plan["why"]
     _start_close(flight["id"], step["id"], plan)
     return {
         "action": "done",
         "note": note,
-        "detail": {"receipt": "landed", "pending_close": plan},
+        "detail": {"receipt": "finished", "pending_close": plan},
     }
 
 
@@ -291,11 +291,11 @@ KIND = register(
     Kind(
         kind="land",
         spec={
-            "label": "Land",
+            "label": "Finish",
             "actor": "robot",
-            "summary": "Once the branch is merged into main: finish the flight, "
+            "summary": "Once the branch is merged into main: finish the route, "
             "delete the branch and close the session. Always the last stop.",
-            "default_title": "Land",
+            "default_title": "Finish",
             "family": "ship",
             "risk": ["irreversible"],
             "fields": [

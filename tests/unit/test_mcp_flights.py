@@ -260,7 +260,7 @@ class TestDescribe:
         api.errors[("POST", "/api/flights/describe")] = client.ApiError(
             404, "{'detail': 'Not Found'}"
         )
-        with pytest.raises(ToolError, match="no flights; upgrade"):
+        with pytest.raises(ToolError, match="no routes; upgrade"):
             box.describe_flight({"text": "x"}, _ctx(clock))
 
 
@@ -447,7 +447,7 @@ class TestStatus:
 
     def test_no_flight(self):
         box, _, clock = _box()
-        with pytest.raises(ToolError, match="has no flight"):
+        with pytest.raises(ToolError, match="has no route"):
             box.flight_status({"title": "w1"}, _ctx(clock))
 
     def test_receipts_notes_and_when(self):
@@ -632,7 +632,7 @@ class TestEdit:
         api.errors[("DELETE", "/api/flights/f_1/steps/s1")] = client.ApiError(
             409, "last_step", {"error": "last_step"}
         )
-        with pytest.raises(ToolError, match="cancel the flight instead"):
+        with pytest.raises(ToolError, match="cancel the route instead"):
             box.edit_flight({"id": "f_1", "remove": ["s1"]}, _ctx(clock))
 
 

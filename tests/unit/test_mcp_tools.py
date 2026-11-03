@@ -146,7 +146,7 @@ class TestRegistry:
         assert "mcp__mindflock__send_message" in INSTRUCTIONS
         assert "NOT the built-in SendMessage" in INSTRUCTIONS
         assert (
-            "Flights: describe_flight → start_flight; flight_status; control_flight"
+            "Routes: describe_flight → start_flight; flight_status; control_flight"
             in INSTRUCTIONS
         )
 

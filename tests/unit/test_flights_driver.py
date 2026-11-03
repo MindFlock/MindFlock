@@ -349,7 +349,7 @@ def test_on_fail_agent_sends_the_failure_note(srv, row, monkeypatch):
     run(D.step_flight(f["id"]))  # pending → run
     run(D.step_flight(f["id"]))  # failed → handed to the agent
     assert sent == [
-        "[MindFlock flight] CI failed: failing checks: lint\nFix it; the flight retries the step once you are done."
+        "[MindFlock route] CI failed: failing checks: lint\nFix it; the route retries the stop once you are done."
     ]
     got = F.get(f["id"])
     assert (
@@ -740,7 +740,7 @@ def test_start_announces_the_halted_flight_it_replaces(srv, emitted):
     run(D.start({"plan_id": plan["id"], "title": "s", "start_at": "s1"}))
     fin = [e for e in emitted if e["event"] == "flight.finished"]
     assert [e["data"]["id"] for e in fin] == [old["id"]]
-    assert fin[0]["data"]["reason"] == "replaced by a new flight"
+    assert fin[0]["data"]["reason"] == "replaced by a new route"
     assert any(k.startswith("finished:") for k in F.get(old["id"])["announced"])
 
 
@@ -774,7 +774,7 @@ def test_an_effect_that_fails_with_on_fail_agent_tells_the_agent(srv, row, monke
     )
     f = fly({"kind": "verify", "title": "Verify", "config": {}, "on_fail": "agent"})
     run(D.step_flight(f["id"]))
-    assert sent and sent[0].startswith("[MindFlock flight] Verify failed: no checklist")
+    assert sent and sent[0].startswith("[MindFlock route] Verify failed: no checklist")
     assert F.get(f["id"])["step_states"]["s1"]["detail"]["phase"] == "fix"
 
 
@@ -832,7 +832,7 @@ def test_a_halted_run_is_absorbed_with_its_reason(srv):
     srv._session_stage = lambda inst: {"stage": "agent"}
     _own_run(state="halted", reason="pre-commit failed")
     f = run(D.start({"title": "s", "steps": [{"kind": "notify"}]}))
-    assert f["plan_id"] == "adhoc" and f["plan_name"] == "Flight on s"
+    assert f["plan_id"] == "adhoc" and f["plan_name"] == "Route on s"
     assert [(s["id"], s["kind"], s["config"].get("lane")) for s in f["steps"]] == [
         ("s2", "ship", "commit"),
         ("s3", "ship", "push"),
@@ -893,7 +893,7 @@ def test_adhoc_start_needs_a_session_or_a_folder(srv, monkeypatch):
     assert created == [{"repo_path": "/r", "prompt": "go"}]
     assert (f["session"], f["plan_name"], f["plan_id"]) == (
         "new-1",
-        "Flight on new-1",
+        "Route on new-1",
         "adhoc",
     )
     assert f["step_states"]["s1"]["detail"] == {"seeded": True}

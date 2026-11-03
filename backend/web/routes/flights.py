@@ -145,7 +145,7 @@ async def _start_intake(body: dict, subject: dict) -> JSONResponse:
 
     plan_id = str(body.get("plan_id") or "")
     if _flights.get_plan(plan_id) is None:
-        return _err(_flights.FlightError("unknown_plan", 404, "no such plan"))
+        return _err(_flights.FlightError("unknown_plan", 404, "no such saved route"))
     if not srv.git_available():
         return srv._no_git_response()
     kind = str(subject.get("kind") or "").strip().lower()
@@ -198,7 +198,7 @@ async def _ground_editor(body: dict, ref: dict) -> dict:
     if plan_id:
         plan = _flights.get_plan(plan_id)
         if plan is None:
-            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+            raise _flights.FlightError("unknown_plan", 404, "no such saved route")
     flight = await asyncio.to_thread(
         _flights.ground,
         plan,
