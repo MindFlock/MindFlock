@@ -631,7 +631,14 @@ that opens the pane). The shared pieces and every layout live in
   2.1.311; see below) as a `kind: "select"` parse.
 - **`codex`** reads the approval overlay (`Would you like to run the
   following command?` / `…make the following edits?`, an optional `Reason:`,
-  the `$ command`) and the trust screen, with `› 1.` options.
+  the `$ command`) and the trust screen, with `› 1.` options. 0.164 draws an
+  `Environment: local` line above the `Reason:`; it is skipped, so the
+  reason stays the detail. Its folder-trust gate (`Do you trust the contents
+  of this directory?`, or 0.164's `Trust this folder? Codex can read, edit,
+  and run files here…` over `› 1. Trust and continue`) is in Codex's
+  `trust_patterns` and is accepted with Enter on the trusting option
+  (`accept_words` `trust`/`yes`, so a moved cursor is walked back first). A
+  fresh worktree, which every session is, opens on that gate.
 
 The other bundled CLIs are config providers: `GenericProvider.parse_dialog`
 dispatches on `ProviderConfig.dialog_layout` (a key of `dialogs.LAYOUTS`),
@@ -682,17 +689,27 @@ for the button ("1", "Y", "y"):
   closed by `└`. The selected choice's hint (`(Allow the tool call once)`)
   moves with the cursor and is cut from its label. Keys: Up/Down from the
   `●`, then Enter. Answered, the `◆` turns `◇` — no parse.
-- **`antigravity`** (agy 1.0) reads a `> 1.` numbered list under one of its
-  openers (`>` alone also starts agy's input line, so the opener is
+- **`antigravity`** (agy 1.0–1.4) reads a `> 1.` numbered list under one of
+  its openers (`>` alone also starts agy's input line, so the opener is
   required): `Requesting permission for:` (the indented lines under it are
-  the `command`, `Do you want to proceed?` the question), `Question N/N: …`,
-  `Do you trust the contents of this …?`. Keys: Up/Down from the cursor,
-  then Enter. A `Question N/N:` with no choices drawn and agy's `esc Skip`
-  hint under it is a free-text question: the parse has no options, and
-  `/dialog` serves it **unparsed with that question** (`parsed: false`) —
-  the UI offers a text field. These goldens are reconstructed from the
-  live-captured snippets in `config.py`, not a fresh capture (running agy
-  writes into the user's conversation store).
+  the `command`, the next line with a `?` the question: 1.0's `Do you want
+  to proceed?`, 1.4's `Run this command?`), `Question N/N: …`, `Do you trust
+  the contents of this …?`, the signed-out `Select login method:` menu, and
+  1.4's file-access prompt (`File access` heading; `Read:` and the path as
+  the `command`; `Allow access to this file?`). agy 1.4 wraps a long option
+  label back to **column 0**, so its parse reads a non-blank line between two
+  options as the upper option's wrap (`option_block(flush_wraps=True)`); the
+  arrow-keys hint (`↑/↓ Navigate`) counts as a footer. Keys: Up/Down from
+  the cursor, then Enter. A `Question N/N:` with no choices drawn and agy's
+  `esc Skip` hint under it is a free-text question: the parse has no
+  options, and `/dialog` serves it **unparsed with that question**
+  (`parsed: false`) — the UI offers a text field. The 1.0 goldens are
+  reconstructed from the live-captured snippets in `config.py`; the
+  `antigravity_command14_w80`, `antigravity_file_access14_w80` and
+  `antigravity_signin_w100` screens are live captures. agy's footer keeps
+  `esc to cancel` (a working pattern) under every menu, so each of these
+  dialogs also has a waiting pattern; without one the session read
+  *working* while agy waited for a person.
 
 A TOML provider whose CLI draws one of these layouts (a wrapper around
 goose, a fork of opencode) sets `dialog_layout` under `[classify]`; an
@@ -947,6 +964,13 @@ API: `price_per_token(model)`, `context_window(model)`, `estimate_cost(tok, mode
 **Estimates only — never billing.** Nothing in this module raises.
 
 ## Usage history (`usage_history.py`)
+
+Which agents get a tab in the overall usage panel: those whose provider opts in
+(`usage_panel_visible`: the bundled claude/codex/antigravity/aider, or a TOML's
+`[usage] visible = true`) **and** that this machine has: the default agent, a
+CLI that is installed, or one with usage on record. On a Codex-only machine
+there is no zero "Claude" tab, which as a windowed plan would also have turned
+the whole panel's wording to plan mode.
 
 Rolling day/week/month/year token+cost totals across **all** Claude Code sessions
 (powers `GET /api/usage` and the sidebar readout). One pass over every transcript

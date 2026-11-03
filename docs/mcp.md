@@ -110,8 +110,10 @@ point `CODEX_HOME` at their own directory. Codex starts MCP servers with a
 cleared environment, so the session's identity is passed in `env` and the tmux
 and token variables are forwarded by name in `env_vars`. The `tools` table
 pre-approves the same fifteen tools as Claude's `--allowedTools`. Verified against
-codex-cli 0.146: the override parses and the server registers. A Codex tool
-call has not yet been run end to end.
+codex-cli 0.146: the override parses and the server registers. Run end to end
+against codex-cli 0.164 (a sandbox with a mock model): Codex lists the server
+as the `mcp__mindflock` tool namespace with all its tools, and a `whoami` call
+returns the calling session without an approval prompt.
 
 **The Assistant window** is attached too, as an *external client*: it is not a
 session, so it has no title. See [External clients](#external-clients).
