@@ -471,8 +471,8 @@ describe("phase 3: split and one for all", () => {
     expectAll(modes, [
       '"In separate worktrees (merge back) — default"',
       '"In this folder (no merge)"',
-      "no per-piece undo.",
-      "the pieces would commit onto it",
+      "no per-worker undo.",
+      "the workers would commit onto it",
     ]);
     for (const body of [panel, modes]) {
       for (const absent of ["window.prompt", "prompt(", "confirm(", "alert("]) expect(body, absent).not.toContain(absent);

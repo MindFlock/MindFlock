@@ -554,7 +554,7 @@ export function DescribeSection({
             lines tall, growing to eight. However many lines, it is ONE
             prompt (only Intake's "Start together…" opens New as a list).
             Enter keeps its old meaning ("read this"); Shift+Enter starts
-            another line, and in a batch or an auto-split Enter does too. */}
+            another line, and in a batch or a split into workers Enter does too. */}
         <textarea
           id="new-describe-text"
           // The question above it is its name.
@@ -674,7 +674,7 @@ export function DescribeSection({
         ))}
       {/* Options only for a BATCH (Intake's "Start together…"). One
           session's page 1 is the prompt and nothing else: the model
-          fills in the form, and Fast-track and Auto-split sit there
+          fills in the form, and Fast-track and "Let it split into workers" sit there
           with the rest of the details. */}
       {batch && (
       <RunOptions

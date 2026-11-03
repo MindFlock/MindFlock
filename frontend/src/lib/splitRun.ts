@@ -131,7 +131,7 @@ function plural(n: number, one: string, many = one + "s"): string {
   return n + " " + (n === 1 ? one : many);
 }
 
-/** The lead's Thread sub-line, e.g. "Split into **3 pieces with separate
+/** The lead's Thread sub-line, e.g. "Split into **3 workers with separate
  * paths** · all 3 merged back into **run/auth-cleanup** · 212 tests pass
  * after the last merge". */
 export function leadSubline(run: RunDTO, leadName: string): SubPart[] {
@@ -148,17 +148,17 @@ export function leadSubline(run: RunDTO, leadName: string): SubPart[] {
             " to decide whether to split — it reads the code first; a plan shows here, or it just does the task."
           : "Waiting for " +
             leadName +
-            " to propose the pieces — it reads the code first, then MindFlock shows the plan here.",
+            " to propose the workers — it reads the code first, then MindFlock shows the plan here.",
       },
     ];
   if (run.state === "plan_ready")
     return [
       { text: leadName + " proposed " },
-      { text: plural(n, "piece") + " with separate paths", b: true },
-      { text: " — approve them and MindFlock starts the workers." },
+      { text: plural(n, "worker") + " with separate paths", b: true },
+      { text: " — approve them and MindFlock starts them." },
     ];
   const parts: SubPart[] = split
-    ? [{ text: "Split into " }, { text: plural(n, "piece") + " with separate paths", b: true }]
+    ? [{ text: "Split into " }, { text: plural(n, "worker") + " with separate paths", b: true }]
     : [{ text: plural(n, "line") + ", one PR", b: true }];
   const merged = tasks.filter((t) => t.state === "integrated").length;
   const live = tasks.filter((t) => !["cancelled", "skipped", "failed"].includes(t.state)).length;
@@ -173,7 +173,7 @@ export function leadSubline(run: RunDTO, leadName: string): SubPart[] {
       parts.push({ text: " on " });
       parts.push({ text: branch || "the lead's branch", b: true });
     } else {
-      parts.push({ text: "each piece is committed on " });
+      parts.push({ text: "each worker is committed on " });
       parts.push({ text: branch || "the lead's branch", b: true });
       parts.push({ text: " as it finishes" });
     }
@@ -227,7 +227,7 @@ export interface ModeChoice {
   blocked: string;
 }
 
-/** The plan card's "where do the pieces run" choice. A lead that works
+/** The plan card's "where do the workers run" choice. A lead that works
  * directly in its folder, or sits on its trunk, is never merged into:
  * separate worktrees get a lead of their own (`<lead>-split`, from its last
  * commit), and its folder needs a branch of its own first. */
@@ -243,12 +243,12 @@ export function modeChoices(
       mode: "worktrees",
       label: "In separate worktrees (merge back) — default",
       hint: own
-        ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "."
+        ? "Each worker in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "."
         : "MindFlock starts " +
           leadName +
           "-split from " +
           leadName +
-          "'s last commit and merges the pieces there — " +
+          "'s last commit and merges the workers there — " +
           leadName +
           " itself is left as it is.",
       blocked: "",
@@ -257,10 +257,10 @@ export function modeChoices(
       mode: "same_folder",
       label: "In this folder (no merge)",
       hint:
-        "Each piece runs in " +
+        "Each worker runs in " +
         leadName +
-        "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
-      blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : "",
+        "'s folder; MindFlock commits each worker's paths as it finishes — nothing to merge, no per-worker undo.",
+      blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the workers would commit onto it" : "",
     },
   ];
 }
@@ -356,13 +356,13 @@ export function releaseCard(run: RunDTO): ReleaseCard {
     stat,
     commits:
       (isSameFolder(run)
-        ? "one per piece, committed by MindFlock with only its paths"
+        ? "one per worker, committed by MindFlock with only its paths"
         : split
-          ? "one per piece, kept as written"
+          ? "one per worker, kept as written"
           : "one per line, kept as written") +
       (fixes ? " + " + plural(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
     body: split
-      ? "a section per piece: what changed, the tests it ran"
+      ? "a section per worker: what changed, the tests it ran"
       : "a section per line: what changed, the tests it ran",
   };
 }
@@ -383,7 +383,7 @@ export function checkLine(run: Pick<RunDTO, "check"> & Partial<Pick<RunDTO, "mod
     case "fixing":
       return cmd + " failed — the lead is fixing it";
     case "pending":
-      return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
+      return isSameFolder(run) ? "runs once every worker is committed" : "runs once every worker is merged back";
     default:
       return "";
   }
@@ -548,7 +548,7 @@ export function leadChip(
   if (run.state === "plan_ready")
     return {
       label: "plan?",
-      title: "The lead proposed the pieces — open its Thread to approve them",
+      title: "The lead proposed the workers — open its Thread to approve them",
     };
   return null;
 }
@@ -563,7 +563,7 @@ export function leadLine(
   const live = tasks.filter((t) => !["cancelled", "skipped", "failed"].includes(t.state)).length;
   switch (run.state) {
     case "planning":
-      return { text: run.optional ? "deciding whether to split…" : "proposing the pieces…", cls: "" };
+      return { text: run.optional ? "deciding whether to split…" : "proposing the workers…", cls: "" };
     case "plan_ready":
       return { text: "plan ready — approve it", cls: "needs" };
     case "checking":

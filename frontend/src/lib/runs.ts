@@ -266,11 +266,11 @@ export interface RunNote {
 
 /** What a group-level `run.needs_you` says when the server sent no sentence. */
 const LEAD_ASKS: Record<string, string> = {
-  plan: "the lead proposed the pieces — approve them",
+  plan: "the lead proposed the workers — approve them",
   release: "one PR is ready to open",
   check_failed: "the check failed on the merged branch",
   lead_gone: "its lead is gone — nothing can merge or ship",
-  stray: "changes no piece owns in the lead's folder — commit or discard them yourself",
+  stray: "changes no worker owns in the lead's folder — commit or discard them yourself",
 };
 
 const num = (v: unknown) => Number(v) || 0;

@@ -764,7 +764,7 @@ def test_on_fail_you_parks_with_the_failure_text():
     f, a = _failing("you")
     f = F.apply(f, a, NOW)
     assert f["state"] == "waiting_you"
-    assert F.you_text(f)[0].startswith("Checks failed: failing checks")
+    assert F.you_text(f)[0].startswith("CI checks failed: failing checks")
     f = F.op_done(f, "s1", now=NOW)
     assert f["cursor"] == 1
 

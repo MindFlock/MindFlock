@@ -58,7 +58,7 @@ describe("the top bar is flat again", () => {
     expect(TOPBAR).toContain('"Verify — " + VERIFY_BLURB + keys("verify")');
   });
 
-  it("the Sky half of the toggle counts the flights perched on you", () => {
+  it("the Sky half of the toggle counts the chains that need you", () => {
     expect(TOPBAR).toContain("const perch = perchBadge(useFlights().data || []);");
     expect(TOPBAR).toMatch(/v === "sky" && perch\.count > 0 && \(\s*<span className=\{"tb-count" \+ \(perch\.failing \? " is-failing" : ""\)\}>\{perch\.count\}<\/span>/);
   });
@@ -216,7 +216,7 @@ describe("flyways live in the Sky", () => {
   });
 });
 
-describe("Schedule lists the scheduled stops", () => {
+describe("Schedule lists the scheduled chains", () => {
   const NOW = new Date(2026, 9, 14, 9, 0);
   const at = (h: number) => new Date(2026, 9, 14, h, 0).getTime() / 1000;
   const plan = (over: Partial<FlightPlan> & { runs?: Record<string, unknown> }): FlightPlan =>

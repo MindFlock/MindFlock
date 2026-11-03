@@ -1,7 +1,7 @@
 /** Notification center bell (port of section 7): the ONE place anything
  * waits on you, plus what happened while you were away.
  *
- * "Needs attention" merges the sidebar's attention items (an agent asking, a
+ * "Needs you" merges the sidebar's attention items (an agent asking, a
  * broken session, failing checks, ready for a PR) with the server's waiting
  * rows (`GET /api/outbox`: an ask-first approval with its commit-message preview, a stuck group
  * line, a spent budget, a lead's plan or PR) — `needsAttention`, one row per
@@ -45,7 +45,7 @@ import { jobPastExpectedRow } from "../lib/jobExpectation";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
-/** Rows of "Needs attention" shown before "+N more". */
+/** Rows of "Needs you" shown before "+N more". */
 const NEEDS_SHOWN = 6;
 
 /** Monochrome bell (fill=currentColor), never the 🔔 emoji. The emoji paints

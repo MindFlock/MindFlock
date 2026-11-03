@@ -51,11 +51,11 @@ KINDS = {
         },
         {
             "kind": "you",
-            "label": "Perch",
+            "label": "Wait for me",
             "actor": "you",
             "summary": "Wait for a person to press Done.",
             "fields": [{"name": "text"}, {"name": "items"}],
-            "default_title": "Perch",
+            "default_title": "Wait for me",
         },
         {
             "kind": "loop",

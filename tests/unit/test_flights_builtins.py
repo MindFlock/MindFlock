@@ -74,7 +74,7 @@ def test_bot_pr():
         ("agent", "Agent reads it"),
         ("test", "Test"),
         ("sync", "Sync with main"),
-        ("checks", "Checks"),
+        ("checks", "CI checks"),
         ("ship", "Merge"),
     ]
     assert lanes("builtin:botpr") == ["merge"]
@@ -138,7 +138,7 @@ def test_release_ends_with_land():
         ("ship", "Commit"),
         ("ship", "Push"),
         ("ship", "Open PR"),
-        ("checks", "Checks"),
+        ("checks", "CI checks"),
         ("you", "Approve the release"),
         ("ship", "Merge"),
         ("agent", "Agent tags and publishes"),

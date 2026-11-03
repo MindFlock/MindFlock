@@ -114,7 +114,7 @@ DEPTH_LABELS = {
     "commit": "Commit",
     "push": "Push",
     "pr": "Open PR",
-    "merge": "Merge",
+    "merge": "Merge when green",
 }
 
 #: Which rung a given session stage PROVES has been completed. Stages that mean

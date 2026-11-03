@@ -380,7 +380,7 @@ STEP_KINDS: Dict[str, dict] = {
     "verify": {
         "label": "Verify",
         "actor": "robot",
-        "summary": "Write the branch's checklist and work through it; your items perch the flight on you.",
+        "summary": "Write the branch's checklist and work through it; the chain waits for you on your items.",
         "default_title": "Verify",
         "fields": [
             _f("who", "select", "Who checks", default="both", options=VERIFY_WHO),
@@ -388,9 +388,9 @@ STEP_KINDS: Dict[str, dict] = {
         ],
     },
     "you": {
-        "label": "Perch",
+        "label": "Wait for me",
         "actor": "you",
-        "summary": "The flight perches until you are done: it asks you to do something and flies on when you press Done.",
+        "summary": "The chain waits until you are done: it asks you to do something and carries on when you press Done.",
         "default_title": "Check it",
         "fields": [
             _f(
@@ -426,10 +426,10 @@ STEP_KINDS: Dict[str, dict] = {
         ],
     },
     "checks": {
-        "label": "Checks",
+        "label": "CI checks",
         "actor": "robot",
-        "summary": "Wait for the PR's checks to pass; a failing check fails the stop.",
-        "default_title": "Checks",
+        "summary": "Wait for the PR's CI checks to pass; a failing check fails the stop.",
+        "default_title": "CI checks",
         "fields": [_f("timeout_minutes", "int", "Give up after (minutes)", default=60)],
     },
     "command": {
@@ -446,7 +446,7 @@ STEP_KINDS: Dict[str, dict] = {
         "label": "Ticket",
         "risk": ["remote"],
         "actor": "robot",
-        "summary": "Move the flight's ticket and/or comment on it (skipped without a ticket).",
+        "summary": "Move the chain's ticket and/or comment on it (skipped without a ticket).",
         "default_title": "Ticket: update",
         "fields": [
             _f(
@@ -1016,9 +1016,9 @@ def normalize_steps(
             raise PlanError("steps is a list", "steps")
         return []
     if strict and not raw:
-        raise PlanError("a plan needs at least one step", "steps")
+        raise PlanError("a chain needs at least one stop", "steps")
     if strict and len(raw) > MAX_STEPS:
-        raise PlanError("a plan has at most %d steps" % MAX_STEPS, "steps")
+        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
     taken: set = set()
     out = []
     for i, s in enumerate(raw[:MAX_STEPS]):
@@ -1080,13 +1080,13 @@ def normalize_plan(raw, strict: bool = True) -> dict:
     ``updated`` are the STORE's to assign — the caller sets them after."""
     if not isinstance(raw, dict):
         if strict:
-            raise PlanError("a plan is an object", "")
+            raise PlanError("a saved chain is an object", "")
         raw = {}
     name = _text(raw.get("name"), 120)
     if not name:
         if strict:
-            raise PlanError("a flyway needs a name", "name")
-        name = "Untitled flyway"
+            raise PlanError("a saved chain needs a name", "name")
+        name = "Untitled chain"
     trig = raw.get("trigger") if isinstance(raw.get("trigger"), dict) else {}
     tkind = _text(trig.get("kind"), 16).lower() or "manual"
     if tkind not in TRIGGER_KINDS:
@@ -1272,7 +1272,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s4", "verify", "Verify", who="agent"),
                 _s("s5", "ship", "Open PR", lane="pr"),
                 _s("s6", "reviews", "Reviews settle", quiet_minutes=10),
-                _s("s7", "checks", "Checks", on_fail="agent"),
+                _s("s7", "checks", "CI checks", on_fail="agent"),
                 _s(
                     "s8",
                     "you",
@@ -1292,7 +1292,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s2", "ship", "Commit", lane="commit"),
                 _s("s3", "ship", "Push", lane="push"),
                 _s("s4", "reviews", "Reviews settle", quiet_minutes=10),
-                _s("s5", "checks", "Checks", on_fail="agent"),
+                _s("s5", "checks", "CI checks", on_fail="agent"),
             ],
         },
         "builtin:schedule": {
@@ -1322,7 +1322,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s1", "agent", "Agent reads it", prompt=_BOT_PR_PROMPT),
                 _s("s2", "test", "Test", on_fail="agent"),
                 _s("s3", "sync", "Sync with main", on_fail="agent"),
-                _s("s4", "checks", "Checks", on_fail="agent"),
+                _s("s4", "checks", "CI checks", on_fail="agent"),
                 _s("s5", "ship", "Merge", lane="merge"),
             ],
         },
@@ -1374,7 +1374,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s2", "ship", "Commit", lane="commit"),
                 _s("s3", "ship", "Push", lane="push"),
                 _s("s4", "ship", "Open PR", lane="pr"),
-                _s("s5", "checks", "Checks", on_fail="agent"),
+                _s("s5", "checks", "CI checks", on_fail="agent"),
                 _s(
                     "s6",
                     "you",
@@ -1416,7 +1416,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s7", "verify", "Verify", who="agent"),
                 _s("s8", "ship", "Open PR", lane="pr"),
                 _s("s9", "reviews", "Reviews settle", quiet_minutes=10),
-                _s("s10", "checks", "Checks", on_fail="agent"),
+                _s("s10", "checks", "CI checks", on_fail="agent"),
                 _s(
                     "s11",
                     "you",
@@ -1560,7 +1560,12 @@ def get_plan(plan_id: str) -> Optional[dict]:
     return _ladder_plan(pid, base, m.group(2))
 
 
-_LANE_LABEL = {"commit": "Commit", "push": "Push", "pr": "Open PR", "merge": "Merge"}
+_LANE_LABEL = {
+    "commit": "Commit",
+    "push": "Push",
+    "pr": "Open PR",
+    "merge": "Merge when green",
+}
 
 
 def _ladder_plan(pid: str, base: dict, depth: str) -> dict:
@@ -1628,7 +1633,7 @@ def save_plan(raw, now: Optional[float] = None) -> dict:
             if _CUT_RE.match(pid):
                 raise PlanError("a depth cut of a built-in can't be edited", "id")
             if pid not in plans:
-                raise FlightError("unknown_plan", 404, "no such plan: %s" % pid)
+                raise FlightError("unknown_plan", 404, "no such saved chain: %s" % pid)
         else:
             pid = _new_id("p_", plans)
         plan["id"] = pid
@@ -1967,7 +1972,7 @@ def _put_new(flight: dict, replaced: Optional[list] = None) -> dict:
                 raise FlightError(
                     "in_flight",
                     409,
-                    "%s is already on a flight (%s)" % (title, f["plan_name"]),
+                    "%s is already on a chain (%s)" % (title, f["plan_name"]),
                 )
             if f["state"] == "halted":
                 _finish(f, "cancelled", "replaced by a new flight", flight["started"])
@@ -2047,7 +2052,9 @@ def start_cursor(plan: dict, start_at: str = "", attach: bool = False) -> int:
     if start_at:
         ids = [s["id"] for s in steps]
         if start_at not in ids:
-            raise FlightError("unknown_step", 400, "no step %s in this plan" % start_at)
+            raise FlightError(
+                "unknown_step", 400, "no stop %s in this chain" % start_at
+            )
         return ids.index(start_at)
     if attach:
         return next(
@@ -2115,7 +2122,7 @@ def take_off(
         },
     )
     if flight is None:
-        raise FlightError("bad_plan", 400, "the plan has no steps")
+        raise FlightError("bad_plan", 400, "the chain has no stops")
     if ready:
         return _put_new(flight, replaced)
     for i, s in enumerate(flight["steps"][:cursor]):
@@ -2158,7 +2165,7 @@ def arm_pending(
     404, ``in_flight`` 409)."""
     plan = get_plan(plan_id)
     if plan is None:
-        raise FlightError("unknown_plan", 404, "no such plan: %s" % plan_id)
+        raise FlightError("unknown_plan", 404, "no such saved chain: %s" % plan_id)
     who = by if by in BY_KINDS or str(by).startswith("agent:") else "intake"
     return take_off(
         plan,
@@ -2188,13 +2195,13 @@ def adhoc_plan(raw_steps, base: Optional[dict] = None, name: str = "") -> dict:
     if base is None:
         return {
             "id": ADHOC_PLAN_ID,
-            "name": _text(name, 120) or "Ad-hoc flight",
+            "name": _text(name, 120) or "Ad-hoc chain",
             "session": _blank_session(),
             "steps": given,
         }
     steps = copy.deepcopy(base["steps"])
     if len(steps) + len(given) > MAX_STEPS:
-        raise PlanError("a flight has at most %d steps" % MAX_STEPS, "steps")
+        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
     _renumber_after(steps, given)
     return dict(copy.deepcopy(base), steps=steps + given)
 
@@ -2232,7 +2239,7 @@ def with_lead(
     cursor = start_cursor(plan, start_at, attach)
     steps = copy.deepcopy(plan["steps"])
     if len(steps) + len(lead) > MAX_STEPS:
-        raise PlanError("a flight has at most %d steps" % MAX_STEPS, "steps")
+        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
     lead = copy.deepcopy(lead)
     _renumber_after(steps, lead)
     return (
@@ -2565,7 +2572,7 @@ def event_data(flight: dict) -> dict:
     elif flight["state"] in ("halted", "cancelled") and flight["reason"]:
         detail = "%s: %s" % (flight["plan_name"], flight["reason"])
     elif flight["state"] == "done":
-        detail = "%s landed" % flight["plan_name"]
+        detail = "%s finished" % flight["plan_name"]
     return {
         "id": flight["id"],
         "plan_name": flight["plan_name"],
@@ -3448,7 +3455,7 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
             flight["subject"].get("kind") not in ("ticket", "issue")
             or not flight["subject"].get("id")
         ):
-            return {"action": "advance", "note": "no ticket on this flight"}
+            return {"action": "advance", "note": "no ticket on this chain"}
         if step["kind"] == "you":
             text = step["config"].get("text") or step["title"]
             return {
@@ -3750,7 +3757,7 @@ def _step_index(flight: dict, sid: str) -> int:
     for i, s in enumerate(flight["steps"]):
         if s["id"] == sid:
             return i
-    raise FlightError("unknown_step", 404, "no step %s on this flight" % sid)
+    raise FlightError("unknown_step", 404, "no stop %s on this chain" % sid)
 
 
 def _not_final(flight: dict) -> None:
@@ -3758,8 +3765,8 @@ def _not_final(flight: dict) -> None:
         raise FlightError(
             "finished",
             409,
-            "this flight has already %s"
-            % ("landed" if flight["state"] == "done" else "been cancelled"),
+            "this chain has already %s"
+            % ("finished" if flight["state"] == "done" else "been stopped"),
         )
 
 
@@ -3769,7 +3776,7 @@ def _airborne(flight: dict) -> None:
     _not_final(flight)
     if flight["state"] == GROUNDED:
         raise FlightError(
-            "grounded", 409, "this flight has no session yet — fly it on one first"
+            "grounded", 409, "this chain has no session yet — run it on one first"
         )
     if flight["state"] == READY:
         raise FlightError(
@@ -3823,7 +3830,7 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     _airborne(flight)
     i = _step_index(flight, sid)
     if i < flight["cursor"]:
-        raise FlightError("behind", 409, "that step is already behind the flight")
+        raise FlightError("behind", 409, "that stop is already behind the chain")
     ss = flight["step_states"][sid]
     ss["state"] = "skipped"
     ss["note"] = "skipped by you"
@@ -4058,7 +4065,7 @@ def _editable(flight: dict) -> None:
         raise FlightError(
             "finished",
             409,
-            "this flight has %s — its steps can't change"
+            "this chain has %s — its stops can't change"
             % {"done": "landed", "cancelled": "been cancelled"}.get(
                 flight["state"], "ended"
             ),
@@ -4115,7 +4122,7 @@ def _insert_index(flight: dict, at, n: int = 1) -> int:
     steps = flight["steps"]
     if len(steps) + n > MAX_STEPS:
         raise FlightError(
-            "too_many_steps", 409, "a flight has at most %d steps" % MAX_STEPS
+            "too_many_steps", 409, "a chain has at most %d stops" % MAX_STEPS
         )
     if at is None:
         return len(steps)
@@ -4478,7 +4485,7 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
             raise FlightError(
                 "in_progress",
                 409,
-                "%s has already flown — only a stop not yet done can halt"
+                "%s is already behind — only a stop not yet done can halt"
                 % flight["steps"][i]["title"],
             )
     raw = copy.deepcopy(flight["steps"][i])
@@ -4600,7 +4607,7 @@ def op_ungroup(flight: dict, gid: str, now: Optional[float] = None) -> dict:
     _not_final(flight)
     mine = [s for s in flight["steps"] if s.get("group") and s["group"]["id"] == gid]
     if not mine:
-        raise FlightError("unknown_group", 404, "no stop %s on this flight" % gid)
+        raise FlightError("unknown_group", 404, "no stop %s on this chain" % gid)
     for s in mine:
         name = s.pop("group")["name"]
     _hist(flight, ts, mine[0]["id"], "edited", "%s taken apart" % name)
@@ -4768,10 +4775,10 @@ def ground(
         steps += given
     if not steps:
         raise FlightError(
-            "needs_steps", 400, "a grounded flight needs plan_id or steps"
+            "needs_steps", 400, "a chain on the board needs plan_id or steps"
         )
     if len(steps) > MAX_STEPS:
-        raise PlanError("a flight has at most %d steps" % MAX_STEPS, "steps")
+        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
     _renumber_after([], steps)
     flight = _normalize_flight(
         "pending",
@@ -4814,7 +4821,7 @@ def op_attach(
     ``edits_default`` on a chain editing a source's default stops."""
     ts = float(now if now is not None else time.time())
     if flight["state"] != GROUNDED:
-        raise FlightError("not_grounded", 409, "this flight already has a session")
+        raise FlightError("not_grounded", 409, "this chain already has a session")
     _refuse_editor(flight)
     trig = _normalize_triggered_by(triggered_by)
     if trig is not None:
@@ -4880,15 +4887,15 @@ def attach(
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
-            raise FlightError("unknown_flight", 404, "no such flight")
+            raise FlightError("unknown_flight", 404, "no such chain")
         if f["state"] != GROUNDED:
-            raise FlightError("not_grounded", 409, "this flight already has a session")
+            raise FlightError("not_grounded", 409, "this chain already has a session")
         for g in flights.values():
             if title and g["session"] == title and g["state"] in UNFINISHED:
                 raise FlightError(
                     "in_flight",
                     409,
-                    "%s is already on a flight (%s)" % (title, g["plan_name"]),
+                    "%s is already on a chain (%s)" % (title, g["plan_name"]),
                 )
         op_attach(f, title, repo_root, branch, seeded, now, triggered_by, start_on)
         f = _normalize_flight(f["id"], f) or f
@@ -4968,7 +4975,7 @@ def split_off(
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
-            raise FlightError("unknown_flight", 404, "no such flight")
+            raise FlightError("unknown_flight", 404, "no such chain")
         f = copy.deepcopy(f)
         chain = op_split_off(f, sid, pos, now)
         f = _normalize_flight(f["id"], f) or f

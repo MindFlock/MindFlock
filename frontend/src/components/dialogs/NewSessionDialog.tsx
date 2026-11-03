@@ -198,9 +198,9 @@ export function NewSessionDialog() {
   // means to touch (with intent) and wait — the Map tab turns that list into
   // ghost tiles and blast arms you can red-zone before a single edit.
   const [planFirst, setPlanFirst] = useState(false);
-  // "Auto-split into up to N sessions if it's worth it" (page 1 only): the
+  // "Let it split into up to N workers if it's worth it" (page 1 only): the
   // start becomes an optional split run — MindFlock creates one session whose
-  // agent decides; a split's pieces are proposed, approved, started and
+  // agent decides; a split's workers are proposed, approved, started and
   // merged back by the server. See SplitCheck.
   const [split, setSplit] = useState(false);
   const [maxPieces, setMaxPieces] = useState(SPLIT_DEFAULT);
@@ -885,7 +885,7 @@ export function NewSessionDialog() {
   const mcpOk = useMemo(
     () =>
       device
-        ? { ok: false, reason: "Auto-split only starts sessions on this device" }
+        ? { ok: false, reason: "Splitting into workers only starts sessions on this device" }
         : teamRunCaps(config?.caps).split
           ? splitGate(config?.caps, canonAgent(program))
           : { ok: false, reason: SERVER_NO_SPLIT },
@@ -1136,7 +1136,7 @@ export function NewSessionDialog() {
   const moreBits: string[] = [];
   if (title.trim()) moreBits.push("named " + title.trim());
   if (draft.lane !== "leave") moreBits.push("Fast-track: " + LANE_LABEL[draft.lane]);
-  if (splitOn) moreBits.push("auto-split");
+  if (splitOn) moreBits.push("split into workers");
   if (provisionOn) moreBits.push("provisioned");
   if (baseBranch) moreBits.push("from " + baseBranch);
   if (planFirst && planOk) moreBits.push("plan first");
@@ -1152,19 +1152,19 @@ export function NewSessionDialog() {
     plainFolder && !initRepo && lane !== "leave"
       ? "No git repo here, so nothing to commit — pick “Make it a git repo first” to use Fast-track"
       : splitOn && lane === "leave"
-      ? "An auto-split commits each piece into its branch — Commit keeps it all on this machine"
+      ? "Splitting into workers commits each worker into its branch — Commit keeps it all on this machine"
       : !prOk && (lane === "pr" || lane === "merge")
       ? prWhy
       : "";
   /** Why "Ask me before it ships" can't be used ("" = it can). */
   const askWhy = splitOn
-    ? "An auto-split always asks you before anything leaves this machine"
+    ? "Splitting into workers always asks you before anything leaves this machine"
     : askFirstApplies(draft.lane)
     ? ""
     : "Fast-track is off: nothing is committed, pushed or merged for you";
   const deepSummary = advancedSummary([
     ["ask me first", gitOn],
-    ["auto-split", gitOn && mcpOk.reason !== SERVER_NO_SPLIT],
+    ["workers", gitOn && mcpOk.reason !== SERVER_NO_SPLIT],
     ["provisioning", gitOn && offerProvision],
     // Only while the picker is (or is about to be) drawn: a repo whose one
     // branch is the checked-out one has nothing to pick.
@@ -1903,7 +1903,7 @@ export function NewSessionDialog() {
                       )}
 
                       {gitOn && (
-                        // "Auto-split into up to N sessions if it's worth it":
+                        // "Let it split into up to N workers if it's worth it":
                         // the form's folder and Task become the lead's.
                         <div id="new-split-row" data-caps="git">
                           <SplitCheck
@@ -1919,7 +1919,7 @@ export function NewSessionDialog() {
                           {!splitOn && mcpOk.reason !== SERVER_NO_SPLIT && (
                             <p className="nf-opt-help muted" id="new-split-help">
                               Lets the agent break a big task into up to {clampSplit(maxPieces, splitLimit)} parallel
-                              sessions — you approve the split first.
+                              workers — you approve the split first.
                             </p>
                           )}
                           {splitSum && (

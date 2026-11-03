@@ -398,7 +398,7 @@ def test_finished_is_announced_once(srv, row, emitted, monkeypatch):
     run(D.step_flight(f["id"]))
     assert [e["event"] for e in emitted].count("flight.finished") == 1
     fin = next(e for e in emitted if e["event"] == "flight.finished")
-    assert fin["data"]["state"] == "done" and fin["data"]["detail"] == "P landed"
+    assert fin["data"]["state"] == "done" and fin["data"]["detail"] == "P finished"
 
 
 def test_another_servers_lease_is_respected(srv, row, monkeypatch):

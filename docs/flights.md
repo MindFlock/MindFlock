@@ -5,6 +5,38 @@
 > frontend and the integration are built against; change them only by editing
 > this file first.
 
+## Vocabulary (2026-11-02)
+
+The owner settled the user-facing words in consolidation wave 2. Every label,
+tooltip, toast, hint, empty state, tour and doc a person reads uses the left
+column. Internal names stay as they are: types, ids, CSS classes, the
+`/api/flights/*` routes, `plans` and `steps` on the wire, store keys, the
+`#flyways` deep link and the hook URL `/api/hooks/flyway/`. The bird flavour
+stays where it explains itself (the Sky, the bird that moves along a chain,
+"takes off" as a verb), but no one has to learn a bird word as a noun.
+
+| Use (UI copy) | Retire in copy |
+|---|---|
+| **stop**: one box on the Sky, every kind | block, box, tile, node, step (in copy) |
+| **group**: a stop with stops inside | Multi-step, sub-steps ("its stops") |
+| **chain**: a row of stops (a session's, or one on the board with no session) | line (in the Sky), flight (as a thing), flyway, plan, "stops-only line" |
+| **saved chain**: a chain kept on the shelf to reuse | saved stop, flyway, plan, Multi-step, "Stops" (as the shelf/chip name), New stops, Scheduled stops, preset |
+| **Wait for me**: the stop kind `you` | Perch, You (as the kind's name) |
+| **Needs you**: everything waiting on a person (the bell's word) | Perched on you, Waiting on you, perch/perched, Needs attention |
+| **Run** / **Run now**: start a chain or template now | Fly, Fly now, Fly these stops, Taking off… (as a button) |
+| **Starts:** By hand / Ticket / Schedule / …: what starts a saved chain | Takes off… (as the dialog/menu name; "takes off" may stay as a verb in a sentence) |
+| **CI checks**: the stop that waits for CI | Checks (as that stop's name) |
+| **Merge when green**: the top Fast-track rung | Merge (as the rung) |
+| **workers**: sessions a session starts | pieces, sub-sessions, children, Auto-split (→ "Let it split into up to N workers") |
+| **Chain**: the session pane tab that shows its chain | Flight (as the tab) |
+| **Stop the chain**: cancel a running chain | Cancel flight |
+| **Finished** / **Merged today**: the landing strip | Landing, Landed today (as headings) |
+
+So in the sections below, which keep the words of the round they record:
+*flyway* or *plan* means a **saved chain**, a *flight* is a **chain** running on
+a session, a *perch* is a **Wait for me** stop, and *Checks* is the **CI checks**
+stop.
+
 ## The idea
 
 MindFlock had three top-bar surfaces that were really one thing seen from

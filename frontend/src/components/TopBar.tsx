@@ -109,7 +109,7 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // The Sky toggle's badge: flights perched on you (lib/flights perchBadge) —
+  // The Sky toggle's badge: the chains that need you (lib/flights perchBadge) —
   // the sky is where they are drawn and its drawer lists them.
   const perch = perchBadge(useFlights().data || []);
   // The calm first hour (lib/calm.ts topBarQuiet): Verify and Schedule are
@@ -168,7 +168,7 @@ export function TopBar() {
   // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
   const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
   const scheduleTitle =
-    "Schedule — everything that starts by itself on a timer: templates and scheduled stops" +
+    "Schedule — everything that starts by itself on a timer: templates and scheduled chains" +
     keys("schedule") +
     (schedFailing > 0
       ? "\n" +
@@ -197,7 +197,7 @@ export function TopBar() {
   const barViews = ui.sidebarHidden || ui.narrow;
   const otherView = ui.view === "sky" ? "grid" : "sky";
   const perchLine =
-    perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+    perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " needs you" : " need you") : "";
   const foldable = [
     barViews && {
       key: "view",
@@ -414,7 +414,7 @@ export function TopBar() {
               the grid of panes or the sky of lines. Only while the sidebar's
               View row (its home) is out of sight — `barViews` above. Glyphs
               alone on a phone, and the last thing a narrow bar folds. The
-              Sky half wears the count of flights perched on you — nothing at
+              Sky half wears the count of chains that need you — nothing at
               zero, the rule every count on this bar keeps. */}
           {barViews && (
           <span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view" role="group" aria-label="View">
@@ -479,7 +479,7 @@ export function TopBar() {
                 out. */}
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
-          {/* Schedule: what starts by itself (templates, and saved stops with a
+          {/* Schedule: what starts by itself (templates, and saved chains with a
               schedule). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
           <button
