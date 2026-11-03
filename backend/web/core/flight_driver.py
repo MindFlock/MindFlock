@@ -2295,7 +2295,7 @@ def _verify_done(flight: dict, sid: str, note: str) -> None:
     for step in _tp.open_human_steps(plan):
         try:
             _tp.record_result(
-                pid, step["id"], "pass", note=note or "Done on the flight", by="human"
+                pid, step["id"], "pass", note=note or "Done on the chain", by="human"
             )
         except Exception as err:  # noqa: BLE001
             _log("flight %s: could not record %s: %v", flight["id"], step["id"], err)

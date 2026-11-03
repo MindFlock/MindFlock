@@ -611,7 +611,7 @@ describe("New dialog: auto-split is an optional split run", () => {
     expect(dlg).toContain("const runMode = (page === 1 && draft.listMode) || splitOn;");
     // The form's Prompt is the lead's task, and an empty one is refused there.
     expect(dlg).toContain("text: page === 1 ? describe : prompt,");
-    expect(dlg).toContain("Auto-split needs a task");
+    expect(dlg).toContain("Splitting into workers needs a task");
     expect(ALL).not.toContain("splitShapeReason");
     // A split starts through the run with its N, and its button stays
     // "Create session" — it may well not split.

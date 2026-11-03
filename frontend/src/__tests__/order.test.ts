@@ -118,7 +118,7 @@ describe("runStages", () => {
       ["check", "next"],
       ["release", "next"],
     ]);
-    expect(s[0].detail).toBe("2 pieces — needs you");
+    expect(s[0].detail).toBe("2 workers — needs you");
   });
 
   it("counts pieces and merges, same folder commits", () => {

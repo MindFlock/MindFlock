@@ -24309,12 +24309,12 @@ function flightDrives(f) {
 	return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
 }
 function perchLabel(title) {
-	const t = String(title || "").trim().replace(/^(you|perch):\s*/i, "");
-	return t ? "Perch: " + t : "Perch";
+	const t = String(title || "").trim().replace(/^(you|perch|wait for me):\s*/i, "");
+	return t ? "Wait for me: " + t : "Wait for me";
 }
 function perchedOnYou(stepTitle) {
-	const t = String(stepTitle || "").trim().replace(/^(you|perch):\s*/i, "");
-	return "Perched on you" + (t ? ": " + t : "");
+	const t = String(stepTitle || "").trim().replace(/^(you|perch|wait for me):\s*/i, "");
+	return "Needs you" + (t ? ": " + t : "");
 }
 function stepStateOf(f, step, index) {
 	const rec = f.step_states?.[step.id]?.state;
@@ -24360,7 +24360,7 @@ function stripDots(f) {
 function stripLabel(f, now = Date.now()) {
 	const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
 	const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-	const tail = f.state === "done" ? "Landed" : f.state === "cancelled" ? "Cancelled" : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
+	const tail = f.state === "done" ? "Finished" : f.state === "cancelled" ? "Cancelled" : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
 	return [
 		f.plan_name,
 		stripDots(f),
@@ -24454,7 +24454,7 @@ function defaultOnFail(def) {
 }
 function planFromSteps(name, steps, trigger) {
 	return {
-		name: name.trim() || "New stops",
+		name: name.trim() || "New chain",
 		description: "",
 		builtin: false,
 		trigger: trigger ? { ...trigger } : {
@@ -25220,7 +25220,7 @@ var STATE_LABEL = {
 };
 var REASON_LABEL = {
 	question: "Question",
-	flight_you: "Perch",
+	flight_you: "Wait for me",
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
 	setup_failed: "Setup failed",
@@ -25345,7 +25345,7 @@ function deriveSessionState(inst, extras) {
 	if (act === "clarify") return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
 	const fl = inst.flight;
 	if (fl && fl.state === "waiting_you" && fl.step?.actor === "you") return {
-		...needsYou("flight_you", flightYouLabel(fl.step.title) + " — flight “" + fl.plan_name + "” is perched on you; press Done on its strip, the Board or the bell"),
+		...needsYou("flight_you", flightYouLabel(fl.step.title) + " — chain “" + fl.plan_name + "” needs you; press Done on its strip, the Sky or the bell"),
 		label: flightYouLabel(fl.step.title)
 	};
 	const bgHint = backgroundHint(inst);
@@ -30350,11 +30350,11 @@ function groupTitle(g) {
 	return bits.join("\n");
 }
 var LEAD_ASKS = {
-	plan: "the lead proposed the pieces — approve them",
+	plan: "the lead proposed the workers — approve them",
 	release: "one PR is ready to open",
 	check_failed: "the check failed on the merged branch",
 	lead_gone: "its lead is gone — nothing can merge or ship",
-	stray: "changes no piece owns in the lead's folder — commit or discard them yourself"
+	stray: "changes no worker owns in the lead's folder — commit or discard them yourself"
 };
 var num$6 = (v) => Number(v) || 0;
 var str$4 = (v) => v == null ? "" : String(v);
@@ -33104,17 +33104,17 @@ function leadSubline(run, leadName) {
 	const tasks = memberTasks(run);
 	const n = split && run.plan && run.state === "plan_ready" ? run.plan.pieces.length : tasks.length;
 	const branch = run.lead?.branch || run.release?.branch || "";
-	if (run.state === "planning") return [{ text: run.optional ? "Waiting for " + leadName + " to decide whether to split — it reads the code first; a plan shows here, or it just does the task." : "Waiting for " + leadName + " to propose the pieces — it reads the code first, then MindFlock shows the plan here." }];
+	if (run.state === "planning") return [{ text: run.optional ? "Waiting for " + leadName + " to decide whether to split — it reads the code first; a plan shows here, or it just does the task." : "Waiting for " + leadName + " to propose the workers — it reads the code first, then MindFlock shows the plan here." }];
 	if (run.state === "plan_ready") return [
 		{ text: leadName + " proposed " },
 		{
-			text: plural$8(n, "piece") + " with separate paths",
+			text: plural$8(n, "worker") + " with separate paths",
 			b: true
 		},
-		{ text: " — approve them and MindFlock starts the workers." }
+		{ text: " — approve them and MindFlock starts them." }
 	];
 	const parts = split ? [{ text: "Split into " }, {
-		text: plural$8(n, "piece") + " with separate paths",
+		text: plural$8(n, "worker") + " with separate paths",
 		b: true
 	}] : [{
 		text: plural$8(n, "line") + ", one PR",
@@ -33139,7 +33139,7 @@ function leadSubline(run, leadName) {
 				b: true
 			});
 		} else {
-			parts.push({ text: "each piece is committed on " });
+			parts.push({ text: "each worker is committed on " });
 			parts.push({
 				text: branch || "the lead's branch",
 				b: true
@@ -33194,13 +33194,13 @@ function modeChoices(run, leadName) {
 	return [{
 		mode: "worktrees",
 		label: "In separate worktrees (merge back) — default",
-		hint: !lead.in_place && !lead.trunk ? "Each piece in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the pieces there — " + leadName + " itself is left as it is.",
+		hint: !lead.in_place && !lead.trunk ? "Each worker in its own worktree, merged back into " + (branch || leadName + "'s branch") + "; conflicts go to " + leadName + "." : "MindFlock starts " + leadName + "-split from " + leadName + "'s last commit and merges the workers there — " + leadName + " itself is left as it is.",
 		blocked: ""
 	}, {
 		mode: "same_folder",
 		label: "In this folder (no merge)",
-		hint: "Each piece runs in " + leadName + "'s folder; MindFlock commits each piece's paths as it finishes — nothing to merge, no per-piece undo.",
-		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the pieces would commit onto it" : ""
+		hint: "Each worker runs in " + leadName + "'s folder; MindFlock commits each worker's paths as it finishes — nothing to merge, no per-worker undo.",
+		blocked: lead.trunk ? leadName + " is on " + (branch || "its trunk") + " — the workers would commit onto it" : ""
 	}];
 }
 function startedText(n, mode, leadName) {
@@ -33249,8 +33249,8 @@ function releaseCard(run) {
 		title: r.title || run.name,
 		into: base + " ← " + (branch || "its branch"),
 		stat,
-		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$8(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
-		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
+		commits: (isSameFolder(run) ? "one per worker, committed by MindFlock with only its paths" : split ? "one per worker, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$8(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		body: split ? "a section per worker: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
 	};
 }
 function checkLine(run) {
@@ -33262,7 +33262,7 @@ function checkLine(run) {
 		case "failed": return cmd + " failed" + (c.summary ? ": " + c.summary : "");
 		case "running": return cmd + " is running on the merged branch…";
 		case "fixing": return cmd + " failed — the lead is fixing it";
-		case "pending": return isSameFolder(run) ? "runs once every piece is committed" : "runs once every piece is merged back";
+		case "pending": return isSameFolder(run) ? "runs once every worker is committed" : "runs once every worker is merged back";
 		default: return "";
 	}
 }
@@ -33371,7 +33371,7 @@ function leadChip(run) {
 	}
 	if (run.state === "plan_ready") return {
 		label: "plan?",
-		title: "The lead proposed the pieces — open its Thread to approve them"
+		title: "The lead proposed the workers — open its Thread to approve them"
 	};
 	return null;
 }
@@ -33386,7 +33386,7 @@ function leadLine(run) {
 	].includes(t.state)).length;
 	switch (run.state) {
 		case "planning": return {
-			text: run.optional ? "deciding whether to split…" : "proposing the pieces…",
+			text: run.optional ? "deciding whether to split…" : "proposing the workers…",
 			cls: ""
 		};
 		case "plan_ready": return {
@@ -33495,7 +33495,7 @@ function waitingChip(w) {
 		cls: "warn"
 	};
 	if (w.kind === "plan") return {
-		text: w.reason || "the lead proposed the pieces — approve them",
+		text: w.reason || "the lead proposed the workers — approve them",
 		cls: "warn"
 	};
 	if (w.kind === "release") return {
@@ -33507,7 +33507,7 @@ function waitingChip(w) {
 		cls: "bad"
 	};
 	if (w.kind === "stray") return {
-		text: w.reason || "changes no piece owns in the lead's folder",
+		text: w.reason || "changes no worker owns in the lead's folder",
 		cls: "warn"
 	};
 	if (w.kind === "approve") return {
@@ -33558,9 +33558,9 @@ function waitingActions(w, can) {
 			key: "approve",
 			label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
 			primary: true,
-			title: "MindFlock starts one worker per piece, each fenced to its paths"
+			title: "MindFlock starts one worker per task, each fenced to its paths"
 		});
-		open("Read the plan in the lead's Thread tab — edit a piece there");
+		open("Read the plan in the lead's Thread tab — edit a worker's task there");
 		return out;
 	}
 	if (w.kind === "release") {
@@ -37924,8 +37924,8 @@ function jumpFlight(flightId, stepId, title = "") {
 	return flightAction("Jump", flightPath(flightId, "/jump"), { step: stepId }, title ? "Jumped to " + title : "");
 }
 function controlFlight(flightId, verb) {
-	const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : verb === "run" ? "Chain started" : "Flight cancelled — its session is kept";
-	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Cancel", flightPath(flightId, "/" + verb), {}, said);
+	const said = verb === "pause" ? "Chain halted — Carry on picks it up again" : verb === "resume" ? "Chain carrying on" : verb === "run" ? "Chain started" : "Chain stopped — its session is kept";
+	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the chain", flightPath(flightId, "/" + verb), {}, said);
 }
 function runFlight(flightId) {
 	return controlFlight(flightId, "run");
@@ -37951,7 +37951,7 @@ async function setHalt(flightId, stepId, halt) {
 			method: "PATCH",
 			json: { halt }
 		});
-		toast(halt ? "Halt point set — the flight stops before this stop" : "Halt point taken off");
+		toast(halt ? "Halt point set — the chain stops before this stop" : "Halt point taken off");
 		return true;
 	} catch (err) {
 		errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
@@ -37977,12 +37977,12 @@ async function takeOff(body) {
 		const flight = (await api("/api/flights/start", { json: body }))?.flight || null;
 		refreshFlights();
 		if (flight?.session) {
-			toast("Took off: " + flight.plan_name);
+			toast("Started: " + flight.plan_name);
 			openWhenReady(flight.session);
 		}
 		return flight;
 	} catch (err) {
-		errorPop("Take off failed", errMsg(err));
+		errorPop("Starting the chain failed", errMsg(err));
 		return null;
 	}
 }
@@ -38203,7 +38203,7 @@ async function attachGrounded(flightId, body) {
 	try {
 		return (await api(flightPath(flightId, "/attach"), { json: body }))?.flight || null;
 	} catch (err) {
-		errorPop("Flying the stops failed", errMsg(err));
+		errorPop("Running the stops failed", errMsg(err));
 		return null;
 	} finally {
 		refreshFlights();
@@ -46734,12 +46734,12 @@ var TOURS = {
 			{
 				target: "[data-tour=\"sky-session-box\"], .sky-head",
 				title: "Each session is a chain",
-				body: "Its agent comes first, then the stops that run after its turn, left to right; Ctrl+Y goes back to the grid."
+				body: "A chain is a row of stops: its agent comes first, then the stops that run after its turn; Ctrl+Y goes back to the grid."
 			},
 			{
 				target: "[data-tour=\"sky-shelf\"]",
 				title: "Add a stop from the shelf",
-				body: "Drag Agent, Perch, Ship, Verify, Wait or Loop onto a chain, or click the + after its last stop."
+				body: "Drag Agent, Wait for me, Ship, Verify, Wait or Loop onto a chain, or click the + after its last stop; saved chains drag on whole."
 			},
 			{
 				target: ".sky-port-out:not(.sky-port-off), [data-tour=\"sky-stop\"]",
@@ -46749,7 +46749,7 @@ var TOURS = {
 			{
 				target: "[data-tour=\"flights-bird\"]",
 				title: "Run it, and answer it",
-				body: "▶ Run (or your next prompt) sets the chain going and the bird shows where it is; a Perch waits for your Done."
+				body: "▶ Run (or your next prompt) starts the chain and the bird shows where; Wait for me holds it in Needs you until you press Done."
 			},
 			{
 				target: "[data-tour=\"sky-guide\"], .sky-toolbar .tour-btn",
@@ -49709,10 +49709,10 @@ function TopBar() {
 		return k.length ? " (" + k.join(" / ") + ")" : "";
 	};
 	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
-	const scheduleTitle = "Schedule — everything that starts by itself on a timer: templates and scheduled stops" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
+	const scheduleTitle = "Schedule — everything that starts by itself on a timer: templates and scheduled chains" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
 	const barViews = ui.sidebarHidden || ui.narrow;
 	const otherView = ui.view === "sky" ? "grid" : "sky";
-	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " needs you" : " need you") : "";
 	const foldable = [
 		barViews && {
 			key: "view",
@@ -53004,7 +53004,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 		},
 		inst.check && inst.check.state !== "running" && !peer && {
 			key: "run-checks",
-			label: "Run checks now",
+			label: "Run the check command",
 			run: () => instApi(title, "/check", { method: "POST" }).then(() => toast("Checks running…")).catch((err) => errorPop("Check run failed", errMsg(err))).finally(() => refreshInstances())
 		},
 		peer && {
@@ -53059,7 +53059,7 @@ function sessionMenu(inst, ctx, opts = {}) {
 		!remote && !peer && !inst.pending && {
 			key: "flyway",
 			label: "Add a stop…",
-			title: "Open this session's Flight tab: tack a stop, or a saved stop, onto its line",
+			title: "Open this session's Chain tab: add a stop, or a saved chain, to its chain",
 			run: () => openTab(title, "flight")
 		},
 		!remote && !peer && !inst.pending && {
@@ -58319,7 +58319,7 @@ function ViewRow({ calm }) {
 	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
 	const k = usableShortcuts("view");
 	const keys = k.length ? " (" + k.join(" / ") + ")" : "";
-	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+	const perchLine = perch.count > 0 ? "\n" + perch.count + " need you" : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "view-modes",
 		children: [
@@ -58349,7 +58349,7 @@ function ViewRow({ calm }) {
 					type: "button",
 					className: "vt" + (ui.view === v ? " active" : ""),
 					"aria-pressed": ui.view === v,
-					"aria-label": viewLabel(v) + (v === "sky" && perch.count > 0 ? ", " + perch.count + " perched on you" : ""),
+					"aria-label": viewLabel(v) + (v === "sky" && perch.count > 0 ? ", " + perch.count + " need you" : ""),
 					"data-view": v,
 					"data-tour": v === "sky" ? "view-sky" : void 0,
 					title: viewLabel(v) + " — " + VIEW_BLURB[v] + keys + (v === "sky" ? perchLine : ""),
@@ -61391,7 +61391,7 @@ function runStages(run) {
 			label: "Plan",
 			how: "the lead proposes, you approve",
 			state: st === "planning" ? "now" : st === "plan_ready" ? "now" : "done",
-			detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — needs you" : pieces ? pieces + " pieces" : ""
+			detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " workers — needs you" : pieces ? pieces + " workers" : ""
 		});
 	}
 	const working = tasks.filter((t) => !TERMINAL.has(t.state) && t.state !== "queued" && t.state !== "integrating").length;
@@ -61401,7 +61401,7 @@ function runStages(run) {
 	const cap = Number(run.concurrency) || 0;
 	out.push({
 		key: "pieces",
-		label: run.split ? "Pieces" : "Lines",
+		label: run.split ? "Workers" : "Tasks",
 		how: sf ? "together, in this folder" : cap && n > cap ? "together, " + cap + " at a time" : "together",
 		state: planning ? "next" : failed ? "bad" : n && finishedWork === n ? "done" : n ? "now" : "next",
 		detail: n ? [
@@ -80778,7 +80778,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "pb-desc",
-					children: e.kind === "stops" ? "Its Flight tab: add, remove or move its stops" : "Its line on the Sky's board"
+					children: e.kind === "stops" ? "Its Chain tab: add, remove or move its stops" : "Its chain on the Sky"
 				})
 			]
 		}, e.kind);
@@ -81759,7 +81759,7 @@ function collapseFlown(d) {
 		id: FLOWN_ID,
 		kind: "flown",
 		row: "main",
-		title: run.length + " flown",
+		title: run.length + " done",
 		sub: first.title + " … " + last.title,
 		state: "done",
 		icon: "flown",
@@ -81952,9 +81952,9 @@ function lineWhere(d) {
 		};
 	}
 	if (!b) return "";
-	const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+	const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
 	const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
-	return head + n.title + (tail ? " · " + tail : "");
+	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
 }
 function flownCount(d) {
 	return d.nodes.find((n) => n.kind === "flown")?.count || 0;
@@ -83142,22 +83142,22 @@ var SKY_MODES = [
 	{
 		id: "all",
 		label: "All",
-		title: "Every session — a worker inside its lead's line"
+		title: "Every session — a worker inside its lead's chain"
 	},
 	{
 		id: "mine",
 		label: "Mine",
-		title: "Your top-level sessions, their workers folded into their line"
+		title: "Your top-level sessions, their workers folded into their chain"
 	},
 	{
 		id: "perched",
-		label: "Perched on you",
-		title: "Only the lines waiting on you"
+		label: "Needs you",
+		title: "Only the chains that need you"
 	},
 	{
 		id: "one",
 		label: "This session",
-		title: "One line, filling the sky"
+		title: "One chain, filling the sky"
 	}
 ];
 var inSky = (r) => !r.hidden_by;
@@ -83310,24 +83310,24 @@ function haltToggle(n) {
 	return n.step?.halt ? {
 		key: "halt",
 		label: "Carry on past here",
-		title: "Take the halt point off this stop — the flight flies on through it"
+		title: "Take the halt point off this stop — the chain goes on through it"
 	} : {
 		key: "halt",
 		label: "Halt here",
-		title: "Make this stop a halt point — the flight stops when it gets here, before doing it"
+		title: "Make this stop a halt point — the chain stops when it gets here, before doing it"
 	};
 }
 function flightHold(n) {
 	if (n.state === "paused") return {
 		key: "resume",
 		label: "Carry on",
-		title: "Fly on from this stop"
+		title: "Go on from this stop"
 	};
 	if (n.state === "halted") return null;
 	return {
 		key: "pause",
 		label: "Halt now",
-		title: "Stop the flight where it is — Carry on picks it up again"
+		title: "Halt the chain where it is — Carry on picks it up again"
 	};
 }
 function haltMark(n) {
@@ -83338,10 +83338,10 @@ function haltMark(n) {
 	if (n.kind !== "stop" || !n.step?.halt) return null;
 	return n.state === "paused" ? {
 		glyph: "⏸",
-		title: "Halt point — the flight stopped here. Carry on to fly on"
+		title: "Halt point — the chain stopped here. Carry on to go on"
 	} : {
 		glyph: "⏸",
-		title: "Halt point — the flight stops here before doing this stop"
+		title: "Halt point — the chain stops here before doing this stop"
 	};
 }
 var note = (label) => ({
@@ -83356,26 +83356,26 @@ function removeTool(n, here = false) {
 		return {
 			key: "remove",
 			label: "Remove",
-			title: "Remove this stop and its " + k + (k === 1 ? " sub-step" : " sub-steps") + " from the line",
+			title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the chain",
 			danger: true
 		};
 	}
 	if (here) return {
 		key: "remove",
-		label: "Remove — the flight halts here",
-		title: "Remove this stop — the flight halts right before the stop that followed it",
+		label: "Remove — the chain halts here",
+		title: "Remove this stop — the chain halts right before the stop that followed it",
 		danger: true
 	};
 	if (flownState(n.state)) return {
 		key: "remove",
-		label: "Remove from the line",
-		title: "Take this flown stop off the line",
+		label: "Remove from the chain",
+		title: "Take this finished stop off the chain",
 		danger: true
 	};
 	return {
 		key: "remove",
 		label: "Remove",
-		title: "Take this stop off the line (Delete)",
+		title: "Take this stop off the chain (Delete)",
 		danger: true
 	};
 }
@@ -83387,20 +83387,20 @@ function groupItems(n, ctx) {
 	if (can.edit) items.push({
 		key: "edit",
 		label: n.editable ? "Edit" : "Details",
-		title: "Open this stop and its sub-steps (Enter)"
+		title: "Open this group and its stops (Enter)"
 	});
 	if (can.group) items.push(ctx.expanded ? {
 		key: "expand",
-		label: "Fold its sub-steps",
-		title: "Draw it as one box again"
+		label: "Fold its stops",
+		title: "Draw it as one stop again"
 	} : {
 		key: "expand",
-		label: "Show its sub-steps",
-		title: "Draw each of its sub-steps on the line"
+		label: "Show its stops",
+		title: "Draw each of its stops on the chain"
 	});
 	if (can.halt && canHalt(n)) items.push(haltToggle(n));
 	if (can.remove) items.push(removeTool(n));
-	if (!n.editable && n.state !== "done" && n.state !== "skipped") items.push(note("The flight is in this stop — only what is still ahead can change"));
+	if (!n.editable && n.state !== "done" && n.state !== "skipped") items.push(note("The chain is in this group — only what is still ahead can change"));
 	return items;
 }
 function menuItemsFor(n, ctx) {
@@ -83413,14 +83413,14 @@ function menuItemsFor(n, ctx) {
 var JUMP_ITEM = {
 	key: "jump",
 	label: "Jump the bird here",
-	title: "Fly the flight to this stop — the halt points after it are armed again"
+	title: "Move the chain to this stop — the halt points after it are armed again"
 };
 function boxItems(n, ctx) {
 	const { can } = ctx;
 	if (n.kind === "add") return can.open ? [{
 		key: "tackon",
 		label: "Tack on a stop",
-		title: "Pick a stop to tack onto the end of the line"
+		title: "Pick a stop to tack onto the end of the chain"
 	}] : [];
 	if (n.kind === "rung") return [note("A fast-track rung — it moves as the session ships")];
 	if (n.kind === "group") return groupItems(n, ctx);
@@ -83440,13 +83440,13 @@ function boxItems(n, ctx) {
 			items.push({
 				key: "earlier",
 				label: "Earlier",
-				title: "Move this stop one place earlier on the line (←)",
+				title: "Move this stop one place earlier on the chain (←)",
 				disabled: !ctx.earlier
 			});
 			items.push({
 				key: "later",
 				label: "Later",
-				title: "Move this stop one place later on the line (→)",
+				title: "Move this stop one place later on the chain (→)",
 				disabled: !ctx.later
 			});
 		}
@@ -83464,10 +83464,10 @@ function boxItems(n, ctx) {
 		if (can.edit) items.push({
 			key: "edit",
 			label: "Details",
-			title: "Open this stop (it has flown: read-only)"
+			title: "Open this stop (it has run: read-only)"
 		});
 		if (can.remove && ctx.live) items.push(removeTool(n));
-		items.push(note("This stop has flown"));
+		items.push(note("This stop has run"));
 		return items;
 	}
 	if (!ctx.here && (n.state === "pending" || n.state === "edit")) return [note("Still to come — it can't change here")];
@@ -83478,7 +83478,7 @@ function boxItems(n, ctx) {
 		if (n.state === "perched") items.push({
 			key: "done",
 			label: "Done",
-			title: "Mark this perch done — the bird flies on"
+			title: "Mark this stop done — the bird flies on"
 		});
 		if (n.state === "halted") items.push({
 			key: "retry",
@@ -83495,10 +83495,10 @@ function boxItems(n, ctx) {
 	if (can.edit) items.push({
 		key: "edit",
 		label: "Details",
-		title: "Open this stop (the flight is here: read-only)"
+		title: "Open this stop (the chain is here: read-only)"
 	});
 	if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
-	items.push(note("The flight is here — it can't change now"));
+	items.push(note("The chain is here — it can't change now"));
 	return items;
 }
 function birdAction(tone, onFlight) {
@@ -83506,7 +83506,7 @@ function birdAction(tone, onFlight) {
 	if (tone === "paused") return {
 		key: "resume",
 		label: "Carry on",
-		title: "Carry on — the flight flies on from this stop"
+		title: "Carry on — the chain goes on from this stop"
 	};
 	if (tone === "halted") return {
 		key: "retry",
@@ -83515,8 +83515,8 @@ function birdAction(tone, onFlight) {
 	};
 	return {
 		key: "pause",
-		label: "Halt the flight here",
-		title: "Halt the flight here — Carry on picks it up again"
+		label: "Halt the chain here",
+		title: "Halt the chain here — Carry on picks it up again"
 	};
 }
 function jumpStepOf(n) {
@@ -83660,7 +83660,7 @@ function RemoveTool({ n, here = false, onRemove }) {
 		type: "button",
 		className: "fl-icon-btn fl-tool fl-tool-remove",
 		"aria-label": said,
-		title: n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the line (Delete)" : t.title,
+		title: n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the chain (Delete)" : t.title,
 		onClick: () => onRemove(n),
 		children: "🗑"
 	});
@@ -83668,7 +83668,7 @@ function RemoveTool({ n, here = false, onRemove }) {
 var REWIND_ITEM = {
 	key: "rewind",
 	label: "Rewind to here",
-	title: "Reset the worktree to this checkpoint and fly on from the stop after it",
+	title: "Reset the worktree to this checkpoint and go on from the stop after it",
 	danger: true
 };
 function canRewind(n, flightId) {
@@ -83703,7 +83703,7 @@ var STATE_WORD$1 = {
 	failed: "failed",
 	halted: "halted",
 	current: "under way",
-	perched: "perched on you",
+	perched: "needs you",
 	paused: "paused here",
 	pending: "still to come"
 };
@@ -84111,7 +84111,7 @@ function FlywayCanvas(p) {
 		try {
 			await api(flightPath(flight, "/steps/" + encodeURIComponent(sid) + "/op/rewind"), { json: {} });
 			setRewind(null);
-			toast("Rewound to “" + rewindNode.title + "” — the flight goes on from the stop after it");
+			toast("Rewound to “" + rewindNode.title + "” — the chain goes on from the stop after it");
 			refreshFlights();
 			refreshInstances();
 		} catch (err) {
@@ -84414,9 +84414,9 @@ function FlywayCanvas(p) {
 						children: [p.onToggleGroup && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "fl-icon-btn fl-group-chev",
-							"aria-label": "Fold “" + f.name + "” into one box",
+							"aria-label": "Fold “" + f.name + "” into one stop",
 							"aria-expanded": true,
-							title: "Fold its sub-steps into one box",
+							title: "Fold its stops into one",
 							onClick: () => p.onToggleGroup(f.id),
 							children: "▾"
 						}), f.name]
@@ -84472,7 +84472,7 @@ function FlywayCanvas(p) {
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
 					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
-					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD$1[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
+					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a group of " + n.group.total + (n.group.total === 1 ? " stop" : " stops") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD$1[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
 							boxRefs.current[n.id] = el;
@@ -84553,7 +84553,7 @@ function FlywayCanvas(p) {
 										type: "button",
 										className: "fl-icon-btn fl-tool",
 										"aria-label": "Edit “" + n.title + "”",
-										title: "Open this stop and its sub-steps (Enter)",
+										title: "Open this group and its stops (Enter)",
 										onClick: () => edit(n),
 										children: "✎"
 									}),
@@ -84561,14 +84561,14 @@ function FlywayCanvas(p) {
 										type: "button",
 										className: "fl-icon-btn fl-tool",
 										"aria-label": "Move “" + n.title + "” earlier",
-										title: "A stop with sub-steps doesn't move yet",
+										title: "A group doesn't move yet",
 										disabled: true,
 										children: "⇤"
 									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
 										className: "fl-icon-btn fl-tool",
 										"aria-label": "Move “" + n.title + "” later",
-										title: "A stop with sub-steps doesn't move yet",
+										title: "A group doesn't move yet",
 										disabled: true,
 										children: "⇥"
 									})] }),
@@ -84671,7 +84671,7 @@ function FlywayCanvas(p) {
 							}),
 							waiting && !open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-join-pill",
-								title: "The line goes on once its workers are done: " + joinLabel(waiting),
+								title: "The chain goes on once its workers are done: " + joinLabel(waiting),
 								"aria-hidden": "true",
 								children: waiting.waiting + " of " + waiting.total
 							}),
@@ -84695,9 +84695,9 @@ function FlywayCanvas(p) {
 										p.onToggleGroup && n.group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 											type: "button",
 											className: "fl-icon-btn fl-group-chev",
-											"aria-label": "Show the sub-steps of “" + n.title + "”",
+											"aria-label": "Show the stops in “" + n.title + "”",
 											"aria-expanded": false,
-											title: "Show its sub-steps on the line",
+											title: "Show its stops on the chain",
 											"data-no-drag": true,
 											onClick: (e) => {
 												e.stopPropagation();
@@ -84855,7 +84855,7 @@ function FlywayCanvas(p) {
 								}),
 								n.dots && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 									className: "fl-box-dots",
-									"aria-label": "Its line",
+									"aria-label": "Its stops",
 									children: n.dots
 								}),
 								p.renderInBox?.(n)
@@ -84889,11 +84889,11 @@ function FlywayCanvas(p) {
 					x: birdDrag?.live ? birdDrag.x : perch.x + pad + perch.w / 2,
 					y: birdDrag?.live ? birdDrag.y : perch.y + top,
 					hand: birdHand,
-					label: "The bird: " + (p.bird.tone === "you" ? "perched on you at " : p.bird.tone === "halted" ? "halted at " : p.bird.tone === "paused" ? "paused at " : "flying ") + perch.node.title
+					label: "The bird: " + (p.bird.tone === "you" ? "needs you at " : p.bird.tone === "halted" ? "halted at " : p.bird.tone === "paused" ? "paused at " : "flying ") + perch.node.title
 				}),
 				branchBirds.map(({ perch: bp, box }) => {
 					const n = box.node;
-					const doing = bp.tone === "you" ? "waiting on you" : "working";
+					const doing = bp.tone === "you" ? "needs you" : "working";
 					const open = () => p.onOpen?.(n);
 					const inV = leaderAt && bp.formation ? formationAt(leaderAt, bp.formation, 18, vertical) : null;
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
@@ -84948,7 +84948,7 @@ function FlywayCanvas(p) {
 					},
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 						title: "Rewind to “" + rewindNode.title + "”?",
-						body: "The worktree goes back to " + (rewindNode.receipt ? "where it was " + rewindNode.receipt : "this checkpoint") + " — work since then is lost unless it was committed somewhere else — and the flight flies on from the stop after it.",
+						body: "The worktree goes back to " + (rewindNode.receipt ? "where it was " + rewindNode.receipt : "this checkpoint") + " — work since then is lost unless it was committed somewhere else — and the chain goes on from the stop after it.",
 						confirmLabel: "Rewind",
 						busy: rewind.busy,
 						onConfirm: () => void doRewind(),
@@ -85040,14 +85040,14 @@ function YouStepActions({ flight, compact = false }) {
 					type: "button",
 					className: "btn-primary fl-btn fl-done",
 					disabled: busy || !allTicked,
-					title: allTicked ? "Mark “" + step.title + "” done — the flight flies on" : "Tick every item first",
+					title: allTicked ? "Mark “" + step.title + "” done — the chain goes on" : "Tick every item first",
 					onClick: () => void run(() => stepDone(flight.id, step.id)),
 					children: "Done"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "test-btn fl-btn fl-skip",
 					disabled: busy,
-					title: "Skip “" + step.title + "” — the flight flies on without it",
+					title: "Skip “" + step.title + "” — the chain goes on without it",
 					onClick: () => void run(() => stepSkip(flight.id, step.id)),
 					children: "Skip"
 				})]
@@ -85067,19 +85067,19 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 		items.push(flight.state === "halted" || flight.state === "paused" ? {
 			key: "resume",
 			label: "Carry on",
-			title: "Fly on from the current stop",
+			title: "Go on from the current stop",
 			onSelect: () => void controlFlight(flight.id, "resume")
 		} : {
 			key: "pause",
 			label: "Halt now",
-			title: "Stop the flight at its current stop — Carry on picks it up again",
+			title: "Halt the chain at its current stop — Carry on picks it up again",
 			onSelect: () => void controlFlight(flight.id, "pause")
 		});
 		items.push({
 			key: "cancel",
-			label: "Cancel",
+			label: "Stop the chain",
 			danger: true,
-			title: "End this flight — its session is kept",
+			title: "End this chain — its session is kept",
 			onSelect: onCancelAsk
 		});
 	}
@@ -85088,7 +85088,7 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 		className: "fl-menu",
 		"data-no-drag": true,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-			label: "Flight actions",
+			label: "Chain actions",
 			items
 		})
 	});
@@ -85102,7 +85102,7 @@ function stopMenuItems(flight, n, onCancelAsk) {
 	if (!atCursor) items.push({
 		key: "jump",
 		label: "Jump here",
-		title: "Move the flight to this stop",
+		title: "Move the chain to this stop",
 		onSelect: () => void jumpFlight(flight.id, step.id, step.title)
 	});
 	if (n.state === "halted" || n.state === "failed") items.push({
@@ -85114,19 +85114,19 @@ function stopMenuItems(flight, n, onCancelAsk) {
 	if (atCursor) items.push(flight.state === "halted" || flight.state === "paused" ? {
 		key: "resume",
 		label: "Carry on",
-		title: "Fly on from here",
+		title: "Go on from here",
 		onSelect: () => void controlFlight(flight.id, "resume")
 	} : {
 		key: "pause",
 		label: "Halt now",
-		title: "Stop the flight at this stop — Carry on picks it up again",
+		title: "Halt the chain at this stop — Carry on picks it up again",
 		onSelect: () => void controlFlight(flight.id, "pause")
 	});
 	items.push({
 		key: "cancel",
-		label: "Cancel flight",
+		label: "Stop the chain",
 		danger: true,
-		title: "End this flight — its session is kept",
+		title: "End this chain — its session is kept",
 		onSelect: onCancelAsk
 	});
 	return items;
@@ -85138,10 +85138,10 @@ function useCancelAsk(flight) {
 		node: asking && flight ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			onClick: stop,
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Cancel this flight?",
+				title: "Stop this chain?",
 				body: "It stops where it is. Its session, branch and work are kept.",
-				confirmLabel: "Cancel flight",
-				cancelLabel: "Keep flying",
+				confirmLabel: "Stop the chain",
+				cancelLabel: "Keep it running",
 				busy,
 				onCancel: () => setAsking(false),
 				onConfirm: async () => {
@@ -85254,7 +85254,7 @@ function FlightCard({ flight, kinds, expand = false }) {
 					className: "fl-strip-now",
 					children: [flight.state === "done" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "fl-landed",
-						children: "Landed"
+						children: "Finished"
 					}) : flight.state === "cancelled" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "muted",
 						children: ["Cancelled", flight.reason ? " — " + flight.reason : ""]
@@ -85273,7 +85273,7 @@ function FlightCard({ flight, kinds, expand = false }) {
 						}),
 						flight.state === "paused" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-now-paused",
-							title: flight.reason === "halt point" ? "The flight reached a halt point and stopped before this stop — Carry on to fly on" : "Halted by you — Carry on to fly on",
+							title: flight.reason === "halt point" ? "The chain reached a halt point and stopped before this stop — Carry on to go on" : "Halted by you — Carry on to go on",
 							children: flight.reason === "halt point" ? "Paused at a halt point" : "Paused"
 						}),
 						flight.state === "halted" && flight.reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -85326,7 +85326,7 @@ function PaneFlightStrip({ inst }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: "fl-strip-line",
-					title: "Open the Flight tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : ""),
+					title: "Open the Chain tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : ""),
 					onClick: () => openFlightTab(inst.title),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "fl-strip-text",
@@ -85976,7 +85976,7 @@ function ReadyHead({ flight }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-head-chip tone-ready",
-				title: "Built, not flying yet",
+				title: "Built, not running yet",
 				children: "Ready"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -86186,8 +86186,8 @@ function hangFromAgent(d) {
 var isSubSession = (n) => (n.kind === "child" || n.kind === "branch") && !!n.session;
 var MINI_WORD = {
 	done: "done",
-	current: "flying now",
-	perched: "waiting on you",
+	current: "running now",
+	perched: "needs you",
 	halted: "halted",
 	paused: "paused",
 	failed: "failed",
@@ -86220,8 +86220,8 @@ function MiniChain({ stops }) {
 var DRAG_MIN = 4;
 var STATE_WORD = {
 	done: "done",
-	current: "flying now",
-	perched: "waiting on you",
+	current: "running now",
+	perched: "needs you",
 	halted: "halted",
 	paused: "paused",
 	pending: "to come",
@@ -86582,7 +86582,7 @@ function SkyChain(p) {
 		"data-flight": g.flightId || void 0,
 		"data-head": head.kind,
 		role: "list",
-		"aria-label": (head.kind === "session" ? "Chain in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it",
+		"aria-label": (head.kind === "session" ? "Chain in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Chain with no session yet") + " — drag a stop to move it, drag a port to wire it",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "sky-wires",
@@ -86766,7 +86766,7 @@ function SkyChain(p) {
 				x: birdOn.x + birdOn.w / 2,
 				y: birdOn.y,
 				size: 22,
-				label: "The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”",
+				label: "The chain is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”",
 				className: "sky-chain-bird"
 			})
 		]
@@ -86960,7 +86960,7 @@ function agentMenuItems(row, opts) {
 		{
 			key: "agent-open",
 			label: opts.opened ? "Fold the terminal" : "Open terminal",
-			title: opts.opened ? "Back to the agent's tile" : "Its real terminal, here in the tile's place",
+			title: opts.opened ? "Back to the agent's stop" : "Its real terminal, here in the stop's place",
 			onSelect: opts.openTerminal
 		},
 		{
@@ -87246,7 +87246,7 @@ function sourcePlanId(steps, plans) {
 function planToSave(name, steps, plans) {
 	const id = sourcePlanId(steps, plans);
 	const base = id ? plans.find((p) => p.id === id) : null;
-	const fresh = planFromSteps(base ? base.name : name || "Stops", steps, base?.trigger);
+	const fresh = planFromSteps(base ? base.name : name || "New chain", steps, base?.trigger);
 	if (!base) return {
 		...fresh,
 		id: "",
@@ -87275,7 +87275,7 @@ function checkRename(raw, plans, selfId) {
 	const name = raw.trim();
 	if (!name) return {
 		ok: false,
-		error: "A saved stop needs a name"
+		error: "A saved chain needs a name"
 	};
 	if (name.length > NAME_MAX) return {
 		ok: false,
@@ -87284,7 +87284,7 @@ function checkRename(raw, plans, selfId) {
 	const clash = plans.find((p) => p.id !== selfId && p.name.trim().toLowerCase() === name.toLowerCase());
 	if (clash) return {
 		ok: false,
-		error: "Another saved stop is already called “" + clash.name.trim() + "”"
+		error: "Another saved chain is already called “" + clash.name.trim() + "”"
 	};
 	return {
 		ok: true,
@@ -88418,14 +88418,14 @@ var DURATION_UNITS = {
 //#region src/components/flights/StopParts.tsx
 function kindName(def, kind = "") {
 	const k = def?.kind || kind;
-	if (k === "you") return "Perch";
+	if (k === "you") return "Wait for me";
 	if (k === "someone") return "Someone";
 	return def?.label || kind;
 }
 function StopPalette({ kinds, onPick, onClose, title = "Add a stop", extra }) {
 	const groups = [[
 		"robot",
-		"The flock does",
+		"MindFlock does",
 		kinds.filter((k) => k.actor !== "you")
 	], [
 		"you",
@@ -88457,7 +88457,7 @@ function StopPalette({ kinds, onPick, onClose, title = "Add a stop", extra }) {
 			}),
 			kinds.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-note muted",
-				children: "The stop list didn't load — this server may not know Flights yet."
+				children: "The stop list didn't load — this server may not know chains yet."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "fl-palette-groups",
@@ -88515,13 +88515,13 @@ function chainChoices(flights, plans) {
 	const out = [];
 	for (const f of groundedFlights(flights)) out.push({
 		value: "flight:" + f.id,
-		label: f.plan_name || "Stops",
+		label: f.plan_name || "Chain",
 		group: "On the board"
 	});
 	for (const p of plans || []) out.push({
 		value: "plan:" + p.id,
 		label: p.name,
-		group: "Saved stops — a fresh copy each time"
+		group: "Saved chains — a fresh copy each time"
 	});
 	return out;
 }
@@ -88644,7 +88644,7 @@ function StopsBeforeField({ label, value, choices, onChange, readOnly }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
 		wide: true,
-		hint: "The flight goes back to this stop for each new run.",
+		hint: "The chain goes back to this stop for each new run.",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "fl-stops-before",
 			"data-dynamic": "stops_before",
@@ -88659,7 +88659,7 @@ function StopsBeforeField({ label, value, choices, onChange, readOnly }) {
 					options: r.items.map((c) => ({
 						value: c.value,
 						label: c.label,
-						title: c.value ? void 0 : "Where the line (or this group) starts"
+						title: c.value ? void 0 : "Where the chain (or this group) starts"
 					})),
 					onChange: pick
 				})]
@@ -88689,13 +88689,13 @@ function BoardChoiceField({ label, kind, value, choices, onChange, readOnly }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
 		wide: true,
-		hint: kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved stop starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.",
+		hint: kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved chain starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "fl-stops-before fl-board-choice",
 			"data-dynamic": kind,
 			children: [!choices.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-note muted",
-				children: kind === "chains" ? "No stops-only chain on the board yet — drop some stops on empty sky first." : "No session yet."
+				children: kind === "chains" ? "No chain on the board yet — drop some stops on empty sky first." : "No session yet."
 			}), runs.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-stops-before-run" + (r.group ? " fl-stops-before-group" : ""),
 				children: [r.group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -88849,7 +88849,7 @@ function WhenHelp({ onClose }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-when-help-top",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "The stop flies only when…" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "The stop runs only when…" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "fl-icon-btn",
 					"aria-label": "Close",
@@ -89316,10 +89316,10 @@ var STOP_STATE_WORD = {
 	failed: "Failed",
 	halted: "Halted",
 	current: "Under way",
-	perched: "Perched on you",
+	perched: "Needs you",
 	paused: "Paused here",
 	pending: "Still to come",
-	edit: "Not flown yet"
+	edit: "Not run yet"
 };
 var copyStep = (s) => ({
 	...s,
@@ -89413,8 +89413,8 @@ function StepDialog(p) {
 					className: "stop-dialog-halt",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
 						on: !!(editable ? draft.halt : n.step?.halt),
-						label: "Halt point — the flight stops here, before doing this stop",
-						title: "Like a breakpoint: Carry on flies on through it",
+						label: "Halt point — the chain stops here, before doing this stop",
+						title: "Like a breakpoint: Carry on goes on through it",
 						onChange: (v) => editable ? setDraft((d) => d ? {
 							...d,
 							halt: v || void 0
@@ -89497,7 +89497,7 @@ function GroupDialog(p) {
 				if (p.onRename && renamed && !p.busy) p.onRename(next);
 			},
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: p.onRename ? "Edit stop" : "Stop" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: p.onRename ? "Edit group" : "Group" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "stop-dialog-kind",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -89506,12 +89506,12 @@ function GroupDialog(p) {
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "stop-dialog-kind-words",
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
-							"A stop with ",
+							"A group of ",
 							g?.total || 0,
-							" sub-steps"
+							" stops"
 						] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "muted",
-							children: ["the flight flies them one by one", g?.current ? " — " + g.done + " of " + g.total + " done" : ""]
+							children: ["the chain runs them one by one", g?.current ? " — " + g.done + " of " + g.total + " done" : ""]
 						})]
 					})]
 				}),
@@ -89524,14 +89524,14 @@ function GroupDialog(p) {
 					label: "Name",
 					wide: false,
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-						label: "Stop name",
+						label: "Group name",
 						value: name,
 						onChange: (t) => p.onRename && setName(t)
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 					className: "stop-dialog-subs",
-					"aria-label": "The sub-steps of " + n.title,
+					"aria-label": "The stops in " + n.title,
 					children: (g?.nodes || []).map((s) => {
 						const perch = ((s.step ? p.kindOf?.get(s.step.kind) : void 0)?.actor || (s.step?.kind === "you" ? "you" : "robot")) === "you";
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
@@ -89556,7 +89556,7 @@ function GroupDialog(p) {
 									type: "button",
 									className: "fl-icon-btn",
 									"aria-label": "Edit “" + s.title + "”",
-									title: s.editable ? "Edit this sub-step" : "Open this sub-step (read-only)",
+									title: s.editable ? "Edit this stop" : "Open this stop (read-only)",
 									onClick: () => p.onOpenSub(s),
 									children: "✎"
 								}),
@@ -89564,7 +89564,7 @@ function GroupDialog(p) {
 									type: "button",
 									className: "fl-icon-btn stop-dialog-danger",
 									"aria-label": "Remove “" + s.title + "”",
-									title: "Remove this sub-step from the line",
+									title: "Remove this stop from the chain",
 									disabled: p.busy,
 									onClick: () => p.onRemoveSub(s),
 									children: "🗑"
@@ -89590,7 +89590,7 @@ function GroupDialog(p) {
 									type: "button",
 									className: "test-btn",
 									disabled: p.busy,
-									title: "Its sub-steps become stops of their own",
+									title: "Its stops go back on the chain one by one",
 									onClick: p.onUngroup,
 									children: "Ungroup"
 								}),
@@ -89598,7 +89598,7 @@ function GroupDialog(p) {
 									type: "button",
 									className: "test-btn",
 									disabled: p.busy || !next,
-									title: "Keep these stops on the shelf, to drag onto any line",
+									title: "Keep these stops on the shelf as a saved chain, to drag onto any chain",
 									onClick: () => void p.onSaveShelf(next),
 									children: "Save to the shelf"
 								})
@@ -89670,8 +89670,8 @@ function promoteWords(src) {
 	const name = intakeSourceName(src);
 	return {
 		label: "Use these stops for every " + w.one + " from " + name,
-		title: "Changes what NEW " + w.many + " from " + name + " fly: each one starts with this line's stops. This " + w.one + " keeps running as it is.",
-		done: "New " + w.many + " from " + name + " fly these stops"
+		title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this chain's stops. This " + w.one + " keeps running as it is.",
+		done: "New " + w.many + " from " + name + " run this chain"
 	};
 }
 async function promoteStops(flightId) {
@@ -89687,7 +89687,7 @@ async function promoteStops(flightId) {
 		label: words.label,
 		undo: () => setIntakeDefault(back)
 	});
-	toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " fly the stops they did before") });
+	toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " run the chain they did before") });
 	return true;
 }
 function usePromoteStops(flight) {
@@ -89709,8 +89709,8 @@ function usePromoteStops(flight) {
 	};
 }
 function removedToast(title, wasHere, next) {
-	if (!wasHere) return "Removed “" + title + "” from the line";
-	return "Removed “" + title + "” — the flight is paused " + (next ? "before “" + next + "”" : "at the end");
+	if (!wasHere) return "Removed “" + title + "” from the chain";
+	return "Removed “" + title + "” — the chain is paused " + (next ? "before “" + next + "”" : "at the end");
 }
 function shelfPlanFor(name, steps, planId, plans) {
 	const was = planId ? plans.find((p) => p.id === planId) : void 0;
@@ -89931,7 +89931,7 @@ function useSessionLine(title, src, opts) {
 		});
 		toast(removedToast(step.title, wasHere, next), { action: {
 			label: "Undo",
-			ariaLabel: "Undo: put “" + step.title + "” back on the line",
+			ariaLabel: "Undo: put “" + step.title + "” back on the chain",
 			onClick: () => {
 				if (takeUndo(entry)) entry.undo();
 			}
@@ -89956,7 +89956,7 @@ function useSessionLine(title, src, opts) {
 		});
 		toast(removedToast(g.name, wasHere, next), { action: {
 			label: "Undo",
-			ariaLabel: "Undo: put “" + g.name + "” back on the line",
+			ariaLabel: "Undo: put “" + g.name + "” back on the chain",
 			onClick: () => {
 				if (takeUndo(entry)) entry.undo();
 			}
@@ -89990,7 +89990,7 @@ function useSessionLine(title, src, opts) {
 		"data-no-drag": true,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 			title: "Remove “" + askName + "”?",
-			body: "The flight is at it right now: it pauses before what follows. Undo puts it back.",
+			body: "The chain is at it right now: it pauses before what follows. Undo puts it back.",
 			confirmLabel: "Remove",
 			busy,
 			onConfirm: () => {
@@ -90086,7 +90086,7 @@ function useSessionLine(title, src, opts) {
 		className: "fl-palette-flyways",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "fl-palette-head",
-			children: "Saved stops — tack one on as a stop with sub-steps"
+			children: "Saved chains — tack one on as a group"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "fl-chiprow",
 			children: ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -90143,14 +90143,14 @@ function useSessionLine(title, src, opts) {
 				const plan = plans.find((p) => p.id === drop.planId);
 				if (plan || flight) tackPlan(plan || {
 					id: drop.planId,
-					name: "the saved stop"
+					name: "the saved chain"
 				}, at);
-				else toast("That saved stop isn't on this server any more");
+				else toast("That saved chain isn't on this server any more");
 				return;
 			}
 			const def = kindOf.get(drop.kind);
 			if (def) tackOne(def, at);
-			else toast("This line has no “" + drop.kind + "” stop to tack on");
+			else toast("This chain has no “" + drop.kind + "” stop to tack on");
 		},
 		renderInBox: parts.renderInBox,
 		sizeOf: parts.sizeOf,
@@ -90184,7 +90184,7 @@ function useSessionLine(title, src, opts) {
 			node: open,
 			kindOf,
 			busy,
-			note: open.editable ? void 0 : open.state === "done" || open.state === "skipped" ? "This stop has flown." : "The flight is in this stop — only its sub-steps still ahead can change.",
+			note: open.editable ? void 0 : open.state === "done" || open.state === "skipped" ? "This stop has finished." : "The chain is in this stop — only its stops still ahead can change.",
 			onClose: close,
 			onRename: flight && changeable ? (name) => act(async () => {
 				if (await patchStopGroup(flight.id, changeable.step.id, { name })) setDialog(null);
@@ -90215,7 +90215,7 @@ function useSessionLine(title, src, opts) {
 		const editable = !!flight && !!open.editable && !!open.step;
 		const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
 		const rec = flight && open.step ? flight.step_states?.[open.step.id] : void 0;
-		const why = editable ? "" : flown ? "This stop has flown — it can't change now." : here ? "The flight is at this stop — it can't change while it is here." : "It can't change here.";
+		const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The chain is at this stop — it can't change while it is here." : "It can't change here.";
 		const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : void 0;
 		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
 			node: open,
@@ -90251,7 +90251,7 @@ function useSessionLine(title, src, opts) {
 						type: "button",
 						className: "fl-pick",
 						disabled: busy,
-						title: "Put a Join right after this Split: the line waits until every worker is done",
+						title: "Put a Join right after this Split: the chain waits until every worker is done",
 						onClick: () => void addJoin(),
 						children: "+ Join"
 					})
@@ -90328,7 +90328,7 @@ function FlywayCard({ plan, kinds, onFly, busy }) {
 				className: "btn-primary fl-btn",
 				disabled: busy,
 				onClick: onFly,
-				children: "Fly these stops"
+				children: "Run these stops"
 			})
 		]
 	});
@@ -90371,7 +90371,7 @@ function SessionFlight({ inst, active = true }) {
 								"/",
 								prog.total,
 								" stops",
-								flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · perched on you" : ""
+								flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · needs you" : ""
 							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightMenu, {
@@ -90381,15 +90381,15 @@ function SessionFlight({ inst, active = true }) {
 						})
 					] }) : diagram.mode === "ladder" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Fast-track" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "muted",
-						children: "tack a stop on and the flight takes over its rungs"
-					})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No flight yet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: "tack a stop on and the chain takes over its rungs"
+					})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No chain yet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "muted",
-						children: "tack a stop onto the line, or fly a saved stop below"
+						children: "tack a stop onto the chain, or run a saved chain below"
 					})] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "linklike fl-open-sky",
-						title: "Switch to the sky on this session's line, with the bird where it is",
+						title: "Switch to the Sky on this session's chain, with the bird where it is",
 						onClick: () => showInSky(title),
 						children: "Open in the Sky"
 					})
@@ -90406,11 +90406,11 @@ function SessionFlight({ inst, active = true }) {
 			line.inspector,
 			!hasSessionDiagram(rows, title) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 				className: "fl-flyway-cards",
-				"aria-label": "Saved stops",
+				"aria-label": "Saved chains",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
 						className: "fl-group-head",
-						children: "Saved stops"
+						children: "Saved chains"
 					}),
 					ordered.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "fl-flyway-grid",
@@ -90428,7 +90428,7 @@ function SessionFlight({ inst, active = true }) {
 						children: allSaved ? "Fewer" : "More… (" + saved.more + ")"
 					})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "fl-note muted",
-						children: "No saved stops on this server yet."
+						children: "No saved chains on this server yet."
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeField, {
 						want: "plan",
@@ -90442,7 +90442,7 @@ function SessionFlight({ inst, active = true }) {
 								await takeOff({
 									plan_id: (await savePlan({
 										id: "",
-										name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described stops",
+										name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described chain",
 										description: "",
 										builtin: false,
 										trigger: {
@@ -91348,7 +91348,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			role: "tab",
 			"aria-selected": tab === "flight",
 			className: "flight-tab" + (tab === "flight" ? " active" : ""),
-			title: "Flight — this session's live diagram: its workers, its fast-track or flight, and + to tack a stop on" + (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The flight halted — it needs you" : "The flight is perched on you") : ""),
+			title: "Chain — this session's live diagram: its workers, its fast-track or chain, and + to add a stop" + (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The chain halted — it needs you" : "The chain needs you") : ""),
 			onClick: (e) => {
 				e.stopPropagation();
 				showTab("flight");
@@ -91357,7 +91357,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: "flight" }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "tab-label",
-					children: "Flight"
+					children: "Chain"
 				}),
 				flightNeeds && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "queue-tab-badge flight-badge needs",
@@ -93245,11 +93245,11 @@ var SKY_GUIDE_SECTIONS = [
 	},
 	{
 		id: "lines",
-		title: "Chains, tiles and wires"
+		title: "Chains, stops and wires"
 	},
 	{
 		id: "stops",
-		title: "Stops and saved stops"
+		title: "Stops and saved chains"
 	},
 	{
 		id: "bird",
@@ -93261,7 +93261,7 @@ var SKY_GUIDE_SECTIONS = [
 	},
 	{
 		id: "grounded",
-		title: "Stops on their own, and handoffs"
+		title: "Chains on their own, and handoffs"
 	},
 	{
 		id: "select",
@@ -93291,20 +93291,20 @@ var useSkyGuide = create((set) => ({
 var openSkyGuide = (section) => useSkyGuide.getState().open(section);
 var closeSkyGuide = () => useSkyGuide.getState().close();
 var SKY_GUIDE_KEYS = [
-	["V", "Drag tool: lines move by their bars, a drag on empty sky selects"],
+	["V", "Drag tool: chains move by their bars, a drag on empty sky selects"],
 	["H", "Click tool: any drag pans the sky, a click selects"],
 	["Space (held)", "Pan with the mouse, in either tool"],
-	["0", "Fit every line, titles still readable"],
-	["1", "Fit the focused line to the window"],
+	["0", "Fit every chain, titles still readable"],
+	["1", "Fit the focused chain to the window"],
 	["+ / −", "Zoom in / out (Ctrl+wheel too)"],
-	["T", "Tidy: every line back in its place, every window minimised"],
+	["T", "Tidy: every chain back in its place, every window minimised"],
 	["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
-	["Delete", "Remove the selected box"],
+	["Delete", "Remove the selected stop"],
 	["Esc", "Clear the selection, fold an open session, cancel a pick"],
-	["Ctrl+A", "Select every line"],
-	["Enter", "Open the focused line's session; on a stop, its dialog"],
+	["Ctrl+A", "Select every chain"],
+	["Enter", "Open the focused chain's session; on a stop, its dialog"],
 	["Ctrl+Y", "Switch between the grid and the sky"],
-	["Ctrl/Alt+N", "A new-session block (double-click empty sky does too)"]
+	["Ctrl/Alt+N", "A new session on the sky (double-click empty sky does too)"]
 ];
 function Box({ x, y, w = 44, h = 26, cls = "" }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
@@ -93412,7 +93412,7 @@ var SKETCHES = {
 		]
 	}),
 	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "Panes on the left, the same sessions as lines on the right",
+		label: "Panes on the left, the same sessions as chains on the right",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 				className: "sg-pane",
@@ -93455,7 +93455,7 @@ var SKETCHES = {
 		]
 	}),
 	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A session's frame: its bar on top, the agent tile first inside, then its stop tiles joined by wires, and a + to add one",
+		label: "A session's frame: its bar on top, the agent first inside, then its stops joined by wires, and a + to add one",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 				className: "sg-box",
@@ -93505,7 +93505,7 @@ var SKETCHES = {
 		]
 	}),
 	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A saved stop: one box holding three sub-steps, and its chip on the shelf with a dot per step",
+		label: "A saved chain on the sky: one group holding three stops, and its chip on the shelf with a dot per stop",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
 				x: 12,
@@ -93575,7 +93575,7 @@ var SKETCHES = {
 		]
 	}),
 	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A line of boxes with the bird on the third; a dashed arrow drags it back to the second",
+		label: "A chain of stops with the bird on the third; a dashed arrow drags it back to the second",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
 				x: 20,
@@ -93641,7 +93641,7 @@ var SKETCHES = {
 		]
 	}),
 	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A chain with no session: an empty socket on its first tile, its stops, and the Session chip dropped on it",
+		label: "A chain with no session: an empty socket on its first stop, its stops, and the Session chip dropped on it",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
 				x: 20,
@@ -93691,7 +93691,7 @@ var SKETCHES = {
 		]
 	}),
 	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A dashed marquee drawn over the boxes of two lines",
+		label: "A dashed marquee drawn over the stops of two chains",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
 				x: 20,
@@ -93758,7 +93758,7 @@ var SKETCHES = {
 		]
 	}),
 	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "The intake lane folded to a row of source blocks, and expanded to show each waiting item with Fly",
+		label: "The intake lane folded to a row of sources, and expanded to show each waiting item with Run",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
 				x: 12,
@@ -93836,7 +93836,7 @@ var SKETCHES = {
 		]
 	}),
 	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "Three places: this browser for the layout, every device for saved stops, this machine for flights",
+		label: "Three places: this browser for the layout, every device for saved chains, this machine for running chains",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 				className: "sg-pane",
@@ -93860,7 +93860,7 @@ var SKETCHES = {
 				className: "sg-text",
 				x: 118,
 				y: 88,
-				children: "saved stops: synced"
+				children: "saved chains: synced"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
 				className: "sg-pane",
@@ -93881,7 +93881,7 @@ var SKETCHES = {
 				className: "sg-text",
 				x: 226,
 				y: 88,
-				children: "flights: this machine"
+				children: "running: this machine"
 			})
 		]
 	})
@@ -93899,7 +93899,19 @@ function Keys() {
 	});
 }
 var WORDS = {
-	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Five things are enough to start; the sections after this one go deeper." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Five words are enough to start: a ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stop" }),
+		" is one box on the sky, a ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "chain" }),
+		" is a row of stops, a ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "saved chain" }),
+		" is one you keep on the shelf, ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
+		" is the stop that waits for you, and ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+		" is where everything waiting on you shows. The sections after this one go deeper."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
 		className: "sky-guide-start",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Each session is a chain." }), " Its agent comes first; the stops after it run left to right, along the wires, once the agent's turn ends."] }),
@@ -93908,7 +93920,7 @@ var WORDS = {
 				" Drag ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
 				", ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Perch" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
 				", ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
 				", ",
@@ -93927,8 +93939,10 @@ var WORDS = {
 				" ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Run" }),
 				" (or your next prompt) sets the chain going; the bird shows where it is. A ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Perch" }),
-				" waits for you: press ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
+				" stop holds the chain and shows under ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+				" on the bell: press ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Done" }),
 				" and it carries on."
 			] }),
@@ -93942,20 +93956,18 @@ var WORDS = {
 			] })
 		]
 	})] }),
-	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The sky is the main area's second view. Every session is a line — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The sky is the main area's second view. Every session is a chain — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 		"Switch with ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Grid · Sky" }),
 		" on the top bar, or ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+Y" }),
-		". The chips on the sky's toolbar choose which lines show, and ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Find a line…" }),
-		" jumps to one by name."
+		". The chips on the sky's toolbar choose which chains show, and the find field jumps to one by name."
 	] })] }),
 	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"Each session draws as a ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "frame" }),
-			" — a soft box in the session's own colour — round its ",
+			" — a soft outline in the session's own colour — round its ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "chain" }),
 			". The frame's ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bar" }),
@@ -93964,50 +93976,52 @@ var WORDS = {
 			" menu (open it here, open it in the grid, show only this chain, add a stop, close the session); a double-click on the bar renames it."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Inside, the first tile is the session's ",
+			"Inside, the first stop is the session's ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "agent" }),
-			" (\"Claude\", \"Codex\"…): what it is doing now, its state and the bird. A click opens its real terminal in the tile's place (a double-click on the card's top folds it back); a right-click offers ",
+			" (\"Claude\", \"Codex\"…): what it is doing now, its state and the bird. A click opens its real terminal in its place (a double-click on the card's top folds it back); a right-click offers ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Open terminal" }),
 			", ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Send a prompt…" }),
 			" and ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Stop" }),
-			", then the session's own menu. Its out port starts the chain: its stops follow as free-floating ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "tiles" }),
-			" joined by ",
+			", then the session's own menu. Its out port starts the chain: its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stops" }),
+			" follow, free-floating, joined by ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "wires" }),
 			". A ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "sub-session" }),
-			" is a small frame of its own under its parent's agent — its own agent, its state, and its own chain when it flies one; click its agent to open it in place."
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "worker" }),
+			" — a session this session started — is a small frame of its own under its parent's agent: its own agent, its state, and its own chain when it runs one; click its agent to open it in place."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Drag a session by its frame's bar (or its agent tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. ",
+			"Drag a session by its frame's bar (or its agent) to put it anywhere — it stays there. Drag a single stop to move just that stop: order is the wires, never where a stop sits. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
 			" (",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
-			") puts every chain back in its place and minimises every open window back to its box; the ⋯'s ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy this line" }),
+			") puts every chain back in its place and minimises every open window; the ⋯'s ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
 			" does one."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Every tile has an ",
+			"Every stop has an ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "in port" }),
 			" (the square on its left) and an ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "out port" }),
 			" (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
-			" after the last tile does the same — or just click it. Grab a wire by a tile's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own."
+			" after the last stop does the same — or just click it. Grab a wire by a stop's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own."
 		] })
 	] }),
 	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"A ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stop" }),
-			" is one block of work: ",
+			" is one piece of work: ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
 			" gives the session's agent a prompt and waits for its turn to settle, ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Perch" }),
-			" waits until you press Done, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
+			" holds the chain until you press Done (it shows under ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+			" meanwhile), ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
 			" commits, pushes, opens or merges the PR, ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
@@ -94016,34 +94030,40 @@ var WORDS = {
 			" waits some minutes or until a time, ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
 			" sends the chain back to an earlier stop, a number of times, every so often. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All blocks…" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All stops…" }),
 			" on the shelf lists the rest, each with what it does."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"A ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "saved stop" }),
-			" is a named series of stops — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "saved chain" }),
+			" is a named chain kept on the shelf — ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "Ticket to merge" }),
-			", say — that you drag on as one box. It flies its sub-steps one by one and reads ",
+			", say — that you drag on whole. On the sky it arrives as a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "group" }),
+			": one stop with its stops inside, run one by one, reading ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "2 of 3" }),
-			" while it does. Double-click it to see and change each sub-step."
+			" while it does. Double-click it to see and change each of its stops."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"To change a saved stop, drag it onto the sky, edit its boxes there, then ",
+			"To change a saved chain, drag it onto the sky, edit its stops there, then ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
-			". Right-click its chip on the shelf to rename, reset or delete it."
+			". Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it."
 		] })
 	] }),
 	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The bird stands on the stop the flight is at: bobbing while the session works, gold when it is perched on you." }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to halt the flight where it is; click it again on a paused flight to carry on."] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Drag" }), " the bird onto another stop of the same flight to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on."] })
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"The bird stands on the stop the chain is at: bobbing while the session works, gold when the chain needs you (the bell lists it under ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+			")."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to halt the chain where it is; click it again on a paused chain to carry on."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Drag" }), " the bird onto another stop of the same chain to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on."] })
 	] }),
 	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏹ Halt now" }),
-		" (on the current stop, or a click on the bird) pauses the flight where it is. ",
+		" (on the current stop, or a click on the bird) pauses the chain where it is. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏸ Halt here" }),
-		" on a stop ahead makes it a halt point: the flight pauses when it reaches that stop, before doing it, and the stop wears a pause badge. ",
+		" on a stop ahead makes it a halt point: the chain pauses when it reaches that stop, before doing it, and the stop wears a pause badge. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Carry on" }),
 		" goes on."
 	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
@@ -94052,21 +94072,21 @@ var WORDS = {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
 		") takes a stop off at once, with ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
-		" in the toast. Removing the stop that is flying stops its work and pauses the flight right before the next stop; Carry on goes into it."
+		" in the toast. Removing the stop the chain is on stops its work and pauses the chain right before the next stop; Carry on goes into it."
 	] })] }),
 	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with ",
+			"Drop a stop or a saved chain on empty sky and it waits there as a chain of its own, with ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "no session" }),
-			": no frame and no agent, just free tiles and an empty socket on the first one — ",
+			": no frame and no agent, just its stops and an empty socket on the first one — ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "wire a session's out port here to run it" }),
 			". Nothing runs until it has a session."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Give it one by wiring an agent tile's out port (or its +) to that socket, by dragging the chain into a session's frame, by dropping the shelf's ",
+			"Give it one by wiring an agent's out port (or its +) to that socket, by dragging the chain into a session's frame, by dropping the shelf's ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
-			" chip on it (a new session is made and the stops take off), or with its ⋯ → ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly on a session…" }),
+			" chip on it (a new session is made and the stops run there), or with its ⋯ → ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run on a session…" }),
 			". The same ⋯ offers ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
 			" and ",
@@ -94078,23 +94098,23 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "start another" }),
 			": hold ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Shift" }),
-			" while you drop a wire from a stop onto a stops-only chain, and a ",
+			" while you drop a wire from a stop onto a chain with no session, and a ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Start a chain" }),
-			" stop goes in there. The other chain then shows a trigger tile — ",
+			" stop goes in there. The other chain then shows a trigger stop — ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "When <chain> reaches <stop>" }),
-			" — and a dashed wire in the first session's colour; when the flight gets there, that chain takes off on a new session (or the one its dialog names), and the wire follows it there."
+			" — and a dashed wire in the first session's colour; when the first chain gets there, the other one takes off on a new session (or the one its dialog names), and the wire follows it there."
 		] })
 	] }),
 	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"Drag across empty sky to draw a box — everything it touches is selected, lines and stop boxes both (in the Click tool, Shift+drag). ",
+		"Drag across empty sky to draw a marquee — everything it touches is selected, chains and stops both (in the Click tool, Shift+drag). ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+A" }),
-		" selects every line; ",
+		" selects every chain; ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
 		" clears."
 	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"The selection bar then offers: drag any selected line's bar and they all move; ",
+		"The selection bar then offers: drag any selected chain's bar and they all move; ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove…" }),
-		" (it asks first: a session line closes its session, a grounded line goes); and for stops of one line, ",
+		" (it asks first: a session's chain closes its session, a chain with no session goes); and for stops of one chain, ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Group into a stop" }),
 		" and ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
@@ -94105,27 +94125,27 @@ var WORDS = {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✥ Drag" }),
 		" (",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "V" }),
-		"): lines move by their bars and a drag on empty sky selects. ",
+		"): chains move by their bars and a drag on empty sky selects. ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "☝ Click" }),
 		" (",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "H" }),
-		"): nothing moves by dragging — any drag pans, a click focuses a line or selects a box. Hold ",
+		"): nothing moves by dragging — any drag pans, a click focuses a chain or selects a stop. Hold ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Space" }),
 		" to pan in either; the wheel and the middle button pan too."
 	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Keys, {})] }),
 	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The intake lane, top left, holds what is waiting to fly: one block per source — tickets, pull requests, issues — with the items in it." }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The intake lane, top left, holds what is waiting to start: one card per source — tickets, pull requests, issues — with the items in it." }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Folded it is a row of blocks; expand it (▸ on its head, or double-click the head) to see every item with its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly" }),
-			" button. Fly starts a session on that item, and its line appears in the sky."
+			"Folded it is a row of sources; expand it (▸ on its head, or double-click the head) to see every item with its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run" }),
+			" button. Run starts a session on that item, and its chain appears in the sky."
 		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Drag the lane by its head like a line; Tidy puts it back." })
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Drag the lane by its head like a chain; Tidy puts it back." })
 	] }),
 	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The layout" }), " — where each line sits, its box sizes, the intake lane's spot, the tool — is kept per device, in this browser."] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Saved stops" }), " live on the server and are synced across your devices, like templates."] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Flights" }), " — the stops a session is flying and where the bird is — stay on the machine that runs them, never synced."] })
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The layout" }), " — where each chain sits, its sizes, the intake lane's spot, the tool — is kept per device, in this browser."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Saved chains" }), " live on the server and are synced across your devices, like templates."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Running chains" }), " — the stops a session is running and where the bird is — stay on the machine that runs them, never synced."] })
 	] })
 };
 function SkyGuide(p) {
@@ -94396,7 +94416,7 @@ function CommandPalette({ host }) {
 			label: "Schedule…",
 			hint: "Alt+S",
 			top: TOP.schedule,
-			keywords: "templates template cron recurring nightly timer daily weekly scheduled stops",
+			keywords: "templates template cron recurring nightly timer daily weekly scheduled chains stops",
 			run: () => ui.openDialogFor("schedule")
 		});
 		acts.push(ui.view === "sky" ? {
@@ -94407,19 +94427,19 @@ function CommandPalette({ host }) {
 		} : {
 			label: "Switch to the Sky",
 			hint: "Ctrl+Y",
-			keywords: "view sky canvas lines bird board flock map flights",
+			keywords: "view sky canvas chains lines bird board flock map flights",
 			run: () => setView("sky")
 		});
 		acts.push({
-			label: "Stops…",
+			label: "Saved chains…",
 			hint: "on the Sky's shelf",
-			keywords: "flights saved stops plan perch canvas shelf new",
+			keywords: "saved chains chain stops shelf canvas new flights saved stops plan",
 			run: () => ui.showFlyways()
 		});
 		acts.push({
 			label: "Learn the Sky",
 			hint: "the guide",
-			keywords: "help how guide tutorial sky lines stops bird keys",
+			keywords: "help how guide tutorial sky chains stops saved chains wait for me needs you bird keys",
 			run: () => {
 				setView("sky");
 				openSkyGuide();
@@ -96602,7 +96622,7 @@ function WorksIn({ inPlace, setInPlace, setProvision, provisionOn, laneNeedsWork
 			setInPlace(true);
 			setProvision(false);
 		},
-		inPlaceDesc: splitOn ? "Turns auto-split off — a split works in its own worktree" : laneNeedsWorktree ? "Turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT,
+		inPlaceDesc: splitOn ? "Turns “Let it split into workers” off — a split works in its own worktree" : laneNeedsWorktree ? "Turns fast-track off (it commits for this session, so it needs its own worktree)" : IN_PLACE_HINT,
 		underWorktree: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			worktree && isGit && !worktreeClamped && (name || continueBranch) && (continueBranch ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BranchLine, {
 				parts: [
@@ -97514,15 +97534,15 @@ function TakeoffFields({ plan, onChange }) {
 	const quiet = plan.trigger.quiet_minutes ?? 60;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 		className: "fl-section fl-trigger",
-		"aria-label": "Where its flights come from",
+		"aria-label": "What starts it",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "fl-form",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Takes off",
+					label: "Starts",
 					wide: true,
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-						label: "Takes off",
+						label: "Starts",
 						value: plan.trigger.kind,
 						options: Object.keys(TRIGGER_LABEL).map((k) => ({
 							v: k,
@@ -97570,13 +97590,13 @@ function TakeoffFields({ plan, onChange }) {
 							paused
 						} }),
 						label: "Paused",
-						title: "A paused schedule takes off nothing"
+						title: "A paused schedule starts nothing"
 					})]
 				}),
 				watchesMain && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 					label: "Watches",
 					wide: true,
-					hint: plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip takes off." : "The checks of its default branch's tip, once per commit; red takes off.",
+					hint: plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip starts it." : "The CI checks of its default branch's tip, once per commit; red starts it.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
 						id: "fl-trigger-repo",
 						value: plan.trigger.repo || "",
@@ -97591,12 +97611,12 @@ function TakeoffFields({ plan, onChange }) {
 				isHook && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 					label: "Hook",
 					wide: true,
-					hint: "POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the flight.",
+					hint: "POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the run.",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HookUrlRow, { plan })
 				}),
 				(watchesMain || isHook) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 					label: "Quiet",
-					hint: "No second take-off inside this many minutes",
+					hint: "No second start inside this many minutes",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, {
 						label: "Quiet minutes",
 						unit: "min",
@@ -97615,7 +97635,7 @@ function TakeoffFields({ plan, onChange }) {
 							paused
 						} }),
 						label: "Paused",
-						title: "A paused trigger takes off nothing"
+						title: "A paused trigger starts nothing"
 					})
 				})] }),
 				needsSession && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -97625,7 +97645,7 @@ function TakeoffFields({ plan, onChange }) {
 						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
 							id: "fl-plan-repo",
 							value: plan.session.repo_path,
-							placeholder: "Ask when it takes off",
+							placeholder: "Ask when it starts",
 							pickerTitle: "The repository these stops' sessions start in",
 							onChange: (v) => onChange({ session: {
 								...plan.session,
@@ -97704,13 +97724,13 @@ function TakeoffDialog({ plan, onClose }) {
 			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: [
-					"“",
+					"When “",
 					plan.name,
-					"” takes off"
+					"” starts"
 				] }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "muted fl-takeoff-lede",
-					children: "When it flies by itself, and the session it starts in."
+					children: "What starts it by itself, and the session it runs in."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffFields, {
 					plan: draft,
@@ -98436,7 +98456,7 @@ function TemplatesDialogView(p) {
 		const { t, info, status: st } = planAsTemplate(f);
 		const scheduled = hasSchedule(t);
 		const paused = scheduled && !!(t.schedule?.paused || info.paused);
-		const stops = f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+		const stops = "Saved chain · " + f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
 		const schedOpen = p.planSched?.id === f.id;
 		const folderOpen = p.planFolder?.id === f.id;
 		const noFolder = !(f.session?.repo_path || "").trim();
@@ -100321,7 +100341,7 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 				if (!split) setFoldOpen(e.currentTarget.open);
 			},
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
-				title: split ? "Stays open while Auto-split is ticked" : void 0,
+				title: split ? "Stays open while “Let it split into workers” is ticked" : void 0,
 				onClick: (e) => {
 					if (split) {
 						e.preventDefault();
@@ -100347,7 +100367,7 @@ function newSessionSubmit(ctx) {
 		setError("");
 		if (splitOn && !prompt.trim()) {
 			setPromptOpen(true);
-			fail("Auto-split needs a task — write it in the Task below, or untick Auto-split.");
+			fail("Splitting into workers needs a task — write it in the Task below, or untick “Let it split”.");
 			return;
 		}
 		const r = await draft.start({
@@ -101594,7 +101614,7 @@ function NewSessionDialog() {
 	const { data: config } = useConfig();
 	const mcpOk = (0, import_react.useMemo)(() => device ? {
 		ok: false,
-		reason: "Auto-split only starts sessions on this device"
+		reason: "Splitting into workers only starts sessions on this device"
 	} : teamRunCaps(config?.caps).split ? splitGate(config?.caps, canonAgent(program)) : {
 		ok: false,
 		reason: SERVER_NO_SPLIT
@@ -101750,7 +101770,7 @@ function NewSessionDialog() {
 	const moreBits = [];
 	if (title.trim()) moreBits.push("named " + title.trim());
 	if (draft.lane !== "leave") moreBits.push("Fast-track: " + LANE_LABEL[draft.lane]);
-	if (splitOn) moreBits.push("auto-split");
+	if (splitOn) moreBits.push("split into workers");
 	if (provisionOn) moreBits.push("provisioned");
 	if (baseBranch) moreBits.push("from " + baseBranch);
 	if (planFirst && planOk) moreBits.push("plan first");
@@ -101759,11 +101779,11 @@ function NewSessionDialog() {
 	const gitOn = config?.caps?.git !== false;
 	const prOk = !!device || hasPrSupport(config?.caps);
 	const prWhy = prNeedsGithubReason(PR_FALLBACK_HINT);
-	const laneWhy = (lane) => plainFolder && !initRepo && lane !== "leave" ? "No git repo here, so nothing to commit — pick “Make it a git repo first” to use Fast-track" : splitOn && lane === "leave" ? "An auto-split commits each piece into its branch — Commit keeps it all on this machine" : !prOk && (lane === "pr" || lane === "merge") ? prWhy : "";
-	const askWhy = splitOn ? "An auto-split always asks you before anything leaves this machine" : askFirstApplies(draft.lane) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you";
+	const laneWhy = (lane) => plainFolder && !initRepo && lane !== "leave" ? "No git repo here, so nothing to commit — pick “Make it a git repo first” to use Fast-track" : splitOn && lane === "leave" ? "Splitting into workers commits each worker into its branch — Commit keeps it all on this machine" : !prOk && (lane === "pr" || lane === "merge") ? prWhy : "";
+	const askWhy = splitOn ? "Splitting into workers always asks you before anything leaves this machine" : askFirstApplies(draft.lane) ? "" : "Fast-track is off: nothing is committed, pushed or merged for you";
 	const deepSummary = advancedSummary([
 		["ask me first", gitOn],
-		["auto-split", gitOn && mcpOk.reason !== SERVER_NO_SPLIT],
+		["workers", gitOn && mcpOk.reason !== SERVER_NO_SPLIT],
 		["provisioning", gitOn && offerProvision],
 		["base branch", gitOn && worktreeMode && isGit && (branches === null || !!branches.is_git && branches.branches.length > 0)],
 		["plan first", true],
@@ -102399,7 +102419,7 @@ function NewSessionDialog() {
 															children: [
 																"Lets the agent break a big task into up to ",
 																clampSplit(maxPieces, splitLimit),
-																" parallel sessions — you approve the split first."
+																" parallel workers — you approve the split first."
 															]
 														}),
 														splitSum && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -102650,7 +102670,7 @@ function flywayOf(kind, own, plans, depth = "") {
 	const id = builtinPlanFor(kind, plans);
 	return {
 		id,
-		name: plans?.find((p) => p.id === id)?.name || "built-in stops",
+		name: plans?.find((p) => p.id === id)?.name || "built-in chain",
 		own: false,
 		words: reach.words
 	};
@@ -102771,7 +102791,7 @@ function stopsWords(flyway) {
 function stopsTip(block, editing = false) {
 	const words = stopsWords(block.flyway);
 	const now = block.flyway.own ? "its own: " + block.flyway.name : words === SOURCE_OFF_LABEL ? "stops after the agent" : "goes as far as " + words;
-	return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default stops for " + block.name + " (" + now + ")";
+	return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default chain for " + block.name + " (" + now + ")";
 }
 function nameParts(name) {
 	return name.split(/(?<=\/)/);
@@ -102977,9 +102997,9 @@ function WaitingChip({ w, block, onFly }) {
 				type: "button",
 				className: "btn-primary fl-btn sky-lane-fly",
 				disabled: busy,
-				title: "Take off on " + w.item.reference + " · " + block.flyway.name,
+				title: "Run on " + w.item.reference + " · " + block.flyway.name,
 				onClick: () => void fly(),
-				children: busy ? "…" : "Fly"
+				children: busy ? "…" : "Run"
 			})]
 		}), error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "error fl-error sky-lane-error",
@@ -103027,7 +103047,7 @@ function Block({ block, onFly, open, editing, onEditDefault }) {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "fl-icon-btn sky-lane-flyway-btn",
-					"aria-label": "Edit the default stops for " + block.label,
+					"aria-label": "Edit the default chain for " + block.label,
 					"data-editing": editing ? "" : void 0,
 					title: stopsTip(block, editing),
 					onClick: () => onEditDefault({
@@ -103039,7 +103059,7 @@ function Block({ block, onFly, open, editing, onEditDefault }) {
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sky-lane-stops-key",
-								children: "Stops"
+								children: "Chain"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
@@ -103295,8 +103315,8 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 //#region src/components/flights/PlanSelect.tsx
 function reachSummary(r, serverSteps) {
 	const steps = serverSteps && serverSteps.length ? serverSteps : r.steps;
-	const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved stops “" + r.words + "”";
-	return r.missing ? "Its saved stops “" + r.missing + "” are gone, so: " + line : line;
+	const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved chain “" + r.words + "”";
+	return r.missing ? "Its saved chain “" + r.missing + "” is gone, so: " + line : line;
 }
 function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 	const plans = useFlightPlans().data;
@@ -103370,7 +103390,7 @@ function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 								role: "radio",
 								"aria-checked": on,
 								className: "fl-pick fl-reach-plan" + (on ? " on" : ""),
-								title: p.builtin ? "Our built-in stops for these items" : "Your saved stops",
+								title: p.builtin ? "Our built-in chain for these items" : "Your saved chain",
 								"data-value": "plan:" + p.value,
 								onClick: () => onChange({ plan: p.value }),
 								children: p.label
@@ -103390,7 +103410,7 @@ function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 					type: "button",
 					className: "linklike fl-reach-edit",
 					disabled: !target,
-					title: target ? "Edit this source's default stops with the blocks, in the Sky" : "Save the source first",
+					title: target ? "Edit this source's default stops in the Sky" : "Save the source first",
 					onClick: () => void editInSky(),
 					children: "Edit in the Sky…"
 				})]
@@ -108789,7 +108809,7 @@ function ScheduledTemplates() {
 				type: "button",
 				className: "test-btn ik-queue-goto",
 				onClick: () => useUi.getState().openDialogFor("schedule"),
-				title: "Schedule — templates and saved stops that start by themselves: run, pause, skip or change them there",
+				title: "Schedule — templates and saved chains that start by themselves: run, pause, skip or change them there",
 				children: "Open Schedule ›"
 			})]
 		})
@@ -130931,7 +130951,7 @@ function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown,
 		"data-device": device.device,
 		"data-state": state,
 		role: "group",
-		"aria-label": name + " — drop a line here to move its session there",
+		"aria-label": name + " — drop a chain here to move its session there",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-block-head",
@@ -130957,7 +130977,7 @@ function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown,
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-block-body muted",
-				children: [device.os ? device.os + " · " : "", typeof device.sessions === "number" ? device.sessions + (device.sessions === 1 ? " session" : " sessions") : "Drop a line to move it here"]
+				children: [device.os ? device.os + " · " : "", typeof device.sessions === "number" ? device.sessions + (device.sessions === 1 ? " session" : " sessions") : "Drop a chain to move it here"]
 			}),
 			dropped && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 				className: "sky-block-ask fl-form",
@@ -131111,12 +131131,12 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 	const headDown = (e) => {
 		if (draggable && onHeadDown && headPress$3(e)) onHeadDown(e);
 	};
-	const moveHint = draggable && onHeadDown ? "Drag to move the landing strip" : "";
+	const moveHint = draggable && onHeadDown ? "Drag to move the Finished strip" : "";
 	const total = landedCount(data);
 	if (folded) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 		ref: rootRef,
 		className: "sky-lane sky-lane-rail sky-landing",
-		"aria-label": "Landing",
+		"aria-label": "Finished",
 		"data-collapsed": "true",
 		title: moveHint || void 0,
 		onPointerDown: headDown,
@@ -131124,13 +131144,13 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 			type: "button",
 			className: "sky-lane-toggle",
 			"aria-expanded": false,
-			title: "Open the landing strip",
+			title: "Open the Finished strip",
 			onClick: () => fold(false),
 			children: "›"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			type: "button",
 			className: "sky-lane-rail-icon fl-kind-badge sky-landing-glyph",
-			title: "Landing — " + (total ? total + " landed today" : "nothing landed today"),
+			title: "Finished — " + (total ? total + " merged today" : "nothing merged today"),
 			onClick: () => fold(false),
 			children: ["⤓", total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-lane-rail-count",
@@ -131141,7 +131161,7 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
 		ref: rootRef,
 		className: "sky-lane sky-landing",
-		"aria-label": "Landing",
+		"aria-label": "Finished",
 		"data-open": open ? "" : void 0,
 		style: {
 			width: frameNow.w > 0 ? frameNow.w : void 0,
@@ -131161,19 +131181,19 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "sky-lane-title",
-						children: "Landing"
+						children: "Finished"
 					}),
 					total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "fl-count",
-						title: total + " landed today",
+						title: total + " merged today",
 						children: total
 					}),
 					onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-lane-toggle sky-lane-expand",
 						"aria-expanded": open,
-						"aria-label": open ? "Fold the landing strip's rows" : "Expand the landing strip: every landed flight",
-						title: open ? "Fold: the first rows of each repo" : "Expand: every landed flight",
+						"aria-label": open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain",
+						title: open ? "Fold: the first rows of each repo" : "Expand: every finished chain",
 						onClick: onToggleOpen,
 						children: open ? "▾" : "▸"
 					}),
@@ -131181,7 +131201,7 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 						type: "button",
 						className: "sky-lane-toggle",
 						"aria-expanded": true,
-						title: "Fold the landing strip",
+						title: "Fold the Finished strip",
 						onClick: () => fold(true),
 						children: "‹"
 					})
@@ -131206,8 +131226,8 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 				role: "separator",
 				tabIndex: 0,
 				"data-no-drag": true,
-				"aria-label": "Resize the landing strip",
-				title: "Drag to resize the landing strip",
+				"aria-label": "Resize the Finished strip",
+				title: "Drag to resize the Finished strip",
 				onPointerDown: resizeDown,
 				onPointerMove: resizeMove,
 				onPointerUp: resizeUp,
@@ -131249,7 +131269,7 @@ function RepoRow({ repo, open, now }) {
 			}),
 			(repo.landed || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 				className: "sky-landing-landed",
-				"aria-label": "Landed today in " + repo.name,
+				"aria-label": "Merged today in " + repo.name,
 				children: [shown.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 					className: "sky-landing-flight",
 					children: [
@@ -131357,7 +131377,7 @@ function PersonBlock({ link, rows, dropped = "", onDone, target = false, onHeadD
 		"data-person": link.link_id,
 		"data-state": state,
 		role: "group",
-		"aria-label": link.peer_name + " — drop a line here to share its session",
+		"aria-label": link.peer_name + " — drop a chain here to share its session",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-block-head",
@@ -131386,7 +131406,7 @@ function PersonBlock({ link, rows, dropped = "", onDone, target = false, onHeadD
 					className: "sky-block-shared",
 					title: shared.map(windowName).join(", "),
 					children: ["Shared · ", shared.length === 1 ? windowName(shared[0]) : shared.length + " sessions"]
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Drop a line to share it" })
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Drop a chain to share it" })
 			}),
 			dropped && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 				className: "sky-block-ask fl-form",
@@ -131679,6 +131699,9 @@ function filterKinds(kinds, query) {
 function filterPlans(plans, query) {
 	return plans.filter((p) => catalogMatch(query, p.name, p.description, ...(p.steps || []).map((s) => s.title)));
 }
+function savedChainLabel(stops) {
+	return "Saved chain · " + stops + (stops === 1 ? " stop" : " stops");
+}
 function planPath(plan) {
 	return plan.steps.map((s) => s.title).join(" → ");
 }
@@ -131834,7 +131857,7 @@ function cardMenu(plan, shelved) {
 		}] : [],
 		{
 			key: "takeoff",
-			label: "Takes off…"
+			label: "What starts it…"
 		},
 		{
 			key: "shelf",
@@ -132025,7 +132048,7 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 			children: on ? "★" : "☆"
 		});
 	};
-	const how = onAdd ? place ? "Drag onto a line or the sky, or click to put it on the board" : "Drag onto a line or the sky, or click to add it to the focused line" : "Drag onto a line or the sky";
+	const how = onAdd ? place ? "Drag onto a chain or the sky, or click to put it on the board" : "Drag onto a chain or the sky, or click to add it to the focused chain" : "Drag onto a chain or the sky";
 	const card = (c, n) => {
 		const plan = c.section === "multi" ? c.plan : null;
 		const def = c.section === "blocks" ? c.def : null;
@@ -132034,7 +132057,7 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 		const on = n === at;
 		const cd = clicker(c.key, c.drop);
 		const mine = (e) => !!onAdd && !naming && !asking && !inner(e.target);
-		const about = plan ? c.section === "multi" && c.path ? c.path : "No steps yet" : def?.summary;
+		const about = plan ? c.section === "multi" && c.path ? c.path : "No stops yet" : def?.summary;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			id: rowId(n),
 			role: "option",
@@ -132131,8 +132154,8 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 		ref: filterRef,
 		className: "fl-input sky-catalog-filter",
 		type: "text",
-		placeholder: "Filter blocks…",
-		"aria-label": "Filter blocks",
+		placeholder: "Filter stops…",
+		"aria-label": "Filter stops",
 		"aria-controls": listId,
 		"aria-activedescendant": at >= 0 ? rowId(at) : void 0,
 		autoComplete: "off",
@@ -132144,7 +132167,7 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 		},
 		onKeyDown: onFilterKey
 	});
-	const what = place ? "puts it on the board" : "adds it to the focused line";
+	const what = place ? "puts it on the board" : "adds it to the focused chain";
 	let i = -1;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		head(filter),
@@ -132152,14 +132175,14 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 			className: "sky-catalog-list sky-own-scroll" + (compact ? " compact" : "") + (cards.grouped ? " grouped" : "") + (listClass ? " " + listClass : ""),
 			id: listId,
 			role: "listbox",
-			"aria-label": "All blocks",
+			"aria-label": "All stops",
 			ref: listRef,
 			children: [
 				groups.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
 					className: "sky-catalog-section",
 					"data-section": "blocks",
 					role: "group",
-					"aria-label": "Blocks",
+					"aria-label": "Stops",
 					children: cards.grouped ? groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "sky-catalog-family",
 						"data-family": g.family,
@@ -132172,7 +132195,7 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 						})]
 					}, g.family)) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 						className: "sky-catalog-label",
-						children: "Blocks"
+						children: "Stops"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "sky-catalog-grid",
 						children: [leadEl, groups[0].items.map((c) => card(c, ++i))]
@@ -132182,10 +132205,10 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 					className: "sky-catalog-section",
 					"data-section": "multi",
 					role: "group",
-					"aria-label": "Multi-step",
+					"aria-label": "Saved chains",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 						className: "sky-catalog-label",
-						children: "Multi-step"
+						children: "Saved chains"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "sky-catalog-grid",
 						children: cards.multi.map((c) => card(c, ++i))
@@ -132193,11 +132216,11 @@ function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfTog
 				}),
 				rows.length + leads === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "sky-catalog-empty muted",
-					children: query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."
+					children: query.trim() ? "Nothing matches “" + query.trim() + "”." : "No stops yet — this server may be too old for the Sky."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "sky-catalog-hint muted",
-					children: onAdd ? "Drag a block onto a line or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a block onto a line or the sky"
+					children: onAdd ? "Drag a stop onto a chain or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a stop onto a chain or the sky"
 				})
 			]
 		}),
@@ -132235,7 +132258,7 @@ function StopCatalog({ onClose, portal = true, ...body }) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
 							id: "sky-catalog-title",
-							children: "All blocks"
+							children: "All stops"
 						}),
 						filter,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -132276,12 +132299,12 @@ function onStopDrag(e, def) {
 	for (const [type, value] of stopDragData(def)) e.dataTransfer.setData(type, value);
 	e.dataTransfer.effectAllowed = "copy";
 }
-var PLACE_HOW = "Click to put it on the board, or drag it onto a line or the sky";
-var clickHow = (click, place, tack) => !click ? "Drag onto a line or the sky" : place ? PLACE_HOW : tack;
+var PLACE_HOW = "Click to put it on the board, or drag it onto a chain or the sky";
+var clickHow = (click, place, tack) => !click ? "Drag onto a chain or the sky" : place ? PLACE_HOW : tack;
 function StopChip({ def, onClick, place = false, onMenu }) {
 	const name = kindName(def);
 	const perch = def.actor === "you";
-	const how = clickHow(!!onClick, place, "Click to tack it onto the focused line, or drag it onto a line or the sky");
+	const how = clickHow(!!onClick, place, "Click to tack it onto the focused chain, or drag it onto a chain or the sky");
 	const cd = useClickOrDouble(onClick && (() => onClick(def.kind)));
 	const props = {
 		className: "sky-stop-chip" + (perch ? " perch" : "") + (onClick ? "" : " drag-only"),
@@ -132313,7 +132336,7 @@ function StopChip({ def, onClick, place = false, onMenu }) {
 		children: onClick ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			...props,
-			"aria-label": place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused line",
+			"aria-label": place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused chain",
 			onClick: cd.onClick,
 			onDoubleClick: cd.onDoubleClick,
 			children: body
@@ -132369,7 +132392,7 @@ function savedMenuItems(plan) {
 		},
 		{
 			key: "takeoff",
-			label: "Takes off…"
+			label: "What starts it…"
 		},
 		{
 			key: "unshelve",
@@ -132465,12 +132488,12 @@ function SavedChip({ plan, plans, kinds, renaming, onClick, place = false, onMen
 			children: ["+", more]
 		})]
 	})] });
-	const how = clickHow(!!onClick, place, "Click to add it to the focused line, or drag it onto a line or the sky");
+	const how = clickHow(!!onClick, place, "Click to add it to the focused chain, or drag it onto a chain or the sky");
 	const props = {
 		className: "sky-stop-chip sky-saved-chip" + (plan.builtin ? " builtin" : "") + (onClick ? "" : " drag-only") + (renaming ? " is-renaming" : ""),
 		"data-plan": plan.id,
 		draggable: !renaming,
-		title: plan.steps.map((s) => s.title).join(" → ") + "\n" + how + " — right-click for more",
+		title: savedChainLabel(plan.steps.length) + (plan.steps.length ? ": " + plan.steps.map((s) => s.title).join(" → ") : "") + "\n" + how + " — right-click for more",
 		onDragStart: (e) => {
 			cd.cancel();
 			carry(e, savedDragData(plan));
@@ -132484,7 +132507,7 @@ function SavedChip({ plan, plans, kinds, renaming, onClick, place = false, onMen
 		children: onClick && !renaming ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			...props,
-			"aria-label": place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused line",
+			"aria-label": place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused chain",
 			onClick: cd.onClick,
 			onDoubleClick: cd.onDoubleClick,
 			children: body
@@ -132654,8 +132677,8 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 				}), onFloat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "sky-shelf-fold sky-shelf-float",
-					"aria-label": "Float the blocks",
-					title: "Float the blocks — a palette on the board you can move and size",
+					"aria-label": "Float the stops",
+					title: "Float the stops — a palette on the board you can move and size",
 					onClick: onFloat,
 					children: "⤢"
 				})]
@@ -132671,12 +132694,12 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 						" ",
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-stops-hint",
-							children: "— drag onto the sky or a line"
+							children: "— drag onto the sky or a chain"
 						})
 					]
 				}), kinds !== void 0 && !kinds?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "sky-stops-empty muted",
-					children: "The stop list didn't load — this server may not know Flights yet."
+					children: "The stop list didn't load — this server may be too old for the Sky."
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-stops-chips",
 					children: [
@@ -132684,12 +132707,12 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 							className: "sky-stops-region",
 							"data-region": "blocks",
 							role: "list",
-							"aria-label": "Blocks",
+							"aria-label": "Stops",
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "sky-stops-label",
 									"aria-hidden": "true",
-									children: "Blocks"
+									children: "Stops"
 								}),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionChip, { onSession }),
 								blocks.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
@@ -132707,11 +132730,11 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 							className: "sky-stops-region",
 							"data-region": "multi",
 							role: "list",
-							"aria-label": "Multi-step",
+							"aria-label": "Saved chains",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sky-stops-label",
 								"aria-hidden": "true",
-								children: "Multi-step"
+								children: "Saved chains"
 							}), saved.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedChip, {
 								plan: p,
 								plans: allSaved,
@@ -132733,7 +132756,7 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 							"data-tour": "sky-catalog",
 							"aria-haspopup": onCatalog ? void 0 : "dialog",
 							"aria-expanded": onCatalog ? void 0 : catalog,
-							title: onCatalog ? "Every block, in a palette on the board you can filter and drag from" : "Every block and every multi-step block, in a list you can filter",
+							title: onCatalog ? "Every stop and saved chain, in a palette on the board you can filter and drag from" : "Every stop and every saved chain, in a list you can filter",
 							onClick: () => onCatalog ? onCatalog() : setCatalog(true),
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sky-stop-icon",
@@ -132741,7 +132764,7 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 								children: "⊞"
 							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sky-stop-name",
-								children: "All blocks…"
+								children: "All stops…"
 							})]
 						})
 					]
@@ -132893,13 +132916,13 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 	const headDown = (e) => {
 		if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
 	};
-	const moveHint = draggable && onHeadDown ? "Drag to move the blocks" : void 0;
+	const moveHint = draggable && onHeadDown ? "Drag to move the stops palette" : void 0;
 	const count = (kinds?.length || 0) + allSaved.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: rootRef,
 		className: "sky-palette",
 		"data-tour": "sky-palette",
-		"aria-label": "Blocks palette",
+		"aria-label": "Stops palette",
 		style: {
 			width: frame.w,
 			height: frame.h
@@ -132924,27 +132947,27 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
 						className: "sky-palette-title",
-						children: "Blocks"
+						children: "Stops"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "sky-palette-count",
-						title: count + " blocks — ★ puts one on the bottom shelf",
+						title: count + " stops and saved chains — ★ puts one on the bottom shelf",
 						children: count
 					}),
 					filter,
 					onDock && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-						label: "The blocks palette — more",
+						label: "The stops palette — more",
 						items: [{
 							key: "dock",
 							label: "Dock at the bottom",
-							title: "Put the blocks back in the shelf at the sky's foot",
+							title: "Put the stops back in the shelf at the sky's foot",
 							onSelect: onDock
 						}]
 					}),
 					onClose && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "fl-icon-btn sky-palette-close",
-						"aria-label": "Close the blocks palette",
+						"aria-label": "Close the stops palette",
 						title: "Close — back to the shelf",
 						onClick: onClose,
 						children: "×"
@@ -132956,8 +132979,8 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 			role: "separator",
 			tabIndex: 0,
 			"data-no-drag": true,
-			"aria-label": "Resize the blocks palette",
-			title: "Drag to resize the blocks (or the arrow keys)",
+			"aria-label": "Resize the stops palette",
+			title: "Drag to resize the palette (or the arrow keys)",
 			onPointerDown: resizeDown,
 			onPointerMove: resizeMove,
 			onPointerUp: resizeUp,
@@ -133705,7 +133728,7 @@ var REPO_CHIPS = 6;
 function savedStopChoices(plans) {
 	return [{
 		value: "",
-		label: "No stops"
+		label: "Nothing more"
 	}, ...[...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)].map((p) => ({
 		value: p.id,
 		label: p.name
@@ -133980,7 +134003,7 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 		}
 		if (!(attach ? await attachGrounded(attach.id, { title }) : plan ? await startFlightOn(title, plan) : true)) {
 			setMade(title);
-			setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't take off — the error card says why.");
+			setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't start — the error card says why.");
 			setBusy(false);
 			onFailed?.();
 			return;
@@ -134003,7 +134026,7 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-new-head" + (onMove ? " is-movable" : ""),
-				title: onMove ? "Drag to move this block — the session starts where it sits" : void 0,
+				title: onMove ? "Drag to move this — the session starts where it sits" : void 0,
 				onPointerDown: onBarDown,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }),
@@ -134071,7 +134094,7 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 					"aria-label": "Task",
 					rows: 3,
 					value: prompt,
-					placeholder: "What should the agent do? Enter flies, Shift+Enter for a new line.",
+					placeholder: "What should the agent do? Enter runs it, Shift+Enter for a new line.",
 					onChange: (e) => setPrompt(e.target.value),
 					onKeyDown: (e) => promptKey(e, () => void fly())
 				})]
@@ -134080,10 +134103,10 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 				className: "fl-fld fl-fld-wide",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "fl-fld-label",
-					children: "Stops"
+					children: "Then run"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
 					className: "sky-new-stops",
-					label: "Stops",
+					label: "Then run",
 					value: plan,
 					options: savedStopChoices(plans),
 					onChange: setPlan
@@ -134180,9 +134203,9 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 					type: "button",
 					className: "btn-primary fl-btn sky-new-fly",
 					disabled: busy || !!blocked,
-					title: blocked || (attach ? "Start the session and fly “" + attach.name + "” on it" : plan ? "Start the session and fly the stops" : "Start the session"),
+					title: blocked || (attach ? "Start the session and run “" + attach.name + "” on it" : plan ? "Start the session, then run the saved chain" : "Start the session"),
 					onClick: () => void fly(),
-					children: busy ? "Taking off…" : made ? "Open session" : "Fly"
+					children: busy ? "Starting…" : made ? "Open session" : "Run"
 				})]
 			})
 		]
@@ -134218,7 +134241,7 @@ function ChecklistRow({ plan, onOpen }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "fl-check-state",
-				children: failing ? "Failed" : "Waiting on you"
+				children: failing ? "Failed" : "Needs you"
 			}),
 			plan.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
 				className: "fl-check-branch",
@@ -134300,7 +134323,7 @@ function WaitingRow({ w, plans, settings }) {
 								meta && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: meta }),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "fl-auto" + (w.auto ? " on" : ""),
-									children: w.auto ? "flies by itself" : "flies when you say"
+									children: w.auto ? "starts by itself" : "starts when you say"
 								})
 							]
 						})]
@@ -134309,9 +134332,9 @@ function WaitingRow({ w, plans, settings }) {
 						type: "button",
 						className: "btn-primary fl-btn fl-fly",
 						disabled: busy,
-						title: "Take off on " + w.item.reference,
+						title: "Run on " + w.item.reference,
 						onClick: () => void fly(),
-						children: busy ? "Taking off…" : "Fly"
+						children: busy ? "Starting…" : "Run"
 					})
 				]
 			}),
@@ -134319,10 +134342,10 @@ function WaitingRow({ w, plans, settings }) {
 				className: "fl-waiting-flyway",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "fl-fld-label",
-					children: "Stops"
+					children: "Chain"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
 					className: "fl-plan-pick",
-					label: "Stops",
+					label: "Chain",
 					value: plan,
 					options: planChoices(plans, kind, plan),
 					onChange: setPicked
@@ -134352,7 +134375,7 @@ function PerchRow({ flight, kinds, onFocus }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "sky-perch-name",
-				title: flight.session ? "Show " + windowName(flight.session) + "'s line" : void 0,
+				title: flight.session ? "Show " + windowName(flight.session) + "'s chain" : void 0,
 				onClick: () => onFocus(flight.session),
 				children: head
 			}),
@@ -134380,17 +134403,17 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 	const count = needs.length + dueChecklists.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		className: "sky-drawer" + (open ? " open" : ""),
-		"aria-label": "Perched on you",
+		"aria-label": "Needs you",
 		"data-tour": "flights-drawer",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			type: "button",
 			className: "sky-drawer-tab" + (count > 0 ? " has-perch" : ""),
 			"aria-expanded": open,
-			title: open ? "Fold the drawer away" : count > 0 ? count + " perched on you — open the drawer" : "What is perched on you",
+			title: open ? "Fold the drawer away" : count > 0 ? count + " need you — open the drawer" : "What needs you",
 			onClick: onToggle,
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-drawer-tab-word",
-				children: "Perched on you"
+				children: "Needs you"
 			}), count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "fl-count fl-count-you",
 				children: count
@@ -134401,7 +134424,7 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 				flightsQ.data === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "fl-note muted",
 					role: "status",
-					children: "This server has no flights yet — update MindFlock to fly stops. Waiting items and checklists still work."
+					children: "This server can't run chains yet — update MindFlock to run them. Waiting items and checklists still work."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 					className: "fl-group fl-group-needs",
@@ -134410,13 +134433,13 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 						id: "fl-group-needs-h",
 						className: "fl-group-head",
-						children: ["Perched on you", count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: ["Needs you", count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-count",
 							children: count
 						})]
 					}), count === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "fl-empty muted",
-						children: "Nothing is perched on you."
+						children: "Nothing needs you."
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [needs.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerchRow, {
 						flight: f,
 						kinds,
@@ -134431,14 +134454,14 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 					id: "fl-group-waiting",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
 						className: "fl-group-head",
-						children: ["Waiting to fly", waiting.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: ["Waiting to start", waiting.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-count",
 							children: waiting.length
 						})]
 					}), waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 						className: "fl-empty muted",
 						children: [
-							"Nothing is waiting to fly.",
+							"Nothing is waiting to start.",
 							" ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -134479,7 +134502,7 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 					onToggle: (e) => setLandedOpen(e.target.open),
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
 						className: "fl-group-head",
-						children: ["Landed", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: ["Finished", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-count muted",
 							children: landed.length
 						})]
@@ -135116,7 +135139,7 @@ function LineRuler({ segments }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "skl-ruler",
 		role: "img",
-		"aria-label": "Time flown: " + fmtDuration(total) + " over " + segments.length + (segments.length === 1 ? " stop" : " stops"),
+		"aria-label": "Time so far: " + fmtDuration(total) + " over " + segments.length + (segments.length === 1 ? " stop" : " stops"),
 		"data-no-drag": true,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "skl-ruler-bar",
@@ -135128,7 +135151,7 @@ function LineRuler({ segments }) {
 			}, s.step))
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "skl-ruler-total",
-			title: "Time flown so far",
+			title: "Time spent so far",
 			children: fmtDuration(total)
 		})]
 	});
@@ -135188,15 +135211,15 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "skl-card-head",
-				title: "Double-click to fold it back into a box",
+				title: "Double-click to fold it back into the chain",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-card-name",
 					children: windowName(inst.title)
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "skl-card-fold",
-					"aria-label": "Fold " + windowName(inst.title) + " back into a box",
-					title: "Back to a box",
+					"aria-label": "Fold " + windowName(inst.title) + " back into the chain",
+					title: "Back to the chain",
 					onClick: onClose,
 					children: "▣"
 				})]
@@ -135464,12 +135487,12 @@ function SkyLine(p) {
 		p.layout.open ? {
 			key: "open",
 			label: "Fold the session back",
-			title: "Back to its agent's tile in the frame",
+			title: "Back to its agent's stop on the chain",
 			onSelect: () => p.onLayout({ open: false })
 		} : {
 			key: "open",
 			label: "Open session",
-			title: "Its agent's terminal, here in the agent tile's place",
+			title: "Its agent's terminal, here in place of the agent's stop",
 			onSelect: () => p.onLayout({ open: true })
 		},
 		{
@@ -135483,20 +135506,20 @@ function SkyLine(p) {
 		},
 		{
 			key: "only",
-			label: "Show only this line",
+			label: "Show only this chain",
 			title: "This session: one chain, filling the sky",
 			onSelect: () => showInSky(p.title)
 		},
 		...folds ? [{
 			key: "flown",
-			label: foldFlown ? "Show flown stops" : "Fold flown stops",
-			title: "The stops this flight has already flown: each on its own, or one pill",
+			label: foldFlown ? "Show finished stops" : "Fold finished stops",
+			title: "The stops this chain has already run: each on its own, or one pill",
 			className: "skl-mi-group",
 			onSelect: () => setFoldFlown((x) => !x)
 		}] : [],
 		p.layout.pinned ? {
 			key: "tidy",
-			label: "Tidy this line",
+			label: "Tidy this chain",
 			title: "Forget where you put it: back to its place in the rows",
 			onSelect: () => p.onLayout({ pinned: false })
 		} : {
@@ -135512,7 +135535,7 @@ function SkyLine(p) {
 		{
 			key: "flyway",
 			label: "Add a stop…",
-			title: "A stop or a saved stop, at the end of the chain",
+			title: "A stop or a saved chain, at the end of the chain",
 			className: "skl-mi-group",
 			onSelect: () => line.togglePalette(true)
 		},
@@ -135834,13 +135857,14 @@ function putBackAt(taken, flight) {
 	});
 }
 var flightNow = (id) => (queryClient.getQueryData(["flights"]) || []).find((f) => f.id === id) || null;
-var NEW_STOPS = "New stops";
+var NEW_STOPS = "New chain";
+var NEW_GROUP = "New group";
 var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
 function groupHint(f, idx, kinds) {
-	if (!f || !idx.length) return "These stops aren't on a flight any more";
+	if (!f || !idx.length) return "These stops aren't on a chain any more";
 	if (!consecutive(idx)) return "Pick stops that sit next to each other";
 	const stops = flightStops(f, kinds);
-	if (idx.some((i) => !stops[i]?.editable)) return "A stop that has flown, or is flying, can't join a group";
+	if (idx.some((i) => !stops[i]?.editable)) return "A stop that has run, or is running, can't join a group";
 	const gid = f.steps[idx[0]]?.group?.id;
 	if (gid && f.steps.every((s, i) => s.group?.id === gid === idx.includes(i))) return "These already are one stop";
 	return "";
@@ -135857,7 +135881,7 @@ function SkySelectionBar(p) {
 	const askRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (p.ask !== "group" && p.ask !== "save") return;
-		setName(NEW_STOPS);
+		setName(p.ask === "group" ? NEW_GROUP : NEW_STOPS);
 		const input = askRef.current?.querySelector("input");
 		input?.focus({ preventScroll: true });
 		input?.select();
@@ -135914,7 +135938,7 @@ function SkySelectionBar(p) {
 				await reopenClosed(closed);
 			}
 		});
-		const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "line") + " of stops" : ""].filter(Boolean).join(", ");
+		const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "chain") + " with no session" : ""].filter(Boolean).join(", ");
 		toast(said.charAt(0).toUpperCase() + said.slice(1), { action: undoAction(entry, "Undo: put " + plural(n, "line") + " back") });
 	});
 	const removeStops = () => run(async () => {
@@ -135952,7 +135976,7 @@ function SkySelectionBar(p) {
 	});
 	const group = () => run(async () => {
 		if (!flight || hint) return;
-		await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_STOPS);
+		await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_GROUP);
 	});
 	const save = () => run(async () => {
 		if (!flight || !idx.length) return;
@@ -135976,7 +136000,7 @@ function SkySelectionBar(p) {
 		if (p.ask === "remove" && !asks && !busy) removeNow();
 	}, [p.ask]);
 	if (!lines.length && !one) return null;
-	const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "line") + " selected";
+	const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "chain") + " selected";
 	const sessions = removable.filter((id) => !isGroundedKey(id));
 	const groundedLines = removable.filter(isGroundedKey);
 	const names = (ids) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
@@ -136001,7 +136025,7 @@ function SkySelectionBar(p) {
 							type: "button",
 							className: "test-btn fl-btn",
 							disabled: busy || !!hint,
-							title: hint || "Make these one stop with sub-steps",
+							title: hint || "Make these one group: a stop with these stops inside",
 							onClick: () => p.setAsk("group"),
 							children: "Group into a stop"
 						}),
@@ -136009,7 +136033,7 @@ function SkySelectionBar(p) {
 							type: "button",
 							className: "test-btn fl-btn",
 							disabled: busy || !idx.length,
-							title: "Keep these stops on the shelf as a saved stop",
+							title: "Keep these stops on the shelf as a saved chain",
 							onClick: () => p.setAsk("save"),
 							children: "Save to the shelf"
 						}),
@@ -136017,14 +136041,14 @@ function SkySelectionBar(p) {
 							type: "button",
 							className: "test-btn fl-btn sky-selbar-danger",
 							disabled: busy || !flight,
-							title: "Take these stops off the line",
+							title: "Take these stops off the chain",
 							onClick: askRemove,
 							children: "Remove"
 						})
 					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-selbar-hint",
-							title: "Drag the bar of any selected line: they all move together",
+							title: "Drag the bar of any selected chain: they all move together",
 							children: "✥ Drag a bar to move them"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -136053,7 +136077,7 @@ function SkySelectionBar(p) {
 					})
 				]
 			}),
-			one && hint && hint !== "These stops aren't on a flight any more" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			one && hint && hint !== "These stops aren't on a chain any more" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "sky-selbar-note muted",
 				children: hint
 			}),
@@ -136064,8 +136088,8 @@ function SkySelectionBar(p) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
 						value: name,
 						onChange: setName,
-						label: p.ask === "group" ? "The new stop's name" : "The saved stop's name",
-						placeholder: NEW_STOPS,
+						label: p.ask === "group" ? "The new group's name" : "The saved chain's name",
+						placeholder: p.ask === "group" ? NEW_GROUP : NEW_STOPS,
 						onEnter: () => void (p.ask === "group" ? group() : save())
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -136084,7 +136108,7 @@ function SkySelectionBar(p) {
 				]
 			}),
 			p.ask === "remove" && asks && !one && removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(removable.length, "line") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + ".",
+				title: "Remove " + plural(removable.length, "chain") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + ".",
 				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "sky-selbar-says",
 					children: [
@@ -136100,12 +136124,12 @@ function SkySelectionBar(p) {
 				}), groundedLines.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "sky-selbar-says",
 					children: [
-						plural(groundedLines.length, "line"),
-						" of stops with no session ",
+						plural(groundedLines.length, "chain"),
+						" with no session ",
 						groundedLines.length === 1 ? "leaves" : "leave",
 						" the board (",
 						names(groundedLines),
-						"). A saved stop on the shelf stays."
+						"). A saved chain on the shelf stays."
 					]
 				})] }),
 				confirmLabel: "Remove",
@@ -136114,8 +136138,8 @@ function SkySelectionBar(p) {
 				onCancel: () => p.setAsk("")
 			}),
 			p.ask === "remove" && asks && one && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(one.nodes.length, "stop") + "? The flight is at “" + runningStop + "” right now.",
-				body: "They leave “" + p.nameOf(one.line) + "”, and the flight pauses right before what follows. Ctrl+Z puts them back.",
+				title: "Remove " + plural(one.nodes.length, "stop") + "? The chain is at “" + runningStop + "” right now.",
+				body: "They leave “" + p.nameOf(one.line) + "”, and the chain pauses right before what follows. Ctrl+Z puts them back.",
 				confirmLabel: "Remove",
 				busy,
 				onConfirm: () => void removeStops(),
@@ -136275,7 +136299,7 @@ function useGroundedLine(flight, src) {
 		className: "fl-palette-flyways",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "fl-palette-head",
-			children: "A saved stop — all of its steps"
+			children: "A saved chain — all of its stops"
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "fl-chiprow",
 			children: ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -136332,7 +136356,7 @@ function useGroundedLine(flight, src) {
 				const plan = plans.find((p) => p.id === d.planId);
 				tackPlan(plan || {
 					id: d.planId,
-					name: "the saved stop"
+					name: "the saved chain"
 				}, at);
 				return;
 			}
@@ -136445,7 +136469,7 @@ var groundedName = (f) => {
 	const given = (f.plan_name || "").trim();
 	if (given && given !== "Stops") return given;
 	const steps = f.steps || [];
-	if (!steps.length) return "Stops";
+	if (!steps.length) return "Chain";
 	return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
 };
 function GroundedLine(p) {
@@ -136464,7 +136488,7 @@ function GroundedLine(p) {
 	const edLabel = ed ? editorLabel(flight) : "";
 	const name = ed ? "Default stops · " + edLabel : groundedName(flight);
 	const edTitle = editorTitle(edLabel);
-	const edHint = "New items from " + (edTitle.name || "this source") + " fly these stops";
+	const edHint = "New items from " + (edTitle.name || "this source") + " run these stops";
 	const lod = lodFor(p.zoom || 1);
 	const [ownDefault, setOwnDefault] = (0, import_react.useState)(false);
 	const [baseSteps, setBaseSteps] = (0, import_react.useState)(null);
@@ -136538,7 +136562,7 @@ function GroundedLine(p) {
 					plan_id: prev
 				})
 			});
-			toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " fly these stops", { action: undoAction(entry, "Undo: " + label + " back on the stops it had") });
+			toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " run these stops", { action: undoAction(entry, "Undo: " + label + " back on the stops it had") });
 		} finally {
 			setBusy(false);
 		}
@@ -136578,7 +136602,7 @@ function GroundedLine(p) {
 		{
 			key: "add",
 			label: "Add a stop…",
-			title: "One stop, or a saved stop, at the end of the line",
+			title: "One stop, or a saved chain, at the end of the chain",
 			onSelect: () => line.togglePalette(true)
 		},
 		...ed ? [] : [{
@@ -136590,7 +136614,7 @@ function GroundedLine(p) {
 		{
 			key: "save",
 			label: "Save to the shelf",
-			title: updates ? "Update the saved stop these came from" : "Keep these stops on the shelf as a saved stop",
+			title: updates ? "Update the saved chain these came from" : "Keep these stops on the shelf as a saved chain",
 			className: "skl-mi-group",
 			onSelect: () => void save()
 		},
@@ -136716,7 +136740,7 @@ function GroundedLine(p) {
 		role: "group",
 		tabIndex: 0,
 		"data-sky-box": true,
-		"aria-label": name + (ed ? " — new items from this source fly these" : head.kind === "trigger" ? " — " + head.title : " — stops with no session yet"),
+		"aria-label": name + (ed ? " — new items from this source run these" : head.kind === "trigger" ? " — " + head.title : " — a chain with no session yet"),
 		onKeyDown: onKey,
 		onPointerDownCapture: () => {
 			if (!p.focused) p.onFocus();
@@ -136731,11 +136755,11 @@ function GroundedLine(p) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
 					ed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-name skl-default-name",
-						title: "Default stops for " + edLabel + ". New items from this source fly these.",
+						title: "Default stops for " + edLabel + ". New items from this source run these.",
 						children: edTitle.name
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "fl-box-chip skl-chip skl-default-tag",
-						title: "You are editing the stops new items from " + edLabel + " fly",
+						title: "You are editing the stops new items from " + edLabel + " run",
 						children: edTitle.kind ? "Default · " + edTitle.kind : "Default"
 					})] }) : naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-name skl-name-edit",
@@ -136770,7 +136794,7 @@ function GroundedLine(p) {
 					running && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused"),
 						title: flight.repo_root ? "Running in " + flight.repo_root : void 0,
-						children: flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"
+						children: flight.state === "waiting_you" ? "Needs you" : flight.state === "running" ? "Running" : "Paused"
 					}),
 					!running && flight.last_run && (() => {
 						const w = lastRunWords(flight.last_run);
@@ -136788,7 +136812,7 @@ function GroundedLine(p) {
 								type: "button",
 								className: "btn-primary fl-btn skl-default-save",
 								disabled: busy || !flight.steps.length || !changed,
-								title: changed ? edHint : "These are the stops " + edLabel + " flies now — change one to save",
+								title: changed ? edHint : "These are the stops " + edLabel + " runs now — change one to save",
 								onClick: () => void writeDefault(false),
 								children: changed ? "Save as default" : "No changes"
 							}),
@@ -137176,7 +137200,7 @@ function Minimap({ rects, cam, viewport, onCamera, onJump, open, onToggle }) {
 				height: MINIMAP_H
 			},
 			role: "img",
-			"aria-label": "Minimap: click a line to go to it, click or drag to move the view",
+			"aria-label": "Minimap: click a chain to go to it, click or drag to move the view",
 			onPointerDown,
 			onPointerMove,
 			onPointerUp,
@@ -137309,7 +137333,7 @@ function zoomMenuItems(p) {
 		},
 		{
 			id: "fit-focused",
-			label: "Fit the focused line",
+			label: "Fit the focused chain",
 			keys: [["1"]],
 			disabled: !p.canFitFocused,
 			checked: false,
@@ -137520,11 +137544,11 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["Shift", "1"],
-				what: "Fit all the lines"
+				what: "Fit all the chains"
 			},
 			{
 				keys: ["0"],
-				what: "Fit all the lines"
+				what: "Fit all the chains"
 			},
 			{
 				keys: ["Shift", "2"],
@@ -137532,7 +137556,7 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["1"],
-				what: "Fit the focused line"
+				what: "Fit the focused chain"
 			},
 			{
 				keys: ["Shift", "0"],
@@ -137553,7 +137577,7 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["drag"],
-				what: "Select what the box touches (on empty sky)"
+				what: "Select what the marquee touches (on empty sky)"
 			},
 			{
 				keys: ["Shift", "drag"],
@@ -137561,11 +137585,11 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["Shift", "click"],
-				what: "Add or take out one line or box"
+				what: "Add or take out one chain or stop"
 			},
 			{
 				keys: ["Ctrl", "A"],
-				what: "Select every line"
+				what: "Select every chain"
 			},
 			{
 				keys: ["F"],
@@ -137582,19 +137606,19 @@ var SKY_SHORTCUT_GROUPS = [
 		items: [
 			{
 				keys: ["double-click"],
-				what: "Edit a box (or ✎)"
+				what: "Edit a stop (or ✎)"
 			},
 			{
 				keys: ["Enter"],
-				what: "Open the focused line's box"
+				what: "Open the focused chain's stop"
 			},
 			{
 				keys: ["right-click"],
-				what: "A box's menu"
+				what: "A stop's menu"
 			},
 			{
 				keys: ["Delete"],
-				what: "Remove the selection or the focused box"
+				what: "Remove the selection or the focused stop"
 			},
 			{
 				keys: ["Backspace"],
@@ -137614,16 +137638,16 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["Esc"],
-				what: "Close the open box"
+				what: "Close the open stop"
 			}
 		]
 	},
 	{
-		title: "Lines and objects",
+		title: "Chains and objects",
 		items: [
 			{
 				keys: ["drag"],
-				what: "Move a line by its bar (the selected ones go together)"
+				what: "Move a chain by its bar (the selected ones go together)"
 			},
 			{
 				keys: ["Alt", "drag"],
@@ -137631,15 +137655,15 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["T"],
-				what: "Tidy: every line back in its place, every window minimised"
+				what: "Tidy: every chain back in its place, every window minimised"
 			},
 			{
 				keys: ["Ctrl", "N"],
-				what: "A new session block (Alt+N in a browser tab)"
+				what: "A new session on the sky (Alt+N in a browser tab)"
 			},
 			{
 				keys: ["double-click"],
-				what: "On empty sky: a new session block there"
+				what: "On empty sky: a new session there"
 			},
 			{
 				keys: ["Ctrl", "Y"],
@@ -137656,11 +137680,11 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["click"],
-				what: "Place a block on the sky"
+				what: "Place a stop on the sky"
 			},
 			{
 				keys: ["drag"],
-				what: "Drop a block onto a line to add it there"
+				what: "Drop a stop onto a chain to add it there"
 			},
 			{
 				keys: ["Esc"],
@@ -137891,11 +137915,12 @@ function SkyShortcuts(p) {
 function quickRows(kinds, plans, q) {
 	const all = [...kinds.map((k) => ({
 		key: "k:" + k.kind,
-		label: k.label,
+		label: kindName(k),
 		hint: k.summary || "",
 		icon: k.kind,
 		pick: { kind: k.kind },
 		words: [
+			kindName(k),
 			k.label,
 			k.summary,
 			k.kind,
@@ -137904,12 +137929,12 @@ function quickRows(kinds, plans, q) {
 	})), ...plans.map((p) => ({
 		key: "p:" + p.id,
 		label: p.name,
-		hint: "saved stop · " + p.steps.length + (p.steps.length === 1 ? " step" : " steps"),
+		hint: savedChainLabel(p.steps.length),
 		icon: "group",
 		pick: { plan: p },
 		words: [
 			p.name,
-			"saved stop",
+			"saved chain",
 			p.steps.map((s) => s.title).join(" ")
 		].join(" ")
 	}))];
@@ -137944,7 +137969,7 @@ function QuickAdd(p) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-ground-menu sky-quick-add",
 		role: "dialog",
-		"aria-label": "Add a block here",
+		"aria-label": "Add a stop here",
 		style: {
 			left: p.x,
 			top: p.y
@@ -137954,8 +137979,8 @@ function QuickAdd(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 				className: "sky-quick-field",
 				autoFocus: true,
-				placeholder: "Add a block…",
-				"aria-label": "Search blocks",
+				placeholder: "Add a stop…",
+				"aria-label": "Search stops",
 				value: q,
 				onChange: (e) => {
 					setQ(e.target.value);
@@ -137966,7 +137991,7 @@ function QuickAdd(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-quick-list",
 				role: "listbox",
-				"aria-label": "Blocks",
+				"aria-label": "Stops",
 				children: [rows.slice(0, 40).map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					role: "option",
@@ -137994,7 +138019,7 @@ function QuickAdd(p) {
 				}, r.key)), !rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-quick-none",
 					children: [
-						"No block matches “",
+						"No stop matches “",
 						q,
 						"”"
 					]
@@ -138214,11 +138239,11 @@ var MINIMAP_KEY = "mf_sky_minimap";
 var TOOL_CHIPS = {
 	drag: {
 		label: "✥ Drag",
-		title: "Drag mode (V): a line moves by its bar, a drag on empty sky selects"
+		title: "Drag mode (V): a chain moves by its bar, a drag on empty sky selects"
 	},
 	click: {
 		label: "☝ Click",
-		title: "Click mode (H): a drag anywhere pans, a click focuses a line or selects a box — Shift+drag selects"
+		title: "Click mode (H): a drag anywhere pans, a click focuses a chain or selects a stop — Shift+drag selects"
 	}
 };
 var OBJECT_CONTROLS = "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new, .sky-palette-slot, .sky-block-ask, .sky-ground-menu";
@@ -140199,7 +140224,7 @@ function SkyView() {
 			window.removeEventListener("keyup", up, true);
 		};
 	}, [narrow]);
-	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a line to show it alone." : query ? "No line matches “" + query + "”." : mode === "perched" ? "Nothing is perched on you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a chain to show it alone." : query ? "No chain matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -140207,7 +140232,7 @@ function SkyView() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
 				className: "sky-modes",
-				label: "Which lines",
+				label: "Which chains",
 				value: mode,
 				options: SKY_MODES.map((m) => ({
 					value: m.id,
@@ -140232,15 +140257,15 @@ function SkyView() {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
 					value: query,
 					onChange: setQuery,
-					label: "Find a line",
-					placeholder: "Find a line…",
+					label: "Find a chain",
+					placeholder: "Find a chain…",
 					onEnter: () => titles[0] && focusOn(titles[0])
 				})
 			}),
 			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "fl-btn sky-tidy",
-				title: "Put every line back in its organized spot (T)",
+				title: "Put every chain back in its organized spot (T)",
 				onClick: tidy,
 				children: "Tidy"
 			}),
@@ -140283,7 +140308,7 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-fit-one",
-						title: "Fit the focused line — the grid's 1 (1)",
+						title: "Fit the focused chain — the grid's 1 (1)",
 						disabled: !focusLine,
 						onClick: () => fitFocused(),
 						children: "1"
@@ -140291,7 +140316,7 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-fit",
-						title: "See everything: every line in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)",
+						title: "See everything: every chain in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)",
 						onClick: () => fitAll(true),
 						children: "Fit"
 					}),
@@ -140685,7 +140710,7 @@ function SkyView() {
 						tabIndex: -1,
 						role: "application",
 						"aria-roledescription": "canvas",
-						"aria-label": "The sky: every session as a line — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the blocks, ? for every key",
+						"aria-label": "The sky: every session as a chain — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the stops, ? for every key",
 						style: {
 							backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`,
 							backgroundPosition: `${cam.x}px ${cam.y}px`

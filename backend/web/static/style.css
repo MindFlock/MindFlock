@@ -36344,7 +36344,7 @@ button.linklike {
 }
 
 /* "Goes as far as" (flights/PlanSelect.tsx): the ONE control on a source card
-   for how far its items go. The rungs, a divider, the saved stops, then "Edit
+   for how far its items go. The rungs, a divider, the saved chains, then "Edit
    in the Sky…" as a link at the end of the row. The summary line under it is
    read-only. */
 .fl-source-reach .fl-reach-line {

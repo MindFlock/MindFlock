@@ -523,9 +523,15 @@ async def hook_fire(
     now = time.time() if now is None else now
     plan = await asyncio.to_thread(plan_by_token, token)
     if plan is None:
-        return 404, {"error": "unknown_token", "detail": "no flyway answers that hook"}
+        return 404, {
+            "error": "unknown_token",
+            "detail": "no saved chain answers that hook",
+        }
     if (plan.get("trigger") or {}).get("paused"):
-        return 409, {"error": "paused", "detail": "that flyway's trigger is paused"}
+        return 409, {
+            "error": "paused",
+            "detail": "that saved chain's trigger is paused",
+        }
     pid = str(plan.get("id") or "")
     state = await asyncio.to_thread(load_state)
     row = dict(state.get(pid) or {})
