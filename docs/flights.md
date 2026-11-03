@@ -394,8 +394,31 @@ quiet", "who: agent"). A perch is rounder, outlined gold, with a branch motif.
 Editing: drag to reorder (pointer events, mouse and touch: the picked box
 lifts, the others slide, the drop snaps, the connectors redraw); ← / → move the
 selected box, Delete removes it, Enter opens it; **+** between boxes on hover
-and at the end opens the stop palette ("The flock does" / "You do", each kind
-with its summary), inserting there. Live: the same canvas draws a flight's
+and at the end opens the stop palette ("MindFlock does" / "You do", each kind
+with its summary), inserting there. **Type to filter** (`StopPalette`, owner:
+"when i click the plus i should be able to just start typing and it narrows
+down the list"): the palette opens with its "Type to filter…" field focused
+(an ARIA combobox over a `listbox` of `option` rows); what is typed narrows the
+kinds (the label `kindName` says, `label`, the kind id, the summary) and the
+saved-chain chips (name, stops) by the floating palette's own rule
+(`catalogMatch`: every word, case-blind). Inside each group the matches rank
+by `paletteRank` — 0 the label starts with the query, 1 a word of the label
+does, 2 a word of another text does, 3 a substring only; ties keep the
+server's order — and the groups always draw MindFlock does → You do → saved
+chains (`paletteRows`). ↓ / ↑ walk the highlight (wrapping), Enter picks it
+(`bestRow`, the best match, until an arrow moves it; a disabled saved chain,
+while `busy`, is skipped silently), Esc clears the text and only a second Esc
+closes (`paletteKey`, pure; IME composition ignored). The field stops every
+key's propagation, the palette's own outer Esc handler included, so the Sky's
+keys (T tidies, arrows pan, Delete removes) never see what is typed. Nothing
+left → "No stop matches “…”", and a group with nothing left hides its head.
+Props: `saved?: PaletteSaved[]` (`id`, `name`, `title` — its stops joined
+with " → " — `disabled`, `onPick`), `savedHead`, `initialQuery`; `extra`
+still draws anything else under them, **unfiltered and off the arrow keys** —
+so a caller with saved chains passes them as `saved`. The Sky's grounded line
+(`useGroundedLine`) does; the session diagram's **Fly a flyway** chips
+(`useSessionLine`) still come in through `extra`, so typing does not narrow
+them. Live: the same canvas draws a flight's
 snapshot steps with their `step_states` — done dimmed with ✓, current glowing
 (gold perched on you, green while the flock works, red halted with the
 reason), skipped struck through, pending outlined; a perch waiting on you
@@ -1435,7 +1458,7 @@ focused or selected. A branch whose worker leaves takes its card with it.
 - The palette and the inspector are driven by the registry
   (`GET /api/flights/kinds`). **Split** (robot: `prompts`, `count`, `model`,
   `fence_only`, `report_back`) and **Join** (robot: `of` all|spawned,
-  `on_failed` halt|continue) appear under "The flock does" once the server
+  `on_failed` halt|continue) appear under "MindFlock does" once the server
   lists them. The `agent` kind's `join` toggle ("Wait for its workers")
   renders as a normal bool field.
 - A Split's `prompts` is a textarea. Its inspector adds a "one worker per
