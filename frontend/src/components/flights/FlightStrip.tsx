@@ -37,7 +37,7 @@ import {
 } from "../../lib/flights";
 import { flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
@@ -119,8 +119,9 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
 }
 
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
- * what enables Done); Retry / Skip on a halted stop. A Verify stop parked on
- * you answers its behaviors instead (`VerifyStopActions`). */
+ * what enables Done); Retry / Skip on a halted stop (+ Let the agent fix it on
+ * a halted Verify stop). A Verify stop parked on you answers its behaviors
+ * instead (`VerifyStopActions`). */
 export function YouStepActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
@@ -179,6 +180,17 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
             Done
+          </button>
+        )}
+        {halted && step.kind === "verify" && (
+          <button
+            type="button"
+            className="test-btn fl-btn fl-fix"
+            disabled={busy}
+            title="Hand the failure to the agent — the behaviors are checked again after its fix"
+            onClick={() => void run(() => stepFix(flight.id, step.id))}
+          >
+            Let the agent fix it
           </button>
         )}
         <button

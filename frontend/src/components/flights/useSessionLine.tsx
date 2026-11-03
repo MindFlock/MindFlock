@@ -57,7 +57,9 @@ import {
   patchStopGroup,
   savePlan,
   setHalt,
+  answerBehaviors,
   stepDone,
+  stepFix,
   stepRetry,
   stepSkip,
   tackOn,
@@ -282,7 +284,7 @@ export function stopLog(n: DiagramNode, flight: Flight | null, rec: StepRunState
       )}
       {ap && (
         <p className="fl-note">
-          Fast-track: <b>{ap.state}</b>
+          Goes as far as: <b>{ap.state}</b>
           {ap.step ? " · " + ap.step : ""}
           {ap.reason ? " — " + ap.reason : ""}
         </p>
@@ -821,8 +823,21 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             : undefined
         }
         onToggleHalt={here && open.step && !flown ? () => toggleHalt(open) : undefined}
-        onDone={here && open.state === "perched" ? () => void act(() => stepDone(flight!.id, open.step!.id)) : undefined}
+        onDone={
+          here && open.state === "perched"
+            ? open.step?.kind === "verify"
+              ? // A Verify stop moves on when its behaviors are answered: its card opens.
+                () => {
+                  close();
+                  answerBehaviors(flight!.id);
+                }
+              : () => void act(() => stepDone(flight!.id, open.step!.id))
+            : undefined
+        }
+        doneLabel={open.step?.kind === "verify" ? "Behaviors" : undefined}
+        doneTitle={open.step?.kind === "verify" ? "Answer its behaviors — the route goes on once each one has an answer" : undefined}
         onRetry={here && open.state === "halted" ? () => void act(() => stepRetry(flight!.id, open.step!.id)) : undefined}
+        onFix={here && open.state === "halted" && open.step?.kind === "verify" ? () => void act(() => stepFix(flight!.id, open.step!.id)) : undefined}
         onSkip={here ? () => void act(() => stepSkip(flight!.id, open.step!.id)) : undefined}
         extra={
           <>

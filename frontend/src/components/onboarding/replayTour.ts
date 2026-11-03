@@ -4,6 +4,7 @@
  * automatic opening of each is useAutoTour's (and WelcomeTour's for the card). */
 
 import { useUi } from "../../state/store";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { openSettings } from "../../lib/openSettings";
 import type { TourId } from "../../lib/tours";
 import type { DialogName } from "../../state/store";
@@ -11,7 +12,6 @@ import type { DialogName } from "../../state/store";
 const SURFACE: Partial<Record<TourId, DialogName>> = {
   new: "new-session",
   intake: "intake",
-  verify: "verify",
   schedule: "schedule",
 };
 
@@ -32,6 +32,11 @@ export function replayTour(id: TourId): void {
   } else if (id === "sky") {
     // The sky is a view, not a dialog: show it, shelf and all.
     ui.showSky();
+  } else if (id === "verify") {
+    // Verify is a stop on the route: the tour walks a Behaviors stop in the
+    // Sky — fly to the next behaviors that need you (else the board).
+    ui.closeDialog();
+    openBehaviors({ next: true });
   } else if (id === "voice") {
     // The top-bar mic: nothing over it (Settings → Voice's "Show me how").
     ui.closeDialog();

@@ -60,7 +60,7 @@ const KINDS: StepKindDef[] = [
     fields: [
       { name: "target", type: "select", label: "Start which route", default: "", options: [], dynamic: "chains" as never },
       { name: "session", type: "select", label: "Run it on", default: "new", options: ["new"], dynamic: "sessions" as never },
-      { name: "wait", type: "bool", label: "Wait for it to land", default: false },
+      { name: "wait", type: "bool", label: "Wait for it to finish", default: false },
     ],
   },
 ];

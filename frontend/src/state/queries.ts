@@ -1019,11 +1019,11 @@ function bridgeTestPlanEvents() {
     say(env, (d) => {
       const n = Number(d.steps) || 0;
       return (
-        (d.refreshed ? "Rewrote the checklist for " : "New checklist for ") +
+        (d.refreshed ? "Rewrote the behaviors for " : "New behaviors for ") +
         String(d.plan || "a session") +
         " — " +
         n +
-        (n === 1 ? " step" : " steps")
+        (n === 1 ? " behavior" : " behaviors")
       );
     })
   );
@@ -1036,14 +1036,14 @@ function bridgeTestPlanEvents() {
         String(d.title || d.plan || "A change") +
         " shipped to " +
         String(d.live_branch || "the live branch") +
-        " — its checklist is ready in Verify",
+        " — its behaviors are ready on its route in the Sky",
     ),
   );
   ev.subscribe("session.test_plan_failed", (env) =>
     say(
       env,
       (d) =>
-        "Couldn't write the checklist for " +
+        "Couldn't write the behaviors for " +
         String(d.plan || "a session") +
         ": " +
         String(d.error || "no reason recorded")
@@ -1081,7 +1081,7 @@ function bridgeTestPlanEvents() {
       env,
       (d) =>
         "Gave up on the verify run for " +
-        String(d.title || d.plan || "a checklist") +
+        String(d.title || d.plan || "these behaviors") +
         " — " +
         String(d.run_session || "the session") +
         " never wrote its answers. Press Check now to try again.",
@@ -1096,13 +1096,13 @@ export function checkedToastText(d: Record<string, unknown>): string {
   const failed = Number(d.failed) || 0;
   const mine = Number(d.needs_you) || 0;
   const bits = [
-    failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "",
-    mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : "",
+    failed ? failed + (failed === 1 ? " behavior failed" : " behaviors failed") : "",
+    mine ? mine + (mine === 1 ? " behavior needs you" : " behaviors need you") : "",
   ].filter(Boolean);
   return (
-    String(d.title || d.plan || "A checklist") +
+    String(d.title || d.plan || "The behaviors") +
     (d.before_merge === true ? " checked on the branch" : " checked") +
-    (bits.length ? " — " + bits.join(", ") : " — everything passed")
+    (bits.length ? " — " + bits.join(", ") : " — every behavior verified")
   );
 }
 

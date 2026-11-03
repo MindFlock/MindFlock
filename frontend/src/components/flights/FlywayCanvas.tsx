@@ -77,7 +77,7 @@ import {
   type DiagramNode,
   type LayoutOpts,
 } from "../../lib/flightDiagram";
-import { controlFlight, flightPath, jumpFlight, refreshFlights, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flightPath, jumpFlight, refreshFlights, answerBehaviors, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { api } from "../../api/client";
 import { refreshInstances } from "../../state/queries";
 import { errMsg } from "../../lib/format";
@@ -750,6 +750,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     else if (key === "duplicate") p.onDuplicate?.(n);
     else if (key === "remove") p.onRemove?.(n);
     else if (key === "done") void stepDone(flight, step);
+    else if (key === "behaviors") answerBehaviors(flight);
+    else if (key === "fix") void stepFix(flight, step);
     else if (key === "skip") void stepSkip(flight, step);
     else if (key === "retry") void stepRetry(flight, step);
     else if (key === "halt") p.onToggleHalt?.(n);

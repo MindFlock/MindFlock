@@ -546,7 +546,7 @@ export function fastTrackStep(inst: Partial<Instance>): FastTrackButton | null {
 
   const ask = askFirstApplies(lane) && askFirst;
   const where = LANE_LABEL[lane] + (ask ? ", asks first" : "");
-  const change = "\n\nClick to change it or turn it off (Ctrl+K F).";
+  const change = "\n\nClick to change how far it goes (Ctrl+K F).";
   let tip: string;
   if (running && run) {
     const doing = run.note
@@ -555,18 +555,18 @@ export function fastTrackStep(inst: Partial<Instance>): FastTrackButton | null {
         ? " (last step: " + run.step + ")"
         : " (waits for the agent to finish)";
     const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-    tip = "Fast-track → " + where + doing + skipped + change;
+    tip = "Goes as far as " + where + doing + skipped + change;
   } else if (halted && run) {
     tip =
-      "Fast-track stopped: " +
+      "Shipping halted: " +
       (run.reason || "unknown reason") +
-      "\n\nClick to pick it again or turn it off (Ctrl+K F).";
+      "\n\nClick to pick how far it goes again (Ctrl+K F).";
   } else if (lane === "leave") {
     tip =
-      "Fast-track is off. Click to choose how far MindFlock carries this session once its " +
+      "Goes as far as Agent only. Click to choose how far MindFlock carries this session once its " +
       "agent is done — commit, push, open a PR, or merge when green (Ctrl+K F).";
   } else {
-    tip = "Fast-track → " + where + ": " + LANE_DESC[lane] + "." + change;
+    tip = "Goes as far as " + where + ": " + LANE_DESC[lane] + "." + change;
   }
   return {
     lane,

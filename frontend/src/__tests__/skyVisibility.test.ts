@@ -38,7 +38,7 @@ const STEPS = [
   step("s3", "ship", "Push", { lane: "push" }),
   step("s4", "reviews", "Reviews settle", { quiet_minutes: 10 }),
   step("s5", "you", "Approve the merge"),
-  step("s6", "ship", "Merge", { lane: "merge" }),
+  step("s6", "ship", "Merge when green", { lane: "merge" }),
 ];
 const KINDS: StepKindDef[] = [
   { kind: "agent", label: "Agent", actor: "robot", summary: "", fields: [], default_title: "Agent" },

@@ -152,9 +152,8 @@ describe("the empty Grid", () => {
 });
 
 describe("every tour speaks the vocabulary", () => {
-  it("no retired word in any tour's copy (Verify's is rewritten elsewhere)", () => {
+  it("no retired word in any tour's copy", () => {
     for (const id of TOUR_IDS) {
-      if (id === "verify") continue;
       for (const s of TOURS[id].steps) {
         // the Sky's one-liner is a phrase ("work in flight", "cleared to fly"), not a noun
         const copy = (s.title + " " + s.body).replaceAll("work in flight", "");

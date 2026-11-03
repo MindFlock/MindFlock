@@ -76,7 +76,7 @@ describe("the top-bar item", () => {
     // Always on the bar; the calm first hour only draws an empty one quiet.
     expect(btn).toContain('className={"tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(btn).toContain("title={scheduleTitle}");
-    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — everything that starts by itself on a timer: templates and scheduled chains" \+\s*keys\("schedule"\)/);
+    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — everything that starts by itself on a timer: templates and saved routes" \+\s*keys\("schedule"\)/);
     expect(btn).toContain('ui.openDialogFor("schedule")');
     // A count only for failures, in the failure red, nothing at zero.
     expect(btn).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');
@@ -107,7 +107,7 @@ describe("the old name still lands", () => {
   it("the palette has Schedule… (on the short menu); \"templates\" finds it — one name, no second row", () => {
     expect(PALETTE).toContain('label: "Schedule…"');
     expect(PALETTE).toContain("top: TOP.schedule");
-    expect(PALETTE).toContain('keywords: "templates template cron recurring nightly timer daily weekly scheduled chains stops"');
+    expect(PALETTE).toContain('keywords: "templates template cron recurring nightly timer daily weekly scheduled routes chains stops"');
     expect(PALETTE).not.toContain('label: "Templates…"');
     expect(PALETTE).not.toContain('openDialogFor("templates"');
   });

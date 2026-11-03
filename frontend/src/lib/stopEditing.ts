@@ -129,7 +129,7 @@ export function undoPayload(step: FlightStep, index: number, flight: Pick<Flight
 
 // --- The right-click menu --------------------------------------------------------------
 
-export type StopMenuKey = "edit" | "earlier" | "later" | "duplicate" | "remove" | "done" | "skip" | "retry" | "halt" | "pause" | "resume" | "jump" | "tackon" | "open" | "expand" | "note";
+export type StopMenuKey = "edit" | "earlier" | "later" | "duplicate" | "remove" | "done" | "behaviors" | "fix" | "skip" | "retry" | "halt" | "pause" | "resume" | "jump" | "tackon" | "open" | "expand" | "note";
 
 /** One line of a box's menu: something to press, or a muted `note`. */
 export interface StopMenuItem {
@@ -295,8 +295,18 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const hold = ctx.here && ctx.live ? flightHold(n) : null;
   if (hold) items.push(hold);
   if (ctx.live) {
-    if (n.state === "perched") items.push({ key: "done", label: "Done", title: "Mark this stop done — the bird flies on" });
+    // A Verify stop moves on when its behaviors are answered, not on Done
+    // (the server refuses it: 409 answer_behaviors) — its card opens instead.
+    const verify = n.step?.kind === "verify";
+    if (n.state === "perched")
+      items.push(
+        verify
+          ? { key: "behaviors", label: "Behaviors", title: "Answer its behaviors — the route goes on once each one has an answer" }
+          : { key: "done", label: "Done", title: "Mark this stop done — the bird flies on" }
+      );
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
+    if (n.state === "halted" && verify)
+      items.push({ key: "fix", label: "Let the agent fix it", title: "Hand the failure to the agent — the behaviors are checked again after its fix" });
     items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
   }
   if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));

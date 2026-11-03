@@ -157,7 +157,7 @@ function flywayOf(kind: WaitingKind, own: string, plans: SourceBlockOpts["plans"
   const reach = sourceReach(kind, { plan: own, depth }, plans);
   if (reach.own) return { id: own, name: reach.words, own: true, words: reach.words };
   const id = builtinPlanFor(kind, plans);
-  return { id, name: plans?.find((p) => p.id === id)?.name || "built-in chain", own: false, words: reach.words };
+  return { id, name: plans?.find((p) => p.id === id)?.name || "built-in route", own: false, words: reach.words };
 }
 
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();

@@ -4,9 +4,6 @@
 
 import { LANE_CHOICES, LANE_LABEL, type Lane } from "./autopilot";
 
-/** What Verify is for. */
-export const VERIFY_BLURB = "check that pushed changes work";
-
 /** Goes as far as's rungs, in order, with the one label each wears on every
  * screen that offers them (the New form, the ⏩ popover, the Schedule form):
  * "Agent only / Commit / Push / Open PR / Merge when green". Built from the ladder's

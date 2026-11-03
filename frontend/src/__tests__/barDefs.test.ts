@@ -13,7 +13,7 @@ import {
 describe("defaultHiddenBars", () => {
   it("hides every bar that is not one of the essentials", () => {
     const hidden = defaultHiddenBars();
-    expect(hidden).toEqual(["pr-review", "issue-handling", "verify", "prompts"]);
+    expect(hidden).toEqual(["pr-review", "issue-handling", "prompts"]);
     // The headline feature's bar is visible out of the box.
     expect(DEFAULT_VISIBLE_BARS).toContain("ingestion");
     // The essentials are never hidden.
@@ -31,7 +31,8 @@ describe("SIDEBAR_BARS labels", () => {
     expect(label("issue-handling")).toBe("Issues");
     // The rest keep their names.
     expect(label("usage")).toBe("Usage");
-    expect(label("verify")).toBe("Verify");
+    // Verify is a stop on the route now, not a bar.
+    expect(label("verify")).toBeUndefined();
     expect(label("assistant")).toBe("Assistant");
     expect(label("prompts")).toBe("Prompts");
   });
@@ -54,9 +55,12 @@ describe("orderedSections", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
-      "verify",
       "assistant",
     ]);
+  });
+  it("drops the retired Verify bar from a saved order", () => {
+    expect(orderedSections(["verify", "assistant"])).not.toContain("verify");
+    expect(orderedBars(["verify", SESSIONS_KEY]).map((b) => b.key)).not.toContain("verify");
   });
   it("drops unknown keys from the saved order", () => {
     expect(orderedSections(["bogus", "assistant"])).toEqual([
@@ -65,7 +69,6 @@ describe("orderedSections", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
-      "verify",
       "prompts",
       "sessions",
     ]);
@@ -118,7 +121,6 @@ describe("orderedSections with extension bars", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
-      "verify",
       "assistant",
     ]);
   });
@@ -160,7 +162,6 @@ describe("orderedBars", () => {
       "ingestion",
       "pr-review",
       "issue-handling",
-      "verify",
     ]);
   });
   it("carries extension bar defs (key + label) through, in resolved order", () => {

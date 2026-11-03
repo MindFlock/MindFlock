@@ -34,7 +34,7 @@ describe("the second-window rule", () => {
     toast.mockReset();
     await writePlanFor("bot7-copy");
     expect(toast).toHaveBeenCalledWith(
-      "bot7-copy's branch already has behaviors — they're under bot7 — they're in Verify"
+      "bot7-copy's branch already has behaviors — they're under bot7 — they're on its route in the Sky"
     );
   });
 });

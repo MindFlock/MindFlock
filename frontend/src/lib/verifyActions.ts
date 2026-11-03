@@ -400,8 +400,8 @@ export async function writePlanForBranch(repo: VerifyRepo, branch: string): Prom
     });
     toast(
       r.existing
-        ? branch + " already has behaviors — they're in Verify"
-        : "Asked the agent to write the behaviors for " + branch + " — they'll appear in Verify (up to three minutes)"
+        ? branch + " already has behaviors — they're on the Behaviors board in the Sky"
+        : "Asked the agent to write the behaviors for " + branch + " — they'll appear on the Behaviors board (up to three minutes)"
     );
     refreshTestPlans();
     return true;
@@ -428,11 +428,11 @@ export async function writePlanFor(target: string): Promise<boolean> {
       r.existing
         ? (r.plan && r.plan !== target
             ? target + "'s branch already has behaviors — they're under " + r.plan
-            : target + " already has behaviors") + " — they're in Verify"
+            : target + " already has behaviors") + " — they're on its route in the Sky"
         // "up to three minutes", matching the row this press creates and the
         // server's own budget. It used to promise "a minute" 200px above a row
         // saying three, which makes the faster of the two promises a broken one.
-        : "Asked the agent to write the behaviors for " + target + " — they'll appear in Verify (up to three minutes)"
+        : "Asked the agent to write the behaviors for " + target + " — they'll appear on its route in the Sky (up to three minutes)"
     );
     refreshTestPlans();
     return true;

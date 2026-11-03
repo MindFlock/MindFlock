@@ -305,7 +305,7 @@ describe("the pane's Flight tab: the session diagram", () => {
   it("an armed fast-track's rungs are boxes on the line", () => {
     const html = render([rowOf("me", { stage: "committed", autopilot: { depth: "pr", state: "running", step: "", reason: "", source: "user", item: "" } })], "me");
     expect(tiles(html)).toEqual(["session:me", "rung:commit", "rung:push", "rung:pr"]);
-    expect(html).toContain(">Fast-track<");
+    expect(html).toContain(">Goes as far as<");
   });
 
   it("with nothing on the line: the session, the +, and the saved stops as cards with Describe stops", () => {

@@ -61,7 +61,9 @@ def test_the_ladder_has_no_agent_rung_to_render():
     assert (
         'export const SOURCE_DEPTHS: readonly Lane[] = ["commit", "push", "pr"];' in src
     )
-    assert "Agent only" not in src
+    # "Agent only" is now the vocabulary's word for the bottom rung (leave —
+    # nothing ships), not an agent rung on the ladder (docs/vocabulary.md).
+    assert 'SOURCE_OFF_LABEL = "Agent only"' in src
 
 
 def test_source_and_repo_pickers_drop_the_agent_rung():
