@@ -501,7 +501,7 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     );
     expect(html).toContain(">Goes as far as<");
     expect(html).toContain('data-tk-field="reach"');
-    for (const w of ["Stop after the agent", "Commit", "Push", "Open PR"]) expect(html, w).toContain(">" + w + "</button>");
+    for (const w of ["Agent only", "Commit", "Push", "Open PR"]) expect(html, w).toContain(">" + w + "</button>");
     // A saved stop decides: its chip is on, the depth's isn't.
     expect(html).toMatch(/<button type="button" role="radio" aria-checked="true" class="fl-pick fl-reach-plan on"[^>]*data-value="plan:p_mine">Mine<\/button>/);
     expect(html).toMatch(/aria-checked="false" class="fl-pick" data-value="push">Push</);
@@ -521,7 +521,7 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
       createElement(PlanSelect, { kind: "prs", target: "acme/api", depth: "", plan: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
       (c) => c.setQueryData(["flight-plans"], null)
     );
-    expect(none).toMatch(/aria-checked="true" class="fl-pick on" data-value="leave">Stop after the agent</);
+    expect(none).toMatch(/aria-checked="true" class="fl-pick on" data-value="leave">Agent only</);
     expect(none).not.toContain("Edit in the Sky");
     // A card the server doesn't hold yet can't open its editor.
     const draft = withClient(
@@ -538,8 +538,8 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     expect(sourceReach("tickets", { plan: "p_pay", depth: "push" }, P)).toMatchObject({ choice: "plan:p_pay", words: "Payments stops", own: true, steps: ["Agent", "Verify"], planId: "p_pay" });
     // A rung: the words every surface shows, the plan id the server answers with.
     expect(sourceReach("tickets", { depth: "push" }, P)).toMatchObject({ choice: "push", words: "Push", own: false, steps: ["Agent", "Commit", "Push"], planId: "builtin:ticket@push" });
-    expect(sourceReach("prs", { depth: "" }, P)).toMatchObject({ choice: "leave", words: "Stop after the agent", steps: ["Agent"], planId: "" });
-    expect(sourceReach("issues", { depth: "agent" }, P).words).toBe("Stop after the agent");
+    expect(sourceReach("prs", { depth: "" }, P)).toMatchObject({ choice: "leave", words: "Agent only", steps: ["Agent"], planId: "" });
+    expect(sourceReach("issues", { depth: "agent" }, P).words).toBe("Agent only");
     // A source may not merge: a hand-edited merge reads as Open PR (server._cap_source_depth).
     expect(sourceReach("tickets", { depth: "merge" }, P)).toMatchObject({ choice: "pr", planId: "builtin:ticket@pr" });
     // A saved stop that's gone: the server goes by the depth, and the card says so.

@@ -100,7 +100,7 @@ export function JointCheck({
   const save = async () => {
     const parsed = parseStepLines(draft);
     if (!parsed.length) {
-      setError("Write at least one step.");
+      setError("Write at least one behavior.");
       return;
     }
     if (await act("write", () => writeCheck(linkId, parsed))) setEditing(false);
@@ -130,7 +130,7 @@ export function JointCheck({
         </span>
         <span className={"peer-joint-actor peer-joint-actor-" + s.actor}>{s.actor === "human" ? "person" : "agent"}</span>
         {mineHuman || takeOver ? (
-          <span className="peer-joint-answer" role="group" aria-label={"Answer step " + n}>
+          <span className="peer-joint-answer" role="group" aria-label={"Answer behavior " + n}>
             {answers.map(([value, label]) => (
               <button
                 key={value}
@@ -169,7 +169,7 @@ export function JointCheck({
   return (
     <div className="peer-joint-check" data-verdict={verdict}>
       <div className="peer-joint-check-head">
-        <span className="set-label">Joint checklist</span>
+        <span className="set-label">Joint behaviors</span>
         {steps.length ? (
           <span className="vchip peer-joint-verdict" data-verdict={verdict} data-tone={look.tone}>
             <span className="vchip-glyph" aria-hidden="true">
@@ -182,7 +182,7 @@ export function JointCheck({
       {check.theirs_unsupported ? (
         <p className="set-hint peer-joint-older">{name}'s MindFlock is older — their side can't report</p>
       ) : null}
-      {asking ? <p className="set-hint peer-joint-asking">Your agent is writing the checklist…</p> : null}
+      {asking ? <p className="set-hint peer-joint-asking">Your agent is writing the behaviors…</p> : null}
       {check.ask?.state === "failed" && check.ask.error ? (
         <p className="set-hint peer-joint-ask-failed">{check.ask.error}</p>
       ) : null}
@@ -193,17 +193,17 @@ export function JointCheck({
             className="peer-joint-editor-text"
             rows={Math.min(12, Math.max(4, draft.split("\n").length + 1))}
             value={draft}
-            aria-label="Joint checklist steps, one per line"
+            aria-label="Joint behaviors, one per line"
             placeholder={"Call GET /items -> a list of items\n[theirs] Run the client -> it prints them\n[theirs] [human] The printed list looks right"}
             onChange={(e) => setDraft(e.target.value)}
           />
           <p className="set-hint">
-            One step per line. Add [theirs] for a step on {name}'s side and [human] for one a person checks; "-&gt;"
+            One behavior per line. Add [theirs] for one on {name}'s side and [human] for one a person checks; "-&gt;"
             starts what should happen. Saving clears every result.
           </p>
           <div className="peer-joint-actions">
             <button type="button" className="btn-primary" disabled={!!busy} onClick={save}>
-              {busy === "write" ? "Saving…" : "Save checklist"}
+              {busy === "write" ? "Saving…" : "Save behaviors"}
             </button>
             <button type="button" className="test-btn" disabled={!!busy} onClick={() => setEditing(false)}>
               Cancel
@@ -216,7 +216,7 @@ export function JointCheck({
           {sideBlock("theirs", name + "'s side")}
         </>
       ) : (
-        <p className="set-hint">No steps yet. Write what shows the two halves agree, or ask your agent to.</p>
+        <p className="set-hint">No behaviors yet. Write what shows the two halves agree, or ask your agent to.</p>
       )}
 
       {!editing && linkId ? (
@@ -231,7 +231,7 @@ export function JointCheck({
               setEditing(true);
             }}
           >
-            Write the checklist
+            Write the behaviors
           </button>
           <button
             type="button"
@@ -243,7 +243,7 @@ export function JointCheck({
           </button>
           {myAgentSteps ? (
             <button type="button" className="test-btn" disabled={!!busy} onClick={() => act("run", () => runCheck(linkId))}>
-              {busy === "run" ? "Starting…" : "Run my steps"}
+              {busy === "run" ? "Starting…" : "Check mine"}
             </button>
           ) : null}
         </div>

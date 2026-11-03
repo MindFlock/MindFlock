@@ -87,8 +87,8 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
 
   it("resolves the default flyway: the source's own, else the kind's built-in", () => {
     expect(blocks[0].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
-    expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false, words: "Stop after the agent" });
-    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false, words: "Stop after the agent" });
+    expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false, words: "Agent only" });
+    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false, words: "Agent only" });
     expect(blocks[3].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
     // No builtin:issue on this server: an issue is worked like a ticket.
     expect(blocks[4].flyway.id).toBe("builtin:ticket");

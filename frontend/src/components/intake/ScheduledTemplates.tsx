@@ -154,7 +154,7 @@ export function ScheduledTemplates() {
           type="button"
           className="test-btn ik-queue-goto"
           onClick={() => useUi.getState().openDialogFor("schedule")}
-          title="Schedule — templates and saved chains that start by themselves: run, pause, skip or change them there"
+          title="Schedule — templates and saved routes that start by themselves: run, pause, skip or change them there"
         >
           Open Schedule ›
         </button>

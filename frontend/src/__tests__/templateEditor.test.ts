@@ -128,11 +128,11 @@ describe("the template editor draws the New form's parts", () => {
     expect(html).toMatch(/<span class="rt-label" id="tpl-schedule-label">Schedule<\/span>/);
     // GLOSSARY round 5: Fast-track, with its five levels, not "When a run's
     // turn ends" / "Leave it for me" / "Commit + push" / "Open a PR".
-    expect(html).toMatch(/<span class="rt-label" id="tpl-autopilot-label">Fast-track<\/span>/);
+    expect(html).toMatch(/<span class="rt-label" id="tpl-autopilot-label">Goes as far as<\/span>/);
     expect(html).toContain("When the agent stops. Applies to Run now and to scheduled runs.");
     expect(html).toContain('id="tpl-at"');
     expect(html).toContain('<option value="pr" selected="">Open PR</option>');
-    expect(html).toContain('<option value="">Off</option>');
+    expect(html).toContain('<option value="">Agent only</option>');
     // never Merge when green: a template's runs are unattended
     expect(html).not.toContain('value="merge"');
     expect(html).not.toMatch(/When a run|Leave it for me|Commit \+ push|each Run now/);

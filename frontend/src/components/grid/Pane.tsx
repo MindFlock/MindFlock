@@ -990,13 +990,13 @@ export function Pane({
         aria-selected={tab === "flight"}
         className={"flight-tab" + (tab === "flight" ? " active" : "")}
         title={
-          "Chain — this session's live diagram: its workers, its fast-track or chain, and + to add a stop" +
-          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The chain halted — it needs you" : "The chain needs you") : "")
+          "Route — this session's live diagram: its workers, its route and how far it goes, and + to add a stop" +
+          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The route halted — it needs you" : "The route needs you") : "")
         }
         onClick={(e) => { e.stopPropagation(); showTab("flight"); }}
       >
         <TabIcon name="flight" />
-        <span className="tab-label">Chain</span>
+        <span className="tab-label">Route</span>
         {flightNeeds && (
           <span className="queue-tab-badge flight-badge needs" aria-hidden="true">
             !
@@ -1067,8 +1067,8 @@ export function Pane({
         aria-haspopup="menu"
         aria-expanded={!!ftMenu}
         aria-label={
-          "Fast-track: " +
-          (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) +
+          "Goes as far as: " +
+          (ft.lane === "leave" ? "Agent only" : ft.label.replace(/^⏩ /, "")) +
           (ft.askFirst ? ", asks first" : "")
         }
         title={ft.title}
@@ -1079,7 +1079,7 @@ export function Pane({
         }}
       >
         {/* Off is just the glyph: a word there read as a second
-            next step. The aria-label still says "Fast-track: off". */}
+            next step. The aria-label still says "Goes as far as: Agent only". */}
         {ft.lane === "leave" && !ft.halted ? "⏩" : ft.label}
         {ft.askFirst && (
           <span className="ft-ask" aria-hidden="true">

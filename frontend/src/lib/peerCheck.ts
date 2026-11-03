@@ -77,7 +77,7 @@ export function verdictOf(check: JointCheckView | null | undefined): CheckVerdic
   return "verified";
 }
 
-const plural = (n: number) => n + (n === 1 ? " step" : " steps");
+const plural = (n: number) => n + (n === 1 ? " behavior" : " behaviors");
 
 /** The card's verdict line: "Verified — every step passed on both sides",
  * "Failed — step 2 on Bob's side", "Needs you — 1 step", "Needs you — 1 step
@@ -86,13 +86,13 @@ export function verdictLine(check: JointCheckView | null | undefined, peerName: 
   const name = (peerName || "").trim() || "your peer";
   const steps = check?.steps || [];
   const v = verdictOf(check);
-  if (!check || v === "empty") return "No checklist yet";
-  if (v === "verified") return "Verified — every step passed on both sides";
+  if (!check || v === "empty") return "No behaviors yet";
+  if (v === "verified") return "Verified — every behavior passed on both sides";
   if (v === "in_progress") return "In progress";
   if (v === "failed") {
     const i = steps.findIndex((s) => cellOf(check, s)?.result === "fail");
     const where = steps[i].side === "mine" ? "your side" : name + "'s side";
-    return "Failed — step " + (i + 1) + " on " + where;
+    return "Failed — behavior " + (i + 1) + " on " + where;
   }
   const count = (side: CheckSide, actor: CheckStep["actor"], result: CheckResult) =>
     steps.filter((s) => s.side === side && s.actor === actor && (cellOf(check, s)?.result || "") === result).length;
@@ -138,11 +138,11 @@ export function jointCheckChip(
   const look = verdictTone(summary.verdict);
   const name = (peerName || "").trim() || "your peer";
   const words: Record<CheckVerdict, string> = {
-    verified: "every step passed on both sides",
-    failed: "a step failed",
-    needs_you: "a person's step is waiting",
+    verified: "every behavior passed on both sides",
+    failed: "a behavior failed",
+    needs_you: "a behavior a person checks is waiting",
     in_progress: summary.passed + " of " + summary.steps + " passed so far",
-    empty: "no steps yet",
+    empty: "no behaviors yet",
   };
   return {
     verdict: summary.verdict,

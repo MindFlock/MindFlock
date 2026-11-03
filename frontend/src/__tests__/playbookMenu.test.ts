@@ -187,7 +187,7 @@ describe("threadOpen", () => {
 describe("Ctrl+K S / F / T", () => {
   it("are bound, and to the letters the spec reserves", () => {
     expect(CHORDS.s.desc).toBe("Message…");
-    expect(CHORDS.f.desc).toBe("Fast-track…");
+    expect(CHORDS.f.desc).toBe("Goes as far as…");
     expect(CHORDS.t.desc).toMatch(/^Thread/);
   });
 

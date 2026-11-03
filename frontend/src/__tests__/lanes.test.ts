@@ -20,7 +20,7 @@ describe("shipLine: what the rail says about a session's lane", () => {
     expect(shipLine(row({ lane: lane("leave") }))).toBeNull();
     // …but a group member still gets a line (its group carries it).
     const m = shipLine(row({ lane: lane("leave"), run: { id: "r", name: "G", task: "t", role: "task", grouping: "each" } }));
-    expect(m?.lead).toBe("fast-track off");
+    expect(m?.lead).toBe("agent only");
   });
 
   it("leads with the lane while the agent works: → PR · working 12m", () => {
@@ -96,7 +96,7 @@ describe("shipLine: what the rail says about a session's lane", () => {
     expect(shipLine(row({ lane: lane("pr") }), { act: "clarify" })!.title).toMatch(/answer it here, in the bell, or in its pane/);
     // A fast-track that stopped is an escalation too.
     const halted = shipLine(row({ lane: lane("pr"), autopilot: ap({ state: "halted", reason: "no origin remote" }) }))!;
-    expect(halted.lead).toBe("! fast-track stopped");
+    expect(halted.lead).toBe("! shipping halted");
     expect(halted.rest).toBe(" — no origin remote");
   });
 

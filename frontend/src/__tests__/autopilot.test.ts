@@ -66,7 +66,7 @@ describe("the ladder", () => {
     // Lane routes say "leave", autopilot/intake "off", older intake "agent".
     for (const v of ["leave", "off", "OFF ", "agent", "none"]) {
       expect(normalizeLane(v)).toBe("leave");
-      expect(laneLabel(v)).toBe("Off");
+      expect(laneLabel(v)).toBe("Agent only");
     }
   });
 
@@ -80,8 +80,8 @@ describe("the ladder", () => {
 
   it("labels empty as Off and shows an unknown value as-is", () => {
     expect(laneLabel("pr")).toBe("Open PR");
-    expect(laneLabel("")).toBe("Off");
-    expect(laneLabel(undefined)).toBe("Off");
+    expect(laneLabel("")).toBe("Agent only");
+    expect(laneLabel(undefined)).toBe("Agent only");
     expect(laneLabel("someday")).toBe("someday");
   });
 });
@@ -110,7 +110,7 @@ describe("chip tooltip", () => {
   });
 
   it("marks a finished run", () => {
-    expect(autopilotChipTitle(run({ state: "done" }))).toContain("switched itself off");
+    expect(autopilotChipTitle(run({ state: "done" }))).toContain("back to Agent only");
   });
 });
 

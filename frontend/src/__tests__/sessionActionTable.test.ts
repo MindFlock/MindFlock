@@ -51,7 +51,7 @@ describe("the chords are table rows", () => {
       h: "Hide / show window",
       m: "Code map",
       s: "Message…",
-      f: "Fast-track…",
+      f: "Goes as far as…",
       t: "Thread — workers and messages",
       n: "Next session that needs you — in the bell's order",
     });

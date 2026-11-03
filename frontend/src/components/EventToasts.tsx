@@ -330,7 +330,7 @@ export function EventToasts() {
           notifyOnce(
             env.session,
             "ftstop",
-            "fast-track stopped on " + namedSlot(env.session) + (d.note ? " — the agent was told what failed" : ""),
+            "shipping halted on " + namedSlot(env.session) + (d.note ? " — the agent was told what failed" : ""),
             { onClick: () => selectSession(env.session) }
           );
       })

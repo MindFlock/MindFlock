@@ -251,8 +251,8 @@ export function GuestLinks() {
       <h4 className="set-subtitle">Let someone into a few of your sessions</h4>
       <p className="set-hint">
         No second MindFlock needed: they open the link in a browser — from anywhere, it goes through a Cloudflare
-        tunnel to this computer — and type into the sessions you pick, under the names you gave them. Sub-sessions
-        come with their parent. They see those sessions and nothing else.
+        tunnel to this computer — and type into the sessions you pick, under the names you gave them. Workers
+        come with the session that started them. They see those sessions and nothing else.
       </p>
 
       {live && (
@@ -321,8 +321,8 @@ export function GuestLinks() {
           >
             <h2>Which sessions?</h2>
             <p className="set-hint">
-              The guest works in the sessions you tick, under the names you see here. Sub-sessions aren't listed —
-              they always come with their parent, whether they exist now or get spawned later. They pick their own
+              The guest works in the sessions you tick, under the names you see here. Workers aren't listed —
+              they always come with the session that started them, whether they exist now or get spawned later. They pick their own
               name when they open the link; that's the pill you'll see them as.
             </p>
             {sessions.length === 0 ? (

@@ -3101,7 +3101,7 @@ export class HandsFree {
       const how = await x.listen(title, hint, ANSWER_LISTEN_MS);
       if (how !== "missed" || this.stopped === title) return;
       if (tries >= 1) {
-        x.caption(x.name(title) + " is waiting on you");
+        x.caption(x.name(title) + " needs you");
         return;
       }
       await x.speak(retry, title);

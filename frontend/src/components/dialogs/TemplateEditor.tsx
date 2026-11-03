@@ -427,7 +427,7 @@ export function ScheduleWhen({
       </p>
       <p className="tpl-cron-preview tpl-sched-note muted">
         {elsewhere ? "Starts on " + status.runs_on + " — the computer that runs schedules. " : ""}
-        Skipped while the last run is still working or waiting on you.
+        Skipped while the last run is still working or needs you.
       </p>
     </>
   );
@@ -755,7 +755,7 @@ export function TemplateEditor(p: TemplateEditorProps) {
 
         <div className="rt-row rt-row-top" id="tpl-autopilot-row">
           <span className="rt-label" id="tpl-autopilot-label">
-            Fast-track
+            Goes as far as
           </span>
           <div className="rt-ctl tpl-fast-track">
             <span className="muted tpl-autopilot-hint">

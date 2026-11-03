@@ -36,20 +36,20 @@ const ALL = { mine: { s1: "pass", s4: "pass" }, theirs: { s2: "pass", s3: "pass"
 
 describe("verdictLine", () => {
   it("says every state in the card's words", () => {
-    expect(verdictLine(check(ALL.mine, ALL.theirs), "Bob")).toBe("Verified — every step passed on both sides");
-    expect(verdictLine(check(ALL.mine, { ...ALL.theirs, s2: "fail" }), "Bob")).toBe("Failed — step 2 on Bob's side");
-    expect(verdictLine(check({ ...ALL.mine, s1: "fail" }, ALL.theirs), "Bob")).toBe("Failed — step 1 on your side");
-    expect(verdictLine(check({ s1: "pass" }, ALL.theirs), "Bob")).toBe("Needs you — 1 step");
-    expect(verdictLine(check(ALL.mine, { s2: "pass" }), "Bob")).toBe("Needs Bob — 1 step");
+    expect(verdictLine(check(ALL.mine, ALL.theirs), "Bob")).toBe("Verified — every behavior passed on both sides");
+    expect(verdictLine(check(ALL.mine, { ...ALL.theirs, s2: "fail" }), "Bob")).toBe("Failed — behavior 2 on Bob's side");
+    expect(verdictLine(check({ ...ALL.mine, s1: "fail" }, ALL.theirs), "Bob")).toBe("Failed — behavior 1 on your side");
+    expect(verdictLine(check({ s1: "pass" }, ALL.theirs), "Bob")).toBe("Needs you — 1 behavior");
+    expect(verdictLine(check(ALL.mine, { s2: "pass" }), "Bob")).toBe("Needs Bob — 1 behavior");
     expect(verdictLine(check({ s4: "pass" }, { s3: "pass" }), "Bob")).toBe("In progress");
     expect(verdictLine(check(ALL.mine, { s2: "blocked", s3: "pass" }), "Bob")).toBe(
-      "Needs Bob — 1 step their agent couldn't check"
+      "Needs Bob — 1 behavior their agent couldn't check"
     );
-    expect(verdictLine(check({ s1: "blocked" }), "Bob")).toBe("Needs you — 1 step your agent couldn't check");
+    expect(verdictLine(check({ s1: "blocked" }), "Bob")).toBe("Needs you — 1 behavior your agent couldn't check");
     expect(verdictLine(check({ ...ALL.mine, s4: "blocked" }, ALL.theirs), "Bob")).toBe(
-      "Needs you — 1 step couldn't be checked"
+      "Needs you — 1 behavior couldn't be checked"
     );
-    expect(verdictLine(null, "Bob")).toBe("No checklist yet");
+    expect(verdictLine(null, "Bob")).toBe("No behaviors yet");
     expect(verdictOf({ steps: [] })).toBe("empty");
   });
 });
@@ -97,15 +97,15 @@ describe("JointCheck", () => {
     expect(html).toContain("Your side");
     expect(html).toContain("Bob&#x27;s side");
     expect(html.indexOf("GET /items answers")).toBeLessThan(html.indexOf("Bob&#x27;s side"));
-    expect(html).toContain("Needs you — 1 step");
+    expect(html).toContain("Needs you — 1 behavior");
     expect(html).toContain('data-tone="you"');
     // Pass / Fail / Can't check once: only s4 (mine, a person's).
-    expect(html.match(/aria-label="Answer step \d"/g)).toEqual(['aria-label="Answer step 4"']);
+    expect(html.match(/aria-label="Answer behavior \d"/g)).toEqual(['aria-label="Answer behavior 4"']);
     expect(html).toContain("Can&#x27;t check");
     expect(html.match(/>person</g)?.length).toBe(2);
-    expect(html).toContain("Write the checklist");
+    expect(html).toContain("Write the behaviors");
     expect(html).toContain("Ask my agent");
-    expect(html).toContain("Run my steps");
+    expect(html).toContain("Check mine");
   });
 
   it("lets my person answer my agent's step it couldn't check — Pass / Fail only", () => {
@@ -116,19 +116,19 @@ describe("JointCheck", () => {
     };
     const html = blocked("agent", "blocked");
     expect(html).toContain("The agent couldn&#x27;t check this — you can");
-    expect(html).toContain("Needs you — 1 step your agent couldn&#x27;t check");
-    const group = html.slice(html.indexOf('aria-label="Answer step 1"'));
+    expect(html).toContain("Needs you — 1 behavior your agent couldn&#x27;t check");
+    const group = html.slice(html.indexOf('aria-label="Answer behavior 1"'));
     const s1 = group.slice(0, group.indexOf("</span>"));
     expect(s1.match(/peer-joint-answer-btn/g)?.length).toBe(2);
     expect(s1).toContain(">Pass<");
     expect(s1).toContain(">Fail<");
     expect(s1).not.toContain("Can&#x27;t check");
     // Once a person answered it (or on their side, or read-only): no buttons.
-    expect(blocked("human", "pass")).not.toContain('aria-label="Answer step 1"');
+    expect(blocked("human", "pass")).not.toContain('aria-label="Answer behavior 1"');
     expect(blocked("human", "pass")).not.toContain("you can");
     const theirs = check({ s1: "pass" }, { s3: "pass" });
     theirs.theirs!.results.s2 = { result: "blocked", by: "agent" };
-    expect(render(theirs)).not.toContain('aria-label="Answer step 2"');
+    expect(render(theirs)).not.toContain('aria-label="Answer behavior 2"');
     const ro = check({}, {}, { link_id: "" });
     ro.mine!.results.s1 = { result: "blocked", by: "agent" };
     expect(render(ro)).not.toContain("you can");
@@ -137,30 +137,30 @@ describe("JointCheck", () => {
   it("says verified and failed in the chip's look", () => {
     expect(render(check(ALL.mine, ALL.theirs))).toContain('data-tone="ok"');
     const failed = render(check(ALL.mine, { ...ALL.theirs, s2: "fail" }));
-    expect(failed).toContain("Failed — step 2 on Bob&#x27;s side");
+    expect(failed).toContain("Failed — behavior 2 on Bob&#x27;s side");
     expect(failed).toContain('data-tone="bad"');
   });
 
   it("an empty checklist still offers Write and Ask, not Run", () => {
     const html = render({ steps: [], link_id: "ab".repeat(16), verdict: "empty" });
-    expect(html).toContain("No steps yet.");
-    expect(html).toContain("Write the checklist");
+    expect(html).toContain("No behaviors yet.");
+    expect(html).toContain("Write the behaviors");
     expect(html).toContain("Ask my agent");
-    expect(html).not.toContain("Run my steps");
+    expect(html).not.toContain("Check mine");
   });
 
   it("says an older peer can't report, and that my agent is writing", () => {
     const html = render(check({}, {}, { theirs_unsupported: true, ask: { state: "asking" } }));
     expect(html).toContain("Bob&#x27;s MindFlock is older — their side can&#x27;t report");
-    expect(html).toContain("Your agent is writing the checklist…");
+    expect(html).toContain("Your agent is writing the behaviors…");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Ask my agent/);
   });
 
   it("without a link id it is read-only", () => {
     const html = render(check({ s1: "pass" }, { s2: "pass" }, { link_id: "" }));
-    expect(html).toContain("Needs you — 1 step");
-    expect(html).not.toContain('aria-label="Answer step');
-    expect(html).not.toContain("Write the checklist");
+    expect(html).toContain("Needs you — 1 behavior");
+    expect(html).not.toContain('aria-label="Answer behavior');
+    expect(html).not.toContain("Write the behaviors");
   });
 
   it("shows why an ask failed", () => {
@@ -187,7 +187,7 @@ describe("the session chip", () => {
     const row = chip("row");
     expect(row).toContain('class="vchip vchip-row peer-joint-chip"');
     expect(row).toContain('data-tone="bad"');
-    expect(row).toContain("Joint check with Bob: a step failed. Open it in People.");
+    expect(row).toContain("Joint check with Bob: a behavior failed. Open it in People.");
     expect(row).not.toContain("Joint failed");
     expect(chip("pane")).toContain("Joint failed");
   });

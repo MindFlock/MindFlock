@@ -280,7 +280,7 @@ function SkyBirdsRow() {
     <div className="set-row set-switch-row">
       <span className="notif-rule-text">
         <span className="set-label">Birds in the Sky</span>
-        <span className="set-hint notif-rule-desc">A flock drifting across the Sky's background. Off by default; the birds on your chains always stay.</span>
+        <span className="set-hint notif-rule-desc">A flock drifting across the Sky's background. Off by default; the birds on your routes always stay.</span>
       </span>
       <label className="ca-switch">
         <input

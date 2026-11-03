@@ -225,7 +225,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     ft &&
       !peer && {
         key: "fast-track",
-        label: "Fast-track…",
+        label: "Goes as far as…",
         note: LANE_SHORT[laneChoice(inst).lane],
         keys: sessionAction("fastTrack").keys,
         title: ft.title,
@@ -234,8 +234,8 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     !!inst.branch &&
       !peer && {
         key: "checklist",
-        label: "Verify checklist…",
-        title: "Verify's checklist for " + inst.branch + " — what to check before or after it merges",
+        label: "Behaviors…",
+        title: "The behaviors Verify checks for " + inst.branch + " — what it should do, before or after it merges",
         run: () => openChecklist(inst.branch),
       },
     inst.check &&
@@ -317,7 +317,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       !inst.pending && {
         key: "flyway",
         label: "Add a stop…",
-        title: "Open this session's Chain tab: add a stop, or a saved chain, to its chain",
+        title: "Open this session's Route tab: add a stop, or a saved route, to its route",
         run: () => openTab(title, "flight"),
       },
     // The Sky on this one session: its line filling the sky, the bird where
@@ -346,11 +346,11 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     group && {
       key: "detach",
       label: "Move out of " + group.name,
-      title: "The team run stops driving it; the session and its fast-track stay",
+      title: "The team run stops driving it; the session and how far it goes stay",
       run: () =>
         call(name, async () => {
           await moveOutOfGroup(group.id, group.task);
-          return `${name} is out of ${group.name} — its session and fast-track stay as they are`;
+          return `${name} is out of ${group.name} — its session and how far it goes stay as they are`;
         }),
     },
     fromTable("duplicate"),

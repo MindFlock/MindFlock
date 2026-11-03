@@ -2331,7 +2331,7 @@ describe("hands-free answering (Read replies aloud)", () => {
       ["t1", ANSWER_LISTEN_MS],
     ]);
     expect(ANSWER_LISTEN_MS).toBe(12_000);
-    expect(out.captions).toEqual(["Login fix is waiting on you"]);
+    expect(out.captions).toEqual(["Login fix needs you"]);
   });
 
   it("an answer ends it; the same dialog is not read twice", async () => {
@@ -2364,7 +2364,7 @@ describe("hands-free answering (Read replies aloud)", () => {
     await new HandsFree(d).question("t1", "Which branch?");
     expect(out.listens).toHaveLength(2);
     expect(out.spoken).toEqual(["Still there? Login fix: Which branch?"]);
-    expect(out.captions).toEqual(["Login fix is waiting on you"]);
+    expect(out.captions).toEqual(["Login fix needs you"]);
   });
 
   it("Diagnostics name what waits on the focused session", () => {

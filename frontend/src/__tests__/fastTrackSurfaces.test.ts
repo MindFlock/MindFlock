@@ -243,7 +243,7 @@ describe("every item is a server call", () => {
     // The row flips at once and rolls back on a refusal.
     expect(pick.split("patchInstance(title,").length - 1).toBe(3);
     // A copy window / a lead / a one-for-all member is locked in the picker.
-    expect(fn("laneLockReason")).toContain("drives this branch — set its fast-track from that session");
+    expect(fn("laneLockReason")).toContain("drives this branch — set how far it goes from that session");
     // Every run route goes through lib/runsApi's one path builder.
     expect(fn("moveOutOfGroup")).toContain('taskPath(runId, taskId, "skip")');
     expect(mod("lib/runsApi.ts")).toContain('"/api/runs/"');
@@ -265,7 +265,7 @@ describe("every item is a server call", () => {
     expect(f).toContain('if (lane === "leave") return true;');
     // 409 "workspace not ready" is retried; anything else is said.
     expect(f).toContain("err.status === 409");
-    expect(f).toContain("Couldn't fast-track ");
+    expect(f).toContain("Couldn't set ${title} to go as far as ");
     expect(newDialog()).toContain('if (lane !== "leave") void setLaneWhenReady(inst.title, lane, askFirst);');
   });
 });
@@ -320,7 +320,7 @@ describe("the ⏩ button and its picker", () => {
     expect(menu).toContain("keyOf(x) === k.toUpperCase()");
     // Nothing in it pastes or messages: Message… stays in the Thread.
     expect(menu).not.toContain("threadOpen(");
-    expect(LANE_LABEL).toEqual({ leave: "Off", commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge when green" });
+    expect(LANE_LABEL).toEqual({ leave: "Agent only", commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge when green" });
     expect(LANE_KEY).toEqual({ leave: "O", commit: "C", push: "U", pr: "P", merge: "M" });
     // All five are offered — Push included (the old menu lacked it).
     expect(LANE_ORDER).toEqual(["leave", "commit", "push", "pr", "merge"]);
@@ -384,10 +384,10 @@ describe("the other doors: row › menu, palette, chords", () => {
     // Fast-track… opens THE picker (the table's row), never a second copy of
     // its choices.
     expect(group).toContain('run: () => sessionAction("fastTrack").run(title)');
-    expect(group).toContain('label: "Fast-track…"');
+    expect(group).toContain('label: "Goes as far as…"');
     expect(group).toContain('keys: sessionAction("fastTrack").keys');
-    expect(SESSION_ACTIONS.fastTrack).toMatchObject({ label: "Fast-track…", keys: "Ctrl+K F", chord: "f" });
-    expect(has(mod(TABLE), 'label: "Fast-track…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
+    expect(SESSION_ACTIONS.fastTrack).toMatchObject({ label: "Goes as far as…", keys: "Ctrl+K F", chord: "f" });
+    expect(has(mod(TABLE), 'label: "Goes as far as…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
     expect(mod(TABLE)).toContain("run: (t) => openFastTrackMenu(t)");
     expect(group).toContain("LANE_SHORT[laneChoice(inst).lane]");
     expect(group).not.toContain("setLane(");
@@ -414,7 +414,7 @@ describe("the other doors: row › menu, palette, chords", () => {
     expect(has(palette, "label: `${actionLabel(id, c)} — ${name}`")).toBe(true);
     expect(has(palette, "const name = windowName(t);")).toBe(true);
     for (const [id, label] of [
-      ["fastTrack", 'label: "Fast-track…"'],
+      ["fastTrack", 'label: "Goes as far as…"'],
       ["split", 'label: "Workers: let the agent split this now"'],
       ["thread", 'label: "Thread"'],
     ]) {
@@ -446,7 +446,7 @@ describe("the other doors: row › menu, palette, chords", () => {
           "run: (t) => useUi.getState().threadOpen(t, { composeTo: t })"
       )
     ).toBe(true);
-    expect(has(table, 'label: "Fast-track…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
+    expect(has(table, 'label: "Goes as far as…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
     expect(has(table, 'label: "Thread", keys: "Ctrl+K T", chord: "t", note: "workers and messages",')).toBe(true);
     expect(SESSION_ACTIONS.message).toMatchObject({ label: "Message…", keys: "Ctrl+K S", chord: "s" });
     expect(SESSION_ACTIONS.thread).toMatchObject({
@@ -483,7 +483,7 @@ describe("the dialogs draw the same choice", () => {
     expect(choice).toContain("LANE_LABEL[l]");
     expect(choice).toContain("ASK_FIRST_LABEL");
     const nl = mod("components/dialogs/NewList.tsx");
-    expect(nl).toContain('"Fast-track each to" : "Fast-track to"');
+    expect(nl).toContain('"Each goes as far as" : "Goes as far as"');
     expect(nl).toContain("<FastTrackChoice");
     // THE default is Settings', for every shape: the preview's own is unread.
     // "Off unless I pick": a single session starts Off, a batch on Settings'
@@ -509,11 +509,11 @@ describe("the dialogs draw the same choice", () => {
     expect(dlg).not.toContain("config?.fasttrack_depth");
     expect(dlg).toContain("single: page !== 1");
     // The shared-folder radio turns fast-track off instead of being disabled.
-    expect(dlg).toContain("Turns fast-track off (it commits for this session");
+    expect(dlg).toContain("Sets Goes as far as to Agent only (it commits for this session");
     expect(dlg).toContain('if (laneNeedsWorktree) draft.setLane("leave");');
     expect(dlg).not.toContain("(not with a lane");
     const commit = mod("components/dialogs/CommitDialog.tsx");
-    expect(commit).toContain(">Then fast-track to<");
+    expect(commit).toContain(">Then goes as far as<");
     expect(
       has(
         commit,
@@ -528,11 +528,11 @@ describe("the dialogs draw the same choice", () => {
 
   it("Settings holds the one default, Off out of the box", () => {
     const ws = mod("components/settings/screens/Workspace.tsx");
-    expect(ws).toContain(">Fast-track goes as far as<");
+    expect(ws).toContain(">Goes as far as<");
     // Unset is Off, and the screen says who reads it.
-    expect(has(ws, '{ value: "", label: "Off (default)" }')).toBe(true);
+    expect(has(ws, '{ value: "", label: "Agent only (default)" }')).toBe(true);
     expect(ws).not.toContain("Open a PR (default)");
-    expect(ws).toContain(">New sessions start Off; batches and ticket runs start at this default.<");
+    expect(ws).toContain(">New sessions start at Agent only; batches and ticket runs start at this default.<");
     for (const [value, label] of [
       ["commit", "Commit"],
       ["push", "Push"],

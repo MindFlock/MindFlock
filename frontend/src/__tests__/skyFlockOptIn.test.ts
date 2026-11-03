@@ -60,7 +60,7 @@ describe("the setting", () => {
   it("Settings says so, under the same label", () => {
     const row = src("components/settings/screens/Appearance.tsx");
     expect(row).toContain('<span className="set-label">Birds in the Sky</span>');
-    expect(row).toContain("Off by default; the birds on your chains always stay.");
+    expect(row).toContain("Off by default; the birds on your routes always stay.");
   });
 
   it("the Sky always mounts SkyFlock and hands it the switch", () => {

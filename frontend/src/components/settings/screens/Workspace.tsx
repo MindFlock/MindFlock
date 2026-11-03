@@ -197,12 +197,12 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           </span>
         </label>
         <label className="set-row">
-          <span className="set-label">Fast-track goes as far as</span>
+          <span className="set-label">Goes as far as</span>
           <SettingField
             group="repository"
             field="fasttrack_depth"
             options={[
-              { value: "", label: "Off (default)" },
+              { value: "", label: "Agent only (default)" },
               { value: "commit", label: "Commit" },
               { value: "push", label: "Push" },
               { value: "pr", label: "Open PR" },
@@ -210,12 +210,12 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             ]}
           />
           <span className="set-hint">
-            <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
+            <strong>New sessions start at Agent only; batches and ticket runs start at this default.</strong>{" "}
             Change one session any time with its <strong>⏩</strong> button.
             <InfoTip>
-              A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+              A batch is a list in the New dialog or Intake's <em>Start together</em>. MindFlock
               waits for the agent to finish, then commits, pushes and carries on to this step. A
-              ticket source keeps its own <em>Fast-track tickets to</em> (Intake), which never
+              ticket source keeps its own <em>Goes as far as</em> (Intake), which never
               merges.
             </InfoTip>
           </span>
@@ -228,10 +228,10 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             placeholder="e.g. black"
           />
           <span className="set-hint">
-            Hooks fast-track may skip when they fail without changing any files.
+            Hooks MindFlock may skip when they fail without changing any files.
             <InfoTip>
               Comma-separated pre-commit hook <strong>IDs</strong> (not display names:{" "}
-              <code>Black format</code> is the hook <code>black</code>). Fast-track retries the
+              <code>Black format</code> is the hook <code>black</code>). MindFlock retries the
               commit once, then re-runs it with <code>SKIP=&lt;id&gt;</code> and says which hook it
               skipped. Test and secret-scanning hooks are refused here.
             </InfoTip>
@@ -253,12 +253,12 @@ function FailureNotesRow() {
   return (
     <div className="set-row set-switch-row" id="workspace-failure-notes">
       <span className="notif-rule-text">
-        <span className="set-label">Tell the agent when fast-track stops</span>
+        <span className="set-label">Tell the agent when shipping halts</span>
         <span className="set-hint notif-rule-desc">
           When a pre-commit step or the verification check fails, CI goes red or the PR
-          conflicts with its base, fast-track stops and leaves the agent a one-line note: what
+          conflicts with its base, shipping halts and MindFlock leaves the agent a one-line note: what
           failed and to fix it — or, when it is a conflict with someone else's change, to stop
-          and tell you. You still get the usual &quot;fast-track stopped&quot; notice.
+          and tell you. You still get the usual &quot;shipping halted&quot; notice.
         </span>
       </span>
       {/* label wraps only the switch, so clicking the row text doesn't flip it */}
@@ -268,7 +268,7 @@ function FailureNotesRow() {
           checked={on}
           onChange={(e) => {
             s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
-            toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+            toast(e.target.checked ? "MindFlock will tell the agent what failed" : "Failure notes off");
           }}
         />
         <span className="ca-slider" />
