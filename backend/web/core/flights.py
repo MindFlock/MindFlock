@@ -3677,8 +3677,15 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         _advance(flight, now)
     elif kind == "loop":
         # A Loop stop's repeat (docs/flights.md "Round 16"): its kind's run
-        # names the stop to go back to; the core does the jump.
-        to = loop_target(flight, step, str(action.get("to") or ""))
+        # names the stop to go back to (or the session's agent, which it
+        # has just prompted: back to stop 0 behind that turn); the core
+        # does the jump.
+        agent = str(action.get("to") or "") == LOOP_AGENT
+        if agent:
+            ahead = _step_index(flight, sid)
+            to = 0 if ahead > 0 else None
+        else:
+            to = loop_target(flight, step, str(action.get("to") or ""))
         if to is None:
             reason = NOTHING_TO_REPEAT
             ss["state"] = "failed"
@@ -3687,6 +3694,10 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             flight["reason"] = reason
             _hist(flight, now, sid, "failed", reason)
             _hist(flight, now, sid, "halted", reason)
+        elif agent:
+            loop_back(
+                flight, sid, to, now, to_agent=True, sent_at=action.get("sent_at")
+            )
         else:
             loop_back(flight, sid, to, now)
     elif kind == "advance":
@@ -3909,6 +3920,40 @@ def op_jump(flight: dict, sid: str, now: Optional[float] = None) -> dict:
 #: Why a Loop stop with no earlier stop to go back to fails.
 NOTHING_TO_REPEAT = "nothing to repeat"
 
+#: A Loop's ``back_to`` naming the session's AGENT (the head of a session's
+#: chain, not a stop; docs/flights-loop-agent.md): each repeat sends the agent
+#: a prompt, then flies the chain again from stop 0 once that turn has ended.
+#: Any other ``back_to`` is a stop id, as before.
+LOOP_AGENT = "agent"
+#: A Loop back to the agent on a chain with no session (it runs in a folder).
+LOOP_AGENT_NO_SESSION = "Loop back to the agent needs a session"
+#: A Loop back to the agent with no prompt of its own and none known.
+LOOP_AGENT_NO_PROMPT = "Loop back to the agent needs a prompt"
+
+
+def loops_to_agent(step: dict) -> bool:
+    """``step`` is a Loop whose ``back_to`` is :data:`LOOP_AGENT`."""
+    return step.get("kind") == "loop" and (
+        str((step.get("config") or {}).get("back_to") or "") == LOOP_AGENT
+    )
+
+
+def check_agent_loops(flight: dict) -> None:
+    """Refuse (:class:`PlanError` on ``steps[i].config.back_to``) a Loop back
+    to the agent on a stops-only chain: a free chain running in a folder, with
+    no session and so no agent. A grounded chain may still get a session when
+    it is attached, so it is not refused here (:func:`op_attach` is)."""
+    if flight.get("session") or not flight.get("free"):
+        return
+    if flight.get("state") == GROUNDED:
+        return
+    for i, s in enumerate(flight.get("steps") or []):
+        if loops_to_agent(s):
+            raise PlanError(
+                LOOP_AGENT_NO_SESSION + " — this chain runs in a folder",
+                "steps[%d].config.back_to" % i,
+            )
+
 
 def loop_target(
     flight: dict, step: dict, back_to: Optional[str] = None
@@ -3940,13 +3985,27 @@ def loop_target(
     return to
 
 
-def loop_back(flight: dict, loop_sid: str, to_index: int, now: float) -> dict:
+def loop_back(
+    flight: dict,
+    loop_sid: str,
+    to_index: int,
+    now: float,
+    to_agent: bool = False,
+    sent_at: Optional[float] = None,
+) -> dict:
     """A Loop stop's repeat (docs/flights.md "Round 16"): one more run
     counted on the loop step's detail (``runs`` += 1, ``last_start`` =
     ``now``), every step from ``to_index`` up to the loop (exclusive) back to
     pending — their configs untouched, a halt point among them armed again —
     the loop step itself left ``running`` with its detail, and the cursor on
-    ``to_index`` (let through, as a jump onto it is)."""
+    ``to_index`` (let through, as a jump onto it is).
+
+    ``to_agent`` (``back_to: "agent"``, docs/flights-loop-agent.md): the
+    repeat went to the session's agent — a prompt was sent at ``sent_at`` —
+    so ``to_index`` is 0 and stop 0 (its parallel group) carries
+    ``detail.after_turn`` / ``turn_from``: it does not fly until that prompt's
+    turn has ended (:func:`_after_turn`, the gate a chain that took off on a
+    prompt uses)."""
     steps = flight["steps"]
     i = _step_index(flight, loop_sid)
     if not 0 <= to_index < i:
@@ -3955,16 +4014,22 @@ def loop_back(flight: dict, loop_sid: str, to_index: int, now: float) -> dict:
     d = ss["detail"]
     d["runs"] = _int(d.get("runs"), 0, 0, 10**6) + 1
     d["last_start"] = now
-    d["target"] = steps[to_index]["id"]
+    d["target"] = LOOP_AGENT if to_agent else steps[to_index]["id"]
     d.pop("next_at", None)
     for s in steps[to_index:i]:
         flight["step_states"][s["id"]] = _blank_step_state()
+    if to_agent:
+        lo, hi = group_span(steps, to_index)
+        for k in range(lo, min(hi, i)):
+            gd = flight["step_states"][steps[k]["id"]]["detail"]
+            gd["after_turn"] = True
+            gd["turn_from"] = float(sent_at if sent_at is not None else now)
     times = _int(steps[i]["config"].get("times"), 0, 0, 10**6)
     run = d["runs"] + 1
     note = "run %d%s — back to %s" % (
         run,
         " of %d" % times if times else "",
-        steps[to_index]["title"],
+        "the agent" if to_agent else steps[to_index]["title"],
     )
     ss["state"] = "running"
     ss["note"] = note
@@ -4823,6 +4888,9 @@ def op_attach(
     if flight["state"] != GROUNDED:
         raise FlightError("not_grounded", 409, "this chain already has a session")
     _refuse_editor(flight)
+    if not title:
+        # Bound to a folder, no session: a Loop back to the agent has none.
+        check_agent_loops(dict(flight, session="", free=True, state="running"))
     trig = _normalize_triggered_by(triggered_by)
     if trig is not None:
         flight["triggered_by"] = trig

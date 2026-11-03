@@ -21,6 +21,14 @@ The flow through the core:
   is a copy of the flight, so the jump must happen there). The loop step
   stays ``running``, so the judge is asked again when the flight comes round.
 
+``back_to: "agent"`` (docs/flights-loop-agent.md) goes back to the SESSION'S
+AGENT, the head of a session's chain (not a stop): the same judge, then
+:func:`_run_agent` clears the context when ``fresh``, sends the agent the
+Loop's ``prompt`` (else the session's last prompt) and returns ``{"action":
+"loop", "to": "agent", "sent_at"}`` — :func:`flights.loop_back` resets every
+stop before the Loop and gates stop 0 behind that prompt's turn. With no stop
+before it, it is the prompt mode below (:func:`repeats_prompt`).
+
 Skip on a current Loop carries on past it, Remove is the usual "stop
 removed" pause, and a backward jump resets it (``runs`` from 0): no special
 casing anywhere.
@@ -38,6 +46,7 @@ from backend.web.core import flights as F
 
 MAX_TIMES = 1000
 MAX_EVERY = 7 * 24 * 60
+MAX_PROMPT = 4000
 
 
 def _config(raw: dict, strict: bool, where: str) -> dict:
@@ -84,8 +93,20 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         "wait_limits": F._bool(c.get("wait_limits"), True),
         "fresh": F._bool(c.get("fresh"), False),
         "until": until,
-        "prompt": F._text(c.get("prompt"), 4000),
+        "prompt": _prompt(c.get("prompt"), strict, where),
     }
+
+
+def _prompt(raw, strict: bool, where: str) -> str:
+    """The Loop's own prompt (what the agent is sent on each repeat back to
+    it): at most :data:`MAX_PROMPT` characters, refused past that when
+    strict, else cut."""
+    text = "" if raw is None else str(raw).replace("\x00", "")
+    if strict and len(text.strip()) > MAX_PROMPT:
+        raise F.PlanError(
+            "the prompt is at most %d characters" % MAX_PROMPT, where + ".prompt"
+        )
+    return F._text(text, MAX_PROMPT)
 
 
 def _every(minutes: int) -> str:
@@ -140,12 +161,20 @@ def repeats_prompt(flight: dict, step: dict) -> bool:
     ``back_to``) repeats the SESSION'S OWN prompt (2026-11-02, the owner put a
     Loop right after the session tile to loop a prompt): each run sends the
     session's last prompt again (or the Loop's ``prompt``), and waits out the
-    agent's turn."""
-    if not flight.get("session") or str(step["config"].get("back_to") or ""):
+    agent's turn. ``back_to: "agent"`` with no stop before it is the same."""
+    if not flight.get("session"):
+        return False
+    if str(step["config"].get("back_to") or "") not in ("", F.LOOP_AGENT):
         return False
     steps = flight["steps"]
     i = next((n for n, s in enumerate(steps) if s["id"] == step["id"]), -1)
     return i >= 0 and all(s.get("kind") == "loop" for s in steps[:i])
+
+
+def to_agent(flight: dict, step: dict) -> bool:
+    """A Loop back to the session's agent with stops before it to fly again
+    (``back_to: "agent"``; with none before it, :func:`repeats_prompt`)."""
+    return F.loops_to_agent(step) and not repeats_prompt(flight, step)
 
 
 #: How long a sent run may take to show a turn before the Loop stops waiting.
@@ -210,7 +239,10 @@ def _judge_prompt(flight, step, ss, obs, now) -> dict:
 
 def _judge(flight, step, ss, obs, now) -> dict:
     cfg = step["config"]
-    to = F.loop_target(flight, step)
+    agent = to_agent(flight, step)
+    to = 0 if agent else F.loop_target(flight, step)
+    if agent and not flight.get("session"):
+        return {"action": "fail", "reason": F.LOOP_AGENT_NO_SESSION}
     if to is None and repeats_prompt(flight, step):
         return _judge_prompt(flight, step, ss, obs, now)
     if to is None:
@@ -240,8 +272,12 @@ def _judge(flight, step, ss, obs, now) -> dict:
         "action": "run",
         "phase": "loop",
         "note": "run %d%s — back to %s"
-        % (runs + 2, " of %d" % times if times else "", target["title"]),
-        "detail": {"target": target["id"]},
+        % (
+            runs + 2,
+            " of %d" % times if times else "",
+            "the agent" if agent else target["title"],
+        ),
+        "detail": {"target": F.LOOP_AGENT if agent else target["id"]},
     }
 
 
@@ -306,7 +342,58 @@ async def _run_prompt(flight, step, action, now) -> dict:
     }
 
 
+async def _run_agent(flight, step, action, now) -> dict:
+    """A repeat back to the session's agent: clear its context when
+    ``fresh``, send it the prompt (the Loop's own, else the session's prompt
+    the Loop saw on its first arrival, else its newest), then hand the core
+    the jump — every stop before the Loop pending, stop 0 waiting for the
+    turn this prompt starts (:func:`flights.loop_back` with ``to_agent``)."""
+    from backend.web.core import flight_driver as D
+
+    title = flight["session"]
+    if not title:
+        raise _kinds.StepFailed(F.LOOP_AGENT_NO_SESSION)
+    d = flight["step_states"][step["id"]]["detail"]
+    text = F.fill_prompt(str(step["config"].get("prompt") or ""), flight).strip()
+    if not text:
+        text = str(d.get("agent_prompt") or "").strip()
+    if not text:
+        text = str(await asyncio.to_thread(_last_prompt, title) or "").strip()
+    if not text:
+        raise _kinds.StepFailed(F.LOOP_AGENT_NO_PROMPT)
+    cleared = False
+    if step["config"].get("fresh"):
+        cmd = await asyncio.to_thread(_clear_command, title)
+        if cmd:
+            await asyncio.to_thread(D._deliver, title, cmd)
+            cleared = True
+    await asyncio.to_thread(D._deliver, title, text)
+    return {
+        "action": "loop",
+        "to": F.LOOP_AGENT,
+        "note": action.get("note") or "",
+        "cleared": cleared,
+        "sent_at": now,
+    }
+
+
+#: How much of the session's prompt a Loop back to the agent keeps.
+_KEEP_PROMPT = 20000
+
+
 async def _run(flight, step, action, now) -> dict:
+    if to_agent(flight, step):
+        if action.get("phase") == "loop":
+            return await _run_agent(flight, step, action, now)
+        # First arrival: run 1 (the agent's turn, then the stops) began when
+        # stop 0 did; remember the prompt that turn ran on, for the repeats
+        # when the Loop has none of its own.
+        detail = {"runs": 0, "last_start": _first_start(flight, 0) or now}
+        if flight.get("session") and not str(step["config"].get("prompt") or ""):
+            seen = await asyncio.to_thread(_last_prompt, flight["session"])
+            if seen:
+                detail["agent_prompt"] = str(seen)[:_KEEP_PROMPT]
+        return dict(action, detail=detail)
     if (
         action.get("phase") != "loop"
         and repeats_prompt(flight, step)
@@ -375,7 +462,8 @@ KIND = _kinds.register(
         spec={
             "label": "Loop",
             "actor": "robot",
-            "summary": "Send the flight back to an earlier stop, N times, every so often",
+            "summary": "Send the flight back to an earlier stop (or to the "
+            "session's agent), N times, every so often",
             "default_title": "Loop ×3",
             "family": "work",
             "risk": [],
@@ -408,9 +496,11 @@ KIND = _kinds.register(
                     placeholder="e.g. judge is yes (empty = by count)",
                 ),
                 F._f(
+                    # Meaningful for back_to "agent" (and a Loop first on a
+                    # session's chain): what the agent is sent each repeat.
                     "prompt",
-                    "text",
-                    "Prompt to repeat (first on a session's chain)",
+                    "textarea",
+                    "Prompt to send the agent",
                     default="",
                     placeholder="empty = the session's last prompt",
                 ),

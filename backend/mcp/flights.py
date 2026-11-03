@@ -81,7 +81,10 @@ D_START = (
     "stops on your user's board with no session (they attach one). name: the "
     "flight's name. A stop that can't be undone (ship lane merge, a kind whose "
     "risk is irreversible) needs confirm_merge=true. One flight per session: "
-    "409 in_flight means it has one (flight_status). Returns {id, state, "
+    "409 in_flight means it has one (flight_status). A loop stop's "
+    'config.back_to is an earlier stop id, or "agent": the session\'s own '
+    "agent is sent config.prompt (empty = its last prompt), then the stops "
+    "fly again after that turn (needs a session). Returns {id, state, "
     "steps, session}; then flight_status / control_flight."
 )
 D_STATUS = (
