@@ -132,8 +132,14 @@ place (`lib/flights.ts` `legacyFlightsRoute`):
 | `#flights`, `#flights/sky[/<title>]`, `#flights/board` | the Sky (`#sky`, `#sky/<title>`) |
 | `#flights/flyways[/<id>]` (and `#flights/plans[/<id>]`) | the Sky with the flyway shelf open — and that flyway's card |
 | `#flights/sources[/<tab>[:<source>]]` | Intake (`#intake/…`) |
-| `#flights/checklists[/<branch>]` | Verify (`#verify/…`) |
+| `#flights/checklists` | the Behaviors board in the Sky (`#behaviors`) |
+| `#flights/checklists/<branch>` | that branch's behaviors in the Sky (`#sky`; docs/behaviors.md §4) |
 | `#flights/schedule` | Schedule (`#schedule`) |
+
+`#behaviors` / `#behaviors/<plan id>` is a Sky link, not a surface: it switches
+to the Sky and flies to the Behaviors board or that plan's card
+(`lib/behaviorsFocus.ts` `openBehaviors`), and stays the address until the
+view moves.
 
 Four entries left the bar:
 

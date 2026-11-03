@@ -143,4 +143,23 @@ too; openBehaviors from the grid switches to the Sky.
 
 ## As built
 
-Each worker writes its notes to `docs/behaviors/<task>.md`; the integrator folds them in here.
+Each worker writes its notes to `docs/behaviors/<task>.md` (card, tile,
+board); the integrator folds them in here.
+
+**Connected (behaviors-connect, 2026-11-03):** the tile, the card in the
+tile's place, the board (with its rows' cards and ⋯ settings), the drawer's
+rows (`openBehaviors({ planId })`), the old `#flights/checklists[/<b>]` links
+(→ `openBehaviors`, address `#behaviors` / `#sky`) and a `#behaviors[/<plan
+id>]` link (load + Back/Forward → `openBehaviors`). Seen rendered against the
+demo mocks in light and dark.
+
+**Still to connect (§4, no worker owned it):** these still open the Verify
+dialog — the top-bar **Verify** button, Alt+V (`lib/keymap.ts`), the palette
+entry, `#verify` / `#verify/<branch>` (still a surface in
+`lib/surfaceHash.ts`), the session menu (`lib/stage.ts`), the verdict chip
+(`VerdictChip.tsx`, `lib/checklistLink.ts`), the bell's verify rows
+(`NotificationsBell.tsx`), the sidebar Verify bar (`VerifyBar.tsx`) and the
+watch pane's back button (`SpecialPane.tsx`); the Verify tour is not
+rewritten. Each is a one-line swap to `openBehaviors(...)` plus the source
+pins in `flatTopBar.test.ts`, `verify*.test.ts` and the top-bar tests that
+name them.

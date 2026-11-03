@@ -26,6 +26,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { useUi } = await import("../state/store");
 const { KEYMAP } = await import("../lib/keymap");
 const { installSurfaceHash, hashFor, parseHash } = await import("../lib/surfaceHash");
+const { useBehaviorsFocus } = await import("../lib/behaviorsFocus");
 const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, scheduledFlyways, scheduleEntries, nextAcross, planWithSkip, planWithWhen, barePlan } = await import(
   "../components/dialogs/TemplatesDialog"
 );
@@ -33,6 +34,7 @@ const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, scheduledFlywa
 const TOPBAR = code("components/TopBar.tsx");
 
 afterEach(() => {
+  useBehaviorsFocus.setState({ request: null, boardRequested: false });
   useUi.getState().closeDialog();
   useUi.getState().takeSkyShelf();
   useUi.getState().setView("grid");
@@ -146,8 +148,10 @@ describe("the old #flights links land where they belong now", () => {
     return { win, loc, calls };
   };
 
-  /** [old link, what is open, the view, the shelf request, the URL after] */
-  const TABLE: Array<[string, [string | null, string | null], "grid" | "sky", string | null, string]> = [
+  /** [old link, what is open, the view, the shelf request, the URL after,
+   * the behaviors request (docs/behaviors.md §4)] */
+  type Behaviors = { board?: boolean; branch?: string } | null;
+  const TABLE: Array<[string, [string | null, string | null], "grid" | "sky", string | null, string, Behaviors?]> = [
     ["#flights", [null, null], "sky", null, "#sky"],
     ["#flights/sky", [null, null], "sky", null, "#sky"],
     ["#flights/sky/fix-login", [null, null], "sky", null, "#sky/fix-login"],
@@ -157,12 +161,13 @@ describe("the old #flights links land where they belong now", () => {
     ["#flights/plans/builtin%3Aticket", [null, null], "sky", "builtin:ticket", "#sky"],
     ["#flights/sources", ["intake", null], "grid", null, "#intake"],
     ["#flights/sources/tickets%3Ajira", ["intake", "tickets:jira"], "grid", null, "#intake/tickets%3Ajira"],
-    ["#flights/checklists", ["verify", null], "grid", null, "#verify"],
-    ["#flights/checklists/feature%2Fx", ["verify", "feature/x"], "grid", null, "#verify/feature%2Fx"],
+    // Checklists are behaviors in the Sky now: the board, or that branch's.
+    ["#flights/checklists", [null, null], "sky", null, "#behaviors", { board: true }],
+    ["#flights/checklists/feature%2Fx", [null, null], "sky", null, "#sky", { branch: "feature/x" }],
     ["#flights/schedule", ["schedule", null], "grid", null, "#schedule"],
   ];
 
-  it.each(TABLE)("%s", (hash, dialog, view, shelf, after) => {
+  it.each(TABLE)("%s", (hash, dialog, view, shelf, after, behaviors = null) => {
     const w = fakeWin(hash);
     const off = installSurfaceHash(w.win);
     const s = useUi.getState();
@@ -172,7 +177,26 @@ describe("the old #flights links land where they belong now", () => {
     // Rewritten in place, so Back from it closes rather than re-opens.
     expect(w.loc.hash).toBe(after);
     expect(w.calls.every((c) => c.startsWith("replace "))).toBe(true);
+    const req = useBehaviorsFocus.getState().request;
+    expect(req ? { ...req, n: undefined } : null).toEqual(behaviors ? { ...behaviors, n: undefined } : null);
     off();
+  });
+
+  it("a #behaviors link flies the Sky to the board or that plan, and keeps its address", () => {
+    for (const [hash, want] of [
+      ["#behaviors", { board: true }],
+      ["#behaviors/fix-login", { planId: "fix-login" }],
+    ] as const) {
+      useUi.getState().setView("grid");
+      const w = fakeWin(hash);
+      const off = installSurfaceHash(w.win);
+      expect(useUi.getState().view).toBe("sky");
+      expect(useUi.getState().openDialog).toBeNull();
+      expect({ ...useBehaviorsFocus.getState().request, n: undefined }).toEqual({ ...want, n: undefined });
+      expect(w.loc.hash).toBe(hash);
+      expect(w.calls).toEqual([]);
+      off();
+    }
   });
 
   it("an old caller's openDialogFor('flights', …) is routed the same way", () => {
@@ -180,7 +204,9 @@ describe("the old #flights links land where they belong now", () => {
     expect([useUi.getState().view, useUi.getState().skyMode, useUi.getState().focused, useUi.getState().openDialog]).toEqual(["sky", "one", "second", null]);
     useUi.getState().setView("grid");
     useUi.getState().openDialogFor("flights", "checklists/feature/x");
-    expect(open()).toEqual(["verify", "feature/x"]);
+    expect(open()).toEqual([null, null]);
+    expect(useUi.getState().view).toBe("sky");
+    expect(useBehaviorsFocus.getState().request).toMatchObject({ branch: "feature/x" });
   });
 });
 
@@ -195,14 +221,14 @@ describe("flyways live in the Sky", () => {
     expect(useUi.getState().skyShelf).toBeNull();
   });
 
-  it("the sky opens its shelf and the saved stop's Takes off dialog on the request; the drawer opens Verify / Intake directly", () => {
+  it("the sky opens its shelf and the saved stop's Takes off dialog on the request; the drawer opens behaviors / Intake", () => {
     const sky = code("components/flights/SkyView.tsx");
     expect(sky).toContain("const shelfAsk = useUi((s) => s.skyShelf);");
     expect(sky).toContain("useUi.getState().takeSkyShelf();");
     expect(sky).toContain("if (plan) setTakeoff(plan);");
     expect(sky).not.toContain("onTab=");
     const drawer = code("components/flights/SkyDrawer.tsx");
-    expect(drawer).toContain('onOpen={(b) => openDialogFor("verify", b)}');
+    expect(drawer).toContain("onOpen={(planId) => openBehaviors({ planId })}");
     expect(drawer).toContain('onClick={() => openDialogFor("intake")}');
   });
 

@@ -202,10 +202,22 @@ describe("a request (openBehaviors)", () => {
 });
 
 describe("the board, drawn", () => {
-  const html = (over: Partial<Parameters<typeof B.BehaviorsBoard>[0]> = {}) =>
-    renderToStaticMarkup(
-      createElement(QueryClientProvider, { client: queryClient }, createElement(B.BehaviorsBoard, { plans: [], expanded: "", onExpand() {}, now: NOW, ...over }))
-    );
+  // An open row draws the BehaviorsCard, whose instances query reads
+  // `document.hidden` for its poll cadence; a server render has no document,
+  // so a quiet one stands in for the render alone (a module-wide stub trips
+  // code that sees a document and reaches for its classList).
+  const html = (over: Partial<Parameters<typeof B.BehaviorsBoard>[0]> = {}) => {
+    const g = globalThis as Record<string, unknown>;
+    const had = "document" in g;
+    if (!had) g.document = { hidden: false, addEventListener: () => {}, removeEventListener: () => {} };
+    try {
+      return renderToStaticMarkup(
+        createElement(QueryClientProvider, { client: queryClient }, createElement(B.BehaviorsBoard, { plans: [], expanded: "", onExpand() {}, now: NOW, ...over }))
+      );
+    } finally {
+      if (!had) delete g.document;
+    }
+  };
 
   it("the calm look: a title bar to drag by, the ⋯ settings, the ×, what it is for", () => {
     const h = html({ onHide() {}, onHeadDown() {} });

@@ -20,6 +20,9 @@ import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
 import type { SkyMode } from "../lib/skyLayout";
 import { legacyFlightsRoute } from "../lib/flights";
+// A cycle (behaviorsFocus reads this store), safe because each side only
+// calls the other inside an action, never at module load.
+import { openBehaviors } from "../lib/behaviorsFocus";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -890,8 +893,12 @@ export const useUi = create<UiState>((set, get) => ({
       return;
     }
     const r = legacyFlightsRoute(target);
-    if (r.to === "sky") get().showSky(r.focus);
-    else if (r.to === "flyways") get().showFlyways(r.plan);
+    if (r.to === "sky") {
+      get().showSky(r.focus);
+      // An old `checklists[/<branch>]` target: the behaviors (the board, or
+      // that branch's frame) — docs/behaviors.md §4.
+      if (r.behaviors) openBehaviors(r.behaviors);
+    } else if (r.to === "flyways") get().showFlyways(r.plan);
     else set({ openDialog: r.to, dialogTarget: r.target });
   },
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),

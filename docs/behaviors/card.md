@@ -67,30 +67,29 @@ the work has shipped and that check is the only one on record.
 
 ## For the integrator to connect
 
-- **Open the checking run** calls `openVerifyPane(run)` and then
-  `setView("grid")`, because the verify pane is a grid window. **View diff**
-  and **What could break** switch to the grid too. **Open the work session**
-  calls `showSky(title)`.
-- The card's root has `data-no-drag` and the rows list has `sky-own-scroll`,
-  so the Sky won't pan from inside it. The host sizes the card (it fills its
-  slot, `max-height: 100%`, and the rows scroll).
-- `BehaviorsSettings` doesn't need a SettingsCtx from the board. Its
-  "Check another branch…" and "Start empty…" actions call `onClose` and then
-  `openBehaviors({ planId })`.
-- After the dialog retires: `writePlanFor`, `writePlanForBranch` and
-  `editPlanStep`'s error still say "checklist"/"step", because
+Checked by behaviors-connect (2026-11-03) — all already wired in the card:
+
+- **Open the checking run** calls `openVerifyPane(run)` then
+  `setView("grid")`; **View diff** / **What could break** switch to the grid
+  too; **Open the work session** calls `showSky(title)`.
+- The root carries `data-plan`, `data-no-drag`; the rows list has
+  `sky-own-scroll`. The tile's box is sized by `behaviorsCardBox` (now 100 px
+  a row), and a `compact` card (a board row, the grid's Flight strip) reads at
+  `--bh-s: 1`.
+- `BehaviorsSettings`'s "Check another branch…" / "Start empty…" call
+  `onClose` then `openBehaviors({ planId })`.
+- Not done (on purpose): rewording `writePlanFor`, `writePlanForBranch` and
+  `editPlanStep`'s "checklist"/"step" errors — they move with
   `startFinish.test.ts`, `verifyAnotherBranch.test.ts` and
-  `verifyDialogUi.test.ts` pin those strings. Reword them together with those
-  tests. `dialogs/verify/emptyChecklist.ts` is replaced by
-  `startEmptyBehaviors`.
+  `verifyDialogUi.test.ts` once the dialog retires.
 - The "Verify stop parked on you" wake-up is the server's
   (`session.test_plan_settled`). The card adds nothing for it.
 
 ## Open gaps
 
-- The card was never seen rendered, because nothing mounts it yet. Its
-  markup is pinned by tests, but the layout still needs a look once the
-  tile and board are in.
+- Seen rendered 2026-11-03 (static bundle + demo mocks, light and dark): in
+  the tile's place on a session frame, and as a board row. Fixed then: the
+  tile box hid rows 2–3, and a board row's head pushed ⋯/× past the edge.
 - Per-behavior "Check this one again" (the old step menu's scoped rerun) was
   dropped. Rerun covers the whole set, and Fix and Edit are on the row.
   `startChecklistRun(plan, { only: [id] })` still exists if it's wanted back.

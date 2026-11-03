@@ -21,10 +21,18 @@
  * legacyFlightsRoute) and are rewritten in place to where they landed:
  * `#flights`, `#flights/sky/<title>`, `#flights/board` → `#sky…`;
  * `#flights/flyways[/<id>]` → the sky with the flyway shelf open;
- * `#flights/sources/<x>` → `#intake/<x>`; `#flights/checklists/<b>` →
- * `#verify/<b>`; `#flights/schedule` → `#schedule`. */
+ * `#flights/sources/<x>` → `#intake/<x>`; `#flights/checklists` → the
+ * Behaviors board (`#behaviors`); `#flights/checklists/<b>` → that branch's
+ * behaviors in the Sky (`#sky`: its plan id is not known until the plans
+ * load); `#flights/schedule` → `#schedule`.
+ *
+ * `#behaviors` / `#behaviors/<plan id>` (docs/behaviors.md §4) is a Sky
+ * link, not a surface: it switches to the Sky and asks for the board or
+ * that plan's card (lib/behaviorsFocus `openBehaviors`), and stays the
+ * address until the view moves. */
 
 import { useUi, type DialogName, type MainView } from "../state/store";
+import { behaviorsHash, openBehaviors, parseBehaviorsHash, type BehaviorsTarget } from "./behaviorsFocus";
 import { legacyFlightsRoute } from "./flights";
 import type { SkyMode } from "./skyLayout";
 
@@ -105,6 +113,20 @@ export function parseViewHash(hash: string): { view: "sky"; focus: string } | nu
   return { view: "sky", focus };
 }
 
+/** A `#behaviors[/<plan id>]` link's target, or null when the hash is not
+ * one (an old `#verify…` link is still the Verify surface's). */
+export function parseBehaviorsLink(hash: string): BehaviorsTarget | null {
+  return /^#behaviors(?:\/|$)/.test(hash || "") ? parseBehaviorsHash(hash) : null;
+}
+
+/** The address an old `#flights/<old>` link reads once it has landed: the
+ * board's `#behaviors` for a bare `checklists`, else what the store shows. */
+function landedHash(old: string): string {
+  const r = legacyFlightsRoute(old);
+  if (r.to === "sky" && r.behaviors?.board) return behaviorsHash();
+  return urlHash(useUi.getState());
+}
+
 /** Everything the URL says right now: the open surface's hash, else the
  * view's. */
 const urlHash = (s: Parameters<typeof viewHash>[0] & { openDialog: DialogName | null; dialogTarget: string | null }) =>
@@ -141,12 +163,15 @@ export function installSurfaceHash(win: Window = window): () => void {
   const first = parseHash(loc.hash);
   const firstView = parseViewHash(loc.hash);
   const firstFlights = parseFlightsHash(loc.hash);
+  const firstBehaviors = parseBehaviorsLink(loc.hash);
   if (firstView) useUi.getState().showSky(firstView.focus);
   // The store routes the retired name (lib/flights legacyFlightsRoute).
   if (firstFlights !== null) useUi.getState().openDialogFor("flights", firstFlights);
+  // A behaviors link keeps its address (nothing below rewrites it).
+  if (firstBehaviors) openBehaviors(firstBehaviors);
   if (first || firstView || firstFlights !== null || !loc.hash) {
     if (first) useUi.getState().openDialogFor(first.name, first.target);
-    const now = urlHash(useUi.getState());
+    const now = firstFlights !== null ? landedHash(firstFlights) : urlHash(useUi.getState());
     if (now !== loc.hash && (now || loc.hash)) {
       try {
         hist.replaceState(null, "", urlWith(now));
@@ -216,8 +241,18 @@ export function installSurfaceHash(win: Window = window): () => void {
       const r = legacyFlightsRoute(old);
       if (r.to !== "sky" && r.to !== "flyways") replace(hashFor(r.to, r.target));
       ui.openDialogFor("flights", old);
-      const now = urlHash(useUi.getState());
+      const now = landedHash(old);
       if (now !== loc.hash) replace(now);
+      return;
+    }
+    const behaviors = parseBehaviorsLink(loc.hash);
+    if (behaviors) {
+      // Back / Forward onto a behaviors link (or one pasted into this tab):
+      // fly there, and keep saying it (switching to the Sky rewrote it).
+      const at = loc.hash;
+      pushed = false;
+      openBehaviors(behaviors);
+      if (loc.hash !== at) replace(at);
       return;
     }
     const want = parseHash(loc.hash);

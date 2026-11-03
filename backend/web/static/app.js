@@ -20924,7 +20924,7 @@ var pe = class {
 	}
 };
 var Yi = [];
-var _n = class {
+var _n$1 = class {
 	constructor() {
 		this._handlers = Object.create(null);
 		this._active = Yi;
@@ -21084,7 +21084,7 @@ var bn = class extends D {
 		};
 		this.initialState = 0, this.currentState = this.initialState, this._params = new ci(), this._params.addParam(0), this._collect = 0, this.precedingJoinState = 0, this._printHandlerFb = (i, r, n) => {}, this._executeHandlerFb = (i) => {}, this._csiHandlerFb = (i, r) => {}, this._escHandlerFb = (i) => {}, this._errorHandlerFb = (i) => i, this._printHandler = this._printHandlerFb, this._executeHandlers = Object.create(null), this._csiHandlers = Object.create(null), this._escHandlers = Object.create(null), this._register(C(() => {
 			this._csiHandlers = Object.create(null), this._executeHandlers = Object.create(null), this._escHandlers = Object.create(null);
-		})), this._oscParser = this._register(new mn()), this._dcsParser = this._register(new _n()), this._errorHandler = this._errorHandlerFb, this.registerEscHandler({ final: "\\" }, () => !0);
+		})), this._oscParser = this._register(new mn()), this._dcsParser = this._register(new _n$1()), this._errorHandler = this._errorHandlerFb, this.registerEscHandler({ final: "\\" }, () => !0);
 	}
 	_identifier(e, i = [64, 126]) {
 		let r = 0;
@@ -24379,7 +24379,7 @@ function youText(f) {
 	return String(cur?.config?.text ?? "").trim() || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
 }
 function perchBadge(flights) {
-	const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
+	const perched = needsYouFlights(flights);
 	return {
 		count: perched.length,
 		failing: perched.some((f) => f.state === "halted")
@@ -24524,8 +24524,9 @@ function legacyFlightsRoute(target) {
 		target: rest || null
 	};
 	if (word === "checklists") return {
-		to: "verify",
-		target: rest || null
+		to: "sky",
+		focus: "",
+		behaviors: rest ? { branch: rest } : { board: true }
 	};
 	if (word === "schedule") return {
 		to: "schedule",
@@ -27053,6 +27054,50 @@ function fitDecision(cur, avail, need, hyst = FIT_HYSTERESIS_PX) {
 	};
 }
 //#endregion
+//#region src/lib/behaviorsFocus.ts
+var _n = 0;
+var useBehaviorsFocus = create((set) => ({
+	request: null,
+	openPlan: "",
+	boardRequested: false,
+	setOpenPlan: (id) => set({ openPlan: id }),
+	take: () => set({ request: null }),
+	setBoardRequested: (v) => set({ boardRequested: v })
+}));
+function openBehaviors(target = { board: true }) {
+	useUi.getState().showSky();
+	useBehaviorsFocus.setState({
+		request: {
+			...target,
+			n: ++_n
+		},
+		...target.board ? { boardRequested: true } : {}
+	});
+}
+function findPlan(plans, t) {
+	const list = plans || [];
+	if (t.planId) {
+		const p = list.find((x) => x.id === t.planId);
+		if (p) return p;
+	}
+	if (t.title) {
+		const p = list.find((x) => x.id === t.title);
+		if (p) return p;
+	}
+	if (t.branch) return list.find((x) => x.branch === t.branch) || null;
+	return null;
+}
+function behaviorsHash(planId = "") {
+	return "#behaviors" + (planId ? "/" + encodeURIComponent(planId) : "");
+}
+function parseBehaviorsHash(hash) {
+	const [head, ...rest] = hash.replace(/^#/, "").split("/");
+	const tail = rest.length ? decodeURIComponent(rest.join("/")) : "";
+	if (head === "behaviors") return tail ? { planId: tail } : { board: true };
+	if (head === "verify") return tail ? { branch: tail } : { next: true };
+	return null;
+}
+//#endregion
 //#region src/state/store.ts
 var loadSkyMode = () => {
 	const m = load$1("mf_sky_view", "mine", false);
@@ -27518,8 +27563,10 @@ var useUi = create((set, get) => ({
 			return;
 		}
 		const r = legacyFlightsRoute(target);
-		if (r.to === "sky") get().showSky(r.focus);
-		else if (r.to === "flyways") get().showFlyways(r.plan);
+		if (r.to === "sky") {
+			get().showSky(r.focus);
+			if (r.behaviors) openBehaviors(r.behaviors);
+		} else if (r.to === "flyways") get().showFlyways(r.plan);
 		else set({
 			openDialog: r.to,
 			dialogTarget: r.target
@@ -30567,7 +30614,7 @@ function dissolvedText(lead, why) {
 //#region src/lib/runsApi.ts
 var runPath = (id, rest = "") => "/api/runs/" + encodeURIComponent(id) + rest;
 var taskPath = (id, task, verb) => runPath(id, "/tasks/" + encodeURIComponent(task) + "/" + verb);
-async function runAction(what, path, body = {}, done = "") {
+async function runAction$1(what, path, body = {}, done = "") {
 	try {
 		await api(path, { json: body });
 		if (done) toast(done);
@@ -30581,10 +30628,10 @@ async function runAction(what, path, body = {}, done = "") {
 	}
 }
 function raiseBudget(runId, usd, name = "") {
-	return runAction("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The team run") + " resumed with a $" + usd + " budget");
+	return runAction$1("Raise the budget", runPath(runId, "/resume"), { budget_usd: usd }, (name || "The team run") + " resumed with a $" + usd + " budget");
 }
 function cancelRun(runId, name = "") {
-	return runAction("Cancel", runPath(runId, "/cancel"), {}, (name || "The team run") + " cancelled — its sessions and branches are kept");
+	return runAction$1("Cancel", runPath(runId, "/cancel"), {}, (name || "The team run") + " cancelled — its sessions and branches are kept");
 }
 function suggestedBudget(budget, spent) {
 	const floor = Math.max(spent, budget) * 1.5;
@@ -31227,7 +31274,7 @@ function planStatusOf(plan, liveBranch = "") {
 	const failed = failCount(plan);
 	if (failed) {
 		const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
-		const text = first >= 0 ? clip$6(steps[first].text, 80) : "";
+		const text = first >= 0 ? clip$7(steps[first].text, 80) : "";
 		return at("bad", (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open.length ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you." : ""), "answer", "See what failed");
 	}
 	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
@@ -31246,7 +31293,7 @@ function planStatusOf(plan, liveBranch = "") {
 	if (unshipped) return at("ok", "Every step passed on the branch — it comes back to be checked again after merge.", "answer", "See the answers");
 	return at("ok", "Every step passed.", "answer", "See the answers");
 }
-function clip$6(text, max) {
+function clip$7(text, max) {
 	const t = String(text || "").trim().replace(/\s+/g, " ");
 	if (t.length <= max) return t.replace(/[.]$/, "");
 	const cut = t.slice(0, max);
@@ -31289,7 +31336,7 @@ function planVerdict(plan) {
 	const t = checkTally(plan);
 	return v("partial", t.passed + " of " + t.total + " checked", isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait", "◐", t.passed + "/" + t.total + " checked");
 }
-function planForSession(plans, inst) {
+function planForSession$1(plans, inst) {
 	const list = plans || [];
 	const byTitle = list.find((p) => p.id === inst.title);
 	if (byTitle) return byTitle;
@@ -31845,7 +31892,7 @@ function prVerdictConfirm(plan) {
 function cachedPlanFor(inst) {
 	const data = queryClient.getQueryData(["test-plans"]);
 	if (!inst.title) return null;
-	return planForSession(data?.plans || [], {
+	return planForSession$1(data?.plans || [], {
 		title: inst.title,
 		branch: inst.branch,
 		repo: inst.repo
@@ -35309,7 +35356,7 @@ function peerEventNote(event, data) {
 		}
 		case "peer.message": {
 			const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
-			const preview = clip$5(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
+			const preview = clip$6(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
 			return {
 				text: preview ? text + ": " + preview : text,
 				cls: "n-info",
@@ -35329,7 +35376,7 @@ function peerEventNote(event, data) {
 			const text = name + " proposes a joint task — accept in People";
 			const brief = String(d.brief || "").trim();
 			return {
-				text: brief ? text + ": " + clip$5(brief, 80) : text,
+				text: brief ? text + ": " + clip$6(brief, 80) : text,
 				cls: "n-info",
 				toast: text
 			};
@@ -35389,7 +35436,7 @@ function peerEventNote(event, data) {
 		default: return null;
 	}
 }
-function clip$5(s, n) {
+function clip$6(s, n) {
 	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
 function baseName$1(path) {
@@ -38344,16 +38391,16 @@ function RowMain({ title, text, shown, row }) {
 }
 function doWaitAction(key, w, runId, taskId) {
 	switch (key) {
-		case "retry": return runAction("Retry", taskPath(runId, taskId, "retry"), { fresh: false }, "Retrying " + w.title);
-		case "retry_fresh": return runAction("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
-		case "skip": return runAction("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
-		case "approve": return runAction("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
+		case "retry": return runAction$1("Retry", taskPath(runId, taskId, "retry"), { fresh: false }, "Retrying " + w.title);
+		case "retry_fresh": return runAction$1("Retry fresh", taskPath(runId, taskId, "retry"), { fresh: true }, "Retrying " + w.title + " on a fresh branch");
+		case "skip": return runAction$1("Skip", taskPath(runId, taskId, "skip"), {}, "Skipped " + w.title);
+		case "approve": return runAction$1("Start the workers", runPath(runId, "/plan/approve"), {}, "Starting the workers — each fenced to its paths");
 		case "release": {
 			const pushOnly = !!w.preview?.local_origin || w.preview?.lane === "push";
-			return runAction(releaseChoices(w.preview?.lane, w.preview?.local_origin).find((c) => !c.merge)?.label || "Open PR", runPath(runId, "/release"), { merge_when_green: false }, pushOnly ? "Pushing the team run's branch" : "Opening the team run's PR");
+			return runAction$1(releaseChoices(w.preview?.lane, w.preview?.local_origin).find((c) => !c.merge)?.label || "Open PR", runPath(runId, "/release"), { merge_when_green: false }, pushOnly ? "Pushing the team run's branch" : "Opening the team run's PR");
 		}
-		case "release_merge": return runAction("Open PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
-		case "retry_check": return runAction("Run the check", runPath(runId, "/check"), {}, "Running the check again");
+		case "release_merge": return runAction$1("Open PR", runPath(runId, "/release"), { merge_when_green: true }, "Opening the PR — it merges once checks pass");
+		case "retry_check": return runAction$1("Run the check", runPath(runId, "/check"), {}, "Running the check again");
 		case "cancel_group": return cancelRun(runId, w.run?.name || "");
 		default: return Promise.resolve(false);
 	}
@@ -39850,7 +39897,7 @@ function bellLabel(needs, unread) {
 	if (unread > 0) return "Notifications, " + unread + " new";
 	return "Notifications";
 }
-function rowKey(e) {
+function rowKey$1(e) {
 	if (e.target !== e.currentTarget || e.key !== "Enter" && e.key !== " ") return;
 	e.preventDefault();
 	e.currentTarget.click();
@@ -40087,7 +40134,7 @@ function NotificationsBell() {
 							"data-needs": it.key,
 							role: a.p === 0 ? void 0 : "button",
 							tabIndex: a.p === 0 ? void 0 : 0,
-							onKeyDown: a.p === 0 ? void 0 : rowKey,
+							onKeyDown: a.p === 0 ? void 0 : rowKey$1,
 							onClick: () => jump(it.title),
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
@@ -40147,7 +40194,7 @@ function NotificationsBell() {
 					"data-session": n.session,
 					role: "button",
 					tabIndex: 0,
-					onKeyDown: rowKey,
+					onKeyDown: rowKey$1,
 					onClick: () => {
 						if (n.lead) {
 							setOpen(false);
@@ -48275,7 +48322,7 @@ function slotted(title) {
 	const n = slotNumber(title);
 	return (n ? "[" + n + "] " : "") + windowName(title);
 }
-function clip$4(text, max = 200) {
+function clip$5(text, max = 200) {
 	const t = text.replace(/\s+/g, " ").trim();
 	return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
 }
@@ -48288,7 +48335,7 @@ function desktopNoteFor(event, data, env) {
 			const text = String(d.question || d.text || "").trim();
 			return {
 				title: slotted(title) + " needs you: Question",
-				body: text ? clip$4(text) : "It's waiting on a dialog — answer it in MindFlock",
+				body: text ? clip$5(text) : "It's waiting on a dialog — answer it in MindFlock",
 				target: SESSION_TARGET + title
 			};
 		}
@@ -48298,7 +48345,7 @@ function desktopNoteFor(event, data, env) {
 			const text = String(d.text || "").trim();
 			return {
 				title: slotted(title) + " needs you: Question",
-				body: text ? clip$4(text) : "It asked you a question in its reply",
+				body: text ? clip$5(text) : "It asked you a question in its reply",
 				target: SESSION_TARGET + title
 			};
 		}
@@ -53660,7 +53707,7 @@ function VerdictBadge({ plan }) {
 function VerdictChip({ inst, where }) {
 	const { data } = useTestPlans();
 	if (isVerifySession(inst)) return null;
-	const plan = planForSession(data?.plans || [], inst);
+	const plan = planForSession$1(data?.plans || [], inst);
 	if (!plan) return null;
 	const v = planVerdict(plan);
 	const branch = plan.branch || inst.branch || "";
@@ -53838,7 +53885,7 @@ var RESULT_TEXT = {
 	blocked: "Can't check",
 	"": "Not yet"
 };
-var ANSWERS = [
+var ANSWERS$1 = [
 	["pass", "Pass"],
 	["fail", "Fail"],
 	["blocked", "Can't check"]
@@ -53896,7 +53943,7 @@ function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
 		const result = r?.result || "";
 		const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
 		const takeOver = !!linkId && s.side === "mine" && s.actor === "agent" && result === "blocked" && r?.by !== "human";
-		const answers = takeOver ? ANSWERS.filter(([v]) => v !== "blocked") : ANSWERS;
+		const answers = takeOver ? ANSWERS$1.filter(([v]) => v !== "blocked") : ANSWERS$1;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "peer-joint-step peer-joint-step-" + (result || "blank"),
 			"data-step": s.id,
@@ -57386,7 +57433,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 				type: "button",
 				role: "menuitem",
 				disabled: busy,
-				onClick: () => go(() => group.paused ? runAction("Resume", runPath(id, "/resume"), {}, group.name + " resumed") : runAction("Pause", runPath(id, "/pause"), { reason: "user" }, group.name + " paused — agents keep working; nothing new starts or ships")),
+				onClick: () => go(() => group.paused ? runAction$1("Resume", runPath(id, "/resume"), {}, group.name + " resumed") : runAction$1("Pause", runPath(id, "/pause"), { reason: "user" }, group.name + " paused — agents keep working; nothing new starts or ships")),
 				children: [group.paused ? "Resume" : "Pause", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "rg-hint",
 					children: group.paused ? "start and ship again" : "agents keep working"
@@ -57443,14 +57490,14 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 						type: "button",
 						disabled: busy,
 						title: "Start it now, past the at-a-time limit (once)",
-						onClick: () => go(() => runAction("Start now", taskPath(id, t.id, "start-now"), {}, "Starting " + queuedTitle(t))),
+						onClick: () => go(() => runAction$1("Start now", taskPath(id, t.id, "start-now"), {}, "Starting " + queuedTitle(t))),
 						children: "Start now"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						disabled: busy,
 						title: "Take it out of the team run — it never starts",
-						onClick: () => go(() => runAction("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run")),
+						onClick: () => go(() => runAction$1("Take out of run", taskPath(id, t.id, "skip"), {}, "Took " + queuedTitle(t) + " out of the team run")),
 						children: "Take out of run"
 					})
 				]
@@ -62067,7 +62114,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 		if (busy) return false;
 		setBusy(key);
 		try {
-			return await runAction(what, runPath(id, path), body, done);
+			return await runAction$1(what, runPath(id, path), body, done);
 		} finally {
 			setBusy("");
 		}
@@ -62152,7 +62199,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 		if (busy) return;
 		setBusy(verb + ":" + t.id);
 		const name = pieceLabel(t, run).name;
-		runAction(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the team run" : "Starting " + name).finally(() => setBusy(""));
+		runAction$1(verb === "skip" ? "Take out of run" : "Start now", taskPath(id, t.id, verb), {}, verb === "skip" ? "Took " + name + " out of the team run" : "Starting " + name).finally(() => setBusy(""));
 	};
 	const noTools = me?.mcp_attached === false && split && (run.state === "planning" || run.state === "plan_ready");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -69305,7 +69352,7 @@ function tailPath(p) {
 	const last = segs[segs.length - 1];
 	return last.length <= 6 && segs.length > 1 ? segs[segs.length - 2] + "/" + last : last;
 }
-function clip$3(s, n = 22) {
+function clip$4(s, n = 22) {
 	return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 function trunkPath(M, T) {
@@ -70778,13 +70825,13 @@ function renderOverlay(v, now) {
 		}
 		g.globalAlpha = alpha;
 		drawBird(g, sx, sy, birdPx, A.ag.color, pose, now, !v.reducedMotion);
-		const tag0 = W < 700 && !(A.ag.parent && A.done) && A.file ? `${A.ag.glyph} ${pose.fly ? "→ " : pose.blocked ? "✕ " : ""}${A.file.name}` : `${A.ag.glyph} ${clip$3(A.ag.short || A.ag.name)}${A.ag.parent && A.done ? pose.fly ? " → home" : " · done" : doing}`;
+		const tag0 = W < 700 && !(A.ag.parent && A.done) && A.file ? `${A.ag.glyph} ${pose.fly ? "→ " : pose.blocked ? "✕ " : ""}${A.file.name}` : `${A.ag.glyph} ${clip$4(A.ag.short || A.ag.name)}${A.ag.parent && A.done ? pose.fly ? " → home" : " · done" : doing}`;
 		g.font = `600 10.5px ${P.font}`;
 		const th = 16;
 		let tag = tag0, tw = 0, bx = 0, by = 0, far = false, placedTag = false;
 		const zd = terrs.filter((T) => !(A.file && isUnder(A.file.node, T.n)));
 		const offZones = (x0, y0, x1, y1) => zd.every((T) => T.polys.every((poly) => rectPolyDist(x0, y0, x1, y1, poly) > 0));
-		const bare = A.ag.parent ? `${A.ag.glyph} ${clip$3(A.ag.short || A.ag.name, 14)}` : A.ag.glyph;
+		const bare = A.ag.parent ? `${A.ag.glyph} ${clip$4(A.ag.short || A.ag.name, 14)}` : A.ag.glyph;
 		const tries = tag0 === bare ? [
 			[
 				tag0,
@@ -72740,7 +72787,7 @@ function drawColumnRows(v, g, S, want, fits) {
 		g.restore();
 		const x0 = r.R[0] + LEAF_PAD;
 		g.font = `${changer ? 600 : 400} 10.5px ${P.font}`;
-		const txt = r.R[2] - r.R[0] < want[r.i].w ? clip$3(l.file.name, Math.max(6, Math.floor((r.R[2] - r.R[0]) / 6))) : l.file.name;
+		const txt = r.R[2] - r.R[0] < want[r.i].w ? clip$4(l.file.name, Math.max(6, Math.floor((r.R[2] - r.R[0]) / 6))) : l.file.name;
 		labelBack(g, P, x0, r.y - LEAF_H / 2, r.R[2] - r.R[0] - 2 * LEAF_PAD);
 		g.strokeStyle = P.halo;
 		g.lineWidth = 3;
@@ -73730,7 +73777,7 @@ function dispName(M, f) {
 	if ((M.nameCount.get(f.name) || 0) > 1 && f.path.includes("/")) return baseOf(dirOf(f.path)) + "/" + f.name;
 	return f.name;
 }
-var clip$2 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var clip$3 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 function BirdIcon({ color }) {
 	const ref = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
@@ -74056,7 +74103,7 @@ function ActivityCard(p) {
 						children: [r.A && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "who",
 							style: { color: r.A.ag.color },
-							children: [clip$2(r.A.ag.short || r.A.ag.name, 18), " "]
+							children: [clip$3(r.A.ag.short || r.A.ag.name, 18), " "]
 						}), r.text]
 					})
 				]
@@ -74141,7 +74188,7 @@ function FileCard(p) {
 					children: [
 						A.ag.glyph,
 						" ",
-						clip$2(A.ag.name)
+						clip$3(A.ag.name)
 					]
 				}),
 				" ",
@@ -74246,7 +74293,7 @@ function FileCard(p) {
 					type: "button",
 					className: "cm-btn",
 					onClick: p.onFolder,
-					children: ["Folder: ", clip$2(f.node.kind === "crown" ? baseOf(f.node.name) : f.node.label || f.node.name, 18)]
+					children: ["Folder: ", clip$3(f.node.kind === "crown" ? baseOf(f.node.name) : f.node.label || f.node.name, 18)]
 				}),
 				p.changed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -74316,7 +74363,7 @@ function NodeCard(p) {
 					children: [
 						A.ag.glyph,
 						" ",
-						clip$2(A.ag.name)
+						clip$3(A.ag.name)
 					]
 				}),
 				" ",
@@ -74391,7 +74438,7 @@ function NodeCard(p) {
 						children: [
 							A.ag.glyph,
 							" ",
-							clip$2(A.ag.name)
+							clip$3(A.ag.name)
 						]
 					}),
 					" ",
@@ -74537,7 +74584,7 @@ function BlastCard(p) {
 					children: [
 						bd.ag.glyph,
 						" ",
-						clip$2(bd.ag.name)
+						clip$3(bd.ag.name)
 					]
 				}),
 				" ",
@@ -74576,13 +74623,13 @@ function BlastCard(p) {
 					type: "button",
 					className: "cm-btn",
 					onClick: p.onFolder,
-					children: ["Folder: ", clip$2(where || "", 18)]
+					children: ["Folder: ", clip$3(where || "", 18)]
 				}),
 				srcs.length === 1 && srcs[0].leaf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: "cm-btn",
 					onClick: () => p.onFile(srcs[0]),
-					children: ["Go to ", clip$2(srcs[0].name, 18)]
+					children: ["Go to ", clip$3(srcs[0].name, 18)]
 				})
 			]
 		})
@@ -74616,7 +74663,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 					children: [
 						A.created.has(f.id) ? "created" : "edited",
 						" by ",
-						clip$2(A.ag.name)
+						clip$3(A.ag.name)
 					]
 				}),
 				" ",
@@ -74626,13 +74673,13 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 				style: { color: A.ag.color },
 				children: [
 					"bud: ",
-					clip$2(A.ag.name),
+					clip$3(A.ag.name),
 					" plans to touch it"
 				]
 			}, "p" + A.ag.id));
 			else if (A.reads.has(f.id)) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				style: { color: A.ag.color },
-				children: ["read by ", clip$2(A.ag.name)]
+				children: ["read by ", clip$3(A.ag.name)]
 			}, "r" + A.ag.id));
 			const dep = depOf(M, A, f.id);
 			if (dep) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
@@ -74643,7 +74690,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 				" ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
 					"(",
-					clip$2(A.ag.name),
+					clip$3(A.ag.name),
 					"'s edit — could break)"
 				] })
 			] }, "g" + A.ag.id));
@@ -74759,7 +74806,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
 				style: { color: A.ag.color },
-				children: [clip$2(A.ag.name), "'s nest"]
+				children: [clip$3(A.ag.name), "'s nest"]
 			}),
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: A.nest === M.crown ? "trunk" : A.nest ? A.nest.path : "" }),
@@ -74783,7 +74830,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			files,
 			bd.ag ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
 				" (",
-				clip$2(bd.ag.name),
+				clip$3(bd.ag.name),
 				"'s edit",
 				bd.files.size > 1 ? "s" : "",
 				")"
@@ -74818,7 +74865,7 @@ var MapGuideContext = (0, import_react.createContext)({
 });
 //#endregion
 //#region src/components/grid/codemap/BirdIndex.tsx
-var clip$1 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var clip$2 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 var plural$3 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var EXPANDED = /* @__PURE__ */ new Map();
 var RISK_DONE = /* @__PURE__ */ new Map();
@@ -75111,7 +75158,7 @@ function RailRow({ A, sub, following, n, onFollow }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "nm",
-				children: clip$1(A.ag.short || A.ag.name, n)
+				children: clip$2(A.ag.short || A.ag.name, n)
 			}),
 			A.edits.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "n",
@@ -75177,7 +75224,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 							children: [
 								A.ag.glyph,
 								" ",
-								clip$1(A.ag.name, 18)
+								clip$2(A.ag.name, 18)
 							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -75238,7 +75285,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 						" ",
 						"· ",
-						area.slice(0, 2).map(([k, n]) => `${clip$1(k, 16)} ${n}`).join(", "),
+						area.slice(0, 2).map(([k, n]) => `${clip$2(k, 16)} ${n}`).join(", "),
 						area.length > 2 ? "…" : ""
 					] })
 				]
@@ -75262,7 +75309,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "nm",
-							children: clip$1(S.ag.short || S.ag.name, 20)
+							children: clip$2(S.ag.short || S.ag.name, 20)
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "st " + S.status,
@@ -75456,7 +75503,7 @@ function Changes({ p, sum, notes = [], riskOpen, onRisk, allFolders = false, onA
 				className: "ct-bix-sum",
 				children: sum.tops.map(([k, n], i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 					i ? " · " : "",
-					clip$1(k, 18),
+					clip$2(k, 18),
 					" ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: n })
 				] }, k))
@@ -80965,6 +81012,1458 @@ function PaneMoreMenu({ children, btnRef }) {
 	}), document.body)] });
 }
 //#endregion
+//#region src/lib/behaviors.ts
+var CHECK = {
+	key: "check",
+	label: "Check now"
+};
+var RERUN = {
+	key: "rerun",
+	label: "Rerun"
+};
+var FAILED = {
+	key: "failed",
+	label: "See what failed"
+};
+var WRITE = {
+	key: "write",
+	label: "Write them"
+};
+var ANSWER = {
+	key: "answer",
+	label: "Answer"
+};
+function behaviorsCount(n) {
+	return n + (n === 1 ? " behavior" : " behaviors");
+}
+function clip$1(text, max = 70) {
+	const t = String(text || "").trim().replace(/\s+/g, " ").replace(/[.]$/, "");
+	if (t.length <= max) return t;
+	const cut = t.slice(0, max);
+	const space = cut.lastIndexOf(" ");
+	return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
+}
+function timingLine(plan) {
+	const run = latestRun(plan);
+	if (run && isBeforeMerge(run) && !plan.live_at) return "Checked before merge · checks again once live";
+	if (!run && plan.live_at) {
+		const earlier = beforeMergeRun(plan);
+		if (earlier) return "Checked before merge (" + beforeMergeSummary(plan, earlier).replace(/steps?/g, (m) => m === "step" ? "behavior" : "behaviors") + ") · checks again once live";
+	}
+	return "";
+}
+function runAction(plan) {
+	if (!(plan.steps || []).some((s) => s.actor !== "human")) return null;
+	const run = latestRun(plan);
+	return run && (run.session || run.by === "agent") ? RERUN : CHECK;
+}
+function said(plan) {
+	const steps = plan.steps || [];
+	const agentCan = steps.filter((s) => s.actor !== "human").length;
+	if (plan.state === "generating") {
+		if (isGenerationStalled(plan)) return {
+			tone: "quiet",
+			sentence: "Writing stopped part-way — nothing for five minutes.",
+			action: WRITE
+		};
+		return {
+			tone: "busy",
+			status: "Writing…",
+			sentence: isGenerationSlow(plan) ? "Writing the behaviors — taking longer than usual…" : "Writing the behaviors from the diff — up to three minutes.",
+			action: null
+		};
+	}
+	if (plan.state === "failed" && !steps.length) {
+		if (isNoCommits(plan)) return {
+			tone: "quiet",
+			sentence: "No behaviors yet — this branch has no commits. They're written once the session commits.",
+			action: null
+		};
+		const why = errorHeadline(plan);
+		return {
+			tone: "quiet",
+			sentence: why ? "The agent couldn't write behaviors — " + why.charAt(0).toLowerCase() + why.slice(1) : "The agent couldn't write behaviors for this.",
+			action: WRITE
+		};
+	}
+	if (isEmptyByChoice(plan)) return {
+		tone: "you",
+		sentence: "No behaviors yet — add what this work should do.",
+		action: WRITE
+	};
+	if (!steps.length) return {
+		tone: "quiet",
+		sentence: "The agent came back with no behaviors.",
+		action: WRITE
+	};
+	const kept = plan.state === "failed" ? "Rewriting didn't work — these are unchanged. " : "";
+	if (plan.state === "running") {
+		if (plan.run_session) {
+			const mine = openHumanSteps(plan).length;
+			return {
+				tone: "busy",
+				status: "Checking…",
+				sentence: "An agent is checking the behaviors it can" + runElapsed(latestRun(plan)) + (mine ? " — " + behaviorsCount(mine) + (mine === 1 ? " needs" : " need") + " you." : "."),
+				action: null
+			};
+		}
+		return {
+			tone: "quiet",
+			sentence: "The agent that was checking these is gone — nothing is running now.",
+			action: runAction(plan)
+		};
+	}
+	const run = latestRun(plan);
+	if (isFailing(plan) && run) {
+		const failed = failCount(plan);
+		const first = steps.find((s) => run.results?.[s.id]?.result === "fail");
+		const open = openHumanSteps(plan).length;
+		return {
+			tone: "bad",
+			sentence: kept + (first ? "Failed: “" + clip$1(first.text) + "”" : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open ? " " + behaviorsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
+			action: FAILED
+		};
+	}
+	if (!run) {
+		if (isConfigBlocked(plan)) return {
+			tone: "you",
+			sentence: kept + plan.live_problem,
+			action: runAction(plan)
+		};
+		if (plan.live_at || plan.state === "due") {
+			if (!agentCan) return {
+				tone: "you",
+				sentence: kept + (steps.length === 1 ? "Live — its one behavior is yours to check." : "Live — all " + steps.length + " behaviors are yours to check."),
+				action: ANSWER
+			};
+			return {
+				tone: "you",
+				sentence: kept + "Live — nobody has checked it yet. " + (agentCan === steps.length ? "The agent can check " + (steps.length === 1 ? "it." : "all " + steps.length + ".") : "The agent can check " + agentCan + " of " + steps.length + "; the rest are yours."),
+				action: CHECK
+			};
+		}
+		if (plan.merged_at) return {
+			tone: "quiet",
+			sentence: kept + "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.",
+			action: null
+		};
+		if (plan.live_problem) return {
+			tone: "quiet",
+			sentence: kept + plan.live_problem,
+			action: agentCan ? CHECK : null
+		};
+		return {
+			tone: "quiet",
+			sentence: kept + "Not merged yet — check the branch now, or they're checked once it reaches " + (plan.live_branch || "the live branch") + ".",
+			action: agentCan ? CHECK : null
+		};
+	}
+	const open = openHumanSteps(plan).length;
+	if (!open && isWaitingOnYou(plan)) return {
+		tone: "you",
+		sentence: kept + "Live — not checked since it shipped.",
+		action: runAction(plan) || ANSWER
+	};
+	if (open) return {
+		tone: "you",
+		sentence: kept + (open === 1 ? "1 behavior needs you — an agent can't judge it." : behaviorsCount(open) + " need you — an agent can't judge them."),
+		action: ANSWER
+	};
+	const missing = unansweredCount(plan);
+	const cant = cantCheckCount(plan);
+	if (missing) {
+		const passed = steps.length - missing - failCount(plan);
+		const blank = missing - cant;
+		const line = [
+			passed ? passed + " of " + steps.length + " verified" : "",
+			cant ? "you couldn't check " + cant : "",
+			blank ? (run.session || run.by === "agent" ? "the check stopped early — " : "") + blank + " with no answer" : ""
+		].filter(Boolean).join(" · ");
+		return {
+			tone: "quiet",
+			sentence: kept + line.charAt(0).toUpperCase() + line.slice(1) + ".",
+			action: runAction(plan)
+		};
+	}
+	const by = passedBy(plan);
+	return {
+		tone: "ok",
+		sentence: kept + "Every behavior passed" + (by ? " — checked by " + by : "") + ".",
+		action: null
+	};
+}
+function behaviorSummary(plan) {
+	const t = checkTally(plan);
+	const s = said(plan);
+	const status = s.status || (s.tone === "bad" ? "Failed" : s.tone === "you" ? "Needs you" : s.tone === "ok" ? plan.live_at ? "Verified live" : "Verified" : s.tone === "busy" ? "Checking…" : "Not checked");
+	const total = (plan.steps || []).length;
+	const short = s.tone === "bad" ? "Failed · " + Math.max(1, t.failed) : s.tone === "you" ? t.yours ? "Needs you · " + t.yours : "Needs you" : s.tone === "busy" || s.tone === "ok" ? status : !total ? "None yet" : t.passed ? t.passed + " of " + total + " verified" : status;
+	const timing = timingLine(plan);
+	const headline = plan.state !== "failed" && plan.state !== "generating" && total ? errorHeadline(plan) : "";
+	const sentence = [
+		s.sentence,
+		headline,
+		timing ? timing + "." : ""
+	].filter(Boolean).join(" ");
+	return {
+		tone: s.tone,
+		status,
+		short,
+		sentence,
+		action: s.action,
+		total,
+		verified: t.passed,
+		failed: t.failed,
+		yours: t.yours
+	};
+}
+function planForSession(plans, row) {
+	if (!row || isVerifySession(row)) return null;
+	return planForSession$1([...plans || []], row);
+}
+function orphanPlans(plans, rows) {
+	const list = plans || [];
+	const owned = /* @__PURE__ */ new Set();
+	for (const r of rows || []) {
+		const p = planForSession(list, r);
+		if (p) owned.add(p.id);
+	}
+	return list.filter((p) => !owned.has(p.id));
+}
+function nextNeedingYou(plans) {
+	const list = plans || [];
+	return list.find((p) => isWaitingOnYou(p) && !isFailing(p)) || list.find((p) => isFailing(p)) || null;
+}
+//#endregion
+//#region src/lib/verifyActions.ts
+function planPath$1(id) {
+	return "/api/test-plans/" + encodeURIComponent(id);
+}
+function patchPlan(id, apply) {
+	queryClient.cancelQueries({ queryKey: ["test-plans"] });
+	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+		...prev,
+		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
+	} : prev);
+}
+function requestPlanRun(planId, only) {
+	return api(planPath$1(planId) + "/run", {
+		method: "POST",
+		json: only ? { steps: only } : {}
+	});
+}
+function requestPlanDelete(planId) {
+	return api(planPath$1(planId), { method: "DELETE" });
+}
+async function startChecklistRun(plan, opts = {}) {
+	try {
+		const r = await requestPlanRun(plan.id, opts.only);
+		await refreshInstances();
+		const started = r?.plan;
+		patchPlan(plan.id, (p) => started || {
+			...p,
+			state: "running",
+			run_session: r?.session || ""
+		});
+		opts.onStarted?.();
+		await refreshTestPlans();
+		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
+	} catch (err) {
+		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function regeneratePlan(plan, focus = "") {
+	try {
+		await api(planPath$1(plan.id) + "/regenerate", {
+			method: "POST",
+			json: { focus: focus.trim() }
+		});
+		patchPlan(plan.id, (p) => ({
+			...p,
+			state: "generating",
+			error: "",
+			gen_started: Date.now() / 1e3
+		}));
+		toast("Rewriting the behaviors for " + planName(plan) + " — up to three minutes");
+		return true;
+	} catch (err) {
+		errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
+		refreshTestPlans();
+		return false;
+	}
+}
+async function cancelChecklistRun(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
+		await refreshInstances();
+		await refreshTestPlans();
+		toast(r?.session ? "Stopped " + r.session : "Check cancelled");
+	} catch (err) {
+		errorPop("Couldn't cancel the check", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function fixPlanFailures(plan, only) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/fix", {
+			method: "POST",
+			json: only ? { steps: only } : {}
+		});
+		await refreshInstances();
+		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
+	} catch (err) {
+		errorPop("Fix didn't start", errMsg(err));
+	}
+}
+async function markPlanDeployed(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(planName(plan) + " is ready to check");
+	} catch (err) {
+		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function removePlan(plan, opts = {}) {
+	try {
+		await requestPlanDelete(plan.id);
+		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
+		opts.onGone?.();
+		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+			...prev,
+			plans: prev.plans.filter((p) => p.id !== plan.id)
+		} : prev);
+		await refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't delete " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function recordStepAnswer(plan, step, result, note) {
+	const wasAsking = isWaitingOnYou(plan);
+	const next = (await api(planPath$1(plan.id) + "/result", { json: {
+		step_id: step.id,
+		result,
+		note
+	} }))?.plan;
+	if (next) patchPlan(plan.id, () => next);
+	if (next && wasAsking && !isWaitingOnYou(next)) toast("All yours are answered — " + planName(plan) + ": " + behaviorSummary(next).status);
+	refreshTestPlans();
+}
+async function editPlanStep(plan, step, fields) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), {
+			method: "PATCH",
+			json: fields
+		});
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		refreshTestPlans();
+		return true;
+	} catch (err) {
+		errorPop("Couldn't change that step", errMsg(err));
+		return false;
+	}
+}
+async function removePlanStep(plan, step) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't remove that behavior", errMsg(err));
+	}
+}
+async function addPlanStep(plan, fields) {
+	return (await api(planPath$1(plan.id) + "/steps", {
+		method: "POST",
+		json: fields
+	}))?.plan;
+}
+async function fetchVerifyRepos() {
+	const r = await api("/api/test-plans/repos");
+	return Array.isArray(r?.repos) ? r.repos : [];
+}
+async function writePlanForBranch(repo, branch) {
+	try {
+		toast((await api("/api/test-plans/branch", { json: {
+			repo: repo.root,
+			branch
+		} })).existing ? branch + " already has a checklist — it's in Verify" : "Asked the agent for a checklist for " + branch + " — it'll appear in Verify (up to three minutes)");
+		refreshTestPlans();
+		return true;
+	} catch (err) {
+		errorPop("Couldn't write a checklist", errMsg(err));
+		return false;
+	}
+}
+async function writePlanFor(target) {
+	try {
+		const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
+		toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it's in Verify" : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)");
+		refreshTestPlans();
+		return true;
+	} catch (err) {
+		errorPop("Couldn't write a checklist", errMsg(err));
+		return false;
+	}
+}
+async function askBehaviorsForBranch(repo, branch, opts = {}) {
+	try {
+		const r = await api("/api/test-plans/branch", { json: opts.empty ? {
+			repo: repo.root,
+			branch,
+			empty: true
+		} : {
+			repo: repo.root,
+			branch
+		} });
+		toast(r.existing ? branch + " already has behaviors — they're on the Behaviors board" : opts.empty ? "Started empty behaviors for " + branch + " — add what it should do" : "Asked the agent to write behaviors for " + branch + " — up to three minutes");
+		refreshTestPlans();
+		return r.plan || "";
+	} catch (err) {
+		errorPop("Couldn't start behaviors for " + branch, errMsg(err));
+		return "";
+	}
+}
+async function startEmptyBehaviors(session) {
+	try {
+		const r = await api("/api/instances/" + encodeURIComponent(session) + "/test-plan", {
+			method: "POST",
+			json: { empty: true }
+		});
+		await refreshTestPlans();
+		toast(r.existing ? session + " already has behaviors — add yours to them" : "Started empty behaviors for " + session + " — add what it should do");
+		return r.plan || "";
+	} catch (err) {
+		errorPop("Couldn't start behaviors for " + session, errMsg(err));
+		return "";
+	}
+}
+//#endregion
+//#region src/components/flights/StopMenu.tsx
+function StopMenu(p) {
+	const ref = (0, import_react.useRef)(null);
+	const live = () => [...ref.current?.querySelectorAll("button[role=menuitem]:not(:disabled)") || []];
+	(0, import_react.useEffect)(() => {
+		live()[0]?.focus();
+		const onDown = (e) => {
+			if (ref.current && !ref.current.contains(e.target)) p.onClose(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			e.preventDefault();
+			p.onClose(true);
+		};
+		document.addEventListener("pointerdown", onDown, true);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("pointerdown", onDown, true);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, []);
+	const onKey = (e) => {
+		const all = live();
+		if (!all.length) return;
+		const i = all.indexOf(document.activeElement);
+		const go = (j) => {
+			e.preventDefault();
+			all[(j + all.length) % all.length].focus();
+		};
+		if (e.key === "ArrowDown") go(i + 1);
+		else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
+		else if (e.key === "Home") go(0);
+		else if (e.key === "End") go(-1);
+		else if (e.key === "Tab") {
+			e.preventDefault();
+			p.onClose(true);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref,
+		className: "fl-stopmenu",
+		role: "menu",
+		"aria-label": p.label,
+		style: {
+			left: p.x,
+			top: p.y
+		},
+		"data-no-drag": true,
+		onKeyDown: onKey,
+		onPointerDown: (e) => e.stopPropagation(),
+		onClick: (e) => e.stopPropagation(),
+		onContextMenu: (e) => e.preventDefault(),
+		children: p.items.map((it, i) => it.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fl-stopmenu-note",
+			role: "menuitem",
+			"aria-disabled": "true",
+			title: it.title,
+			children: it.label
+		}, "note" + i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			role: "menuitem",
+			className: "fl-stopmenu-item" + (it.danger ? " danger" : ""),
+			disabled: it.disabled,
+			title: it.title,
+			onClick: () => p.onPick(it.key),
+			children: it.label
+		}, it.key))
+	});
+}
+//#endregion
+//#region src/components/behaviors/cardModel.ts
+function watchSessionOf(plan) {
+	return plan.run_session || latestRun(plan)?.session || "";
+}
+function cardMenuItems(plan, ctx) {
+	const items = [];
+	const steps = plan.steps || [];
+	const running = plan.state === "running";
+	const primary = ctx.summary.action?.key || "";
+	const agentCan = steps.some((s) => s.actor !== "human");
+	if (plan.state !== "generating" && primary !== "write") {
+		const blocked = rewriteBlockedReason(plan);
+		items.push({
+			key: "rewrite",
+			label: "Rewrite behaviors",
+			title: blocked || "Ask the agent to write them again — you can say what to focus on",
+			disabled: !!blocked
+		});
+	}
+	if (plan.state === "generated" && plan.merged_at && !plan.live_at) items.push({
+		key: "deployed",
+		label: "It's deployed — check now",
+		title: "Don't wait out the deploy timer"
+	});
+	if (isFailing(plan)) items.push({
+		key: "fix",
+		label: "Fix in a new session",
+		title: "Starts a new session with what failed attached"
+	});
+	if (!running && steps.length && plan.state !== "generating" && agentCan && primary !== "check" && primary !== "rerun") items.push({
+		key: "run",
+		label: latestRun(plan) ? "Rerun" : "Check now",
+		title: "The agent checks the behaviors it can"
+	});
+	const watch = watchSessionOf(plan);
+	if (watch) items.push({
+		key: "watch",
+		label: "Open the checking run",
+		title: "Open " + watch + " as a pane — closing it doesn't stop the check"
+	});
+	if (running) items.push({
+		key: "cancel",
+		label: "Cancel the check",
+		title: "Stop the agent — what it found so far is kept"
+	});
+	if (ctx.session) {
+		items.push({
+			key: "session",
+			label: "Open the work session",
+			title: "Show " + ctx.session.title + " in the Sky"
+		});
+		items.push({
+			key: "diff",
+			label: "View diff",
+			title: "Show what changed on " + (plan.branch || "this branch")
+		});
+		items.push({
+			key: "risk",
+			label: "What could break",
+			title: "Open the map on what imports these changes"
+		});
+		if (ctx.session.pr_url) items.push({
+			key: "pr",
+			label: "Open PR ↗",
+			title: ctx.session.pr_url
+		});
+	}
+	items.push({
+		key: "delete",
+		label: "Delete these behaviors",
+		title: "Delete these behaviors and their answers",
+		danger: true
+	});
+	return items;
+}
+var CHIP_WORDS = {
+	pass: "Passed",
+	fail: "Failed",
+	cant: "Couldn't check",
+	yours: "Needs you",
+	pending: "Not checked"
+};
+function rowChip(plan, stepId) {
+	const state = stepCheck(plan, stepId);
+	return {
+		state,
+		glyph: CHECK_MARK[state],
+		label: CHIP_WORDS[state]
+	};
+}
+function whoOf(plan, step) {
+	const you = stepIsYours(plan, step);
+	const handed = you && step.actor !== "human";
+	return {
+		you,
+		handed,
+		label: you ? "🙋 you" : "🤖 agent",
+		title: handed ? "The agent couldn't check this one — it's yours now" : you ? "Checked by you — press to let the agent check it" : "Checked by the agent — press to check it yourself"
+	};
+}
+function byWords(by) {
+	return by === "human" ? "you" : "the agent";
+}
+function showsAnswers(plan, step, entry = stepResult(plan, step.id)) {
+	return stepIsYours(plan, step) || entry?.by === "human";
+}
+function rowKey(key, opts) {
+	if (opts.mods || opts.repeat || opts.busy) return "";
+	if (stepKeyIsUndo(key)) return opts.answered ? "undo" : "";
+	const a = stepKeyAction(key);
+	return a === "" ? "" : a;
+}
+function rowAnswered(entry) {
+	return !!entry && isYourAnswer(entry.result, entry.by);
+}
+function primaryTarget(plan, key) {
+	const run = latestRun(plan);
+	const steps = plan.steps || [];
+	if (key === "failed") return steps.find((s) => run?.results?.[s.id]?.result === "fail")?.id || "";
+	if (key === "answer") return openHumanSteps(plan)[0]?.id || steps.find((s) => stepCheck(plan, s.id) === "yours")?.id || steps[0]?.id || "";
+	return "";
+}
+//#endregion
+//#region src/components/behaviors/BehaviorRow.tsx
+var NOTES$1 = /* @__PURE__ */ new Map();
+var noteKey$2 = (plan, step) => plan + "\0" + step;
+var ANSWERS = [
+	{
+		value: "pass",
+		label: "Pass",
+		key: "1"
+	},
+	{
+		value: "fail",
+		label: "Fail",
+		key: "2"
+	},
+	{
+		value: "blocked",
+		label: "Can't check",
+		key: "3"
+	}
+];
+function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce }) {
+	const ref = (0, import_react.useRef)(null);
+	const key = noteKey$2(plan.id, step.id);
+	const draft = NOTES$1.get(key);
+	const [pending, setPending] = (0, import_react.useState)(null);
+	const [noteOpen, setNoteOpenRaw] = (0, import_react.useState)(!!draft?.open);
+	const [note, setNoteRaw] = (0, import_react.useState)(draft?.text || "");
+	const [editing, setEditing] = (0, import_react.useState)(false);
+	const [confirmRemove, setConfirmRemove] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const setNoteOpen = (open, text = note) => {
+		setNoteOpenRaw(open);
+		if (open) NOTES$1.set(key, {
+			open,
+			text
+		});
+		else NOTES$1.delete(key);
+	};
+	const setNote = (text) => {
+		setNoteRaw(text);
+		NOTES$1.set(key, {
+			open: true,
+			text
+		});
+	};
+	(0, import_react.useEffect)(() => {
+		if (!focusNonce) return;
+		const el = ref.current;
+		el?.scrollIntoView?.({
+			block: "nearest",
+			behavior: "smooth"
+		});
+		el?.focus({ preventScroll: true });
+	}, [focusNonce]);
+	const entry = stepResult(plan, step.id);
+	const chip = rowChip(plan, step.id);
+	const who = whoOf(plan, step);
+	const answered = rowAnswered(entry);
+	const answers = showsAnswers(plan, step, entry);
+	const shown = pending ?? entry?.result ?? "";
+	const yourEntry = entry?.by === "human";
+	const locked = pending !== null || busy;
+	const record = async (result) => {
+		setPending(result);
+		try {
+			await onRecord(step, result, result === "" ? "" : note.trim());
+			const next = noteDraftAfter(result, noteOpen, note);
+			setNoteRaw(next.text);
+			setNoteOpen(next.open, next.text);
+		} catch (err) {
+			errorPop("Couldn't record that answer", errMsg(err));
+		} finally {
+			setPending(null);
+		}
+	};
+	const saveNote = async () => {
+		if (!answered || !yourEntry) return;
+		setBusy(true);
+		try {
+			await onRecord(step, entry.result, note.trim());
+			setNoteOpen(false);
+		} catch (err) {
+			errorPop("Couldn't save that note", errMsg(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const toggleWho = async () => {
+		if (!onEdit || busy) return;
+		setBusy(true);
+		try {
+			await onEdit(step, { actor: who.you ? "agent" : "human" });
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		ref,
+		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : ""),
+		"data-step-id": step.id,
+		"data-manual": step.manual ? "1" : void 0,
+		tabIndex: 0,
+		"aria-label": "Behavior " + (index + 1) + ": " + step.text + " — " + chip.label,
+		onKeyDown: (e) => {
+			const from = e.target;
+			if (from !== e.currentTarget && from.closest("input, textarea, select")) return;
+			const act = rowKey(e.key, {
+				answered,
+				mods: e.metaKey || e.ctrlKey || e.altKey,
+				repeat: e.repeat,
+				busy: locked
+			});
+			if (!act) return;
+			e.preventDefault();
+			e.stopPropagation();
+			if (act === "note") setNoteOpen(true);
+			else if (act === "undo") record("");
+			else record(act);
+		},
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "bh-chip",
+			"data-check": chip.state,
+			title: chip.label,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					"aria-hidden": "true",
+					children: chip.glyph
+				}),
+				" ",
+				chip.label
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "bh-row-body",
+			children: [
+				editing && onEdit ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorEditor, {
+					step,
+					onCancel: () => setEditing(false),
+					onSave: async (fields) => {
+						if (await onEdit(step, fields)) setEditing(false);
+					}
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "bh-text",
+					children: step.text
+				}), step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-expect",
+					children: ["Expect: ", step.expect]
+				}) : null] }),
+				entry?.note && !yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-evidence",
+					title: "What the agent recorded",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-evidence-by",
+							children: "The agent:"
+						}),
+						" ",
+						entry.note
+					]
+				}) : entry?.note && yourEntry && !noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-evidence",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-evidence-by",
+							children: "Your note:"
+						}),
+						" ",
+						entry.note
+					]
+				}) : null,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-row-actions",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "bh-who" + (who.you ? " is-you" : ""),
+							title: who.title,
+							"aria-label": "Who checks behavior " + (index + 1) + ": " + (who.you ? "you" : "the agent"),
+							"aria-pressed": who.you,
+							disabled: !onEdit || busy,
+							onClick: () => void toggleWho(),
+							children: who.label
+						}),
+						answers ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-answers",
+							role: "group",
+							"aria-label": "Answer behavior " + (index + 1),
+							children: ANSWERS.map((a) => {
+								const on = shown === a.value && (answered || pending === a.value);
+								return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn bh-answer bh-answer-" + a.value,
+									"data-on": on ? "1" : void 0,
+									"aria-pressed": on,
+									disabled: locked,
+									title: on && yourEntry ? "Recorded — press again to take it back" : a.label + " (" + a.key + ")",
+									onClick: () => void record(on && yourEntry ? "" : a.value),
+									children: pending === a.value ? "…" : a.label
+								}, a.value);
+							})
+						}) : null,
+						entry?.result && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "bh-receipt",
+							children: [byWords(entry.by), entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""]
+						}) : null,
+						answered && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tb-item bh-quiet",
+							disabled: locked,
+							title: "Take this answer back (u)",
+							onClick: () => void record(""),
+							children: "Undo"
+						}) : null,
+						(!entry || yourEntry || !answered) && !noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tb-item bh-quiet",
+							title: "Add a note (n)",
+							onClick: () => {
+								setNote(yourEntry ? entry?.note || "" : "");
+								setNoteOpen(true);
+							},
+							children: "+ note"
+						}) : null,
+						shown === "fail" && onFix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tb-item bh-quiet",
+							title: "Starts a new session with this failure attached",
+							onClick: () => onFix(step),
+							children: "Fix"
+						}) : null,
+						onEdit && !editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tb-item bh-quiet",
+							title: "Change the wording — clears any answer on it",
+							onClick: () => setEditing(true),
+							children: "Edit"
+						}) : null,
+						step.manual && onRemove ? confirmRemove ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "bh-confirm",
+							role: "alertdialog",
+							"aria-label": "Remove this behavior?",
+							children: [
+								"Remove it?",
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn bh-danger",
+									disabled: busy,
+									onClick: async () => {
+										setBusy(true);
+										try {
+											await onRemove(step);
+										} finally {
+											setBusy(false);
+											setConfirmRemove(false);
+										}
+									},
+									children: "Remove"
+								}),
+								" ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									autoFocus: true,
+									onClick: () => setConfirmRemove(false),
+									children: "Keep it"
+								})
+							]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tb-item bh-quiet",
+							title: "Delete this behavior you added",
+							onClick: () => setConfirmRemove(true),
+							children: "Remove"
+						}) : null
+					]
+				}),
+				noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-note-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "fl-input bh-note",
+						placeholder: shown === "pass" ? "anything worth recording?" : "what happened?",
+						"aria-label": "Note for behavior " + (index + 1),
+						autoComplete: "off",
+						autoFocus: true,
+						value: note,
+						disabled: busy,
+						onChange: (e) => setNote(e.target.value),
+						onKeyDown: (e) => {
+							e.stopPropagation();
+							if (e.key === "Enter") {
+								e.preventDefault();
+								saveNote();
+							} else if (e.key === "Escape") {
+								e.preventDefault();
+								setNoteOpen(false);
+								ref.current?.focus();
+							}
+						}
+					}), answered && yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						onClick: () => void saveNote(),
+						children: busy ? "Saving…" : "Save"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "bh-hint",
+						children: "Pick Pass, Fail or Can't check to save it"
+					})]
+				}) : null
+			]
+		})]
+	});
+}
+function BehaviorEditor({ step, onCancel, onSave }) {
+	const [text, setText] = (0, import_react.useState)(step.text);
+	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const save = async () => {
+		if (!text.trim()) return;
+		setBusy(true);
+		try {
+			await onSave({
+				text: text.trim(),
+				expect: expect.trim()
+			});
+		} finally {
+			setBusy(false);
+		}
+	};
+	const keys = (e) => {
+		e.stopPropagation();
+		if (e.key === "Escape") {
+			e.preventDefault();
+			onCancel();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "bh-edit",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				className: "fl-input",
+				rows: 2,
+				"aria-label": "What the work should do",
+				autoFocus: true,
+				value: text,
+				disabled: busy,
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: keys
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "fl-input",
+				"aria-label": "What should happen",
+				placeholder: "what should happen",
+				autoComplete: "off",
+				value: expect,
+				disabled: busy,
+				onChange: (e) => setExpect(e.target.value),
+				onKeyDown: (e) => {
+					keys(e);
+					if (e.key === "Enter") {
+						e.preventDefault();
+						save();
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bh-edit-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary",
+					disabled: busy || !text.trim(),
+					onClick: () => void save(),
+					children: busy ? "Saving…" : "Save"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: onCancel,
+					children: "Cancel"
+				})]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/behaviors/BehaviorsCard.tsx
+function ShieldIcon() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "bh-shield",
+		viewBox: "0 0 16 16",
+		width: "14",
+		height: "14",
+		"aria-hidden": "true",
+		focusable: "false",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+			d: "M8 1.5 13.5 3.5v4c0 3.3-2.3 5.9-5.5 7-3.2-1.1-5.5-3.7-5.5-7v-4z",
+			fill: "none",
+			stroke: "currentColor",
+			strokeWidth: "1.4",
+			strokeLinejoin: "round"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+			d: "m5.4 8.1 1.9 1.9 3.4-3.6",
+			fill: "none",
+			stroke: "currentColor",
+			strokeWidth: "1.5",
+			strokeLinecap: "round",
+			strokeLinejoin: "round"
+		})]
+	});
+}
+function BehaviorsCard({ plan, onClose, compact, flightStep }) {
+	const s = behaviorSummary(plan);
+	const { data: instances } = useInstances();
+	const session = (instances || []).find((i) => planForSession([plan], i) === plan) || null;
+	const steps = plan.steps || [];
+	const running = plan.state === "running";
+	const watch = watchSessionOf(plan);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [rewriting, setRewriting] = (0, import_react.useState)(false);
+	const [confirmDelete, setConfirmDelete] = (0, import_react.useState)(false);
+	const [adding, setAdding] = (0, import_react.useState)(false);
+	const [focus, setFocus] = (0, import_react.useState)({
+		id: "",
+		n: 0
+	});
+	const [menu, setMenu] = (0, import_react.useState)(null);
+	const moreRef = (0, import_react.useRef)(null);
+	const withBusy = async (key, fn) => {
+		setBusy(key);
+		try {
+			await fn();
+		} finally {
+			setBusy("");
+		}
+	};
+	const focusRow = (id) => id && setFocus((f) => ({
+		id,
+		n: f.n + 1
+	}));
+	const primary = () => {
+		const a = s.action;
+		if (!a) return;
+		if (a.key === "check" || a.key === "rerun") withBusy("primary", () => startChecklistRun(plan));
+		else if (a.key === "failed" || a.key === "answer") focusRow(primaryTarget(plan, a.key));
+		else if (a.key === "write") {
+			if (plan.origin === "manual") setAdding(true);
+			else withBusy("primary", () => regeneratePlan(plan));
+		}
+	};
+	const pick = (key) => {
+		const ui = useUi.getState();
+		switch (key) {
+			case "rewrite":
+				setRewriting(true);
+				break;
+			case "deployed":
+				withBusy("deployed", () => markPlanDeployed(plan));
+				break;
+			case "fix":
+				withBusy("fix", () => fixPlanFailures(plan));
+				break;
+			case "run":
+				withBusy("primary", () => startChecklistRun(plan));
+				break;
+			case "watch":
+				ui.openVerifyPane(watch);
+				ui.setView("grid");
+				break;
+			case "cancel":
+				withBusy("cancel", () => cancelChecklistRun(plan));
+				break;
+			case "session":
+				if (session) ui.showSky(session.title);
+				break;
+			case "diff":
+				if (session) {
+					ui.openDiff(session.title);
+					ui.setView("grid");
+				}
+				break;
+			case "risk":
+				if (session) {
+					ui.openMap(session.title, { section: "risk" });
+					ui.setView("grid");
+				}
+				break;
+			case "pr":
+				if (session?.pr_url) window.open(session.pr_url, "_blank");
+				break;
+			case "delete": setConfirmDelete(true);
+		}
+	};
+	const items = cardMenuItems(plan, {
+		summary: s,
+		session
+	});
+	const record = (step, result, note) => recordStepAnswer(plan, step, result, note);
+	const edit = running ? void 0 : (step, fields) => editPlanStep(plan, step, fields);
+	const remove = running ? void 0 : (step) => removePlanStep(plan, step);
+	const fixOne = running || busy ? void 0 : (step) => void withBusy("fix", () => fixPlanFailures(plan, [step.id]));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "bh-card is-" + s.tone + (compact ? " is-compact" : ""),
+		"data-plan": plan.id,
+		"data-tone": s.tone,
+		"data-no-drag": true,
+		"aria-label": "Behaviors — " + s.status,
+		onKeyDown: (e) => {
+			if (e.key !== "Escape" || !onClose || menu) return;
+			if (e.target.closest("input, textarea, select")) return;
+			e.stopPropagation();
+			e.preventDefault();
+			onClose();
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "bh-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "bh-head-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldIcon, {}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "bh-title",
+								children: "Behaviors"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "bh-status",
+								"data-tone": s.tone,
+								children: s.status
+							}),
+							s.total ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "bh-count",
+								children: behaviorsCount(s.total)
+							}) : null,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "bh-head-tools",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									ref: moreRef,
+									type: "button",
+									className: "fl-icon-btn bh-more",
+									"aria-label": "More for these behaviors",
+									"aria-haspopup": "menu",
+									"aria-expanded": !!menu,
+									onClick: (e) => {
+										const r = e.currentTarget.getBoundingClientRect();
+										setMenu(menu ? null : {
+											x: Math.max(8, r.right - 220),
+											y: r.bottom + 4
+										});
+									},
+									children: "⋯"
+								}), onClose ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "fl-icon-btn bh-close",
+									"aria-label": "Close",
+									title: "Fold back (Esc)",
+									onClick: onClose,
+									children: "×"
+								}) : null]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "bh-sentence",
+						children: s.sentence
+					}),
+					s.action || flightStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "bh-head-actions",
+						children: [s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary bh-primary",
+							"data-action": s.action.key,
+							disabled: !!busy,
+							onClick: primary,
+							children: busy === "primary" ? "…" : s.action.label
+						}) : null, flightStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn bh-skip",
+							title: "The chain moves on without these answers",
+							disabled: !!busy,
+							onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
+							children: busy === "skip" ? "…" : "Skip this stop"
+						}) : null]
+					}) : null
+				]
+			}),
+			rewriting ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RewriteBehaviors, {
+				plan,
+				onDone: () => setRewriting(false)
+			}) : null,
+			confirmDelete ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Delete these behaviors?",
+				body: "Their answers go too" + (running ? ", and the check running now stops." : "."),
+				confirmLabel: "Delete",
+				cancelLabel: "Keep them",
+				busy: busy === "delete",
+				onConfirm: () => void withBusy("delete", async () => {
+					await removePlan(plan, { watchSession: watch });
+					setConfirmDelete(false);
+					onClose?.();
+				}),
+				onCancel: () => setConfirmDelete(false)
+			}) : null,
+			steps.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "bh-rows sky-own-scroll",
+				children: steps.map((st, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorRow, {
+					plan,
+					step: st,
+					index: i,
+					onRecord: record,
+					onEdit: edit,
+					onRemove: remove,
+					onFix: fixOne,
+					focusNonce: focus.id === st.id ? focus.n : 0
+				}, st.id))
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
+				className: "bh-foot",
+				children: adding ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddBehavior, {
+					plan,
+					onDone: () => setAdding(false)
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "tb-item bh-add",
+					disabled: plan.state === "generating",
+					onClick: () => setAdding(true),
+					children: "+ Add a behavior"
+				})
+			}),
+			menu && typeof document !== "undefined" ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-chain-menu",
+				style: {
+					position: "fixed",
+					left: 0,
+					top: 0,
+					width: 0,
+					height: 0,
+					zIndex: 80,
+					["--sky-z"]: 1
+				},
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
+					x: menu.x,
+					y: menu.y,
+					label: "Behaviors — what you can do",
+					items: items.map((it) => ({
+						...it,
+						key: it.key
+					})),
+					onPick: (key) => {
+						setMenu(null);
+						pick(key);
+					},
+					onClose: (back) => {
+						setMenu(null);
+						if (back) moreRef.current?.focus();
+					}
+				})
+			}), document.body) : null
+		]
+	});
+}
+function RewriteBehaviors({ plan, onDone }) {
+	const [focus, setFocus] = (0, import_react.useState)(plan.focus || "");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const blocked = rewriteBlockedReason(plan);
+	const warning = blocked ? "" : rewriteWarning(plan).replace(/Steps/g, "Behaviors").replace(/steps/g, "behaviors");
+	const go = async () => {
+		setBusy(true);
+		try {
+			if (await regeneratePlan(plan, focus)) onDone();
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "bh-rewrite",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+				className: "bh-rewrite-title",
+				htmlFor: "bh-rewrite-" + plan.id,
+				children: "Rewrite behaviors"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				id: "bh-rewrite-" + plan.id,
+				className: "fl-input",
+				rows: 2,
+				autoFocus: true,
+				placeholder: "What should they check instead? (optional) — e.g. “focus on the coupon flow at checkout”",
+				value: focus,
+				disabled: busy || !!blocked,
+				onChange: (e) => setFocus(e.target.value),
+				onKeyDown: (e) => {
+					e.stopPropagation();
+					if (e.key === "Escape") {
+						e.preventDefault();
+						onDone();
+					}
+				}
+			}),
+			blocked || warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "bh-hint",
+				children: blocked || warning
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bh-edit-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary",
+					disabled: busy || !!blocked,
+					onClick: () => void go(),
+					children: busy ? "Asking…" : "Rewrite"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: busy,
+					onClick: onDone,
+					children: "Cancel"
+				})]
+			})
+		]
+	});
+}
+function AddBehavior({ plan, onDone }) {
+	const [text, setText] = (0, import_react.useState)("");
+	const [expect, setExpect] = (0, import_react.useState)("");
+	const [actor, setActor] = (0, import_react.useState)("agent");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const textRef = (0, import_react.useRef)(null);
+	const add = async () => {
+		const body = text.trim();
+		if (!body || busy) return;
+		setBusy(true);
+		try {
+			await addBehavior(plan, {
+				text: body,
+				expect: expect.trim(),
+				actor
+			});
+			setText("");
+			setExpect("");
+			textRef.current?.focus();
+		} catch (err) {
+			errorPop("Couldn't add that behavior", errMsg(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const keys = (e) => {
+		e.stopPropagation();
+		if (e.key === "Enter") {
+			e.preventDefault();
+			add();
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			onDone();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "bh-addform",
+		role: "group",
+		"aria-label": "Add a behavior",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				ref: textRef,
+				type: "text",
+				className: "fl-input",
+				autoFocus: true,
+				autoComplete: "off",
+				placeholder: "what the work should do",
+				"aria-label": "New behavior",
+				value: text,
+				disabled: busy,
+				onChange: (e) => setText(e.target.value),
+				onKeyDown: keys
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				className: "fl-input",
+				autoComplete: "off",
+				placeholder: "what should happen (optional)",
+				"aria-label": "What should happen",
+				value: expect,
+				disabled: busy,
+				onChange: (e) => setExpect(e.target.value),
+				onKeyDown: keys
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bh-edit-actions",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "bh-who" + (actor === "human" ? " is-you" : ""),
+						"aria-pressed": actor === "human",
+						title: "Who checks it — press to switch",
+						disabled: busy,
+						onClick: () => setActor(actor === "human" ? "agent" : "human"),
+						children: actor === "human" ? "🙋 you" : "🤖 agent"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary",
+						disabled: busy || !text.trim(),
+						onClick: () => void add(),
+						children: busy ? "Adding…" : "Add"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						onClick: onDone,
+						children: "Done adding"
+					})
+				]
+			})
+		]
+	});
+}
+async function addBehavior(plan, fields) {
+	const next = await addPlanStep(plan, fields);
+	if (next) patchPlan(plan.id, () => next);
+	refreshTestPlans();
+}
+//#endregion
 //#region src/components/OverflowMenu.tsx
 function OverflowMenu({ label, items, boundaryId }) {
 	const ref = (0, import_react.useRef)(null);
@@ -82659,6 +84158,49 @@ function reorderDiagram(d, from, to) {
 		edges
 	};
 }
+var BEHAVIORS_ID = "behaviors";
+function verifyStopOf(d) {
+	const main = d.nodes.filter((n) => n.row === "main" && n.kind === "stop" && n.step?.kind === "verify");
+	return main.length ? main[main.length - 1] : null;
+}
+function withBehaviors(d, mark) {
+	if (!mark) return d;
+	const verify = verifyStopOf(d);
+	if (verify) return {
+		...d,
+		nodes: d.nodes.map((n) => n.id === verify.id ? {
+			...n,
+			behaviors: mark
+		} : n)
+	};
+	const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "add" && n.kind !== "parent");
+	const session = main.find((n) => n.kind === "session");
+	const line = main.filter((n) => n.kind !== "session");
+	const last = line[line.length - 1] || session;
+	if (!last) return d;
+	const node = {
+		id: BEHAVIORS_ID,
+		kind: "behaviors",
+		row: "main",
+		title: "Behaviors",
+		sub: mark.short,
+		state: "pending",
+		icon: "behaviors",
+		behaviors: mark
+	};
+	const pid = last.parallel?.id;
+	const from = pid ? line.filter((n) => n.parallel?.id === pid) : [last];
+	const edges = [...d.edges, ...from.map((n) => ({
+		from: n.id,
+		to: BEHAVIORS_ID,
+		kind: from.length > 1 ? "join" : "line"
+	}))];
+	return {
+		...d,
+		nodes: [...d.nodes, node],
+		edges
+	};
+}
 //#endregion
 //#region src/lib/skyLayout.ts
 var SKY_GAP = 64;
@@ -82881,6 +84423,60 @@ function assignSpots(existing, newcomers, area) {
 	if (!fresh.length) return {};
 	const all = placeLines([...existing, ...fresh], saved, area);
 	return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
+}
+var FILL_GAIN = 1.1;
+function fillWidth(existing, newcomers, area, vw, vh, opts = {}) {
+	const min = area.width;
+	const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
+	if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
+	const maxZ = opts.maxZ ?? 1;
+	const flat = new Set(opts.flat || []);
+	const aside = new Set((opts.right || []).map((r) => r.id));
+	const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
+	const x0 = area.left ?? SKY_MARGIN;
+	const stops = [];
+	let run = x0;
+	for (const n of fresh) {
+		run += n.w;
+		stops.push(run);
+		run += SKY_GAP;
+	}
+	const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
+	const steps = 24;
+	const k = max > min ? (max / Math.max(1, min)) ** (1 / 23) : 1;
+	const widths = /* @__PURE__ */ new Set([min]);
+	if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
+	for (const s of stops) if (s > min && s <= max) widths.add(s);
+	const counted = existing.filter((e) => !aside.has(e.id));
+	let best = min;
+	let bestZ = -Infinity;
+	let minZ = -Infinity;
+	for (const width of [...widths].sort((a, b) => a - b)) {
+		const spots = assignSpots(existing, fresh, {
+			...area,
+			width
+		});
+		const b = boundsOf([...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({
+			id: n.id,
+			...spots[n.id],
+			w: n.w,
+			h: n.h
+		}))].map((r) => ({
+			x: r.x,
+			y: r.y,
+			w: r.w,
+			h: flat.has(r.id) ? 1 : r.h
+		})));
+		if (!b) continue;
+		const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
+		const z = Math.min(maxZ, (vw - 112) / w, (vh - 112) / Math.max(1, b.h));
+		if (width === min) minZ = z;
+		if (z > bestZ + .001) {
+			bestZ = z;
+			best = width;
+		}
+	}
+	return bestZ >= minZ * FILL_GAIN ? best : min;
 }
 function boundsOf(rects) {
 	if (!rects.length) return null;
@@ -83600,77 +85196,6 @@ function canJumpTo(flight, n) {
 }
 function jumpTargets(d, flight = jumpFlightOf(d)) {
 	return flight ? d.nodes.filter((n) => canJumpTo(flight, n)) : [];
-}
-//#endregion
-//#region src/components/flights/StopMenu.tsx
-function StopMenu(p) {
-	const ref = (0, import_react.useRef)(null);
-	const live = () => [...ref.current?.querySelectorAll("button[role=menuitem]:not(:disabled)") || []];
-	(0, import_react.useEffect)(() => {
-		live()[0]?.focus();
-		const onDown = (e) => {
-			if (ref.current && !ref.current.contains(e.target)) p.onClose(false);
-		};
-		const onKey = (e) => {
-			if (e.key !== "Escape") return;
-			e.stopPropagation();
-			e.preventDefault();
-			p.onClose(true);
-		};
-		document.addEventListener("pointerdown", onDown, true);
-		document.addEventListener("keydown", onKey, true);
-		return () => {
-			document.removeEventListener("pointerdown", onDown, true);
-			document.removeEventListener("keydown", onKey, true);
-		};
-	}, []);
-	const onKey = (e) => {
-		const all = live();
-		if (!all.length) return;
-		const i = all.indexOf(document.activeElement);
-		const go = (j) => {
-			e.preventDefault();
-			all[(j + all.length) % all.length].focus();
-		};
-		if (e.key === "ArrowDown") go(i + 1);
-		else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
-		else if (e.key === "Home") go(0);
-		else if (e.key === "End") go(-1);
-		else if (e.key === "Tab") {
-			e.preventDefault();
-			p.onClose(true);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		ref,
-		className: "fl-stopmenu",
-		role: "menu",
-		"aria-label": p.label,
-		style: {
-			left: p.x,
-			top: p.y
-		},
-		"data-no-drag": true,
-		onKeyDown: onKey,
-		onPointerDown: (e) => e.stopPropagation(),
-		onClick: (e) => e.stopPropagation(),
-		onContextMenu: (e) => e.preventDefault(),
-		children: p.items.map((it, i) => it.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fl-stopmenu-note",
-			role: "menuitem",
-			"aria-disabled": "true",
-			title: it.title,
-			children: it.label
-		}, "note" + i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			role: "menuitem",
-			className: "fl-stopmenu-item" + (it.danger ? " danger" : ""),
-			disabled: it.disabled,
-			title: it.title,
-			onClick: () => p.onPick(it.key),
-			children: it.label
-		}, it.key))
-	});
 }
 //#endregion
 //#region src/components/flights/FlywayCanvas.tsx
@@ -85039,12 +86564,70 @@ function flightHeadline(f) {
 	if (s?.id) return (s.kind === "pr" || s.kind === "issue" ? "#" : "") + s.id;
 	return f.session || f.plan_name;
 }
+function VerifyStopActions({ flight, compact = false }) {
+	const step = flight.steps[flight.cursor];
+	const plans = useTestPlans().data?.plans;
+	const row = useInstances().data?.find((r) => r.title === flight.session) || {
+		title: flight.session,
+		branch: "",
+		repo: ""
+	};
+	const plan = planForSession(plans || [], row);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	if (!step) return null;
+	const skip = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn fl-btn fl-skip",
+		disabled: busy,
+		title: "Skip “" + step.title + "” — the chain goes on without it",
+		onClick: () => {
+			setBusy(true);
+			stepSkip(flight.id, step.id).finally(() => setBusy(false));
+		},
+		children: "Skip"
+	});
+	if (compact || !plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-you fl-you-verify" + (compact ? " fl-you-compact" : ""),
+		onClick: stop,
+		"data-no-drag": true,
+		children: [!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "fl-you-text",
+			children: "Writing the behaviors… they show here to answer once they are written."
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-you-acts",
+			children: [plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary fl-btn fl-behaviors",
+				title: "Answer the behaviors that wait on you, on the session's frame in the Sky",
+				onClick: () => openBehaviors({ planId: plan.id }),
+				children: "Behaviors"
+			}), skip]
+		})]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fl-you fl-you-verify",
+		onClick: stop,
+		"data-no-drag": true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorsCard, {
+			plan,
+			compact: true,
+			flightStep: {
+				flightId: flight.id,
+				stepId: step.id
+			}
+		})
+	});
+}
 function YouStepActions({ flight, compact = false }) {
 	const step = flight.steps[flight.cursor];
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	if (!step || flight.state !== "waiting_you" && flight.state !== "halted") return null;
+	if (step.kind === "verify" && flight.state === "waiting_you") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopActions, {
+		flight,
+		compact
+	});
 	const run = async (fn) => {
 		setBusy(true);
 		try {
@@ -85211,9 +86794,10 @@ function useCancelAsk(flight) {
 		ask: () => setAsking(true)
 	};
 }
-function liveBoxParts(flight, expand, onCancelAsk) {
+function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 	const cur = flight ? flight.steps[flight.cursor] : null;
-	const expanded = (n) => !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted");
+	const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
+	const expanded = (n) => !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted") && !(opts.verifyInPlace && verifyHere);
 	const renderInBox = (n) => {
 		if (!flight || n.kind !== "stop") return null;
 		const items = stopMenuItems(flight, n, onCancelAsk);
@@ -85229,6 +86813,10 @@ function liveBoxParts(flight, expand, onCancelAsk) {
 	};
 	const sizeOf = (n, base) => {
 		if (!expanded(n)) return base;
+		if (verifyHere) return {
+			w: Math.max(base.w, 320),
+			h: base.h + 220
+		};
 		const items = n.state === "perched" ? youItems(cur).length : 0;
 		const text = n.state === "perched" && youText(flight) ? 24 : 0;
 		return {
@@ -85409,6 +86997,7 @@ var PITCH_Y = 150;
 var GRID_SNAP = 8;
 var PLUS_REACH = 52;
 var PLUS_SIZE = 24;
+var BEHAVIORS_GAP = 40;
 var LOOP_CLEAR = 16;
 var LOOP_LANE = 20;
 var LOOP_HOOK = 40;
@@ -85538,7 +87127,9 @@ function chainGraph(d, opts) {
 			kind: "head"
 		});
 	}
-	if (d.nodes.some((n) => n.kind === "add") && !addFrom) addFrom = main.length ? main[main.length - 1].id : hn ? HEAD_ID : null;
+	const hasAdd = d.nodes.some((n) => n.kind === "add");
+	const stops = main.filter((n) => n.kind !== "behaviors");
+	if (hasAdd && !addFrom) addFrom = stops.length ? stops[stops.length - 1].id : hn ? HEAD_ID : null;
 	if (addFrom) push({
 		from: addFrom,
 		to: "add",
@@ -85738,11 +87329,14 @@ function autoPlace(nodes) {
 			col.last = next;
 			if (!n.pinned) colLow = Math.max(colLow, next.y);
 		} else {
+			const gap = n.node.kind === "behaviors" ? BEHAVIORS_GAP : 0;
+			const step = prev ? Math.max(PITCH_X, prev.w + 18) : 0;
 			next = n.pinned ? { ...n } : {
 				...n,
-				x: prev ? prev.x + PITCH_X : 0,
+				x: prev ? prev.x + step + gap : 0,
 				y: prev ? prev.y : 0
 			};
+			if (next.h > NODE_H) colLow = Math.max(colLow, next.y + next.h - NODE_H);
 			prev = next;
 			col = n.node.parallel && n.node.parallel.size > 1 ? {
 				id: n.node.parallel.id,
@@ -86124,6 +87718,7 @@ var FAMILY = {
 	you: "people",
 	perch: "people",
 	verify: "people",
+	behaviors: "people",
 	someone: "people",
 	handoff: "flow"
 };
@@ -86163,6 +87758,21 @@ function TileIcon({ kind, size = 28 }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M19.5 4.5L10 14" }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M17 13.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4.5" })
 		]
+	});
+	if (kind === "behaviors") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "fl-stop-icon",
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.8",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		focusable: "false",
+		"data-icon": "behaviors",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3l7.5 2.8v5.4c0 4.6-3.1 8.1-7.5 9.8-4.4-1.7-7.5-5.2-7.5-9.8V5.8z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M8.6 12.2l2.4 2.4 4.6-4.8" })]
 	});
 	if (kind === "group") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		className: "fl-stop-icon",
@@ -86340,6 +87950,9 @@ function tileLabel(n, head = false) {
 	const sub = tileSub(n);
 	return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
 }
+function behaviorsLabel(n, bh) {
+	return (n.kind === "behaviors" ? "Behaviors" : n.title + ", the behaviors") + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
+}
 function SkyChain(p) {
 	const [drag, setDrag] = (0, import_react.useState)(null);
 	const dragRef = (0, import_react.useRef)(null);
@@ -86355,7 +87968,8 @@ function SkyChain(p) {
 	const firstStop = g.nodes.find((n) => n.node.row === "main") || null;
 	const activate = (n) => {
 		if (justDragged.current) return;
-		if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
+		if (n.id !== HEAD_ID && n.node.behaviors) p.onOpen?.(n.node);
+		else if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
 		else p.onOpen?.(n.node);
 	};
 	const edit = (n) => p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node);
@@ -86473,12 +88087,15 @@ function SkyChain(p) {
 		const frame = sub_ ? p.subFrames?.[dn.session] : void 0;
 		const fam = nodeFamily(dn, p.kinds);
 		const halt = isHead ? null : haltMark(dn);
-		const sub = isHead ? head.sub : tileSub(dn);
+		const bh = isHead ? void 0 : dn.behaviors;
+		const bhTile = !isHead && dn.kind === "behaviors";
+		const sub = isHead ? head.sub : bh ? bh.short : tileSub(dn);
 		const cls = [
 			"sky-node",
 			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
 			isAgent ? "sky-agent" : "",
 			sub_ ? "sky-subframe" : "",
+			bh ? "sky-behaviors is-" + bh.tone : "",
 			"st-" + dn.state,
 			"sky-fam-" + fam,
 			dn.chip ? "tone-" + dn.chip.tone : "",
@@ -86493,7 +88110,7 @@ function SkyChain(p) {
 			drag?.live && drag.id === n.id ? "is-dragging" : "",
 			draggable(n) ? "is-draggable" : ""
 		].filter(Boolean).join(" ");
-		const said = sub_ ? "Sub-session " + dn.title + " — its agent" + (frame ? " (" + frame.agent + ")" : "") + (dn.chip ? " " + dn.chip.label.toLowerCase() : "") + (sub ? ", " + sub : "") : (isAgent ? "Agent: " : "") + tileLabel(isHead ? {
+		const said = sub_ ? "Sub-session " + dn.title + " — its agent" + (frame ? " (" + frame.agent + ")" : "") + (dn.chip ? " " + dn.chip.label.toLowerCase() : "") + (sub ? ", " + sub : "") : bh ? behaviorsLabel(dn, bh) : (isAgent ? "Agent: " : "") + tileLabel(isHead ? {
 			...dn,
 			title: head.title,
 			sub: head.sub
@@ -86520,7 +88137,7 @@ function SkyChain(p) {
 			"data-diagram-node": dn.id,
 			"aria-label": said,
 			"aria-current": isSel(n) ? "true" : void 0,
-			title: isHead ? void 0 : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
+			title: isHead ? void 0 : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
 			style: {
 				transform: `translate(${n.x}px, ${n.y}px)`,
 				width: n.w,
@@ -86569,13 +88186,18 @@ function SkyChain(p) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-tile-icon",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
-								kind: isAgent || sub_ ? "agent" : isHead ? head.kind === "trigger" ? "handoff" : "session" : dn.perch ? "perch" : dn.icon,
+								kind: isAgent || sub_ ? "agent" : isHead ? head.kind === "trigger" ? "handoff" : "session" : bh ? "behaviors" : dn.perch ? "perch" : dn.icon,
 								size: 28
 							})
 						}),
 						isHead && head.kind !== "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-dot",
 							"aria-hidden": "true"
+						}),
+						bhTile && bh && (bh.tone === "ok" || bh.tone === "bad") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge " + (bh.tone === "ok" ? "sky-badge-done" : "sky-badge-failed"),
+							"aria-hidden": "true",
+							children: bh.tone === "ok" ? "✓" : "!"
 						}),
 						!isHead && dn.state === "done" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-badge sky-badge-done",
@@ -86629,6 +88251,24 @@ function SkyChain(p) {
 						className: "sky-head-chip tone-" + dn.chip.tone,
 						children: dn.chip.label
 					}) : null
+				}) : bhTile ? p.onMenu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-extra",
+					"data-no-drag": true,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-icon-btn sky-bh-more",
+						"aria-label": "Actions for these behaviors",
+						title: "What you can do with these behaviors",
+						onClick: (e) => {
+							e.stopPropagation();
+							const r = e.currentTarget.getBoundingClientRect();
+							p.onMenu?.(dn, {
+								clientX: r.left,
+								clientY: r.bottom
+							});
+						},
+						children: "⋯"
+					})
 				}) : dn.chip && !isStopish(dn) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "sky-node-extra",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -86887,6 +88527,186 @@ function Countdown({ until }) {
 		"aria-live": "off",
 		children: ["⏱ ", leftWord(until - now)]
 	});
+}
+var BH_CARD_W = 380;
+var BH_CARD_MIN_H = 220;
+var BH_CARD_MAX_H = 560;
+var BH_ASK_W = 300;
+var BH_ASK_H = 170;
+var BH_CARD_CHROME_H = 132;
+var BH_ROW_H = 100;
+function behaviorsCardBox(plan) {
+	const rows = (plan?.steps || []).length;
+	return {
+		w: BH_CARD_W,
+		h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, BH_CARD_CHROME_H + rows * BH_ROW_H))
+	};
+}
+function behaviorsMarkOf(plan) {
+	if (!plan) return null;
+	const s = behaviorSummary(plan);
+	return {
+		planId: plan.id,
+		short: s.short,
+		status: s.status,
+		tone: s.tone
+	};
+}
+function behaviorsFrameClass(mark) {
+	return mark?.tone === "bad" ? "is-bh-bad" : mark?.tone === "you" ? "is-bh-you" : "";
+}
+function requestNamesPlan(plans, req, plan, title) {
+	if (!req) return false;
+	return (findPlan(plans, req) || (req.next ? nextNeedingYou(plans) : null))?.id === plan.id || !!req.title && req.title === title;
+}
+function useBehaviorsTile(title, row, opts = {}) {
+	const plans = useTestPlans().data?.plans;
+	const plan = (0, import_react.useMemo)(() => row ? planForSession(plans || [], row) : null, [plans, row]);
+	const mark = (0, import_react.useMemo)(() => behaviorsMarkOf(plan), [plan]);
+	const [mode, setMode] = (0, import_react.useState)(null);
+	const [menuAt, setMenuAt] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const planId = plan?.id || "";
+	(0, import_react.useEffect)(() => {
+		if (!planId && mode) setMode(null);
+	}, [planId, mode]);
+	(0, import_react.useEffect)(() => {
+		if (!planId) return;
+		const st = useBehaviorsFocus.getState();
+		if (mode === "card") st.setOpenPlan(planId);
+		else if (st.openPlan === planId) st.setOpenPlan("");
+	}, [mode, planId]);
+	(0, import_react.useEffect)(() => () => {
+		const st = useBehaviorsFocus.getState();
+		if (planId && st.openPlan === planId) st.setOpenPlan("");
+	}, [planId]);
+	const req = useBehaviorsFocus((st) => st.request);
+	const seen = (0, import_react.useRef)(0);
+	(0, import_react.useEffect)(() => {
+		if (!opts.listen || !req || !plan || req.n === seen.current) return;
+		seen.current = req.n;
+		if (requestNamesPlan(plans || [], req, plan, title)) setMode("card");
+	}, [
+		opts.listen,
+		req,
+		plan,
+		plans,
+		title
+	]);
+	const close = () => setMode(null);
+	const apply = (0, import_react.useCallback)((d) => withBehaviors(d, mark), [mark]);
+	const big = (0, import_react.useCallback)((d) => {
+		const host = mode && plan ? d.nodes.find((n) => !!n.behaviors) : void 0;
+		if (!host) return {};
+		return { [host.id]: mode === "ask" ? {
+			w: BH_ASK_W,
+			h: BH_ASK_H
+		} : behaviorsCardBox(plan) };
+	}, [mode, plan]);
+	const onOpen = (n) => {
+		if (!n.behaviors || !plan) return false;
+		setMode((m) => m ? null : "card");
+		return true;
+	};
+	const onMenu = (n, at) => {
+		if (n.kind !== "behaviors" || !plan) return false;
+		setMenuAt({
+			x: at.clientX,
+			y: at.clientY
+		});
+		return true;
+	};
+	const flightStep = (n) => {
+		const f = opts.flight;
+		if (!f || !n.step || n.step.kind !== "verify" || !isLive(f) || f.steps[f.cursor]?.id !== n.step.id) return null;
+		return {
+			flightId: f.id,
+			stepId: n.step.id
+		};
+	};
+	const renderOpen = (n) => {
+		if (!mode || !plan || !n.behaviors) return null;
+		const esc = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			close();
+		};
+		if (mode === "ask") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-bh-open sky-bh-ask sky-own-scroll",
+			"data-no-drag": true,
+			"data-plan": plan.id,
+			onKeyDown: esc,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Delete these behaviors?",
+				body: "What “" + title + "” should do in real use, and every answer to it, go for good.",
+				confirmLabel: "Delete these behaviors",
+				cancelLabel: "Keep them",
+				busy,
+				onConfirm: () => {
+					setBusy(true);
+					removePlan(plan, { onGone: close }).finally(() => setBusy(false));
+				},
+				onCancel: close
+			})
+		});
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-bh-open sky-own-scroll",
+			"data-no-drag": true,
+			"data-plan": plan.id,
+			onKeyDown: esc,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorsCard, {
+				plan,
+				onClose: close,
+				flightStep: flightStep(n)
+			})
+		});
+	};
+	const items = [{
+		key: "open",
+		label: mode === "card" ? "Fold the behaviors back" : "Open the behaviors",
+		title: mode === "card" ? "Back to the tile" : "Read, answer and edit them here, in the tile's place"
+	}, {
+		key: "delete",
+		label: "Delete these behaviors",
+		title: "They go for good, with every answer to them",
+		danger: true
+	}];
+	return {
+		plan,
+		mark,
+		apply,
+		big,
+		onOpen,
+		onMenu,
+		renderOpen,
+		menu: menuAt && plan && typeof document !== "undefined" ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-chain-menu",
+			style: {
+				position: "fixed",
+				left: 0,
+				top: 0,
+				width: 0,
+				height: 0,
+				zIndex: 80,
+				["--sky-z"]: 1
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
+				x: menuAt.x,
+				y: menuAt.y,
+				label: "Behaviors — what you can do",
+				items,
+				onPick: (key) => {
+					setMenuAt(null);
+					if (key === "open") setMode((m) => m === "card" ? null : "card");
+					else if (key === "delete") setMode("ask");
+				},
+				onClose: () => setMenuAt(null)
+			})
+		}), document.body) : null,
+		frameClass: behaviorsFrameClass(mark),
+		open: mode === "card"
+	};
 }
 //#endregion
 //#region src/components/flights/useChainMenu.tsx
@@ -88098,7 +89918,15 @@ function FlightChain({ title, line, kinds, label }) {
 		flights,
 		kinds
 	]);
-	const big = (0, import_react.useMemo)(() => subFrameBoxes(moves.diagram.nodes, subFrames), [moves.diagram, subFrames]);
+	const behaviors = line.behaviors;
+	const big = (0, import_react.useMemo)(() => ({
+		...subFrameBoxes(moves.diagram.nodes, subFrames),
+		...behaviors.big(moves.diagram)
+	}), [
+		moves.diagram,
+		subFrames,
+		behaviors.big
+	]);
 	const graph = (0, import_react.useMemo)(() => chainGraph(hangFromAgent(moves.diagram), {
 		head,
 		key: title,
@@ -88199,8 +90027,13 @@ function FlightChain({ title, line, kinds, label }) {
 		if (t === title) useUi.getState().setLastTab(title, "agent");
 		else selectSession(t);
 	};
-	const onOpen = (n) => n.kind === "session" ? openTerminal(title) : gc.onOpen?.(n);
+	const onOpen = (n) => {
+		if (behaviors.onOpen(n)) return;
+		if (n.kind === "session") openTerminal(title);
+		else gc.onOpen?.(n);
+	};
 	const onMenu = (n, at) => {
+		if (behaviors.onMenu(n, at)) return;
 		const t = n.kind === "session" ? title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
 		if (!t) return chainMenu.onMenu(n, at);
 		const r = t === title ? row : rows?.find((x) => x.title === t);
@@ -88215,7 +90048,7 @@ function FlightChain({ title, line, kinds, label }) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "fl-chain-view sky-own-scroll",
+		className: "fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : ""),
 		"aria-label": label,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -88237,6 +90070,11 @@ function FlightChain({ title, line, kinds, label }) {
 							className: "fl-box-chip fl-chain-frame-chip tone-" + ss.tone,
 							title: ss.hint,
 							children: ss.label
+						}),
+						behaviors.mark?.tone === "you" && ss.tone !== "attention" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs",
+							title: "A behavior waits on you — open the Behaviors tile to answer it",
+							children: "Needs you"
 						}),
 						where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-chain-frame-where",
@@ -88264,6 +90102,7 @@ function FlightChain({ title, line, kinds, label }) {
 						onNodeMove: moves.move,
 						onPortDown,
 						onPlus: (after) => after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						renderOpen: behaviors.renderOpen,
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
 						renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
@@ -88275,6 +90114,7 @@ function FlightChain({ title, line, kinds, label }) {
 			}),
 			chainMenu.menu,
 			agentMenu.menu,
+			behaviors.menu,
 			band && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 				className: "sky-connect" + (band.over ? " is-over" : ""),
 				"aria-hidden": "true",
@@ -88325,7 +90165,7 @@ function filterPlans(plans, query) {
 function savedChainLabel(stops) {
 	return "Saved chain · " + stops + (stops === 1 ? " stop" : " stops");
 }
-function planPath$1(plan) {
+function planPath(plan) {
 	return plan.steps.map((s) => s.title).join(" → ");
 }
 function stopDragData(def) {
@@ -88432,7 +90272,7 @@ function catalogCards(kinds, plans, query) {
 		drop: { planId: plan.id },
 		name: plan.name,
 		builtin: !!plan.builtin,
-		path: planPath$1(plan),
+		path: planPath(plan),
 		plan
 	}));
 	return {
@@ -90469,8 +92309,13 @@ function useSessionLine(title, src, opts) {
 		foldFlown,
 		expandedGroups
 	]);
+	const behaviors = useBehaviorsTile(title, row, {
+		flight,
+		listen: !!opts.listenBehaviors
+	});
+	const graphDiagram = (0, import_react.useMemo)(() => behaviors.apply(line), [behaviors.apply, line]);
 	const cancel = useCancelAsk(flight);
-	const parts = liveBoxParts(flight, true, cancel.ask);
+	const parts = liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true });
 	const kindOf = (0, import_react.useMemo)(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
 	const stops = line.nodes.filter((n) => n.kind === "stop");
 	const end = flight ? flight.steps.length : 0;
@@ -90896,7 +92741,8 @@ function useSessionLine(title, src, opts) {
 		toggleGroup,
 		editing: palette !== null || inspector !== null,
 		canvas: shown.canvas,
-		graphDiagram: line,
+		graphDiagram,
+		behaviors,
 		graphCanvas: {
 			...raw,
 			loopChoicesOf
@@ -103731,7 +105577,7 @@ function Block({ block, onFly, open, editing, onEditDefault }) {
 		]
 	});
 }
-var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+var headPress$5 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
 function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
 	const flights = useFlights().data;
 	const editDefault = (ref, label) => {
@@ -103821,7 +105667,7 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 	};
 	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
 	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$4(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress$5(e)) onHeadDown(e);
 	};
 	const moveHint = draggable && onHeadDown ? "Drag to move the intake lane" : "";
 	if (collapsed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
@@ -122977,187 +124823,6 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	});
 }
 //#endregion
-//#region src/lib/verifyActions.ts
-function planPath(id) {
-	return "/api/test-plans/" + encodeURIComponent(id);
-}
-function patchPlan(id, apply) {
-	queryClient.cancelQueries({ queryKey: ["test-plans"] });
-	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-		...prev,
-		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
-	} : prev);
-}
-function requestPlanRun(planId, only) {
-	return api(planPath(planId) + "/run", {
-		method: "POST",
-		json: only ? { steps: only } : {}
-	});
-}
-function requestPlanDelete(planId) {
-	return api(planPath(planId), { method: "DELETE" });
-}
-async function startChecklistRun(plan, opts = {}) {
-	try {
-		const r = await requestPlanRun(plan.id, opts.only);
-		await refreshInstances();
-		const started = r?.plan;
-		patchPlan(plan.id, (p) => started || {
-			...p,
-			state: "running",
-			run_session: r?.session || ""
-		});
-		opts.onStarted?.();
-		await refreshTestPlans();
-		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
-	} catch (err) {
-		errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function regeneratePlan(plan, focus = "") {
-	try {
-		await api(planPath(plan.id) + "/regenerate", {
-			method: "POST",
-			json: { focus: focus.trim() }
-		});
-		patchPlan(plan.id, (p) => ({
-			...p,
-			state: "generating",
-			error: "",
-			gen_started: Date.now() / 1e3
-		}));
-		toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
-		return true;
-	} catch (err) {
-		errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
-		refreshTestPlans();
-		return false;
-	}
-}
-async function cancelChecklistRun(plan) {
-	try {
-		const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
-		await refreshInstances();
-		await refreshTestPlans();
-		toast(r?.session ? "Stopped " + r.session : "Run cancelled");
-	} catch (err) {
-		errorPop("Couldn't cancel the run", errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function fixPlanFailures(plan, only) {
-	try {
-		const r = await api(planPath(plan.id) + "/fix", {
-			method: "POST",
-			json: only ? { steps: only } : {}
-		});
-		await refreshInstances();
-		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
-	} catch (err) {
-		errorPop("Fix didn't start", errMsg(err));
-	}
-}
-async function markPlanDeployed(plan) {
-	try {
-		const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		await refreshTestPlans();
-		toast(planName(plan) + " is ready to check");
-	} catch (err) {
-		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function removePlan(plan, opts = {}) {
-	try {
-		await requestPlanDelete(plan.id);
-		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
-		opts.onGone?.();
-		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-			...prev,
-			plans: prev.plans.filter((p) => p.id !== plan.id)
-		} : prev);
-		await refreshTestPlans();
-	} catch (err) {
-		errorPop("Couldn't delete " + planName(plan), errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function recordStepAnswer(plan, step, result, note) {
-	const wasAsking = isWaitingOnYou(plan);
-	const next = (await api(planPath(plan.id) + "/result", { json: {
-		step_id: step.id,
-		result,
-		note
-	} }))?.plan;
-	if (next) patchPlan(plan.id, () => next);
-	if (next && wasAsking && !isWaitingOnYou(next)) {
-		const dest = groupPlans([next])[0]?.label || "";
-		toast("All your steps are answered — " + planName(plan) + (dest ? " moves to " + dest : ""));
-	}
-	refreshTestPlans();
-}
-async function editPlanStep(plan, step, fields) {
-	try {
-		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), {
-			method: "PATCH",
-			json: fields
-		});
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		refreshTestPlans();
-		return true;
-	} catch (err) {
-		errorPop("Couldn't change that step", errMsg(err));
-		return false;
-	}
-}
-async function removePlanStep(plan, step) {
-	try {
-		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		refreshTestPlans();
-	} catch (err) {
-		errorPop("Couldn't remove that step", errMsg(err));
-	}
-}
-async function addPlanStep(plan, fields) {
-	return (await api(planPath(plan.id) + "/steps", {
-		method: "POST",
-		json: fields
-	}))?.plan;
-}
-async function fetchVerifyRepos() {
-	const r = await api("/api/test-plans/repos");
-	return Array.isArray(r?.repos) ? r.repos : [];
-}
-async function writePlanForBranch(repo, branch) {
-	try {
-		toast((await api("/api/test-plans/branch", { json: {
-			repo: repo.root,
-			branch
-		} })).existing ? branch + " already has a checklist — it's in Verify" : "Asked the agent for a checklist for " + branch + " — it'll appear in Verify (up to three minutes)");
-		refreshTestPlans();
-		return true;
-	} catch (err) {
-		errorPop("Couldn't write a checklist", errMsg(err));
-		return false;
-	}
-}
-async function writePlanFor(target) {
-	try {
-		const r = await api("/api/instances/" + encodeURIComponent(target) + "/test-plan", { method: "POST" });
-		toast(r.existing ? (r.plan && r.plan !== target ? target + "'s branch already has a checklist — it's under " + r.plan : target + " already has a checklist") + " — it's in Verify" : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)");
-		refreshTestPlans();
-		return true;
-	} catch (err) {
-		errorPop("Couldn't write a checklist", errMsg(err));
-		return false;
-	}
-}
-//#endregion
 //#region src/lib/rowSelection.ts
 function selectedInOrder(selected, allKeys) {
 	return allKeys.filter((k) => selected.has(k));
@@ -123839,7 +125504,7 @@ function PlanRow({ plan, liveBranch, selection, expanded, onToggle, onExpand, re
 	const closeDialog = useUi((s) => s.closeDialog);
 	const openVerifyPane = useUi((s) => s.openVerifyPane);
 	const { data: instances } = useInstances();
-	const session = (instances || []).find((i) => !isVerifySession(i) && planForSession([plan], i) === plan) || null;
+	const session = (instances || []).find((i) => !isVerifySession(i) && planForSession$1([plan], i) === plan) || null;
 	const fixSession = (instances || []).find((i) => i.title === "fix-" + plan.id) || null;
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [stepBusy, setStepBusy] = (0, import_react.useState)("");
@@ -131395,6 +133060,14 @@ function parseViewHash(hash) {
 		focus
 	};
 }
+function parseBehaviorsLink(hash) {
+	return /^#behaviors(?:\/|$)/.test(hash || "") ? parseBehaviorsHash(hash) : null;
+}
+function landedHash(old) {
+	const r = legacyFlightsRoute(old);
+	if (r.to === "sky" && r.behaviors?.board) return behaviorsHash();
+	return urlHash(useUi.getState());
+}
 var urlHash = (s) => hashFor(s.openDialog, s.dialogTarget) || viewHash(s);
 function installSurfaceHash(win = window) {
 	const hist = win.history;
@@ -131411,11 +133084,13 @@ function installSurfaceHash(win = window) {
 	const first = parseHash(loc.hash);
 	const firstView = parseViewHash(loc.hash);
 	const firstFlights = parseFlightsHash(loc.hash);
+	const firstBehaviors = parseBehaviorsLink(loc.hash);
 	if (firstView) useUi.getState().showSky(firstView.focus);
 	if (firstFlights !== null) useUi.getState().openDialogFor("flights", firstFlights);
+	if (firstBehaviors) openBehaviors(firstBehaviors);
 	if (first || firstView || firstFlights !== null || !loc.hash) {
 		if (first) useUi.getState().openDialogFor(first.name, first.target);
-		const now = urlHash(useUi.getState());
+		const now = firstFlights !== null ? landedHash(firstFlights) : urlHash(useUi.getState());
 		if (now !== loc.hash && (now || loc.hash)) try {
 			hist.replaceState(null, "", urlWith(now));
 		} catch {}
@@ -131467,8 +133142,16 @@ function installSurfaceHash(win = window) {
 			const r = legacyFlightsRoute(old);
 			if (r.to !== "sky" && r.to !== "flyways") replace(hashFor(r.to, r.target));
 			ui.openDialogFor("flights", old);
-			const now = urlHash(useUi.getState());
+			const now = landedHash(old);
 			if (now !== loc.hash) replace(now);
+			return;
+		}
+		const behaviors = parseBehaviorsLink(loc.hash);
+		if (behaviors) {
+			const at = loc.hash;
+			pushed = false;
+			openBehaviors(behaviors);
+			if (loc.hash !== at) replace(at);
 			return;
 		}
 		const want = parseHash(loc.hash);
@@ -131514,6 +133197,729 @@ function moveSessionToDevice(title, device, force = false) {
 			force
 		}
 	});
+}
+//#endregion
+//#region src/components/behaviors/BehaviorsSettings.tsx
+function writesOnPush(settings) {
+	return (settings?.repository || {}).verify_enabled !== false;
+}
+function emptyTargets(targets) {
+	return targets.filter((t) => !t.planId && (!t.reason || t.noCommits));
+}
+function targetLabel(t) {
+	return (t.branch || t.title) + (t.title !== t.branch ? " — " + t.title : "") + (t.closed ? " (closed)" : "");
+}
+function BehaviorsSettings({ onClose }) {
+	const model = useSettingsModel(true);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
+		value: model,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsBody, { onClose })
+	});
+}
+function SettingsBody({ onClose }) {
+	const model = useSettings();
+	const liveBranch = useTestPlans().data?.live_branch || "";
+	const on = writesOnPush(model.settings);
+	const watched = (model.settings.repository || {}).verify_repos || [];
+	const [adding, setAdding] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "bh-settings",
+		role: "group",
+		"aria-label": "Behaviors settings",
+		"data-no-drag": true,
+		onKeyDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
+				label: "Write behaviors on every push",
+				title: "Pause or resume writing behaviors on push — nothing is deleted",
+				rowId: "bh-push-row",
+				inputId: "bh-push",
+				statusId: "bh-push-status",
+				checked: on,
+				note: watched.length ? void 0 : "Covers your sessions' branches, and any repository you watch below.",
+				onChange: async (next) => {
+					if (await model.saveGroup("repository", { verify_enabled: next }, next ? "Writing behaviors on every push" : "No new behaviors on push — nothing is deleted")) {
+						queryClient.invalidateQueries({ queryKey: ["verify-settings"] });
+						queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+					}
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+				className: "bh-set-section",
+				"aria-labelledby": "bh-set-repos",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						id: "bh-set-repos",
+						className: "bh-set-head",
+						children: "Watched repositories"
+					}),
+					watched.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySources, { liveBranch }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "bh-hint",
+						children: "None yet — behaviors are written for your sessions' branches."
+					}),
+					adding ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
+						title: "Watch a GitHub repository",
+						uses: ["verify"],
+						only: "verify",
+						liveBranch,
+						onCancel: () => setAdding(false),
+						onDone: () => setAdding(false)
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "bh-watch-repo",
+						onClick: () => setAdding(true),
+						children: "Watch a GitHub repository for every push"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnotherBranch, { onClose }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EmptyForSession, {
+				liveBranch,
+				onClose
+			})
+		]
+	});
+}
+function AnotherBranch({ onClose }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [repos, setRepos] = (0, import_react.useState)(null);
+	const [root, setRoot] = (0, import_react.useState)("");
+	const [branch, setBranch] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const repo = repos?.find((r) => r.root === root) || repos?.[0];
+	(0, import_react.useEffect)(() => {
+		if (!open || repos !== null) return;
+		let live = true;
+		fetchVerifyRepos().then((list) => live && setRepos(list), () => live && setRepos([]));
+		return () => {
+			live = false;
+		};
+	}, [open, repos]);
+	const go = async (empty) => {
+		const b = branch.trim();
+		if (!repo || !b || busy) return;
+		setBusy(empty ? "empty" : "ask");
+		try {
+			const id = await askBehaviorsForBranch(repo, b, { empty });
+			if (id) {
+				setBranch("");
+				onClose?.();
+				openBehaviors({ planId: id });
+			}
+		} finally {
+			setBusy("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "bh-set-section bh-set-fold",
+		open,
+		onToggle: (e) => setOpen(e.currentTarget.open),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+			className: "bh-set-head",
+			children: "Check another branch…"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "bh-set-form",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					id: "bh-branch-repo",
+					className: "fl-input",
+					"aria-label": "Repository",
+					value: repo?.root || "",
+					disabled: !!busy || !repos?.length,
+					onChange: (e) => setRoot(e.target.value),
+					children: repos === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: "Loading repositories…"
+					}) : !repos.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: "No repositories yet"
+					}) : repos.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: r.root,
+						title: r.root,
+						children: r.name
+					}, r.root))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: "bh-branch-name",
+					type: "text",
+					className: "fl-input",
+					"aria-label": "Branch",
+					placeholder: "branch, e.g. feature/login",
+					autoComplete: "off",
+					value: branch,
+					disabled: !!busy,
+					onChange: (e) => setBranch(e.target.value),
+					onKeyDown: (e) => {
+						if (e.key === "Enter") go(false);
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-edit-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "bh-branch-ask",
+						className: "btn-primary",
+						disabled: !!busy || !repo || !branch.trim(),
+						onClick: () => void go(false),
+						children: busy === "ask" ? "Asking…" : "Ask the agent"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "bh-branch-empty",
+						className: "test-btn",
+						disabled: !!busy || !repo || !branch.trim(),
+						onClick: () => void go(true),
+						children: busy === "empty" ? "Starting…" : "Start empty"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "bh-hint",
+					children: repos && !repos.length ? "No repositories yet — open a session in one first." : "For a branch no session has been on — the agent reads its changes and writes behaviors (about three minutes)."
+				})
+			]
+		})]
+	});
+}
+function EmptyForSession({ liveBranch, onClose }) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [picked, setPicked] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const instancesQ = useInstances();
+	const plansQ = useTestPlans();
+	const closedQ = useQuery({
+		queryKey: ["recently-closed"],
+		queryFn: () => api("/api/recently-closed"),
+		enabled: open,
+		staleTime: 3e4,
+		retry: false
+	});
+	const targets = emptyTargets(checklistTargets(instancesQ.data || [], plansQ.data?.plans || [], closedQ.data || [], liveBranch));
+	const target = targets.some((t) => t.title === picked) ? picked : targets[0]?.title || "";
+	const go = async () => {
+		if (!target || busy) return;
+		setBusy(true);
+		try {
+			const id = await startEmptyBehaviors(target);
+			if (id) {
+				onClose?.();
+				openBehaviors({ planId: id });
+			}
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "bh-set-section bh-set-fold",
+		open,
+		onToggle: (e) => setOpen(e.currentTarget.open),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+			className: "bh-set-head",
+			children: "Start empty behaviors for a session…"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "bh-set-form",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					id: "bh-empty-pick",
+					className: "fl-input",
+					"aria-label": "Session",
+					value: target,
+					disabled: busy || !targets.length,
+					onChange: (e) => setPicked(e.target.value),
+					children: targets.length ? targets.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: t.title,
+						children: targetLabel(t)
+					}, t.title)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: "",
+						children: "No session without behaviors"
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "bh-edit-actions",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "bh-empty-go",
+						className: "test-btn",
+						disabled: busy || !target,
+						onClick: () => void go(),
+						children: busy ? "Starting…" : "Start empty behaviors"
+					})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "bh-hint",
+					children: "No agent involved — you write what the work should do, then check it."
+				})
+			]
+		})]
+	});
+}
+//#endregion
+//#region src/components/flights/BehaviorsBoard.tsx
+var BEHAVIORS_KEY = "behaviors";
+var BEHAVIORS_PREF = "mf_sky_behaviors";
+var BEHAVIORS_W = 300;
+var BEHAVIORS_H = 200;
+var BEHAVIORS_MIN = {
+	w: 240,
+	h: 110
+};
+var BEHAVIORS_MAX = {
+	w: 900,
+	h: 1600
+};
+var BEHAVIORS_EXPLAIN = "Behaviors with no session in the Sky — a closed session, another branch, a watched repo's push";
+var VERIFIED_TODAY_S = 86400;
+var REVEAL_AFTER_MS = 320;
+var FLY_GIVE_UP_MS = 3e3;
+var BOARD_GROUPS = [
+	{
+		tone: "you",
+		label: "Needs you"
+	},
+	{
+		tone: "bad",
+		label: "Failed"
+	},
+	{
+		tone: "busy",
+		label: "Checking"
+	},
+	{
+		tone: "quiet",
+		label: "Not checked"
+	},
+	{
+		tone: "ok",
+		label: "Verified today"
+	}
+];
+var readPref$1 = (key) => {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+};
+var writePref$1 = (key, v) => {
+	try {
+		localStorage.setItem(key, v);
+	} catch {}
+};
+function lastCheckedAt(plan) {
+	return (plan.runs || []).reduce((t, r) => Math.max(t, r.at || 0), 0);
+}
+function isUrgent(plan) {
+	const t = behaviorSummary(plan).tone;
+	return t === "you" || t === "bad";
+}
+function boardGroups(plans, now = Date.now() / 1e3) {
+	const by = /* @__PURE__ */ new Map();
+	for (const p of plans) {
+		const tone = behaviorSummary(p).tone;
+		if (tone === "ok" && now - lastCheckedAt(p) > VERIFIED_TODAY_S) continue;
+		by.set(tone, [...by.get(tone) || [], p]);
+	}
+	return BOARD_GROUPS.filter((g) => by.has(g.tone)).map((g) => ({
+		...g,
+		plans: by.get(g.tone)
+	}));
+}
+function boardShown(s) {
+	if (!s.allowed) return false;
+	return s.pref || s.requested || s.urgent.some((id) => !s.dismissed.includes(id));
+}
+function aimFor(t, plans, lineForPlan, lineOfTitle) {
+	if (t.board) return {
+		to: "board",
+		expand: ""
+	};
+	const plan = t.next ? nextNeedingYou(plans) : findPlan(plans, t);
+	if (!plan) {
+		const line = !t.next && t.title ? lineOfTitle(t.title) : "";
+		return line ? {
+			to: "line",
+			line,
+			plan: null
+		} : {
+			to: "board",
+			expand: ""
+		};
+	}
+	const line = lineForPlan(plan);
+	return line ? {
+		to: "line",
+		line,
+		plan
+	} : {
+		to: "board",
+		expand: plan.id
+	};
+}
+var attrSel = (v) => v.replace(/["\\]/g, "\\$&");
+function useBehaviorsBoard({ rows, titles, allowed }) {
+	const q = useTestPlans();
+	const plans = (0, import_react.useMemo)(() => q.data?.plans || [], [q.data]);
+	const loaded = q.data !== void 0 || q.isError;
+	const requested = useBehaviorsFocus((s) => s.boardRequested);
+	const [pref, setPrefState] = (0, import_react.useState)(() => readPref$1(BEHAVIORS_PREF) === "1");
+	const setPref = (0, import_react.useCallback)((v) => {
+		setPrefState(v);
+		writePref$1(BEHAVIORS_PREF, v ? "1" : "0");
+	}, []);
+	const [dismissed, setDismissed] = (0, import_react.useState)([]);
+	const [expanded, setExpanded] = (0, import_react.useState)("");
+	const lineOfTitle = (0, import_react.useMemo)(() => {
+		const shown = new Set(titles);
+		const parent = new Map(rows.map((r) => [r.title, r.parent || ""]));
+		return (title) => shown.has(title) ? title : shown.has(parent.get(title) || "\0") ? parent.get(title) : "";
+	}, [rows, titles]);
+	const framed = (0, import_react.useMemo)(() => rows.filter((r) => lineOfTitle(r.title)), [rows, lineOfTitle]);
+	const lineForPlan = (0, import_react.useCallback)((plan) => {
+		const r = framed.find((x) => planForSession(plans, x)?.id === plan.id);
+		return r ? lineOfTitle(r.title) : "";
+	}, [
+		framed,
+		plans,
+		lineOfTitle
+	]);
+	const orphans = (0, import_react.useMemo)(() => orphanPlans(plans, framed), [plans, framed]);
+	const urgent = (0, import_react.useMemo)(() => orphans.filter(isUrgent).map((p) => p.id), [orphans]);
+	const on = boardShown({
+		allowed,
+		pref,
+		requested,
+		urgent,
+		dismissed
+	});
+	const hide = (0, import_react.useCallback)(() => {
+		setPref(false);
+		setDismissed(urgent);
+		setExpanded("");
+		useBehaviorsFocus.getState().setBoardRequested(false);
+	}, [setPref, urgent]);
+	const show = (0, import_react.useCallback)((expand = "") => {
+		useBehaviorsFocus.getState().setBoardRequested(true);
+		if (expand) setExpanded(expand);
+	}, []);
+	return {
+		on,
+		plans,
+		loaded,
+		rows: orphans,
+		expanded,
+		setExpanded,
+		toggle: (0, import_react.useCallback)(() => on ? hide() : setPref(true), [
+			on,
+			hide,
+			setPref
+		]),
+		hide,
+		show,
+		lineForPlan,
+		lineOfTitle
+	};
+}
+function applyRequest(request, board) {
+	const f = useBehaviorsFocus.getState();
+	const a = aimFor(request, board.plans, board.lineForPlan, board.lineOfTitle);
+	f.take();
+	if (a.to === "line") {
+		if (a.plan) f.setOpenPlan(a.plan.id);
+		return {
+			id: a.line,
+			reveal: a.plan ? `.sky-line-slot[data-slot="${attrSel(a.line)}"] [data-plan="${attrSel(a.plan.id)}"]` : ""
+		};
+	}
+	board.show(a.expand);
+	return {
+		id: BEHAVIORS_KEY,
+		reveal: a.expand ? `.sky-bh [data-bh-row="${attrSel(a.expand)}"]` : ""
+	};
+}
+function useBehaviorsRequest(board, { ready, fly }) {
+	const request = useBehaviorsFocus((s) => s.request);
+	const [aim, setAim] = (0, import_react.useState)(null);
+	const boardRef = (0, import_react.useRef)(board);
+	boardRef.current = board;
+	(0, import_react.useEffect)(() => {
+		if (!request || !board.loaded || !ready) return;
+		setAim({
+			...applyRequest(request, boardRef.current),
+			at: Date.now()
+		});
+	}, [
+		request,
+		board.loaded,
+		ready
+	]);
+	const revealT = (0, import_react.useRef)(void 0);
+	(0, import_react.useEffect)(() => () => clearTimeout(revealT.current), []);
+	(0, import_react.useEffect)(() => {
+		if (!aim) return;
+		if (!fly(aim.id)) {
+			if (Date.now() - aim.at > FLY_GIVE_UP_MS) setAim(null);
+			return;
+		}
+		setAim(null);
+		if (!aim.reveal || typeof document === "undefined") return;
+		clearTimeout(revealT.current);
+		revealT.current = setTimeout(() => {
+			document.querySelector(aim.reveal)?.dispatchEvent(new Event(TOUR_REVEAL, {
+				bubbles: true,
+				cancelable: true
+			}));
+		}, REVEAL_AFTER_MS);
+	}, [aim, fly]);
+}
+var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+function BehaviorsBoard({ plans, expanded, onExpand, onHide, width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, now }) {
+	const rootRef = (0, import_react.useRef)(null);
+	const [live, setLive] = (0, import_react.useState)(null);
+	const grab = (0, import_react.useRef)(null);
+	const frameNow = live || {
+		w: width ?? 0,
+		h: height ?? 0
+	};
+	const resizeDown = (e) => {
+		if (e.button !== 0 || !onResize) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const el = rootRef.current;
+		grab.current = {
+			id: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			w: width ?? (el ? el.offsetWidth : BEHAVIORS_W),
+			h: height ?? (el ? el.offsetHeight : BEHAVIORS_H)
+		};
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+	};
+	const resizeMove = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		const z = zoom > 0 ? zoom : 1;
+		setLive({
+			w: Math.max(BEHAVIORS_MIN.w, Math.round(g.w + (e.clientX - g.sx) / z)),
+			h: Math.max(BEHAVIORS_MIN.h, Math.round(g.h + (e.clientY - g.sy) / z))
+		});
+	};
+	const resizeUp = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		grab.current = null;
+		if (live && onResize) onResize(live.w, live.h);
+		setLive(null);
+	};
+	const measureRef = (0, import_react.useRef)(onMeasure);
+	measureRef.current = onMeasure;
+	(0, import_react.useEffect)(() => {
+		const el = rootRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		const read = () => {
+			const w = el.offsetWidth;
+			const h = el.offsetHeight;
+			if (w > 0 && h > 0) measureRef.current?.(w, h);
+		};
+		read();
+		const ro = new ResizeObserver(read);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+	const headDown = (e) => {
+		if (draggable && onHeadDown && headPress$4(e)) onHeadDown(e);
+	};
+	const groups = boardGroups(plans, now);
+	const urgent = plans.filter(isUrgent).length;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		ref: rootRef,
+		className: "sky-bh",
+		"aria-label": "Behaviors",
+		style: {
+			width: frameNow.w > 0 ? frameNow.w : void 0,
+			height: frameNow.h > 0 ? frameNow.h : void 0
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-bh-bar",
+				"data-sky-head": true,
+				title: draggable && onHeadDown ? "Drag to move the Behaviors board" : void 0,
+				onPointerDown: headDown,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-bh-title",
+						children: "Behaviors"
+					}),
+					urgent > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-bh-count",
+						title: urgent + (urgent === 1 ? " needs" : " need") + " you or failed",
+						children: urgent
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-bh-tools",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BoardSettingsButton, {}), onHide && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "fl-icon-btn sky-bh-hide",
+							"aria-label": "Hide the Behaviors board",
+							title: "Hide the Behaviors board — ⋯ › Show the Behaviors board brings it back",
+							onClick: onHide,
+							children: "×"
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "sky-bh-explain",
+				children: BEHAVIORS_EXPLAIN
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-bh-rows sky-own-scroll",
+				children: !groups.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-bh-empty",
+					children: "Nothing here: every session's behaviors are on its frame in the Sky."
+				}) : groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "sky-bh-group is-" + g.tone,
+					"aria-label": g.label,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+						className: "sky-bh-group-head",
+						children: [g.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-bh-group-n",
+							children: g.plans.length
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "sky-bh-list",
+						children: g.plans.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BoardRow, {
+							plan: p,
+							open: expanded === p.id,
+							onToggle: () => onExpand(expanded === p.id ? "" : p.id)
+						}, p.id))
+					})]
+				}, g.tone))
+			}),
+			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-bh-resize skl-resize",
+				role: "separator",
+				tabIndex: 0,
+				"data-no-drag": true,
+				"aria-label": "Resize the Behaviors board",
+				title: "Drag to resize the Behaviors board",
+				onPointerDown: resizeDown,
+				onPointerMove: resizeMove,
+				onPointerUp: resizeUp,
+				onPointerCancel: resizeUp
+			})
+		]
+	});
+}
+function BoardRow({ plan, open, onToggle }) {
+	const s = behaviorSummary(plan);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "sky-bh-item is-" + s.tone,
+		"data-bh-row": plan.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "fl-check-row sky-bh-row",
+				"aria-expanded": open,
+				title: open ? "Fold these behaviors" : "Open these behaviors",
+				onClick: onToggle,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-bh-dot is-" + s.tone,
+						"aria-hidden": "true"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-bh-name",
+						children: planName(plan)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-bh-short",
+						children: s.short
+					})
+				]
+			}),
+			plan.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+				className: "sky-bh-branch",
+				children: plan.branch
+			}),
+			open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-bh-card",
+				"data-no-drag": true,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorsCard, {
+					plan,
+					compact: true,
+					onClose: onToggle
+				})
+			})
+		]
+	});
+}
+function BoardSettingsButton() {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [at, setAt] = (0, import_react.useState)(null);
+	const btn = (0, import_react.useRef)(null);
+	const pop = (0, import_react.useRef)(null);
+	const close = (0, import_react.useCallback)((refocus) => {
+		setOpen(false);
+		setAt(null);
+		if (refocus) btn.current?.focus();
+	}, []);
+	(0, import_react.useLayoutEffect)(() => {
+		if (!open || !btn.current) return;
+		const r = btn.current.getBoundingClientRect();
+		const right = Math.max(8, window.innerWidth - r.right);
+		setAt(r.bottom + 360 > window.innerHeight && r.top > 360 ? {
+			bottom: window.innerHeight - r.top + 4,
+			right
+		} : {
+			top: r.bottom + 4,
+			right
+		});
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onDown = (e) => {
+			const t = e.target;
+			if (pop.current?.contains(t) || btn.current?.contains(t)) return;
+			close(false);
+		};
+		const onEsc = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			close(true);
+		};
+		document.addEventListener("pointerdown", onDown, true);
+		document.addEventListener("keydown", onEsc, true);
+		return () => {
+			document.removeEventListener("pointerdown", onDown, true);
+			document.removeEventListener("keydown", onEsc, true);
+		};
+	}, [open, close]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		ref: btn,
+		type: "button",
+		className: "fl-icon-btn sky-bh-more" + (open ? " is-open" : ""),
+		"aria-haspopup": "dialog",
+		"aria-expanded": open,
+		"aria-label": "Behaviors settings",
+		title: "Behaviors settings: write them on every push, watched repositories, check another branch",
+		onClick: () => open ? close(false) : setOpen(true),
+		children: "⋯"
+	}), open && at && typeof document !== "undefined" && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref: pop,
+		className: "sky-bh-pop",
+		role: "dialog",
+		"aria-label": "Behaviors settings",
+		style: {
+			top: at.top,
+			bottom: at.bottom,
+			right: at.right
+		},
+		"data-no-drag": true,
+		onPointerDown: (e) => e.stopPropagation(),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorsSettings, { onClose: () => close(true) })
+	}), document.body)] });
 }
 //#endregion
 //#region src/components/flights/DeviceBlocks.tsx
@@ -133395,6 +135801,7 @@ var isDeviceKey = (key) => key.startsWith("device:");
 function objectKind(key) {
 	if (key === INTAKE_KEY) return "intake";
 	if (key === PALETTE_KEY) return "palette";
+	if (key === BEHAVIORS_KEY) return "behaviors";
 	if (key === LANDING_KEY) return "landing";
 	if (isPersonKey(key)) return "person";
 	if (isDeviceKey(key)) return "device";
@@ -133447,6 +135854,37 @@ var SKY_OBJECTS = [
 		},
 		on: (view) => view.paletteOn ? [{ key: PALETTE_KEY }] : [],
 		render: (host) => host.view.renderPalette(host)
+	},
+	{
+		key: BEHAVIORS_KEY,
+		kind: "behaviors",
+		place: "right",
+		min: BEHAVIORS_MIN,
+		max: BEHAVIORS_MAX,
+		className: "sky-object sky-object-behaviors",
+		frame: (stored) => objectFrame(stored, BEHAVIORS_MIN, BEHAVIORS_MAX),
+		size: (stored, measured) => objectFrame(stored, BEHAVIORS_MIN, BEHAVIORS_MAX) || (measured && measured.w > 0 ? measured : {
+			w: BEHAVIORS_W,
+			h: BEHAVIORS_H
+		}),
+		on: (view) => view.mode === "one" || view.narrow || !view.behaviorsOn ? [] : [{ key: BEHAVIORS_KEY }],
+		render: (host) => {
+			const b = host.view.behaviors;
+			const frame = host.layoutEntry ? objectFrame(host.layoutEntry, BEHAVIORS_MIN, BEHAVIORS_MAX) : null;
+			return (0, import_react.createElement)(BehaviorsBoard, {
+				plans: b?.rows || [],
+				expanded: b?.expanded || "",
+				onExpand: (id) => b?.setExpanded(id),
+				onHide: b?.hide,
+				width: frame?.w,
+				height: frame?.h,
+				zoom: host.zoom,
+				onHeadDown: host.onHeadDown,
+				draggable: host.draggable,
+				onResize: host.onResize,
+				onMeasure: host.onMeasure
+			});
+		}
 	},
 	{
 		key: LANDING_KEY,
@@ -134621,8 +137059,8 @@ function ChecklistRow({ plan, onOpen }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "fl-check-row" + (failing ? " is-failing" : ""),
-		title: "Open this checklist in Verify",
-		onClick: () => onOpen(plan.branch || plan.id),
+		title: failing ? "Show the behaviors that failed" : "Show the behaviors that need you",
+		onClick: () => onOpen(plan.id),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "fl-check-glyph",
@@ -134818,7 +137256,7 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 				flightsQ.data === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "fl-note muted",
 					role: "status",
-					children: "This server can't run chains yet — update MindFlock to run them. Waiting items and checklists still work."
+					children: "This server can't run chains yet — update MindFlock to run them. Waiting items and behaviors still work."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 					className: "fl-group fl-group-needs",
@@ -134840,7 +137278,7 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 						onFocus
 					}, f.id)), dueChecklists.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
 						plan: p,
-						onOpen: (b) => openDialogFor("verify", b)
+						onOpen: (planId) => openBehaviors({ planId })
 					}, p.id))] })]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -135683,6 +138121,7 @@ function SkyLine(p) {
 	const line = useSessionLine(p.title, src, {
 		family: true,
 		askRunning: true,
+		listenBehaviors: true,
 		onSession: (t) => selectSession(t)
 	});
 	useUi((s) => s.aliases[p.title]);
@@ -135757,6 +138196,7 @@ function SkyLine(p) {
 		flights,
 		kinds
 	]);
+	const behaviors = line.behaviors;
 	const big = (0, import_react.useMemo)(() => {
 		const open = {};
 		for (const [t, ks] of Object.entries(kids)) {
@@ -135766,11 +138206,15 @@ function SkyLine(p) {
 				h: c.h + CARD_HEAD_H
 			};
 		}
-		return subFrameBoxes(moves.diagram.nodes, subFrames, open);
+		return {
+			...subFrameBoxes(moves.diagram.nodes, subFrames, open),
+			...behaviors.big(moves.diagram)
+		};
 	}, [
 		kids,
 		moves.diagram,
-		subFrames
+		subFrames,
+		behaviors.big
 	]);
 	const graph = (0, import_react.useMemo)(() => chainGraph(hangFromAgent(moves.diagram), {
 		head,
@@ -135817,6 +138261,7 @@ function SkyLine(p) {
 	};
 	const onOpen = (n) => {
 		if (n.kind === "session" && press.current.moved) return;
+		if (behaviors.onOpen(n)) return;
 		if (n.kind === "flown") setFoldFlown((x) => !x);
 		else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
 		else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);
@@ -136007,6 +138452,7 @@ function SkyLine(p) {
 		];
 	};
 	const onMenu = (n, at) => {
+		if (behaviors.onMenu(n, at)) return;
 		const t = n.kind === "session" ? p.title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
 		if (t) agentMenu.open(t, at, agentItems(t, at));
 		else chainMenu.onMenu(n, at);
@@ -136050,6 +138496,8 @@ function SkyLine(p) {
 		}, t));
 	}
 	const renderOpen = (n) => {
+		const bh = behaviors.renderOpen(n);
+		if (bh) return bh;
 		const t = n.session;
 		const ks = t ? kids[t] : void 0;
 		const kid = t && ks ? rowOf(t) : void 0;
@@ -136071,7 +138519,7 @@ function SkyLine(p) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-chainline skl-frame" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-chainline skl-frame" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : "") + (behaviors.frameClass ? " " + behaviors.frameClass : ""),
 		"data-line": p.title,
 		"data-lod": lod,
 		"data-age": age || void 0,
@@ -136145,6 +138593,11 @@ function SkyLine(p) {
 						className: "skl-chip fl-box-chip skl-state-chip tone-" + ss.tone,
 						title: ss.hint,
 						children: ss.label
+					}),
+					behaviors.mark?.tone === "you" && ss.tone !== "attention" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-chip fl-box-chip skl-state-chip tone-attention skl-bh-needs",
+						title: "A behavior waits on you — open the Behaviors tile to answer it",
+						children: "Needs you"
 					}),
 					where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-where",
@@ -136232,6 +138685,7 @@ function SkyLine(p) {
 					}),
 					chainMenu.menu,
 					agentMenu.menu,
+					behaviors.menu,
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
 						graph,
 						anchor: line.anchor,
@@ -138865,6 +141319,11 @@ function SkyView() {
 		query,
 		focused
 	]);
+	const behaviors = useBehaviorsBoard({
+		rows,
+		titles,
+		allowed: !narrow && mode !== "one"
+	});
 	const grounded = (0, import_react.useMemo)(() => {
 		if (mode === "one" || mode === "perched") return [];
 		const q = query.trim().toLowerCase();
@@ -138926,6 +141385,7 @@ function SkyView() {
 	]);
 	const links = (0, import_react.useMemo)(() => linksQ.data?.links || [], [linksQ.data]);
 	const devices = (0, import_react.useMemo)(() => (devicesQ.data?.devices || []).filter((d) => d.device && d.device !== devicesQ.data?.self?.device), [devicesQ.data]);
+	const behaviorsOn = behaviors.on;
 	const objData = (0, import_react.useMemo)(() => ({
 		mode,
 		narrow,
@@ -138933,7 +141393,8 @@ function SkyView() {
 		paletteOn,
 		links,
 		devices,
-		notes
+		notes,
+		behaviorsOn
 	}), [
 		mode,
 		narrow,
@@ -138941,7 +141402,8 @@ function SkyView() {
 		paletteOn,
 		links,
 		devices,
-		notes
+		notes,
+		behaviorsOn
 	]);
 	const objects = (0, import_react.useMemo)(() => skyObjects(objData).filter((o) => o.def.kind !== "device" && (o.def.kind !== "landing" || finishedOn)), [objData, finishedOn]);
 	const objectById = (0, import_react.useMemo)(() => new Map(objects.map((o) => [o.key, o])), [objects]);
@@ -139001,11 +141463,17 @@ function SkyView() {
 			...at,
 			...measured[id]
 		});
-		const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]), {
+		const newcomers = items.filter((l) => !saved[l.id]);
+		const area = {
 			width: Math.max(vp.w, LINES_LEFT + 900),
 			left: SKY_MARGIN,
 			top: SKY_MARGIN
+		};
+		area.width = fillWidth(existing, newcomers, area, vp.w, vp.h, {
+			flat: [INTAKE_KEY, PALETTE_KEY],
+			right: rightItems
 		});
+		const fresh = assignSpots(existing, newcomers, area);
 		const place = { ...fresh };
 		for (const e of existing) if (shown.has(e.id)) place[e.id] = {
 			x: e.x,
@@ -139050,6 +141518,7 @@ function SkyView() {
 		measured,
 		lineAlive,
 		vp.w,
+		vp.h,
 		mode,
 		objects,
 		objectBox
@@ -139308,6 +141777,18 @@ function SkyView() {
 		setFlash(id);
 		setTimeout(() => alive.current && setFlash((f) => f === id ? "" : f), 1400);
 	}, []);
+	const flyToBehaviors = (id) => {
+		if (narrow) return true;
+		const r = rectOf(id);
+		if (!r || !vp.w) return false;
+		goTo(centerOn(r, vp.w, vp.h, Math.max(camRef.current.z, .85)));
+		flashLine(id);
+		return true;
+	};
+	useBehaviorsRequest(behaviors, {
+		ready: narrow || !!vp.w && !!vp.h && instQ.data !== void 0 && settled,
+		fly: flyToBehaviors
+	});
 	const setMode = (m) => setSkyMode(m);
 	const zoomBy = (k) => {
 		setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
@@ -139345,14 +141826,34 @@ function SkyView() {
 		setLayout((l) => patch.pinned === false ? closeSkyWindows(tidySkyLayout(l, id), [id]) : patchSkyLine(l, id, patch));
 	}, []);
 	const tidyTimer = (0, import_react.useRef)(void 0);
+	const tidyFit = (0, import_react.useRef)(false);
+	const tidyFitTimer = (0, import_react.useRef)(void 0);
 	const tidy = () => {
 		setAutoPos({});
 		setLayout((l) => closeSkyWindows(tidySkyLayout(l)));
+		tidyFit.current = true;
+		clearTimeout(tidyFitTimer.current);
+		tidyFitTimer.current = setTimeout(() => tidyFit.current = false, 2e3);
 		if (motionOff) return;
 		setTidying(true);
 		clearTimeout(tidyTimer.current);
 		tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
 	};
+	(0, import_react.useEffect)(() => {
+		if (!tidyFit.current) return;
+		const spotted = (id) => mode === "one" || !!autoPos[id] || !!layout[id]?.pinned;
+		if (!lines.every((l) => spotted(l.id)) || intakeOn && !spotted(INTAKE_KEY)) return;
+		tidyFit.current = false;
+		fitAll(true);
+	}, [
+		place,
+		autoPos,
+		layout,
+		lines,
+		intakeOn,
+		mode,
+		fitAll
+	]);
 	const tidyThese = (ids) => {
 		setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !ids.includes(id))));
 		setLayout((l) => closeSkyWindows(ids.reduce((acc, id) => tidySkyLayout(acc, id), l), ids));
@@ -140778,6 +143279,13 @@ function SkyView() {
 						title: "Each repo's main branch — its CI and its last merge — and the chains merged today, in a strip right of the chains",
 						className: "sky-finished-toggle",
 						onSelect: () => setFinishedOn(!finishedOn)
+					},
+					{
+						key: "behaviors",
+						label: (behaviors.on ? "✓ " : "") + "Show the Behaviors board",
+						title: "Behaviors with no session in the Sky — a closed session, another branch, a watched repo's push — in a board right of the chains",
+						className: "sky-behaviors-toggle",
+						onSelect: behaviors.toggle
 					}
 				]
 			}),
@@ -141065,7 +143573,13 @@ function SkyView() {
 		editingNote,
 		setEditingNote,
 		changeNote,
-		removeNote
+		removeNote,
+		behaviors: {
+			rows: behaviors.rows,
+			expanded: behaviors.expanded,
+			setExpanded: behaviors.setExpanded,
+			hide: behaviors.hide
+		}
 	};
 	const hostFor = (o) => ({
 		key: o.key,

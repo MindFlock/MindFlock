@@ -40,7 +40,10 @@
   --bh-tone: color-mix(in srgb, var(--accent) 50%, var(--border));
 }
 
+/* Compact = a row of the Behaviors board (or the grid's Flight strip): it
+ * reads at its host's size, not the Sky zoom's larger type. */
 .bh-card.is-compact {
+  --bh-s: 1;
   padding: 8px 10px;
   gap: 6px;
 }
@@ -82,12 +85,18 @@
   border-color: var(--border);
   color: var(--muted);
 }
+/* In a narrow home (a Behaviors board row) the count gives way first, so the
+ * ⋯ and × never slide past the card's edge. */
 .bh-count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-size: calc(11.5px * var(--bh-s));
   white-space: nowrap;
 }
 .bh-head-tools {
+  flex: none;
   margin-left: auto;
   display: flex;
   align-items: center;

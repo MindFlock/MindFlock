@@ -89,25 +89,25 @@ docs/behaviors.md §1 and the frontend half of §5. Notes for the integrator.
 
 ## For the integrator (outside this fence)
 
-1. `frontend/src/state/store.ts` `openDialogFor` (~:888): after
-   `if (r.to === "sky") get().showSky(r.focus);` also open the behaviors —
-   `if (r.to === "sky") { get().showSky(r.focus); if (r.behaviors) openBehaviors(r.behaviors); }`
-   (import `openBehaviors` lazily or from lib/behaviorsFocus — note
-   behaviorsFocus imports the store, so call it inside the action, not at
-   module load).
-2. `frontend/src/lib/surfaceHash.ts` (~:216): for an old
-   `#flights/checklists…` link, replace the address with
-   `behaviorsHash(...)` (`#behaviors`) instead of the sky's hash, if the
-   shell worker's `#behaviors` routing wants it to read that way.
-3. `frontend/src/__tests__/flatTopBar.test.ts` "the old #flights links land
-   where they belong now" — three cases expect `#flights/checklists[/…]` /
-   `openDialogFor("flights", "checklists/feature/x")` to open the `verify`
-   dialog. They now land on the Sky: expect `[openDialog, dialogTarget]` =
-   `[null, null]` and (once 1. is in) a behaviors request
-   `{ board: true }` / `{ branch: "feature/x" }` in `useBehaviorsFocus`.
-4. Nothing else outside the fence needed changing; `skyLine.test.ts`,
-   `skyResize.test.ts`, `skyView.test.ts`, `grounded.test.ts` source pins
-   still hold.
+Connected by behaviors-connect (2026-11-03):
+
+1. `state/store.ts` `openDialogFor("flights", "checklists[/<b>]")` calls
+   `openBehaviors(r.behaviors)` right after `showSky` (a static import; the
+   store ↔ behaviorsFocus cycle is safe because each side only calls the
+   other inside an action).
+2. `lib/surfaceHash.ts`: an old `#flights/checklists` link now reads
+   `#behaviors`; `#flights/checklists/<branch>` reads `#sky` (its plan id is
+   not known until the plans load). `#behaviors` / `#behaviors/<plan id>` is
+   accepted on load and on Back/Forward (`parseBehaviorsLink` →
+   `openBehaviors`) and stays the address until the view moves. An old
+   `#verify…` link is still the Verify dialog's (see docs/behaviors.md, "Still
+   to connect").
+3. `flatTopBar.test.ts` pins both: `[null, null]` dialog, the Sky, the
+   behaviors request (`{ board: true }` / `{ branch: "feature/x" }`), the
+   rewritten address, and a new case for the `#behaviors` links.
+4. `behaviorsCardBox` now sizes a row at 100 px (measured 89–108 at
+   BH_CARD_W); at 64 the open card showed only its first row of three. Below
+   ~0.8 zoom the card's type grows (`--bh-s`), so the rows scroll there.
 
 ## Tests
 

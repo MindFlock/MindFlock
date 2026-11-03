@@ -467,7 +467,7 @@ URL in place):
 | `#flights`, `sky`, `sky/<title>`, `board` | the Sky (`#sky`, `#sky/<title>`) |
 | `flyways[/<id>]`, `plans[/<id>]` | the Sky with the shelf open (and that flyway's card) — `useUi.showFlyways(id)` |
 | `sources[/<x>]` | Intake, target `<x>` (`#intake/<x>`) |
-| `checklists[/<branch>]` | Verify, that checklist (`#verify/<branch>`) |
+| `checklists[/<branch>]` | the behaviors in the Sky (`openBehaviors`): the board (`#behaviors`), or that branch's frame (`#sky`) — docs/behaviors.md §4 |
 | `schedule[/<x>]` | Schedule, target `<x>` (`#schedule`) |
 | anything else | the Sky |
 

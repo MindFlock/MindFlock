@@ -777,9 +777,14 @@ export const BH_CARD_MAX_H = 560;
 export const BH_ASK_W = 300;
 export const BH_ASK_H = 170;
 
+/** The card's head + foot, and one row (its text, expect line, who checks it
+ * and its answer buttons or the agent's note), as drawn at BH_CARD_W:
+ * measured rows run 89–108 px, so a smaller guess hid all but the first. */
+const BH_CARD_CHROME_H = 132;
+const BH_ROW_H = 100;
 export function behaviorsCardBox(plan: Pick<TestPlan, "steps"> | null | undefined): { w: number; h: number } {
   const rows = (plan?.steps || []).length;
-  return { w: BH_CARD_W, h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, 132 + rows * 64)) };
+  return { w: BH_CARD_W, h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, BH_CARD_CHROME_H + rows * BH_ROW_H)) };
 }
 
 /** A session's behaviors as its tile draws them, or null (no behaviors). */

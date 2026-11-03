@@ -69,14 +69,22 @@ behaviors still work."
 
 ## For the integrator
 
-- `frontend/src/__tests__/flatTopBar.test.ts:204` (outside this fence) pins
-  the old drawer line and now FAILS. Change
-  `expect(drawer).toContain('onOpen={(b) => openDialogFor("verify", b)}');`
-  to `expect(drawer).toContain("onOpen={(planId) => openBehaviors({ planId })}");`
-  (and the test's name: "…the drawer opens behaviors / Intake").
-- vs-tile: the reveal step looks for `[data-plan="<plan id>"]` inside the
-  line's slot — the seam card's root carries it; keep it on the real card.
-- The board relies on `BehaviorsCard`'s `onClose` to fold a row, and on
-  `BehaviorsSettings`'s `onClose` to close its popover.
-- In This session (mode "one") and on a phone the board never shows, so a
-  request for an orphan plan there only takes the request (nothing to fly to).
+Connected by behaviors-connect (2026-11-03):
+
+- `flatTopBar.test.ts` now pins the drawer's
+  `onOpen={(planId) => openBehaviors({ planId })}` ("…the drawer opens
+  behaviors / Intake").
+- The reveal step's `[data-plan="<plan id>"]` is on the real card: both the
+  tile's open box (`.sky-bh-open`, SkyChain) and `BehaviorsCard`'s root carry
+  it. Seen rendered: `#behaviors/<plan id>` flies to the frame and opens the
+  card; `#flights/checklists` lands on `#behaviors` with the board in view.
+- `BehaviorsCard`'s `onClose` folds a row and `BehaviorsSettings`'s `onClose`
+  closes its popover (both wired).
+- The "an open row draws the card" render test stubs `document` for that
+  render alone (the card's instances query reads `document.hidden`; the
+  `pollInterval` line itself is pinned by `uxRound.test.ts`).
+- A board row's card is `compact`, which now reads at the board's own type
+  size (`--bh-s: 1`) instead of the Sky zoom's larger type, and its head lets
+  the count ellipsize so ⋯ and × stay inside a narrow board.
+- Still true: in This session (mode "one") and on a phone the board never
+  shows, so a request for an orphan plan there only takes the request.
