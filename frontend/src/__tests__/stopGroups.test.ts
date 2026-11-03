@@ -39,7 +39,7 @@ const { FLYWAY_MIME } = await import("../lib/skyLayout");
 const G = { id: "g1", name: "Ticket to merge", plan_id: "builtin:ticket" };
 const step = (id: string, kind: string, title: string, group?: typeof G): FlightStep => ({ id, kind, title, config: {}, on_fail: "halt", ...(group ? { group } : {}) });
 // s1 alone, s2..s4 one group, s5 and s6 alone.
-const STEPS = [step("s1", "agent", "Work the ticket"), step("s2", "ship", "Push", G), step("s3", "ship", "Open the PR", G), step("s4", "reviews", "Reviews settle", G), step("s5", "you", "Approve"), step("s6", "ship", "Merge")];
+const STEPS = [step("s1", "agent", "Work the ticket"), step("s2", "ship", "Push", G), step("s3", "ship", "Open the PR", G), step("s4", "reviews", "Reviews settle", G), step("s5", "you", "Approve"), step("s6", "ship", "Merge when green")];
 const KINDS: StepKindDef[] = [
   { kind: "agent", label: "Agent", actor: "robot", summary: "", fields: [], default_title: "Agent" },
   { kind: "ship", label: "Ship", actor: "robot", summary: "", fields: [], default_title: "Ship" },
@@ -147,10 +147,10 @@ describe("a group is one stop on the line", () => {
   });
 
   it("the same id back later on the line is a box of its own — a lone member draws as itself", () => {
-    const steps = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge", G), step("s7", "ship", "Tag", G)];
+    const steps = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge when green", G), step("s7", "ship", "Tag", G)];
     expect(mainIds(at(0, { steps }))).toEqual(["session:me", "stop:s1", "group:g1", "stop:s5", "group:g1@5", "add"]);
     // A group of ONE stop is that stop (a joined-on lone Commit stays "Commit").
-    const lone = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge", G)];
+    const lone = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge when green", G)];
     expect(mainIds(at(0, { steps: lone }))).toEqual(["session:me", "stop:s1", "group:g1", "stop:s5", "stop:s6", "add"]);
   });
 

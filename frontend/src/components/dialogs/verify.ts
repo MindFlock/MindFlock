@@ -551,7 +551,7 @@ export function checklistTargets(
     // the server refuses it, so the picker says so first.
     const noCommits = !covering && !onLive && empty;
     const reason = covering
-      ? "has a checklist"
+      ? "has behaviors"
       : onLive
         ? "on " + b + " — nothing to compare"
         : noCommits
@@ -806,14 +806,14 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
         "wait",
         "Not written yet — writing stopped part-way, nothing for five minutes.",
         "rewrite",
-        "Rewrite the checklist",
+        "Rewrite the behaviors",
       );
     // "Up to three minutes" is a promise; past it, the row says so (m11).
     return at(
       "wait",
       isGenerationSlow(plan)
-        ? "Writing the checklist — taking longer than usual…"
-        : "Writing the checklist from the diff — up to three minutes.",
+        ? "Writing the behaviors — taking longer than usual…"
+        : "Writing the behaviors from the diff — up to three minutes.",
       "none",
     );
   }
@@ -846,9 +846,9 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       "wait",
       why
         ? "Not written yet — " + why.charAt(0).toLowerCase() + why.slice(1)
-        : "Not written yet — the agent couldn't write a checklist for this.",
+        : "Not written yet — the agent couldn't write behaviors for this.",
       "rewrite",
-      "Rewrite the checklist",
+      "Rewrite the behaviors",
     );
   }
   // Steps, and a recorded failure: an older store's rewrite that timed out.
@@ -856,23 +856,23 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   if (plan.state === "failed")
     return at(
       "warn",
-      "Rewriting this didn't work — the steps below are unchanged.",
+      "Rewriting this didn't work — the behaviors below are unchanged.",
       "rewrite",
       "Try rewriting again",
     );
 
   // Made empty on purpose ("Start an empty checklist"): nothing failed, a
   // person is about to write the steps.
-  if (isEmptyByChoice(plan)) return at("you", "Empty — add the steps to check.", "answer", "Add a step");
+  if (isEmptyByChoice(plan)) return at("you", "Empty — add the behaviors to check.", "answer", "Add a behavior");
 
   // A plan that came back empty looks identical to one still being written, so
   // it has to say which it is.
   if (!steps.length)
     return at(
       "wait",
-      "Not written yet — it came back with no steps.",
+      "Not written yet — it came back with no behaviors.",
       "rewrite",
-      "Rewrite the checklist",
+      "Rewrite the behaviors",
     );
 
   // An agent is on it right now. The one thing worth doing is watching — but
@@ -1191,7 +1191,7 @@ export function planVerdict(plan: TestPlan): PlanVerdict {
     ({ key, label, short, tone, glyph }) as PlanVerdict;
   const steps = plan.steps || [];
   if (plan.state === "generating" && !isGenerationStalled(plan))
-    return v("writing", "Being written", "busy", "\u2026", "Checklist…");
+    return v("writing", "Being written", "busy", "\u2026", "Writing…");
   if (plan.state === "running") return v("checking", "Agent checking", "busy", "\u2026", "Checking…");
   if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
   // Grey, not red: nothing about the change is known yet (M4).

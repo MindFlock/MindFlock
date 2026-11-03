@@ -98,7 +98,7 @@ describe("the keys", () => {
 
 describe("the palette", () => {
   const p = code("components/palette/CommandPalette.tsx");
-  it("Intake… / Schedule… open the dialogs; Behaviors fly the Sky; Switch to the Sky / grid; Saved chains… is the shelf", () => {
+  it("Intake… / Schedule… open the dialogs; Behaviors fly the Sky; Switch to the Sky / grid; Saved routes… is the shelf", () => {
     expect(p).toContain('run: () => ui.openDialogFor("intake"),');
     expect(p).not.toContain('label: "Verify…"');
     expect(p).toContain('label: "Behaviors — next that needs you",');
@@ -108,7 +108,7 @@ describe("the palette", () => {
     expect(p).toContain('label: "Schedule…"');
     expect(p).toContain('label: "Switch to the Sky", hint: "Ctrl+Y"');
     expect(p).toContain('label: "Switch to the grid", hint: "Ctrl+Y"');
-    expect(p).toMatch(/label: "Saved chains…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
+    expect(p).toMatch(/label: "Saved routes…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
     expect(p).not.toContain('label: "Flights…"');
     expect(p).not.toContain('"flights"');
   });

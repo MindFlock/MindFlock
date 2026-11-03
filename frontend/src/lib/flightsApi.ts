@@ -4,6 +4,9 @@
  * button posts.
  *
  *  - Done / Skip / Retry   POST /api/flights/{id}/steps/{sid}/done {note?} · /skip · /retry
+ *                          (Done on a Verify stop parked on you is 409
+ *                          `answer_behaviors`: `stepDone` opens its behaviors)
+ *  - Let the agent fix it  POST /api/flights/{id}/steps/{sid}/op/fix (a halted stop)
  *  - Jump to…              POST /api/flights/{id}/jump {step}
  *  - Pause / Resume / Cancel  POST /api/flights/{id}/pause · /resume · /cancel
  *  - Take off              POST /api/flights/start {plan_id, repo_path?}
@@ -22,9 +25,10 @@
  * Every start ends in `selectSession(title)` as soon as the row exists — the
  * way lib/templateRun.ts does. */
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { Instance } from "../api/types";
 import { queryClient, refreshInstances } from "../state/queries";
+import { type BehaviorsTarget, openBehaviors } from "./behaviorsFocus";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { selectSession } from "./sessionActions";
@@ -78,8 +82,57 @@ export async function flightAction(what: string, path: string, body: unknown = {
   }
 }
 
-export function stepDone(flightId: string, stepId: string, note = ""): Promise<boolean> {
-  return flightAction("Done", stepPath(flightId, stepId, "done"), note ? { note } : {});
+/** A Verify stop parked on you moves on when its behaviors are answered,
+ * not on Done (docs/behaviors.md §5): the server refuses it with 409
+ * `answer_behaviors`. */
+export function isAnswerBehaviors(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 409) return false;
+  const b = err.body as { error?: unknown } | null;
+  return !!b && typeof b === "object" && b.error === "answer_behaviors";
+}
+
+/** Where a flight's behaviors live: its session's (or branch's) card on the
+ * route, else the next behaviors that need you. */
+export function flightBehaviorsTarget(flightId: string): BehaviorsTarget {
+  const flights = queryClient.getQueryData<Flight[] | null>(["flights"]) || [];
+  const fl = flights.find((f) => f.id === flightId);
+  if (fl?.session) return { title: fl.session, ...(fl.branch ? { branch: fl.branch } : {}) };
+  if (fl?.branch) return { branch: fl.branch };
+  return { next: true };
+}
+
+/** "Behaviors" on a Verify stop parked on you: its card, in the stop's place. */
+export function answerBehaviors(flightId: string): void {
+  openBehaviors(flightBehaviorsTarget(flightId));
+}
+
+/** Done on a stop parked on you. A Verify stop refuses it (409
+ * `answer_behaviors`): that is not an error — its behaviors open instead. */
+export async function stepDone(flightId: string, stepId: string, note = ""): Promise<boolean> {
+  try {
+    await api(stepPath(flightId, stepId, "done"), { json: note ? { note } : {} });
+    return true;
+  } catch (err) {
+    if (isAnswerBehaviors(err)) {
+      toast("Answer its behaviors (or Skip it) — the route goes on once each one has an answer");
+      answerBehaviors(flightId);
+    } else errorPop("Done failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
+}
+
+/** Let the agent fix it, on a halted stop: the failure goes to the session's
+ * agent and the stop runs again once its turn ends. */
+export function stepFix(flightId: string, stepId: string): Promise<boolean> {
+  return flightAction(
+    "Let the agent fix it",
+    flightPath(flightId, "/steps/" + enc(stepId) + "/op/fix"),
+    {},
+    "Handed to the agent — the stop runs again after its fix"
+  );
 }
 
 export function stepSkip(flightId: string, stepId: string): Promise<boolean> {

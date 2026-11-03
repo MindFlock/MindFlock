@@ -137,7 +137,7 @@ const FLIGHT = {
   session: "me",
   state: "running",
   cursor: 2,
-  steps: [step("s1", "agent", "Work it", "done"), step("s2", "ship", "Commit", "done"), step("s3", "ship", "Push", "running"), step("s4", "ship", "Merge")],
+  steps: [step("s1", "agent", "Work it", "done"), step("s2", "ship", "Commit", "done"), step("s3", "ship", "Push", "running"), step("s4", "ship", "Merge when green")],
   history: [],
 } as unknown as Flight;
 const PLANS: FlightPlan[] = [];

@@ -118,7 +118,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
           </>
         ) : diagram.mode === "ladder" ? (
           <>
-            <strong>Fast-track</strong>
+            <strong>Goes as far as</strong>
             <span className="muted">tack a stop on and the route takes over its rungs</span>
           </>
         ) : (

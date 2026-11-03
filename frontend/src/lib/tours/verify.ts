@@ -4,8 +4,9 @@
  * board. Each target names its `data-tour` hook first and the element's own
  * class after it (either finds it); a step whose element isn't on screen (no
  * session has behaviors yet, the card is folded, the board is hidden) centres
- * its card. Replayed from Settings → Tours and the palette (replayTour opens
- * the Sky first); never automatic. */
+ * its card. It opens by itself once, the first time a Behaviors stop shows
+ * on a route in the Sky (SkyView `useTourOnFirstSight`); replayed from
+ * Settings → Tours and the palette (replayTour flies to the behaviors). */
 import type { TourDef } from ".";
 
 export const VERIFY_TOUR: TourDef = {

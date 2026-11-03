@@ -110,20 +110,16 @@ export function calmHidesBar(key: string): boolean {
   return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
 }
 
-/** The top bar in the calm first hour: Verify and Schedule are ALWAYS on
- * the bar, in the same place, from the very first launch — a surface you
- * can't see is a surface nobody finds (the Help tour list offered tours of
- * both while neither was anywhere on screen). What the calm hour changes is
- * only their weight: while it is calm and one is still empty (no checklist /
- * nothing scheduled), it is drawn QUIET — muted, secondary to "③ Start your
- * first session" — and its first item makes it a normal button. Its empty
- * state is what it opens to meanwhile. Once calm ends (three sessions, or a
- * week) neither is ever quiet. */
-export function topBarQuiet(o: { calm: boolean; checklists: number; templates: number }): {
-  verify: boolean;
-  schedule: boolean;
-} {
-  return { verify: o.calm && o.checklists === 0, schedule: o.calm && o.templates === 0 };
+/** The top bar in the calm first hour: Schedule is ALWAYS on the bar, in
+ * the same place, from the very first launch — a surface you can't see is a
+ * surface nobody finds. What the calm hour changes is only its weight: while
+ * it is calm and nothing is scheduled yet, it is drawn QUIET — muted,
+ * secondary to "③ Start your first session" — and its first item makes it a
+ * normal button. Once calm ends (three sessions, or a week) it is never
+ * quiet. (Verify had the same rule; it is a stop on the route now, not a
+ * button.) */
+export function topBarQuiet(o: { calm: boolean; templates: number }): { schedule: boolean } {
+  return { schedule: o.calm && o.templates === 0 };
 }
 
 /** The welcome tour opens by itself exactly once, on a genuinely first

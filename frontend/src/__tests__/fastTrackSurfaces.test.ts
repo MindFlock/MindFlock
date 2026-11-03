@@ -299,7 +299,7 @@ describe("the ⏩ button and its picker", () => {
     expect(btn).not.toContain("aria-pressed");
     const step = fn("fastTrackStep");
     expect(has(step, 'label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : "")')).toBe(true);
-    expect(step).toContain("Click to change it or turn it off (Ctrl+K F).");
+    expect(step).toContain("Click to change how far it goes (Ctrl+K F).");
     expect(LANE_SHORT).toEqual({ leave: "off", commit: "Commit", push: "Push", pr: "PR", merge: "Merge" });
   });
 

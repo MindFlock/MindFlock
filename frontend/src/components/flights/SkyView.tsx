@@ -119,7 +119,7 @@
 
 import { optimisticDelete } from "../../lib/flightOptimism";
 import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
-import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
+import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks, useTestPlans } from "../../state/queries";
 import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
 import type { Instance } from "../../api/types";
 import { errMsg } from "../../lib/format";
@@ -269,7 +269,8 @@ import { QuickAdd } from "./QuickAdd";
 import { PlacePicker } from "./PlacePicker";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
-import { useAutoTour } from "../onboarding/useAutoTour";
+import { useAutoTour, useTourOnFirstSight } from "../onboarding/useAutoTour";
+import { behaviorsOnARoute } from "../../lib/behaviors";
 import { SkyEmpty } from "../onboarding/SkyEmpty";
 import "./Sky.css";
 import "./SkyObjects.css";
@@ -600,6 +601,10 @@ export function SkyView() {
   // flights' — stops with no session yet — newest first. Not in This session
   // or Perched on you; Find matches their name.
   const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: focused || "" }), [rows, mode, query, focused]);
+  // The Verify tour opens by itself once: the first time a Behaviors stop
+  // shows on a route here (docs/behaviors.md §4).
+  const testPlans = useTestPlans().data?.plans;
+  useTourOnFirstSight("verify", useMemo(() => behaviorsOnARoute(testPlans, rows, titles), [testPlans, rows, titles]));
   // The Behaviors board (docs/behaviors.md §3): the behaviors with no frame here.
   const behaviors = useBehaviorsBoard({ rows, titles, allowed: !narrow && mode !== "one" });
   const grounded = useMemo(() => {

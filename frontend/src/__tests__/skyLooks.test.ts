@@ -42,7 +42,7 @@ const rec = (state: StepRunState["state"], detail: Record<string, unknown> = {})
 const STEPS = [
   step("s1", "test", "Tests"),
   step("s2", "checkpoint", "Checkpoint"),
-  step("s3", "ship", "Merge", { lane: "merge" }, { when: "diff touches frontend/**" }),
+  step("s3", "ship", "Merge when green", { lane: "merge" }, { when: "diff touches frontend/**" }),
   step("s4", "budget", "Budget", { max_usd: 5 }),
 ];
 const flight = (over: Partial<Flight> = {}): Flight =>

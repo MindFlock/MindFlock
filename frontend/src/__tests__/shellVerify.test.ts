@@ -99,7 +99,7 @@ describe("a checklist made empty on purpose", () => {
     expect(planVerdict(p)).toMatchObject({ key: "empty", label: "Empty — add a step", tone: "you" });
     expect(isFailing(p)).toBe(false);
     expect(isWaitingOnYou(p)).toBe(true);
-    expect(planStatus(p)).toMatchObject({ tone: "you", action: "answer", actionLabel: "Add a step" });
+    expect(planStatus(p)).toMatchObject({ tone: "you", action: "answer", actionLabel: "Add a behavior" });
   });
 
   it("a generated checklist with no steps is Not written yet — grey, not a failure (round 5, M4)", () => {

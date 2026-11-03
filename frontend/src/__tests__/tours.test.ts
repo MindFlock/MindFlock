@@ -456,14 +456,13 @@ describe("the ? button and the replays", () => {
 });
 
 describe("the top bar in the calm first hour", () => {
-  it("Verify and Schedule are always on the bar; an empty one is only drawn quiet while calm", () => {
-    expect(topBarQuiet({ calm: true, checklists: 0, templates: 0 })).toEqual({ verify: true, schedule: true });
-    expect(topBarQuiet({ calm: true, checklists: 1, templates: 0 })).toEqual({ verify: false, schedule: true });
-    expect(topBarQuiet({ calm: true, checklists: 0, templates: 2 })).toEqual({ verify: true, schedule: false });
+  it("Schedule is always on the bar; empty, it is only drawn quiet while calm", () => {
+    expect(topBarQuiet({ calm: true, templates: 0 })).toEqual({ schedule: true });
+    expect(topBarQuiet({ calm: true, templates: 2 })).toEqual({ schedule: false });
   });
 
-  it("neither is ever quiet once the first hour is over", () => {
-    expect(topBarQuiet({ calm: false, checklists: 0, templates: 0 })).toEqual({ verify: false, schedule: false });
+  it("it is never quiet once the first hour is over", () => {
+    expect(topBarQuiet({ calm: false, templates: 0 })).toEqual({ schedule: false });
   });
 
   it("both buttons always render; the rule only adds tb-quiet (muted, still labelled)", () => {

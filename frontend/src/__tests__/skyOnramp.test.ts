@@ -49,7 +49,7 @@ describe("a chain just built draws at once", () => {
     ({
       id: "f_1",
       plan_id: "",
-      plan_name: "Flight on me",
+      plan_name: "Route on me",
       steps: [{ id: "s1", kind: "verify", title: "Verify", config: {}, on_fail: "halt" }],
       subject: {},
       session: "me",
@@ -72,7 +72,7 @@ describe("a chain just built draws at once", () => {
     const rows = [row("me"), row("other")];
     const out = withLiveFlights(rows, [flight()], [{ kind: "verify", actor: "you" }]);
     expect(out).not.toBe(rows);
-    expect(out[0].flight).toMatchObject({ id: "f_1", plan_name: "Flight on me", cursor: 0, total: 1, state: "ready", step: { id: "s1", kind: "verify", title: "Verify", state: "pending", actor: "you" } });
+    expect(out[0].flight).toMatchObject({ id: "f_1", plan_name: "Route on me", cursor: 0, total: 1, state: "ready", step: { id: "s1", kind: "verify", title: "Verify", state: "pending", actor: "you" } });
     expect(out[1]).toBe(rows[1]);
   });
 

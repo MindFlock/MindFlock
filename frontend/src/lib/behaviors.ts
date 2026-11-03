@@ -275,6 +275,19 @@ export function planForSession(plans: readonly TestPlan[] | null | undefined, ro
   return legacyPlanFor([...(plans || [])], row);
 }
 
+/** Is there a Behaviors stop on any route in the Sky — a shown session whose
+ * behaviors its route draws (the Verify stop, or the tile standing in for
+ * it)? What first opens the Verify tour (SkyView). */
+export function behaviorsOnARoute(
+  plans: readonly TestPlan[] | null | undefined,
+  rows: readonly Pick<Instance, "title" | "branch" | "repo">[],
+  titles: readonly string[]
+): boolean {
+  if (!plans?.length) return false;
+  const shown = new Set(titles);
+  return rows.some((r) => shown.has(r.title) && !!planForSession(plans, r));
+}
+
 /** Behaviors whose session has no frame in the Sky (closed session, another
  * branch, a watched repo's push): the Behaviors board's rows. */
 export function orphanPlans(plans: readonly TestPlan[] | null | undefined, rows: readonly Pick<Instance, "title" | "branch" | "repo">[]): TestPlan[] {

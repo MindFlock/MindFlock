@@ -89,7 +89,7 @@ describe("the session picker", () => {
   const t = (title: string, over: Partial<ChecklistTarget> = {}): ChecklistTarget => ({ title, branch: "feature/" + title, closed: false, reason: "", planId: "", ...over });
 
   it("offers sessions with no behaviors yet (a branch with no commits too)", () => {
-    const list = [t("a"), t("b", { planId: "b", reason: "has a checklist" }), t("c", { reason: "no commits yet", noCommits: true }), t("d", { reason: "on main — nothing to compare" })];
+    const list = [t("a"), t("b", { planId: "b", reason: "has behaviors" }), t("c", { reason: "no commits yet", noCommits: true }), t("d", { reason: "on main — nothing to compare" })];
     expect(emptyTargets(list).map((x) => x.title)).toEqual(["a", "c"]);
   });
 

@@ -74,7 +74,13 @@ export interface StopDialogProps {
   onToggleHalt?(): void;
   /** The current stop's own: Done (a perch), Retry (halted), Skip. */
   onDone?(): void;
+  /** Done's own words when it does something else (a Verify stop: "Behaviors"
+   * opens its card — it moves on when they are answered, not on Done). */
+  doneLabel?: string;
+  doneTitle?: string;
   onRetry?(): void;
+  /** A halted Verify stop: Let the agent fix it. */
+  onFix?(): void;
   onSkip?(): void;
   /** Group: rename it (Save), its rows' ✎ and 🗑, Ungroup, Save to the shelf. */
   onRename?(name: string): void | Promise<unknown>;
@@ -226,13 +232,18 @@ function StepDialog(p: StopDialogProps) {
             )}
           </span>
           {p.onDone && (
-            <button type="button" className="test-btn" disabled={p.busy} onClick={p.onDone}>
-              Done
+            <button type="button" className="test-btn" disabled={p.busy} title={p.doneTitle} onClick={p.onDone}>
+              {p.doneLabel || "Done"}
             </button>
           )}
           {p.onRetry && (
             <button type="button" className="test-btn" disabled={p.busy} onClick={p.onRetry}>
               Retry
+            </button>
+          )}
+          {p.onFix && (
+            <button type="button" className="test-btn" disabled={p.busy} onClick={p.onFix}>
+              Let the agent fix it
             </button>
           )}
           {p.onSkip && (

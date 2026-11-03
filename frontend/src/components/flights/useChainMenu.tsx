@@ -15,7 +15,7 @@ import { toast } from "../../lib/toast";
 import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
-import { controlFlight, joinParallel, leaveParallel, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, joinParallel, leaveParallel, answerBehaviors, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { isParallelSafe, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { StopMenu, type SkyMenuItem } from "./StopMenu";
 
@@ -133,6 +133,8 @@ export function useChainMenu(
     else if (key === "remove") h.onRemove?.(n);
     else if (key === "halt") h.onToggleHalt?.(n);
     else if (key === "done") void stepDone(flightId, step);
+    else if (key === "behaviors") answerBehaviors(flightId);
+    else if (key === "fix") void stepFix(flightId, step);
     else if (key === "skip") void stepSkip(flightId, step);
     else if (key === "retry") void stepRetry(flightId, step);
     else if (key === "pause" || key === "resume") void controlFlight(flightId, key);

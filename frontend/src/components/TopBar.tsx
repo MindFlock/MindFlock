@@ -102,7 +102,7 @@ export function TopBar() {
   // the route, and behaviors that need you count in the Sky's Needs-you badge.
   // The list is still read so the bar keeps its poll warm for the chips and
   // the Sky.
-  const { data: testPlans } = useTestPlans();
+  useTestPlans();
   // Schedule's badge: the scheduled templates whose last run FAILED — the
   // cards that say "Last run failed", nothing else. A schedule that is merely
   // set, or a run skipped because the last one was still going, is the
@@ -116,7 +116,6 @@ export function TopBar() {
   // bar; while empty it is only drawn quiet until its first scheduled template.
   const quiet = topBarQuiet({
     calm: useCalm(),
-    checklists: testPlans?.plans?.length ?? 0,
     templates: sched.templates.length,
   });
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
@@ -166,7 +165,7 @@ export function TopBar() {
 
   // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
   const scheduleTitle =
-    "Schedule — everything that starts by itself on a timer: templates and scheduled chains" +
+    "Schedule — everything that starts by itself on a timer: templates and saved routes" +
     keys("schedule") +
     (schedFailing > 0
       ? "\n" +

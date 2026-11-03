@@ -585,10 +585,10 @@ describe("planStatus (the one sentence and the one button)", () => {
     // They look identical — no steps, nothing to do — and only one of them is
     // going to fix itself.
     expect(planStatus(plan({ state: "generating" })).line).toBe(
-      "Writing the checklist from the diff — up to three minutes.",
+      "Writing the behaviors from the diff — up to three minutes.",
     );
     expect(planStatus(plan({ state: "due", steps: [] })).line).toBe(
-      "Not written yet — it came back with no steps.",
+      "Not written yet — it came back with no behaviors.",
     );
     expect(planStatus(plan({ state: "due", steps: [] })).action).toBe("rewrite");
   });
@@ -607,7 +607,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     // Grey since round 5 (M4): not written is not a failure.
     expect(status.tone).toBe("wait");
     expect(status.action).toBe("rewrite");
-    expect(status.actionLabel).toBe("Rewrite the checklist");
+    expect(status.actionLabel).toBe("Rewrite the behaviors");
     expect(status.line).toContain("stopped part-way");
   });
 
@@ -640,7 +640,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     const status = planStatus(broken, "main");
     expect(status.group).toBe("failed");
     expect(status.tone).toBe("wait");
-    expect(status.actionLabel).toBe("Rewrite the checklist");
+    expect(status.actionLabel).toBe("Rewrite the behaviors");
     // M1: the reason is in the headline, not only in the expanded body.
     expect(status.line).toBe("Not written yet — no <testplan> block.");
   });
@@ -659,7 +659,7 @@ describe("planStatus (the one sentence and the one button)", () => {
 
   it("says a write past three minutes is taking longer than usual (m11)", () => {
     const slow = plan({ state: "generating", gen_started: Date.now() / 1000 - 200 });
-    expect(planStatus(slow).line).toBe("Writing the checklist — taking longer than usual…");
+    expect(planStatus(slow).line).toBe("Writing the behaviors — taking longer than usual…");
     expect(planStatus(slow).action).toBe("none");
   });
 
@@ -1505,7 +1505,7 @@ describe("checklistTargets (Ask the agent for a checklist)", () => {
       ["open-a", false, ""],
       ["closed-c", true, ""],
       ["on-main", false, "on main — nothing to compare"],
-      ["closed-b", true, "has a checklist"],
+      ["closed-b", true, "has behaviors"],
     ]);
     expect(targets.find((t) => t.title === "closed-b")?.planId).toBe("closed-b");
   });
