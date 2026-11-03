@@ -73,6 +73,27 @@ def env(monkeypatch, cfg):
 # --------------------------------------------------------------------------- #
 # core.flock_mode
 # --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _claude_is_the_default(monkeypatch):
+    """These tests read the request as a Claude-default machine words it (the
+    machine running the suite may have only another agent installed)."""
+    monkeypatch.setattr(flock_mode, "_claude_default", lambda: True)
+
+
+def test_another_default_agent_gets_no_claude_model(cfg, monkeypatch):
+    """A GitHub Copilot-only machine: workers run Copilot, which may not know
+    "claude-opus-5-5" — the default request leaves the model to it."""
+    monkeypatch.setattr(flock_mode, "_claude_default", lambda: False)
+    text = flock_mode.request_text()
+    assert "claude" not in text and "(model" not in text
+    assert text.startswith(
+        "Use MindFlock workers for this: spawn as many MindFlock agents"
+    )
+    # A model the person typed is theirs, whatever the default agent.
+    settings_mod.update_settings(general={"workers_model": "gpt-6-luna"})
+    assert "(model gpt-6-luna)" in flock_mode.request_text()
+
+
 def test_the_flag_file_lifecycle(cfg):
     p = flock_mode.flag_path("mindflock_w")
     assert p == cfg / "voice" / "mindflock_w.flock"

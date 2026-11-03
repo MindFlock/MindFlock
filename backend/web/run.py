@@ -330,8 +330,13 @@ def main(argv: Optional[List[str]] = None) -> None:
     # nobody has opened yet and retrying onto offline.html.
     def _preflight() -> None:
         try:
-            from backend import init_wizard
+            from backend import init_wizard, pathenv
 
+            # PATH first (idempotent; the server's startup does the same): this
+            # thread races it, and an agent in ~/.local/bin (Copilot's npm
+            # prefix) read as missing made the report say "missing Claude Code"
+            # on a machine whose only agent is installed and is the default.
+            pathenv.ensure_enriched()
             # Rendered into a buffer and written once: the "Press Ctrl-C" line
             # above is racing this thread, and a block printed line by line
             # would let that line land in the middle of it.

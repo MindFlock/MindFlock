@@ -3810,12 +3810,33 @@ def get_setup(refresh: bool = False) -> JSONResponse:
     ``{steps: [{id, title, required, group, done, at, skipped, status}], summary:
     {done, total, required_done, complete, next}, doctor: {ok, checks,
     install} | null, tailscale: {status, detail, fix, docs} | null, logins:
-    [{name, installed, logged_in, login_cmd, default}], default_provider,
-    report}``. ``report`` is the first-run text ``mindflock serve`` printed at
+    [{name, installed, logged_in, login_cmd, default}], agents: [{name, label,
+    installed, installable}] (step ①'s picker), default_provider, report}``. ``report`` is the first-run text ``mindflock serve`` printed at
     boot (``""`` on a later boot). The doctor result is the cached one;
     ``?refresh=1`` re-probes (after an install or a sign-in). sync def: the
     probe shells out, so FastAPI runs it off the event loop."""
     return JSONResponse(_setup_steps.status(_doctor_payload_cached(refresh=refresh)))
+
+
+@app.post("/api/setup/agent")
+async def post_setup_agent(request: Request) -> JSONResponse:
+    """Step ①'s agent picker: ``{"provider": "copilot"}`` makes that agent the
+    default — installed or not, as long as MindFlock can install it (Settings
+    → Agents takes only an installed one). Answers the fresh ``GET /api/setup``
+    body (step ① then names the new agent). 400 for an agent setup can't
+    offer; owner only (``auth.may_configure``, 403)."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    name = str((body or {}).get("provider") or "") if isinstance(body, dict) else ""
+    err = await asyncio.to_thread(_setup_steps.choose_agent, name)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    payload = await asyncio.to_thread(_doctor_payload_cached, True)
+    return JSONResponse(await asyncio.to_thread(_setup_steps.status, payload))
 
 
 @app.post("/api/setup/{step}/skip")

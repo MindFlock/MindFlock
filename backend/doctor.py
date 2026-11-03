@@ -363,21 +363,14 @@ def check_gh() -> Check:
 
 
 def _default_provider_name() -> str:
-    """The configured default coding-CLI provider ("claude" unless overridden)."""
-    name = ""
+    """The configured default coding-CLI provider: the chosen one, else
+    "claude" — or, when claude is not installed, the first agent that is
+    (:func:`backend.config.program.default_provider_name`)."""
     try:
-        from backend.config.settings import load_settings
+        from backend.config.program import default_provider_name
 
-        name = load_settings().coding_cli.default_provider
+        return default_provider_name()
     except Exception:  # noqa: BLE001 — settings are optional
-        name = ""
-    if name:
-        return name
-    try:
-        from backend import providers
-
-        return providers.DEFAULT_PROVIDER
-    except Exception:  # noqa: BLE001
         return "claude"
 
 

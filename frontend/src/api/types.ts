@@ -76,6 +76,14 @@ export interface SetupLogin {
   default: boolean;
 }
 
+export interface SetupAgentChoice {
+  name: string;
+  /** Its product name ("GitHub Copilot"). */
+  label: string;
+  installed: boolean;
+  installable: boolean;
+}
+
 export interface SetupStatus {
   steps: SetupStep[];
   summary: SetupProgress;
@@ -87,6 +95,9 @@ export interface SetupStatus {
   /** The doctor's Tailscale row (status != "ok" → "Install Tailscale"). */
   tailscale: { status: string; detail: string; fix: string; docs: string } | null;
   logins: SetupLogin[];
+  /** Step ①'s agent picker: every agent that is installed or that MindFlock
+   * can install (POST /api/setup/agent makes one the default). */
+  agents?: SetupAgentChoice[];
   default_provider: string;
   /** What `mindflock serve` printed at a first start ("" on later boots). */
   report: string;

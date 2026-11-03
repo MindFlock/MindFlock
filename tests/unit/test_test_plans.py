@@ -619,6 +619,23 @@ def test_an_empty_or_unusable_block_raises(body):
         tp.parse_plan("<testplan>%s</testplan>" % body)
 
 
+def test_a_deliberately_empty_answer_says_so():
+    """GitHub Copilot, asked about a bare helper function (2026-11-03), wrote
+    a summary and ``"steps": []``: its judgment that nothing could be tried in
+    real use. The row says that and what to do, not "no usable steps"."""
+    raw = (
+        '<testplan>\n{"summary": "You can add two numbers with the new '
+        'addition function.", "steps": []}\n</testplan>'
+    )
+    with pytest.raises(tp.TestPlanError) as err:
+        tp.parse_plan(raw)
+    assert "wrote no behaviors" in str(err.value)
+    assert "Add one yourself" in str(err.value)
+    with pytest.raises(tp.TestPlanError) as err:
+        tp.parse_plan('<testplan>[{"text": "   "}]</testplan>')
+    assert "no usable steps" in str(err.value)
+
+
 def test_a_blank_step_is_dropped_without_gapping_the_ids():
     """Ids are positional over the steps that survive: run results key off them,
     and a gap would be an id nobody can ever answer."""
