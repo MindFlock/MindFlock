@@ -697,6 +697,15 @@ class Backend:
         faster path for one lone word."""
         return self.transcribe(audio, mime, lang, word)
 
+    def wake_verify_transcribe(
+        self, audio: bytes, mime: str, lang: str = ""
+    ) -> Optional[str]:
+        """The same clip again with NO hint, to check a wake the hinted pass
+        found (``core.wake.veto``: the hint makes whisper write the word for
+        "Mind." and "Mine."). ``None``: this backend has no such pass and
+        the wake stands on the first."""
+        return None
+
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         raise SpeechError("%s does not do voices" % self.label)
 
@@ -1317,6 +1326,16 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
         if word:
             kw["initial_prompt"] = word
+        name = self.stream_model_name(lang)
+        return self._clip(self._model(name), audio, mime, kw, name)
+
+    def wake_verify_transcribe(
+        self, audio: bytes, mime: str, lang: str = ""
+    ) -> Optional[str]:
+        """:meth:`wake_transcribe` without the prompt (the veto's pass: the
+        same fast model, greedy, no VAD — never ``word_timestamps``, which
+        sends the prompted decoder into "MindFlock MindFlock" loops)."""
+        kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
         name = self.stream_model_name(lang)
         return self._clip(self._model(name), audio, mime, kw, name)
 

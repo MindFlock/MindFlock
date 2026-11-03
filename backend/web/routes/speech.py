@@ -68,6 +68,9 @@ Status codes, in the order they are checked:
   "final_wait_ms", "final_early", "same"}`` when the accurate pass ran
   (``core.speech_stream``'s two tiers), and the stream is gone.
   ``DELETE stream/{id}`` — 204, always.
+* ``wake`` — ``transcribe``'s codes; 200 ``{"wake", "reason", "text",
+  "plain", "word", "backend", "ms"}``. ``GET wake/recent`` — 200, the last
+  :data:`WAKE_RECENT_MAX` checks (docs/voice-wake.md).
 * ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
   the status (``core.speech_install``). ``GET`` the status, for anyone.
 """
@@ -82,7 +85,7 @@ import logging
 import re
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
@@ -800,6 +803,28 @@ async def _clip(request: Request):
     return audio, mime, backend
 
 
+#: How many wake checks ``GET /api/voice/wake/recent`` keeps (in memory
+#: only: what the standby heard, so the owner's own voice can tune
+#: ``core.wake`` — docs/voice-wake.md).
+WAKE_RECENT_MAX = 50
+_WAKE_RECENT: "deque[dict]" = deque(maxlen=WAKE_RECENT_MAX)
+_WAKE_RECENT_LOCK = threading.Lock()
+
+
+def _record_wake(entry: dict) -> None:
+    """Keep one wake check for ``/wake/recent`` and log it (one debug line)."""
+    with _WAKE_RECENT_LOCK:
+        _WAKE_RECENT.append(entry)
+    _logger.debug(
+        "voice wake: %s (%s) prompted=%r plain=%r %d ms",
+        "yes" if entry["wake"] else "no",
+        entry["reason"],
+        entry["text_prompted"],
+        entry["text_plain"],
+        entry["ms"],
+    )
+
+
 @router.post("/api/voice/wake")
 async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     """Is this short clip the wake word on its own — ``voice.words``'s
@@ -807,34 +832,74 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     and ``Content-Type`` are exactly ``/transcribe``'s; the clip is
     recognised with the word as the decoder's hint — on the fast streaming
     model where the backend has one (``Backend.wake_transcribe``) — and
-    judged by
-    ``core.wake.is_wake`` (the word alone, one or two tokens, two letters of
-    slack for how whisper hears a made-up word; a sentence never wakes). →
-    ``{"wake": bool, "text", "word", "backend", "ms"}``; the same status
-    codes as ``/transcribe``. The clients send only a short lone utterance
-    bounded by silence (their standby), so the model sees a second of audio
-    at a time, never the room."""
+    judged by ``core.wake.judge`` (the word alone after a greeting and a
+    repeat are dropped; ours strictly, by its known forms and sound shape,
+    a custom word with letter slack; a sentence never wakes). A yes for
+    ours is checked by a second decode of the same clip WITHOUT the hint
+    (``Backend.wake_verify_transcribe``; local faster-whisper only, the
+    others skip it) and turned down when that plainly heard another word
+    (``core.wake.veto``: the hint makes whisper write "MindFlock" for
+    "Mind." and "Mine."); a no never pays for it. → ``{"wake": bool,
+    "reason", "text", "plain", "word", "backend", "ms"}`` — ``plain`` the
+    un-hinted text, ``null`` when that pass did not run; the same status
+    codes as ``/transcribe``. Every check is kept for ``/wake/recent``.
+    The clients send only a short lone utterance bounded by silence (their
+    standby), so the model sees a second of audio at a time, never the
+    room."""
     got = await _clip(request)
     if not isinstance(got, tuple):
         return got
     audio, mime, backend = got
     word = _wake_word()
+    language = _lang_hint(lang)
     started = time.monotonic()
+    entry = {"ts": time.time(), "text_prompted": "", "text_plain": None}
     try:
         text = await _stt(
-            backend.wake_transcribe, audio, mime, _lang_hint(lang), _wake.hint(word)
+            backend.wake_transcribe, audio, mime, language, _wake.hint(word)
         )
     except Exception as err:  # noqa: BLE001
+        entry.update(wake=False, reason="error: %s" % type(err).__name__)
+        entry["ms"] = int((time.monotonic() - started) * 1000)
+        _record_wake(entry)
         return _failed(err)
+    wake, reason = _wake.judge(text, word)
+    plain: Optional[str] = None
+    if wake and _wake.normalize(word) == _wake.WAKE_WORD:
+        try:
+            plain = await _stt(backend.wake_verify_transcribe, audio, mime, language)
+        except Exception as err:  # noqa: BLE001 — the check failed: the yes stands
+            _logger.debug("voice wake: the plain pass failed: %s", err)
+            plain = None
+        if plain is not None:
+            vetoed = _wake.veto(plain)
+            if vetoed:
+                wake, reason = False, vetoed
+    ms = int((time.monotonic() - started) * 1000)
+    entry.update(text_prompted=text, text_plain=plain, wake=wake, reason=reason, ms=ms)
+    _record_wake(entry)
     return JSONResponse(
         {
-            "wake": _wake.is_wake(text, word),
+            "wake": wake,
+            "reason": reason,
             "text": text,
+            "plain": plain,
             "word": word,
             "backend": backend.id,
-            "ms": int((time.monotonic() - started) * 1000),
+            "ms": ms,
         }
     )
+
+
+@router.get("/api/voice/wake/recent")
+def voice_wake_recent() -> JSONResponse:
+    """The last :data:`WAKE_RECENT_MAX` wake checks, newest first →
+    ``{"attempts": [{"ts", "text_prompted", "text_plain", "wake", "reason",
+    "ms"}]}`` (``text_plain`` ``null`` when the un-hinted pass did not
+    run). In memory: a restart empties it."""
+    with _WAKE_RECENT_LOCK:
+        rows = [dict(e) for e in reversed(_WAKE_RECENT)]
+    return JSONResponse({"attempts": rows})
 
 
 @router.post("/api/voice/stream")

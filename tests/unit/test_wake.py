@@ -102,3 +102,112 @@ def test_the_hint():
     assert wake.hint("mindflock") == "MindFlock"
     assert wake.hint("hey  jarvis") == "Hey Jarvis"
     assert wake.hint("") == "MindFlock"
+
+
+# --- a greeting in front, a repeat, and ours matched strictly ---------------------
+@pytest.mark.parametrize(
+    "heard, reason",
+    [
+        ("Mind Flock.", "word"),  # the letters exactly, split
+        ("Mindflock", "word"),
+        ("Hey, MindFlock!", "word"),
+        ("OK MindFlock", "word"),
+        ("hello, mine flock", "form"),
+        ("MindFlock MindFlock", "word"),  # the hinted decoder loops
+        ("MindFlock MindFlock MindFlock", "word"),
+        ("Hey, mind flunk.", "form"),
+        ("Mind Flap.", "sound"),  # the sound shape, no table entry
+        ("Minh Flock", "form"),
+        ("Mend clock", "sound"),
+        ("Mindflopping", "sound"),
+    ],
+)
+def test_ours_wakes_with_a_lead_a_repeat_or_its_sound(heard, reason):
+    assert wake.judge(heard) == (True, reason)
+
+
+@pytest.mark.parametrize(
+    "heard",
+    [
+        "Windlock",  # two letters off: the old slack woke on it
+        "Wind lock.",
+        "Mild block",
+        "Mindful",
+        "Mindful.",
+        "Mind the gap",
+        "Mind fog.",
+        "Line clock.",
+        "mindflock now",  # the sound shape is the word whole, not a start
+        "Hey",
+        "Hey hey",
+        "Hey, MindFlock, open the docs",
+        "Mind flock mind flock",  # a repeated PAIR is not collapsed
+    ],
+)
+def test_ours_is_strict(heard):
+    assert wake.is_wake(heard) is False
+
+
+def test_the_reasons_for_a_no():
+    assert wake.judge("") == (False, "empty")
+    assert wake.judge("...") == (False, "empty")
+    assert wake.judge("MindFlock is great") == (False, "long")
+    assert wake.judge("Windlock") == (False, "other")
+
+
+def test_a_custom_word_keeps_the_letter_slack():
+    # Ours turns "Windlock" down; as the person's own word, "Mindlock" is
+    # one letter off it and wakes as before.
+    assert wake.judge("Mindlock", "windlock") == (True, "near")
+    assert wake.judge("Windlock", "windlock") == (True, "word")
+    # A greeting and a repeat are dropped for any word ...
+    assert wake.judge("Hey, Jarvis!", "jarvis") == (True, "word")
+    assert wake.judge("Jarvis Jarvis", "jarvis") == (True, "word")
+    # ... but not when the word starts with it.
+    assert wake.judge("Hey Jarvis", "hey jarvis") == (True, "word")
+    assert wake.is_wake("Jarvis", "hey jarvis") is False
+    # The sound shape and the veto's start are ours only.
+    assert wake.is_wake("Mind Flap", "jarvis") is False
+
+
+# --- the veto: the plain (un-hinted) decode heard another word --------------------
+@pytest.mark.parametrize(
+    "plain",
+    [
+        "mind",
+        "Mine.",
+        "Mindset.",
+        "Minefield.",
+        "Mind field.",
+        "mind again.",
+        "Mind the gap.",
+        "Mind fog.",
+        "Mindful.",
+        "Hey, mine.",
+        "Mindhole.",
+    ],
+)
+def test_the_veto_turns_down_another_word(plain):
+    assert wake.veto(plain).startswith("plain:")
+
+
+@pytest.mark.parametrize(
+    "plain",
+    [
+        "Mind Flock.",
+        "Mindflock",
+        "Mind clock",
+        "Mine Pluck.",
+        "mind-tlook",
+        "Hey, mind flunk.",
+        "My flock",
+        # The plain model missing the word is not hearing another one.
+        "",
+        "Men flat.",
+        "Amen.",
+        "My",
+        "It's been fun.",
+    ],
+)
+def test_the_veto_keeps_the_word_and_a_plain_miss(plain):
+    assert wake.veto(plain) == ""
