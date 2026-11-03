@@ -17,6 +17,7 @@ import { Modal } from "../Modal";
 import "./SkyGuide.css";
 
 export const SKY_GUIDE_SECTIONS = [
+  { id: "start", title: "Start here" },
   { id: "what", title: "What the sky is" },
   { id: "lines", title: "Chains, tiles and wires" },
   { id: "stops", title: "Stops and saved stops" },
@@ -108,6 +109,18 @@ function Sketch({ label, children, h = 110 }: { label: string; children: ReactNo
 }
 
 const SKETCHES: Record<SkyGuideSection, ReactNode> = {
+  start: (
+    <Sketch label="A chain: the agent first, two stops joined by wires and a + after them; a stop dragged up from the shelf onto it">
+      <Line x={20} y={12} n={3} />
+      <rect className="sg-box sg-dash" x={182} y={26} width={26} height={26} rx={5} />
+      <text className="sg-text" x={190} y={44}>+</text>
+      <BirdMark x={74} y={22} />
+      <rect className="sg-chip" x={196} y={82} width={70} height={20} rx={10} />
+      <text className="sg-text" x={210} y={96}>Verify</text>
+      <path className="sg-arrow" d="M220 82 L200 58 M200 66 L200 58 L208 60" />
+      <text className="sg-text" x={20} y={74}>agent → stops</text>
+    </Sketch>
+  ),
   what: (
     <Sketch label="Panes on the left, the same sessions as lines on the right">
       <rect className="sg-pane" x={8} y={14} width={60} height={38} rx={4} />
@@ -243,6 +256,18 @@ function Keys() {
 }
 
 const WORDS: Record<SkyGuideSection, ReactNode> = {
+  start: (
+    <>
+      <p>Five things are enough to start; the sections after this one go deeper.</p>
+      <ol className="sky-guide-start">
+        <li><b>Each session is a chain.</b> Its agent comes first; the stops after it run left to right, along the wires, once the agent's turn ends.</li>
+        <li><b>Add a stop from the shelf.</b> Drag <b>Agent</b>, <b>Perch</b>, <b>Ship</b>, <b>Verify</b>, <b>Wait</b> or <b>Loop</b> onto a chain, or click the <b>+</b> after its last stop. Double-click empty sky for a new session.</li>
+        <li><b>Wire it.</b> Drag from a stop's round port onto another stop to move it there. Double-click a stop to edit it.</li>
+        <li><b>Run it, and answer it.</b> <b>▶ Run</b> (or your next prompt) sets the chain going; the bird shows where it is. A <b>Perch</b> waits for you: press <b>Done</b> and it carries on.</li>
+        <li><b>Help.</b> The sky's <b>?</b> replays the tour or opens this guide; the <kbd>?</kbd> key lists every shortcut.</li>
+      </ol>
+    </>
+  ),
   what: (
     <>
       <p>The sky is the main area's second view. Every session is a line — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes.</p>
@@ -259,7 +284,7 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   stops: (
     <>
-      <p>A <b>stop</b> is one block of work: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Perch</b> waits until you press Done, <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> works through the branch's checklist, <b>Wait</b> waits some minutes or until a time. <b>All blocks…</b> on the shelf lists the rest, each with what it does.</p>
+      <p>A <b>stop</b> is one block of work: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Perch</b> waits until you press Done, <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> works through the branch's checklist, <b>Wait</b> waits some minutes or until a time, <b>Loop</b> sends the chain back to an earlier stop, a number of times, every so often. <b>All blocks…</b> on the shelf lists the rest, each with what it does.</p>
       <p>A <b>saved stop</b> is a named series of stops — <i>Ticket to merge</i>, say — that you drag on as one box. It flies its sub-steps one by one and reads <i>2 of 3</i> while it does. Double-click it to see and change each sub-step.</p>
       <p>To change a saved stop, drag it onto the sky, edit its boxes there, then <b>Save to the shelf</b>. Right-click its chip on the shelf to rename, reset or delete it.</p>
     </>

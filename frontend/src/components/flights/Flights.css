@@ -587,6 +587,11 @@ a.fl-waiting-ref:hover {
   gap: 10px;
 }
 
+/* The rest of the saved stops wait behind "More…" (SessionFlight). */
+.fl-flyway-more {
+  align-self: flex-start;
+}
+
 .fl-flyway-card {
   display: flex;
   flex-direction: column;

@@ -192,3 +192,18 @@ describe("the sheet", () => {
     expect(c).toMatch(/\.sky-keys-card kbd\s*\{/);
   });
 });
+
+describe("the sheet is wired (round-consolidate defect 1)", () => {
+  it("SkyView hands the sheet the real list, never an empty one", () => {
+    const sky = code("components/flights/SkyView.tsx");
+    expect(sky).toContain('import { SKY_SHORTCUT_GROUPS } from "../../lib/skyShortcuts";');
+    expect(sky).toContain("groups={SKY_SHORTCUT_GROUPS}");
+    expect(sky).not.toContain("groups={[]}");
+  });
+
+  it("double-click on empty sky is listed as the new-session block, as the guide and the shelf say", () => {
+    const rows = SKY_SHORTCUT_GROUPS.flatMap((g) => g.items).filter((i) => i.keys.join("+") === "double-click");
+    expect(rows.map((r) => r.what)).toContain("On empty sky: a new session block there");
+    expect(rows.map((r) => r.what).join(" ")).not.toMatch(/palette/);
+  });
+});

@@ -19,7 +19,7 @@
  * never get one. */
 
 import type { Instance } from "../api/types";
-import { rowWaitsOnYou, type FlightRow } from "./flights";
+import { isShown, rowWaitsOnYou, type Flight, type FlightRow, type StepKindDef } from "./flights";
 import { deriveSessionState } from "./sessionState";
 
 // --- Geometry ------------------------------------------------------------------
@@ -148,8 +148,8 @@ export const BLOCK_H = 64;
  * placed (`placed`: every line and object with a spot, at its size), `gap`
  * clear of it, stacked from `top` with half a gap between. With nothing
  * placed, the column starts where the first line would. The column's x is
- * read once per newcomer — its spot is kept like a line's, so a line that
- * grows or comes later never shoves it. */
+ * read once per newcomer — its spot is kept like a line's; only a line that
+ * grows INTO it moves it (`clearRightColumn`). */
 export function rightColumn(placed: readonly Rect[], items: readonly LineBox[], top = SKY_MARGIN, gap = SKY_GAP): Record<string, Pos> {
   const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
   const x = placed.length ? right + gap : LINES_LEFT;
@@ -160,6 +160,21 @@ export function rightColumn(placed: readonly Rect[], items: readonly LineBox[], 
     y += it.h + gap / 2;
   }
   return out;
+}
+
+/** The right column kept clear of the lines: a line that GREW into an object
+ * the sky placed right of every line (the landing strip, the device and
+ * people blocks — `column`: only the auto-placed ones, never one the owner
+ * dragged) pushes the column right of everything again (`lines`: every line,
+ * the lane and the palette at their sizes now), each keeping its height. The
+ * objects make way, never the lines — a chain with a few stops on it used to
+ * run under the landing strip (round-consolidate judge). A line closer than
+ * half a gap counts as in the way. Nothing in the way: {}. */
+export function clearRightColumn(column: readonly PlacedLine[], lines: readonly Rect[], gap = SKY_GAP): Record<string, Pos> {
+  if (!column.length || !lines.length) return {};
+  if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
+  const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
+  return Object.fromEntries(column.map((c) => [c.id, { x, y: c.y }]));
 }
 
 /** Where a block of `size` lands when the palette places it (docs/flights.md
@@ -769,4 +784,50 @@ export function skyLineTitles(rows: readonly Instance[], mode: SkyMode, opts: { 
     return out;
   };
   return pick.filter((r) => lineOf(r, new Set())).map((r) => r.title).reverse();
+}
+
+// --- Rows the sky draws ----------------------------------------------------------
+
+/** The rows as the sky draws them: each row's own `flight` field, or — when
+ * a row has none yet but `/api/flights` already holds a flight its line draws
+ * (`isShown`: in the air, or built and ready) for that session — one read off
+ * that flight, the newest. GET /api/instances serves the last tick's snapshot
+ * (~4 s), so a chain just built on a session (its first stop from the + or
+ * the shelf) is in the flights list before its row says so; without this its
+ * tiles stayed missing until a later tick or a reload (round-consolidate
+ * judge). Nothing to add: the same array back, so nothing redraws. */
+export function withLiveFlights<R extends Pick<Instance, "title" | "flight">>(rows: R[], flights: readonly Flight[] | null | undefined, kinds?: readonly Pick<StepKindDef, "kind" | "actor">[]): R[] {
+  if (!flights?.length) return rows;
+  const newest = new Map<string, Flight>();
+  for (const f of flights) {
+    if (!f.session || f.free || !isShown(f)) continue;
+    const had = newest.get(f.session);
+    if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
+  }
+  if (!newest.size) return rows;
+  let out: R[] | null = null;
+  rows.forEach((r, i) => {
+    const f = newest.get(r.title);
+    if (!f || r.flight?.id) return;
+    const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
+    const row = {
+      ...r.flight,
+      id: f.id,
+      plan_name: f.plan_name,
+      cursor: f.cursor,
+      total: f.steps.length,
+      state: f.state,
+      step: step
+        ? {
+            id: step.id,
+            kind: step.kind,
+            title: step.title,
+            state: f.step_states?.[step.id]?.state || "pending",
+            actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot"),
+          }
+        : null,
+    } as FlightRow;
+    (out ??= rows.slice())[i] = { ...r, flight: row };
+  });
+  return out ?? rows;
 }

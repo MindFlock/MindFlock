@@ -97,8 +97,8 @@
  * fit, focus and jump EASES the camera (~220 ms ease-out, `goTo`; none under
  * reduced motion); Ctrl+Shift+Z / ⌘⇧Z REDOES what Ctrl+Z undid ("Redid: …",
  * lib/skyUndo `popRedo`); Tab floats the palette with its filter focused and
- * a second Tab docks it, a double-click on empty sky floats it at the
- * pointer; F with a selection is FOCUS MODE (`.sky-focus` on the plane,
+ * a second Tab docks it (a double-click on empty sky is the new-session
+ * block, as the guide says); F with a selection is FOCUS MODE (`.sky-focus` on the plane,
  * `data-dim` on the rest — a click or Esc lifts it); `?` opens the shortcuts
  * sheet; the minimap and the off-screen hints sit bottom-right, the zoom
  * readout is a menu (Minimap, OffscreenHints, ZoomMenu, SkyShortcuts).
@@ -117,6 +117,7 @@ import { optimisticDelete } from "../../lib/flightOptimism";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
 import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
+import type { Instance } from "../../api/types";
 import { errMsg } from "../../lib/format";
 import {
   hitAt,
@@ -206,6 +207,8 @@ import {
   type SkyLineLayout,
   type SkyMode,
   intakeFrame,
+  withLiveFlights,
+  clearRightColumn,
 } from "../../lib/skyLayout";
 import {
   MARQUEE_MIN,
@@ -250,6 +253,7 @@ import { SkyGuide } from "./SkyGuide";
 import { Minimap, OffscreenHints, type MinimapRect } from "./Minimap";
 import { ZoomMenu } from "./ZoomMenu";
 import { SkyShortcuts } from "./SkyShortcuts";
+import { SKY_SHORTCUT_GROUPS } from "../../lib/skyShortcuts";
 import { TakeoffDialog } from "./TakeoffDialog";
 import { TourButton } from "../onboarding/TourButton";
 import { QuickAdd } from "./QuickAdd";
@@ -410,6 +414,7 @@ interface NewBlockAt extends Pos {
 type PlaceNear = "shelf" | "palette" | "lane";
 
 const NO_KINDS: StepKindDef[] = [];
+const NO_ROWS: Instance[] = [];
 const NO_PLANS: FlightPlan[] = [];
 
 /** The camera across a trip to the grid and back: where it was and which
@@ -418,11 +423,13 @@ let memo: { cam: SkyCamera; key: string } | null = null;
 
 export function SkyView() {
   const instQ = useInstances();
-  const rows = useMemo(() => instQ.data || [], [instQ.data]);
   const flightsQ = useFlights();
   const flights = flightsQ.data;
   // Stable while loading: a new [] each render would remake every chain.
   const kinds = useFlightKinds().data || NO_KINDS;
+  // A chain just built on a session draws from the flights list until the
+  // row's own `flight` catches up (the instances snapshot lags a tick).
+  const rows = useMemo(() => withLiveFlights(instQ.data || NO_ROWS, flights, kinds), [instQ.data, flights, kinds]);
   const plansQ = useFlightPlans();
   const plans = plansQ.data || NO_PLANS;
   const focused = useUi((s) => s.focused);
@@ -445,8 +452,7 @@ export function SkyView() {
   const [drag, setDrag] = useState<{ from: Record<string, Pos>; dx: number; dy: number } | null>(null);
   // Round 17: the alignment guides of the drag under way (lib/skySnap), the
   // focus mode (F), the shortcuts sheet (?), the minimap folded or open, and
-  // whether the palette's filter should take the focus when it floats (Tab,
-  // a double-click on empty sky).
+  // whether the palette's filter should take the focus when it floats (Tab).
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [focusMode, setFocusMode] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -655,6 +661,15 @@ export function SkyView() {
     for (const e of existing) if (shown.has(e.id)) place[e.id] = { x: e.x, y: e.y };
     // The right column: a newcomer goes just right of everything placed,
     // under the ones before it; its spot is kept like a line's.
+    // A line that grew into an auto-placed one (the landing strip under a
+    // chain's new stops) moves the column right of everything; one the owner
+    // dragged stays put.
+    const column: PlacedLine[] = rightItems.filter((r) => autoPos[r.id] && !layout[r.id]?.pinned && place[r.id]).map((r) => ({ id: r.id, ...place[r.id], w: r.w, h: r.h }));
+    const lineRects: Rect[] = items.filter((l) => place[l.id]).map((l) => ({ ...place[l.id], w: l.w, h: l.h }));
+    for (const [id, at] of Object.entries(clearRightColumn(column, lineRects))) {
+      fresh[id] = at;
+      place[id] = at;
+    }
     const placedRects: Rect[] = [...items, ...rightItems].filter((l) => place[l.id]).map((l) => ({ ...place[l.id], w: l.w, h: l.h }));
     for (const [id, at] of Object.entries(rightColumn(placedRects, rightItems.filter((r) => !saved[r.id])))) {
       fresh[id] = at;
@@ -1772,7 +1787,7 @@ export function SkyView() {
     setNewAt({ x: p.x, y: Math.max(SKY_MARGIN, p.y - 40), attach: { id: f.id, name: groundedName(f) } });
   };
   /** Round 17: the palette floats at a plane point with its filter focused
-   * (Tab, a double-click on empty sky) — placing then lands beside it. */
+   * (Tab) — placing then lands beside it. */
   const floatPaletteAt = (at: Pos) => {
     setFilterFocus(true);
     onLayout(PALETTE_KEY, { x: Math.round(at.x), y: Math.round(at.y), pinned: true });
@@ -1786,13 +1801,13 @@ export function SkyView() {
     const c = toPlane(camRef.current, Math.max(24, vp.w / 2 - PALETTE_W * camRef.current.z / 2), 48);
     return { x: Math.round(c.x), y: Math.round(c.y) };
   };
-  // A double-click on empty sky floats the palette at the pointer (n8n's
-  // manner; a double-click on a line keeps its meaning — it never gets
-  // here). A phone has no floating palette: the new-session block instead.
+  // A double-click on empty sky opens the new-session block at the pointer
+  // — what the guide and the shelf's Session chip say it does (Tab floats
+  // the palette). A double-click on a line keeps its meaning — it never gets
+  // here.
   const onDouble = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (!ground(e.target)) return;
-    if (narrow) return newAtScreen(e.clientX, e.clientY);
-    floatPaletteAt(planeAt(e.clientX, e.clientY));
+    newAtScreen(e.clientX, e.clientY);
   };
   // The shelf's Session chip dragged in: over empty sky the sky lights
   // softly and takes the drop; the block opens where it lands, as a
@@ -2195,7 +2210,7 @@ export function SkyView() {
             ? "Nothing is perched on you."
             : instQ.data === undefined
               ? ""
-              : "No sessions in the sky yet — double-click anywhere for the blocks, or press the Session chip in the shelf below, to start one.";
+              : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
 
   const toolbar = (
     <div className="sky-toolbar" role="toolbar" aria-label="The sky">
@@ -2627,7 +2642,7 @@ export function SkyView() {
             aria-label={
               "The sky: every session as a line — " +
               (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") +
-              ", Ctrl+wheel or + / − to zoom, double-click for the blocks, ? for every key"
+              ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the blocks, ? for every key"
             }
             style={{ backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`, backgroundPosition: `${cam.x}px ${cam.y}px` }}
             onPointerDownCapture={onDownCapture}
@@ -2735,8 +2750,7 @@ export function SkyView() {
                 }}
               />
             </div>
-            {/* TODO(zoom-shortcuts): SKY_SHORTCUT_GROUPS from "../../lib/skyShortcuts" once that task lands; the integrator wires `groups`. */}
-            <SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={[]} />
+            <SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={SKY_SHORTCUT_GROUPS} />
             {empty && (
               <p className="sky-empty muted" role="status">
                 {empty}

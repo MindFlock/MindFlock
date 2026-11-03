@@ -6,8 +6,8 @@
  *     new-session block opens there; onto a grounded line and a new session
  *     is made for those stops; a click opens the block in the middle of the
  *     sky (`NEW_SESSION_MIME`, lib/skyLayout) — then the default kinds
- *     (`DEFAULT_KINDS`, lib/stopCatalog: Agent, Perch, Ship, Verify, Wait;
- *     one the server doesn't list is skipped). Each carries its kind under
+ *     (`DEFAULT_KINDS`, lib/stopCatalog: Agent, Perch, Ship, Verify, Wait,
+ *     Loop; one the server doesn't list is skipped). Each carries its kind under
  *     `STOP_MIME` (and its name as plain text).
  *  2. **Multi-step**: the SAVED STOPS (`useFlightPlans`, built-ins first): the
  *     name and a row of dots, one per step (a perch's gold, "+N" past ten).

@@ -29,8 +29,9 @@ const { TourButton } = await import("../components/onboarding/TourButton");
 const render = (section?: string) => renderToStaticMarkup(createElement(SkyGuide, { open: true, onClose: () => {}, section, portal: false }));
 
 describe("the guide's sections", () => {
-  it("are the ten the contract names, in its order", () => {
+  it("lead with Start here, then the ten the contract names, in its order", () => {
     expect(SKY_GUIDE_SECTIONS.map((s) => s.title)).toEqual([
+      "Start here",
       "What the sky is",
       "Chains, tiles and wires",
       "Stops and saved stops",
@@ -59,9 +60,20 @@ describe("the guide's sections", () => {
     }
   });
 
-  it("an unknown or missing section opens the first", () => {
-    expect(render("nope")).toContain('<h3 id="sky-guide-page-title">What the sky is</h3>');
-    expect(render()).toContain('<h3 id="sky-guide-page-title">What the sky is</h3>');
+  it("an unknown or missing section opens the first: Start here", () => {
+    expect(render("nope")).toContain('<h3 id="sky-guide-page-title">Start here</h3>');
+    expect(render()).toContain('<h3 id="sky-guide-page-title">Start here</h3>');
+  });
+
+  it("Start here is short: the five essentials the tour walks, Loop on the shelf's list", () => {
+    const html = render("start");
+    expect(html).toContain('<ol class="sky-guide-start">');
+    expect(html.match(/<li>/g)).toHaveLength(5);
+    for (const w of ["Each session is a chain.", "Add a stop from the shelf.", "Wire it.", "Run it, and answer it.", "Help.", "<b>Loop</b>", "Double-click empty sky for a new session"]) expect(html, w).toContain(w);
+  });
+
+  it("the stops section names Loop with the other shelf blocks", () => {
+    expect(render("stops")).toContain("<b>Loop</b> sends the chain back to an earlier stop");
   });
 
   it("closed renders nothing", () => {
@@ -102,11 +114,11 @@ describe("the guide's store", () => {
   it("opens on a section, follows a new one, and closes", () => {
     expect(useSkyGuide.getState().section).toBeNull();
     openSkyGuide();
-    expect(useSkyGuide.getState().section).toBe("what");
+    expect(useSkyGuide.getState().section).toBe("start");
     openSkyGuide("bird");
     expect(useSkyGuide.getState().section).toBe("bird");
     openSkyGuide("not-a-section");
-    expect(useSkyGuide.getState().section).toBe("what");
+    expect(useSkyGuide.getState().section).toBe("start");
     closeSkyGuide();
     expect(useSkyGuide.getState().section).toBeNull();
   });

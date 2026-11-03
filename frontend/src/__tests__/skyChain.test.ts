@@ -182,7 +182,9 @@ describe("SkyChain markup", () => {
   it("families: the server's word when it names one, else ours", () => {
     expect(kindFamily("ship")).toBe("ship");
     expect(kindFamily("mystery")).toBe("outside");
-    expect(kindFamily("loop")).toBe("flow");
+    expect(kindFamily("loop")).toBe("work");
+    expect(kindFamily("checkpoint")).toBe("ship");
+    expect(kindFamily("handoff")).toBe("flow");
     expect(kindFamily("agent", [{ kind: "agent", family: "people" }])).toBe("people");
     expect(nodeFamily({ kind: "stop", icon: "agent", perch: true })).toBe("people");
   });

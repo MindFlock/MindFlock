@@ -2,7 +2,8 @@
  * round 15 objects"): a sky object placed right of every line (layout key
  * "landing", lib/skyLayout `LANDING_KEY`) that shows, per repo in the sky,
  * its default branch — the name, the checks of its head (green / red /
- * pending / none), the last merge's age — and **Landed today**: the flights
+ * pending / none), the age of its last merge (or of its last commit, said
+ * so, when it has none — `mergeWords`) — and **Landed today**: the flights
  * finished `done` whose last ship step merged, in the last 24 h (the
  * session's name, a PR link). Data: `GET /api/sky/landing` (api/skyApi),
  * which the host fetches and passes in (`data`), refetched every minute.
@@ -71,10 +72,22 @@ export function checksWords(tone: CheckTone): string {
   }
 }
 
-/** "merged 2h ago", or "no merges yet". */
-export function mergeWords(at: number | null, now?: number): string {
+/** What the server's `last_merge_at` is: a merge commit's time, or — on a
+ * branch with no merge commit yet (a fresh repo, a squash-merge habit) — its
+ * last commit's (backend/web/core/landing.py `last_merge_at`). A server that
+ * says which sends `last_merge_kind`; an older one doesn't, and its time may
+ * be either, so the words never claim a merge they can't vouch for. */
+export type MergeKind = "merge" | "commit";
+type RepoWithKind = LandingRepo & { last_merge_kind?: MergeKind };
+
+/** "merged 2h ago" (a merge commit), "last commit 2h ago" (no merge yet),
+ * "updated 2h ago" (the server didn't say which), or "no merges yet". */
+export function mergeWords(at: number | null, now?: number, kind?: MergeKind): string {
   if (!at) return "no merges yet";
-  return "merged " + relTime(at, { now });
+  const ago = relTime(at, { now });
+  if (kind === "merge") return "merged " + ago;
+  if (kind === "commit") return "last commit " + ago;
+  return "updated " + ago;
 }
 
 /** The landed rows the strip shows: every one expanded, the first
@@ -239,7 +252,9 @@ function RepoRow({ repo, open, now }: { repo: LandingRepo; open: boolean; now?: 
         </strong>
         <code className="sky-landing-branch">{repo.branch || "?"}</code>
       </div>
-      <div className="sky-landing-merge muted">{mergeWords(repo.last_merge_at, now)}</div>
+      <div className="sky-landing-merge muted" title="The default branch's last merge (or, with none yet, its last commit)">
+        {mergeWords(repo.last_merge_at, now, (repo as RepoWithKind).last_merge_kind)}
+      </div>
       {(repo.landed || []).length > 0 && (
         <ul className="sky-landing-landed" aria-label={"Landed today in " + repo.name}>
           {shown.map((l) => (
