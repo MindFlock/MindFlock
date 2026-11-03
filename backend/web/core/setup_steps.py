@@ -538,7 +538,7 @@ def provider_logins() -> List[dict]:
                 installed = bool(shutil.which(binary))
                 logged: Optional[bool] = None
                 if installed:
-                    if doctor._auth_evidence(p):
+                    if doctor._auth_evidence(p) or doctor._local_model_auth(p.name):
                         logged = True
                     elif doctor._declares_auth_sources(p):
                         logged = False
@@ -573,7 +573,8 @@ def _install_hint(provider) -> str:
 def agent_choices() -> List[dict]:
     """``[{name, label, installed, installable}]`` — the agents step ① can be
     pointed at: every registered agent that is installed or that names an
-    installer (picking one then makes ① "Install <it>"). Never raises."""
+    installer (picking one then makes ① "Install <it>"), the installed ones
+    first. Never raises."""
     out: List[dict] = []
     try:
         from backend import doctor, providers
@@ -599,7 +600,9 @@ def agent_choices() -> List[dict]:
                 continue
     except Exception:  # noqa: BLE001
         return out
-    return out
+    # The agents already on this computer first (registration order kept
+    # within each group): the likely pick is the one you have.
+    return sorted(out, key=lambda c: not c["installed"])
 
 
 def choose_agent(name: str) -> str:
