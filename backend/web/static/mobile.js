@@ -960,7 +960,7 @@
   };
   var REASON_LABEL = {
     question: "Question",
-    flight_you: "Perch",
+    flight_you: "Wait for me",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
@@ -986,7 +986,7 @@
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
   // the old "You: …") is read without it (lib/flights.ts perchLabel).
   function youStepLabel(title) {
-    var t = String(title || "").trim().replace(/^(you|perch):\s*/i, "");
+    var t = String(title || "").trim().replace(/^(you|perch|wait for me):\s*/i, "");
     return t ? REASON_LABEL.flight_you + ": " + t : REASON_LABEL.flight_you;
   }
   // The row's `flight` is perched on you (lib/flights.ts rowWaitsOnYou).

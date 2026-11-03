@@ -893,7 +893,7 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         auth_files=("~/.copilot/config.json",),
         auth_env=("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
         login_command="copilot login",
-        install_hint="npm install -g @github/copilot",
+        install_hint="npm install -g --prefix ~/.local @github/copilot",
     ),
 ]
 
