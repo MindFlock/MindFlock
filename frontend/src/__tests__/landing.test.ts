@@ -40,7 +40,11 @@ const render = (props: Record<string, unknown> = {}) =>
 describe("the words", () => {
   it("checks, merges, counts", () => {
     expect(["green", "red", "pending", "none"].map((t) => checksWords(t as never))).toEqual(["checks green", "checks red", "checks running", "no checks"]);
-    expect(mergeWords(NOW - 7200, NOW)).toBe("merged 2h ago");
+    // The server's time is a merge commit's, or — none yet (a fresh repo) —
+    // the last commit's: the words claim a merge only when it says so.
+    expect(mergeWords(NOW - 7200, NOW, "merge")).toBe("merged 2h ago");
+    expect(mergeWords(NOW - 600, NOW, "commit")).toBe("last commit 10m ago");
+    expect(mergeWords(NOW - 600, NOW)).toBe("updated 10m ago");
     expect(mergeWords(null)).toBe("no merges yet");
     expect(landedCount(DATA)).toBe(4);
     expect(landedCount(null)).toBe(0);
@@ -67,8 +71,14 @@ describe("the strip", () => {
     expect(html).toContain('<span class="sky-landing-dot is-green" title="checks green · 0123456" aria-label="checks green"></span>');
     expect(html).toContain('<span class="sky-landing-dot is-red"');
     expect(html).toContain('<strong class="sky-landing-name" title="/home/me/app">app</strong><code class="sky-landing-branch">main</code>');
-    expect(html).toContain('<div class="sky-landing-merge muted">merged 2h ago</div>');
-    expect(html).toContain('<div class="sky-landing-merge muted">no merges yet</div>');
+    const merge = (w: string) => `<div class="sky-landing-merge muted" title="The default branch&#x27;s last merge (or, with none yet, its last commit)">${w}</div>`;
+    expect(html).toContain(merge("updated 2h ago"));
+    expect(html).toContain(merge("no merges yet"));
+    // A fresh repo never reads "merged …" (round-consolidate judge).
+    const fresh = render({ data: { repos: [repo({ last_merge_at: NOW - 600, last_merge_kind: "commit", landed: [] } as never)], at: NOW } });
+    expect(fresh).toContain(merge("last commit 10m ago"));
+    expect(fresh).not.toContain("merged");
+    expect(render({ data: { repos: [repo({ last_merge_kind: "merge" } as never)], at: NOW } })).toContain(merge("merged 2h ago"));
     // The session's NAME, newest first, three folded, the PR a link.
     const names = [...html.matchAll(/class="sky-landing-flight-name" title="([^"]+)">([^<]+)</g)].map((m) => m[1] + "=" + m[2]);
     expect(names).toEqual(["sc-9=sc-9", "fix-login=Login fix", "bump-deps=bump-deps"]);

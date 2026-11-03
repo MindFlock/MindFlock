@@ -1,6 +1,6 @@
 /** Round 17 (docs/flights.md "Round 17: the Sky as a canvas tool", task
  * `sky-core`): the manners every good canvas has — fit selection (Shift+2),
- * Shift+1 / Shift+0, the eased camera, redo, Tab and double-click to the
+ * Shift+1 / Shift+0, the eased camera, redo, Tab to the
  * palette, the cursor contract, focus mode, and the seams mounted (Minimap,
  * OffscreenHints, ZoomMenu, SkyShortcuts). The pure parts run; the wiring
  * is pinned in SkyView's and Sky.css's text. */
@@ -158,13 +158,13 @@ describe("redo (lib/skyUndo)", () => {
   });
 });
 
-describe("Tab and double-click → the palette", () => {
-  it("Tab floats the palette with its filter focused, a second Tab (in the filter) docks it; a double-click on empty sky floats it at the pointer", () => {
+describe("Tab → the palette; double-click → a new session", () => {
+  it("Tab floats the palette with its filter focused, a second Tab (in the filter) docks it; a double-click on empty sky opens the new-session block (what the guide and shelf say)", () => {
     expect(v).toMatch(/k === "Tab" && !e\.shiftKey && !narrow\) \{\s*handled\(\);\s*if \(paletteOn\) setPaletteMode\("shelf"\);\s*else floatPaletteAt\(paletteSpot\(\)\);/);
     expect(v).toContain('if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && paletteOn && typing(el) && el?.closest(".sky-palette-slot")) {');
     expect(v).toMatch(/const floatPaletteAt = \(at: Pos\) => \{\s*setFilterFocus\(true\);\s*onLayout\(PALETTE_KEY, \{ x: Math\.round\(at\.x\), y: Math\.round\(at\.y\), pinned: true \}\);\s*setPaletteMode\("float"\);/);
     expect(v).toContain("focusFilter={!!catalogOpen || filterFocus}");
-    expect(v).toMatch(/const onDouble = [\s\S]*?if \(narrow\) return newAtScreen\(e\.clientX, e\.clientY\);\s*floatPaletteAt\(planeAt\(e\.clientX, e\.clientY\)\);/);
+    expect(v).toMatch(/const onDouble = \(e: ReactMouseEvent<HTMLDivElement>\) => \{\s*if \(!ground\(e\.target\)\) return;\s*newAtScreen\(e\.clientX, e\.clientY\);\s*\};/);
     expect(v).toContain("onDoubleClick={onDouble}");
     // Docking forgets the filter focus, so the next float does not steal the keyboard.
     expect(v).toMatch(/if \(m === "shelf"\) \{\s*setCatalogOpen\(null\);\s*setFilterFocus\(false\);/);
@@ -217,16 +217,16 @@ describe("the seams are mounted", () => {
     expect(sheet).toMatch(/\.sky-minimap-host \{\s*position: absolute;\s*right: 12px;\s*bottom: 12px;/);
   });
 
-  it("ZoomMenu replaces the readout with min / max / the fits; SkyShortcuts opens on ? and closes on Esc (groups wired by the integrator)", () => {
+  it("ZoomMenu replaces the readout with min / max / the fits; SkyShortcuts opens on ? and closes on Esc, with the real groups", () => {
     expect(v).not.toContain('<span className="sky-zoom-read"');
     expect(v).toMatch(/<ZoomMenu\s+zoom=\{cam\.z\}\s+min=\{ZOOM_MIN\}\s+max=\{ZOOM_MAX\}\s+onZoomTo=\{zoomTo\}\s+onFitAll=\{\(\) => fitAll\(\)\}\s+onFitSelection=\{fitSel\}\s+onFitFocused=\{\(\) => fitFocused\(\)\}\s+canFitSelection=\{!selectionEmpty\(sel\)\}\s+canFitFocused=\{!!focusLine\}/);
     expect(ZOOM_MIN).toBe(0.1);
     expect(ZOOM_MAX).toBe(3);
     expect(v).toMatch(/k === "\?"\) \{\s*handled\(\);\s*setShortcutsOpen\(true\);/);
     expect(v).toMatch(/if \(e\.key === "Escape" && shortcutsOpen\) \{\s*e\.preventDefault\(\);\s*setShortcutsOpen\(false\);\s*return;/);
-    expect(v).toContain("<SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={[]} />");
-    // The groups come from lib/skyShortcuts (task zoom-shortcuts); a TODO in the JSX marks the seam (comments are blanked here).
-    expect(src("components/flights/SkyView.tsx")).toContain("TODO(zoom-shortcuts): SKY_SHORTCUT_GROUPS");
+    // The groups come from lib/skyShortcuts — wired (the sheet was empty: round-consolidate defect 1).
+    expect(v).toContain("<SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={SKY_SHORTCUT_GROUPS} />");
+    expect(src("components/flights/SkyView.tsx")).not.toContain("TODO(zoom-shortcuts)");
     // The ⋯ menu names the sheet too, for the mouse.
     expect(v).toContain('{ key: "keys", label: "Keyboard shortcuts…", title: "Every key the sky knows (?)", onSelect: () => setShortcutsOpen(true) },');
   });

@@ -296,13 +296,9 @@ describe("the Flight tab draws the same", () => {
 describe("the tour and the guide say frame and agent", () => {
   it("the Sky tour", () => {
     const steps = TOURS.sky.steps;
-    const bar = steps.find((s) => s.target.startsWith('[data-tour="sky-line-bar"]'))!;
-    expect(bar.title).toBe("A session is a frame");
     const agent = steps.find((s) => s.target.startsWith('[data-tour="sky-session-box"]'))!;
-    expect(agent.title).toBe("The agent starts the chain");
-    expect(agent.body).toContain("send it a prompt or stop it");
-    const grounded = steps.find((s) => s.target.startsWith('[data-tour="sky-grounded"]'))!;
-    expect(grounded.body).toContain("no frame");
+    expect(agent.title).toBe("Each session is a chain");
+    expect(agent.body).toContain("Its agent comes first");
   });
 
   it("the guide", () => {

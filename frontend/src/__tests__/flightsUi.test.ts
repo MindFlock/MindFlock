@@ -22,7 +22,7 @@ const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query
 const { useUi } = await import("../state/store");
 const { FlightCard, PaneFlightStrip } = await import("../components/flights/FlightStrip");
 const { FlywayCanvas } = await import("../components/flights/FlywayCanvas");
-const { SessionFlight } = await import("../components/flights/SessionFlight");
+const { SessionFlight, featuredPlans, SAVED_SHOWN } = await import("../components/flights/SessionFlight");
 const { flightDiagram, flywayDiagram } = await import("../lib/flightDiagram");
 const { SkyView } = await import("../components/flights/SkyView");
 const { PlanSelect } = await import("../components/flights/PlanSelect");
@@ -318,6 +318,27 @@ describe("the pane's Flight tab: the session diagram", () => {
     // Its line in the Sky, one press away; no bird while the session idles.
     expect(html).toMatch(/class="linklike fl-open-sky"[^>]*>Open in the Sky<\/button>/);
     expect(html).not.toContain("fl-bird-marker");
+  });
+
+  it("a pane is not a gallery: the 3 most relevant saved stops, the rest behind More…", () => {
+    const p = (id: string, builtin: boolean, updated = 0): FlightPlan => ({ ...PLAN, id, name: id, builtin, updated });
+    const plans = [p("b1", true), p("b2", true), p("b3", true), p("b4", true), p("old", false, 10), p("new", false, 20)];
+    expect(SAVED_SHOWN).toBe(3);
+    // yours first, the last saved first; then the built-ins in order
+    expect(featuredPlans(plans, false).shown.map((x) => x.id)).toEqual(["new", "old", "b1"]);
+    expect(featuredPlans(plans, false).more).toBe(3);
+    expect(featuredPlans(plans, true).shown.map((x) => x.id)).toEqual(["new", "old", "b1", "b2", "b3", "b4"]);
+    expect(featuredPlans(plans, true).more).toBe(0);
+    expect(featuredPlans(plans.slice(0, 2), false).more).toBe(0);
+    // rendered: three cards and a More… (n) button
+    const html = withClient(createElement(SessionFlight, { inst: { title: "me" } }), (c) => {
+      c.setQueryData(["instances"], [rowOf("me")]);
+      c.setQueryData(["flights"], []);
+      c.setQueryData(["flight-kinds"], KINDS);
+      c.setQueryData(["flight-plans"], plans);
+    });
+    expect(html.match(/>Fly these stops<\/button>/g)).toHaveLength(3);
+    expect(html).toMatch(/<button type="button" class="test-btn fl-flyway-more" aria-expanded="false">More… \(3\)<\/button>/);
   });
 });
 

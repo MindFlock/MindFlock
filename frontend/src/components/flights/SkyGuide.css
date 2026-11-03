@@ -107,6 +107,17 @@
   line-height: 1.5;
 }
 
+/* Start here: the five essentials, numbered. */
+.sky-guide-start {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  line-height: 1.5;
+}
+
+.sky-guide-start li + li {
+  margin-top: 6px;
+}
+
 .sky-guide-words kbd,
 .sky-guide-keys kbd {
   font: 12px/1 ui-monospace, monospace;

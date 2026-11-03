@@ -61,6 +61,7 @@ export const SKY_SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["Alt", "drag"], what: "Move without snapping to the others" },
       { keys: ["T"], what: "Tidy: every line back in its place, every window minimised" },
       { keys: ["Ctrl", "N"], what: "A new session block (Alt+N in a browser tab)" },
+      { keys: ["double-click"], what: "On empty sky: a new session block there" },
       { keys: ["Ctrl", "Y"], what: "Switch between the grid and the sky" },
     ],
   },
@@ -68,7 +69,6 @@ export const SKY_SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: "The palette",
     items: [
       { keys: ["Tab"], what: "Open the palette with its filter (again: dock it)" },
-      { keys: ["double-click"], what: "On empty sky: the palette at the pointer" },
       { keys: ["click"], what: "Place a block on the sky" },
       { keys: ["drag"], what: "Drop a block onto a line to add it there" },
       { keys: ["Esc"], what: "Dock a floating palette" },
