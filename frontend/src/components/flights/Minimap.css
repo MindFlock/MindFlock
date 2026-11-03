@@ -163,6 +163,13 @@
   overflow: hidden;
 }
 
+/* Any dialog or menu open anywhere on the page — Settings, New, a ⋯ menu, a
+   popover — hides the off-screen pointers: they belong to the board, and they
+   drew through whatever sat over it. */
+body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], [data-modal], details.vf-menu[open]) .sky-offscreen {
+  display: none;
+}
+
 .sky-offscreen .sky-offscreen-chip {
   position: absolute;
   display: inline-flex;
