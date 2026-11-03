@@ -1219,3 +1219,23 @@
   }
 }
 /* === end: return wires explain themselves === */
+
+/* A Ship stop the agent did itself (docs/vision/fixwire.md "Done by the
+   agent"): under its receipt, the agent glyph and "by the agent". */
+.sky-node-by {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sky-node-by .fl-stop-icon {
+  color: var(--sky-fam-work);
+}
+.skl[data-lod="far"] .sky-node-by,
+[data-lod="far"] .sky-node-by {
+  display: none;
+}

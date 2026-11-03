@@ -96,6 +96,41 @@ outcome?}`:
   (`LANE_RUNG_FIXES` mirrors autopilot `_ladder` / `_interrupt_action` /
   `_blocker_fix`) — the UI never claims a case the lane doesn't handle.
 
+## Done by the agent (a Ship stop the agent already did)
+
+The owner: "if the agents do some of the steps in the route I'd still like it
+reflected in the route — like this case where the agent PR'd even though it
+could have been done by the route." Real case f_a993cc (sc-25355): the agent
+committed, pushed and opened the PR itself; the Commit stop armed its lane,
+the lane wrote "already at pr — waiting for new work" and the stop sat
+`running` forever, Push and Open PR pending, the bird stuck on Commit.
+
+Now a Ship stop whose rung git already proves is done, **done by the agent**:
+
+- **The truth is git's, not the lane's note**: `flights.agent_did(step, obs)`
+  reads `obs["git"]` = the session's stage as the lane climbs by
+  (`agent_state._session_stage`: a dirty tree is `agent`; a clean tree with
+  commits ahead of its base is `committed`; origin holding HEAD is `pushed`;
+  an open PR for the branch is `pr`) plus the commits ahead
+  (`flight_driver._ship_git_obs`). `STAGE_RUNG` maps a stage to the rung it
+  proves (autopilot `_STAGE_ACHIEVED`). Uncommitted work after a commit reads
+  `agent`, so Commit still has work. Merge is never proven by a stage.
+- Never while the agent is mid-turn (its turn may add work: the lane waits for
+  it), and never once the lane has acted itself (`commits` / `step` on its
+  record — that is the lane's own done).
+- **Where**: a pending Ship stop, before it arms its lane; a running one whose
+  lane has not acted. The driver's pass already carries on while each step
+  finishes (`_CHAIN` = 4), so Commit, Push and Open PR all go done in ONE
+  pass, each marked, up to the first with real work left. A lane armed for a
+  stop done this way is disarmed (`_disarm_ours`: it had nothing left to do).
+- **Marked**: `detail.by = "agent"`, `detail.receipt` "already committed · 3
+  commits" / "already pushed" / "PR #123" (and `detail.url`); one history
+  `done` event "done by the agent — <receipt>".
+- **Drawn**: the stop's done tick, its receipt, and under it the agent glyph
+  and "by the agent" (`DiagramNode.by`, `.sky-node-by`; hidden at far zoom).
+  The screen reader hears "Commit — done by the agent, already committed · 3
+  commits".
+
 ## Leftovers for the integrator
 
 - `LANE_FIX_ROUNDS` (flights.py) mirrors `autopilot.MAX_FIX_ROUNDS`, and
@@ -104,6 +139,9 @@ outcome?}`:
 - `--warn` is used with a fallback across the flights CSS but is defined
   nowhere; the wire falls back to `--tone-attention` (gold/amber).
 - The bundle (`backend/web/static/`) is not rebuilt here.
+- `STAGE_RUNG` mirrors autopilot `_STAGE_ACHIEVED`.
+- The PR receipt is "PR #123" (the link rides in `detail.url`; the face does
+  not draw an ↗ link yet).
 - Pins updated deliberately: `loopIdlePill` "↻ ×3" → "↻ repeat ×3"
   (flightLoop.test, skyChain.test); a retry after an `on_fail: agent` fix
   keeps `detail.fix` (test_flights.py).

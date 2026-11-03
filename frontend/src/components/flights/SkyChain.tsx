@@ -260,7 +260,7 @@ export function tileLabel(n: DiagramNode, head = false): string {
   if (head) return (n.title || "Agent") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
   const word = STATE_WORD[n.state] ?? "";
   const sub = tileSub(n);
-  return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
+  return n.title + (word ? " — " + word : "") + (n.by === "agent" ? " by the agent" : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
 }
 
 /** What a screen reader says for the Behaviors tile (or the Verify stop
@@ -544,6 +544,12 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         </div>
         <div className="sky-node-title">{isHead ? head.title : sub_ ? frame?.agent || "Agent" : dn.title}</div>
         {sub && <div className="sky-node-sub">{sub}</div>}
+        {!isHead && dn.by === "agent" && (
+          // A Ship stop the agent did itself: who did it, under the receipt.
+          <div className="sky-node-by" title="The agent did this itself — the route found it already done">
+            <TileIcon kind="agent" size={11} /> by the agent
+          </div>
+        )}
         {!isHead && dn.until && (dn.state === "current" || dn.state === "paused" || dn.state === "halted") ? <Countdown until={dn.until} /> : null}
         {isHead ? (
           <div className="sky-head-extra" data-no-drag>

@@ -187,6 +187,9 @@ export interface DiagramNode {
   /** A stop that may send work back to the agent (docs/vision/fixwire.md):
    * where to, why, and the fix under way or just over (its return wire). */
   ret?: ReturnMark;
+  /** A Ship stop the agent did itself (`detail.by` "agent": it had already
+   * committed, pushed or opened the PR) — its face says "by the agent". */
+  by?: "agent";
 }
 
 /** A stop's return wire as drawn: the server's `returns` entry (`to`,
@@ -829,6 +832,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
       ...(ret ? { ret } : {}),
+      ...(state === "done" && rec?.detail?.by === "agent" ? { by: "agent" as const } : {}),
       ...(!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}),
       ...parallelMark(f.steps, i),
     };

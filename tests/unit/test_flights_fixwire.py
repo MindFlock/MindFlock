@@ -270,3 +270,94 @@ def test_the_next_action_resolves_a_failed_checks_stop_to_a_fix():
 def test_short_reason_is_one_short_line():
     assert F.short_reason("  a\n b ") == "a"
     assert len(F.short_reason("x" * 200)) == 90
+
+
+# --------------------------------------------------------------------------- #
+# Done by the agent: a Ship stop whose rung git already proves is done
+# --------------------------------------------------------------------------- #
+PR_URL = "https://github.com/o/r/pull/123"
+IDLE = {"present": True, "activity": "idle"}
+
+
+def _fly_pass(f, obs, now=NOW, chain=4):
+    """One driver pass: up to ``chain`` steps while each one finishes."""
+    acts = []
+    for _ in range(chain):
+        if f["state"] not in F.ACTIVE:
+            break
+        a = F.next_action(f, obs, now)
+        acts.append(a)
+        F.apply(f, a, now)
+        if a["action"] not in ("done", "advance", "skip_when"):
+            break
+    return acts
+
+
+def _route():
+    return fly(AGENT, SHIP("commit"), SHIP("push"), SHIP("pr"))
+
+
+def test_already_at_pr_commit_push_and_pr_are_all_done_by_the_agent_in_one_pass():
+    f = _at(_route(), 1)
+    rec = _lane(f, "commit", note="already at pr — waiting for new work")
+    git = {"stage": "pr", "pr_url": PR_URL, "ahead": 3}
+    acts = _fly_pass(f, {"session": IDLE, "autopilot": rec, "git": git})
+    assert [a["action"] for a in acts] == ["done", "done", "done"]
+    assert all(a.get("by_agent") for a in acts)
+    assert f["state"] == "done"
+    receipts = [f["step_states"][s["id"]]["detail"] for s in f["steps"][1:]]
+    assert [d["by"] for d in receipts] == ["agent"] * 3
+    assert [d["receipt"] for d in receipts] == [
+        "already committed · 3 commits",
+        "already pushed",
+        "PR #123",
+    ]
+    assert receipts[2]["url"] == PR_URL
+    by = [h for h in f["history"] if h["note"].startswith("done by the agent")]
+    assert [h["step"] for h in by] == [s["id"] for s in f["steps"][1:]]
+
+
+def test_committed_but_not_pushed_commit_is_done_by_the_agent_push_runs():
+    f = _at(_route(), 1)
+    rec = _lane(f, "commit", note="already at commit — waiting for new work")
+    git = {"stage": "committed", "ahead": 1}
+    acts = _fly_pass(f, {"session": IDLE, "autopilot": rec, "git": git})
+    assert [a["action"] for a in acts] == ["done", "run"]
+    assert f["step_states"][f["steps"][1]["id"]]["detail"]["by"] == "agent"
+    assert f["step_states"][f["steps"][1]["id"]]["detail"]["receipt"] == (
+        "already committed · 1 commit"
+    )
+    assert f["steps"][f["cursor"]]["config"]["lane"] == "push"
+    assert "by" not in f["step_states"][f["steps"][2]["id"]]["detail"]
+
+
+def test_a_dirty_tree_means_commit_still_has_work():
+    f = _route()
+    _at(f, 1)
+    f["step_states"][f["steps"][1]["id"]].update(state="pending", since=0.0)
+    acts = _fly_pass(f, {"session": IDLE, "git": {"stage": "agent"}})
+    assert [a["action"] for a in acts] == ["run"]
+    # Running with its lane armed: still a wait, never done by the agent.
+    f = _at(fly(AGENT, SHIP("commit"), SHIP("push"), session="s2"), 1)
+    rec = _lane(f, "commit", note="committing")
+    a = F.next_action(
+        f, {"session": IDLE, "autopilot": rec, "git": {"stage": "agent"}}, NOW
+    )
+    assert a["action"] == "wait"
+
+
+def test_never_while_the_agent_is_mid_turn_or_once_the_lane_has_acted():
+    f = _at(_route(), 1)
+    git = {"stage": "pr", "pr_url": PR_URL}
+    rec = _lane(f, "commit")
+    busy = F.next_action(f, {"session": SESS, "autopilot": rec, "git": git}, NOW)
+    assert busy["action"] == "wait"
+    # The lane committed itself: its own done, not the agent's.
+    acted = dict(rec, commits=1, state="done")
+    a = F.next_action(f, {"session": IDLE, "autopilot": acted, "git": git}, NOW)
+    assert a["action"] == "done" and not a.get("by_agent")
+
+
+def test_merge_is_never_done_by_a_stage():
+    step = F.normalize_step(SHIP("merge"))
+    assert F.agent_did(step, {"session": IDLE, "git": {"stage": "pr"}}) is None
