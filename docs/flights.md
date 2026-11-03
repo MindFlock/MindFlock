@@ -482,7 +482,9 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   pointer, Space+drag pans from anywhere; keys: arrows pan, + / − zoom, 0
   fits all, 1 the focused line, T tidies, Enter opens the focused line's box,
   Esc closes it. A faint dot grid scales with it, in both themes, the flock
-  (`SkyFlock {width, height, zoom, paused?, density?}`) drifting behind.
+  (`SkyFlock {width, height, zoom, paused?, density?, birds?}`) drifting
+  behind when you turn it on (Settings → Appearance → **Birds in the Sky**,
+  off by default; the weather's clouds and night tint show either way).
 - **Every session is a line** (`SkyLine {title, rows, plans, layout,
   onLayout, focused, onFocus, zoom, onDragStart?, onMeasure?, dropFlyway?}`):
   its title bar (drag handle, size control, ⋯), its
@@ -1150,9 +1152,9 @@ canvas per glyph.
   `birdLook(tone, reduced)` (the marker class, the sprite class, flaps or not),
   `prefersReducedMotion()`.
 
-**The ambient flock** — `SkyFlock {width, height, zoom, paused?, density?}`
-(`components/flights/SkyFlock.tsx`): a `<canvas>` the Sky mounts behind its
-plane with a few birds crossing the empty sky — ~8, times `density` (capped
+**The ambient flock** — `SkyFlock {width, height, zoom, paused?, density?,
+birds?}` (`components/flights/SkyFlock.tsx`): a `<canvas>` the Sky mounts
+behind its plane with a few birds crossing the empty sky — ~8, times `density` (capped
 at 40). Same sprite (flock.ts's `tinted()`), same 12-species plumage (the dark
 column, the light one in the light theme), same wing beat and belly-up mirror
 as the app's flock. They flock casually, each heads for a wandering target,
@@ -1163,10 +1165,23 @@ the Sky's zoom a little (√zoom, 0.7–1.3).
 Cheap by construction: one rAF, at most 60 frames a second (a 120 Hz frame is
 skipped), no work while the tab is hidden, `paused` asks for no frame at all
 (the last one stays painted), DPR-aware (capped at 2). Under
-`prefers-reduced-motion` it renders **nothing**. It is decoration:
+`prefers-reduced-motion` it flies no birds.
+
+**Off by default.** Settings → Appearance → **Birds in the Sky** turns the
+flock on (`skyBirds` in the store, saved under `mf_sky_flock`; the old
+`mf_sky_birds` key, saved when the default was on, is deliberately never
+read, so everyone starts with it off). It is a per-browser `localStorage`
+pref — not in `settings.json` or the synced `ui.*` prefs — so it is turned on
+separately on each device, and in the desktop app apart from a browser tab.
+The Sky always mounts `SkyFlock` and passes `birds={skyBirds}`: with the birds off, none are seeded or stepped, but
+the weather stays — the canvas still exists while there are clouds, the rAF
+runs only while they drift, and the night tint still dims the sky. A clear,
+bird-less sky renders nothing and asks for no frame (`skyMotion`). The birds
+on your chains are not part of it and always stay. It is decoration:
 `pointer-events: none`, 0.55 opacity (0.32 in the light theme). The simulation
-(`flockSize`, `seedBirds`, `fitBirds`, `stepBirds`) and the frame loop
-(`skyLoop`) are pure and tested without a DOM.
+(`flockSize`, `seedBirds`, `fitBirds`, `stepBirds`), what the sky draws
+(`skyMotion`) and the frame loop (`skyLoop`) are pure and tested without a
+DOM (`__tests__/skyBirds.test.ts`, `skyFlockOptIn.test.ts`).
 
 **The pane's Flight tab** (`components/grid/TabIcon.tsx`) is a route now —
 three stops joined by arrows, like the connectors — not a bird.

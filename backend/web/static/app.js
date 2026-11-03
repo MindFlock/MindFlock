@@ -26939,7 +26939,7 @@ var useUi = create((set, get) => ({
 	showFilter: load$1("mf_show_filter", true),
 	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
-	skyBirds: load$1("mf_sky_birds", true),
+	skyBirds: load$1("mf_sky_flock", false) === true,
 	breakReminder: load$1("mf_break_on", false),
 	breakEveryMin: clampBreakMinutes(load$1("mf_break_every", BREAK_DEFAULT_MINUTES)),
 	idleFlock: load$1("mf_idle_flock", true),
@@ -27227,7 +27227,7 @@ var useUi = create((set, get) => ({
 		set({ reduceMotion: on });
 	},
 	setSkyBirds: (on) => {
-		save("mf_sky_birds", on);
+		save("mf_sky_flock", on);
 		set({ skyBirds: on });
 	},
 	setBreakReminder: (on) => {
@@ -29795,7 +29795,7 @@ function SkyBirdsRow() {
 				children: "Birds in the Sky"
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint notif-rule-desc",
-				children: "The flock drifting across the Sky's background. The birds on your chains stay."
+				children: "A flock drifting across the Sky's background. Off by default; the birds on your chains always stay."
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
@@ -132764,6 +132764,14 @@ function stepBirds(birds, w, h, rand = Math.random) {
 		else if (b.y > h + 30) b.y = -30;
 	}
 }
+function skyMotion(o) {
+	const flying = o.birds && !o.reduced;
+	return {
+		flying,
+		canvas: flying || o.clouds > 0,
+		loop: flying || o.drift && o.clouds > 0
+	};
+}
 function skyLoop(tick, opts = {}) {
 	if (opts.paused) return () => {};
 	const raf = opts.raf ?? ((cb) => requestAnimationFrame(cb));
@@ -132843,7 +132851,7 @@ function WeatheredSky(props) {
 		weather: useWeather()
 	});
 }
-function SkyCanvas({ width, height, zoom, paused = false, density = 1, weather }) {
+function SkyCanvas({ width, height, zoom, paused = false, density = 1, birds: wantBirds = true, weather }) {
 	const ref = (0, import_react.useRef)(null);
 	const reduced = useReducedMotion();
 	const birds = (0, import_react.useRef)([]);
@@ -132857,7 +132865,12 @@ function SkyCanvas({ width, height, zoom, paused = false, density = 1, weather }
 	});
 	const { night, drift } = weather;
 	const nClouds = cloudCount(weather.clouds);
-	const canvas = !reduced || nClouds > 0;
+	const { flying, canvas, loop } = skyMotion({
+		birds: wantBirds,
+		reduced,
+		clouds: nClouds,
+		drift
+	});
 	(0, import_react.useEffect)(() => {
 		view.current = {
 			width,
@@ -132876,7 +132889,7 @@ function SkyCanvas({ width, height, zoom, paused = false, density = 1, weather }
 			c.height = ph;
 		}
 		g.setTransform(dpr, 0, 0, dpr, 0, 0);
-		birds.current = reduced ? [] : fitBirds(birds.current, flockSize(width, height, density), width, height);
+		birds.current = !flying ? [] : fitBirds(birds.current, flockSize(width, height, density), width, height);
 		clouds.current = fitClouds(clouds.current, nClouds, width, height, drift);
 		paint(g, birds.current, clouds.current, view.current.thick, width, height, zoom, frame.current);
 	}, [
@@ -132884,25 +132897,26 @@ function SkyCanvas({ width, height, zoom, paused = false, density = 1, weather }
 		height,
 		zoom,
 		density,
-		reduced,
+		flying,
 		nClouds,
 		weather.clouds,
 		drift,
 		canvas
 	]);
 	(0, import_react.useEffect)(() => {
-		if (reduced) return;
+		if (!loop) return;
 		return skyLoop(() => {
 			const g = ref.current?.getContext("2d");
 			if (!g) return;
 			const v = view.current;
-			stepBirds(birds.current, v.width, v.height);
+			if (flying) stepBirds(birds.current, v.width, v.height);
 			if (drift) clouds.current = stepClouds(clouds.current, v.width);
 			paint(g, birds.current, clouds.current, v.thick, v.width, v.height, v.zoom, ++frame.current);
 		}, { paused });
 	}, [
 		paused,
-		reduced,
+		loop,
+		flying,
 		drift
 	]);
 	if (!canvas && !night) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, {});
@@ -137936,11 +137950,12 @@ function SkyView() {
 						onDrop: onNewDrop,
 						onScroll: onViewportScroll,
 						children: [
-							skyBirds && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyFlock, {
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyFlock, {
 								width: vp.w,
 								height: vp.h,
 								zoom: cam.z,
-								paused: motionOff || !!drag
+								paused: motionOff || !!drag,
+								birds: skyBirds
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "sky-plane" + (focusMode ? " sky-focus" : ""),

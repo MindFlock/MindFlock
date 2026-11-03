@@ -4324,8 +4324,10 @@ scrolls it; **Ctrl/⌘+wheel** or a pinch zooms about the pointer, from 40% to
 group: **−**, the readout (*100%*), **+**, **1** (fit the focused line),
 **Fit** and **100%**. The background is a faint dot grid that scales and pans
 with the plane — a dark sky in the dark theme, a white expanse in the light
-one — with the flock drifting behind it (`SkyFlock`; still while a line is
-being dragged or motion is reduced).
+one — with, if you turn it on (Settings → Appearance → **Birds in the Sky**,
+off by default), a flock drifting behind it (`SkyFlock`; paused while a line is
+being dragged, and no birds at all under reduced motion). The weather's
+clouds and night tint show either way.
 
 **Lines.** Each session is a line (`SkyLine`): a title bar — the bird, the
 name, its state chip, a 📌 when you placed it by hand, a size control and a ⋯
@@ -6844,6 +6846,12 @@ labels above the inputs.
   choice persists server-side
   (`ui.surface` / `ui.accent` via `/api/settings`) so desktop and `/m` match,
   with `localStorage` (`cs_surface` / `cs_accent`) as a pre-paint cache.
+- **Appearance → Birds in the Sky** (`mf_sky_flock`, **off by default**,
+  browser-local, not synced) — flies the ambient flock behind the Sky. Off
+  keeps the weather (clouds, the night tint) and the birds on your chains. The
+  old `mf_sky_birds` key is ignored, so the flock starts off once for everyone
+  after the release that made it opt-in; turn it back on per device and per
+  browser (the desktop app and a browser tab are separate).
 
 Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
 last-used tab, and saved prompts are persisted in `localStorage` (`cs_*` /
