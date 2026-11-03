@@ -355,3 +355,17 @@ def test_tours_seen_is_a_synced_string_list():
     assert PrefsSettings.from_dict({"tours_seen": ["new", "intake"]}).to_dict() == {
         "tours_seen": ["new", "intake"]
     }
+
+
+# --------------------------------------------------------------------------- #
+# whats_new_seen (the What's new window, once per person)
+# --------------------------------------------------------------------------- #
+def test_whats_new_seen_is_a_synced_string_over_the_prefs_route(client):
+    assert "whats_new_seen" in settings_sync.SYNCED["prefs"]
+    assert settings_sync.LABELS["prefs.whats_new_seen"]
+    got = client.post("/api/prefs", json={"whats_new_seen": "0.11.0"}).json()
+    assert got["whats_new_seen"] == "0.11.0"
+    store.invalidate()
+    assert store.load_settings().prefs.whats_new_seen == "0.11.0"
+    d = store.Settings(prefs=store.PrefsSettings(whats_new_seen="0.11.0")).to_dict()
+    assert store.Settings.from_dict(d).prefs.whats_new_seen == "0.11.0"

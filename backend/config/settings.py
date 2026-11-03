@@ -1572,8 +1572,11 @@ class PrefsSettings:
     # header): ``{"order": [item id…], "hidden": [item id…]}``; None = never
     # customized (the built-in default set).
     pane_header: Optional[dict] = None
+    # What's new: the newest release version whose window this person has seen
+    # ("" = never), so it pops once per person across browser, desktop, phone.
+    whats_new_seen: str = ""
 
-    _STRS = ("theme", "diff_mode", "diff_base")
+    _STRS = ("theme", "diff_mode", "diff_base", "whats_new_seen")
     _BOOLS = (
         "reduce_motion",
         "break_on",
@@ -1635,6 +1638,7 @@ class PrefsSettings:
             welcome_tour=_opt_bool(d.get("welcome_tour")),
             settings_advanced=_opt_bool(d.get("settings_advanced")),
             pane_header=_pane_header(d.get("pane_header")),
+            whats_new_seen=str(d.get("whats_new_seen") or "")[:32],
         )
 
 
