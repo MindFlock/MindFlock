@@ -309,6 +309,79 @@ export function assignSpots(existing: readonly PlacedLine[], newcomers: readonly
   return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
 }
 
+/** What `fillWidth` counts besides the lines: `flat` ids count for their
+ * width and top only (the intake lane: its height is its own scroll's, as in
+ * the toolbar's Fit), and `right` is the column placed right of every line
+ * afterwards (the strip, the people) — its widest box plus a gap is added to
+ * the width, wherever those objects sit now. `maxZ` is the fit's cap. */
+export interface FillOpts {
+  flat?: readonly string[];
+  right?: readonly LineBox[];
+  maxZ?: number;
+}
+
+/** How much larger a wider layout must show things than the minimum's to
+ * be worth it: a portrait window gains a few percent from a second column
+ * under the lane, and keeps its tall column instead. */
+export const FILL_GAIN = 1.1;
+
+/** The wrap width that best fills a vw × vh window: `assignSpots` is run at
+ * a set of widths from `area.width` (the minimum) up to every newcomer on one
+ * row — about two dozen geometric steps, plus each width at which one more
+ * newcomer fits on the first row. The width whose layout a fit shows
+ * largest wins, if it shows them at least `FILL_GAIN` larger than the
+ * minimum does. A tie (everything already fits at `maxZ`) goes to the
+ * narrowest, so a few lines or a tall monitor are placed exactly as at the
+ * minimum; a wide monitor gets rows that fill it. Never less than the
+ * minimum; with no newcomer (nothing to place) or no window, the minimum.
+ * The zoom is scored unclamped, so two layouts both past the zoom floor
+ * still compare. */
+export function fillWidth(existing: readonly PlacedLine[], newcomers: readonly LineBox[], area: PlaceArea, vw: number, vh: number, opts: FillOpts = {}): number {
+  const min = area.width;
+  const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
+  if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
+  const pad = FIT_PAD;
+  const maxZ = opts.maxZ ?? 1;
+  const flat = new Set(opts.flat || []);
+  const aside = new Set((opts.right || []).map((r) => r.id));
+  const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
+  const x0 = area.left ?? SKY_MARGIN;
+  // Breakpoints: the first row holding one more newcomer each time.
+  const stops: number[] = [];
+  let run = x0;
+  for (const n of fresh) {
+    run += n.w;
+    stops.push(run);
+    run += SKY_GAP;
+  }
+  const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
+  const steps = 24;
+  const k = max > min ? (max / Math.max(1, min)) ** (1 / (steps - 1)) : 1;
+  const widths = new Set<number>([min]);
+  if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
+  for (const s of stops) if (s > min && s <= max) widths.add(s);
+  const counted = existing.filter((e) => !aside.has(e.id));
+  let best = min;
+  let bestZ = -Infinity;
+  let minZ = -Infinity;
+  for (const width of [...widths].sort((a, b) => a - b)) {
+    const spots = assignSpots(existing, fresh, { ...area, width });
+    const rects: Rect[] = [...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({ id: n.id, ...spots[n.id], w: n.w, h: n.h }))].map(
+      (r) => ({ x: r.x, y: r.y, w: r.w, h: flat.has(r.id) ? 1 : r.h })
+    );
+    const b = boundsOf(rects);
+    if (!b) continue;
+    const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
+    const z = Math.min(maxZ, (vw - 2 * pad) / w, (vh - 2 * pad) / Math.max(1, b.h));
+    if (width === min) minZ = z;
+    if (z > bestZ + 1e-3) {
+      bestZ = z;
+      best = width;
+    }
+  }
+  return bestZ >= minZ * FILL_GAIN ? best : min;
+}
+
 /** The smallest rectangle holding them all, or null for none. */
 export function boundsOf(rects: readonly Rect[]): Rect | null {
   if (!rects.length) return null;

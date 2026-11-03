@@ -180,6 +180,7 @@ import {
   ZOOM_MIN,
   CAM_EASE_MS,
   assignSpots,
+  fillWidth,
   boundsOf,
   catalogFrame,
   centerOn,
@@ -685,7 +686,12 @@ export function SkyView() {
     const existing: PlacedLine[] = [...items, ...rightItems].filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
     for (const [id, at] of Object.entries(saved))
       if (!shown.has(id) && measured[id] && lineAlive(id)) existing.push({ id, ...at, ...measured[id] });
-    const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]), { width: Math.max(vp.w, LINES_LEFT + 900), left: SKY_MARGIN, top: SKY_MARGIN });
+    // The wrap width that fills the window best (a landscape screen gets wider
+    // rows than a portrait one; a few lines are placed as at the minimum).
+    const newcomers = items.filter((l) => !saved[l.id]);
+    const area = { width: Math.max(vp.w, LINES_LEFT + 900), left: SKY_MARGIN, top: SKY_MARGIN };
+    area.width = fillWidth(existing, newcomers, area, vp.w, vp.h, { flat: [INTAKE_KEY, PALETTE_KEY], right: rightItems });
+    const fresh = assignSpots(existing, newcomers, area);
     const place: Record<string, Pos> = { ...fresh };
     for (const e of existing) if (shown.has(e.id)) place[e.id] = { x: e.x, y: e.y };
     // The right column: a newcomer goes just right of everything placed,
@@ -708,7 +714,7 @@ export function SkyView() {
     // relative to its line's spot (so it moves with the line).
     for (const o of objects) if (o.def.kind === "note") place[o.key] = notePos(o.data as SkyNote, (id) => place[id] || null);
     return { place, fresh };
-  }, [lines, intakeBox, paletteBox, paletteOn, layout, autoPos, measured, lineAlive, vp.w, mode, objects, objectBox]);
+  }, [lines, intakeBox, paletteBox, paletteOn, layout, autoPos, measured, lineAlive, vp.w, vp.h, mode, objects, objectBox]);
   // Keep a newcomer's spot once it is known where it fits: the window
   // measured, the sessions and the flights loaded, the line drawn and
   // measured. Free the spots of sessions that are gone and of lines the
@@ -997,16 +1003,36 @@ export function SkyView() {
    * are forgotten, every line is placed again, and they glide there — the
    * only glide on the sky (`data-tidying` turns the slots' transition on for
    * a moment), and every open session window is minimised back to its box.
-   * The camera stays where it is. */
+   * The rows are as wide as fills the window best (`fillWidth`), and once
+   * every line has its new spot the camera eases to the whole fit, so a Tidy
+   * ends with everything on screen (the effect below `tidyFit`). Tidy these
+   * and the lane making way leave the camera where it is. */
   const tidyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const tidyFit = useRef(false);
+  const tidyFitTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const tidy = () => {
     setAutoPos({});
     setLayout((l) => closeSkyWindows(tidySkyLayout(l)));
+    // Arm the fit (the effect below); disarmed after 2 s regardless, so a
+    // line that never gets its spot (never measured) can't jump the camera
+    // long after the Tidy.
+    tidyFit.current = true;
+    clearTimeout(tidyFitTimer.current);
+    tidyFitTimer.current = setTimeout(() => (tidyFit.current = false), 2000);
     if (motionOff) return;
     setTidying(true);
     clearTimeout(tidyTimer.current);
     tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
   };
+  // After a Tidy, once every shown line (and the lane) has its new spot —
+  // given by the refill above or pinned — ease to the whole fit, once.
+  useEffect(() => {
+    if (!tidyFit.current) return;
+    const spotted = (id: string) => mode === "one" || !!autoPos[id] || !!layout[id]?.pinned;
+    if (!lines.every((l) => spotted(l.id)) || (intakeOn && !spotted(INTAKE_KEY))) return;
+    tidyFit.current = false;
+    fitAll(true);
+  }, [place, autoPos, layout, lines, intakeOn, mode, fitAll]);
   /** Tidy these (the selection bar): only their spots are forgotten, only
    * their windows minimised. */
   const tidyThese = (ids: string[]) => {

@@ -100,7 +100,8 @@ describe("the sky view stays still", () => {
     expect(sky).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
     // The intake lane is the first item placed (round 12), then the lines.
     expect(sky).toContain("const items = [{ id: INTAKE_KEY, ...intakeBox }, ...(paletteOn ? [{ id: PALETTE_KEY, ...paletteBox }] : []), ...lines];");
-    expect(sky).toContain("assignSpots(existing, items.filter((l) => !saved[l.id]),");
+    expect(sky).toContain("const newcomers = items.filter((l) => !saved[l.id]);");
+    expect(sky).toContain("assignSpots(existing, newcomers, area);");
     expect(sky).toMatch(/if \(flightsSettled && intakeReady\) for \(const \[id, at\] of Object\.entries\(fresh\)\) if \(measured\[id\] \|\| id === INTAKE_KEY \|\| id === PALETTE_KEY\) edit\(\)\[id\] = at;/);
     // A session that's gone (or grounded stops that took off or were
     // removed), or a line the owner pinned, frees its given spot.
