@@ -753,10 +753,10 @@
   color: #fff;
 }
 
-/* Flock (the raven): workers on every prompt. Off it is a quiet outline — a switch you
-   reach for now and then, never competing with the guided button or ⏩. On it
-   fills, so a session that sends the workers request with every prompt is
-   recognisable across a grid without hovering. Clicking flips it. */
+/* Workers (the raven): opens the Workers… picker — split now, ask once, on
+   every prompt. Off it is a quiet outline, never competing with the guided
+   button or ⏩. With "Workers on every prompt" on it fills ("Workers ✓"), so
+   such a session is recognisable across a grid without hovering. */
 .pane-head .actions .nextstep.nextstep-flock {
   background: transparent;
   color: var(--muted);
@@ -767,7 +767,7 @@
 
 /* The MindFlock raven (the same /bird.png the rail's flock flies, an
    alpha-only silhouette) drawn as a mask filled with currentColor, so it is
-   muted when Flock is off, white on the accent when on, and follows the
+   muted while every prompt is off, white on the accent when on, and follows the
    light/dark theme with the button's own colour. */
 .pane-head .actions .nextstep.nextstep-flock .flock-bird {
   display: inline-block;
@@ -789,6 +789,12 @@
 .pane-head .actions .nextstep.nextstep-flock.is-on {
   background: var(--accent);
   color: #fff;
+  border-color: var(--accent);
+}
+
+/* Its picker is open: the outline holds the accent, like a hover. */
+.pane-head .actions .nextstep.nextstep-flock.open:not(.is-on) {
+  color: var(--accent);
   border-color: var(--accent);
 }
 

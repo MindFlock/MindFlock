@@ -449,7 +449,7 @@ describe("phase 3: split and one for all", () => {
     expect(allCode()).not.toContain("not with a lane");
   });
 
-  it("the plan card asks where the pieces run", () => {
+  it("the plan card asks where the workers run", () => {
     // Split modes: the plan card offers "In separate worktrees (merge back)"
     // (default) and "In this folder (no merge)", one short line each, posts
     // the choice as `{mode}`, and — for a lead on its trunk — offers the
@@ -462,7 +462,7 @@ describe("phase 3: split and one for all", () => {
       '"/lead/branch"',
       "Start a branch here first",
       "Use separate worktrees",
-      "Where the pieces run",
+      "Where the workers run",
       "rb-modes",
       'type="radio"',
       "threadOpen(lead)",

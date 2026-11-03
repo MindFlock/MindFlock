@@ -89,8 +89,11 @@ describe("one per-session menu", () => {
     expect(m.groups.map((g) => g.id)).toEqual(["work", "ship", "session", "danger"]);
     expect(m.groups.find((g) => g.id === "danger")!.items.map((i) => i.key)).toEqual(["close", "delete"]);
     const more = m.more.map((i) => i.key);
-    for (const rare of ["split", "duplicate", "ide", "hide", "terminal", "map", "copy-path"]) expect(more).toContain(rare);
-    for (const rare of ["split", "duplicate", "ide", "hide"]) expect(keys(m)).not.toContain(rare);
+    for (const rare of ["duplicate", "ide", "hide", "terminal", "map", "copy-path"]) expect(more).toContain(rare);
+    for (const rare of ["duplicate", "ide", "hide"]) expect(keys(m)).not.toContain(rare);
+    // Split is a mode of the one Workers… entry (under Session), not a row.
+    expect(more).not.toContain("split");
+    expect(m.groups.find((g) => g.id === "session")!.items.map((i) => i.key)).toContain("workers");
   });
 
   it("offers Commit… only once there is something to commit", () => {

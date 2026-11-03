@@ -4,10 +4,12 @@ A RUN is a batch of work the user started at once (a few ticket IDs, a few
 typed lines): MindFlock starts one session per item, at most ``concurrency`` at
 a time with the rest queued, carries each one along its ship LANE (leave /
 commit / push / PR / merge, :mod:`backend.web.core.lanes`), and surfaces only
-what needs a human. On screen there is no "run" noun — sessions say how far
-they go, a batch is a group header, the bell holds what is waiting on you and
-each row says what it is shipping — but the server keeps a record, because that is what
-gives deterministic spawning, queueing, retries and restart safety.
+what needs a human. On screen it is a **team run**: the rail draws it as a
+group header (its ⋯ holds the queued tasks, Pause and Cancel), its sessions
+say how far they go, the bell holds what is waiting on you, and the sessions a
+split's lead starts are its **workers** (the lead's Thread tab lists them).
+The server keeps a record, because that is what gives deterministic spawning,
+queueing, retries and restart safety.
 
 This module is the record and the brain, and it is deliberately free of I/O
 beyond its own files:

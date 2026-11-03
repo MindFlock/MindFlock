@@ -1,18 +1,18 @@
 /** The lead's half of the Thread tab, for a split or a one-for-all group
- * (SPEC §7.C.4): the plan card while the lead's pieces wait for your OK, the
+ * (SPEC §7.C.4): the plan card while the lead's workers wait for your OK, the
  * ship card once everything is merged back and checked, and one row per
- * piece saying where it is.
+ * worker saying where it is.
  *
  * MindFlock does the work between the two clicks that are yours: it starts
  * the workers, fences each one to its paths, merges each back into the lead's
  * branch as it finishes, hands a conflict to the lead, runs the check on the
  * merged branch, and opens the ONE PR when you say so. Nothing here pastes a
  * prompt into an agent, and nothing asks through a browser dialog (Electron
- * has none): editing a piece and the note for a different split are inline
+ * has none): editing a worker and the note for a different split are inline
  * rows. The sentences are lib/splitRun.ts.
  *
- * Such a group has no header on the rail (it is a family under its lead), so
- * this panel is also its home for what a header's ⋯ holds: a queued piece's
+ * Such a group has no header on the rail (its workers sit under its lead), so
+ * this panel is also its home for what a header's ⋯ holds: a queued worker's
  * Start now / Take out of run, and a finished group's "Copy summary". */
 
 import { useState } from "react";
@@ -73,7 +73,7 @@ export function RunLeadPanel({
   const [problems, setProblems] = useState<string[]>([]);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
-  // Where the pieces run — picked on the plan card, separate worktrees first.
+  // Where the workers run — picked on the plan card, separate worktrees first.
   const [mode, setMode] = useState<Exclude<SplitMode, "">>("worktrees");
 
   if (!run) {
@@ -235,15 +235,15 @@ export function RunLeadPanel({
         {run.mode === "same_folder" && !!(run.stray?.paths?.length || run.stray?.commits?.length) && (
           <p className="thread-sub th-bad rb-warn" data-stray="">
             {run.stray?.paths?.length
-              ? "Changes no piece owns in " +
+              ? "Changes no worker owns in " +
                 myName +
                 "'s folder: " +
                 run.stray.paths.slice(0, 4).join(", ") +
                 (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") +
-                " — no piece's commit takes them; commit or discard them yourself."
+                " — no worker's commit takes them; commit or discard them yourself."
               : ""}
             {run.stray?.commits?.length
-              ? " A commit no piece made is on the team run's branch (" +
+              ? " A commit no worker made is on the team run's branch (" +
                 run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") +
                 ") — it ships with the PR unless you undo it."
               : ""}
@@ -267,7 +267,7 @@ export function RunLeadPanel({
         )}
         {noTools && (
           <p className="thread-sub th-bad rb-warn">
-            Restart the lead to give it the MindFlock tools — it proposes the pieces with them.
+            Restart the lead to give it the MindFlock tools — it proposes the workers with them.
           </p>
         )}
         {/* The order this group runs in, the running stage lit. */}
@@ -279,7 +279,7 @@ export function RunLeadPanel({
           <div className="thread-sec-head">
             <span className="thread-label">Plan · {plan.length}</span>
             <span className="th-sp" />
-            <span className="rb-note">proposed by {myName} · each piece may edit only its paths</span>
+            <span className="rb-note">proposed by {myName} · each worker may edit only its paths</span>
           </div>
           <div className="rb-card rb-plan">
             {run.plan?.why && <p className="rb-why">{run.plan.why}</p>}
@@ -343,7 +343,7 @@ export function RunLeadPanel({
               </ul>
             )}
             <fieldset className="rb-modes" disabled={!!busy || editing !== null}>
-              <legend>Where the pieces run</legend>
+              <legend>Where the workers run</legend>
               {choices.map((c) => (
                 <label key={c.mode} className={"rb-mode" + (mode === c.mode ? " on" : "")} data-mode={c.mode}>
                   <input
@@ -533,7 +533,7 @@ export function RunLeadPanel({
         <section className="thread-sec">
           <div className="thread-sec-head">
             <span className="thread-label">
-              {split ? "Pieces" : "Lines"} · {tasks.length}
+              Workers · {tasks.length}
             </span>
             <span className="th-sp" />
             <span className="rb-note">

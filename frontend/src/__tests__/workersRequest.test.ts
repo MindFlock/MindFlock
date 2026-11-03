@@ -1,8 +1,9 @@
 /** Asking for MindFlock workers without typing it (lib/workersRequest): the
  * request text and its fallback, typing it into the terminal, the Flock
  * toggle, and the surfaces that reach them — the Alt+G / Alt+Shift+G keys,
- * the pane's Flock control (the raven mask + the word), the row menu, the palette and Settings →
- * General. */
+ * the ONE "Workers…" entry (the pane's Workers control — the raven mask + the
+ * word — and the row / pane menu's Workers… open the same picker), the palette
+ * and Settings → Agent orchestration. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Config, Instance } from "../api/types";
@@ -26,13 +27,15 @@ const W = await import("../lib/workersRequest");
 const { queryClient } = await import("../state/queries");
 const { KEYMAP, comboProblem, sameCombo, workersKeyAllowed } = await import("../lib/keymap");
 const { actionCtx, actionLabel, SESSION_ACTIONS } = await import("../lib/sessionActionTable");
-const { sessionMenu } = await import("../lib/sessionMenu");
+const { sessionMenu, workersModes } = await import("../lib/sessionMenu");
 const { useUi } = await import("../state/store");
 
 import PANE_SRC from "../components/grid/Pane.tsx?raw";
 import PANE_CSS from "../components/grid/Pane.css?raw";
 import PALETTE_SRC from "../components/palette/CommandPalette.tsx?raw";
 import GENERAL_SRC from "../components/settings/screens/General.tsx?raw";
+import ORCH_SRC from "../components/settings/screens/AgentOrchestration.tsx?raw";
+import WK_MENU_SRC from "../components/grid/WorkersMenu.tsx?raw";
 import TYPES_SRC from "../api/types.ts?raw";
 
 const row = (o: Partial<Instance> = {}) => ({ title: "s", status: "ready", ...o }) as Instance;
@@ -77,15 +80,21 @@ describe("the request text", () => {
 
 describe("the words", () => {
   it("the control, its tooltip and the toggle's label", () => {
-    expect(W.flockChipLabel()).toBe("Flock");
+    // One word: "Workers", with a ✓ while every prompt asks for them.
+    expect(W.flockChipLabel()).toBe("Workers");
+    expect(W.flockChipLabel(true)).toBe("Workers ✓");
     const tip = W.flockTooltip(false);
-    expect(tip).toContain("Workers on every prompt — the request is added to everything you send here");
-    expect(tip).toContain("(Alt+Shift+G to toggle; Alt+G to add it once)");
-    expect(W.flockTooltip(true, ["F7", "F8"])).toContain("(F7 to toggle; F8 to add it once)");
+    expect(tip).toContain("Workers — let the agent split this now, ask for workers once, or on every prompt");
+    expect(tip).toContain("(Alt+G asks once; Alt+Shift+G turns every prompt on or off)");
+    expect(tip).not.toContain("on every prompt: on");
+    expect(W.flockTooltip(true, ["F7", "F8"])).toContain("(F8 asks once; F7 turns every prompt on or off)");
+    expect(W.flockTooltip(true)).toContain("Workers on every prompt: on");
     expect(W.flockActionLabel(false)).toBe("Workers on every prompt: turn on");
     expect(W.flockActionLabel(true)).toBe("Workers on every prompt: turn off");
-    expect(W.flockToast("api", true)).toMatch(/^api: Flock on/);
-    expect(W.flockToast("api", false)).toMatch(/^api: Flock off/);
+    expect(W.flockToast("api", true)).toBe("api: Workers on every prompt — on");
+    expect(W.flockToast("api", false)).toBe("api: Workers on every prompt — off");
+    for (const t of [W.flockChipLabel(), W.flockTooltip(true), W.flockToast("a", true), W.flockToast("a", false)])
+      expect(t).not.toMatch(/\bFlock\b/);
   });
 });
 
@@ -184,22 +193,56 @@ describe("the row menu and the palette", () => {
     const inst = row(o);
     return sessionMenu(inst, actionCtx("s", { inst, caps: CAPS as never }));
   };
-  const flockItem = (o: Partial<Instance> = {}) =>
-    menu(o).groups.find((g) => g.id === "session")?.items.find((i) => i.key === "flock");
+  const workersItem = (o: Partial<Instance> = {}) =>
+    menu(o).groups.find((g) => g.id === "session")?.items.find((i) => i.key === "workers");
+  const allKeys = (o: Partial<Instance> = {}) => {
+    const m = menu(o);
+    return [...m.groups.flatMap((g) => g.items), ...m.more].map((i) => i.key);
+  };
 
-  it("Workers on every prompt is a ✓ switch under Session", () => {
-    expect(flockItem()).toMatchObject({ label: "Workers on every prompt", checked: false, keys: "Alt+Shift+G" });
-    expect(flockItem({ flock: true })).toMatchObject({ label: "✓ Workers on every prompt", checked: true });
-    expect(flockItem({ peer_share: true })).toBeUndefined();
-    expect(flockItem({ device: "mac-mini" })).toBeUndefined();
+  it("ONE Workers… item under Session, no separate split / every-prompt rows", () => {
+    expect(workersItem()).toMatchObject({ label: "Workers…" });
+    expect(workersItem()?.note).toBeUndefined();
+    expect(workersItem({ flock: true })).toMatchObject({ label: "Workers…", note: "on every prompt" });
+    expect(workersItem({ peer_share: true })).toBeUndefined();
+    expect(workersItem({ device: "mac-mini" })).toBeUndefined();
+    for (const gone of ["split", "flock", "askWorkers"]) expect(allKeys()).not.toContain(gone);
+    expect(SESSION_ACTIONS.workers.label).toBe("Workers…");
   });
 
-  it("the table labels the toggle by what it does, and Ask for workers needs a running agent", () => {
+  it("the picker's three modes, in order, with their shortcuts", () => {
+    const inst = row();
+    const modes = workersModes(inst, actionCtx("s", { inst, caps: CAPS as never }));
+    expect(modes.map((m) => m.label)).toEqual(["Let the agent split this now", "Ask for workers once", "Workers on every prompt"]);
+    expect(modes.map((m) => m.keys)).toEqual([undefined, "Alt+G", "Alt+Shift+G"]);
+    expect(modes.map((m) => m.letter)).toEqual(["S", "A", "E"]);
+    expect(modes[2].checked).toBe(false);
+    const on = row({ flock: true });
+    expect(workersModes(on, actionCtx("s", { inst: on, caps: CAPS as never }))[2].checked).toBe(true);
+    // Ask once needs a running agent; it says why instead of vanishing.
+    const paused = row({ status: "paused" });
+    expect(workersModes(paused, actionCtx("s", { inst: paused, caps: CAPS as never }))[1].why).toMatch(/paused/);
+    // The split mode greys with the server's reason.
+    const noSplit = { ...CAPS, team_runs: { split: false } };
+    expect(workersModes(inst, actionCtx("s", { inst, caps: noSplit as never }))[0].why).not.toBe("");
+  });
+
+  it("the picker is body-mounted, keyboard-first and guarded like ⏩'s", () => {
+    expect(WK_MENU_SRC).toContain('id="workers-menu"');
+    expect(WK_MENU_SRC).toContain("data-modal");
+    expect(WK_MENU_SRC).toContain("createPortal(");
+    expect(WK_MENU_SRC).toContain("workersModes(inst, actionCtx(title, { inst }))");
+    expect(WK_MENU_SRC).toContain("Settings → Agent orchestration");
+  });
+
+  it("the table labels each mode with the word, and Ask for workers needs a running agent", () => {
     const at = (o: Partial<Instance>) => actionCtx("s", { inst: row(o), caps: CAPS as never });
     expect(actionLabel("flock", at({}))).toBe("Workers on every prompt: turn on");
     expect(actionLabel("flock", at({ flock: true }))).toBe("Workers on every prompt: turn off");
     expect(SESSION_ACTIONS.askWorkers.enabled(at({}))).toBe(true);
     expect(SESSION_ACTIONS.askWorkers.enabled(at({ status: "paused" }))).toBe(false);
+    expect(SESSION_ACTIONS.askWorkers.label).toBe("Ask for workers once");
+    expect(SESSION_ACTIONS.split.label).toBe("Workers: let the agent split this now");
   });
 
   it("the palette lists both", () => {
@@ -218,16 +261,25 @@ describe("the pane control and the settings", () => {
     expect(el).toMatch(/^<button\b/);
     expect(el).not.toContain("stagechip");
     expect(PANE_SRC).toMatch(/flockShown = flockAvailable\(inst, config\)/);
-    expect(PANE_SRC.slice(at, at + 900)).toContain("toggleFlock(title)");
+    // A click opens the Workers… picker (the one entry), never a bare toggle.
+    expect(PANE_SRC.slice(at, at + 900)).toContain("openWorkersMenu(title, true)");
+    expect(PANE_SRC.slice(at, at + 900)).toContain("{flockChipLabel(flockOn)}");
+    expect(PANE_SRC.slice(at, at + 900)).not.toContain("toggleFlock(");
+    expect(PANE_SRC).toContain("<WorkersMenu");
     expect(PANE_CSS).toContain(".pane-head .actions .nextstep.nextstep-flock.is-on");
   });
 
-  it("General has the request and the model, saved under general", () => {
-    expect(GENERAL_SRC).toContain('"workers_request"');
-    expect(GENERAL_SRC).toMatch(/<SettingField group="general" field="workers_model"/);
-    expect(GENERAL_SRC).toContain("Workers request");
-    expect(GENERAL_SRC).toContain("Workers model");
-    expect(GENERAL_SRC).toContain("or to every prompt while a session's Flock is on");
+  it("Agent orchestration has the request and the model beside Spawn limits, saved under general", () => {
+    expect(ORCH_SRC).toContain('"workers_request"');
+    expect(ORCH_SRC).toMatch(/<SettingField group="general" field="workers_model"/);
+    expect(ORCH_SRC).toContain("Workers request");
+    expect(ORCH_SRC).toContain("Workers model");
+    expect(ORCH_SRC).toMatch(/<WorkersRows \/>\s*<h3 className="set-section-title">Spawn limits<\/h3>/);
+    expect(ORCH_SRC).not.toMatch(/\bFlock\b/);
+    // A move, not a copy: General no longer has them.
+    expect(GENERAL_SRC).not.toContain("workers_request");
+    expect(GENERAL_SRC).not.toContain("workers_model");
+    expect(GENERAL_SRC).not.toContain("WorkersRows");
   });
 
   it("the types carry the contract", () => {

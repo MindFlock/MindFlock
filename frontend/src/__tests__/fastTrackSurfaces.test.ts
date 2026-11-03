@@ -11,9 +11,9 @@
  * picker (grid/FastTrackMenu.tsx — Off / Commit / Push / Open PR / Merge when
  * green, and "Ask me before it ships"), every item a
  * `POST /api/instances/{t}/lane`. The row › menu (sidebar/SessionRowItems.tsx),
- * the palette and Ctrl+K F open that same picker; Split into parallel
- * pieces… and Move out of a group are row › menu (and palette) actions of
- * their own; the New and Commit dialogs draw the same choices
+ * the palette and Ctrl+K F open that same picker; "Let the agent split this
+ * now" (a mode of the one Workers… entry, and a palette action) and Move out
+ * of a group are actions of their own; the New and Commit dialogs draw the same choices
  * (dialogs/FastTrackChoice.tsx).
  *
  * Every removal is pinned as the OLD call site being ABSENT, not only the new
@@ -392,8 +392,11 @@ describe("the other doors: row › menu, palette, chords", () => {
     expect(group).toContain("LANE_SHORT[laneChoice(inst).lane]");
     expect(group).not.toContain("setLane(");
     expect(group).not.toContain("pickFastTrack(");
-    // Split is its own action; Move out is a member's; Message… stays.
-    expect(group).toContain('label: "Split into parallel pieces…"');
+    // Split is a mode of the ONE Workers… entry (its picker), no longer its
+    // own menu row; Move out is a member's; Message… stays.
+    expect(group).toContain('fromTable("workers"');
+    expect(group).toContain('label: "Let the agent split this now"');
+    expect(group).not.toContain("Split into parallel pieces");
     expect(group).toContain("detachableGroup(inst)");
     expect(group).toContain("moveOutOfGroup(group.id, group.task)");
     expect(group).toContain('label: "Move out of " + group.name');
@@ -412,13 +415,13 @@ describe("the other doors: row › menu, palette, chords", () => {
     expect(has(palette, "const name = windowName(t);")).toBe(true);
     for (const [id, label] of [
       ["fastTrack", 'label: "Fast-track…"'],
-      ["split", 'label: "Split into parallel pieces…"'],
+      ["split", 'label: "Workers: let the agent split this now"'],
       ["thread", 'label: "Thread"'],
     ]) {
       expect(palette, id).toContain(`"${id}",`);
       expect(has(table, label), label).toBe(true);
     }
-    expect(SESSION_ACTIONS.split.label).toBe("Split into parallel pieces…");
+    expect(SESSION_ACTIONS.split.label).toBe("Workers: let the agent split this now");
     expect(SESSION_ACTIONS.thread.label).toBe("Thread");
     // "Start several sessions…" was New under a second name (its box takes a
     // list on its own) — one action, one entry.
@@ -619,8 +622,9 @@ describe("New dialog: auto-split is an optional split run", () => {
 
   it("the split check's copy and pill", () => {
     const box = mod("components/dialogs/SplitCheck.tsx");
-    expect(box).toMatch(/>\s*Auto-split into up to\s*</);
-    expect(box).toContain(">sessions if it's worth it<");
+    // One word for parallel work: the box splits into WORKERS.
+    expect(box).toMatch(/>\s*Let it split into up to\s*</);
+    expect(box).toContain(">workers if it's worth it<");
     expect(ALL).not.toContain("Split a big line");
     expect(box).not.toContain("Split across workers");
     expect(box).toContain("suggestionPill(sug)");
@@ -669,7 +673,10 @@ describe("review: remote rows get no split, and one children-of rule", () => {
     expect(isRemote({ title: "api" })).toBe(false);
     const group = mod(ROW_ITEMS);
     expect(group).toContain("const remote = isRemote(inst);");
-    expect(group).toContain('const splitWhy = remote ? "" : splitBlockReason');
+    // Split is a Workers… mode: the entry is never offered on a remote row
+    // (flockAvailable), and the mode itself refuses one too.
+    expect(group).toContain("const splitWhy = isRemote(inst) ? ");
+    expect(mod(TABLE)).toContain("enabled: (c) => flockAvailable(c.inst, cfg()),\n    run: (t) => openWorkersMenu(t),");
     expect(group).toContain("const group = remote ? null : detachableGroup(inst);");
     expect(mod(TABLE)).toContain('!c.inst!.device && !c.title.includes("::")');
   });
