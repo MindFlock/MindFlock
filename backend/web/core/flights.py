@@ -4121,6 +4121,58 @@ def op_cancel(
     return flight
 
 
+#: Why a flight was cancelled because its session was closed or deleted
+#: (``flight_driver.on_session_removed``) — the one cancel a reopen undoes.
+SESSION_REMOVED = "its session was deleted"
+
+
+def removal_snapshot(title: str) -> Optional[dict]:
+    """What a closed session's Recently-closed entry keeps so a reopen can
+    bring its chain back (docs/flights-reopen.md): the unfinished flight on
+    ``title`` — its id and the state it was in before the close cancels it —
+    or None when it has none."""
+    f = for_session(title)
+    if f is None:
+        return None
+    return {"id": f["id"], "state": f["state"], "reason": f.get("reason") or ""}
+
+
+def op_restore(
+    flight: dict, snap: dict, title: str, now: Optional[float] = None
+) -> dict:
+    """Undo the cancel a session's close did: the flight comes back in the
+    state it was in (same cursor, same step states — exactly as a pause and
+    Carry on would leave them) on the reopened session ``title``. Only a flight
+    cancelled BY that close (:data:`SESSION_REMOVED`) comes back — one the
+    owner cancelled, or that ended some other way, stays history."""
+    ts = float(now if now is not None else time.time())
+    state = str((snap or {}).get("state") or "")
+    if flight["state"] != "cancelled" or flight.get("reason") != SESSION_REMOVED:
+        raise FlightError(
+            "not_restorable", 409, "this chain did not end with its session"
+        )
+    if state not in UNFINISHED:
+        raise FlightError("not_restorable", 409, "this chain had already ended")
+    flight["state"] = state
+    flight["reason"] = str(snap.get("reason") or "")
+    flight["finished"] = 0.0
+    flight["session"] = title
+    flight["updated"] = ts
+    # Its close announced it finished; a later real finish must say so again.
+    flight["announced"] = [
+        k for k in flight.get("announced") or [] if not str(k).startswith("finished:")
+    ]
+    cur = _current(flight)
+    _hist(
+        flight,
+        ts,
+        cur["id"] if cur else "",
+        "resumed",
+        "restored when the session was reopened",
+    )
+    return flight
+
+
 def _editable(flight: dict) -> None:
     """Steps change on any flight not yet over: in the air (running, waiting,
     paused), halted on a failure (the owner tacks on or takes out stops to

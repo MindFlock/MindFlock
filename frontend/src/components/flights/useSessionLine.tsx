@@ -766,7 +766,12 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
                 void act(async () => {
                   if (await removeGroup(open)) setDialog(null);
                 })
-            : undefined
+            : landedId
+              ? () =>
+                  void act(async () => {
+                    if (await clearLanded()) setDialog(null);
+                  })
+              : undefined
         }
       />
     );
@@ -776,6 +781,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
     const rec = flight && open.step ? flight.step_states?.[open.step.id] : undefined;
     const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The chain is at this stop — it can't change while it is here." : "It can't change here.";
+    const clears = !flight && landedId ? "Remove clears the finished chain." : "";
     const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : undefined;
     inspector = (
       <StopDialog
@@ -785,7 +791,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         lineSteps={flight?.steps}
         loopAgent
         busy={busy}
-        note={[why, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
+        note={[why, clears, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
         onClose={close}
         onSave={
           editable
@@ -805,7 +811,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             : undefined
         }
         onRemove={
-          flight && open.step
+          // A finished chain's stop (its loop pill too) comes off as on the
+          // canvas: that clears the finished chain (removeNode / clearLanded).
+          (flight || landedId) && open.step
             ? () =>
                 void act(async () => {
                   if (await removeNode(open)) close();

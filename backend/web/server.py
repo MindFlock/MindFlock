@@ -8270,7 +8270,20 @@ async def _reopen_closed_entry(entry_id: str) -> JSONResponse:
         log.ErrorLog.Printf("reopen %s: agent boot deferred: %s", title, boot_err)
     ENGINE.save()
     _save_recently_closed([e for e in items if e.get("id") != entry_id])
-    return JSONResponse(_instance_json(inst))
+    # The chain the close cancelled comes back with it (docs/flights-reopen.md).
+    restored = None
+    if isinstance(entry.get("flight"), dict):
+        try:
+            from backend.web.core import flight_driver as _flight_driver
+
+            restored = _flight_driver.restore_on_reopen(entry["flight"], title)
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("reopen %s: chain not restored: %s", title, err)
+    out = _instance_json(inst)
+    if restored:
+        out["flight_restored"] = restored["id"]
+    return JSONResponse(out)
 
 
 @app.post("/api/recently-closed/{entry_id}/forget")

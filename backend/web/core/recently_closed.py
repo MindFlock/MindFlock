@@ -138,6 +138,16 @@ def _record_closed(inst, wiped: bool = False) -> None:
         "person": _person_of(inst.Title),
         "data": data,
     }
+    # Its chain, as it was before the close cancels it: a reopen of THIS
+    # entry brings it back (flight_driver.restore_on_reopen).
+    try:
+        from backend.web.core import flights as _flights
+
+        snap = _flights.removal_snapshot(inst.Title)
+    except Exception:  # noqa: BLE001
+        snap = None
+    if snap:
+        entry["flight"] = snap
     # De-dupe: drop any prior entry for the SAME worktree dir AND title, so the
     # newest close of a given session wins without a stale pile-up. Keying on the
     # title too (not folder alone) is what lets a copy and its origin — which

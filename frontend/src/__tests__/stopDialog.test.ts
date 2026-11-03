@@ -67,9 +67,10 @@ describe("a stop that can change", () => {
     expect(html).not.toContain('class="fl-inspector');
   });
 
-  it("Remove · Duplicate on the left, Cancel · Save (nothing to save yet)", () => {
+  it("Remove · Duplicate on the left, Cancel · Save — Save works with nothing changed (a new stop's defaults)", () => {
     expect(buttons(html).filter((b) => ["Remove", "Duplicate", "Cancel", "Save"].includes(b))).toEqual(["Remove", "Duplicate", "Cancel", "Save"]);
-    expect(html).toMatch(/<button type="submit" class="btn-primary" disabled="">Save<\/button>/);
+    expect(html).toMatch(/<button type="submit" class="btn-primary" title="Keep it as it is">Save<\/button>/);
+    expect(code("components/flights/StopDialog.tsx")).toContain("if (dirty) void save();\n          else p.onClose();");
     expect(html).toContain('class="test-btn stop-dialog-danger"');
   });
 
@@ -148,6 +149,13 @@ describe("a group's dialog", () => {
 describe("the session line's wiring", () => {
   const src = code("components/flights/useSessionLine.tsx");
   const canvas = code("components/flights/FlywayCanvas.tsx");
+
+  it("a finished chain's stop dialog (a loop pill's too) still offers Remove: it clears that chain", () => {
+    expect(src).toContain("(flight || landedId) && open.step");
+    expect(src).toContain("if (await clearLanded()) setDialog(null);");
+    expect(src).toContain('"Remove clears the finished chain."');
+    expect(src).toContain("if (!flight && landedId) return clearLanded();");
+  });
 
   it("the dialog IS the line's inspector output; no inline inspector any more", () => {
     expect(src).toContain("<StopDialog");

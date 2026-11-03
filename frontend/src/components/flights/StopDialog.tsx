@@ -139,7 +139,11 @@ function StepDialog(p: StopDialogProps) {
         className="stop-dialog-form"
         onSubmit={(e) => {
           e.preventDefault();
-          if (editable && dirty && !p.busy) void save();
+          // Save with nothing changed keeps the stop as it is: a stop just
+          // added opens here with its defaults, and those are a fine answer.
+          if (!editable || p.busy) return;
+          if (dirty) void save();
+          else p.onClose();
         }}
       >
         <h2>{editable ? "Edit stop" : "Stop"}</h2>
@@ -240,7 +244,7 @@ function StepDialog(p: StopDialogProps) {
             {editable ? "Cancel" : "Close"}
           </button>
           {editable && (
-            <button type="submit" className="btn-primary" disabled={!dirty || p.busy}>
+            <button type="submit" className="btn-primary" disabled={p.busy} title={dirty ? "Save the changes" : "Keep it as it is"}>
               Save
             </button>
           )}

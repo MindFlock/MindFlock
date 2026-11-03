@@ -91775,7 +91775,9 @@ function StepDialog(p) {
 			className: "stop-dialog-form",
 			onSubmit: (e) => {
 				e.preventDefault();
-				if (editable && dirty && !p.busy) save();
+				if (!editable || p.busy) return;
+				if (dirty) save();
+				else p.onClose();
 			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: editable ? "Edit stop" : "Stop" }),
@@ -91932,7 +91934,8 @@ function StepDialog(p) {
 						editable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "submit",
 							className: "btn-primary",
-							disabled: !dirty || p.busy,
+							disabled: p.busy,
+							title: dirty ? "Save the changes" : "Keep it as it is",
 							children: "Save"
 						})
 					]
@@ -92673,6 +92676,8 @@ function useSessionLine(title, src, opts) {
 			}),
 			onRemove: flight ? () => void act(async () => {
 				if (await removeGroup(open)) setDialog(null);
+			}) : landedId ? () => void act(async () => {
+				if (await clearLanded()) setDialog(null);
 			}) : void 0
 		}, open.id);
 	} else if (open && open.kind === "stop") {
@@ -92681,6 +92686,7 @@ function useSessionLine(title, src, opts) {
 		const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
 		const rec = flight && open.step ? flight.step_states?.[open.step.id] : void 0;
 		const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The chain is at this stop — it can't change while it is here." : "It can't change here.";
+		const clears = !flight && landedId ? "Remove clears the finished chain." : "";
 		const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : void 0;
 		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
 			node: open,
@@ -92688,7 +92694,11 @@ function useSessionLine(title, src, opts) {
 			lineSteps: flight?.steps,
 			loopAgent: true,
 			busy,
-			note: [why, open.reason || rec?.note || ""].filter(Boolean).join(" "),
+			note: [
+				why,
+				clears,
+				open.reason || rec?.note || ""
+			].filter(Boolean).join(" "),
 			onClose: close,
 			onSave: editable ? (patch) => act(async () => {
 				if (await patchStop(flight.id, open.step.id, patch)) close();
@@ -92698,7 +92708,7 @@ function useSessionLine(title, src, opts) {
 				tackOn(flight.id, open.step, at < end ? at : void 0);
 				close();
 			} : void 0,
-			onRemove: flight && open.step ? () => void act(async () => {
+			onRemove: (flight || landedId) && open.step ? () => void act(async () => {
 				if (await removeNode(open)) close();
 			}) : void 0,
 			onToggleHalt: here && open.step && !flown ? () => toggleHalt(open) : void 0,

@@ -2082,11 +2082,47 @@ def on_session_removed(title: str) -> None:
         return
     try:
         after = _flights.mutate(
-            f["id"], lambda x: _flights.op_cancel(x, "its session was deleted")
+            f["id"], lambda x: _flights.op_cancel(x, _flights.SESSION_REMOVED)
         )
     except _flights.FlightError:
         return
     _announce(f, after)
+
+
+def restore_on_reopen(snap: Optional[dict], title: str) -> Optional[dict]:
+    """The reopen hook: a chain the session's close cancelled comes back on
+    the reopened session ``title`` (:func:`flights.op_restore`). Only from the
+    Recently-closed entry's own snapshot — a new session that merely reuses
+    the title gets nothing. Not when another chain is already live on
+    ``title``: that one is left alone, and the old one stays cancelled with a
+    note saying why. Returns the restored flight, else None."""
+    fid = str((snap or {}).get("id") or "")
+    if not fid or not title:
+        return None
+    before = _flights.get(fid)
+    if before is None:
+        return None
+    if _flights.for_session(title) is not None:
+        try:
+            _flights.mutate(
+                fid,
+                lambda x: _flights._hist(
+                    x,
+                    time.time(),
+                    "",
+                    "halted",
+                    "not restored: another chain is live on the reopened session",
+                ),
+            )
+        except _flights.FlightError:
+            pass
+        return None
+    try:
+        after = _flights.mutate(fid, lambda x: _flights.op_restore(x, snap, title))
+    except _flights.FlightError:
+        return None
+    _announce(before, after)
+    return after
 
 
 # --------------------------------------------------------------------------- #
