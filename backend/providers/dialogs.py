@@ -1288,8 +1288,16 @@ CODEX_CURSORS = "›>"
 # pressed Enter on "Update now" — which updated the user's Codex (2026-10-23).
 _CODEX_OPENERS = re.compile(
     r"^(?:Would you like to .*\?|Do you trust the contents of this directory\?"
-    r"|Do you want to .*\?|.* needs your approval\.?|Update available\b.*)"
+    r"|Trust this folder\?|Do you want to .*\?|.* needs your approval\.?"
+    r"|Update available\b.*)"
 )
+#: The folder-trust gate's question, old (≤ 0.146: "Do you trust the contents
+#: of this directory?") and new (0.164: "Trust this folder? Codex can read,
+#: edit, and run files here, …") — its body is boilerplate, never a detail.
+_CODEX_TRUST_QUESTION = re.compile(r"^(?:Do you trust\b|Trust this folder\?)")
+#: A context line the approval overlay draws above ``Reason:`` (0.164:
+#: "Environment: local") — not the reason, so it never takes its place.
+_CODEX_CONTEXT_LINE = re.compile(r"^Environment:\s")
 
 
 def parse_codex(screen: str) -> Optional[dict]:
@@ -1331,9 +1339,13 @@ def parse_codex(screen: str) -> Optional[dict]:
             cmd_lines.append(text[2:].strip())
         elif cmd_lines:
             cmd_lines.append(text)  # a multi-line command's continuation
-        elif text.lower().startswith("reason:") and detail is None:
-            detail = text
-        elif detail is None and not question.startswith("Do you trust"):
+        elif text.lower().startswith("reason:"):
+            # The model's stated reason beats any line above it.
+            if detail is None or not detail.lower().startswith("reason:"):
+                detail = text
+        elif _CODEX_CONTEXT_LINE.match(text):
+            continue
+        elif detail is None and not _CODEX_TRUST_QUESTION.match(question):
             detail = text
     if cmd_lines:
         command = "\n".join(cmd_lines)

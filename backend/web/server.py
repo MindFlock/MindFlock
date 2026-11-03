@@ -3047,8 +3047,11 @@ def usage_windows() -> JSONResponse:
                         continue
                 except Exception:  # noqa: BLE001
                     continue
+                entry = _provider_usage_entry(p)
+                if not _usage_panel_keeps(p, entry, default_p.name):
+                    continue
                 order[p.name] = len(order)
-                entries.append(_provider_usage_entry(p))
+                entries.append(entry)
             # Stable order: default first, then registry (registration) order —
             # claude, codex, antigravity, aider.
             entries.sort(
@@ -3078,6 +3081,27 @@ def usage_windows() -> JSONResponse:
         return JSONResponse(out)
     except Exception:  # noqa: BLE001 — history is optional; never 500 the UI
         return JSONResponse({})
+
+
+def _usage_panel_keeps(p, entry: dict, default_name: str) -> bool:
+    """Whether a panel provider earns its tab: it is the default agent, its
+    CLI is installed here, or it has usage on record. A bundled agent this
+    machine never had stays out — on a Codex-only machine a zero "Claude"
+    tab (a windowed plan) also flipped the whole panel to plan wording.
+    Any doubt keeps the tab."""
+    try:
+        if p.name == default_name:
+            return True
+        from backend.web.core import settings_hooks as _sh
+
+        if _sh.provider_installed(p.name):
+            return True
+        if entry.get("window"):
+            return True
+        year = (entry.get("periods") or {}).get("year") or {}
+        return any(year.get(k) for k in ("in", "out", "cache_read", "cache_write"))
+    except Exception:  # noqa: BLE001 — a probe failure keeps the tab
+        return True
 
 
 def _ticketing_connected() -> bool:

@@ -151,8 +151,14 @@ def test_trust_prompts_differ():
     agy = providers.resolve("agy").trust_prompt()
     assert agy.keystroke == b"\r"
     assert "Do you trust the contents of this project?" in agy.patterns
-    # ...and codex/opencode open straight in — no auto-dismiss prompt at all.
-    assert providers.resolve("codex").trust_prompt() is None
+    # ...codex accepts its folder-trust gate (both wordings) with Enter on
+    # the trusting option...
+    codex = providers.resolve("codex").trust_prompt()
+    assert codex.keystroke == b"\r"
+    assert "Do you trust the contents of this directory?" in codex.patterns
+    assert "Trust this folder? Codex can" in codex.patterns
+    assert tuple(codex.accept_words) == ("trust", "yes")
+    # ...and opencode opens straight in — no auto-dismiss prompt at all.
     assert providers.resolve("opencode").trust_prompt() is None
 
 

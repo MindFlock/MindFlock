@@ -439,7 +439,20 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         effort_args=("-c", "model_reasoning_effort={level}"),
         effort_levels=("low", "medium", "high", "xhigh"),
         idle_pattern="",  # unknown -> never auto-confirm spuriously
-        trust_patterns=(),  # unknown -> don't auto-dismiss
+        # The folder-trust gate a fresh worktree opens on (every MindFlock
+        # session is one). ≤ 0.146 asks "Do you trust the contents of this
+        # directory?" over "› 1. Yes, continue"; 0.164 (verified live) asks
+        # "Trust this folder? Codex can read, edit, and run files here, …" over
+        # "› 1. Trust and continue" — the cursor line is matched too, since
+        # the question can wrap at narrow widths. Without these a Codex session sat
+        # on "Needs you" until a person pressed Enter. The accepting option is
+        # preselected; CodexProvider.trust_prompt also names it (accept_words)
+        # so a moved cursor is walked back before Enter.
+        trust_patterns=(
+            "Do you trust the contents of this directory?",
+            "Trust this folder? Codex can",
+            "› 1. Trust and continue",
+        ),
         trust_keystroke="enter",
         # Activity classification, verified against the codex-cli 0.142.5 binary
         # (strings in the TUI): a live turn renders "Working (12s • Esc to

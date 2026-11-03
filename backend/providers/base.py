@@ -115,11 +115,11 @@ class TrustSpec:
 
 
 #: A select-menu cursor line: optional box border, the cursor glyph (``❯`` as
-#: Claude Code draws it, ``>`` as plain terminals and test fixtures do), then
-#: the option text.
-_TRUST_CURSOR_RE = re.compile(r"^\s*(?:│\s*)?[❯>]\s+\S")
+#: Claude Code draws it, ``›`` as Codex does, ``>`` as plain terminals and
+#: test fixtures do), then the option text.
+_TRUST_CURSOR_RE = re.compile(r"^\s*(?:│\s*)?[❯›>]\s+\S")
 #: What precedes an option's words: the cursor glyph and/or a ``1.`` number.
-_TRUST_OPTION_LABEL_RE = re.compile(r"^(?:[❯>]\s*)?(?:\d+[.)]\s*)?")
+_TRUST_OPTION_LABEL_RE = re.compile(r"^(?:[❯›>]\s*)?(?:\d+[.)]\s*)?")
 
 
 _NATURAL_EXIT_CODES = (0, 130)
