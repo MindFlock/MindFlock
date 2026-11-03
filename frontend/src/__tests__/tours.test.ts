@@ -80,11 +80,14 @@ describe("the tours registry", () => {
       }
   });
 
-  it("points the Welcome tour at the Get set up checklist by its data-tour hooks", () => {
-    const targets = TOURS.welcome.steps.map((s) => s.target).join(" ");
-    for (const hook of ["setup-next", "setup-step-tools", "setup-step-agent_login", "setup-step-repo"])
-      expect(targets).toContain(`[data-tour="${hook}"]`);
-    expect(TOURS.welcome.steps.length).toBeLessThanOrEqual(5);
+  it("points the Welcome tour at the Get set up checklist's three steps — at most 3 before the user acts", () => {
+    // Vision round: the card says the picture; the tour only walks ①–③.
+    expect(TOURS.welcome.steps.map((s) => s.target.split(",")[0])).toEqual([
+      '[data-tour="setup-step-tools"]',
+      '[data-tour="setup-step-agent_login"]',
+      '[data-tour="setup-step-repo"]',
+    ]);
+    expect(TOURS.welcome.steps.length).toBeLessThanOrEqual(3);
   });
 
   it("walks Intake in setup order by its data-tour hooks", () => {
@@ -152,29 +155,34 @@ describe("the tours registry", () => {
     for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
   });
 
-  it("the Sky tour is the on-ramp: five essentials, the rest in the guide — never a Flights tab", () => {
+  it("the Sky tour is the on-ramp: what the Sky is for, then four essentials, the rest in the guide — never a Flights tab", () => {
     const steps = TOURS.sky.steps;
     expect(TOURS.sky.id).toBe("sky");
     expect(TOURS.sky.title).toBe("Sky");
     expect(steps).toHaveLength(5);
-    // the first selector of each target: its data-tour hook
+    // first: the Sky in one line (docs/vocabulary.md), centred
+    expect(steps[0].target).toBe("");
+    expect(steps[0].body).toBe(
+      "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you."
+    );
+    // the first selector of each target: its hook (or class) on the sky, then the bell
     expect(steps.map((s) => s.target.split(",")[0])).toEqual([
+      "",
       '[data-tour="sky-session-box"]',
-      '[data-tour="sky-shelf"]',
-      ".sky-port-out:not(.sky-port-off)",
+      ".sky-plus",
       '[data-tour="flights-bird"]',
-      '[data-tour="sky-guide"]',
+      "#notif-btn",
     ]);
     // A selector list matches in DOCUMENT order and the top bar comes first:
     // a fallback to the toggle would always win, so no step names it — a
     // missing target centres the card instead.
     for (const s of steps) expect(s.target).not.toContain("view-sky");
     expect(steps.some((s) => /flights-tab|flights-plans/.test(s.target))).toBe(false);
-    // what a chain is, add a stop from the shelf, wire it, run / answer, help
+    // what the Sky is for, each session's route, + adds a stop, the bird, Needs you
     const words = steps.map((s) => s.title + " " + s.body).join(" ");
-    for (const w of ["chain", "agent", "shelf", "Loop", "port", "▶ Run", "Wait for me", "saved chain", "Needs you", "Done", "bird", "guide", "shortcuts"]) expect(words, w).toContain(w);
-    // the nouns the guide keeps out of the on-ramp
-    for (const w of ["Perch", "frame", "socket", "stops-only", "Group into a stop", "intake", "Drag or Click"]) expect(words, w).not.toContain(w);
+    for (const w of ["route", "agent", "+", "shelf", "moves the work, checks the work, or asks you", "▶ Run", "Needs you", "bird", "guide", "Ctrl+Y"]) expect(words, w).toContain(w);
+    // the nouns the guide keeps out of the on-ramp, and the retired words
+    for (const w of ["Perch", "frame", "socket", "stops-only", "Group into a stop", "intake", "Drag or Click", "chain", "flyway"]) expect(words, w).not.toContain(w);
   });
 });
 

@@ -12,7 +12,7 @@ export const NEW_TOUR: TourDef = {
     {
       target: '[data-tour="new-task"], #new-describe-text',
       title: "Say what to work on",
-      body: "Describe one task in plain words — the agent starts on exactly this.",
+      body: "A session is one agent on its own branch — describe its task in plain words, and the agent starts on exactly this.",
     },
     {
       target: '[data-tour="new-folder"], #new-describe-folder',
@@ -22,7 +22,7 @@ export const NEW_TOUR: TourDef = {
     {
       target: '[data-tour="new-start"], #new-describe-start, #new-create',
       title: "Start it",
-      body: "Start begins the session now — watch, steer or stop it from its pane.",
+      body: "Start begins the session now; talk to its agent in the Grid, or follow its route in the Sky.",
     },
     {
       target: '[data-tour="pane-tabs"], [data-tour="pane-menu"]',

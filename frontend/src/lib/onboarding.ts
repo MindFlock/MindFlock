@@ -1,7 +1,41 @@
 /** The first-run flows' small decisions — pure, so vitest covers them:
- * Connect GitHub (the device flow, gh, or a token), each device's own
+ * the picture in one breath every first-run surface says (the welcome card,
+ * How MindFlock works, the empty Sky and Grid, the Sky guide), Connect GitHub (the device flow, gh, or a token), each device's own
  * readiness on the Devices screen, and the toast a failed push raises.
  * The Setup checklist's own model lives in components/setup/setupModel.ts. */
+
+// --- The picture in one breath (docs/vocabulary.md — binding) ---------------
+// One copy of the vision, so the welcome card, Settings → Help → How MindFlock
+// works, the empty Sky, the empty Grid and the Sky guide never drift apart.
+
+/** "The picture in one breath", sentence by sentence. */
+export const VISION_BREATH: readonly string[] = [
+  "MindFlock runs your coding agents side by side.",
+  "Each session is one agent working on its own branch.",
+  "Its route is the stops the work goes through until it is merged — the agent, its checks, your OK, the PR.",
+  "The Sky shows every route at once, and what needs you.",
+];
+
+/** The Sky in one line. */
+export const SKY_LINE =
+  "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you.";
+
+/** The Grid in one line. */
+export const GRID_LINE = "Inside the work — your sessions side by side, talk to the agents.";
+
+/** How the two views relate. */
+export const VIEWS_LINE = "Same sessions, two views: Ctrl+Y switches between the Grid and the Sky.";
+
+/** The test for anything on a route. */
+export const STOP_TEST = "A stop moves the work, checks the work, or asks you.";
+
+/** The three-part picture (components/onboarding/VisionPicture): session →
+ * route → Needs you, each with its caption. */
+export const VISION_PARTS: readonly { id: "session" | "route" | "needs"; title: string; line: string }[] = [
+  { id: "session", title: "Session", line: "one agent on its own branch" },
+  { id: "route", title: "Route", line: "the stops until it is merged" },
+  { id: "needs", title: "Needs you", line: "what waits on your OK" },
+];
 
 // --- Connect GitHub ----------------------------------------------------------
 

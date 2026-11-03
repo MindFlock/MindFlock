@@ -293,19 +293,22 @@ describe("the Flight tab draws the same", () => {
   });
 });
 
-describe("the tour and the guide say frame and agent", () => {
+// Vision round (docs/vocabulary.md): a session has a ROUTE, drawn in a soft
+// outline — "chain" and "frame" are retired copy words.
+describe("the tour and the guide say route and agent", () => {
   it("the Sky tour", () => {
     const steps = TOURS.sky.steps;
     const agent = steps.find((s) => s.target.startsWith('[data-tour="sky-session-box"]'))!;
-    expect(agent.title).toBe("Each session is a chain");
-    expect(agent.body).toContain("A chain is a row of stops: its agent comes first");
+    expect(agent.title).toBe("Each session's route");
+    expect(agent.body).toContain("The agent comes first, then the stops its work goes through");
   });
 
   it("the guide", () => {
     const g = code("components/flights/SkyGuide.tsx");
-    expect(g).toContain("Each session draws as a <b>frame</b>");
+    expect(g).toContain("Each session draws as a soft outline in its own colour round its <b>route</b>");
     expect(g).toContain("<b>Open terminal</b>, <b>Send a prompt…</b> and <b>Stop</b>");
-    expect(g).toContain("A <b>worker</b> — a session this session started — is a small frame of its own");
+    expect(g).toContain("A <b>worker</b> — a session this session started — is a small outline of its own");
+    expect(g).not.toMatch(/\bchain\b|\bframe\b/);
     expect(g).not.toContain("sub-session");
     expect(g).not.toContain("session tile");
   });

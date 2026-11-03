@@ -32,15 +32,15 @@ describe("the guide's sections", () => {
   it("lead with Start here, then the ten the contract names, in its order", () => {
     expect(SKY_GUIDE_SECTIONS.map((s) => s.title)).toEqual([
       "Start here",
-      "What the sky is",
-      "Chains, stops and wires",
-      "Stops and saved chains",
+      "What the Sky is for",
+      "Routes, stops and wires",
+      "Stops and saved routes",
       "The bird",
       "Halt points and Remove",
-      "Chains on their own, and handoffs",
+      "Routes on their own, and handoffs",
       "Selection",
       "Tools and the keyboard",
-      "The intake lane",
+      "The Intake lane",
       "Where things are saved",
     ]);
     expect(new Set(SKY_GUIDE_SECTIONS.map((s) => s.id)).size).toBe(SKY_GUIDE_SECTIONS.length);
@@ -69,11 +69,28 @@ describe("the guide's sections", () => {
     const html = render("start");
     expect(html).toContain('<ol class="sky-guide-start">');
     expect(html.match(/<li>/g)).toHaveLength(5);
-    for (const w of ["Each session is a chain.", "Add a stop from the shelf.", "Wire it.", "Run it, and answer it.", "Help.", "<b>Loop</b>", "Double-click empty sky for a new session"]) expect(html, w).toContain(w);
+    for (const w of ["Each session has a route.", "+ adds a stop.", "Wire it.", "The bird shows where the work is.", "Help.", "<b>Loop</b>", "Double-click empty sky for a new session"]) expect(html, w).toContain(w);
+  });
+
+  it("Start here opens with the picture in one breath, what the Sky is for, and the stop test", () => {
+    const html = render("start");
+    const words = html.slice(html.indexOf('class="sky-guide-words"'));
+    // the breath comes first, before the five steps
+    expect(words.indexOf('class="sky-guide-breath"')).toBeLessThan(words.indexOf('class="sky-guide-start"'));
+    for (const w of [
+      "<b>MindFlock runs your coding agents side by side.</b>",
+      "Each session is one agent working on its own branch.",
+      "Its route is the stops the work goes through until it is merged",
+      "The Sky shows every route at once, and what needs you.",
+      "The Sky is air traffic control for your agents",
+      "<b>a stop moves the work, checks the work, or asks you.</b>",
+    ])
+      expect(words, w).toContain(w.replace(/'/g, "&#x27;"));
+    expect(GUIDE_SRC).toContain('from "../../lib/onboarding"');
   });
 
   it("the stops section names Loop with the other shelf blocks", () => {
-    expect(render("stops")).toContain("<b>Loop</b> sends the chain back to an earlier stop");
+    expect(render("stops")).toContain("<b>Loop</b> sends the route back to an earlier stop");
   });
 
   it("closed renders nothing", () => {
@@ -82,12 +99,13 @@ describe("the guide's sections", () => {
 
   it("says the things a newcomer needs, in the house words", () => {
     const words = SKY_GUIDE_SECTIONS.map((s) => render(s.id)).join(" ");
-    for (const w of ["same sessions as the grid", "saved chain", "<b>Wait for me</b>", "<b>Needs you</b>", "<b>group</b>", "Halt now", "Halt here", "pauses the chain right before the next stop", "out port here to run it", "Start a chain", "in port", "out port", "Group into a stop", "Save to the shelf", "<b>Run</b>", "synced", "this browser"])
+    for (const w of ["same sessions as the grid", "saved route", "<b>Wait for me</b>", "<b>Needs you</b>", "<b>group</b>", "Halt now", "Halt here", "halts the route right before the next stop", "out port here to run it", "Start a route", "in port", "out port", "Group into a stop", "Save to the shelf", "<b>Run</b>", "synced", "this browser", "behaviors"])
       expect(words, w).toContain(w);
-    // the vocabulary pass (round-consolidate VOCAB.md): no retired word is taught
-    // (the sketches' <line> elements are markup, not copy)
-    const copy = words.replace(/<\/?line\b[^>]*>/g, "");
-    for (const w of ["saved stop", "Perch", "perched", "Multi-step", "sub-step", "tile", "block", "flight", "Fly", "line"]) expect(copy, w).not.toMatch(new RegExp("\\b" + w + "\\b"));
+    // the vocabulary pass (docs/vocabulary.md): no retired word is taught
+    // (the sketches' <line> elements are markup, not copy; "in flight" is the
+    // Sky's own one-liner, a phrase, never a flight as a thing)
+    const copy = words.replace(/<\/?line\b[^>]*>/g, "").replaceAll("work in flight", "");
+    for (const w of ["saved stop", "Perch", "perched", "Multi-step", "sub-step", "tile", "block", "flight", "Fly", "line", "chain", "frame", "checklist", "Fast-track"]) expect(copy, w).not.toMatch(new RegExp("\\b" + w + "\\b"));
     // the guide's own copy never says flyway (round 11 retired the word)
     expect(words.toLowerCase()).not.toContain("flyway");
   });

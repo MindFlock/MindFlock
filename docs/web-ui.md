@@ -1,5 +1,23 @@
 # Web UI guide
 
+**MindFlock runs your coding agents side by side.** Each **session** is one
+agent working on its own branch. Its **route** is the stops the work goes
+through until it is merged — the agent, its checks, your OK, the PR. The
+**Sky** shows every route at once, and what **needs you**.
+
+The main area has two views of the same sessions (Ctrl+Y switches):
+
+- **Sky** — air traffic control for your agents: every piece of work in
+  flight, the route it's cleared to fly, and the ones that need you.
+- **Grid** — inside the work: your sessions side by side, talk to the agents.
+
+A first launch says exactly this: the welcome card (the picture above plus a
+three-part sketch, session → route → Needs you), then three coach marks over
+the Get set up checklist. An empty Sky and an empty Grid each say what the
+view is for, with **New session** (and, on the Sky, **Connect a source in
+Intake**); Settings → General → Help → **How MindFlock works** shows the
+picture again. As built: `docs/vision/firstrun.md`.
+
 The frontend is a React + TypeScript app. Source lives in `frontend/` (Vite;
 `npm run dev` proxies to the FastAPI server, `npm run build` emits committed,
 unminified `app.js` / `style.css` / `index.html` into
@@ -12,32 +30,38 @@ and the contracts to preserve.
 ## Vocabulary
 
 One word per thing, everywhere a person reads it — the web UI, the phone page,
-CLI output, MCP tool descriptions and these docs. API paths, JSON and settings
-keys, event names and MCP tool names keep their older names (`/api/instances`,
-`autopilot`, `lane`, `set_autopilot`).
+CLI output, MCP tool descriptions and these docs. **The binding list is
+[`docs/vocabulary.md`](vocabulary.md)**; the short form is below. API paths,
+JSON and settings keys, event names and MCP tool names keep their older names
+(`/api/instances`, `/api/flights/*`, `autopilot`, `lane`, `set_autopilot`).
 
 | Thing | Word |
 |---|---|
-| An agent working on a worktree | **session** |
-| Assistant, log tail, Verify and extension rows on the rail | **window** |
-| The ladder that ships a session when its turn ends (Off / Commit / Push / Open PR / Merge when green) | **Fast-track** |
+| One agent working in one folder/branch (a worktree + an agent CLI) | **session** |
+| The coding CLI working in a session (Claude, Codex, …) | **agent** |
+| Assistant, log tail and extension rows on the rail | **window** |
+| The row of stops a piece of work goes through | **route** (the pane tab that shows it is **Route**; cancelling it is **Stop the route**) |
+| One box on a route, every kind | **stop** (a stop with stops inside is a **group**) |
+| A route kept on the shelf to reuse | **saved route** (what starts it: **Starts:** By hand / Ticket / Schedule / …) |
+| Start a route or a template now | **Run** / **Run now** |
+| The route pauses at a stop until you Retry / Skip / Continue | **Halt** / **Halted** / **Halt here** |
+| How far a session's work goes by itself (Agent only / Commit / Push / Open PR / Merge when green) | **Goes as far as** |
+| What the work should do in real use, each checked by the agent or by you | **behaviors** (the stop that checks them is **Verify**) |
 | Several sessions started together and shipped by MindFlock | **team run** |
 | The git steps | **Commit**, **Push**, **Open PR**, **Merge** (an existing PR's link is **View PR ↗**) |
 | Leaving a session | **Close** (keeps the worktree), **Delete** (removes it) |
 | Waiting on the person | **Needs you**, with its reason: Question, Pre-commit failed, Checks failing, Setup failed |
-| One box on the Sky, every kind | **stop** (a stop with stops inside is a **group**) |
-| A row of stops, a session's or one on the board | **chain** (the pane tab that shows it is **Chain**; cancelling it is **Stop the chain**) |
-| A chain kept on the shelf to reuse | **saved chain** (what starts it: **Starts:** By hand / Ticket / Schedule / …) |
-| Start a chain or a template now | **Run** / **Run now** |
 | The stop kind that waits for you | **Wait for me** |
 | The stop that waits for CI | **CI checks** |
 | Sessions a session starts | **workers** ("Let it split into up to N workers") |
-| The landing strip's headings | **Finished** / **Merged today** |
+| Where work arrives by itself (tickets, PRs, issues) | **Intake** — each **source** says which route its items take |
+| Sessions and saved routes that start on a timer | **Schedule** |
+| The strip of work that landed | **Finished** / **Merged today** |
 
-The Sky's words were settled on 2026-11-02 (the full table, with the words each
-one retires, is at the top of `docs/flights.md`). Older sections below may still
-say *flyway* or *plan* (a saved chain), *flight* (a chain running on a session),
-*perch* (a Wait for me stop) or *pieces* (workers); the UI copy no longer does.
+Older sections below may still say *chain* (a route), *flyway* or *plan* (a
+saved route), *flight* (a route running on a session), *perch* (a Wait for me
+stop), *Fast-track* (Goes as far as) or *pieces* (workers); the UI copy no
+longer does.
 Internal names keep them: `/api/flights/*`, the `#flyways` deep link and the hook
 URL `/api/hooks/flyway/`.
 
