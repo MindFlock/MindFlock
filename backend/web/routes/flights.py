@@ -347,7 +347,7 @@ def flights_get(flight_id: str) -> JSONResponse:
     f = _flights.get(flight_id)
     if f is None:
         return JSONResponse({"error": "unknown_flight"}, status_code=404)
-    return JSONResponse({"flight": f})
+    return JSONResponse({"flight": _driver.flight_dto(f)})
 
 
 @router.delete("/api/flights/{flight_id}")

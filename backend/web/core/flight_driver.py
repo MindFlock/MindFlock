@@ -2761,11 +2761,29 @@ def list_dto(all_: bool = False) -> List[dict]:
     """``GET /api/flights``: unfinished + the last 20 finished (all with
     ``all_``)."""
     flights = _flights.list_flights()
-    if all_:
-        return flights
-    live = [f for f in flights if f["state"] not in _flights.FINAL]
-    landed = sorted(
-        (f for f in flights if f["state"] in _flights.FINAL),
-        key=lambda f: -(f["finished"] or f["updated"]),
-    )[:20]
-    return live + landed
+    if not all_:
+        live = [f for f in flights if f["state"] not in _flights.FINAL]
+        landed = sorted(
+            (f for f in flights if f["state"] in _flights.FINAL),
+            key=lambda f: -(f["finished"] or f["updated"]),
+        )[:20]
+        flights = live + landed
+    notes = lane_notes()
+    return [_flights.with_returns(f, notes) for f in flights]
+
+
+def flight_dto(flight: dict) -> dict:
+    """One flight as the API sends it: plus ``returns`` (which stops can go
+    back to the agent, and why — ``flights.returns_of``)."""
+    return _flights.with_returns(flight, lane_notes())
+
+
+def lane_notes() -> bool:
+    """Whether a lane hands its failures back to the agent at all
+    (``repository.fasttrack_failure_notes``; unreadable settings: yes)."""
+    try:
+        from backend.config import settings as _settings
+
+        return bool(_settings.load_settings().repository.fasttrack_failure_notes)
+    except Exception:  # noqa: BLE001 — the default
+        return True
