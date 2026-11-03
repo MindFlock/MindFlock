@@ -79,6 +79,7 @@ import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
 import { StopPalette, type PaletteSaved } from "./StopParts";
 import { StopDialog } from "./StopDialog";
+import { useBehaviorsTile } from "./SkyChain";
 
 export interface LineSource {
   rows: readonly Instance[];
@@ -96,6 +97,9 @@ export interface SessionLineOpts {
    * it comes off (`removeAsk`, drawn by the line); everything else goes at
    * once. Off (the pane's Flight tab): every stop goes at once, as before. */
   askRunning?: boolean;
+  /** The Sky: a Behaviors focus request (`openBehaviors`) naming this
+   * session's behaviors opens their card on the tile. */
+  listenBehaviors?: boolean;
 }
 
 /** The flight's step indexes a box stands for: a stop its own, a group all
@@ -320,8 +324,15 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
   // The line in the flight's own indexes (what every handler below speaks).
   const line = useMemo(() => sessionDiagram(rows, title, { flights, kinds, family, foldFlown, expandedGroups }), [rows, title, flights, kinds, family, foldFlown, expandedGroups]);
+  // The session's behaviors: the LAST tile of the chain the Sky and the
+  // Flight tab draw (docs/behaviors.md §1) — a rendering view; the line's own
+  // edits keep speaking `line`.
+  const behaviors = useBehaviorsTile(title, row, { flight, listen: !!opts.listenBehaviors });
+  const graphDiagram = useMemo(() => behaviors.apply(line), [behaviors.apply, line]);
   const cancel = useCancelAsk(flight);
-  const parts = liveBoxParts(flight, true, cancel.ask);
+  // Both homes draw SkyChain: a Verify stop parked on you is the Behaviors
+  // tile, whose card opens in its place (docs/behaviors.md §1).
+  const parts = liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true });
   const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
   const stops = line.nodes.filter((n) => n.kind === "stop");
   const end = flight ? flight.steps.length : 0;
@@ -847,7 +858,11 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     canvas: shown.canvas,
     /** Round 18: the line in the FLIGHT's indexes and its handlers (the Sky's
      * chain speaks them: lib/skyGraph `chainGraph` / `wireIntent`). */
-    graphDiagram: line,
+    /** With the Behaviors tile on it (docs/behaviors.md §1). */
+    graphDiagram,
+    /** The session's Behaviors tile: its plan, its card in the tile's place,
+     * its ⋯ (SkyChain `useBehaviorsTile`). */
+    behaviors,
     graphCanvas: { ...raw, loopChoicesOf },
     paletteAfter,
     paletteParallel,

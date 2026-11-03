@@ -1034,3 +1034,72 @@
   fill: var(--accent);
 }
 /* === end: loop back to the agent + easier wires === */
+
+/* --- The Behaviors tile (docs/behaviors.md §1) ----------------------------------
+   The chain's LAST tile (or its Verify stop standing in for it): a ✓-shield,
+   "Behaviors", the summary under it. Its tone is the tile's edge: quiet (the
+   resting line), busy (checking), you (gold, as a perch), bad (red), ok
+   (green). The text stays the tile's own ink (contrast in both themes); a
+   failed or waiting summary is set in the regular weight rather than muted. */
+
+.sky-node.sky-behaviors.is-busy .sky-tile {
+  border-color: var(--tone-waiting);
+}
+.sky-node.sky-behaviors.is-you .sky-tile {
+  border-color: var(--tone-attention);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--tone-attention) 22%, transparent),
+    0 0 16px color-mix(in srgb, var(--tone-attention) 26%, transparent);
+}
+.sky-node.sky-behaviors.is-bad .sky-tile {
+  border-color: var(--red, var(--tone-broken));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red, var(--tone-broken)) 20%, transparent);
+}
+.sky-node.sky-behaviors.is-ok .sky-tile {
+  border-color: var(--green, var(--tone-working));
+}
+.sky-node.sky-behaviors.is-you .sky-node-sub,
+.sky-node.sky-behaviors.is-bad .sky-node-sub {
+  color: var(--text);
+  font-weight: 600;
+}
+/* The derived tile: wired in, never a wire's source or target. */
+.sky-node.sky-node-behaviors {
+  cursor: pointer;
+}
+.sky-node .sky-bh-more {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Its card, open in the tile's place: an opaque box (the wire into it runs
+   under it), scrolling past its room. Text sizes counter-scale with the
+   Sky's zoom so the card reads at any zoom. */
+.sky-bh-open {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  border: 1.5px solid var(--sky-tile-line-hi, var(--border));
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--sky-shadow-rest, 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14));
+  color: var(--text);
+  text-align: left;
+  cursor: auto;
+}
+.sky-bh-open.sky-bh-ask {
+  padding: 10px 12px;
+}
+
+/* The frame carries the tone: a thin red top edge when a behavior failed
+   (screen-thin at any zoom). */
+.skl-chainline.skl-frame.is-bh-bad > .skl-frame-box {
+  box-shadow: inset 0 calc(2px / var(--sky-z, 1)) 0 var(--red, var(--tone-broken));
+}
+.fl-chain-view.is-bh-bad > .fl-chain-frame {
+  box-shadow: inset 0 2px 0 var(--red, var(--tone-broken));
+}

@@ -12,7 +12,10 @@
 
 import { useState, type MouseEvent, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
-import { useFlightKinds, useFlights, useInstances } from "../../state/queries";
+import { useFlightKinds, useFlights, useInstances, useTestPlans } from "../../state/queries";
+import { planForSession } from "../../lib/behaviors";
+import { openBehaviors } from "../../lib/behaviorsFocus";
+import { BehaviorsCard } from "../behaviors/BehaviorsCard";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { useNow } from "../../lib/useNow";
@@ -67,14 +70,64 @@ export function flightHeadline(f: Flight): string {
   return f.session || f.plan_name;
 }
 
+/** A Verify stop parked on you (docs/behaviors.md §5): its behaviors, each
+ * answered on its own in the Behaviors card — no blanket Done. The stop moves
+ * on once the last one is answered (the server settles it), or the card's
+ * Skip. `compact` (the pane's one-line strip): a way to the card in the Sky,
+ * and Skip. Before the behaviors are written: what it waits for, and Skip. */
+export function VerifyStopActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
+  const step = flight.steps[flight.cursor];
+  const plans = useTestPlans().data?.plans;
+  const rows = useInstances().data;
+  const row = rows?.find((r) => r.title === flight.session) || { title: flight.session, branch: "", repo: "" };
+  const plan = planForSession(plans || [], row);
+  const [busy, setBusy] = useState(false);
+  if (!step) return null;
+  const skip = (
+    <button
+      type="button"
+      className="test-btn fl-btn fl-skip"
+      disabled={busy}
+      title={"Skip “" + step.title + "” — the chain goes on without it"}
+      onClick={() => {
+        setBusy(true);
+        void stepSkip(flight.id, step.id).finally(() => setBusy(false));
+      }}
+    >
+      Skip
+    </button>
+  );
+  if (compact || !plan)
+    return (
+      <div className={"fl-you fl-you-verify" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
+        {!compact && <p className="fl-you-text">Writing the behaviors… they show here to answer once they are written.</p>}
+        <div className="fl-you-acts">
+          {plan && (
+            <button type="button" className="btn-primary fl-btn fl-behaviors" title="Answer the behaviors that wait on you, on the session's frame in the Sky" onClick={() => openBehaviors({ planId: plan.id })}>
+              Behaviors
+            </button>
+          )}
+          {skip}
+        </div>
+      </div>
+    );
+  return (
+    <div className="fl-you fl-you-verify" onClick={stop} data-no-drag>
+      <BehaviorsCard plan={plan} compact flightStep={{ flightId: flight.id, stepId: step.id }} />
+    </div>
+  );
+}
+
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
- * what enables Done); Retry / Skip on a halted stop. */
+ * what enables Done); Retry / Skip on a halted stop. A Verify stop parked on
+ * you answers its behaviors instead (`VerifyStopActions`). */
 export function YouStepActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   if (!step || (flight.state !== "waiting_you" && flight.state !== "halted")) return null;
+  if (step.kind === "verify" && flight.state === "waiting_you") return <VerifyStopActions flight={flight} compact={compact} />;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -225,11 +278,19 @@ export function useCancelAsk(flight: Flight | null) {
 
 /** What goes inside a live flight's boxes: the ⋯, and — when `expand` — a
  * perch's checklist with Done / Skip (or a halted stop's Retry / Skip) in the
- * current box, which is drawn bigger to hold them. */
-export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void) {
+ * current box, which is drawn bigger to hold them. `verifyInPlace` (a chain
+ * drawn by SkyChain): a Verify stop parked on you stays a tile — its
+ * Behaviors card opens in the tile's place (docs/behaviors.md §1). */
+export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void, opts: { verifyInPlace?: boolean } = {}) {
   const cur = flight ? flight.steps[flight.cursor] : null;
+  const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
   const expanded = (n: DiagramNode) =>
-    !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted");
+    !!flight &&
+    expand &&
+    n.kind === "stop" &&
+    n.index === flight.cursor &&
+    (n.state === "perched" || n.state === "halted") &&
+    !(opts.verifyInPlace && verifyHere);
   const renderInBox = (n: DiagramNode): ReactNode => {
     if (!flight || n.kind !== "stop") return null;
     const items = stopMenuItems(flight, n, onCancelAsk);
@@ -246,6 +307,8 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
   };
   const sizeOf = (n: DiagramNode, base: BoxSize): BoxSize => {
     if (!expanded(n)) return base;
+    // A Verify stop's behaviors: room for the card (it scrolls past it).
+    if (verifyHere) return { w: Math.max(base.w, 320), h: base.h + 220 };
     const items = n.state === "perched" ? youItems(cur).length : 0;
     const text = n.state === "perched" && youText(flight!) ? 24 : 0;
     return { w: Math.max(base.w, 250), h: base.h + text + items * 23 + 38 };

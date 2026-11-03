@@ -33,6 +33,9 @@ export const GRID_SNAP = 8;
  * node's out port, and the button's size. */
 export const PLUS_REACH = 52;
 export const PLUS_SIZE = 24;
+/** The Behaviors tile (docs/behaviors.md §1, always the chain's last) sits
+ * this much further right than a stop would, clear of the trailing +. */
+export const BEHAVIORS_GAP = 40;
 /** A loop wire's run: this far under the lowest box it passes, each further
  * loop (`lane`) another `LOOP_LANE` lower; its hooks bulge this far out. */
 export const LOOP_CLEAR = 16;
@@ -235,7 +238,9 @@ export function chainGraph(d: Diagram, opts: ChainGraphOpts): ChainGraph {
     else push({ from: HEAD_ID, to: main[0].id, kind: "head" });
   }
   const hasAdd = d.nodes.some((n) => n.kind === "add");
-  if (hasAdd && !addFrom) addFrom = main.length ? main[main.length - 1].id : hn ? HEAD_ID : null;
+  // The + never hangs off the Behaviors tile: a stop goes before it.
+  const stops = main.filter((n) => n.kind !== "behaviors");
+  if (hasAdd && !addFrom) addFrom = stops.length ? stops[stops.length - 1].id : hn ? HEAD_ID : null;
   if (addFrom) push({ from: addFrom, to: "add", kind: "add" });
   return assemble({ key: opts.key, flightId: opts.flightId, head, insertFrom }, hn, nodes, specs);
 }
@@ -397,7 +402,14 @@ export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
       col.last = next;
       if (!n.pinned) colLow = Math.max(colLow, next.y);
     } else {
-      next = n.pinned ? { ...n } : { ...n, x: prev ? prev.x + PITCH_X : 0, y: prev ? prev.y : 0 };
+      // The Behaviors tile stands a little further off, so the trailing +
+      // (a stop after the last one, before the tile) has its own room.
+      const gap = n.node.kind === "behaviors" ? BEHAVIORS_GAP : 0;
+      // A main-row node drawn open (the Behaviors card, docs/behaviors.md
+      // §1) pushes the next one along, and the rows of branches under it.
+      const step = prev ? Math.max(PITCH_X, prev.w + (PITCH_X - NODE_W)) : 0;
+      next = n.pinned ? { ...n } : { ...n, x: prev ? prev.x + step + gap : 0, y: prev ? prev.y : 0 };
+      if (next.h > NODE_H) colLow = Math.max(colLow, next.y + next.h - NODE_H);
       prev = next;
       col = n.node.parallel && n.node.parallel.size > 1 ? { id: n.node.parallel.id, head: next, last: next } : null;
     }

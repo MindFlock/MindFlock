@@ -11,6 +11,8 @@
 
 import { relTime } from "./format";
 import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
+// Type only: lib/behaviorsFocus reads the store, which reads this module.
+import type { BehaviorsTarget } from "./behaviorsFocus";
 
 // --- The contract's shapes ---------------------------------------------------
 
@@ -425,11 +427,11 @@ export interface PerchBadge {
 }
 
 /** The Sky toggle's badge: flights perched on you (or halted until someone
- * retries, skips or cancels). A flight parked on a VERIFY step is one of
- * Verify's due checklists, which Verify's own badge counts, so it is left
- * out here rather than counted twice. */
+ * retries, skips or cancels). A flight parked on a VERIFY step counts too:
+ * its behaviors wait on you on the session's frame in the Sky
+ * (docs/behaviors.md §5) — there is no Verify badge any more. */
 export function perchBadge(flights: readonly Flight[]): PerchBadge {
-  const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
+  const perched = needsYouFlights(flights);
   return { count: perched.length, failing: perched.some((f) => f.state === "halted") };
 }
 
@@ -655,7 +657,7 @@ export const ON_FAIL_LABEL: Record<OnFail, string> = {
  * Sky (on a session: `focus`), the Sky with the flyway shelf open (and one
  * flyway's card: `plan`), or one of the flat dialogs with its own deep link. */
 export type LegacyFlightsRoute =
-  | { to: "sky"; focus: string }
+  | { to: "sky"; focus: string; behaviors?: BehaviorsTarget }
   | { to: "flyways"; plan: string }
   | { to: "intake" | "verify" | "schedule"; target: string | null };
 
@@ -665,7 +667,9 @@ export type LegacyFlightsRoute =
  *   ""  sky[/<title>]  board        → the Sky (on that session)
  *   flyways[/<id>]  plans[/<id>]    → the Sky, shelf open (that flyway's card)
  *   sources[/<x>]                   → Intake (x = its tab / source)
- *   checklists[/<branch>]           → Verify (that checklist)
+ *   checklists[/<branch>]           → the Sky's behaviors (`behaviors`: that
+ *                                     branch's, else the Behaviors board) —
+ *                                     `#behaviors`, through openBehaviors
  *   schedule[/<x>]                  → Schedule (x = its own deep link)
  *
  * Anything else is the Sky. */
@@ -676,7 +680,7 @@ export function legacyFlightsRoute(target: string | null | undefined): LegacyFli
   const rest = cut < 0 ? "" : raw.slice(cut + 1);
   if (word === "flyways" || word === "plans") return { to: "flyways", plan: rest };
   if (word === "sources") return { to: "intake", target: rest || null };
-  if (word === "checklists") return { to: "verify", target: rest || null };
+  if (word === "checklists") return { to: "sky", focus: "", behaviors: rest ? { branch: rest } : { board: true } };
   if (word === "schedule") return { to: "schedule", target: rest || null };
   return { to: "sky", focus: word === "sky" ? rest : "" };
 }
