@@ -85,11 +85,16 @@ describe("the welcome card", () => {
   // Round 5: the five slides (whose last one said "You're all set" at 2 of 3
   // done) became one card that never claims setup is finished — the Get set
   // up checklist and its Welcome tour say what is left.
+  // Vision round: the card says the picture in one breath (docs/vocabulary.md)
+  // — the lead sentence, then session / route / Sky — before the three steps.
   it("says what MindFlock is and that three steps start the first agent, nothing more", () => {
     expect(WELCOME_TITLE).toBe("Welcome to MindFlock");
-    expect(WELCOME_LINES).toHaveLength(2);
-    expect(WELCOME_LINES.join(" ")).toContain("each session on its own branch");
-    expect(WELCOME_LINES[1]).toBe("Three steps and your first agent is running.");
+    expect(WELCOME_LINES).toHaveLength(3);
+    expect(WELCOME_LINES[0]).toBe("MindFlock runs your coding agents side by side.");
+    expect(WELCOME_LINES[1]).toContain("Each session is one agent working on its own branch.");
+    expect(WELCOME_LINES[1]).toContain("Its route is the stops the work goes through until it is merged");
+    expect(WELCOME_LINES[1]).toContain("The Sky shows every route at once, and what needs you.");
+    expect(WELCOME_LINES[2]).toBe("Three steps and your first agent is running.");
     expect(WELCOME_LINES.join(" ")).not.toMatch(/all set/i);
   });
 });

@@ -92,15 +92,29 @@ export function showSetupCard(opts: {
   return opts.onboarded === false;
 }
 
+/** Whether an agent has been seen at work in any session: proof the three
+ * required steps are done (it is installed, signed in, and started on a
+ * task), whatever the last doctor run or a stale /api/setup read says. The
+ * server marks `repo` on the first working reading and `agent_login` only on
+ * a doctor run, so a user who signed in inside the session's own terminal
+ * kept a "Setup 2 of 3" chip beside a running agent. */
+export function agentWorked(instances: readonly { activity?: string }[] | null | undefined): boolean {
+  return (instances || []).some((i) => i.activity === "working");
+}
+
 /** Whether the compact "Setup 3/5" chip shows: something is still to do, and
- * the grid card is not already showing the same list. */
+ * the grid card is not already showing the same list. `worked` (an agent has
+ * been seen at work — agentWorked) counts the required steps as done, so the
+ * chip only stays for optional steps still to settle. */
 export function showSetupChip(opts: {
   sessions: number;
   status: SetupStatus | null | undefined;
   onboarded: boolean | undefined;
+  worked?: boolean;
 }): boolean {
   if (!opts.status) return false;
   if (opts.status.summary.complete) return false;
+  if (opts.worked && setupCount(opts.status, true).optional === 0) return false;
   return !showSetupCard(opts);
 }
 
@@ -110,14 +124,17 @@ export function showSetupChip(opts: {
  * REQUIRED steps (what "Get set up" promises); once those are done the
  * optional ones still to settle ride along as `optional`, never as a bigger
  * denominator. */
-export function setupCount(status: SetupStatus | null | undefined): {
+export function setupCount(
+  status: SetupStatus | null | undefined,
+  worked = false
+): {
   done: number;
   total: number;
   optional: number;
 } {
   const steps = orderedSteps(status);
   const req = steps.filter((x) => REQUIRED_STEPS.includes(x.id as SetupStepId));
-  const done = req.filter((x) => x.done).length;
+  const done = worked ? req.length : req.filter((x) => x.done).length;
   const optional = steps.filter(
     (x) => stepGroup(x) === "connect" && !x.done && !x.skipped
   ).length;
@@ -126,9 +143,9 @@ export function setupCount(status: SetupStatus | null | undefined): {
 
 /** "Setup 1 of 3" — then "Setup 3 of 3 · 2 optional" once the required steps
  * are done and optional ones remain. */
-export function chipLabel(status: SetupStatus | null | undefined): string {
+export function chipLabel(status: SetupStatus | null | undefined, worked = false): string {
   if (!status?.summary) return "Setup";
-  const c = setupCount(status);
+  const c = setupCount(status, worked);
   return "Setup " + c.done + " of " + c.total + (c.optional ? " · " + c.optional + " optional" : "");
 }
 

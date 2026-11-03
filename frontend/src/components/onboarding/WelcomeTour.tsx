@@ -1,14 +1,20 @@
-/** The welcome card — ONE card on a first launch: what MindFlock is, in two
- * sentences, and one button. "Let's go" hands over to the Welcome tour
- * (lib/tours/welcome.ts): coach marks over the Get set up checklist, the
- * three steps to a first session. Skip, Esc and the backdrop just close it.
+/** The welcome card — ONE card on a first launch: the picture in one breath
+ * (docs/vocabulary.md — MindFlock runs your coding agents side by side; a
+ * session is one agent on its own branch; its route is the stops the work
+ * goes through until it is merged; the Sky shows every route and what needs
+ * you), the three-part sketch of it (VisionPicture: session → route → Needs
+ * you), and one button. "Let's go" hands over to the Welcome tour
+ * (lib/tours/welcome.ts): three coach marks over the Get set up checklist,
+ * the three steps to a first session. Skip, Esc and the backdrop just close
+ * it.
  *
  * Every exit marks it seen (the synced `welcome_tour` pref, on every device),
  * so it never comes back by itself — there is no button here that leaves it
  * half-finished and re-armed. It used to be five slides describing a grid,
  * shipping and Intake that weren't on screen yet, over the checklist that
  * was the actual path; those surfaces now have their own tours, from the
- * "?" in each dialog's header.
+ * "?" in each dialog's header. The picture alone is reopenable from
+ * Settings → General → Help → How MindFlock works (./HowItWorks).
  *
  * Opens by itself ONCE, on a first launch (`useFirstLaunchTour` below: the
  * synced pref, never a per-browser flag), and is replayable from the palette
@@ -22,12 +28,17 @@ import { firstLaunchTour } from "../../lib/calm";
 import { firstPrefsPull } from "../../lib/prefsSync";
 import { Modal } from "../Modal";
 import { findTarget } from "./CoachTour";
+import { VISION_BREATH } from "../../lib/onboarding";
+import { VisionPicture } from "./VisionPicture";
 import "./WelcomeTour.css";
 
-/** The card's words (pinned by the tests). */
+/** The card's words (pinned by the tests): the picture in one breath — its
+ * first sentence as the lead, the rest as one paragraph — then what happens
+ * next. */
 export const WELCOME_TITLE = "Welcome to MindFlock";
 export const WELCOME_LINES = [
-  "MindFlock runs coding agents side by side on this computer, each session on its own branch.",
+  VISION_BREATH[0],
+  VISION_BREATH.slice(1).join(" "),
   "Three steps and your first agent is running.",
 ];
 
@@ -110,7 +121,11 @@ export function WelcomeTour() {
               {WELCOME_TITLE}
             </h2>
           </div>
-          {WELCOME_LINES.map((line) => (
+          <p className="wt-body wt-lead">
+            <b>{WELCOME_LINES[0]}</b>
+          </p>
+          <VisionPicture />
+          {WELCOME_LINES.slice(1).map((line) => (
             <p key={line} className="wt-body">
               {line}
             </p>

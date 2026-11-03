@@ -15,7 +15,7 @@ export const INTAKE_TOUR: TourDef = {
       target:
         '[data-tour="intake-tiles"], #intake-panel:not(:has([data-tour="intake-tiles"])) #intake-add-source',
       title: "Pick where your work lives",
-      body: "Intake turns tickets, pull requests and issues into sessions — start by picking your tracker, or Repository for a GitHub repo.",
+      body: "Intake is where work arrives by itself — tickets, pull requests, issues; pick your tracker, or Repository for a GitHub repo.",
     },
     {
       target: '[data-tour="intake-token"]',
@@ -30,14 +30,14 @@ export const INTAKE_TOUR: TourDef = {
     {
       target: '[data-tour="intake-start"]',
       title: "Start one by hand first",
-      body: "Start opens a ticket as a session in the sidebar, and Open session › takes you to it.",
+      body: "Start opens a ticket as a session — its route shows in the Sky — and Open session › takes you to it.",
     },
     {
       // The switches on the Auto-start tab; its tab button from anywhere else.
       target:
         '[data-tour="intake-autostart"], #intake-panel:not(:has([data-tour="intake-autostart"])) #intake-tab-autostart',
       title: "Auto-start, when you trust it",
-      body: "One switch each for tickets, PR review comments and new issues — and, folded below them, how ticket sessions are set up.",
+      body: "One switch each for tickets, PR review comments and new issues; each source says which route its items take.",
     },
   ],
 };

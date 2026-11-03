@@ -270,6 +270,7 @@ import { PlacePicker } from "./PlacePicker";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
 import { useAutoTour } from "../onboarding/useAutoTour";
+import { SkyEmpty } from "../onboarding/SkyEmpty";
 import "./Sky.css";
 import "./SkyObjects.css";
 
@@ -2291,6 +2292,9 @@ export function SkyView() {
               ? ""
               : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
 
+  // Nothing at all on an unfiltered sky: SkyEmpty's calm card instead of the line.
+  const blank = lines.length === 0 && !query && mode !== "one" && mode !== "perched" && instQ.data?.length === 0;
+
   const toolbar = (
     <div className="sky-toolbar" role="toolbar" aria-label="The sky">
       <ChipRow<SkyMode>
@@ -2712,7 +2716,7 @@ export function SkyView() {
         {drawer}
         {newBlock}
         <div className="sky-list">
-          {empty && <p className="fl-empty muted">{empty}</p>}
+          <SkyEmpty blank={blank} className="fl-empty muted">{empty}</SkyEmpty>
           {lines.map((l) => lineFor(l.id))}
         </div>
         {shelf}
@@ -2864,11 +2868,7 @@ export function SkyView() {
               />
             </div>
             <SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={SKY_SHORTCUT_GROUPS} />
-            {empty && (
-              <p className="sky-empty muted" role="status">
-                {empty}
-              </p>
-            )}
+            <SkyEmpty blank={blank} className="sky-empty muted">{empty}</SkyEmpty>
           </div>
           {shelf}
         </div>

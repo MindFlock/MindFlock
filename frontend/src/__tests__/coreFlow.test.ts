@@ -155,9 +155,13 @@ describe("shortcut hints say keys that work here", () => {
   it("a browser tab gets Alt+N, the desktop app both", () => {
     expect(usableShortcuts("new", true)).toEqual(["Alt+N"]);
     expect(usableShortcuts("new", false)).toEqual(["Ctrl+N", "Alt+N"]);
+    // The empty grid's words live in onboarding/GridEmpty (TerminalGrid mounts it).
     const grid = code("components/grid/TerminalGrid.tsx");
     expect(grid).not.toContain("(Ctrl+N)");
-    expect(grid).toContain('usableShortcuts("new").join(" / ")');
+    expect(grid).toContain("<GridEmpty />");
+    const empty = code("components/onboarding/GridEmpty.tsx");
+    expect(empty).not.toContain("(Ctrl+N)");
+    expect(empty).toContain('usableShortcuts("new").join(" / ")');
   });
 });
 

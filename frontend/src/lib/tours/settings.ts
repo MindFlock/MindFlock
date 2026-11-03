@@ -53,7 +53,7 @@ export const SETTINGS_TOUR: TourDef = {
       target: '[data-tour="settings-tours"], #general-tours',
       screen: "general",
       title: "Replay any tour",
-      body: "Every tour lives here under Help, next to the switch for hints.",
+      body: "How MindFlock works and every tour live here under Help, next to the switch for hints.",
     },
   ],
 };

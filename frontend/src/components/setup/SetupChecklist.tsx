@@ -367,7 +367,9 @@ export function SetupChecklist() {
             </>
           ) : (
             <>
-              <p className="muted setup-hint">Pick a repo folder and say what to do.</p>
+              <p className="muted setup-hint">
+                Pick a repo folder and say what to do. That is a session: one agent on its own branch, its route in the Sky.
+              </p>
               <div className="setup-actions">
                 <Action next={repo.id === next} className="setup-new" onClick={() => go("new-session")}>
                   + New session
@@ -405,7 +407,7 @@ export function SetupChecklist() {
         {/* ⑤ Connect your tracker */}
         <Step step={tracker} next={next}>
           <p className="muted setup-hint">
-            Turn tickets from Jira, Linear, Shortcut, Asana or GitHub Issues into sessions.
+            Let work arrive by itself in Intake: tickets from Jira, Linear, Shortcut, Asana or GitHub Issues start as sessions.
           </p>
           <div className="setup-actions">
             <Action

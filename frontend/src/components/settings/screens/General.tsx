@@ -22,6 +22,7 @@ import { TOURS, TOUR_IDS, type TourId } from "../../../lib/tours";
 import { replayTour } from "../../onboarding/replayTour";
 import { replayPeopleTour } from "./peer/replayPeopleTour";
 import { openWhatsNew } from "../../whatsNew/WhatsNew";
+import { HOW_IT_WORKS_TITLE, HowItWorks, openHowItWorks } from "../../onboarding/HowItWorks";
 import "./General.css";
 
 export function General(_: ScreenProps) {
@@ -179,6 +180,17 @@ function Tours() {
           Show
         </button>
       </div>
+      {/* The welcome picture again, without re-running the checklist tour. */}
+      <div className="set-row onboarding-action" data-help-row="how-it-works">
+        <div className="onboarding-action-text">
+          <span className="set-label">{HOW_IT_WORKS_TITLE}</span>
+          <span className="set-hint">Sessions, routes, the Sky and what needs you, in one picture.</span>
+        </div>
+        <button type="button" className="test-btn" onClick={openHowItWorks}>
+          Show
+        </button>
+      </div>
+      <HowItWorks />
       <h4 className="set-subtitle">Tours</h4>
       {TOUR_IDS.map((id) => (
         <div className="set-row onboarding-action" key={id} data-tour-row={id}>
@@ -220,8 +232,8 @@ function Tours() {
 const TOUR_HINT: Record<TourId, string> = {
   welcome: "The three steps to your first session.",
   new: "Starting a session: the task, the repo, Start.",
-  sky: "The sky: every session a line, the bird on its stop, and the Stops shelf.",
-  intake: "Turning tickets, pull requests and issues into sessions.",
+  sky: "What the Sky is for: each session's route, + to add a stop, the bird, Needs you.",
+  intake: "Where work arrives by itself: tickets, pull requests and issues.",
   verify: "Checking that a change actually works.",
   schedule: "Templates, and sessions that start by themselves.",
   settings: "Where your connections and every setting live.",
