@@ -795,7 +795,7 @@ def test_mobile_js_voice_requests_have_the_contract_shape():
     # The dialog itself, quietly (204 when there is none).
     assert '"/dialog?quiet=1"' in v
     assert "r.status === 204 ? null" in v
-    assert '" is waiting on you: open the screen."' in v
+    assert '" needs you: open the screen."' in v
     # The on-demand summary and the say line.
     assert '"/voice/condense"' in v
     assert "/api/events" in v

@@ -370,7 +370,7 @@ def arm_session(
         by=by,
     )
     if rec is None:
-        raise LaneError("could not arm Fast-track", 500)
+        raise LaneError("could not arm Goes as far as", 500)
     return rec
 
 
@@ -416,12 +416,12 @@ def ship_now(
     )
     if not target:
         raise LaneError(
-            "this session has no fast-track of its own — pick how far it goes first",
+            "this session has no Goes as far as of its own — pick how far it goes first",
             409,
         )
     if target == "leave":
         raise LaneError(
-            "this session's fast-track ships nothing — pick how far it goes first"
+            "this session's Goes as far as ships nothing — pick how far it goes first"
         )
     # An edited message from the approval card is a human's sentence: it is
     # committed as written (never replaced by a generated one).

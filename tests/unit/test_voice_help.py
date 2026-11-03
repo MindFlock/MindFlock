@@ -37,7 +37,7 @@ def fresh(monkeypatch):
     [
         ("how do I schedule a template", ("web-ui.md", "new-session dialog")),
         ("how does the fence work", ("mcp.md", "fences")),
-        ("what does autopilot do", ("team-runs.md", "fast-track")),
+        ("what does autopilot do", ("team-runs.md", "goes as far as")),
         ("what are red zones", ("web-ui.md", "zones")),
         ("how do I change the voice words", ("web-ui.md", "voice words")),
         ("what is the code map", ("web-ui.md", "code map")),

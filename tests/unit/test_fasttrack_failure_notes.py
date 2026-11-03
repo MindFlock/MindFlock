@@ -125,7 +125,7 @@ def test_the_precommit_note_names_the_step_and_how_to_rerun_it():
     note = ap.failure_note(
         {"fix": "precommit", "hook": "ruff", "step": "Ruff lint", "reason": "x"}
     )
-    assert note.startswith("Fast-track stopped: the pre-commit step Ruff lint failed")
+    assert note.startswith("Shipping stopped: the pre-commit step Ruff lint failed")
     assert '"pre-commit run ruff" shows why' in note and "commit" in note
     assert "tell the user" in note, "a conflict is the user's call"
     assert "\n" not in note

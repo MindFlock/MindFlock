@@ -336,7 +336,7 @@ def test_no_session_names_at_most_six():
 def test_list(text):
     assert ans(text) == {
         "kind": "list",
-        "say": "Sessions: invoice-parser (working), API docs (waiting on you), "
+        "say": "Sessions: invoice-parser (working), API docs (needs you), "
         "login-fix (waiting on failing checks), login-page (offline), billing (idle).",
     }
 
@@ -901,7 +901,7 @@ def test_finish_without_a_dialog():
     assert got["no_dialog"] is True and "keys" not in got
     assert got["say"] == "API docs is not asking anything."
     got = fin("docs, yes", UNPARSED, session="")
-    assert got["say"] == "API docs is waiting on you: open the screen."
+    assert got["say"] == "API docs needs you: open the screen."
     got = fin("billing, yes", None, session="", remote=True)
     assert got["say"] == "billing is on another device: answer it there."
 

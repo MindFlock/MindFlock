@@ -21,7 +21,7 @@ here:
    pytest run, where the model is never asked — and the best passage's first
    sentences are said instead, markdown stripped (``core.spoken``).
 
-Every answer names the section it came from: "From Fast-track: …".
+Every answer names the section it came from: "From Goes as far as: …".
 """
 
 from __future__ import annotations
@@ -131,7 +131,8 @@ _SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "addon": ("extension",),
     "shortcut": ("keyboard",),
     "hotkey": ("keyboard", "shortcut"),
-    "autopilot": ("fast", "track"),
+    "autopilot": ("goes", "far", "fast", "track"),
+    "fast": ("goes", "far"),
     "reopen": ("recently", "closed"),
     "restore": ("recently", "closed", "reopen"),
 }

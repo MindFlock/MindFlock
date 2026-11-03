@@ -149,10 +149,10 @@ def test_the_target_reached_by_the_fix_finishes_the_run():
 def test_a_handoff_note_says_the_run_carries_on():
     detail = {"fix": "precommit", "hook": "mypy", "step": "mypy"}
     note = ap.failure_note(detail, resumes=True)
-    assert note.startswith("Fast-track paused: the pre-commit step mypy failed")
-    assert "Fast-track carries on from your commit" in note
+    assert note.startswith("Shipping paused: the pre-commit step mypy failed")
+    assert "MindFlock carries on from your commit" in note
     assert "tell the user" in note and "\n" not in note
-    assert ap.failure_note(detail).startswith("Fast-track stopped:")
+    assert ap.failure_note(detail).startswith("Shipping stopped:")
 
 
 # --- the store --------------------------------------------------------------- #
@@ -202,7 +202,7 @@ def test_a_failed_hook_is_handed_off_then_the_fix_is_pushed(tmp_path, monkeypatc
     rec = ap.get("s1")
     assert rec["state"] == "running" and rec["fixing"] == "precommit"
     (note,) = _notes()
-    assert note["text"].startswith("Fast-track paused:")
+    assert note["text"].startswith("Shipping paused:")
     # 2. The agent works the fix and commits it itself, then settles.
     ap.update("s1", worked_at=rec["fix_since"] + 1, idle_since=0.0)
     acted = []
@@ -224,7 +224,7 @@ def test_out_of_handoffs_it_halts_as_before(tmp_path, monkeypatch):
     assert rec["state"] == "halted" and rec["reason"] == "pre-commit failed at mypy"
     assert rec["note"] == driver._TOLD_AGENT
     (note,) = _notes()
-    assert note["text"].startswith("Fast-track stopped:")
+    assert note["text"].startswith("Shipping stopped:")
 
 
 def test_an_unchanged_fix_turn_halts_once_with_its_own_note(tmp_path, monkeypatch):

@@ -689,7 +689,8 @@ _HELP_FEATURES = re.compile(
     r"|providers?|agent clis?|mcp|orchestrators?|workers?|lineage|tailscale"
     r"|tailnet|desktop app|doctor|workflow optimi[sz]er|branch(?:ing)? a session"
     r"|window rows?|windows|panes?|tabs?|diff tab|ask anywhere|assistant"
-    r"|make pr|open pr|merge when green|commit button|ship(?:ping)?)\b"
+    r"|make pr|open pr|merge when green|commit button|ship(?:ping)?"
+    r"|saved routes?|the sky|goes as far as|behaviors?|wait for me)\b"
 )
 # The agent's work (a prompt), the session's state (a status question), or
 # someone spoken to: never help unless MindFlock was addressed first.
@@ -1345,7 +1346,7 @@ def _list(rows, now: float) -> dict:
     parts = []
     for r in listed[:MAX_LIST]:
         ss = session_state(r, now)
-        word = "waiting on you" if ss["reason"] == "question" else _state_word(ss)
+        word = "needs you" if ss["reason"] == "question" else _state_word(ss)
         parts.append("%s (%s)" % (_name(r), word))
     more = len(listed) - MAX_LIST
     tail = ", and %d more" % more if more > 0 else ""
@@ -1850,7 +1851,7 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
                 % name
             )
         elif isinstance(dialog, dict):
-            out["say"] = "%s is waiting on you: open the screen." % name
+            out["say"] = "%s needs you: open the screen." % name
         else:
             out["say"] = "%s is not asking anything." % name
         return out

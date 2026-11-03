@@ -62,7 +62,7 @@ def _in_flight(title: str) -> str:
 
         rec = _autopilot.get(title)
         if rec is not None and rec.get("state") == "running":
-            return "its fast-track is running — stop it first"
+            return "it is shipping by itself (Goes as far as) — stop that first"
     except Exception:  # noqa: BLE001
         pass
     return ""

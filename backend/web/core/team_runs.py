@@ -2354,7 +2354,9 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
         )
         if armed in LANES and armed != "leave":
             acts.append(_act("seen", t, fields={"lane": armed}))
-            acts.append(_act("log", t, text="fast-track changed to %s by you" % armed))
+            acts.append(
+                _act("log", t, text="Goes as far as changed to %s by you" % armed)
+            )
             return acts
     if lane == "leave":
         ended = float(o.get("turn_ended_at") or 0.0)
@@ -2371,7 +2373,7 @@ def _plan_task(run: dict, t: dict, o: dict, now: float, boot: bool) -> List[dict
         # Disarmed by someone other than the run (⏩ off, lane → leave): the
         # user's act wins — this task's lane is now "leave it".
         acts.append(_act("seen", t, fields={"lane": "leave"}))
-        acts.append(_act("log", t, text="fast-track turned off by you"))
+        acts.append(_act("log", t, text="Goes as far as turned off by you"))
         return acts
     ap_state = _s(rec.get("state"))
     step = _s(rec.get("step"))
@@ -3009,7 +3011,7 @@ def _plan_integration(run: dict, obs: dict, now: float, acts: List[dict]) -> Lis
                     state="release_ready",
                     release={
                         "state": "ready",
-                        "detail": "the lead's fast-track was turned off — nothing was shipped",
+                        "detail": "the lead's Goes as far as was turned off — nothing was shipped",
                     },
                 )
             )

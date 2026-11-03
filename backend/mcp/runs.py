@@ -68,11 +68,11 @@ DEFAULT_RUN_WAIT_S = 600
 D_START_RUN = (
     "Start a TEAM RUN: MindFlock works on several things at once for your "
     "user, one session per item, and carries each one as far as its "
-    "Fast-track says. items: ticket IDs or links (PAY-412, sc-123, a URL; a line of only "
+    "Goes as far as says. items: ticket IDs or links (PAY-412, sc-123, a URL; a line of only "
     "IDs is that many tickets) and/or task lines (one thing per line). lane "
-    "(the Fast-track): leave or off (no commit) | commit | push | pr (one PR per item) | merge (merges "
+    "(Goes as far as): leave or off (no commit) | commit | push | pr (one PR per item) | merge (merges "
     "once CI is green; needs confirm_merge=true); default: your user's "
-    "Fast-track setting, which is leave when they never set one. concurrency: how many run at once (1-8, default 3); "
+    "Goes as far as setting, which is leave when they never set one. concurrency: how many run at once (1-8, default 3); "
     "the rest wait in a queue. MindFlock owns these sessions, not you: you "
     "cannot steer, close or delete them, and they do not report to you. It commits "
     "with messages written from each diff, retries failed hooks, nudges a "
@@ -356,7 +356,7 @@ class RunTools:
             lane = "leave"
         if lane == "merge" and not args.get("confirm_merge"):
             raise ToolError(
-                "lane=merge (Fast-track to Merge) merges every item's PR with no one "
+                "lane=merge (Goes as far as Merge when green) merges every item's PR with no one "
                 "looking: pass confirm_merge=true only when that was clearly asked for"
             )
         items = [str(i).strip() for i in args["items"] if str(i).strip()]
@@ -570,7 +570,7 @@ class RunTools:
                 "note": "no split — the team run is dissolved and this is an ordinary "
                 "session now. Do the whole task yourself, here"
                 + (
-                    "; when your turn ends MindFlock fast-tracks it (%s)" % lane
+                    "; when your turn ends MindFlock ships it by itself (%s)" % lane
                     if lane
                     else ""
                 )

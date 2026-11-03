@@ -118,7 +118,7 @@ D_SHIP = (
     "calling it again resumes. Refused while the target is mid-turn or on a "
     "dialog (shipping half-finished work): wait_for_session first, or use "
     "set_autopilot to ship when its turn ends; also refused while its "
-    "Fast-track is armed. Merge only when the PR is "
+    "Goes as far as is armed. Merge only when the PR is "
     "mergeable and CI is not failing or running. wait=true (default) waits up "
     "to timeout_s for the commit hooks and the push. Returns steps "
     "[{step, state, ...}] with the commit sha, the PR url; a failed step "
@@ -127,13 +127,13 @@ D_SHIP = (
     "{state: diverged, behind, authors} with ok=false: rebase first."
 )
 D_AUTOPILOT = (
-    "Arm MindFlock's Fast-track on a session (yourself or one you manage): "
+    "Arm MindFlock's Goes as far as on a session (yourself or one you manage): "
     "when its agent's turn ends it ships itself up to depth (commit, push, pr "
     "or merge) through the same commit/push/PR/merge buttons, retrying the "
     "pre-commit hooks Settings allow-lists and halting with a reason on anything that needs a "
     "human. depth off (or leave) disarms. Use it for a worker that is still working "
     "(ship_session refuses mid-turn). merge needs confirm_merge=true and waits "
-    "for CI. Returns the Fast-track state {depth, state, step, reason, url}; "
+    "for CI. Returns the Goes as far as state {depth, state, step, reason, url}; "
     "get_session shows it later."
 )
 D_TICKET = (
@@ -448,7 +448,7 @@ class ShipTools:
             # Two drivers on one shell double-commit and double-push: the
             # autopilot's lease is the server's, so it wins.
             raise ToolError(
-                "%r has its Fast-track armed (depth %s, %s): it will ship itself. "
+                "%r has Goes as far as armed (depth %s, %s): it will ship itself. "
                 'Disarm it first with set_autopilot(title=%r, depth="off") to '
                 "ship by hand."
                 % (title, auto.get("depth"), auto.get("note") or "waiting", title)
@@ -969,7 +969,7 @@ class ShipTools:
         autopilot = _off(args.get("autopilot") or "off")
         if autopilot == "merge" and not args.get("confirm_merge"):
             raise ToolError(
-                "autopilot=merge (Fast-track to Merge) merges the worker's PR with no "
+                "autopilot=merge (Goes as far as Merge when green) merges the worker's PR with no "
                 "one looking: pass confirm_merge=true only when that was clearly asked for"
             )
         source, ticket_id, listed = self._resolve_ticket(

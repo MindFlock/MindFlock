@@ -731,7 +731,7 @@ def _test_plan_is_live(plan: dict) -> bool:
         # happened, and let the deploy question stay open.
         _test_plans.set_live_problem(
             plan["id"],
-            "Its pull request merged into %s, not %s. This checklist is waiting "
+            "Its pull request merged into %s, not %s. These behaviors are waiting "
             "for %s \u2014 change the live branch on this repo's card if %s is "
             "what you ship." % (base, live, live, base),
         )
@@ -841,7 +841,7 @@ def _notify_test_plan_due(plan: dict) -> None:
             # on main" before it parses as "check, on main" — which is why the
             # branch has moved up into the title, where it is a fact about what
             # happened rather than a place to go.
-            message="%d step%s in its checklist, %d for you."
+            message="%d behavior%s to check, %d for you."
             % (len(steps), "" if len(steps) == 1 else "s", mine),
             # 3 = normal. This is news, not an emergency: nothing is broken and
             # nothing is waiting on the user, unlike the rules that ring at 4.
@@ -2008,8 +2008,8 @@ async def _write_test_plan_for_closed(title: str) -> JSONResponse:
                 "",
                 JSONResponse(
                     {
-                        "error": "%s is gone from this repo — nothing left to write a "
-                        "checklist from" % branch
+                        "error": "%s is gone from this repo — nothing left to write "
+                        "behaviors from" % branch
                     },
                     status_code=409,
                 ),
