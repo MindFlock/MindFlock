@@ -647,3 +647,36 @@ class TestChooseAgent:
         assert any(a["name"] == "copilot" for a in body["agents"])
         r = client.post("/api/setup/agent", json={"provider": "nope"})
         assert r.status_code == 400 and "nope" in r.json()["error"]
+
+
+class TestLocalModelAndOrder:
+    def test_installed_agents_come_first(self, monkeypatch):
+        import shutil
+
+        monkeypatch.setattr(
+            shutil, "which", lambda b, *a, **k: "/x/copilot" if b == "copilot" else None
+        )
+        rows = setup_steps.agent_choices()
+        assert rows[0]["name"] == "copilot" and rows[0]["installed"] is True
+        assert all(not r["installed"] for r in rows[1:])
+
+    def test_a_local_model_counts_as_signed_in(self, monkeypatch):
+        """aider / goose against a local model need no account: the doctor's
+        sign-in row is ok, so step ② can tick."""
+        from backend.providers import local_models
+
+        monkeypatch.setattr(
+            local_models,
+            "launch_overlay",
+            lambda name: (
+                ({"OPENAI_API_BASE": "http://127.0.0.1:11434/v1"}, ())
+                if name == "aider"
+                else ({}, ())
+            ),
+        )
+        assert "local model" in doctor._local_model_auth("aider")
+        assert doctor._local_model_auth("codex") == ""
+        monkeypatch.setattr(doctor, "_auth_evidence", lambda p: "")
+        monkeypatch.setattr(doctor.shutil, "which", lambda b, *a, **k: "/x/" + b)
+        c = doctor._agent_auth_check("agent-auth", "aider", "agent auth (aider)")
+        assert c.status == "ok" and "local model" in c.detail
