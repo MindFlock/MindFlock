@@ -91,7 +91,7 @@ export function DeviceBlock({ device, dropped = "", onDone, target = false, onHe
   const state = device.connected ? "on" : "off";
   const name = device.host || device.device;
   return (
-    <div ref={rootRef} className={"sky-block sky-device" + (target ? " is-merge-target" : "")} data-device={device.device} data-state={state} role="group" aria-label={name + " — drop a line here to move its session there"}>
+    <div ref={rootRef} className={"sky-block sky-device" + (target ? " is-merge-target" : "")} data-device={device.device} data-state={state} role="group" aria-label={name + " — drop a chain here to move its session there"}>
       <div className="sky-block-head" data-sky-head title={draggable && onHeadDown ? "Drag to move" : undefined} onPointerDown={headDown}>
         <span className="sky-block-glyph" aria-hidden="true">
           ▣
@@ -103,7 +103,7 @@ export function DeviceBlock({ device, dropped = "", onDone, target = false, onHe
       </div>
       <div className="sky-block-body muted">
         {device.os ? device.os + " · " : ""}
-        {typeof device.sessions === "number" ? device.sessions + (device.sessions === 1 ? " session" : " sessions") : "Drop a line to move it here"}
+        {typeof device.sessions === "number" ? device.sessions + (device.sessions === 1 ? " session" : " sessions") : "Drop a chain to move it here"}
       </div>
       {dropped && (
         <form

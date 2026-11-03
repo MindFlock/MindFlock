@@ -185,7 +185,7 @@ export function agentMenuItems(row: Pick<Instance, "title" | "status"> | null | 
   if (!row) return [];
   const paused = row.status === "paused";
   return [
-    { key: "agent-open", label: opts.opened ? "Fold the terminal" : "Open terminal", title: opts.opened ? "Back to the agent's tile" : "Its real terminal, here in the tile's place", onSelect: opts.openTerminal },
+    { key: "agent-open", label: opts.opened ? "Fold the terminal" : "Open terminal", title: opts.opened ? "Back to the agent's stop" : "Its real terminal, here in the stop's place", onSelect: opts.openTerminal },
     { key: "agent-prompt", label: "Send a prompt…", title: "Type a prompt for this agent and send it", disabled: paused, onSelect: opts.compose },
     paused
       ? { key: "agent-resume", label: "Resume", title: "Start the agent again in the same worktree", onSelect: () => void resumeSession(row.title) }

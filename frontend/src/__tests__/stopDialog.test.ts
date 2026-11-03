@@ -166,9 +166,9 @@ describe("the session line's wiring", () => {
   });
 
   it("Remove on the stop the flight is at says where the flight now waits", () => {
-    expect(removedToast("Push", false, "Merge")).toBe("Removed “Push” from the line");
-    expect(removedToast("Push", true, "Merge")).toBe("Removed “Push” — the flight is paused before “Merge”");
-    expect(removedToast("Merge", true, undefined)).toBe("Removed “Merge” — the flight is paused at the end");
+    expect(removedToast("Push", false, "Merge")).toBe("Removed “Push” from the chain");
+    expect(removedToast("Push", true, "Merge")).toBe("Removed “Push” — the chain is paused before “Merge”");
+    expect(removedToast("Merge", true, undefined)).toBe("Removed “Merge” — the chain is paused at the end");
     expect(src).toMatch(/toast\(removedToast\(step\.title, wasHere, next\), \{\s+action: \{\s+label: "Undo"/);
   });
 

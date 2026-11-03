@@ -72,9 +72,9 @@ describe("the stops chip", () => {
     expect(stopsWords({ id: "builtin:ticket", name: "Ticket", own: false })).toBe("Stop after the agent");
     const html = lane();
     const jira = block(html, "tickets:jira-1");
-    expect(jira).toContain('<span class="sky-lane-stops own"><span class="sky-lane-stops-key">Stops</span><span class="sky-lane-flyway own">Payments stops</span>');
+    expect(jira).toContain('<span class="sky-lane-stops own"><span class="sky-lane-stops-key">Chain</span><span class="sky-lane-flyway own">Payments stops</span>');
     const pr = block(html, "prs:quickpay/quickpay");
-    expect(pr).toContain('<span class="sky-lane-stops"><span class="sky-lane-stops-key">Stops</span><span class="sky-lane-flyway">Open PR</span>');
+    expect(pr).toContain('<span class="sky-lane-stops"><span class="sky-lane-stops-key">Chain</span><span class="sky-lane-flyway">Open PR</span>');
     // No depth: the agent alone, said the way the card says it.
     expect(block(html, "issues:quickpay/web")).toContain('<span class="sky-lane-flyway">Stop after the agent</span>');
     expect(pr).not.toContain(">Review a PR<");
@@ -83,8 +83,8 @@ describe("the stops chip", () => {
   it("reads as editable: a pencil, a pointer, and a tooltip naming what it edits and what it is now", () => {
     const pr = block(lane(), "prs:quickpay/quickpay");
     expect(pr).toContain('<span class="sky-lane-stops-edit" aria-hidden="true">✎</span>');
-    expect(pr).toContain('title="Edit the default stops for quickpay/quickpay (goes as far as Open PR)"');
-    expect(stopsTip({ name: "Jira — payments", flyway: { id: "p", name: "Payments stops", own: true } })).toBe("Edit the default stops for Jira — payments (its own: Payments stops)");
+    expect(pr).toContain('title="Edit the default chain for quickpay/quickpay (goes as far as Open PR)"');
+    expect(stopsTip({ name: "Jira — payments", flyway: { id: "p", name: "Payments stops", own: true } })).toBe("Edit the default chain for Jira — payments (its own: Payments stops)");
     const sheet = css("components/flights/IntakeLane.css");
     expect(cssRule(sheet, ".sky-lane-chips .sky-lane-flyway-btn")).toContain("cursor: pointer");
     expect(cssRule(sheet, ".sky-lane-flyway-btn:hover .sky-lane-stops")).toContain("border-color");

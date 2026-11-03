@@ -208,7 +208,7 @@ describe("flown stops and the ⋯'s words", () => {
     const html = line();
     expect(html).toContain('data-node="stop:s1"');
     expect(html).not.toContain('data-node="flown"');
-    expect(menu(html)).toContain("Fold flown stops");
+    expect(menu(html)).toContain("Fold finished stops");
   });
 
   it("draws the hook's diagram (the fold and the open groups are its), and asks it what a fold would hide", () => {
@@ -224,7 +224,7 @@ describe("flown stops and the ⋯'s words", () => {
     const items = menu(line());
     expect(items).toContain("Add a stop…");
     expect(items.some((l) => /flyway/i.test(l))).toBe(false);
-    expect(line()).toContain('title="A stop or a saved stop, at the end of the chain"');
+    expect(line()).toContain('title="A stop or a saved chain, at the end of the chain"');
   });
 });
 
@@ -242,7 +242,7 @@ describe("names", () => {
   it("the open card's name and labels too", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('<span className="skl-card-name">{windowName(inst.title)}</span>');
-    expect(src).toContain('aria-label={"Fold " + windowName(inst.title) + " back into a box"}');
+    expect(src).toContain('aria-label={"Fold " + windowName(inst.title) + " back into the chain"}');
     expect(src).toContain(`aria-label={"Resize " + windowName(inst.title) + "'s card"}`);
     // Shown text and labels: never the raw title (keys and data-line may).
     expect(src).not.toMatch(/>\{(p|inst)\.title\}<|(label|title)=\{[^}]*[^(\w.](p|inst)\.title\b/);

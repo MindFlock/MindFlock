@@ -232,7 +232,7 @@ describe("the line", () => {
     expect(html).toMatch(/>Terminal</);
     expect(html).not.toContain('class="grip"');
     expect(html).not.toContain('aria-label="Hide window"');
-    expect(html).toContain('aria-label="Fold me back into a box"');
+    expect(html).toContain('aria-label="Fold me back into the chain"');
     expect(html).toContain('class="skl-resize"');
     // Only the session's card: the worker stays a tile.
     expect(html.match(/class="skl-card sky-own-scroll"/g)?.length).toBe(1);

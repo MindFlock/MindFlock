@@ -280,8 +280,8 @@ const TIDY_MS = 350;
 const MINIMAP_KEY = "mf_sky_minimap";
 /** The toolbar's two tools, in words. */
 const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
-  drag: { label: "✥ Drag", title: "Drag mode (V): a line moves by its bar, a drag on empty sky selects" },
-  click: { label: "☝ Click", title: "Click mode (H): a drag anywhere pans, a click focuses a line or selects a box — Shift+drag selects" },
+  drag: { label: "✥ Drag", title: "Drag mode (V): a chain moves by its bar, a drag on empty sky selects" },
+  click: { label: "☝ Click", title: "Click mode (H): a drag anywhere pans, a click focuses a chain or selects a stop — Shift+drag selects" },
 };
 /** What on the sky takes a press itself, whatever the tool: a control, a
  * field, an open card, a line's editor, a menu, the selection's bar, the
@@ -2203,11 +2203,11 @@ export function SkyView() {
       : mode === "one"
         ? focused
           ? "“" + windowName(focused) + "” isn't in the sky right now."
-          : "Pick a line to show it alone."
+          : "Pick a chain to show it alone."
         : query
-          ? "No line matches “" + query + "”."
+          ? "No chain matches “" + query + "”."
           : mode === "perched"
-            ? "Nothing is perched on you."
+            ? "Nothing needs you."
             : instQ.data === undefined
               ? ""
               : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
@@ -2216,7 +2216,7 @@ export function SkyView() {
     <div className="sky-toolbar" role="toolbar" aria-label="The sky">
       <ChipRow<SkyMode>
         className="sky-modes"
-        label="Which lines"
+        label="Which chains"
         value={mode}
         options={SKY_MODES.map((m) => ({ value: m.id, label: m.label, title: m.title }))}
         onChange={setMode}
@@ -2233,10 +2233,10 @@ export function SkyView() {
         />
       )}
       <span className="sky-search">
-        <TextField value={query} onChange={setQuery} label="Find a line" placeholder="Find a line…" onEnter={() => titles[0] && focusOn(titles[0])} />
+        <TextField value={query} onChange={setQuery} label="Find a chain" placeholder="Find a chain…" onEnter={() => titles[0] && focusOn(titles[0])} />
       </span>
       {!narrow && (
-        <button type="button" className="fl-btn sky-tidy" title="Put every line back in its organized spot (T)" onClick={tidy}>
+        <button type="button" className="fl-btn sky-tidy" title="Put every chain back in its organized spot (T)" onClick={tidy}>
           Tidy
         </button>
       )}
@@ -2262,13 +2262,13 @@ export function SkyView() {
           <button type="button" className="sky-zoom-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={cam.z >= ZOOM_MAX - 0.001} onClick={() => zoomBy(1.2)}>
             +
           </button>
-          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused line — the grid's 1 (1)" disabled={!focusLine} onClick={() => fitFocused()}>
+          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused chain — the grid's 1 (1)" disabled={!focusLine} onClick={() => fitFocused()}>
             1
           </button>
           <button
             type="button"
             className="sky-zoom-btn sky-fit"
-            title="See everything: every line in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
+            title="See everything: every chain in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
             onClick={() => fitAll(true)}
           >
             Fit
@@ -2640,9 +2640,9 @@ export function SkyView() {
             role="application"
             aria-roledescription="canvas"
             aria-label={
-              "The sky: every session as a line — " +
+              "The sky: every session as a chain — " +
               (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") +
-              ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the blocks, ? for every key"
+              ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the stops, ? for every key"
             }
             style={{ backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`, backgroundPosition: `${cam.x}px ${cam.y}px` }}
             onPointerDownCapture={onDownCapture}

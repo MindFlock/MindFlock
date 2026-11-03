@@ -353,16 +353,16 @@ describe("a line in the sky", () => {
     expect(labels.map(([l]) => l)).toEqual([
       "Open session",
       "Open in the grid",
-      "Show only this line",
+      "Show only this chain",
       // Nothing folds by default; the line offers to fold what has flown.
       // (Round 18: a chain's tiles have one size — no box sizes.)
-      "Fold flown stops",
+      "Fold finished stops",
       "Pin here",
       "Add a stop…",
       "Close session",
     ]);
     const cls = Object.fromEntries(labels);
-    expect(cls["Fold flown stops"]).toContain("skl-mi-group");
+    expect(cls["Fold finished stops"]).toContain("skl-mi-group");
     expect(cls["Add a stop…"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("vf-menu-danger");
@@ -370,7 +370,7 @@ describe("a line in the sky", () => {
 
   it("a pinned line offers Tidy instead of Pin; an open one folds back", () => {
     const html = line({ pinned: true, open: false });
-    expect(html).toContain(">Tidy this line<");
+    expect(html).toContain(">Tidy this chain<");
     expect(html).not.toContain(">Pin here<");
   });
 

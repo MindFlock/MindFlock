@@ -156,8 +156,8 @@ export function promoteWords(src: Pick<IntakeDefault, "kind" | "label" | "target
   const name = intakeSourceName(src);
   return {
     label: "Use these stops for every " + w.one + " from " + name,
-    title: "Changes what NEW " + w.many + " from " + name + " fly: each one starts with this line's stops. This " + w.one + " keeps running as it is.",
-    done: "New " + w.many + " from " + name + " fly these stops",
+    title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this chain's stops. This " + w.one + " keeps running as it is.",
+    done: "New " + w.many + " from " + name + " run this chain",
   };
 }
 
@@ -171,7 +171,7 @@ export async function promoteStops(flightId: string): Promise<boolean> {
   const back = { kind: res.kind, target: res.target, plan_id: res.previous_plan_id };
   // One undo, two roads: the toast's button and Ctrl+Z in the sky.
   const promoted = pushUndo({ label: words.label, undo: () => setIntakeDefault(back) });
-  toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " fly the stops they did before") });
+  toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " run the chain they did before") });
   return true;
 }
 
@@ -195,8 +195,8 @@ export function usePromoteStops(flight: Pick<Flight, "id" | "subject"> | null | 
 /** The toast after a stop came off: removing the one the flight was at
  * pauses the flight right before the stop that followed (or at the end). */
 export function removedToast(title: string, wasHere: boolean, next: string | null | undefined): string {
-  if (!wasHere) return "Removed “" + title + "” from the line";
-  return "Removed “" + title + "” — the flight is paused " + (next ? "before “" + next + "”" : "at the end");
+  if (!wasHere) return "Removed “" + title + "” from the chain";
+  return "Removed “" + title + "” — the chain is paused " + (next ? "before “" + next + "”" : "at the end");
 }
 
 /** The saved stop a group's "Save to the shelf" writes: the plan it came
@@ -422,7 +422,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     toast(removedToast(step.title, wasHere, next), {
       action: {
         label: "Undo",
-        ariaLabel: "Undo: put “" + step.title + "” back on the line",
+        ariaLabel: "Undo: put “" + step.title + "” back on the chain",
         // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
           if (takeUndo(entry)) void entry.undo();
@@ -453,7 +453,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     toast(removedToast(g.name, wasHere, next), {
       action: {
         label: "Undo",
-        ariaLabel: "Undo: put “" + g.name + "” back on the line",
+        ariaLabel: "Undo: put “" + g.name + "” back on the chain",
         // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
           if (takeUndo(entry)) void entry.undo();
@@ -494,7 +494,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     <div className="skl-close-confirm skl-remove-confirm" data-no-drag>
       <InlineConfirm
         title={"Remove “" + askName + "”?"}
-        body={"The flight is at it right now: it pauses before what follows. Undo puts it back."}
+        body={"The chain is at it right now: it pauses before what follows. Undo puts it back."}
         confirmLabel="Remove"
         busy={busy}
         onConfirm={() => {
@@ -597,7 +597,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const ordered = orderedPlans(plans);
   const savedStops = (at: number | null) => (
     <div className="fl-palette-flyways">
-      <div className="fl-palette-head">Saved stops — tack one on as a stop with sub-steps</div>
+      <div className="fl-palette-head">Saved chains — tack one on as a group</div>
       <div className="fl-chiprow">
         {ordered.map((p) => (
           <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void tackPlan(p, at)}>
@@ -660,13 +660,13 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     onDropStop: (drop: StopDrop, at) => {
       if ("planId" in drop) {
         const plan = plans.find((p) => p.id === drop.planId);
-        if (plan || flight) void tackPlan(plan || { id: drop.planId, name: "the saved stop" }, at);
-        else toast("That saved stop isn't on this server any more");
+        if (plan || flight) void tackPlan(plan || { id: drop.planId, name: "the saved chain" }, at);
+        else toast("That saved chain isn't on this server any more");
         return;
       }
       const def = kindOf.get(drop.kind);
       if (def) void tackOne(def, at);
-      else toast("This line has no “" + drop.kind + "” stop to tack on");
+      else toast("This chain has no “" + drop.kind + "” stop to tack on");
     },
     renderInBox: parts.renderInBox,
     sizeOf: parts.sizeOf,
@@ -709,7 +709,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         kindOf={kindOf}
         busy={busy}
-        note={open.editable ? undefined : open.state === "done" || open.state === "skipped" ? "This stop has flown." : "The flight is in this stop — only its sub-steps still ahead can change."}
+        note={open.editable ? undefined : open.state === "done" || open.state === "skipped" ? "This stop has finished." : "The chain is in this stop — only its stops still ahead can change."}
         onClose={close}
         onRename={
           flight && changeable
@@ -755,7 +755,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const editable = !!flight && !!open.editable && !!open.step;
     const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
     const rec = flight && open.step ? flight.step_states?.[open.step.id] : undefined;
-    const why = editable ? "" : flown ? "This stop has flown — it can't change now." : here ? "The flight is at this stop — it can't change while it is here." : "It can't change here.";
+    const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The chain is at this stop — it can't change while it is here." : "It can't change here.";
     const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : undefined;
     inspector = (
       <StopDialog
@@ -803,7 +803,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             )}
             {offerJoin && (
               <div className="fl-chiprow fl-join-offer">
-                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the line waits until every worker is done" onClick={() => void addJoin()}>
+                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the chain waits until every worker is done" onClick={() => void addJoin()}>
                   + Join
                 </button>
               </div>

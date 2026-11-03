@@ -107,7 +107,7 @@ export function PersonBlock({ link, rows, dropped = "", onDone, target = false, 
       data-person={link.link_id}
       data-state={state}
       role="group"
-      aria-label={link.peer_name + " — drop a line here to share its session"}
+      aria-label={link.peer_name + " — drop a chain here to share its session"}
     >
       <div className="sky-block-head" data-sky-head title={draggable && onHeadDown ? "Drag to move" : undefined} onPointerDown={headDown}>
         <span className="sky-block-glyph" aria-hidden="true">
@@ -122,7 +122,7 @@ export function PersonBlock({ link, rows, dropped = "", onDone, target = false, 
             Shared · {shared.length === 1 ? windowName(shared[0]) : shared.length + " sessions"}
           </span>
         ) : (
-          <span>Drop a line to share it</span>
+          <span>Drop a chain to share it</span>
         )}
       </div>
       {dropped && (

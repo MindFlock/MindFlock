@@ -63,9 +63,9 @@ describe("the strip", () => {
   it("one block per repo: the dot, the name, the branch, the merge's age, the landed rows with PR links", () => {
     useUi.setState({ aliases: { "fix-login": "Login fix" } });
     const html = render();
-    expect(html).toMatch(/^<nav class="sky-lane sky-landing" aria-label="Landing">/);
-    expect(html).toContain('<span class="sky-lane-title">Landing</span>');
-    expect(html).toMatch(/<span class="fl-count" title="4 landed today">4<\/span>/);
+    expect(html).toMatch(/^<nav class="sky-lane sky-landing" aria-label="Finished">/);
+    expect(html).toContain('<span class="sky-lane-title">Finished</span>');
+    expect(html).toMatch(/<span class="fl-count" title="4 merged today">4<\/span>/);
     const repos = [...html.matchAll(/data-repo="([^"]+)"/g)].map((m) => m[1]);
     expect(repos).toEqual(["/home/me/app", "/home/me/site"]);
     expect(html).toContain('<span class="sky-landing-dot is-green" title="checks green · 0123456" aria-label="checks green"></span>');
@@ -90,19 +90,19 @@ describe("the strip", () => {
 
   it("expanded: every landed row, the ▾ on the head", () => {
     const html = render({ open: true });
-    expect(html).toContain('<nav class="sky-lane sky-landing" aria-label="Landing" data-open="">');
+    expect(html).toContain('<nav class="sky-lane sky-landing" aria-label="Finished" data-open="">');
     expect(html).toContain("sc-8");
     expect(html).not.toContain("more — expand");
-    expect(html).toContain('aria-expanded="true" aria-label="Fold the landing strip&#x27;s rows"');
-    expect(render()).toContain('aria-expanded="false" aria-label="Expand the landing strip: every landed flight"');
+    expect(html).toContain('aria-expanded="true" aria-label="Fold the Finished strip&#x27;s rows"');
+    expect(render()).toContain('aria-expanded="false" aria-label="Expand the Finished strip: every finished chain"');
   });
 
   it("the head drags it (when the host lets it), ‹ folds it to a rail with the count, the corner sizes it", () => {
     const html = render();
-    expect(html).toContain('<div class="sky-lane-head" data-sky-head="true" title="Drag to move the landing strip · double-click to expand">');
+    expect(html).toContain('<div class="sky-lane-head" data-sky-head="true" title="Drag to move the Finished strip · double-click to expand">');
     expect(render({ draggable: false })).toContain('<div class="sky-lane-head" data-sky-head="true" title="double-click to expand">');
-    expect(html).toContain('<span class="sky-lane-resize skl-resize" role="separator" tabindex="0" data-no-drag="true" aria-label="Resize the landing strip"');
-    expect(html).toContain('title="Fold the landing strip"');
+    expect(html).toContain('<span class="sky-lane-resize skl-resize" role="separator" tabindex="0" data-no-drag="true" aria-label="Resize the Finished strip"');
+    expect(html).toContain('title="Fold the Finished strip"');
     const src = code("components/flights/LandingStrip.tsx");
     expect(src).toContain("if (draggable && onHeadDown && headPress(e)) onHeadDown(e);");
     expect(src).toContain('closest("button, a, input, summary, [data-no-drag]")');
@@ -111,7 +111,7 @@ describe("the strip", () => {
     expect(src).toContain("e.currentTarget.setPointerCapture(e.pointerId);");
     // The rail: ‹ remembered per device.
     expect(src).toContain('const FOLDED_KEY = "mf_sky_landing_folded";');
-    expect(src).toContain('className="sky-lane sky-lane-rail sky-landing" aria-label="Landing" data-collapsed="true"');
+    expect(src).toContain('className="sky-lane sky-lane-rail sky-landing" aria-label="Finished" data-collapsed="true"');
     expect(src).toContain("const ro = new ResizeObserver(read);");
     expect(src).toContain("measureRef.current?.(w, h);");
   });
