@@ -986,7 +986,8 @@ def _default_folder() -> str:
 def needs_agent(flight: dict) -> bool:
     """Whether a chain types into an agent: an agent / reviews stop, a verify
     the agent takes part in, a plug-in that types to the agent, or a Loop that
-    repeats the session's prompt. A perch, a wait, a notify… need none."""
+    repeats the session's prompt or goes back to the session's agent
+    (``back_to: "agent"``). A perch, a wait, a notify… need none."""
     from backend.web.core import flight_kinds as _kinds
 
     steps = flight.get("steps") or []
@@ -999,6 +1000,8 @@ def needs_agent(flight: dict) -> bool:
             return True
         plug = _kinds.get(k)
         if plug is not None and getattr(plug, "types_to_agent", False):
+            return True
+        if k == "loop" and _flights.loops_to_agent(st):
             return True
         if (
             k == "loop"
@@ -2396,6 +2399,8 @@ def change_steps(
             _flights.op_remove_group(f, step)
         else:
             _flights.op_remove_step(f, step)
+        # A Loop back to the agent on a chain running in a folder: no agent.
+        _flights.check_agent_loops(f)
 
     return _changed(flight_id, _do)
 
