@@ -191,10 +191,11 @@ export function TopBar() {
   // too).
   //
   // The toggle's home is the sidebar's View row, beside the pane counts. The
-  // bar wears it only where that row is out of sight — the sidebar hidden, or
-  // a phone-narrow window (whose sidebar is an overlay) — so there is one
-  // visible toggle, never two.
-  const barViews = ui.sidebarHidden || ui.narrow;
+  // bar wears it only on a phone-narrow window: there the sidebar is an
+  // overlay and a phone has no Ctrl+Y, so without it there'd be no way to
+  // switch views. A desktop window with the sidebar hidden doesn't get it —
+  // Ctrl+Y and the palette still switch there, and the bar stays calm.
+  const barViews = ui.narrow;
   const otherView = ui.view === "sky" ? "grid" : "sky";
   const perchLine =
     perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " needs you" : " need you") : "";
@@ -411,9 +412,11 @@ export function TopBar() {
             New
           </button>
           {/* The main area's two views of the same sessions (lib/viewMode):
-              the grid of panes or the sky of lines. Only while the sidebar's
-              View row (its home) is out of sight — `barViews` above. Glyphs
-              alone on a phone, and the last thing a narrow bar folds. The
+              the grid of panes or the sky of lines. Only on a phone-narrow
+              window, whose sidebar (the toggle's home) is an overlay and
+              which has no Ctrl+Y — `barViews` above; never just because a
+              desktop sidebar is hidden. Glyphs alone, and the last thing a
+              narrow bar folds. The
               Sky half wears the count of chains that need you — nothing at
               zero, the rule every count on this bar keeps. */}
           {barViews && (

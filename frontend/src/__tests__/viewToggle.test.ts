@@ -160,7 +160,7 @@ describe("the sidebar's View row: Auto 1 2 4 9 │ Grid Sky", () => {
   });
 });
 
-describe("the top bar wears the toggle only where the row is out of sight", () => {
+describe("the top bar wears the toggle only on a phone-narrow window", () => {
   const bar = () => render(createElement(TopBar));
 
   it("sidebar shown: no toggle on the bar — the sidebar's is the one", () => {
@@ -172,24 +172,31 @@ describe("the top bar wears the toggle only where the row is out of sight", () =
     expect(html).toContain('id="intake-btn"');
   });
 
-  it("sidebar hidden: the pair is back beside New, Sky the tour's target", () => {
+  it("sidebar hidden on a wide window: still no toggle on the bar (Ctrl+Y / the palette switch)", () => {
     setUi({ sidebarHidden: true, narrow: false });
     const html = bar();
-    expect(html).toContain('data-fold="view"');
-    expect(html).toContain('id="view-grid-btn"');
-    expect(html).toContain('id="view-sky-btn"');
-    expect(html).toContain('data-tour="view-sky"');
-    expect(html.indexOf('id="new-btn"')).toBeLessThan(html.indexOf('data-fold="view"'));
-    expect(html.indexOf('data-fold="view"')).toBeLessThan(html.indexOf('id="intake-btn"'));
+    expect(html).not.toContain("tb-views");
+    expect(html).not.toContain('data-fold="view"');
+    expect(html).not.toContain('id="view-sky-btn"');
+    expect(html).toContain('id="new-btn"');
+    expect(html).toContain('id="intake-btn"');
   });
 
-  it("phone-narrow: on the bar (where the ⋯ fold can take it)", () => {
+  it("phone-narrow: the pair beside New (where the ⋯ fold can take it), Sky the tour's target", () => {
     // The narrow store hides the sidebar by itself; an overlay drawer opened
     // over it doesn't take the bar's toggle away.
-    setUi({ sidebarHidden: false, narrow: true });
-    expect(bar()).toContain('data-fold="view"');
+    for (const sidebarHidden of [false, true]) {
+      setUi({ sidebarHidden, narrow: true });
+      const html = bar();
+      expect(html).toContain('data-fold="view"');
+      expect(html).toContain('id="view-grid-btn"');
+      expect(html).toContain('id="view-sky-btn"');
+      expect(html).toContain('data-tour="view-sky"');
+      expect(html.indexOf('id="new-btn"')).toBeLessThan(html.indexOf('data-fold="view"'));
+      expect(html.indexOf('data-fold="view"')).toBeLessThan(html.indexOf('id="intake-btn"'));
+    }
     const top = code("components/TopBar.tsx");
-    expect(top).toContain("const barViews = ui.sidebarHidden || ui.narrow;");
+    expect(top).toContain("const barViews = ui.narrow;");
     expect(top).toMatch(/barViews && \{\s*key: "view",/);
   });
 

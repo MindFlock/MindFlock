@@ -93,10 +93,11 @@ carries its side of the journey. Flights are drawn in the Sky.
 | Schedule (templates) | the **Schedule** dialog; a flyway may carry its own schedule trigger, and Schedule lists those under **Scheduled flyways** | `session_templates.json` |
 | Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
-The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**:
-`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Ctrl+Y` switches to the
-`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Ctrl+Y` (⌘Y) switches to the
-sky (the main area's other view). The Sky half of the toggle counts the
+The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**
+(the Grid / Sky toggle only on a phone-narrow window; on desktop it sits on
+the sidebar's View row): `Alt+I` / `Alt+V` / `Alt+S` open the three dialogs,
+`Ctrl+Y` (⌘Y) switches to the sky (the main area's other view). The Sky half
+of the toggle counts the
 flights perched on you. Flyways are made, edited and flown from the Sky's
 **flyway shelf**. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
 Flights button as tabs of a Flights dialog; round 8 retired it — see
@@ -379,7 +380,9 @@ wire keeps its names; only what a person reads changed.
 **Top bar.** Flat: **New · Grid / Sky · Intake · Verify · Schedule ·
 Settings**, each with its own badge, tooltip, calm-hour rule and shortcut
 (`Alt+I` / `Alt+V` / `Alt+S`, ids `intake` / `verify` / `schedule`). No
-Flights entry. The Grid / Sky toggle's Sky half carries the badge of flights
+Flights entry. The Grid / Sky toggle is on the bar only on a phone-narrow
+window; on desktop it lives on the sidebar's View row (`Ctrl+Y` and the
+palette switch when the sidebar is hidden). Its Sky half carries the badge of flights
 perched on you (a flight perched on a Verify stop is Verify's count, not this
 one; red when one halted — `perchBadge`). The palette has "Intake…",
 "Verify…", "Schedule…", "Switch to the Sky / grid" and "Flyways…" (the Sky
@@ -504,9 +507,12 @@ soon as the row exists, the way `templateRun.ts` already does.
 `<flyway> · Perch: <stop>`, and **Done** / **Skip**.
 
 **Tours.** A short `sky` CoachTour (`lib/tours/sky.ts`; it was the `flights`
-tour): the top bar's Grid · Sky toggle (`data-tour="view-sky"`), a line
-(`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`), each
-falling back to the toggle. Its **?** ends the Sky's toolbar; it opens by
+tour): the Grid · Sky toggle (`data-tour="view-sky"` — the sidebar View
+row's Sky chip on desktop, the top bar's toggle on a phone-narrow window), a
+line (`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`). No
+step falls back to the toggle; a step whose element is not on screen
+(including the toggle step on a desktop with the sidebar hidden) centres its
+card (see [the tour table](#as-built-round-12-guide)). Its **?** ends the Sky's toolbar; it opens by
 itself the first time the Sky is shown in the calm first hour. The Intake,
 Verify and Schedule tours walk their own dialogs again.
 
@@ -526,8 +532,9 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   "fit the focused line" and This session, 2 / 4 / 9 its Fit; the bell's
   needs-you rows are the drawer's Perched on you; New is a new-session card on
   the sky. The full table is in docs/web-ui.md.
-- **Switch points**: the top bar's Grid · Sky toggle (`data-tour="view-sky"`),
-  the sidebar View row's **Sky** chip (a number returns to the grid), `Ctrl+Y`,
+- **Switch points**: the sidebar View row's **Sky** chip
+  (`data-tour="view-sky"`; a number returns to the grid), the top bar's
+  Grid · Sky toggle (phone-narrow only), `Ctrl+Y`,
   the palette, `#sky` / `#sky/<title>`. Switching keeps the selection, the
   camera, the drawer and the shelf; each pane's ghost flies to its line and
   back (~250 ms; none under `prefers-reduced-motion`).

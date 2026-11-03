@@ -13930,7 +13930,7 @@ var rt = class s {
 		return this.underlineStyle === 0 && this._urlId === 0;
 	}
 };
-var q = class s extends De {
+var q$1 = class s extends De {
 	constructor() {
 		super(...arguments);
 		this.content = 0;
@@ -14022,7 +14022,7 @@ var wt = class {
 			e(void 0);
 			return;
 		}
-		let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h = !1;
+		let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q$1(), l = i.getTrimmedLength(), a = -1, u = -1, h = !1;
 		for (let c = 0; c < l; c++) if (!(u === -1 && !i.hasContent(c))) {
 			if (i.loadCell(c, o), o.hasExtendedAttrs() && o.extended.urlId) if (u === -1) {
 				u = c, a = o.extended.urlId;
@@ -17765,7 +17765,7 @@ var ct = class {
 		this._bufferService = t;
 		this._characterJoiners = [];
 		this._nextCharacterJoinerId = 0;
-		this._workCell = new q();
+		this._workCell = new q$1();
 	}
 	register(t) {
 		let e = {
@@ -17891,7 +17891,7 @@ var Vt = class {
 		this._coreService = n;
 		this._decorationService = o;
 		this._themeService = l;
-		this._workCell = new q();
+		this._workCell = new q$1();
 		this._columnSelectMode = !1;
 		this.defaultSpacing = 0;
 	}
@@ -18807,7 +18807,7 @@ var ei = class extends D {
 		this._coreBrowserService = h;
 		this._dragScrollAmount = 0;
 		this._enabled = !0;
-		this._workCell = new q();
+		this._workCell = new q$1();
 		this._mouseDownTimeStamp = 0;
 		this._oldHasSelection = !1;
 		this._oldSelectionStart = void 0;
@@ -19458,7 +19458,7 @@ var Ze = class s {
 		this._combined = {};
 		this._extendedAttrs = {};
 		this._data = new Uint32Array(t * B);
-		let r = e || q.fromCharData([
+		let r = e || q$1.fromCharData([
 			0,
 			ir,
 			1,
@@ -19523,7 +19523,7 @@ var Ze = class s {
 	}
 	insertCells(t, e, i) {
 		if (t %= this.length, t && this.getWidth(t - 1) === 2 && this.setCellFromCodepoint(t - 1, 0, 1, i), e < this.length - t) {
-			let r = new q();
+			let r = new q$1();
 			for (let n = this.length - t - e - 1; n >= 0; --n) this.setCell(t + e + n, this.loadCell(t + n, r));
 			for (let n = 0; n < e; ++n) this.setCell(t + n, i);
 		} else for (let r = t; r < this.length; ++r) this.setCell(r, i);
@@ -19531,7 +19531,7 @@ var Ze = class s {
 	}
 	deleteCells(t, e, i) {
 		if (t %= this.length, e < this.length - t) {
-			let r = new q();
+			let r = new q$1();
 			for (let n = 0; n < this.length - t - e; ++n) this.setCell(t + n, this.loadCell(t + e + n, r));
 			for (let n = this.length - e; n < this.length; ++n) this.setCell(n, i);
 		} else for (let r = t; r < this.length; ++r) this.setCell(r, i);
@@ -19887,13 +19887,13 @@ var $i = class {
 		this.savedCurAttrData = X.clone();
 		this.savedCharset = Je;
 		this.markers = [];
-		this._nullCell = q.fromCharData([
+		this._nullCell = q$1.fromCharData([
 			0,
 			ir,
 			1,
 			0
 		]);
-		this._whitespaceCell = q.fromCharData([
+		this._whitespaceCell = q$1.fromCharData([
 			0,
 			we,
 			1,
@@ -22303,7 +22303,7 @@ var vn = class extends D {
 		return this._charsetService.setgLevel(e), !0;
 	}
 	screenAlignmentPattern() {
-		let e = new q();
+		let e = new q$1();
 		e.content = 4194373, e.fg = this._curAttrData.fg, e.bg = this._curAttrData.bg, this._setCursor(0, 0);
 		for (let i = 0; i < this._bufferService.rows; ++i) {
 			let r = this._activeBuffer.ybase + this._activeBuffer.y + i, n = this._activeBuffer.lines.get(r);
@@ -23604,7 +23604,7 @@ var wn = class {
 		return this._line.length;
 	}
 	getCell(t, e) {
-		if (!(t < 0 || t >= this._line.length)) return e ? (this._line.loadCell(t, e), e) : this._line.loadCell(t, new q());
+		if (!(t < 0 || t >= this._line.length)) return e ? (this._line.loadCell(t, e), e) : this._line.loadCell(t, new q$1());
 	}
 	translateToString(t, e, i) {
 		return this._line.translateToString(t, e, i);
@@ -23638,7 +23638,7 @@ var Ji = class {
 		if (e) return new wn(e);
 	}
 	getNullCell() {
-		return new q();
+		return new q$1();
 	}
 };
 var Dn = class extends D {
@@ -49710,7 +49710,7 @@ function TopBar() {
 	};
 	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
 	const scheduleTitle = "Schedule — everything that starts by itself on a timer: templates and scheduled chains" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
-	const barViews = ui.sidebarHidden || ui.narrow;
+	const barViews = ui.narrow;
 	const otherView = ui.view === "sky" ? "grid" : "sky";
 	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " needs you" : " need you") : "";
 	const foldable = [
@@ -81167,6 +81167,18 @@ function loopEdges(line, head) {
 		if (s.kind !== "loop") return;
 		const before = stops.slice(0, i).filter((b) => b.step.kind !== "loop");
 		const back = String(s.config?.back_to ?? "").trim();
+		if (back === LOOP_AGENT) {
+			if (!head) return;
+			const last = before[before.length - 1];
+			out.push({
+				from: last ? last.id : head,
+				to: head,
+				kind: "loop",
+				loop: n.loop || loopMark(s),
+				via: n
+			});
+			return;
+		}
 		const gid = s.group?.id;
 		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
 		const end = before[before.length - 1];
@@ -81209,15 +81221,56 @@ function loopSlotAfter(n) {
 	if (n.index === void 0) return void 0;
 	return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
 }
+var LOOP_AGENT = "agent";
+var loopsToAgent = (step) => !!step && step.kind === "loop" && String(step.config?.back_to ?? "").trim() === LOOP_AGENT;
 function loopStepTo(def, taken, target) {
 	const step = newStep(def, taken);
 	return {
 		...step,
 		config: {
 			...step.config,
-			back_to: target.id
+			back_to: target === LOOP_AGENT ? LOOP_AGENT : target.id
 		}
 	};
+}
+function loopBackTo(to) {
+	if (to.kind === "session") return LOOP_AGENT;
+	return firstStepOf(to)?.id || "";
+}
+function loopChoices(n, nodes, opts = {}) {
+	const canRepeat = (m) => (m.kind === "stop" ? !!m.step && m.step.kind !== "loop" : m.kind === "group") && m.index !== void 0 && m.row === "main";
+	if (!canRepeat(n)) return [];
+	const from = loopFromOf(n, nodes);
+	const slot = loopSlotAfter(from);
+	if (slot === void 0 || slot < (opts.insertFrom ?? 0)) return [];
+	const out = [];
+	if (opts.session) out.push({
+		key: "loop-to-agent",
+		label: "The agent (run it again)",
+		title: "After this stop the agent is prompted again, then the chain runs again",
+		agent: true,
+		from,
+		to: opts.session
+	});
+	for (const m of nodes) {
+		if (!canRepeat(m) || m.index > n.index) continue;
+		out.push({
+			key: "loop-to:" + m.id,
+			label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”",
+			title: "After this stop the chain goes back to “" + m.title + "”",
+			agent: false,
+			from,
+			to: m
+		});
+	}
+	return out;
+}
+function loopFromOf(n, nodes) {
+	const pid = n.parallel?.id;
+	if (!pid) return n;
+	let last = n;
+	for (const m of nodes) if (m.parallel?.id === pid && m.index !== void 0 && last.index !== void 0 && m.index > last.index) last = m;
+	return last;
 }
 function findNode(d, id) {
 	if (!id) return null;
@@ -85570,7 +85623,7 @@ function assemble(base, headNode, nodes, specs) {
 				return i > lo && i < hi && !isBranchRow(n.node);
 			});
 			const lane = laneOf.get(s) ?? 0;
-			const r = loopWirePathG(a, b, between, lane);
+			const r = loopWirePathG(a, b, between, lane, all);
 			wires.push({
 				id: "loop:" + (s.via?.id || s.from + ">" + s.to),
 				from: a.id,
@@ -85790,19 +85843,52 @@ function wirePath(a, b) {
 	const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
 	return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
 }
-function loopWirePathG(a, b, others, lane = 0) {
+function loopWirePathG(a, b, others, lane = 0, obstacles = []) {
 	const o = outPortOf(a);
 	const i = inPortOf(b);
 	const headRoom = a.id === HEAD_ID || b.id === HEAD_ID ? 60 : 0;
-	const y = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom + LOOP_CLEAR + lane * LOOP_LANE;
+	const low = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom;
 	const k = LOOP_HOOK;
-	return {
+	const path = (y) => ({
 		d: `M ${o.x} ${o.y} C ${o.x + k} ${o.y}, ${o.x + k} ${y}, ${o.x} ${y} L ${i.x} ${y} C ${i.x - k} ${y}, ${i.x - k} ${i.y}, ${i.x} ${i.y}`,
 		mid: {
 			x: (o.x + i.x) / 2,
 			y
 		}
-	};
+	});
+	const under = low + LOOP_CLEAR + lane * LOOP_LANE;
+	const rest = obstacles.filter((n) => n.id !== a.id && n.id !== b.id);
+	const hitsUnder = rest.length ? loopHits(o, i, under, rest) : 0;
+	if (!hitsUnder) return path(under);
+	const x0 = Math.min(i.x, o.x) - k;
+	const x1 = Math.max(i.x, o.x) + k;
+	const reach = rest.filter((n) => n.x < x1 && n.x + n.w > x0 && !isBranchRow(n.node));
+	const over = Math.min(a.y, b.y, ...others.map((n) => n.y), ...reach.map((n) => n.y)) - LOOP_CLEAR - lane * LOOP_LANE;
+	return loopHits(o, i, over, rest) < hitsUnder ? path(over) : path(under);
+}
+function loopHits(o, i, y, boxes) {
+	const k = LOOP_HOOK * .75;
+	const legs = [
+		{
+			x0: o.x,
+			x1: o.x + k,
+			y0: Math.min(o.y, y),
+			y1: Math.max(o.y, y)
+		},
+		{
+			x0: i.x - k,
+			x1: i.x,
+			y0: Math.min(i.y, y),
+			y1: Math.max(i.y, y)
+		},
+		{
+			x0: Math.min(i.x, o.x),
+			x1: Math.max(i.x, o.x),
+			y0: y - 2,
+			y1: y + 2
+		}
+	];
+	return boxes.filter((n) => legs.some((l) => n.x < l.x1 && n.x + n.w > l.x0 && n.y < l.y1 && n.y + n.h > l.y0)).length;
 }
 var CHAIN_HUES = [
 	265,
@@ -85912,6 +85998,16 @@ function wireIntent(src, dst, ctx = {}) {
 			after: Xa,
 			with: N.node,
 			step: Y.node
+		};
+	}
+	if (B.key === A.key && isHead(Y)) {
+		if (A.head.kind !== "session" || !A.headNode || !loopable(X.node)) return NONE;
+		return {
+			op: "loop",
+			chain: A.key,
+			from: Xa,
+			to: A.headNode.node,
+			agent: true
 		};
 	}
 	if (B.key === A.key) {
@@ -86349,7 +86445,7 @@ function SkyChain(p) {
 		const live = side === "in" ? n.inPort : n.outPort;
 		if (!live && !wired) return null;
 		const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
-		const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : "Drag from here to wire it to a stop, another chain or empty sky";
+		const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : n.id === HEAD_ID ? "Drag from here to wire it to a stop, another chain or empty sky" : "Drag from here: drop on an earlier stop or the agent to loop, on empty sky to add a stop";
 		return live ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: cls,
 			"data-port": side,
@@ -86392,6 +86488,7 @@ function SkyChain(p) {
 			isSel(n) ? "is-selected" : "",
 			p.highlighted?.has(n.id) || isHead && headNodeId && p.highlighted?.has(headNodeId) ? "is-highlighted" : "",
 			p.targets?.has(n.id) ? "is-target" : "",
+			isAgent && p.targets?.has(n.id) ? "is-agent-target" : "",
 			p.over === n.id ? "is-over" : "",
 			drag?.live && drag.id === n.id ? "is-dragging" : "",
 			draggable(n) ? "is-draggable" : ""
@@ -86573,7 +86670,7 @@ function SkyChain(p) {
 	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
 	const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : ""),
+		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "") + (p.targets && p.targets.size ? " is-wiring" : ""),
 		style: {
 			position: "relative",
 			width: Math.max(0, b.x + b.w),
@@ -86793,6 +86890,64 @@ function Countdown({ until }) {
 }
 //#endregion
 //#region src/components/flights/useChainMenu.tsx
+function stepLoopChoices(n, steps) {
+	if (!n.editable) return [];
+	const nodes = steps.map((st, i) => ({
+		id: "stop:" + st.id,
+		kind: "stop",
+		row: "main",
+		title: st.title,
+		sub: "",
+		state: "pending",
+		icon: st.kind,
+		step: st,
+		index: i,
+		...st.parallel ? { parallel: {
+			id: st.parallel.id,
+			index: 0,
+			size: 0
+		} } : {}
+	}));
+	const me = n.step ? nodes.find((m) => m.step.id === n.step.id) : void 0;
+	if (!me) return [];
+	return loopChoices({
+		...me,
+		title: n.title
+	}, nodes);
+}
+var LOOP_BACK_KEY = "loop-back";
+function withLoopItem(items, choices) {
+	const out = [...items];
+	if (!choices.length) return out;
+	const item = {
+		key: LOOP_BACK_KEY,
+		label: "Loop back to…",
+		title: choices.some((c) => c.agent) ? "Repeat: after this stop, run the agent again — or go back to an earlier stop" : "Repeat: after this stop, go back to an earlier stop"
+	};
+	const cut = out.findIndex((i) => i.danger || i.note);
+	out.splice(cut < 0 ? out.length : cut, 0, item);
+	return out;
+}
+function loopMenuItems(choices) {
+	return [
+		{
+			key: "loop-note",
+			label: "Loop back to…",
+			title: "Where the chain goes back to after this stop",
+			note: true
+		},
+		...choices.map((c) => ({
+			key: c.key,
+			label: c.label,
+			title: c.title
+		})),
+		{
+			key: "loop-cancel",
+			label: "← Back",
+			title: "Back to the stop's menu"
+		}
+	];
+}
 var HERE = /* @__PURE__ */ new Set([
 	"current",
 	"perched",
@@ -86844,7 +86999,9 @@ function useChainMenu(h, flightId, ctx) {
 		const cut = items.findIndex((i) => i.danger || i.note);
 		items.splice(cut < 0 ? items.length : cut, 0, ...par);
 	}
-	if (!items.length) return {
+	const choices = h.onLoopFrom && (n.kind === "stop" || n.kind === "group") ? h.loopChoicesOf ? h.loopChoicesOf(n) : stepLoopChoices(n, steps) : [];
+	const shown = open.sub === "loop" ? loopMenuItems(choices) : withLoopItem(items, choices);
+	if (!shown.length) return {
 		onMenu,
 		menu: null
 	};
@@ -86861,6 +87018,10 @@ function useChainMenu(h, flightId, ctx) {
 		else if (key === "open" || key === "tackon") h.onOpen?.(n);
 		else if (key === "solo") leaveParallel(flightId, step);
 		else if (key === "parallel" && next) joinParallel(flightId, step, next.id);
+		else {
+			const c = choices.find((x) => x.key === key);
+			if (c) h.onLoopFrom?.(c.from, c.to);
+		}
 	};
 	return {
 		onMenu,
@@ -86878,14 +87039,19 @@ function useChainMenu(h, flightId, ctx) {
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
 				x: open.x,
 				y: open.y,
-				label: "“" + n.title + "” — what you can do",
-				items,
+				label: open.sub === "loop" ? "Loop “" + n.title + "” back to…" : "“" + n.title + "” — what you can do",
+				items: shown,
 				onPick: (key) => {
+					const k = key;
+					if (k === LOOP_BACK_KEY || k === "loop-cancel") return setOpen({
+						...open,
+						sub: k === LOOP_BACK_KEY ? "loop" : void 0
+					});
 					pick(key);
 					setOpen(null);
 				},
 				onClose: () => setOpen(null)
-			})
+			}, open.sub || "menu")
 		}), document.body)
 	};
 }
@@ -86895,6 +87061,7 @@ function pillAimer(graph, onLoopTo) {
 		const wire = graph.wires.find((w) => w.via?.id === via.id);
 		const end = graph.nodes.find((n) => n.id === wire?.from);
 		if (!end || end.node.index === void 0) return;
+		const agent = graph.head.kind === "session" ? graph.headNode : null;
 		const sx = e.clientX;
 		const sy = e.clientY;
 		let moved = false;
@@ -86902,6 +87069,10 @@ function pillAimer(graph, onLoopTo) {
 		const targetAt = (x, y) => {
 			const el = document.elementFromPoint(x, y)?.closest("[data-node]");
 			if (!el || el.closest("[data-chain]")?.getAttribute("data-chain") !== graph.key) return null;
+			if (agent && el.getAttribute("data-node") === agent.id) return wire?.to === agent.id ? null : {
+				el,
+				n: agent
+			};
 			const n = graph.nodes.find((g) => g.id === el.getAttribute("data-node"));
 			return n && loopable(n.node) && n.node.index <= end.node.index ? {
 				el,
@@ -87479,6 +87650,33 @@ function useChainRegistry() {
 		version
 	};
 }
+var q = (t) => "“" + t + "”";
+function intentHint(intent) {
+	switch (intent.op) {
+		case "loop": return intent.agent ? "↺ Loop back to the agent" : "↺ Loop back to " + q(intent.to.title);
+		case "move": return "Move " + q(intent.step.title) + " here";
+		case "merge": return "Join that chain on here";
+		case "attach": return "Run that chain on this session";
+		case "handoff": return "Start that chain from here";
+		case "parallel": return intent.step ? "Run " + q(intent.step.title) + " beside " + q(intent.with.title) : "Add a stop beside " + q(intent.with.title);
+		case "palette": return "Add a stop here";
+		case "split": return "Split off a chain here";
+		default: return "";
+	}
+}
+function dragHint(src, targets) {
+	if ("sky" in src) return "";
+	if (src.side === "in") return "Drop on empty sky to split it off";
+	const own = targets.get(src.chain.key);
+	const g = src.chain;
+	const agent = !!own?.has(HEAD) && src.node.id !== HEAD && g.head.kind === "session";
+	const at = src.node.node.index;
+	const earlier = at !== void 0 && g.nodes.some((n) => own?.has(n.id) && n.node.index !== void 0 && n.node.index <= at && n.node.kind !== "child" && n.node.kind !== "branch");
+	if (agent && earlier) return "Drop on an earlier stop or the agent to loop";
+	if (agent) return "Drop on the agent to loop";
+	if (earlier) return "Drop on an earlier stop to loop";
+	return "Drop on empty sky to add a stop";
+}
 function useSkyWiring(opts) {
 	const optsRef = (0, import_react.useRef)(opts);
 	optsRef.current = opts;
@@ -87503,12 +87701,15 @@ function useSkyWiring(opts) {
 		const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
 		let shift = e.shiftKey;
 		const kindsNow = () => optsRef.current.kinds?.() || null;
-		setTargets(wireTargetsOf(src, chains.values(), shift, kindsNow()));
+		let lit = wireTargetsOf(src, chains.values(), shift, kindsNow());
+		let base = dragHint(src, lit);
+		setTargets(lit);
 		setBand({
 			from,
 			to: from,
 			side,
-			over: false
+			over: false,
+			hint: base
 		});
 		setOver(null);
 		const pid = e.pointerId;
@@ -87529,18 +87730,21 @@ function useSkyWiring(opts) {
 			const to = now.planeAt(ev.clientX, ev.clientY);
 			if (ev.shiftKey !== shift) {
 				shift = ev.shiftKey;
-				setTargets(wireTargetsOf(src, now.chains().values(), shift, kindsNow()));
+				lit = wireTargetsOf(src, now.chains().values(), shift, kindsNow());
+				base = dragHint(src, lit);
+				setTargets(lit);
 			}
 			const h = hit(ev).node;
 			const hc = h ? now.chains().get(h.key) : null;
-			const ok = !!h && !!hc && wireIntent(src, {
+			const it = h && hc ? wireIntent(src, {
 				chain: hc.graph,
 				node: h.node,
 				side: "in"
 			}, {
 				shift,
 				kinds: kindsNow()
-			}).op !== "none";
+			}) : { op: "none" };
+			const ok = it.op !== "none";
 			setOver((cur) => ok ? cur?.key === h.key && cur.node === h.node.id ? cur : {
 				key: h.key,
 				node: h.node.id
@@ -87549,7 +87753,8 @@ function useSkyWiring(opts) {
 				from,
 				to,
 				side,
-				over: ok
+				over: ok,
+				hint: ok && intentHint(it) || base
 			});
 		};
 		const end = (commit, ev) => {
@@ -87688,10 +87893,11 @@ async function runWireIntent(intent, ctx, d) {
 	}
 	if (intent.op === "loop") {
 		const def = d.kinds.find((k) => k.kind === "loop");
-		const target = firstStepOf(intent.to);
+		const target = intent.agent ? LOOP_AGENT : firstStepOf(intent.to);
 		const at = loopSlotAfter(intent.from);
-		if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
-		if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast("Loops back to “" + target.title + "”");
+		if (!def) return void toast("This server has no Loop stop");
+		if (!target || at === void 0) return;
+		if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast(target === LOOP_AGENT ? "Loops back to the agent — it runs again after “" + intent.from.title + "”" : "Loops back to “" + target.title + "”");
 		return;
 	}
 	if (intent.op === "split") {
@@ -89674,6 +89880,15 @@ var copyStep = (s) => ({
 	...s,
 	config: { ...s.config }
 });
+var LOOP_AGENT_OWN_FIELDS = ["back_to", "prompt"];
+function loopFormDef(def, step) {
+	if (!def || !loopsToAgent(step)) return def;
+	return {
+		...def,
+		fields: def.fields.filter((f) => !LOOP_AGENT_OWN_FIELDS.includes(f.name))
+	};
+}
+var LOOP_PROMPT_HINT = "Empty = send the same prompt again";
 function StopDialog(p) {
 	return p.node.kind === "group" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GroupDialog, { ...p }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepDialog, { ...p });
 }
@@ -89745,9 +89960,66 @@ function StepDialog(p) {
 						children: state
 					}), p.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: p.note })]
 				}),
+				draft && loopsToAgent(draft) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Back to",
+					wide: true,
+					hint: "After this stop the agent is prompted again; once its turn is done the chain runs again from its first stop.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fl-chiprow stop-dialog-loop-agent",
+						"data-loop-agent": "",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "the agent" }), editable && (p.lineSteps?.length || 0) > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => setDraft((d) => d ? {
+								...d,
+								config: {
+									...d.config,
+									back_to: ""
+								}
+							} : d),
+							children: "Go back to a stop instead"
+						})]
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Prompt",
+					wide: true,
+					hint: LOOP_PROMPT_HINT,
+					children: editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptBox, {
+						label: "Prompt for the agent each run",
+						rows: 3,
+						value: String(draft.config?.prompt ?? ""),
+						placeholder: "The prompt that started the agent's turn",
+						onChange: (t) => setDraft((d) => d ? {
+							...d,
+							config: {
+								...d.config,
+								prompt: t
+							}
+						} : d)
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: String(draft.config?.prompt ?? "").trim() || "the same prompt again"
+					})
+				})] }),
+				draft && editable && p.loopAgent && draft.kind === "loop" && !loopsToAgent(draft) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fl-chiprow",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						title: "The agent is prompted again after this stop, then the chain runs again",
+						onClick: () => setDraft((d) => d ? {
+							...d,
+							config: {
+								...d.config,
+								back_to: LOOP_AGENT
+							}
+						} : d),
+						children: "↺ Loop back to the agent instead"
+					})
+				}),
 				draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopForm, {
 					step: draft,
-					def: p.def,
+					def: loopFormDef(p.def, draft),
 					lineSteps: p.lineSteps,
 					readOnly: !editable,
 					onChange: (patch) => setDraft((d) => d ? {
@@ -90431,23 +90703,13 @@ function useSessionLine(title, src, opts) {
 		if (step && i >= flight.cursor && st !== "done" && st !== "skipped") setHalt(flight.id, step.id, !step.halt);
 	};
 	const ordered = orderedPlans(plans);
-	const savedStops = (at) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-palette-flyways",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fl-palette-head",
-			children: "Saved chains — tack one on as a group"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fl-chiprow",
-			children: ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "fl-pick",
-				disabled: busy,
-				title: p.steps.map((s) => s.title).join(" → "),
-				onClick: () => void tackPlan(p, at),
-				children: p.name
-			}, p.id))
-		})]
-	});
+	const savedStops = (at) => ordered.map((p) => ({
+		id: p.id,
+		name: p.name,
+		title: p.steps.map((s) => s.title).join(" → "),
+		disabled: busy,
+		onPick: () => void tackPlan(p, at)
+	}));
 	const raw = {
 		selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
 		onSelect: (n) => onSelect(own(n)),
@@ -90474,18 +90736,21 @@ function useSessionLine(title, src, opts) {
 		onToggleGroup: toggleGroup,
 		onLoopFrom: flight ? (from, to) => {
 			const def = kindOf.get("loop");
-			const target = firstStepOf(to);
+			const target = to.kind === "session" ? LOOP_AGENT : firstStepOf(to);
 			const at = loopSlotAfter(from);
-			if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
-			tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : void 0).then((ok) => ok && toast("Loops back to “" + target.title + "”"));
+			if (!def) return void toast("This server has no Loop stop");
+			if (!target || at === void 0) return;
+			const said = target === LOOP_AGENT ? "Loops back to the agent — it runs again after “" + from.title + "”" : "Loops back to “" + target.title + "”";
+			tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : void 0).then((ok) => ok && toast(said));
 		} : void 0,
 		onLoopTo: flight ? (loop, to) => {
-			const target = firstStepOf(to);
-			if (!loop.step || !target || loop.step.config?.back_to === target.id) return;
+			const back = loopBackTo(to);
+			if (!loop.step || !back || loop.step.config?.back_to === back) return;
+			const said = back === LOOP_AGENT ? "Loops back to the agent now" : "Loops back to “" + (firstStepOf(to)?.title || to.title) + "” now";
 			patchStop(flight.id, loop.step.id, { config: {
 				...loop.step.config,
-				back_to: target.id
-			} }).then((ok) => ok && toast("Loops back to “" + target.title + "” now"));
+				back_to: back
+			} }).then((ok) => ok && toast(said));
 		} : void 0,
 		onDropStop: (drop, at) => {
 			if ("planId" in drop) {
@@ -90506,6 +90771,11 @@ function useSessionLine(title, src, opts) {
 		reveal: currentNodeId(line, flight)
 	};
 	const shown = drawnCanvas(line, raw);
+	const sessionBox = line.nodes.find((n) => n.kind === "session" && n.row === "main") || null;
+	const loopChoicesOf = (n) => flight ? loopChoices(own(n), line.nodes.filter((m) => m.row === "main"), {
+		session: sessionBox,
+		insertFrom: line.insertFrom
+	}) : [];
 	const palette = paletteAt !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
 		kinds,
 		title: paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”",
@@ -90514,7 +90784,8 @@ function useSessionLine(title, src, opts) {
 			setPaletteAt(null);
 			setPaletteHang(null);
 		},
-		extra: ordered.length > 0 ? savedStops(paletteAt >= end ? null : paletteAt) : void 0
+		saved: savedStops(paletteAt >= end ? null : paletteAt),
+		savedHead: "Saved chains — tack one on as a group"
 	}) : null;
 	const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
 	const act = async (f) => {
@@ -90570,6 +90841,7 @@ function useSessionLine(title, src, opts) {
 			node: open,
 			def,
 			lineSteps: flight?.steps,
+			loopAgent: true,
 			busy,
 			note: [why, open.reason || rec?.note || ""].filter(Boolean).join(" "),
 			onClose: close,
@@ -90625,7 +90897,10 @@ function useSessionLine(title, src, opts) {
 		editing: palette !== null || inspector !== null,
 		canvas: shown.canvas,
 		graphDiagram: line,
-		graphCanvas: raw,
+		graphCanvas: {
+			...raw,
+			loopChoicesOf
+		},
 		paletteAfter,
 		paletteParallel,
 		anchor: inspector !== null && dialog ? dialog.id : palette !== null ? paletteHang?.node ?? "" : null,
@@ -135198,15 +135473,27 @@ function SkyWires({ band, wires }) {
 			})]
 		}, w.id)), band && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
 			className: "sky-band" + (band.over ? " is-over" : "") + (band.side === "in" ? " is-split" : ""),
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sky-band-path",
-				d: band.side === "in" ? wirePath(band.to, band.from) : wirePath(band.from, band.to)
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-				className: "sky-band-end",
-				cx: band.to.x,
-				cy: band.to.y,
-				r: 5
-			})]
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					className: "sky-band-path",
+					d: band.side === "in" ? wirePath(band.to, band.from) : wirePath(band.from, band.to)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					className: "sky-band-end",
+					cx: band.to.x,
+					cy: band.to.y,
+					r: 5
+				}),
+				band.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+					className: "sky-band-hint",
+					x: band.to.x,
+					y: band.to.y,
+					dx: "1.1em",
+					dy: "2.1em",
+					"data-hint": "",
+					children: band.hint
+				})
+			]
 		})]
 	});
 }

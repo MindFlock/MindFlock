@@ -49,7 +49,8 @@ everything that needs you (see [Notifications](#notifications-)), and the
 mic right after it (below: talk to the focused session). Then the menu,
 which carries only the daily loop — **New**, the **Grid · Sky** toggle
 (`Ctrl+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
-while the sidebar, its home, is hidden or the window is phone-narrow), **Intake**
+on a phone-narrow window; its home is the sidebar, and a desktop with the
+sidebar hidden switches with `Ctrl+Y` or the palette), **Intake**
 (`Alt+I`; see [Intake](#intake)), **Verify** (`Alt+V`), **Schedule**
 (`Alt+S`; see [Schedule](#schedule)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
@@ -102,10 +103,12 @@ working. It refreshes on `template.run_started` / `template.run_failed`
 **The Grid · Sky toggle**'s Sky half wears the count of flights **perched on
 you** (parked on a *you* stop, or halted until someone retries or skips; a
 flight parked on a Verify stop is Verify's count, not this one) — nothing at
-zero, red when one halted (`lib/flights.ts` `perchBadge`). Its folded ⋯ row
-carries the same count, and so does the sidebar View row's Sky half — the
-toggle's home, where it lives whenever the sidebar is shown (see
-[Switching](#switching)).
+zero, red when one halted (`lib/flights.ts` `perchBadge`). The toggle's home
+is the sidebar View row, whose Sky half carries the count; the bar wears the
+toggle (and its folded ⋯ row the same count) only on a phone-narrow window
+(see [Switching](#switching)). A desktop window with the sidebar hidden shows
+no perch count on the bar; perched flights still reach you through
+notifications and the Sky's drawer.
 
 **The bar's tooltips read their shortcuts off the live keymap**
 (`shortcutLabels`), rebinds included — and in a browser tab they leave out
@@ -4221,7 +4224,9 @@ and **Schedule…**.
 **The Sky tour** (`lib/tours/sky.ts`, id `sky`; the ? at the end of the Sky's
 toolbar, and by itself once, the first time the Sky is shown in the calm
 first hour) walks every surface in the order a newcomer meets it, one plain
-sentence each: the Grid · Sky toggle (`view-sky`) · a line's bar (drag it, ⋯)
+sentence each: the Grid · Sky toggle (`view-sky` — the sidebar View row's Sky
+chip on desktop, the bar's toggle only on a phone; with the desktop sidebar
+hidden the step has no target and centres its card) · a line's bar (drag it, ⋯)
 · the boxes (the session box opens the real terminal) · the bird (click halts
 or carries on, drag jumps) · a stop's hover toolbar · a stop's dialog · the
 shelf (default blocks, saved stops, All blocks…) · a grounded line (drop a
@@ -4318,10 +4323,14 @@ All through `lib/viewMode.ts` (`setView`, `toggleView`, `showInSky`):
   only the numbers (unless a count other than Auto was picked), never the
   toggle.
 - **The top bar's Grid · Sky toggle**, beside New — the same pair, worn only
-  while the View row is out of sight: the sidebar hidden, or a phone-narrow
-  window (glyphs only there, and the last thing a narrow bar folds — into ⋯,
-  after Settings, Schedule and Verify, as *Switch to the Sky / grid*). With the
-  sidebar shown there is exactly one toggle on screen, the sidebar's.
+  on a phone-narrow window, whose sidebar is an overlay and which has no
+  `Ctrl+Y` (glyphs only there, and the last thing a narrow bar folds — into ⋯,
+  after Settings, Schedule and Verify, as *Switch to the Sky / grid*). A
+  desktop window never wears it on the bar, not even with the sidebar hidden
+  (`Ctrl+Y` and the palette switch there), so the only toggle on screen is
+  the sidebar's. The perched-on-you count rides wherever a toggle is: with a
+  desktop sidebar hidden it is on no bar (notifications and the drawer still
+  carry it).
 - **`Ctrl+Y`** — from anywhere but a text field or behind a dialog (a terminal
   included).
 - **The palette**: *Switch to the Sky* / *Switch to the grid*.
