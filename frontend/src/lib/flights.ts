@@ -774,7 +774,7 @@ export function planChoices(
 // ignored beside a plan.
 
 /** The ship ladder a depth means, in the words a ship step's title uses. */
-const SHIP_WORD: Record<string, string> = { commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge" };
+const SHIP_WORD: Record<string, string> = { commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge when green" };
 
 /** A ship lane in the words a ship step's title uses ("Open PR", "Merge"). */
 export function shipWord(lane: string): string {
