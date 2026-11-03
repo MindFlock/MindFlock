@@ -77,7 +77,7 @@ import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
-import { StopPalette } from "./StopParts";
+import { StopPalette, type PaletteSaved } from "./StopParts";
 import { StopDialog } from "./StopDialog";
 
 export interface LineSource {
@@ -595,18 +595,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   };
 
   const ordered = orderedPlans(plans);
-  const savedStops = (at: number | null) => (
-    <div className="fl-palette-flyways">
-      <div className="fl-palette-head">Saved chains — tack one on as a group</div>
-      <div className="fl-chiprow">
-        {ordered.map((p) => (
-          <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void tackPlan(p, at)}>
-            {p.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  // The saved chains, as data: the palette's filter narrows them with the
+  // stop kinds ("Saved chains — tack one on as a group").
+  const savedStops = (at: number | null): PaletteSaved[] =>
+    ordered.map((p) => ({
+      id: p.id,
+      name: p.name,
+      title: p.steps.map((s) => s.title).join(" → "),
+      disabled: busy,
+      onPick: () => void tackPlan(p, at),
+    }));
 
   const raw: LineCanvasProps = {
     selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
@@ -695,7 +693,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
           setPaletteAt(null);
           setPaletteHang(null);
         }}
-        extra={ordered.length > 0 ? savedStops(paletteAt >= end ? null : paletteAt) : undefined}
+        saved={savedStops(paletteAt >= end ? null : paletteAt)}
+        savedHead="Saved chains — tack one on as a group"
       />
     ) : null;
 
