@@ -166,7 +166,7 @@ describe("auto-split: stepper, planning copy and the dissolved toast", () => {
   it("puts the N stepper OUTSIDE the checkbox's label", () => {
     // Clicking − or + must not toggle the box: the label's text ends, the
     // label closes, and only then does the stepper open.
-    expect(SPLIT).toMatch(/Auto-split into up to\s*<\/label>\{" "\}[\s\S]*?<span className="rt-step nf-split-n"/);
+    expect(SPLIT).toMatch(/Let it split into up to\s*<\/label>\{" "\}[\s\S]*?<span className="rt-step nf-split-n"/);
     expect(SPLIT).toContain("disabled={!ok || maxPieces <= SPLIT_MIN}");
     expect(SPLIT).toContain("disabled={!ok || maxPieces >= limit}");
     // The stepper's CSS ships with it.

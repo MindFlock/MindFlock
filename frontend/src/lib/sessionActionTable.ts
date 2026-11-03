@@ -55,6 +55,7 @@ import {
   flockActionLabel,
   flockAvailable,
   insertWorkersRequest,
+  openWorkersMenu,
   toggleFlock,
 } from "./workersRequest";
 
@@ -193,11 +194,23 @@ export const SESSION_ACTIONS = {
     enabled: (c) => settled(c) && !c.shared && !!fastTrackStep(c.inst!),
     run: (t) => openFastTrackMenu(t),
   },
-  // A split acts at once through the server. Local rows only: another
-  // device's group and split routes aren't forwarded.
+  // Workers — sessions this one starts. ONE entry, "Workers…", opens the
+  // picker hung under the pane's Workers control (components/grid/
+  // WorkersMenu) with the three modes below; each mode is also its own row
+  // here, for the palette and the shortcuts. Offered on the same rows as the
+  // control: this machine's own settled sessions, never a guest's.
+  workers: {
+    label: "Workers…",
+    note: (c) => (c.inst?.flock ? "on every prompt" : "split now, ask once, or on every prompt"),
+    enabled: (c) => flockAvailable(c.inst, cfg()),
+    run: (t) => openWorkersMenu(t),
+  },
+  // Let the agent split this now: acts at once through the server (a split
+  // team run). Local rows only: another device's group and split routes
+  // aren't forwarded.
   split: {
-    label: "Split into parallel pieces…",
-    note: "starts a split",
+    label: "Workers: let the agent split this now",
+    note: "it proposes workers; you approve them",
     enabled: (c) =>
       settled(c) && !c.shared && !c.inst!.device && !c.title.includes("::") && !splitBlockReason(c.caps, c.inst!),
     run: (t) => {
@@ -210,11 +223,11 @@ export const SESSION_ACTIONS = {
     },
   },
   // MindFlock workers without typing the ask (lib/workersRequest): once, typed
-  // into the terminal for you to finish; or Flock mode, where the server adds
-  // it to every prompt. This machine's own settled sessions only, never a
-  // guest's — the same rows Pause/Resume act on.
+  // into the terminal for you to finish; or on every prompt, where the server
+  // adds it to everything you send. This machine's own settled sessions only,
+  // never a guest's — the same rows Pause/Resume act on.
   askWorkers: {
-    label: "Ask for workers",
+    label: "Ask for workers once",
     keys: ASK_WORKERS_KEYS,
     note: "types the workers request into its terminal",
     enabled: (c) => flockAvailable(c.inst, cfg()) && c.inst!.status !== "paused",

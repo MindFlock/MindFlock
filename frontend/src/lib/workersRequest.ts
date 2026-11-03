@@ -1,6 +1,10 @@
 /** Asking a session for MindFlock workers without typing the ask each time.
  *
- * Two ways, both on the focused session:
+ * "Workers" is the one word for sessions a session starts. Their one entry is
+ * the "Workers…" picker (components/grid/WorkersMenu): the pane's Workers
+ * control opens it, and so do the row / pane ⋯ menu's "Workers…". It has
+ * three modes — "Let the agent split this now" (a split team run), and the
+ * two below — whose shortcuts stay:
  *
  *   Alt+G        "Ask for workers" — types the workers request into the
  *                session's agent terminal (as one pasted chunk, a trailing
@@ -9,19 +13,21 @@
  *   Alt+Shift+G  "Workers on every prompt" — the sticky Flock mode: while on,
  *                the server adds the request to every prompt submitted in
  *                that session (`POST /api/instances/{title}/flock {on}`), so
- *                you type nothing extra. The pane's Flock control (the
- *                MindFlock raven, lib/flock's sprite as a mask) and the
- *                row menu flip the same switch.
+ *                you type nothing extra. The pane's Workers control (the
+ *                MindFlock raven, lib/flock's sprite as a mask) reads
+ *                "Workers ✓" while it is on.
  *
  * The request text is the server's (`GET /api/config` → `flock.request`,
- * Settings → General "Workers request" with `{model}` already filled in); an
+ * Settings → Agent orchestration "Workers request" with `{model}` already
+ * filled in); an
  * older server sends no `flock`, and then the default below is used. */
 
+import { useSyncExternalStore } from "react";
 import type { Config, Instance } from "../api/types";
 import { instApi } from "../api/client";
 import { patchInstance, queryClient } from "../state/queries";
 import { displayName } from "../state/store";
-import { instances } from "./sessionActions";
+import { instances, selectSession } from "./sessionActions";
 import { peekTerm } from "./terminals";
 import { isRemote } from "./playbooks";
 import { errMsg } from "./format";
@@ -30,7 +36,7 @@ import { toast } from "./toast";
 /** The model workers run on when Settings says nothing. */
 export const DEFAULT_WORKERS_MODEL = "claude-opus-5-5";
 
-/** Settings → General "Workers request" when unset: `{model}` is replaced by
+/** Settings → Agent orchestration "Workers request" when unset: `{model}` is replaced by
  * "Workers model". */
 export const DEFAULT_WORKERS_TEMPLATE =
   "Use MindFlock workers for this: spawn as many MindFlock agents as the work needs (model {model}), " +
@@ -70,18 +76,19 @@ export function flockAvailable(inst: Instance | undefined, config?: Pick<Config,
   return !(inst as { remote_peer?: boolean }).remote_peer;
 }
 
-/** What the pane control says. */
-export function flockChipLabel(): string {
-  return "Flock";
+/** What the pane control says: "Workers", with a ✓ while "Workers on every
+ * prompt" is on. */
+export function flockChipLabel(on = false): string {
+  return on ? "Workers ✓" : "Workers";
 }
 
 /** The pane control's tooltip, on or off. `keys`: the live combos for
- * [toggle, add once] (rebinds included); defaults otherwise. */
+ * [every prompt, ask once] (rebinds included); defaults otherwise. */
 export function flockTooltip(on: boolean, keys: [string, string] = [FLOCK_KEYS, ASK_WORKERS_KEYS]): string {
   return (
-    "Workers on every prompt — the request is added to everything you send here" +
-    ` (${keys[0]} to toggle; ${keys[1]} to add it once)` +
-    (on ? "\nOn: click to turn it off" : "\nOff: click to turn it on")
+    "Workers — let the agent split this now, ask for workers once, or on every prompt" +
+    ` (${keys[1]} asks once; ${keys[0]} turns every prompt on or off)` +
+    (on ? "\nWorkers on every prompt: on" : "")
   );
 }
 
@@ -93,8 +100,8 @@ export function flockActionLabel(on: boolean): string {
 /** What the toggle says once the server answered. */
 export function flockToast(name: string, on: boolean): string {
   return on
-    ? `${name}: Flock on — the workers request is added to every prompt`
-    : `${name}: Flock off — prompts go as typed`;
+    ? `${name}: Workers on every prompt — on`
+    : `${name}: Workers on every prompt — off`;
 }
 
 /** Type the workers request into a session's agent terminal and give it the
@@ -117,7 +124,7 @@ export function insertWorkersRequest(title: string, config: Config | null | unde
   return true;
 }
 
-/** Flip a session's Flock mode (`on` given: set it). Resolves the server's
+/** Flip a session's "Workers on every prompt" (`on` given: set it). Resolves the server's
  * answer, or null when the call failed (already toasted). */
 export async function toggleFlock(title: string, on?: boolean): Promise<boolean | null> {
   const before = !!instances().find((r) => r.title === title)?.flock;
@@ -136,7 +143,61 @@ export async function toggleFlock(title: string, on?: boolean): Promise<boolean 
     return now;
   } catch (err) {
     patchInstance(title, { flock: before });
-    toast(`${name}: Flock — ${errMsg(err)}`, { duration: 6000 });
+    toast(`${name}: Workers on every prompt — ${errMsg(err)}`, { duration: 6000 });
     return null;
   }
+}
+
+// --- The Workers… picker's open state -----------------------------------------
+// One picker open at a time, hung under its pane's Workers control. A tiny
+// store of its own (not the UI store): only that control and its pane read it.
+
+let workersMenuTitle: string | null = null;
+const workersMenuSubs = new Set<() => void>();
+
+function setWorkersMenu(title: string | null) {
+  if (workersMenuTitle === title) return;
+  workersMenuTitle = title;
+  workersMenuSubs.forEach((f) => f());
+}
+
+/** The session whose Workers… picker is open (null = none). */
+export function workersMenuOpenFor(): string | null {
+  return workersMenuTitle;
+}
+
+/** Whether THIS pane's picker is the open one. */
+export function useWorkersMenu(title: string): boolean {
+  return useSyncExternalStore(
+    (f) => {
+      workersMenuSubs.add(f);
+      return () => workersMenuSubs.delete(f);
+    },
+    () => workersMenuTitle === title,
+    () => false
+  );
+}
+
+/** Open (or, `toggle`, flip) a session's Workers… picker — from its pane's
+ * Workers control, the row / pane ⋯ menu's "Workers…" or the palette. The
+ * session is selected first so its pane (the picker's anchor) is on screen. */
+export function openWorkersMenu(title: string, toggle = false): void {
+  if (toggle && workersMenuTitle === title) {
+    setWorkersMenu(null);
+    return;
+  }
+  const inst = instances().find((r) => r.title === title);
+  if (!inst || inst.pending) {
+    toast("That session isn't ready yet");
+    return;
+  }
+  selectSession(title, { noKeyboard: true });
+  // A frame later: the pane may have just been un-hidden, and its Workers
+  // control is what the picker measures itself against.
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => setWorkersMenu(title));
+  else setWorkersMenu(title);
+}
+
+export function closeWorkersMenu(): void {
+  setWorkersMenu(null);
 }

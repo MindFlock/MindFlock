@@ -2,15 +2,24 @@
  * flock through the MindFlock MCP, and how far it may fan out.
  *
  * - the MCP switch and its scope (were a fold at the bottom of General);
- * - the spawn caps: live sub-sessions per orchestrator, how deep spawns may
- *   nest, and agent-spawned sessions alive at once. They are guard-rails the
+ * - Workers (sessions a session starts): the workers request and model
+ *   (lib/workersRequest; moved here from General, saved under `general`);
+ * - the spawn caps: live workers per orchestrator, how deep spawns may
+ *   nest, and workers alive at once. They are guard-rails the
  *   server applies at each spawn (backend.web.core.lineage), read per request,
  *   so a change applies to the next spawn — no relaunch. An env var
  *   (MINDFLOCK_MAX_*) set on the server still wins; the row says so;
  * - shared MCP servers: which of the user's own MCP servers run once per
  *   machine instead of once per window (SharedMcpServers). */
 
+import { useEffect, useState } from "react";
 import { toast } from "../../../lib/toast";
+import {
+  ASK_WORKERS_KEYS,
+  DEFAULT_WORKERS_MODEL,
+  DEFAULT_WORKERS_TEMPLATE,
+  FLOCK_KEYS,
+} from "../../../lib/workersRequest";
 import { useConfig } from "../../../state/queries";
 import type { OrchestrationCap } from "../../../api/types";
 import { SettingField, useSettings } from "../useSettings";
@@ -23,9 +32,15 @@ export function AgentOrchestration(_: ScreenProps) {
       <h3 className="set-section-title">Agent orchestration</h3>
       <p className="set-hint orch-intro">
         Agents can see the other sessions, message them, and start and steer
-        sub-sessions of their own through the MindFlock MCP.
+        workers of their own through the MindFlock MCP.
       </p>
       <AgentMcpRows />
+      <h3 className="set-section-title">Workers</h3>
+      <p className="set-hint orch-intro">
+        Sessions a session starts. Ask for them from a session's Workers… (its pane
+        button or ⋯ menu): let the agent split it now, ask once, or on every prompt.
+      </p>
+      <WorkersRows />
       <h3 className="set-section-title">Spawn limits</h3>
       <p className="set-hint orch-intro">
         Guard-rails on how far one orchestrator can fan out. A change applies to
@@ -34,22 +49,65 @@ export function AgentOrchestration(_: ScreenProps) {
       <CapRow
         cap="max_children"
         field="agent_max_children"
-        label="Sub-sessions per orchestrator"
-        hint="How many live sub-sessions one session may have at once. Also the most pieces a split can make."
+        label="Workers per orchestrator"
+        hint="How many live workers one session may have at once. Also the most workers a split can make."
       />
       <CapRow
         cap="max_spawned"
         field="agent_max_spawned"
-        label="Agent-spawned sessions in total"
-        hint="Every agent-started session alive at once, across all orchestrators. Raise it with the per-orchestrator cap, or it stops you first."
+        label="Workers in total"
+        hint="Every worker alive at once, across all orchestrators. Raise it with the per-orchestrator cap, or it stops you first."
       />
       <CapRow
         cap="max_spawn_depth"
         field="agent_max_spawn_depth"
         label="Nesting depth"
-        hint="How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
+        hint="How deep spawns may nest: 1 = only your sessions start workers, 2 = their workers may start workers too, and so on."
       />
       <SharedMcpServers />
+    </>
+  );
+}
+
+/** The workers request: a template (`{model}` becomes "Workers model") the
+ * server fills in and serves as `/api/config` → `flock.request`. Empty means
+ * the default (shown as the placeholder). Saved on blur (still under `general`, where the
+ * server reads it); the row marks "✓ Saved", a failure toasts and re-syncs. */
+function WorkersRows() {
+  const s = useSettings();
+  const stored = s.get("general", "workers_request");
+  const display = typeof stored === "string" ? stored : "";
+  const [value, setValue] = useState(display);
+  useEffect(() => setValue(display), [display]);
+  return (
+    <>
+      <label className="set-row" id="orch-workers">
+        <span className="set-label">Workers request</span>
+        <textarea
+          className="workers-request"
+          data-group="general"
+          data-field="workers_request"
+          rows={4}
+          style={{ resize: "vertical", lineHeight: 1.45 }}
+          spellCheck={false}
+          placeholder={DEFAULT_WORKERS_TEMPLATE}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => {
+            if (value !== display) void s.saveField("general", "workers_request", value);
+          }}
+        />
+        <span className="set-hint">
+          What "Ask for workers once" types ({ASK_WORKERS_KEYS}), and what "Workers on every prompt" adds to
+          everything you send ({FLOCK_KEYS}). <code>{"{model}"}</code> becomes the model below; empty uses the
+          default.
+        </span>
+      </label>
+      <label className="set-row">
+        <span className="set-label">Workers model</span>
+        <SettingField group="general" field="workers_model" placeholder={DEFAULT_WORKERS_MODEL} />
+        <span className="set-hint">The model the request asks workers to run on.</span>
+      </label>
     </>
   );
 }
@@ -100,11 +158,12 @@ function CapRow({
   );
 }
 
-/** The scope select's options. "" is the server's default (children); stored
+/** The scope select's options. "" is the server's default (`children`: its
+ * workers); stored
  * only when the user picks something else (settings.GeneralSettings). */
 export const AGENT_MCP_SCOPE_OPTIONS = [
-  { value: "", label: "Default (children)" },
-  { value: "children", label: "Children — manage only sessions it spawned" },
+  { value: "", label: "Default (its workers)" },
+  { value: "children", label: "Its workers — manage only sessions it started" },
   { value: "readonly", label: "Read-only — look and check its inbox, no messaging" },
   { value: "all", label: "All — manage any session" },
 ];
@@ -169,7 +228,7 @@ function AgentMcpRows() {
       </div>
       <label
         className="set-row"
-        title="How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Reading the flock and messaging are allowed in every scope except read-only."
+        title="How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Seeing the other sessions and messaging are allowed in every scope except read-only."
       >
         <span className="set-label">Agent MCP scope</span>
         <SettingField group="general" field="agent_mcp_scope" options={AGENT_MCP_SCOPE_OPTIONS} />

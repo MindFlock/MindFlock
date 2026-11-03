@@ -1,14 +1,15 @@
-/** The rail's group header for sessions started together, its queued lines,
+/** The rail's group header for a team run (sessions started together), its
+ * queued tasks,
  * and the "On their own" divider (ship lanes, SPEC §7.C.2).
  *
  * Same component family as the device header (`li.device-group`): a click
  * folds the group, the name reads in small caps, badges sit on the right.
- * Neither a header nor a queued line is a rail ROW: no number, no drag, no
+ * Neither a header nor a queued task is a rail ROW: no number, no drag, no
  * drop target, never in the saved order or railOrder (lib/runs.ts says why).
  *
  * The ⋯ menu acts through the runs API at once — never a `window.prompt` /
- * `confirm` (Electron has neither): "Add lines…" and "Cancel…" open inline
- * rows inside the menu. It is the group's one home: its queued lines (Start
+ * `confirm` (Electron has neither): "Add tasks…" and "Cancel…" open inline
+ * rows inside the menu. It is the group's one home: its queued tasks (Start
  * now / Take out of run), Pause, Cancel and, once it has finished, "Copy summary" —
  * what waits on you is the bell's. */
 
@@ -59,7 +60,7 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
       ) : group.waitingUsage && !group.done ? (
         <span className="dev-badge rg-usage">usage</span>
       ) : group.waitingMemory && !group.done ? (
-        <span className="dev-badge rg-usage" title="Memory is low — queued lines start once it recovers">memory</span>
+        <span className="dev-badge rg-usage" title="Memory is low — queued tasks start once it recovers">memory</span>
       ) : null}
       <span className={"dev-badge rg-shipped" + (group.done && !group.cancelled ? " ok" : "")}>{shippedBadge(group)}</span>
       {group.failed > 0 && <span className="dev-badge rg-failed">{group.failed} failed</span>}
@@ -67,7 +68,7 @@ export function RunGroupHeader({ group, repoPath }: { group: RunGroup; repoPath?
         ref={more}
         type="button"
         className="rg-more"
-        title="Pause, add lines, start the next one, cancel…"
+        title="Pause, add tasks, start the next one, cancel…"
         aria-label={"Actions for " + group.name}
         aria-haspopup="menu"
         onClick={(e) => {
@@ -148,7 +149,7 @@ function RunGroupMenu({
       const items = (pv?.items || []).filter((i) => !i.error);
       const bad = (pv?.items || []).filter((i) => i.error);
       if (!items.length) {
-        errorPop("Nothing to add", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n") || "no lines");
+        errorPop("Nothing to add", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n") || "no tasks");
         return;
       }
       await api(runPath(id, "/tasks"), {
@@ -158,11 +159,11 @@ function RunGroupMenu({
           ),
         },
       });
-      toast("Added " + items.length + (items.length === 1 ? " line" : " lines") + " to " + group.name);
-      if (bad.length) errorPop("Some lines weren't added", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n"));
+      toast("Added " + items.length + (items.length === 1 ? " task" : " tasks") + " to " + group.name);
+      if (bad.length) errorPop("Some tasks weren't added", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n"));
       onClose();
     } catch (err) {
-      errorPop("Add lines failed", errMsg(err));
+      errorPop("Add tasks failed", errMsg(err));
     } finally {
       setBusy(false);
       void refreshRuns();
@@ -223,7 +224,7 @@ function RunGroupMenu({
           </div>
         ) : (
           <button type="button" role="menuitem" disabled={busy} onClick={() => setMode("add")}>
-            Add lines…
+            Add tasks…
           </button>
         ))}
       {group.queued.length > 0 && (
@@ -304,7 +305,7 @@ function RunGroupMenu({
   );
 }
 
-/** A line still waiting for a slot: dim, hollow dot, no number, no ✕ (Take out of run
+/** A task still waiting for a slot: dim, hollow dot, no number, no ✕ (Take out of run
  * lives in the header's ⋯). Not a rail row — see the module comment. */
 export function QueuedRow({ task, pos, groupName }: { task: RunTask; pos: number; groupName: string }) {
   const title = queuedTitle(task);
