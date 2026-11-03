@@ -45,6 +45,7 @@
  * fixed box sizes, so the markup (and a test of it) needs no DOM measuring. */
 
 import type { AutopilotRun, Instance } from "../api/types";
+import type { BehaviorTone } from "./behaviors";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
@@ -72,7 +73,7 @@ import {
  * done or skipped, before its current one), folded into one pill. `group`
  * is a stop with sub-steps: consecutive steps sharing `step.group.id`, drawn
  * as ONE box until its line expands it (docs/flights.md "Round 11"). */
-export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown" | "group";
+export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown" | "group" | "behaviors";
 
 /** What a box shows. `edit` is a flyway's stop being drawn (no run yet). */
 export type DiagramNodeState =
@@ -178,6 +179,19 @@ export interface DiagramNode {
   /** Round 20: a member of a parallel group — its id (`step.parallel.id`),
    * its place in the group (0-based) and the group's size. */
   parallel?: ParallelMark;
+  /** The Behaviors tile (docs/behaviors.md §1): the `behaviors` node, or the
+   * chain's Verify stop standing in for it — the session's behaviors in brief. */
+  behaviors?: BehaviorsMark;
+}
+
+/** A session's behaviors as its tile draws them (lib/behaviors
+ * `behaviorSummary`): the plan, the tile's sub line, its tone. */
+export interface BehaviorsMark {
+  planId: string;
+  /** "3 of 5 verified", "Needs you · 2", "Failed · 1", "Writing…", "Not checked". */
+  short: string;
+  status: string;
+  tone: BehaviorTone;
 }
 
 /** Round 20: where a stop sits in its parallel group. */
@@ -1886,4 +1900,40 @@ export function reorderDiagram(d: Diagram, from: number, to: number): Diagram {
   for (const b of [...branches, ...hung])
     if (b.branch) edges.push({ from: b.id, to: b.branch.to, kind: "join", ...(joinDone.get(b.id) ? { done: true } : {}) });
   return { ...d, nodes: [...rest, ...line, ...branches], edges };
+}
+
+// --- The Behaviors tile (docs/behaviors.md §1) --------------------------------------
+
+/** The Behaviors tile's node id. */
+export const BEHAVIORS_ID = "behaviors";
+
+/** The chain's Verify stop that stands in for the Behaviors tile: the LAST
+ * plain stop of kind `verify` on the line, else null. */
+export function verifyStopOf(d: Pick<Diagram, "nodes">): DiagramNode | null {
+  const main = d.nodes.filter((n) => n.row === "main" && n.kind === "stop" && n.step?.kind === "verify");
+  return main.length ? main[main.length - 1] : null;
+}
+
+/** The line with its session's behaviors on it, as the LAST tile of the
+ * chain: the Verify stop wears `mark` when the chain has one (that stop IS
+ * the tile — no second one), else a derived `behaviors` node goes after the
+ * last stop (right of the session's agent when there are none), wired in
+ * with a plain line (a join out of every member of a trailing parallel
+ * group). It is not a flight step: no index, no step, never editable. A
+ * rendering view — `mark` null leaves the diagram as it is. */
+export function withBehaviors(d: Diagram, mark: BehaviorsMark | null | undefined): Diagram {
+  if (!mark) return d;
+  const verify = verifyStopOf(d);
+  if (verify) return { ...d, nodes: d.nodes.map((n) => (n.id === verify.id ? { ...n, behaviors: mark } : n)) };
+  const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "add" && n.kind !== "parent");
+  const session = main.find((n) => n.kind === "session");
+  const line = main.filter((n) => n.kind !== "session");
+  const last = line[line.length - 1] || session;
+  if (!last) return d;
+  const node: DiagramNode = { id: BEHAVIORS_ID, kind: "behaviors", row: "main", title: "Behaviors", sub: mark.short, state: "pending", icon: "behaviors", behaviors: mark };
+  // A trailing parallel group joins into the tile out of each member.
+  const pid = last.parallel?.id;
+  const from = pid ? line.filter((n) => n.parallel?.id === pid) : [last];
+  const edges: DiagramEdge[] = [...d.edges, ...from.map((n): DiagramEdge => ({ from: n.id, to: BEHAVIORS_ID, kind: from.length > 1 ? "join" : "line" }))];
+  return { ...d, nodes: [...d.nodes, node], edges };
 }

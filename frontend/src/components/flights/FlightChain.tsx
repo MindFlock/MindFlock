@@ -47,7 +47,11 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const rows = useInstances().data;
   const flights = useFlights().data;
   const subFrames = useMemo(() => subFramesOf(rows || [], title, flights, kinds), [rows, title, flights, kinds]);
-  const big = useMemo(() => subFrameBoxes(moves.diagram.nodes, subFrames), [moves.diagram, subFrames]);
+  // The session's behaviors: the chain's last tile, as on the Sky
+  // (docs/behaviors.md §1; on `line.graphDiagram`) — its card opens in the
+  // tile's place here too.
+  const behaviors = line.behaviors;
+  const big = useMemo(() => ({ ...subFrameBoxes(moves.diagram.nodes, subFrames), ...behaviors.big(moves.diagram) }), [moves.diagram, subFrames, behaviors.big]);
   const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: title, flightId, big }), [moves.diagram, head, title, flightId, big]);
   const gc = line.graphCanvas;
   const chainMenu = useChainMenu(gc, flightId || line.landedId, { steps: line.flight?.steps, kinds });
@@ -119,8 +123,13 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
     if (t === title) useUi.getState().setLastTab(title, "agent");
     else selectSession(t);
   };
-  const onOpen = (n: DiagramNode) => (n.kind === "session" ? openTerminal(title) : gc.onOpen?.(n));
+  const onOpen = (n: DiagramNode) => {
+    if (behaviors.onOpen(n)) return;
+    if (n.kind === "session") openTerminal(title);
+    else gc.onOpen?.(n);
+  };
   const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => {
+    if (behaviors.onMenu(n, at)) return;
     const t = n.kind === "session" ? title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
     if (!t) return chainMenu.onMenu(n, at);
     const r = t === title ? row : rows?.find((x) => x.title === t);
@@ -130,7 +139,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   // moves the chain in by as much.
   const shift = { marginLeft: -Math.min(0, Math.floor(graph.bbox.x)), marginTop: -Math.min(0, Math.floor(graph.bbox.y)) };
   return (
-    <div ref={rootRef} className="fl-chain-view sky-own-scroll" aria-label={label}>
+    <div ref={rootRef} className={"fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : "")} aria-label={label}>
       <div className="fl-chain-frame" style={{ ["--sky-chain-color" as string]: head.color }}>
         <div className="fl-chain-frame-bar">
           <span className="fl-chain-frame-name">{windowName(title)}</span>
@@ -142,6 +151,11 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
           {row && (
             <span className={"fl-box-chip fl-chain-frame-chip tone-" + ss.tone} title={ss.hint}>
               {ss.label}
+            </span>
+          )}
+          {behaviors.mark?.tone === "you" && ss.tone !== "attention" && (
+            <span className="fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors tile to answer it">
+              Needs you
             </span>
           )}
           {where && (
@@ -168,6 +182,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
             onNodeMove={moves.move}
             onPortDown={onPortDown}
             onPlus={(after) => (after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+            renderOpen={behaviors.renderOpen}
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
             renderHead={() =>
               line.flight?.state === "ready" ? (
@@ -182,6 +197,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
       </div>
       {chainMenu.menu}
       {agentMenu.menu}
+      {behaviors.menu}
       {band &&
         createPortal(
           <svg className={"sky-connect" + (band.over ? " is-over" : "")} aria-hidden="true" focusable="false">

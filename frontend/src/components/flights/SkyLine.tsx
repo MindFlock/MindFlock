@@ -349,7 +349,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const flights = useFlights().data;
   const kinds = useFlightKinds().data;
   const src: LineSource = useMemo(() => ({ rows: p.rows, flights, kinds: kinds || NO_KINDS, plans: p.plans }), [p.rows, flights, kinds, p.plans]);
-  const line = useSessionLine(p.title, src, { family: true, askRunning: true, onSession: (t) => selectSession(t) });
+  const line = useSessionLine(p.title, src, { family: true, askRunning: true, listenBehaviors: true, onSession: (t) => selectSession(t) });
   // A rename redraws the line (its name is read through windowName).
   useUi((s) => s.aliases[p.title]);
   const name = windowName(p.title);
@@ -421,14 +421,18 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // card-sized box and the other branches make room (the owner: sub-sessions
   // should open like the session does, not below).
   // Every other sub-session takes its small frame's box.
+  // The session's behaviors (docs/behaviors.md §1): the LAST tile of the
+  // chain (or its Verify stop) — already on `line.graphDiagram` — whose card
+  // opens in the tile's place.
+  const behaviors = line.behaviors;
   const big = useMemo(() => {
     const open: Record<string, { w: number; h: number }> = {};
     for (const [t, ks] of Object.entries(kids)) {
       const c = clampPane(ks.w, ks.h);
       open[t] = { w: c.w, h: c.h + CARD_HEAD_H };
     }
-    return subFrameBoxes(moves.diagram.nodes, subFrames, open);
-  }, [kids, moves.diagram, subFrames]);
+    return { ...subFrameBoxes(moves.diagram.nodes, subFrames, open), ...behaviors.big(moves.diagram) };
+  }, [kids, moves.diagram, subFrames, behaviors.big]);
   const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: p.title, flightId: line.flight?.id || "", big }), [moves.diagram, head, p.title, line.flight?.id, big]);
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
   // The frame grows to a tile dragged left of / above the chain's origin.
@@ -450,6 +454,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   };
   const onOpen = (n: DiagramNode) => {
     if (n.kind === "session" && press.current.moved) return;
+    if (behaviors.onOpen(n)) return;
     if (n.kind === "flown") setFoldFlown((x) => !x);
     else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
     else if ((n.kind === "child" || n.kind === "branch") && n.session) toggleKid(n.session);
@@ -586,6 +591,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     return [...mine, { key: "s-note", label: "Session “" + name + "”", title: "The session round this agent", note: true }, ...session];
   };
   const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => {
+    if (behaviors.onMenu(n, at)) return;
     const t = n.kind === "session" ? p.title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
     if (t) agentMenu.open(t, at, agentItems(t, at));
     else chainMenu.onMenu(n, at);
@@ -617,6 +623,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     if (kid && !onChain.has(t)) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
   }
   const renderOpen = (n: DiagramNode): ReactNode => {
+    const bh = behaviors.renderOpen(n);
+    if (bh) return bh;
     const t = n.session;
     const ks = t ? kids[t] : undefined;
     const kid = t && ks ? rowOf(t) : undefined;
@@ -634,7 +642,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         (p.layout.open ? " is-open" : "") +
         (p.dropFlyway ? " is-drop" : "") +
         (p.mergeTarget ? " is-merge-target" : "") +
-        (line.editing ? " is-editing" : "")
+        (line.editing ? " is-editing" : "") +
+        (behaviors.frameClass ? " " + behaviors.frameClass : "")
       }
       data-line={p.title}
       data-lod={lod}
@@ -701,6 +710,12 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         {row && (
           <span className={"skl-chip fl-box-chip skl-state-chip tone-" + ss.tone} title={ss.hint}>
             {ss.label}
+          </span>
+        )}
+        {behaviors.mark?.tone === "you" && ss.tone !== "attention" && (
+          // The Needs-you mark: a behavior waits on you (docs/behaviors.md §1).
+          <span className="skl-chip fl-box-chip skl-state-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors tile to answer it">
+            Needs you
           </span>
         )}
         {where && (
@@ -783,6 +798,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           />
           {chainMenu.menu}
           {agentMenu.menu}
+          {behaviors.menu}
           <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
             {line.palette}
             {line.inspector}

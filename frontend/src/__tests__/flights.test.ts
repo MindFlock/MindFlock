@@ -156,8 +156,9 @@ describe("what waits on you", () => {
     expect(perchBadge([flight(), parked])).toEqual({ count: 1, failing: false });
   });
 
-  it("never counts a flight parked on a verify step (Verify's own badge does)", () => {
-    expect(perchBadge([onVerify]).count).toBe(0);
+  it("counts a flight parked on a verify step: its behaviors wait on you in the Sky (docs/behaviors.md §5)", () => {
+    expect(perchBadge([onVerify]).count).toBe(1);
+    expect(perchBadge([flight(), parked, onVerify])).toEqual({ count: 2, failing: false });
   });
 
   it("says nothing at all on zero", () => {
@@ -328,8 +329,9 @@ describe("the retired Flights dialog's addresses", () => {
     expect(legacyFlightsRoute("plans/builtin:ticket")).toEqual({ to: "flyways", plan: "builtin:ticket" });
     expect(legacyFlightsRoute("sources")).toEqual({ to: "intake", target: null });
     expect(legacyFlightsRoute("sources/tickets:jira")).toEqual({ to: "intake", target: "tickets:jira" });
-    expect(legacyFlightsRoute("checklists")).toEqual({ to: "verify", target: null });
-    expect(legacyFlightsRoute("checklists/feature/x")).toEqual({ to: "verify", target: "feature/x" });
+    // Verify's old checklists land on the Sky's behaviors (docs/behaviors.md §4).
+    expect(legacyFlightsRoute("checklists")).toEqual({ to: "sky", focus: "", behaviors: { board: true } });
+    expect(legacyFlightsRoute("checklists/feature/x")).toEqual({ to: "sky", focus: "", behaviors: { branch: "feature/x" } });
     expect(legacyFlightsRoute("schedule")).toEqual({ to: "schedule", target: null });
     expect(legacyFlightsRoute("schedule/new")).toEqual({ to: "schedule", target: "new" });
     expect(legacyFlightsRoute("nope/x")).toEqual({ to: "sky", focus: "" });

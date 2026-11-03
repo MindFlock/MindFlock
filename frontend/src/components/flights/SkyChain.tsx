@@ -26,11 +26,19 @@
  * a strip of mini stops when it flies one (`subFrames`). The graph gives each
  * sub-frame its box (`subFrameSize` through `ChainGraphOpts.big`). */
 
-import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import type { Instance } from "../../api/types";
-import type { BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
-import { leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram } from "../../lib/flightDiagram";
-import type { Flight, StepKindDef } from "../../lib/flights";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import type { Instance, TestPlan } from "../../api/types";
+import type { BehaviorsMark, BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
+import { leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
+import { isLive, type Flight, type StepKindDef } from "../../lib/flights";
+import { behaviorSummary, nextNeedingYou, planForSession } from "../../lib/behaviors";
+import { findPlan, useBehaviorsFocus, type BehaviorsTarget } from "../../lib/behaviorsFocus";
+import { removePlan } from "../../lib/verifyActions";
+import { useTestPlans } from "../../state/queries";
+import { BehaviorsCard } from "../behaviors/BehaviorsCard";
+import { InlineConfirm } from "../InlineConfirm";
+import { StopMenu, type SkyMenuItem } from "./StopMenu";
 import { agentName } from "../../lib/agentNames";
 import { firstLine } from "../../lib/format";
 import { windowName } from "../../lib/windowName";
@@ -255,6 +263,12 @@ export function tileLabel(n: DiagramNode, head = false): string {
   return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
 }
 
+/** What a screen reader says for the Behaviors tile (or the Verify stop
+ * standing in for it). */
+export function behaviorsLabel(n: Pick<DiagramNode, "kind" | "title">, bh: BehaviorsMark): string {
+  return (n.kind === "behaviors" ? "Behaviors" : n.title + ", the behaviors") + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
+}
+
 interface Drag {
   id: string;
   pointer: number;
@@ -283,7 +297,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
 
   const activate = (n: GraphNode) => {
     if (justDragged.current) return;
-    if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
+    if (n.id !== HEAD_ID && n.node.behaviors) p.onOpen?.(n.node);
+    else if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
     else p.onOpen?.(n.node);
   };
   const edit = (n: GraphNode) => (p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node));
@@ -392,12 +407,16 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const frame = sub_ ? p.subFrames?.[dn.session!] : undefined;
     const fam = nodeFamily(dn, p.kinds);
     const halt = isHead ? null : haltMark(dn);
-    const sub = isHead ? head.sub : tileSub(dn);
+    // The Behaviors tile, or the Verify stop standing in for it (docs/behaviors.md §1).
+    const bh = isHead ? undefined : dn.behaviors;
+    const bhTile = !isHead && dn.kind === "behaviors";
+    const sub = isHead ? head.sub : bh ? bh.short : tileSub(dn);
     const cls = [
       "sky-node",
       isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
       isAgent ? "sky-agent" : "",
       sub_ ? "sky-subframe" : "",
+      bh ? "sky-behaviors is-" + bh.tone : "",
       "st-" + dn.state,
       "sky-fam-" + fam,
       // A session-like tile (the head, a sub-session, a worker) wears its
@@ -417,7 +436,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       .join(" ");
     const said = sub_
       ? "Sub-session " + dn.title + " — its agent" + (frame ? " (" + frame.agent + ")" : "") + (dn.chip ? " " + dn.chip.label.toLowerCase() : "") + (sub ? ", " + sub : "")
-      : (isAgent ? "Agent: " : "") + tileLabel(isHead ? { ...dn, title: head.title, sub: head.sub } : dn, isHead);
+      : bh
+        ? behaviorsLabel(dn, bh)
+        : (isAgent ? "Agent: " : "") + tileLabel(isHead ? { ...dn, title: head.title, sub: head.sub } : dn, isHead);
     const opened = !isHead && p.renderOpen ? p.renderOpen(dn) : null;
     if (opened)
       return (
@@ -435,7 +456,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         data-diagram-node={dn.id}
         aria-label={said}
         aria-current={isSel(n) ? "true" : undefined}
-        title={isHead ? undefined : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title}
+        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title}
         style={{
           transform: `translate(${n.x}px, ${n.y}px)`,
           width: n.w,
@@ -473,9 +494,14 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         )}
         <div className="sky-tile" style={{ width: TILE, height: TILE }}>
           <span className="sky-tile-icon">
-            <TileIcon kind={isAgent || sub_ ? "agent" : isHead ? (head.kind === "trigger" ? "handoff" : "session") : dn.perch ? "perch" : dn.icon} size={28} />
+            <TileIcon kind={isAgent || sub_ ? "agent" : isHead ? (head.kind === "trigger" ? "handoff" : "session") : bh ? "behaviors" : dn.perch ? "perch" : dn.icon} size={28} />
           </span>
           {isHead && head.kind !== "none" && <span className="sky-head-dot" aria-hidden="true" />}
+          {bhTile && bh && (bh.tone === "ok" || bh.tone === "bad") && (
+            <span className={"sky-badge " + (bh.tone === "ok" ? "sky-badge-done" : "sky-badge-failed")} aria-hidden="true">
+              {bh.tone === "ok" ? "✓" : "!"}
+            </span>
+          )}
           {!isHead && dn.state === "done" && (
             <span className="sky-badge sky-badge-done" aria-hidden="true">
               ✓
@@ -514,6 +540,25 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           <div className="sky-head-extra" data-no-drag>
             {p.renderHead ? p.renderHead() : dn.chip ? <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span> : null}
           </div>
+        ) : bhTile ? (
+          // Derived, not a stop: no Done / Skip, only its ⋯ (its right-click too).
+          p.onMenu && (
+            <div className="sky-node-extra" data-no-drag>
+              <button
+                type="button"
+                className="fl-icon-btn sky-bh-more"
+                aria-label="Actions for these behaviors"
+                title="What you can do with these behaviors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  p.onMenu?.(dn, { clientX: r.left, clientY: r.bottom });
+                }}
+              >
+                ⋯
+              </button>
+            </div>
+          )
         ) : dn.chip && !isStopish(dn) ? (
           // A sub-session / worker: its state, always (the owner: "I should be
           // able to see the states of the sub-sessions, always").
@@ -712,4 +757,197 @@ function Countdown({ until }: { until: number }): JSX.Element {
       ⏱ {leftWord(until - now)}
     </div>
   );
+}
+
+// --- The Behaviors tile (docs/behaviors.md §1) -------------------------------------
+
+/** The open Behaviors card's box on the chain (plane px): its width, and a
+ * height that grows with its rows up to a cap (the card scrolls past it). */
+export const BH_CARD_W = 380;
+export const BH_CARD_MIN_H = 220;
+export const BH_CARD_MAX_H = 560;
+/** The "Delete these behaviors?" question, asked in the tile's place. */
+export const BH_ASK_W = 300;
+export const BH_ASK_H = 170;
+
+export function behaviorsCardBox(plan: Pick<TestPlan, "steps"> | null | undefined): { w: number; h: number } {
+  const rows = (plan?.steps || []).length;
+  return { w: BH_CARD_W, h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, 132 + rows * 64)) };
+}
+
+/** A session's behaviors as its tile draws them, or null (no behaviors). */
+export function behaviorsMarkOf(plan: TestPlan | null | undefined): BehaviorsMark | null {
+  if (!plan) return null;
+  const s = behaviorSummary(plan);
+  return { planId: plan.id, short: s.short, status: s.status, tone: s.tone };
+}
+
+/** The frame's tone class (docs/behaviors.md §1): a thin red top edge when a
+ * behavior failed, the Needs-you mark when one waits on you. */
+export function behaviorsFrameClass(mark: BehaviorsMark | null | undefined): string {
+  return mark?.tone === "bad" ? "is-bh-bad" : mark?.tone === "you" ? "is-bh-you" : "";
+}
+
+/** Does a Behaviors focus request (`openBehaviors`) name this plan? Its plan
+ * id / title / branch through `findPlan`, Alt+V's `next` through
+ * `nextNeedingYou`, or the session's own title. */
+export function requestNamesPlan(plans: readonly TestPlan[], req: BehaviorsTarget | null | undefined, plan: TestPlan, title: string): boolean {
+  if (!req) return false;
+  const t = findPlan(plans, req) || (req.next ? nextNeedingYou(plans) : null);
+  return t?.id === plan.id || (!!req.title && req.title === title);
+}
+
+export interface BehaviorsTile {
+  plan: TestPlan | null;
+  mark: BehaviorsMark | null;
+  /** The diagram with the tile on it (lib/flightDiagram `withBehaviors`). */
+  apply(d: Diagram): Diagram;
+  /** The open card's (or question's) box, by node id — merge into
+   * `ChainGraphOpts.big` so the chain makes room. */
+  big(d: Diagram): Record<string, { w: number; h: number }>;
+  /** Handle a tile's click (the tile, or the Verify stop standing in for
+   * it): true when it was the Behaviors tile's. */
+  onOpen(n: DiagramNode): boolean;
+  /** Its right-click / ⋯: true when it was the Behaviors tile's. */
+  onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): boolean;
+  /** The open card in the tile's place (SkyChain `renderOpen`), else null. */
+  renderOpen(n: DiagramNode): ReactNode;
+  /** The ⋯ menu's portal (render it beside the chain). */
+  menu: ReactNode;
+  /** The frame's tone class (`behaviorsFrameClass`). */
+  frameClass: string;
+  open: boolean;
+}
+
+/** The Behaviors tile of one session's chain: its plan (`planForSession`
+ * over `useTestPlans`), the tile on the diagram, the BehaviorsCard opened in
+ * its place (Esc / × folds it back; recorded in `useBehaviorsFocus.openPlan`),
+ * its ⋯ ("Delete these behaviors", asked in place). `listen`: open the card
+ * when a focus request names this plan (the Sky; the request itself is
+ * SkyView's to take). */
+export function useBehaviorsTile(
+  title: string,
+  row: Pick<Instance, "title" | "branch" | "repo"> | null | undefined,
+  opts: { flight?: Flight | null; listen?: boolean } = {}
+): BehaviorsTile {
+  const plans = useTestPlans().data?.plans;
+  const plan = useMemo(() => (row ? planForSession(plans || [], row) : null), [plans, row]);
+  const mark = useMemo(() => behaviorsMarkOf(plan), [plan]);
+  const [mode, setMode] = useState<null | "card" | "ask">(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const planId = plan?.id || "";
+
+  // Behaviors gone (deleted, the session's branch moved on): the card goes too.
+  useEffect(() => {
+    if (!planId && mode) setMode(null);
+  }, [planId, mode]);
+
+  // The open card is the Sky's to know (the board, the shell read it).
+  useEffect(() => {
+    if (!planId) return;
+    const st = useBehaviorsFocus.getState();
+    if (mode === "card") st.setOpenPlan(planId);
+    else if (st.openPlan === planId) st.setOpenPlan("");
+  }, [mode, planId]);
+  useEffect(
+    () => () => {
+      const st = useBehaviorsFocus.getState();
+      if (planId && st.openPlan === planId) st.setOpenPlan("");
+    },
+    [planId]
+  );
+
+  // A request (openBehaviors) naming this plan opens its card. Each request
+  // carries a fresh `n`; SkyView takes it once the camera has flown.
+  const req = useBehaviorsFocus((st) => st.request);
+  const seen = useRef(0);
+  useEffect(() => {
+    if (!opts.listen || !req || !plan || req.n === seen.current) return;
+    seen.current = req.n;
+    if (requestNamesPlan(plans || [], req, plan, title)) setMode("card");
+  }, [opts.listen, req, plan, plans, title]);
+
+  const close = () => setMode(null);
+  const apply = useCallback((d: Diagram) => withBehaviors(d, mark), [mark]);
+  const big = useCallback(
+    (d: Diagram): Record<string, { w: number; h: number }> => {
+      const host = mode && plan ? d.nodes.find((n) => !!n.behaviors) : undefined;
+      if (!host) return {};
+      return { [host.id]: mode === "ask" ? { w: BH_ASK_W, h: BH_ASK_H } : behaviorsCardBox(plan) };
+    },
+    [mode, plan]
+  );
+  const onOpen = (n: DiagramNode) => {
+    if (!n.behaviors || !plan) return false;
+    setMode((m) => (m ? null : "card"));
+    return true;
+  };
+  const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => {
+    // A Verify stop keeps its own stop menu; the tile's ⋯ is the tile's.
+    if (n.kind !== "behaviors" || !plan) return false;
+    setMenuAt({ x: at.clientX, y: at.clientY });
+    return true;
+  };
+  const flightStep = (n: DiagramNode) => {
+    const f = opts.flight;
+    if (!f || !n.step || n.step.kind !== "verify" || !isLive(f) || f.steps[f.cursor]?.id !== n.step.id) return null;
+    return { flightId: f.id, stepId: n.step.id };
+  };
+  const renderOpen = (n: DiagramNode): ReactNode => {
+    if (!mode || !plan || !n.behaviors) return null;
+    const esc = (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
+    if (mode === "ask")
+      return (
+        <div className="sky-bh-open sky-bh-ask sky-own-scroll" data-no-drag data-plan={plan.id} onKeyDown={esc}>
+          <InlineConfirm
+            title="Delete these behaviors?"
+            body={"What “" + title + "” should do in real use, and every answer to it, go for good."}
+            confirmLabel="Delete these behaviors"
+            cancelLabel="Keep them"
+            busy={busy}
+            onConfirm={() => {
+              setBusy(true);
+              void removePlan(plan, { onGone: close }).finally(() => setBusy(false));
+            }}
+            onCancel={close}
+          />
+        </div>
+      );
+    return (
+      <div className="sky-bh-open sky-own-scroll" data-no-drag data-plan={plan.id} onKeyDown={esc}>
+        <BehaviorsCard plan={plan} onClose={close} flightStep={flightStep(n)} />
+      </div>
+    );
+  };
+  const items: SkyMenuItem[] = [
+    { key: "open", label: mode === "card" ? "Fold the behaviors back" : "Open the behaviors", title: mode === "card" ? "Back to the tile" : "Read, answer and edit them here, in the tile's place" },
+    { key: "delete" as SkyMenuItem["key"], label: "Delete these behaviors", title: "They go for good, with every answer to them", danger: true },
+  ];
+  const menu =
+    menuAt && plan && typeof document !== "undefined"
+      ? createPortal(
+          <div className="sky-chain-menu" style={{ position: "fixed", left: 0, top: 0, width: 0, height: 0, zIndex: 80, ["--sky-z" as string]: 1 }}>
+            <StopMenu
+              x={menuAt.x}
+              y={menuAt.y}
+              label="Behaviors — what you can do"
+              items={items}
+              onPick={(key) => {
+                setMenuAt(null);
+                if (key === "open") setMode((m) => (m === "card" ? null : "card"));
+                else if ((key as string) === "delete") setMode("ask");
+              }}
+              onClose={() => setMenuAt(null)}
+            />
+          </div>,
+          document.body
+        )
+      : null;
+  return { plan, mark, apply, big, onOpen, onMenu, renderOpen, menu, frameClass: behaviorsFrameClass(mark), open: mode === "card" };
 }
