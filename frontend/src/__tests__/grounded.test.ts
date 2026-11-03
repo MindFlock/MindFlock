@@ -149,12 +149,12 @@ describe("the grounded line", () => {
     expect(html).toContain('data-flight="f_1"');
     expect(html).toContain('class="skl-name skl-name-edit" title="Click to rename (F2)">Ticket to merge<');
     expect(html).not.toContain(">No session<");
-    expect(html).toContain('aria-label="Ticket to merge — stops with no session yet"');
+    expect(html).toContain('aria-label="Ticket to merge — a route with no session yet"');
     expect(html).toContain('tabindex="0"');
-    expect(groundedName({ plan_name: "" })).toBe("Stops");
+    expect(groundedName({ plan_name: "" })).toBe("Route");
   });
 
-  it("round 18: no head box — a headless chain of its stops under a small label", () => {
+  it("round 18: no head box — a headless route of its stops under a small label", () => {
     expect(html).not.toContain("skl-grounded-head");
     expect(html).not.toContain("No session yet");
     expect(html).toContain('class="skl skl-chainline skl-grounded"');
@@ -168,8 +168,8 @@ describe("the grounded line", () => {
     expect(src).toContain('useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });');
   });
 
-  it("round 18: a chain another hands off to wears its trigger head and says so", () => {
-    const head = { kind: "trigger" as const, title: "When me reaches Start a chain", sub: "runs on a new session", session: "new", color: "hsl(1 70% 60%)", from: { flight: "f_0", step: "s2", title: "Start a chain" } };
+  it("round 18: a route another hands off to wears its trigger head and says so", () => {
+    const head = { kind: "trigger" as const, title: "When me reaches Start a route", sub: "runs on a new session", session: "new", color: "hsl(1 70% 60%)", from: { flight: "f_0", step: "s2", title: "Start a route" } };
     const t = renderToStaticMarkup(
       createElement(GroundedLine, {
         flight: flight({ plan_name: "Ticket to merge" }),
@@ -183,14 +183,14 @@ describe("the grounded line", () => {
         head,
       })
     );
-    expect(t).toContain(">Started by a chain<");
+    expect(t).toContain(">Started by a route<");
     expect(t).toContain("is-triggered");
-    expect(t).toContain('aria-label="Ticket to merge — When me reaches Start a chain"');
+    expect(t).toContain('aria-label="Ticket to merge — When me reaches Start a route"');
   });
 
   it("its ⋯: Add a stop…, Fly on a session…, Save to the shelf, Remove — Remove at once, undoable (round 14: a grounded line never runs)", () => {
     const src = code("components/flights/GroundedLine.tsx");
-    for (const l of ['label: "Add a stop…"', 'label: "Fly on a session…"', 'label: "Save to the shelf"', 'label: "Remove", danger: true'])
+    for (const l of ['label: "Add a stop…"', 'label: "Run on a session…"', 'label: "Save to the shelf"', 'label: "Remove", danger: true'])
       expect(src).toContain(l);
     expect(src).toContain("onSelect: () => void remove() },");
     expect(src).not.toContain("<InlineConfirm");
@@ -237,8 +237,9 @@ describe("the Sky hosts them", () => {
     expect(block).toContain("attach ? await attachGrounded(attach.id, { title })");
   });
 
-  it("the line picker shows names, never raw titles", () => {
-    expect(sky).toMatch(/<button key=\{t\} type="button" className="fl-chip" title=\{t\} onClick=\{\(\) => asking\.on\(t\)\}>\s*\{windowName\(t\)\}/);
+  it("the place picker (a popup with a search) shows names, never raw titles", () => {
+    expect(sky).toContain("<PlacePicker");
+    expect(code("components/flights/PlacePicker.tsx")).toContain("label: windowName(s.title)");
   });
 });
 
@@ -286,5 +287,23 @@ describe("round 13: renaming a grounded line", () => {
     expect(cleanFlightName("  Ship it  ")).toBe("Ship it");
     expect(cleanFlightName("   ")).toBe("");
     expect(cleanFlightName("x".repeat(200))).toHaveLength(120);
+  });
+});
+
+describe("free routes (2026-11-02): run in a folder with no session, like an n8n workflow", () => {
+  const f = (over: Partial<Flight>) => ({ id: "x", state: "grounded", started: 1, session: "", ...over }) as Flight;
+  it("a free route mid-run stays on the Sky; a session's flight does not", () => {
+    expect(G.groundedFlights([f({ state: "running", free: true })]).length).toBe(1);
+    expect(G.groundedFlights([f({ state: "waiting_you", free: true })]).length).toBe(1);
+    expect(G.groundedFlights([f({ state: "running", session: "s1" })]).length).toBe(0);
+    expect(G.groundedFlights([f({ state: "done", free: true })]).length).toBe(0);
+    expect(G.isFreeRun(f({ state: "running", free: true }))).toBe(true);
+    expect(G.isFreeRun(f({ state: "grounded", free: true }))).toBe(false);
+  });
+  it("its ▶ sits on the first stop (SkyChain run), never a Run label on the route's bar", () => {
+    const src = code("components/flights/GroundedLine.tsx");
+    expect(src).not.toContain("skl-run");
+    expect(src).toContain("run={run}");
+    expect(code("components/flights/SkyChain.tsx")).toContain('className={"sky-run fl-icon-btn"');
   });
 });

@@ -187,8 +187,8 @@ describe("Verify toasts from the main screen's glue", () => {
   it("says a pre-merge check ran on the branch", async () => {
     const { checkedToastText } = await import("../state/queries");
     expect(checkedToastText({ title: "fix-login", before_merge: true })).toBe(
-      "fix-login checked on the branch — everything passed"
+      "fix-login checked on the branch — every behavior verified"
     );
-    expect(checkedToastText({ title: "fix-login", failed: 1 })).toBe("fix-login checked — 1 step failed");
+    expect(checkedToastText({ title: "fix-login", failed: 1 })).toBe("fix-login checked — 1 behavior failed");
   });
 });

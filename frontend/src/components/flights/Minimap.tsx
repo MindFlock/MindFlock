@@ -155,7 +155,7 @@ export function Minimap({ rects, cam, viewport, onCamera, onJump, open, onToggle
         className="sky-minimap-map"
         style={{ width: MINIMAP_W, height: MINIMAP_H }}
         role="img"
-        aria-label="Minimap: click a line to go to it, click or drag to move the view"
+        aria-label="Minimap: click a route to go to it, click or drag to move the view"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}

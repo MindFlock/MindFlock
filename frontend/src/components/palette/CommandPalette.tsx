@@ -30,11 +30,12 @@ import { openSettings } from "../../lib/openSettings";
 import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
 import { settingsActions } from "./settingsSearch";
-import { VERIFY_BLURB } from "../../lib/vocab";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
 import { openSkyGuide } from "../flights/SkyGuide";
 import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
+import { openWhatsNew } from "../whatsNew/WhatsNew";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -154,18 +155,27 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     // The other end of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.
+    // Verify lives on the route now (docs/behaviors.md §4): both rows fly the
+    // Sky; the words people learned still find them.
     acts.push({
-      label: "Verify…",
+      label: "Behaviors — next that needs you",
       hint: "Alt+V",
       top: TOP.verify,
-      keywords: VERIFY_BLURB + " checklists",
-      run: () => ui.openDialogFor("verify"),
+      keywords: "verify behaviors check checklist test plan pushed changes work",
+      run: () => openBehaviors({ next: true }),
+    });
+    acts.push({
+      label: "Show the Behaviors board",
+      keywords: "verify behaviors board closed sessions other branches watched repositories",
+      run: () => openBehaviors({ board: true }),
     });
     acts.push({
       label: "Schedule…",
       hint: "Alt+S",
       top: TOP.schedule,
-      keywords: "templates cron recurring nightly timer daily weekly",
+      // "Templates…" was a second row for the same dialog; it is one name
+      // now, and the word people learned still finds it (the keywords).
+      keywords: "templates template cron recurring nightly timer daily weekly scheduled routes chains stops",
       run: () => ui.openDialogFor("schedule"),
     });
     // The main area's other view (lib/viewMode): the same sessions as panes
@@ -174,12 +184,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push(
       ui.view === "sky"
         ? { label: "Switch to the grid", hint: "Ctrl+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
-        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
+        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas routes chains lines bird board flock map flights", run: () => setView("sky") }
     );
     acts.push({
-      label: "Stops…",
+      label: "Saved routes…",
       hint: "on the Sky's shelf",
-      keywords: "flights saved stops plan perch canvas shelf new",
+      keywords: "saved routes route saved chains chain stops shelf canvas new flights saved stops plan",
       run: () => ui.showFlyways(),
     });
     // The Sky's long-form guide (flights/SkyGuide): the sky shows it, so show
@@ -187,7 +197,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({
       label: "Learn the Sky",
       hint: "the guide",
-      keywords: "help how guide tutorial sky lines stops bird keys",
+      keywords: "help how guide tutorial sky routes chains stops saved routes saved chains wait for me needs you bird keys",
       run: () => {
         setView("sky");
         openSkyGuide();
@@ -201,9 +211,6 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.setBulkMode(true),
     });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
-    // Schedule is the top bar's; "Templates…" is the name it had, kept as a
-    // row so the word people learned still finds it.
-    acts.push({ label: "Templates…", hint: "your templates — in Schedule", run: () => ui.openDialogFor("schedule") });
     // A NEW template's form with its schedule on — it says template, because
     // that is what it makes ("Schedule a session…" still finds it).
     acts.push({
@@ -272,6 +279,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         run: () => (id === "people" ? replayPeopleTour() : replayTour(id)),
       });
     }
+    acts.push({ label: "What's new", hint: "this release's new features", keywords: "release new features update version help", run: () => openWhatsNew() });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "Keyboard shortcuts", hint: "?", top: TOP.shortcuts, run: () => host.toggleShortcuts() });
 

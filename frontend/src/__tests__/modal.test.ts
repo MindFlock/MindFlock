@@ -178,11 +178,8 @@ describe("dialogs use the shell instead of hand-rolling one", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("VerifyDialog is on the shell too (its own Escape listener is gone)", () => {
-    const src = SOURCES["../components/dialogs/VerifyDialog.tsx"];
-    expect(src).toMatch(/<Modal\s+id="verify-dialog"/);
-    expect(src).not.toMatch(/e\.target === e\.currentTarget/);
-    expect(src).not.toMatch(/addEventListener\("keydown"/);
+  it("VerifyDialog is gone — Verify is a stop on the route, not a dialog", () => {
+    expect(SOURCES["../components/dialogs/VerifyDialog.tsx"]).toBeUndefined();
   });
 
   it("RenameDialog no longer dismisses on a backdrop click", () => {

@@ -16,9 +16,12 @@ provider's aliases). Registration order:
 1. **`claude`** (`ClaudeProvider` in `claude.py`) — matches `claude` and empty
    programs. The default.
 2. **Bundled providers** — `codex`, `antigravity`, `aider`, `opencode`, `cline`,
-   `goose` (`BUILTIN_CONFIGS` in `config.py`). `codex` and `antigravity` get
-   dedicated Python subclasses (`CodexProvider`, `AntigravityProvider`) for live
-   usage/telemetry; the rest are data-only configs.
+   `goose`, `copilot` (`BUILTIN_CONFIGS` in `config.py`). `codex` and
+   `antigravity` get dedicated Python subclasses (`CodexProvider`,
+   `AntigravityProvider`) for live usage/telemetry, and `copilot`
+   (`CopilotProvider`, GitHub Copilot CLI, npm `@github/copilot`) for the
+   MindFlock MCP auto-attach (`--additional-mcp-config` JSON) and `/clear`; the
+   rest are data-only configs.
 3. **User TOML providers** — one per file in the providers dir.
 4. **`generic` fallback** — matches anything; runs the program bare.
 

@@ -206,6 +206,22 @@
   overflow-wrap: break-word;
 }
 
+/* A READY chain's head (ReadyHead under it): its sub is ONE line with an
+   ellipsis, and nothing under the tile shrinks — `.sky-node-sub`'s
+   overflow:hidden let it shrink in the fixed-height box, so the next line
+   drew over its own. Any other head keeps its two-line "doing now". */
+.sky-head:has(.sky-ready) > .sky-node-sub {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: unset;
+}
+.sky-head > .sky-node-title,
+.sky-head > .sky-node-sub,
+.sky-head > .sky-head-extra {
+  flex-shrink: 0;
+}
+
 .sky-node-extra,
 .sky-head-extra {
   margin-top: 4px;
@@ -628,42 +644,99 @@
   white-space: nowrap;
 }
 
-/* Sub-sessions' bus: dashed, quiet, square corners (lib/skyGraph). */
-.sky-wire.sky-wire-fan {
+/* Sub-sessions' bus: dashed, quiet, square corners (lib/skyGraph). A
+   parallel group's fork and join (round 20) are plain fan / join wires: solid. */
+.sky-wire.sky-wire-bus {
   stroke-dasharray: 4 4;
   stroke-linejoin: round;
   opacity: 0.75;
 }
 
-/* Round 19: a ready chain's session tile — Ready, ▶ Run, how it starts. */
+/* Round 19: a ready chain's session tile — under its name, one row
+   "[Ready] [▶ Run]", then one small muted line saying how it starts. The head
+   box is NODE_W × NODE_H (132 × 140, lib/skyGraph): tile 64 + name 24 + sub
+   15 + this 4 + 18 + 1 + 13 = 139, so every line here is one line, never a
+   wrap. The ▶ is `.sky-ready-run`, never `.sky-run`: `.sky-chain .sky-run`
+   is the free chain's hover-only trigger circle, and this sits in .sky-chain. */
 .sky-ready {
-  display: inline-flex;
-  flex-wrap: wrap;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-width: 100%;
+  min-width: 0;
+}
+.sky-ready-row {
+  display: flex;
   justify-content: center;
   align-items: center;
-  gap: 4px;
-  max-width: 180px;
+  gap: 5px;
 }
 .sky-head-chip.tone-ready {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
   color: var(--fl-ink-accent, var(--accent));
 }
-.sky-run {
-  padding: 2px 8px;
+.sky-ready-run {
+  box-sizing: border-box;
+  height: 18px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid var(--tone-working);
   color: var(--fl-ink-working, var(--tone-working));
   background: var(--panel);
+  font-family: inherit;
   font-size: 11px;
   font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.sky-run:hover {
+.sky-ready-run:hover:not(:disabled) {
   background: color-mix(in srgb, var(--tone-working) 14%, var(--panel));
 }
+.sky-ready-run:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sky-ready-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* A button, but quiet: no link colour or underline at rest (not .linklike,
+   which `.sky button.linklike` paints accent). */
 .sky-start-on {
-  font-size: 10.5px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 13px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.sky-start-on:hover,
+.sky-start-on:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+.sky-start-on:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+/* A ready head's name stays one line, so the head fits its box. */
+.sky-head:has(.sky-ready) > .sky-node-title {
+  -webkit-line-clamp: 1;
+}
+/* The free chain's ▶ trigger (`.sky-chain .sky-run`, the rest of its look)
+   kept the weight this block used to give every `.sky-run`. */
+.sky-run {
+  font-weight: 600;
 }
 
 /* A working / asking sub-session's own bird, perched on its tile. */
@@ -682,4 +755,487 @@
 .sky-chain:hover .sky-socket,
 .sky-socket.is-target {
   opacity: 1;
+}
+
+/* --- Round 20: the agent tile, sub-session frames ---------------------------
+   (docs/flights.md "Round 20" A). The session's chain starts at its AGENT:
+   the sparkle in the session's colour on a plain rounded tile (no more
+   session "pill" shape — the frame round the chain is the session). */
+
+.sky-head.sky-agent .sky-tile {
+  border-radius: 16px;
+}
+
+.sky-head.sky-agent .sky-node-sub {
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+}
+
+/* A sub-session: a small frame in its own colour — its name on the bar, its
+   agent tile inside, its own chain as a strip of mini stops. */
+.sky-node.sky-subframe {
+  box-sizing: border-box;
+  justify-content: flex-start;
+  /* Left-aligned inside (the owner: not "weirdly center justified"). */
+  align-items: flex-start;
+  text-align: left;
+  padding: 0 8px 8px;
+  border: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 40%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 6%, var(--bg, transparent));
+}
+
+.sky-node.sky-subframe:hover {
+  border-color: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 65%, transparent);
+}
+
+.sky-node.sky-subframe.is-selected,
+.sky-node.sky-subframe.is-highlighted {
+  border-color: var(--accent);
+}
+
+.sky-subframe-bar {
+  box-sizing: border-box;
+  flex: none;
+  width: calc(100% + 16px);
+  height: 22px;
+  margin: 0 -8px 8px;
+  padding: 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 24%, transparent);
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 12%, transparent);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 22px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-subframe .sky-tile {
+  border-radius: 16px;
+}
+
+.sky-subframe .sky-tile-icon {
+  color: var(--sky-sub-color, var(--accent));
+}
+
+/* The bus down from the parent's agent to each sub-session's frame. */
+.sky-wire-fan.sky-wire-bus {
+  stroke-dasharray: 4 4;
+}
+
+/* A sub-session's own chain, small: a square per stop on a thin line. */
+.sky-mini-chain {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sky-mini-chain::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  top: 50%;
+  border-top: 1.5px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 45%, transparent);
+}
+.sky-mini {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid var(--sky-tile-line);
+  background: var(--sky-tile-bg);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1;
+}
+.sky-mini.st-done {
+  border-color: color-mix(in srgb, var(--tone-working) 55%, transparent);
+  color: var(--fl-ink-working, var(--tone-working));
+}
+.sky-mini.st-current {
+  border-color: var(--tone-working);
+  color: var(--fl-ink-working, var(--tone-working));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone-working) 22%, transparent);
+}
+.sky-mini.st-perched {
+  border-color: var(--tone-attention);
+  color: var(--tone-attention);
+}
+.sky-mini.st-failed,
+.sky-mini.st-halted {
+  border-color: var(--red, var(--tone-broken));
+  color: var(--red, var(--tone-broken));
+}
+.sky-mini-more {
+  width: auto;
+  padding: 0 4px;
+}
+
+/* The agent's Send a prompt… composer, at the pointer (a portal on the page). */
+.sky-agent-prompt {
+  position: fixed;
+  z-index: 81;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 320px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--sky-shadow-raised, 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34));
+  font-size: 12.5px;
+}
+.sky-agent-prompt-head {
+  font-weight: 600;
+}
+.sky-agent-prompt textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+}
+.sky-agent-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+.sky-agent-prompt-row .muted {
+  margin-right: auto;
+}
+
+/* A node drawn open (a sub-session's card in its tile's place): a container,
+   not a tile — nothing centred, the card fills it. */
+.sky-node.sky-node-open {
+  align-items: stretch;
+  text-align: left;
+}
+
+/* --- A chain with no session: its run button (n8n's trigger ▶) --------------
+   On the left of the first stop, where a run starts — never a label floating
+   over the chain. At rest it shows on hover; while the chain runs it stays,
+   as ■ (stop the run). */
+.sky-chain .sky-run {
+  position: absolute;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)));
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  background: var(--sky-tile-bg, var(--bg));
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.sky-chain .sky-run.is-running {
+  padding: 0;
+  opacity: 1;
+}
+.sky-chain:hover .sky-run,
+.sky-chain .sky-run:focus-visible {
+  opacity: 1;
+}
+.sky-chain .sky-run:hover,
+.sky-chain .sky-run:focus-visible {
+  background: var(--accent);
+  color: var(--bg);
+  outline: none;
+}
+
+/* A free chain's ▶ takes the empty socket's place (`.has-run`): on hover it
+   is the one circle left of the first stop, its dashed stub the wire into
+   it. The socket comes back — and the ▶ steps aside — only while something
+   is dragged that could land there (a wire: `.is-target`; a Session chip:
+   GroundedLine.css `.is-session-over`). */
+.sky-chain.has-run .sky-socket:not(.is-target) {
+  opacity: 0;
+}
+.sky-chain.has-run:has(.sky-socket.is-target) .sky-run:not(.is-running) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* === Loop back to the agent + easier wires (docs/flights-loop-agent-sky.md) ===
+   Its own block (another worker edits the `.sky-ready*` rules above).
+   - The out port's hit area is bigger than its dot (an invisible ring).
+   - While a wire is drawn (`.is-wiring`: the chain has lit drop targets),
+     every lit tile is a generous drop: an invisible pad round its box, a
+     tinted tile; the one under the pointer glows (`.is-over`).
+   - The agent tile as a drop says "↺" (a Loop back to the agent).
+   - The hint by the pointer (SkyWires `.sky-band-hint`), screen-sized. */
+.sky-port-out::before {
+  content: "";
+  position: absolute;
+  inset: -10px;
+  border-radius: 50%;
+}
+
+.sky-chain.is-wiring .sky-node.is-target::after {
+  content: "";
+  position: absolute;
+  inset: -18px;
+  border-radius: 18px;
+  pointer-events: auto;
+}
+
+.sky-chain.is-wiring .sky-node.is-target .sky-tile {
+  background: color-mix(in srgb, var(--accent) 12%, var(--sky-tile-bg, var(--panel)));
+}
+
+.sky-chain.is-wiring .sky-node.is-target.is-over::after {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  outline: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.sky-node.is-agent-target .sky-tile::after {
+  content: "↺";
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.sky-band-hint {
+  font-size: calc(12px / var(--sky-z, 1));
+  font-weight: 600;
+  fill: var(--text);
+  stroke: var(--sky-bg, var(--bg));
+  stroke-width: calc(4px / var(--sky-z, 1));
+  stroke-linejoin: round;
+  paint-order: stroke;
+  pointer-events: none;
+}
+
+.sky-band.is-over .sky-band-hint {
+  fill: var(--accent);
+}
+/* === end: loop back to the agent + easier wires === */
+
+/* --- The Behaviors tile (docs/behaviors.md §1) ----------------------------------
+   The chain's LAST tile (or its Verify stop standing in for it): a ✓-shield,
+   "Behaviors", the summary under it. Its tone is the tile's edge: quiet (the
+   resting line), busy (checking), you (gold, as a perch), bad (red), ok
+   (green). The text stays the tile's own ink (contrast in both themes); a
+   failed or waiting summary is set in the regular weight rather than muted. */
+
+.sky-node.sky-behaviors.is-busy .sky-tile {
+  border-color: var(--tone-waiting);
+}
+.sky-node.sky-behaviors.is-you .sky-tile {
+  border-color: var(--tone-attention);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--tone-attention) 22%, transparent),
+    0 0 16px color-mix(in srgb, var(--tone-attention) 26%, transparent);
+}
+.sky-node.sky-behaviors.is-bad .sky-tile {
+  border-color: var(--red, var(--tone-broken));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red, var(--tone-broken)) 20%, transparent);
+}
+.sky-node.sky-behaviors.is-ok .sky-tile {
+  border-color: var(--green, var(--tone-working));
+}
+.sky-node.sky-behaviors.is-you .sky-node-sub,
+.sky-node.sky-behaviors.is-bad .sky-node-sub {
+  color: var(--text);
+  font-weight: 600;
+}
+/* The derived tile: wired in, never a wire's source or target. */
+.sky-node.sky-node-behaviors {
+  cursor: pointer;
+}
+.sky-node .sky-bh-more {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* Its card, open in the tile's place: an opaque box (the wire into it runs
+   under it), scrolling past its room. Text sizes counter-scale with the
+   Sky's zoom so the card reads at any zoom. */
+.sky-bh-open {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  border: 1.5px solid var(--sky-tile-line-hi, var(--border));
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--sky-shadow-rest, 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14));
+  color: var(--text);
+  text-align: left;
+  cursor: auto;
+}
+.sky-bh-open.sky-bh-ask {
+  padding: 10px 12px;
+}
+
+/* The frame carries the tone: a thin red top edge when a behavior failed
+   (screen-thin at any zoom). */
+.skl-chainline.skl-frame.is-bh-bad > .skl-frame-box {
+  box-shadow: inset 0 calc(2px / var(--sky-z, 1)) 0 var(--red, var(--tone-broken));
+}
+.fl-chain-view.is-bh-bad > .fl-chain-frame {
+  box-shadow: inset 0 2px 0 var(--red, var(--tone-broken));
+}
+
+/* === Return wires explain themselves (docs/vision/fixwire.md) ===============
+   A stop that can send work back to the agent draws a return wire under the
+   route (lib/skyGraph `fix` wires, stacked with the Loops): quiet — thin,
+   dashed, muted — with its case on it ("if pre-commit fails"). While the
+   agent fixes it the wire turns the warning tone, solid and flowing, and its
+   label says the real reason and round. Every return wire (Loops too) ends
+   in an arrowhead at the stop it goes back to. */
+
+.sky-chain {
+  --sky-fix: var(--warn, var(--tone-attention));
+}
+
+.sky-wire-fix {
+  stroke: color-mix(in srgb, var(--muted) 55%, transparent);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 5;
+}
+
+.sky-wire-fix.sky-ret-fixing {
+  stroke: var(--sky-fix);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+  animation: sky-wire-flow 0.9s linear infinite;
+}
+
+.sky-wire-fix.sky-ret-fixed {
+  stroke: color-mix(in srgb, var(--tone-working) 45%, transparent);
+  stroke-dasharray: none;
+}
+
+.sky-wire-fix.sky-ret-halted {
+  stroke: color-mix(in srgb, var(--red, var(--tone-broken)) 70%, transparent);
+  stroke-dasharray: none;
+}
+
+/* The arrowhead takes its wire's colour. */
+.sky-wire.sky-wire-arrow {
+  fill: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke: none;
+  stroke-dasharray: none;
+  animation: none;
+}
+.sky-wire-arrow.sky-loop-running {
+  fill: var(--tone-working);
+}
+.sky-wire-arrow.sky-loop-done {
+  fill: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.sky-wire-arrow.sky-wire-fix {
+  fill: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+.sky-wire-arrow.sky-ret-fixing {
+  fill: var(--sky-fix);
+}
+.sky-wire-arrow.sky-ret-fixed {
+  fill: color-mix(in srgb, var(--tone-working) 45%, transparent);
+}
+.sky-wire-arrow.sky-ret-halted {
+  fill: color-mix(in srgb, var(--red, var(--tone-broken)) 70%, transparent);
+}
+
+/* The words on the wire: plane-sized (they zoom with the route, so they
+   always fit their run), on a panel chip so the wire breaks under them. */
+.sky-ret-label {
+  position: absolute;
+  z-index: 1;
+  transform: translate(-50%, -50%);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.sky-ret-label.sky-ret-fixing {
+  color: var(--text);
+  border: 1px solid var(--sky-fix);
+  background: color-mix(in srgb, var(--sky-fix) 14%, var(--panel));
+}
+
+.sky-ret-label.sky-ret-fixed {
+  color: color-mix(in srgb, var(--tone-working) 80%, var(--muted));
+  opacity: 0.8;
+}
+
+.sky-ret-label.sky-ret-halted {
+  color: var(--fl-ink-red, var(--red, var(--tone-broken)));
+}
+
+/* The stop whose failure is with the agent wears the warning tone. */
+.sky-node.is-fixing .sky-tile {
+  border-color: var(--sky-fix);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--sky-fix) 22%, transparent),
+    0 0 16px color-mix(in srgb, var(--sky-fix) 26%, transparent);
+}
+
+/* Far out the words go, as the Sky's other small text does. */
+.skl[data-lod="far"] .sky-ret-label,
+[data-lod="far"] .sky-ret-label {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-wire-fix.sky-ret-fixing {
+    animation: none;
+  }
+}
+/* === end: return wires explain themselves === */
+
+/* A Ship stop the agent did itself (docs/vision/fixwire.md "Done by the
+   agent"): under its receipt, the agent glyph and "by the agent". */
+.sky-node-by {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sky-node-by .fl-stop-icon {
+  color: var(--sky-fam-work);
+}
+.skl[data-lod="far"] .sky-node-by,
+[data-lod="far"] .sky-node-by {
+  display: none;
 }

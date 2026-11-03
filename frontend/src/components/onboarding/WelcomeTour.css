@@ -7,7 +7,7 @@
 
 .wt-card {
   position: relative;
-  width: min(460px, calc(100vw - 32px));
+  width: min(500px, calc(100vw - 32px));
   box-sizing: border-box;
   max-height: calc(100vh - 40px);
   display: flex;
@@ -98,6 +98,15 @@
 
 .wt-body + .wt-body {
   margin-top: 8px;
+}
+
+/* The lead sentence, then the picture (VisionPicture), then the rest. */
+.wt-lead {
+  font-size: 14.5px;
+}
+
+.wt-content .vision-picture {
+  margin: 12px 0 14px;
 }
 
 .wt-body b {

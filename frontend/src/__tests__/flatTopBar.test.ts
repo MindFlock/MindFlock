@@ -26,13 +26,15 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { useUi } = await import("../state/store");
 const { KEYMAP } = await import("../lib/keymap");
 const { installSurfaceHash, hashFor, parseHash } = await import("../lib/surfaceHash");
-const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, scheduledFlyways, flywayNextLine } = await import(
+const { useBehaviorsFocus } = await import("../lib/behaviorsFocus");
+const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, scheduledFlyways, scheduleEntries, nextAcross, planWithSkip, planWithWhen, barePlan } = await import(
   "../components/dialogs/TemplatesDialog"
 );
 
 const TOPBAR = code("components/TopBar.tsx");
 
 afterEach(() => {
+  useBehaviorsFocus.setState({ request: null, boardRequested: false });
   useUi.getState().closeDialog();
   useUi.getState().takeSkyShelf();
   useUi.getState().setView("grid");
@@ -41,24 +43,25 @@ afterEach(() => {
 const open = () => [useUi.getState().openDialog, useUi.getState().dialogTarget];
 
 describe("the top bar is flat again", () => {
-  it("New · Grid / Sky · Intake · Verify · Schedule · Settings — and no Flights button", () => {
-    const at = ['id="new-btn"', 'data-fold="view"', 'id="intake-btn"', 'id="verify-btn"', 'id="schedule-btn"', 'id="settings-btn"', 'id="palette-btn"'].map(
+  it("New · Grid / Sky · Intake · Schedule · Settings — no Flights button, no Verify button", () => {
+    const at = ['id="new-btn"', 'data-fold="view"', 'id="intake-btn"', 'id="schedule-btn"', 'id="settings-btn"', 'id="palette-btn"'].map(
       (s) => TOPBAR.indexOf(s)
     );
     expect(at.every((x, i) => x > 0 && (i === 0 || x > at[i - 1])), at.join(",")).toBe(true);
     expect(TOPBAR).not.toContain('id="flights-btn"');
     expect(TOPBAR).not.toContain('openDialogFor("flights"');
-    for (const name of ["intake", "verify", "schedule"]) expect(TOPBAR).toContain(`ui.openDialogFor("${name}")`);
+    for (const name of ["intake", "schedule"]) expect(TOPBAR).toContain(`ui.openDialogFor("${name}")`);
+    // Verify is a stop on the route, not a place (docs/behaviors.md §4).
+    expect(TOPBAR).not.toContain('id="verify-btn"');
+    expect(TOPBAR).not.toContain('openDialogFor("verify")');
   });
 
   it("each button wears its own badge and tooltip again", () => {
-    expect(TOPBAR).toContain('{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}');
     expect(TOPBAR).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');
     expect(TOPBAR).toContain('"Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake")');
-    expect(TOPBAR).toContain('"Verify — " + VERIFY_BLURB + keys("verify")');
   });
 
-  it("the Sky half of the toggle counts the flights perched on you", () => {
+  it("the Sky half of the toggle counts the chains that need you", () => {
     expect(TOPBAR).toContain("const perch = perchBadge(useFlights().data || []);");
     expect(TOPBAR).toMatch(/v === "sky" && perch\.count > 0 && \(\s*<span className=\{"tb-count" \+ \(perch\.failing \? " is-failing" : ""\)\}>\{perch\.count\}<\/span>/);
   });
@@ -67,10 +70,9 @@ describe("the top bar is flat again", () => {
 describe("the keys", () => {
   const run = (id: string) => KEYMAP.find((k) => k.id === id)!.run({} as KeyboardEvent);
 
-  it("Alt+I → Intake, Alt+V → Verify, Alt+S → Schedule, under their old ids (a rebind survives)", () => {
+  it("Alt+I → Intake, Alt+S → Schedule, under their old ids (a rebind survives)", () => {
     for (const [id, key, help] of [
       ["intake", "i", "Intake — tickets, PRs and issues"],
-      ["verify", "v", /^Verify — /],
       ["schedule", "s", "Schedule — templates that start sessions on their own"],
     ] as const) {
       const k = KEYMAP.find((e) => e.id === id)!;
@@ -81,17 +83,32 @@ describe("the keys", () => {
       expect(open(), id).toEqual([id, null]);
     }
   });
+
+  it("Alt+V (its old id) flies the Sky to the next behaviors that need you — no dialog", () => {
+    useUi.getState().closeDialog();
+    const k = KEYMAP.find((e) => e.id === "verify")!;
+    expect(k).toMatchObject({ key: "v", alt: true });
+    expect(k.help?.[2]).toBe("Behaviors — the next that needs you");
+    run("verify");
+    expect(open()).toEqual([null, null]);
+    expect(useUi.getState().view).toBe("sky");
+    expect(useBehaviorsFocus.getState().request).toMatchObject({ next: true });
+  });
 });
 
 describe("the palette", () => {
   const p = code("components/palette/CommandPalette.tsx");
-  it("Intake… / Verify… / Schedule… open the dialogs; Switch to the Sky / grid; Stops… is the shelf", () => {
+  it("Intake… / Schedule… open the dialogs; Behaviors fly the Sky; Switch to the Sky / grid; Saved routes… is the shelf", () => {
     expect(p).toContain('run: () => ui.openDialogFor("intake"),');
-    expect(p).toContain('label: "Verify…"');
+    expect(p).not.toContain('label: "Verify…"');
+    expect(p).toContain('label: "Behaviors — next that needs you",');
+    expect(p).toContain("run: () => openBehaviors({ next: true }),");
+    expect(p).toContain('label: "Show the Behaviors board",');
+    expect(p).toContain("run: () => openBehaviors({ board: true }),");
     expect(p).toContain('label: "Schedule…"');
     expect(p).toContain('label: "Switch to the Sky", hint: "Ctrl+Y"');
     expect(p).toContain('label: "Switch to the grid", hint: "Ctrl+Y"');
-    expect(p).toMatch(/label: "Stops…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
+    expect(p).toMatch(/label: "Saved routes…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
     expect(p).not.toContain('label: "Flights…"');
     expect(p).not.toContain('"flights"');
   });
@@ -108,13 +125,14 @@ describe("the Flights dialog is retired", () => {
     expect(parseHash("#flights")).toBeNull();
   });
 
-  it("the three dialogs open standalone, on their own deep links", () => {
+  it("the two dialogs open standalone, on their own deep links; Verify is no dialog", () => {
     useUi.getState().openDialogFor("intake", "tickets:jira");
     expect(open()).toEqual(["intake", "tickets:jira"]);
     expect(hashFor("intake", "tickets:jira")).toBe("#intake/tickets%3Ajira");
-    useUi.getState().openDialogFor("verify", "feature/x");
-    expect(open()).toEqual(["verify", "feature/x"]);
-    expect(hashFor("verify", "feature/x")).toBe("#verify/feature%2Fx");
+    // A Verify dialog is no surface: no hash of its own (#verify links land
+    // on #behaviors — shellRound4.test.ts).
+    expect(hashFor("verify", "feature/x")).toBe("");
+    expect(parseHash("#verify")).toBeNull();
     useUi.getState().openDialogFor("templates", "new");
     expect(open()).toEqual(["schedule", "new"]);
     expect(hashFor("schedule", "new")).toBe("#schedule");
@@ -146,8 +164,10 @@ describe("the old #flights links land where they belong now", () => {
     return { win, loc, calls };
   };
 
-  /** [old link, what is open, the view, the shelf request, the URL after] */
-  const TABLE: Array<[string, [string | null, string | null], "grid" | "sky", string | null, string]> = [
+  /** [old link, what is open, the view, the shelf request, the URL after,
+   * the behaviors request (docs/behaviors.md §4)] */
+  type Behaviors = { board?: boolean; branch?: string } | null;
+  const TABLE: Array<[string, [string | null, string | null], "grid" | "sky", string | null, string, Behaviors?]> = [
     ["#flights", [null, null], "sky", null, "#sky"],
     ["#flights/sky", [null, null], "sky", null, "#sky"],
     ["#flights/sky/fix-login", [null, null], "sky", null, "#sky/fix-login"],
@@ -157,12 +177,13 @@ describe("the old #flights links land where they belong now", () => {
     ["#flights/plans/builtin%3Aticket", [null, null], "sky", "builtin:ticket", "#sky"],
     ["#flights/sources", ["intake", null], "grid", null, "#intake"],
     ["#flights/sources/tickets%3Ajira", ["intake", "tickets:jira"], "grid", null, "#intake/tickets%3Ajira"],
-    ["#flights/checklists", ["verify", null], "grid", null, "#verify"],
-    ["#flights/checklists/feature%2Fx", ["verify", "feature/x"], "grid", null, "#verify/feature%2Fx"],
+    // Checklists are behaviors in the Sky now: the board, or that branch's.
+    ["#flights/checklists", [null, null], "sky", null, "#behaviors", { board: true }],
+    ["#flights/checklists/feature%2Fx", [null, null], "sky", null, "#sky", { branch: "feature/x" }],
     ["#flights/schedule", ["schedule", null], "grid", null, "#schedule"],
   ];
 
-  it.each(TABLE)("%s", (hash, dialog, view, shelf, after) => {
+  it.each(TABLE)("%s", (hash, dialog, view, shelf, after, behaviors = null) => {
     const w = fakeWin(hash);
     const off = installSurfaceHash(w.win);
     const s = useUi.getState();
@@ -172,7 +193,26 @@ describe("the old #flights links land where they belong now", () => {
     // Rewritten in place, so Back from it closes rather than re-opens.
     expect(w.loc.hash).toBe(after);
     expect(w.calls.every((c) => c.startsWith("replace "))).toBe(true);
+    const req = useBehaviorsFocus.getState().request;
+    expect(req ? { ...req, n: undefined } : null).toEqual(behaviors ? { ...behaviors, n: undefined } : null);
     off();
+  });
+
+  it("a #behaviors link flies the Sky to the board or that plan, and keeps its address", () => {
+    for (const [hash, want] of [
+      ["#behaviors", { board: true }],
+      ["#behaviors/fix-login", { planId: "fix-login" }],
+    ] as const) {
+      useUi.getState().setView("grid");
+      const w = fakeWin(hash);
+      const off = installSurfaceHash(w.win);
+      expect(useUi.getState().view).toBe("sky");
+      expect(useUi.getState().openDialog).toBeNull();
+      expect({ ...useBehaviorsFocus.getState().request, n: undefined }).toEqual({ ...want, n: undefined });
+      expect(w.loc.hash).toBe(hash);
+      expect(w.calls).toEqual([]);
+      off();
+    }
   });
 
   it("an old caller's openDialogFor('flights', …) is routed the same way", () => {
@@ -180,7 +220,9 @@ describe("the old #flights links land where they belong now", () => {
     expect([useUi.getState().view, useUi.getState().skyMode, useUi.getState().focused, useUi.getState().openDialog]).toEqual(["sky", "one", "second", null]);
     useUi.getState().setView("grid");
     useUi.getState().openDialogFor("flights", "checklists/feature/x");
-    expect(open()).toEqual(["verify", "feature/x"]);
+    expect(open()).toEqual([null, null]);
+    expect(useUi.getState().view).toBe("sky");
+    expect(useBehaviorsFocus.getState().request).toMatchObject({ branch: "feature/x" });
   });
 });
 
@@ -195,14 +237,14 @@ describe("flyways live in the Sky", () => {
     expect(useUi.getState().skyShelf).toBeNull();
   });
 
-  it("the sky opens its shelf and the saved stop's Takes off dialog on the request; the drawer opens Verify / Intake directly", () => {
+  it("the sky opens its shelf and the saved stop's Takes off dialog on the request; the drawer opens behaviors / Intake", () => {
     const sky = code("components/flights/SkyView.tsx");
     expect(sky).toContain("const shelfAsk = useUi((s) => s.skyShelf);");
     expect(sky).toContain("useUi.getState().takeSkyShelf();");
     expect(sky).toContain("if (plan) setTakeoff(plan);");
     expect(sky).not.toContain("onTab=");
     const drawer = code("components/flights/SkyDrawer.tsx");
-    expect(drawer).toContain('onOpen={(b) => openDialogFor("verify", b)}');
+    expect(drawer).toContain("onOpen={(planId) => openBehaviors({ planId })}");
     expect(drawer).toContain('onClick={() => openDialogFor("intake")}');
   });
 
@@ -216,7 +258,7 @@ describe("flyways live in the Sky", () => {
   });
 });
 
-describe("Schedule lists the scheduled stops", () => {
+describe("Schedule lists the scheduled chains", () => {
   const NOW = new Date(2026, 9, 14, 9, 0);
   const at = (h: number) => new Date(2026, 9, 14, h, 0).getTime() / 1000;
   const plan = (over: Partial<FlightPlan> & { runs?: Record<string, unknown> }): FlightPlan =>
@@ -260,41 +302,104 @@ describe("Schedule lists the scheduled stops", () => {
 
   it("only the flyways with a schedule trigger, soonest first, paused last", () => {
     expect(scheduledFlyways(FLYWAYS).map((p) => p.id)).toEqual(["p_soon", "p_late", "p_held"]);
-    expect(flywayNextLine(FLYWAYS[3], NOW)).toBe("Paused");
-    expect(flywayNextLine(FLYWAYS[1], NOW)).toBe("in 12h");
-    expect(flywayNextLine(plan({ runs: { runs_here: false, runs_on: "mac-mini" } }), NOW)).toBe("Starts on mac-mini");
   });
 
-  it("a section of rows with a template's anatomy: name, schedule line, next run, last result — Fly now, Edit in the Sky", () => {
+  it("ONE list: templates and saved stops on a schedule side by side, soonest first, paused last", () => {
+    const tpl = { name: "nightly", repo_path: "/home/me/app", prompt: "x", schedule: { at: "12:00", days: "daily" as const } };
+    const status = { runs: { nightly: { next_at: at(12) } }, runs_here: true, runs_on: "" };
+    const unset = plan({ id: "p_unset", name: "No time yet", trigger: { kind: "schedule", schedule: null, paused: false } });
+    const order = scheduleEntries([tpl], status, [...FLYWAYS, unset]).map((e) => (e.kind === "template" ? "t:" + e.t.name : e.f.id));
+    expect(order).toEqual(["p_soon", "t:nightly", "p_late", "p_held"]);
+    expect(nextAcross([tpl], status, FLYWAYS)).toEqual({ name: "Standup notes", at: at(11) });
+  });
+
+  it("each saved stop is a template card with a template card's verbs: Run now, Edit, Change schedule, Skip next, Pause", () => {
     const html = view(FLYWAYS);
-    const sec = html.slice(html.indexOf('id="schedule-flyways"'));
-    expect(sec).toContain(">Scheduled stops<");
+    const sec = html.slice(html.indexOf('id="schedule-scheduled"'));
+    expect(sec).not.toContain("Scheduled stops");
+    expect(html).not.toContain('id="schedule-flyways"');
     expect([...sec.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1])).toEqual(["p_soon", "p_late", "p_held"]);
     const late = sec.slice(sec.indexOf('data-plan="p_late"'), sec.indexOf('data-plan="p_held"'));
     expect(late).toContain("Nightly deps");
     expect(late).toContain("2 stops · app · claude");
-    expect(late).toContain('<span class="sch-cadence">Every day at 21:00</span>');
+    expect(late).toContain('<span class="sch-cadence">Every day at 21:00 · next today 21:00</span>');
     expect(late).toContain('<span class="sch-next">in 12h</span>');
     expect(late).toContain("Last run");
     expect(late).toContain("nightly-oct14");
-    expect(late).toContain(">Fly now</button>");
-    expect(late).toContain(">Edit in the Sky</button>");
+    expect(late).toContain(">▶ Run now</button>");
+    expect(late).toContain(">Edit</button>");
+    expect(late).toContain(">Change schedule</button>");
+    expect(late).toContain(">Skip next</button>");
+    expect(late).toContain(">Pause</button>");
+    expect(late).not.toContain("Fly now");
+    expect(late).not.toContain("Edit in the Sky");
     const soon = sec.slice(sec.indexOf('data-plan="p_soon"'), sec.indexOf('data-plan="p_late"'));
-    expect(sec).toContain('class="tpl-card is-scheduled sch-flyway is-failing" data-plan="p_soon"');
+    expect(sec).toContain('class="tpl-card sch-flyway is-scheduled is-failing" data-plan="p_soon"');
     expect(soon).toContain("Last run failed: repo moved");
     const held = sec.slice(sec.indexOf('data-plan="p_held"'));
-    expect(sec).toContain('class="tpl-card is-scheduled sch-flyway is-paused" data-plan="p_held"');
+    expect(sec).toContain('class="tpl-card sch-flyway is-scheduled is-paused" data-plan="p_held"');
     expect(held).toContain("Paused");
+    expect(held).toContain(">Resume</button>");
   });
 
-  it("nothing scheduled hides the section — no heading, no empty state", () => {
-    expect(view([FLYWAYS[0]])).not.toContain("schedule-flyways");
-    expect(view(null)).not.toContain("Scheduled stops");
+  it("a saved stop on a schedule with no time set is Not scheduled, with Schedule…", () => {
+    const unset = plan({ id: "p_unset", name: "No time yet", trigger: { kind: "schedule", schedule: null, paused: false } });
+    const html = view([FLYWAYS[0], unset]);
+    const saved = html.slice(html.indexOf('id="schedule-saved"'));
+    expect(saved).toContain('data-plan="p_unset"');
+    expect(saved).toContain(">Schedule…</button>");
+    expect(view([FLYWAYS[0]])).not.toContain("data-plan=");
   });
 
-  it("Fly now takes off on the flyway; Edit in the Sky closes Schedule and opens its card on the shelf", () => {
+  it("a saved stop with no repository says Run now needs a folder, and its folder row offers the picker", () => {
+    const bare = plan({ id: "p_bare", name: "Bare", session: { repo_path: "", program: "", model: "", in_place: false }, runs: { next_at: at(21) } });
+    const html = view([bare]);
+    expect(html).toContain("Run now and schedules need a folder.");
+    expect(html).toContain(">Pick one</button>");
+    const open = renderToStaticMarkup(
+      createElement(TemplatesDialogView, {
+        templates: [],
+        ui: TEMPLATES_UI_INIT,
+        form: formFromTemplate(null),
+        busy: false,
+        loaded: true,
+        onForm: () => {},
+        dispatch: () => {},
+        onSave: () => {},
+        onDelete: () => {},
+        onClose: () => {},
+        now: NOW,
+        flyways: [bare],
+        planFolder: { id: "p_bare", path: "/home/me/app", keep: true },
+      })
+    );
+    expect(open).toContain("Which folder should it start in?");
+    expect(open).toContain('value="/home/me/app"');
+    expect(open).toContain("Browse…");
+    expect(open).toContain("Keep it for its scheduled runs too");
+    expect(open).not.toContain("Run now and schedules need a folder.");
+  });
+
+  it("Skip next / Pause write the plan's own trigger; a changed cadence drops a skip", () => {
+    const p0 = plan({});
+    const future = Date.now() / 1000 + 3600;
+    expect((planWithSkip(p0, future).trigger.schedule as { skip_until?: number }).skip_until).toBe(future);
+    expect("skip_until" in (planWithSkip(planWithSkip(p0, future), 0).trigger.schedule as object)).toBe(false);
+    const skipped = planWithSkip(p0, future);
+    const same = planWithWhen(skipped, { days: "daily", at: "21:00", date: "", cron: "", seeded: "" })!;
+    expect((same.trigger.schedule as { skip_until?: number }).skip_until).toBe(future);
+    const moved = planWithWhen(skipped, { days: "weekdays", at: "21:00", date: "", cron: "", seeded: "" })!;
+    expect(moved.trigger.schedule).toEqual({ at: "21:00", days: "weekdays" });
+    expect(planWithWhen(p0, { days: "cron", at: "", date: "", cron: "  ", seeded: "" })).toBeNull();
+    expect("runs" in barePlan({ ...p0, runs: {} } as never)).toBe(false);
+  });
+
+  it("Run now takes off (a folder first when it has none); Edit opens its Takes off dialog over Schedule", () => {
     const src = code("components/dialogs/TemplatesDialog.tsx");
-    expect(src).toContain("void takeOff({ plan_id: f.id })");
-    expect(src).toContain("useUi.getState().showFlyways(f.id);");
+    expect(src).toContain("const flight = await takeOff(path ? { plan_id: f.id, repo_path: repo } : { plan_id: f.id });");
+    expect(src).toContain("setPlanFolder({ id: f.id, path: defaultFolder(folderSuggestions), keep: true });");
+    expect(src).toContain("{takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}");
+    expect(src).toContain("(b) => ({ ...b, trigger: { ...b.trigger, paused } })");
+    expect(src).not.toContain("showFlyways(");
   });
 });

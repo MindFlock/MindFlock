@@ -182,11 +182,11 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
   const headDown = (e: ReactPointerEvent) => {
     if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
   };
-  const moveHint = draggable && onHeadDown ? "Drag to move the blocks" : undefined;
+  const moveHint = draggable && onHeadDown ? "Drag to move the stops palette" : undefined;
   const count = (kinds?.length || 0) + allSaved.length;
 
   return (
-    <section ref={rootRef} className="sky-palette" data-tour="sky-palette" aria-label="Blocks palette" style={{ width: frame.w, height: frame.h }}>
+    <section ref={rootRef} className="sky-palette" data-tour="sky-palette" aria-label="Stops palette" style={{ width: frame.w, height: frame.h }}>
       <StopCatalogBody
         kinds={kinds || []}
         plans={allSaved}
@@ -201,14 +201,14 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
         lead={(q) => (catalogMatch(q, "Session", "A new agent session") ? <SessionCard key="session" onSession={onSession} /> : null)}
         head={(filter) => (
           <div className={"sky-palette-head" + (moveHint ? " movable" : "")} data-sky-head title={moveHint} onPointerDown={headDown}>
-            <strong className="sky-palette-title">Blocks</strong>
-            <span className="sky-palette-count" title={count + " blocks — ★ puts one on the bottom shelf"}>
+            <strong className="sky-palette-title">Stops</strong>
+            <span className="sky-palette-count" title={count + " stops and saved routes — ★ puts one on the bottom shelf"}>
               {count}
             </span>
             {filter}
-            {onDock && <OverflowMenu label="The blocks palette — more" items={[{ key: "dock", label: "Dock at the bottom", title: "Put the blocks back in the shelf at the sky's foot", onSelect: onDock }]} />}
+            {onDock && <OverflowMenu label="The stops palette — more" items={[{ key: "dock", label: "Dock at the bottom", title: "Put the stops back in the shelf at the sky's foot", onSelect: onDock }]} />}
             {onClose && (
-              <button type="button" className="fl-icon-btn sky-palette-close" aria-label="Close the blocks palette" title="Close — back to the shelf" onClick={onClose}>
+              <button type="button" className="fl-icon-btn sky-palette-close" aria-label="Close the stops palette" title="Close — back to the shelf" onClick={onClose}>
                 ×
               </button>
             )}
@@ -221,8 +221,8 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
           role="separator"
           tabIndex={0}
           data-no-drag
-          aria-label="Resize the blocks palette"
-          title="Drag to resize the blocks (or the arrow keys)"
+          aria-label="Resize the stops palette"
+          title="Drag to resize the palette (or the arrow keys)"
           onPointerDown={resizeDown}
           onPointerMove={resizeMove}
           onPointerUp={resizeUp}

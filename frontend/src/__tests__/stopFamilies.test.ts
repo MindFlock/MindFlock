@@ -114,7 +114,7 @@ describe("the cards by family (catalogCards)", () => {
   it("a filter hides the groups it empties (and keeps grouping by every kind, not the matches)", () => {
     expect(groupsOf(catalogCards(KINDS, [], "ship").groups)).toEqual(["ship:ship"]);
     expect(groupsOf(catalogCards(KINDS, [], "wait perch").groups)).toEqual([]);
-    expect(groupsOf(catalogCards(KINDS, [], "perch").groups)).toEqual(["people:you"]);
+    expect(groupsOf(catalogCards(KINDS, [], "for me").groups)).toEqual(["people:you"]);
     const c = catalogCards(KINDS, [TICKET], "nothing at all");
     expect(c.groups).toEqual([]);
     expect(c.grouped).toBe(true);
@@ -148,10 +148,10 @@ const families = (html: string) => [...html.matchAll(/data-family="([^"]+)"/g)].
 const kindsIn = (html: string) => [...html.matchAll(/data-kind="([^"]+)"/g)].map((m) => m[1]);
 
 describe("StopCatalogBody by family", () => {
-  it("a thin label row per family — Work · Ship · Outside · People — then Multi-step after them", () => {
+  it("a thin label row per family — Work · Ship · Outside · People — then Saved routes after them", () => {
     const html = body({ onAdd() {} });
     expect(html).toContain('class="sky-catalog-list sky-own-scroll grouped" id="sky-catalog-list" role="listbox"');
-    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Multi-step"]);
+    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Saved routes"]);
     expect(families(html)).toEqual(["work", "ship", "outside", "people"]);
     expect(html).toContain('<div class="sky-catalog-family" data-family="work"><h3 class="sky-catalog-label">Work</h3><div class="sky-catalog-grid"><div id="sky-catalog-row-0"');
     expect(kindsIn(html)).toEqual(["agent", "split", "join", "ship", "checks", "wait", "notify", "you", "verify"]);
@@ -175,11 +175,11 @@ describe("StopCatalogBody by family", () => {
     expect(html).toContain('<div class="sky-catalog-grid"><div class="lead">Session</div></div></div><div class="sky-catalog-family" data-family="ship">');
   });
 
-  it("an older server: no family labels at all — the round-14 Blocks grid", () => {
+  it("an older server: no family labels at all — the round-14 Stops grid", () => {
     const html = body({ kinds: FLAT });
     expect(html).toContain('class="sky-catalog-list sky-own-scroll" id="sky-catalog-list"');
     expect(html).not.toContain("data-family");
-    expect(labels(html)).toEqual(["Blocks", "Multi-step"]);
+    expect(labels(html)).toEqual(["Stops", "Saved routes"]);
     expect(html.match(/<div class="sky-catalog-grid">/g)).toHaveLength(2);
   });
 
@@ -204,10 +204,10 @@ describe("the palette groups; the bottom shelf stays flat", () => {
   it("the floating palette: Session first in Work, every family, then the saved stops", () => {
     const html = render(createElement(SkyPalette, { onPlace() {}, onSession() {} }), KINDS);
     expect(html).toContain('class="sky-catalog-list sky-own-scroll compact grouped sky-palette-body" id="sky-palette-list"');
-    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Multi-step"]);
+    expect(labels(html)).toEqual(["Work", "Ship", "Outside", "People", "Saved routes"]);
     expect(html).toMatch(/data-family="work"><h3 class="sky-catalog-label">Work<\/h3><div class="sky-catalog-grid"><div role="option" aria-selected="false" class="sky-catalog-card sky-catalog-session"/);
     // The count is every block still.
-    expect(html).toContain('<span class="sky-palette-count" title="11 blocks — ★ puts one on the bottom shelf">11</span>');
+    expect(html).toContain('<span class="sky-palette-count" title="11 stops and saved routes — ★ puts one on the bottom shelf">11</span>');
   });
 
   it("the shelf: the ★ pick, flat, exactly as an older server's", () => {

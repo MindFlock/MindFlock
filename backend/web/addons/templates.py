@@ -217,8 +217,8 @@ def save_refusal(body: dict) -> Optional[dict]:
     depth = str(body.get("autopilot") or "").strip().lower()
     if depth in _GITHUB_DEPTHS and not _github_connected():
         return {
-            "error": "Fast-track to a PR needs GitHub connected",
-            "detail": "Fast-track “%s” needs GitHub — connect GitHub, or pick "
+            "error": "Goes as far as a PR needs GitHub connected",
+            "detail": "Goes as far as “%s” needs GitHub — connect GitHub, or pick "
             "Commit or Push"
             % ("Merge when green" if depth == "merge" else "Open a PR"),
             "reason": "github_required",

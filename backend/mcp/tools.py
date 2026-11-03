@@ -95,9 +95,9 @@ needs_input: read_output(view="screen"), then answer_prompt or ask your user.
 
 TEAM RUN ("3 at a time, PR each"): start_team_run; wait_for_run, get_run, list_runs; control_run steers. Split lead: propose_run_plan; report_integrated after a conflict.
 
-Flights: describe_flight → start_flight; flight_status; control_flight; edit_flight, save_flight_plan.
+Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan.
 
-Also: get_session, check_inbox, wait_for_message, set_parent. Steer/ship/close/delete only your descendants (ship and fly also yourself).
+Also: get_session, check_inbox, wait_for_message, set_parent. Steer/ship/close/delete only your descendants (ship/route yourself).
 
 Long job: expect_background_job(duration) or prefix MINDFLOCK_EXPECT=6h."""
 
@@ -2606,7 +2606,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "set_autopilot",
-            "Arm a session's Fast-track",
+            "Arm a session's Goes as far as",
             _ship.D_AUTOPILOT,
             _ship.S_AUTOPILOT,
             box.set_autopilot,
@@ -2675,7 +2675,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         # may push or merge (openWorld), so they always prompt.
         Tool(
             "describe_flight",
-            "Describe a flight",
+            "Describe a route",
             _flights.D_DESCRIBE,
             _flights.S_DESCRIBE,
             box.describe_flight,
@@ -2683,7 +2683,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "start_flight",
-            "Start a flight",
+            "Start a route",
             _flights.D_START,
             _flights.S_START,
             box.start_flight,
@@ -2691,7 +2691,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "flight_status",
-            "Flight status",
+            "Route status",
             _flights.D_STATUS,
             _flights.S_STATUS,
             box.flight_status,
@@ -2699,7 +2699,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "control_flight",
-            "Steer a flight",
+            "Steer a route",
             _flights.D_CONTROL,
             _flights.S_CONTROL,
             box.control_flight,
@@ -2707,7 +2707,7 @@ def build_tools(box: Toolbox) -> List[Tool]:
         ),
         Tool(
             "edit_flight",
-            "Edit a flight's stops",
+            "Edit a route's stops",
             _flights.D_EDIT,
             _flights.S_EDIT,
             box.edit_flight,

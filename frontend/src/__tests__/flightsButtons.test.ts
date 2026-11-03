@@ -23,6 +23,7 @@ const TIERS: Record<string, string> = {
   "fl-pick": "chip",
   "fl-chip": "chip (Sky.css .sky-flypick)",
   "fl-toggle": "chip, a switch",
+  "sky-ready-run": "chip, a ready chain's ▶ Run pill (SkyChain.css)",
   // quiet-icon — .fl-icon-btn (StopParts.css), the top bar's .tb-item
   "fl-icon-btn": "quiet",
   "fl-gap-add": "quiet, accent-edged (FlywayCanvas.css)",
@@ -40,6 +41,7 @@ const TIERS: Record<string, string> = {
   linklike: "link",
   "sky-perch-name": "link, a name (Sky.css)",
   "fl-strip-line": "link, a strip's line (Flights.css)",
+  "sky-start-on": "link, quiet: a ready chain's start-on line (SkyChain.css)",
   // documented exceptions: whole rows / cards that are one button
   "fl-check-row": "a card row (Flights.css)",
   "fl-palette-item": "a palette card (StopParts.css)",

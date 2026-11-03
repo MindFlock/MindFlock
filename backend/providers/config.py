@@ -845,6 +845,56 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "{argv_env_shell}",
         ),
     ),
+    ProviderConfig(
+        name="copilot",
+        program_aliases=("copilot",),
+        # GitHub Copilot CLI (npm @github/copilot). Every flag below was read
+        # off `copilot --help` of 1.0.105 and the screens captured from a live
+        # run in a scratch tmux (2026-11-02).
+        # `--yolo` = --allow-all-tools --allow-all-paths --allow-all-urls: the
+        # skip-all-prompts parity with Claude's --dangerously-skip-permissions.
+        skip_perms_flag="--yolo",
+        # `--continue` resumes the most recent session; `--resume <id>` one
+        # specific session (id, task id, prefix or exact name).
+        resume_flag="--continue",
+        resume_fallback=True,
+        resume_id_flag="--resume {id}",
+        # `-i <prompt>`: "Start interactive mode and automatically execute this
+        # prompt" — the interactive counterpart of -p (which exits).
+        prompt_arg="-i {prompt}",
+        # One question, no files touched: -p is non-interactive and needs
+        # --allow-all-tools, so its shell and write tools are denied (verified:
+        # answers, leaves the tree as it was). -s prints only the answer.
+        oneshot_args=(
+            "-p",
+            "{prompt}",
+            "-s",
+            "--allow-all-tools",
+            "--deny-tool",
+            "shell",
+            "--deny-tool",
+            "write",
+        ),
+        # `--reasoning-effort <none|minimal|low|medium|high|xhigh|max>`.
+        effort_args=("--reasoning-effort", "{level}"),
+        effort_levels=("low", "medium", "high", "xhigh", "max"),
+        idle_pattern="",  # its tool-approval dialog was not captured: never auto-confirm
+        # The per-folder trust gate: "Do you trust the files in this folder?"
+        # with "1. Yes" preselected, so a bare Enter accepts it.
+        trust_patterns=("Do you trust the files in this folder?",),
+        trust_keystroke="enter",
+        # A live turn shows "○ Working · esc esc edit prompt" on the footer
+        # (idle shows "/ commands · ? help" there instead).
+        working_patterns=(r"(?i)\bWorking\b.{0,6}\besc\b",),
+        usage_window_kind="",
+        usage_window_note="Copilot plan premium requests (AIC); no MindFlock-managed window.",
+        # Auth: `copilot login` (device flow); a token in COPILOT_GITHUB_TOKEN,
+        # GH_TOKEN or GITHUB_TOKEN takes precedence (`copilot help environment`).
+        auth_files=("~/.copilot/config.json",),
+        auth_env=("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
+        login_command="copilot login",
+        install_hint="npm install -g --prefix ~/.local @github/copilot",
+    ),
 ]
 
 

@@ -348,7 +348,7 @@ export function summarySentence(o: {
     const n = clampSplit(o.maxPieces ?? SPLIT_DEFAULT);
     const lead =
       "One session in a new worktree. Its agent reads the code and decides: not worth splitting, " +
-      `it does the task itself; worth it, it proposes up to ${n} pieces with separate paths — you ` +
+      `it does the task itself; worth it, it proposes up to ${n} workers with separate paths — you ` +
       "approve the split in its Thread tab, then MindFlock starts the workers, fences each to its " +
       "paths and merges them back.";
     const tail =

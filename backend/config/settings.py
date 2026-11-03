@@ -1314,6 +1314,9 @@ class GeneralSettings:
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
     heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
     mcp_shared_servers: List[str] = field(default_factory=list)
+    # The DEFAULT FOLDER (2026-11-02): a chain run with no session picked
+    # runs here ("" = MindFlock's own ~/.mindflock/default).
+    default_folder: str = ""
     workers_request: str = DEFAULT_WORKERS_REQUEST
     workers_model: str = DEFAULT_WORKERS_MODEL
 
@@ -1358,6 +1361,8 @@ class GeneralSettings:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
             d["agent_mcp_scope"] = self.agent_mcp_scope
+        if self.default_folder:
+            d["default_folder"] = self.default_folder
         for key in AGENT_SPAWN_CAP_FIELDS:
             value = getattr(self, key)
             if value is not None:
@@ -1406,6 +1411,7 @@ class GeneralSettings:
             agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
             heavy_slots=_opt_pos_int(d.get("heavy_slots")),
             mcp_shared_servers=_mcp_server_names(d.get("mcp_shared_servers")),
+            default_folder=str(d.get("default_folder") or "").strip()[:1024],
             workers_request=str(d.get("workers_request", "") or "").strip()
             or DEFAULT_WORKERS_REQUEST,
             workers_model=str(d.get("workers_model", "") or "").strip()
@@ -1566,8 +1572,11 @@ class PrefsSettings:
     # header): ``{"order": [item id…], "hidden": [item id…]}``; None = never
     # customized (the built-in default set).
     pane_header: Optional[dict] = None
+    # What's new: the newest release version whose window this person has seen
+    # ("" = never), so it pops once per person across browser, desktop, phone.
+    whats_new_seen: str = ""
 
-    _STRS = ("theme", "diff_mode", "diff_base")
+    _STRS = ("theme", "diff_mode", "diff_base", "whats_new_seen")
     _BOOLS = (
         "reduce_motion",
         "break_on",
@@ -1629,6 +1638,7 @@ class PrefsSettings:
             welcome_tour=_opt_bool(d.get("welcome_tour")),
             settings_advanced=_opt_bool(d.get("settings_advanced")),
             pane_header=_pane_header(d.get("pane_header")),
+            whats_new_seen=str(d.get("whats_new_seen") or "")[:32],
         )
 
 

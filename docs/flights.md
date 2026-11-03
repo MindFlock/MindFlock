@@ -1,9 +1,28 @@
-# Flights — one route from waiting to landed
+# Flights — one route from waiting to finished
 
-> How Flights work — for people using them (start at [Using Flights](#using-flights))
-> and for code. The sections marked *contract* are what the backend, the
-> frontend and the integration are built against; change them only by editing
-> this file first.
+> How routes work — for people using them (start at [Using Flights](#using-flights))
+> and for code. "Flights" is the feature's internal name (the `/api/flights/*`
+> routes, `flights.py`); on screen it is a **route**. The sections marked
+> *contract* are what the backend, the frontend and the integration are built
+> against; change them only by editing this file first.
+
+## Vocabulary
+
+The words a person reads are decided in [vocabulary.md](vocabulary.md)
+(2026-11-03), which replaces the table that stood here (2026-11-02). Internal
+names stay as they are: types, ids, CSS classes, the `/api/flights/*` routes,
+`plans` and `steps` on the wire, store keys, the `#flyways` deep link and the
+hook URL `/api/hooks/flyway/`.
+
+The sections after [Using Flights](#using-flights) record each round in the
+words of its day. Read them with this key: a *flyway*, *plan* or *saved chain*
+is a **saved route**; a *flight*, *line* or *chain* is a **route** (running on
+a session, or on the Sky with no session); a *block*, *tile* or *step* is a
+**stop**; a *perch* is a **Wait for me** stop and *perched on you* is **Needs
+you**; *Fly* / *Take off* is **Run**; *Fast-track* (the control) is **Goes as
+far as**; a *checklist* or *test plan* is the session's **behaviors**;
+*Checks* is the **CI checks** stop; *Land* is the **Finish** stop and the
+*landing strip* is **Finished**.
 
 ## The idea
 
@@ -12,7 +31,7 @@ three sides:
 
 - **Intake** — work *arrives* (tickets, pull requests, issues) and becomes a
   session.
-- **Verify** — a *human or agent checks* the work on a checklist.
+- **Verify** — a *human or agent checks* the work's behaviors.
 - **Schedule** — work *starts by itself* on a timer.
 
 Each of them was one step of the same journey, and the journey itself was
@@ -20,139 +39,139 @@ nowhere: once a ticket had become a session, nothing in the app knew whether
 it was meant to be tested in the sandbox, wait for reviewers, answer the
 CodeRabbit comments, or stop and ask before merging.
 
-A **flight** is that journey, drawn as a line of stops:
+A **route** is that journey, drawn as a row of stops:
 
 ```
-Ticket → Agent works → Commit → Push → Verify → Open PR → Reviews settle → Checks → Perch: approve → Merge → Ticket: Done
+Ticket → Agent works → Commit → Push → Verify → Open PR → Reviews settle → CI checks → Wait for me: approve → Merge when green → Ticket: Done
 ```
-
-The words are birds', never planes' — MindFlock is a flock:
 
 | Word | Is | On the wire |
 |---|---|---|
-| **flyway** | the route a flock follows: a line of stops (a template) | a *plan* (`plans`, `plan_id`, `FlightPlan`) |
-| **flight** | one run of a flyway — one ticket, one PR, one scheduled job, or something you started by hand | a *flight* |
-| **stop** | one box on the line: a *robot* stop the server carries out by itself | a *step* |
-| **perch** | a stop that waits on you: the flight perches, pings you, and flies on when you press **Done** | a step of kind `you` |
-| **sky** | the open space where every flight is drawn: the main area's second view beside the grid (the same sessions as lines), a pannable, zoomable plane | (UI only) |
-| **line** | one session's row of blocks in the sky: its session box, its workers, its stops or rungs, and the trailing + | (UI only) |
+| **route** | the row of stops one piece of work goes through — one ticket, one PR, one scheduled job, or something you started by hand | a *flight* |
+| **saved route** | a route kept on the shelf to reuse (Ticket to merge, Nightly chores, …) | a *plan* (`plans`, `plan_id`, `FlightPlan`) |
+| **stop** | one box on a route: a *robot* stop the server carries out by itself, or one that asks a person | a *step* |
+| **Wait for me** | a stop that waits on you: the route pings you and carries on when you press **Done** | a step of kind `you` |
+| **Needs you** | everything waiting on a person — the bell's word | step state `waiting_you` |
+| **Sky** | the open space where every route is drawn: the main area's second view beside the Grid (the same sessions), a pannable, zoomable plane | (UI only) |
 
-Glossary in one line: *flyway* = the route, *flight* = one run, *stop* = one
-box, *perch* = a stop that waits on you, *sky* = the open space where every
-flight is drawn, *line* = one session's row of blocks. "Take off", "In flight" and "Landed"
-are what they sound like. The glyph is a small bird, never ✈. Only the words
-changed: every field and route keeps its name (`plans`, `steps`,
-`/api/flights/...`).
+The bird flavour stays where it explains itself: the small bird that moves
+along a route to show where the work is (never ✈), the Sky, and "takes off"
+as a verb in a sentence. Only the words changed: every field and route keeps
+its name (`plans`, `steps`, `/api/flights/...`).
 
-Every flight has exactly one session (a worktree + an agent) and the Sky
-draws every session as a line, a bird on the stop each flight is at.
+Every route that is running has exactly one session (a worktree + an agent),
+and the Sky draws every session with its route, a bird on the stop it is at.
 
 ### What stays, what folds in
 
-Nothing is deleted, and nothing is nested: Intake, Verify and Schedule stay
-the flat top-bar dialogs they always were, their stores untouched, and each
-carries its side of the journey. Flights are drawn in the Sky.
+Nothing is deleted, and nothing is nested: Intake and Schedule stay the flat
+top-bar dialogs they always were, their stores untouched, and each carries its
+side of the journey. Routes are drawn in the Sky.
 
-| Surface | Its part in a flight | Store (unchanged) |
+| Surface | Its part in a route | Store (unchanged) |
 |---|---|---|
-| Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's Waiting to fly**: each eligible item is a flight that has not taken off, under its kind's heading with a kind badge, a **Fly** button and the flyway as chips | pipeline `state.json`, settings sources |
-| Intake source cards + Auto-start switches | the **Intake** dialog, each source card with its **Flyway** chips | settings |
-| Verify checklists | a **Verify** stop on a flyway; the checklists stay in the **Verify** dialog; open checklist items perch the flight (the Sky's drawer lists it) | `test_plans.json` |
-| Schedule (templates) | the **Schedule** dialog; a flyway may carry its own schedule trigger, and Schedule lists those under **Scheduled flyways** | `session_templates.json` |
-| Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
+| Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's waiting items**: each eligible item is a route that has not started, under its kind's heading with a kind badge, a **Run** button and the saved route as chips | pipeline `state.json`, settings sources |
+| Intake source cards + Auto-start switches | the **Intake** dialog, each source card saying which saved route its items take | settings |
+| Verify (behaviors) | a **Verify** stop on a route; behaviors still open for you make the route **Need you** (the Sky's drawer lists it) | `test_plans.json` |
+| Schedule (templates) | the **Schedule** dialog; a saved route may carry its own schedule trigger, and Schedule lists those beside the templates | `session_templates.json` |
+| Goes as far as (Agent only · Commit · Push · Open PR · Merge when green) | the **ship** stops of a route; a per-source setting still works and maps to the plain ladder at that rung (the agent, then Commit → … → that rung — nothing else); an armed session's rungs are drawn as stops on its route ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
-The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**:
-`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Ctrl+Y` switches to the
-`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Ctrl+Y` (⌘Y) switches to the
-sky (the main area's other view). The Sky half of the toggle counts the
-flights perched on you. Flyways are made, edited and flown from the Sky's
-**flyway shelf**. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
+The top bar is **New · Grid / Sky · Intake · Schedule · Settings** (the
+Grid / Sky toggle only on a phone-narrow window; on desktop it sits on the
+sidebar's View row): `Alt+I` / `Alt+S` open the dialogs, `Ctrl+Y` (⌘Y)
+switches to the Sky (the main area's other view). The Sky half of the toggle
+counts the routes that need you. Saved routes are made, edited and run from
+the Sky's shelf. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
 Flights button as tabs of a Flights dialog; round 8 retired it — see
 [Round 8: flat again](#round-8-flat-again).)
 
 ## Using Flights
 
-### How a ticket becomes a flight
+### How a ticket gets its route
 
 Every way work arrives ends in the same start path, and every one of them can
-put the new session on a flight:
+put the new session on a route:
 
-- **Intake / the Sky's Waiting to fly** (its intake lane and drawer) — **Fly** on a ticket, pull
-  request or issue (`POST /api/tickets/start`, `/api/github/prs/review`,
-  `/api/github/issues/start`, or `POST /api/flights/start` with a `subject`,
-  which runs the very same code). The flyway chips send `plan`; leaving them
-  on the default leaves the choice to the server.
+- **Intake / the Sky's waiting items** (its intake lane and drawer) — **Run**
+  on a ticket, pull request or issue (`POST /api/tickets/start`,
+  `/api/github/prs/review`, `/api/github/issues/start`, or
+  `POST /api/flights/start` with a `subject`, which runs the very same code).
+  The saved-route chips send `plan`; leaving them on the default leaves the
+  choice to the server.
 - **The pipeline** — a ticket, PR or issue it auto-starts.
 - **An agent** — `spawn_ticket_session` from another session.
 
-Which flyway (`plan`), in order:
+Which saved route (`plan`), in order:
 
 1. the start's own `plan`;
-2. a fast-track **depth picked for this start** (the row's ⏩ pick, a team
-   run's "off", an agent's `autopilot=`) — the built-in plan cut at that rung;
-3. the **source's plan** — Intake's source card (`TicketingSource.plan`) or the
-   repo card (`github.repo_settings[repo].plan` for PRs,
-   `github.issue_repo_settings[repo].plan` for issues), while that plan exists;
-4. the built-in plan for the kind **cut at the source's depth** — so a source
-   set to "carry it to a PR" flies *Agent works → Commit → Push → Verify → Open
-   PR*;
-5. **no flight** — a source with no plan and a depth of off/agent starts its
-   sessions exactly as it always did.
+2. a **Goes as far as picked for this start** (the row's pick, a team run's
+   "off", an agent's `autopilot=`) — the built-in saved route cut at that
+   rung;
+3. the **source's saved route** — Intake's source card
+   (`TicketingSource.plan`) or the repo card
+   (`github.repo_settings[repo].plan` for PRs,
+   `github.issue_repo_settings[repo].plan` for issues), while it exists;
+4. the built-in saved route for the kind **cut at the source's Goes as far
+   as** — so a source set to go as far as Open PR runs *Agent works → Commit →
+   Push → Verify → Open PR*;
+5. **no route** — a source with no saved route that goes no further than
+   Agent only starts its sessions exactly as it always did.
 
-The flight is armed on the session's title **before the session exists** (an
-intake title is deterministic), so the item is "in flight" in the Sky and in
-the sidebar's provisioning row from the first second, and survives a server
-restart mid-launch. Its first agent step is the session's first prompt — the
-ticket / PR / issue prompt Intake always built — with the step's own text (if
-any) appended. The flight's ship steps arm the fast-track lanes themselves, so
-the source's depth is not armed beside it (unless the plan has no ship steps).
-A start whose session can't be created cancels its flight with the reason.
+The route is armed on the session's title **before the session exists** (an
+intake title is deterministic), so the item shows on its route in the Sky and
+in the sidebar's provisioning row from the first second, and survives a server
+restart mid-launch. Its first agent stop is the session's first prompt — the
+ticket / PR / issue prompt Intake always built — with the stop's own text (if
+any) appended. The route's ship stops arm Goes as far as themselves, so the
+source's setting is not armed beside it (unless the route has no ship stops).
+A start whose session can't be created stops its route with the reason.
 
-### Scheduled plans
+### Scheduled saved routes
 
-A plan whose trigger is **Schedule** starts itself, like a template: daily or
-weekdays at a time, a cron expression, or once at a date and time — the same
+A saved route that **Starts: Schedule** starts itself, like a template: daily
+or weekdays at a time, a cron expression, or once at a date and time — the same
 editor (and the same `GET /api/templates/cron-preview` previews) as
 Schedule, and the same rules (`core/template_schedule.py`): a schedule
 counts from when it was set, after downtime only the most recent missed run
 fires, a paused trigger fires nothing, and in a group of devices only the
-automation device fires. Each run takes off like **Take off** — a new session
-from the plan's session defaults — recorded with `by: "schedule"`. Scheduled
-plans fire from the **templates addon's schedule loop** (`template_schedule.
-run_loop`, beside the templates' own schedules), so they stop with it: a server
-with that addon disabled fires neither.
+automation device fires. Each run starts like **Run** — a new session from the
+saved route's session defaults — recorded with `by: "schedule"`. Scheduled
+saved routes fire from the **templates addon's schedule loop**
+(`template_schedule.run_loop`, beside the templates' own schedules), so they
+stop with it: a server with that addon disabled fires neither.
 
-A run is **skipped** (and says so in the plan's history, with a refetch of the
-Sky) while the plan's previous flight is still in the air or its session is
+A run is **skipped** (and says so in the saved route's history, with a refetch
+of the Sky) while its previous route is still running or its session is
 working, asking a question or at a usage limit — a schedule never stacks
-flights. A run that can't take off (no folder set, the agent not installed) is
-a failed run with the reason. The plans list (`GET /api/flights/plans`) shows a
-scheduled plan's next run, last run and history under `runs`; the record is
-`~/.mindflock/flights/schedule_runs.json`, on this device only (the plans
-themselves sync). The Schedule dialog lists templates and, under **Scheduled
-flyways**, these plans — with that record (next run, last result, history),
-**Fly now** and **Edit in the Sky**.
+routes. A run that can't start (no folder set, the agent not installed) is a
+failed run with the reason. The saved-route list (`GET /api/flights/plans`)
+shows a scheduled one's next run, last run and history under `runs`; the
+record is `~/.mindflock/flights/schedule_runs.json`, on this device only (the
+saved routes themselves sync). The Schedule dialog lists templates and these
+saved routes — with that record (next run, last result, history), **Run now**
+and **Edit in the Sky**.
 
-### Verify steps
+### Verify stops
 
-A verify step asks for the session's checklist through Verify's own button
-path and parks the flight on you while human items are open. Ticking them off
-in the Verify dialog moves the flight on at once (`session.test_plan_settled`
-wakes the driver); **Done** on the step records them as passed. A checklist the
-push watcher makes for the same branch is the same checklist — Verify keys
-them by (repo, branch).
+A Verify stop asks for the session's behaviors through Verify's own button
+path and makes the route **Need you** while behaviors that are yours to check
+are open. Checking them moves the route on at once
+(`session.test_plan_settled` wakes the driver); **Done** on the stop records
+them as verified. The behaviors the push watcher writes for the same branch
+are the same behaviors — Verify keys them by (repo, branch).
 
 ### The CLI
 
 ```
-mindflock flights [--all]                 # what is in the air: flyway, subject, session, state, stop
-mindflock flight flyways                  # the flyways (scheduled ones say when next); `flight plans` = the same
-mindflock flight start FLYWAY [--repo PATH] [--title SESSION]
-mindflock flight done FLIGHT [--note …]   # the perch waiting on you; also skip / cancel
+mindflock flights [--all]                 # routes running: saved route, subject, session, state, stop
+mindflock flight plans                    # the saved routes (scheduled ones say when next); `flight flyways` = the same
+mindflock flight start ROUTE [--repo PATH] [--title SESSION]
+mindflock flight done ROUTE [--note …]    # the Wait for me stop that needs you; also skip / cancel (Stop the route)
 ```
 
-`FLYWAY` is an id or a name (a unique prefix is enough); `FLIGHT` is a flight
-id (prefix) or its session's title. See [cli.md](cli.md).
+For `start`, `ROUTE` is a saved route's id or name (a unique prefix is
+enough); for `done` / `skip` / `cancel` it is a route id (prefix) or its
+session's title. See [cli.md](cli.md).
 
 ## Contract: the data model
 
@@ -335,7 +354,7 @@ auto-start reads a per-source `plan` setting (`TicketingSource.plan`,
 the built-in plan for that kind cut at the source's `depth`, which keeps every
 existing setup behaving exactly as before). A per-start `depth` outranks the
 source's `plan` (a team run's `"off"` must stay off) — the full order is in
-[How a ticket becomes a flight](#how-a-ticket-becomes-a-flight). An unknown
+[How a ticket gets its route](#how-a-ticket-gets-its-route). An unknown
 `plan` is a 400.
 
 ## Contract: the UI
@@ -347,7 +366,9 @@ wire keeps its names; only what a person reads changed.
 **Top bar.** Flat: **New · Grid / Sky · Intake · Verify · Schedule ·
 Settings**, each with its own badge, tooltip, calm-hour rule and shortcut
 (`Alt+I` / `Alt+V` / `Alt+S`, ids `intake` / `verify` / `schedule`). No
-Flights entry. The Grid / Sky toggle's Sky half carries the badge of flights
+Flights entry. The Grid / Sky toggle is on the bar only on a phone-narrow
+window; on desktop it lives on the sidebar's View row (`Ctrl+Y` and the
+palette switch when the sidebar is hidden). Its Sky half carries the badge of flights
 perched on you (a flight perched on a Verify stop is Verify's count, not this
 one; red when one halted — `perchBadge`). The palette has "Intake…",
 "Verify…", "Schedule…", "Switch to the Sky / grid" and "Flyways…" (the Sky
@@ -362,8 +383,31 @@ quiet", "who: agent"). A perch is rounder, outlined gold, with a branch motif.
 Editing: drag to reorder (pointer events, mouse and touch: the picked box
 lifts, the others slide, the drop snaps, the connectors redraw); ← / → move the
 selected box, Delete removes it, Enter opens it; **+** between boxes on hover
-and at the end opens the stop palette ("The flock does" / "You do", each kind
-with its summary), inserting there. Live: the same canvas draws a flight's
+and at the end opens the stop palette ("MindFlock does" / "You do", each kind
+with its summary), inserting there. **Type to filter** (`StopPalette`, owner:
+"when i click the plus i should be able to just start typing and it narrows
+down the list"): the palette opens with its "Type to filter…" field focused
+(an ARIA combobox over a `listbox` of `option` rows); what is typed narrows the
+kinds (the label `kindName` says, `label`, the kind id, the summary) and the
+saved-chain chips (name, stops) by the floating palette's own rule
+(`catalogMatch`: every word, case-blind). Inside each group the matches rank
+by `paletteRank` — 0 the label starts with the query, 1 a word of the label
+does, 2 a word of another text does, 3 a substring only; ties keep the
+server's order — and the groups always draw MindFlock does → You do → saved
+chains (`paletteRows`). ↓ / ↑ walk the highlight (wrapping), Enter picks it
+(`bestRow`, the best match, until an arrow moves it; a disabled saved chain,
+while `busy`, is skipped silently), Esc clears the text and only a second Esc
+closes (`paletteKey`, pure; IME composition ignored). The field stops every
+key's propagation, the palette's own outer Esc handler included, so the Sky's
+keys (T tidies, arrows pan, Delete removes) never see what is typed. Nothing
+left → "No stop matches “…”", and a group with nothing left hides its head.
+Props: `saved?: PaletteSaved[]` (`id`, `name`, `title` — its stops joined
+with " → " — `disabled`, `onPick`), `savedHead`, `initialQuery`; `extra`
+still draws anything else under them, **unfiltered and off the arrow keys** —
+so a caller with saved chains passes them as `saved`. The Sky's grounded line
+(`useGroundedLine`) does; the session diagram's **Fly a flyway** chips
+(`useSessionLine`) still come in through `extra`, so typing does not narrow
+them. Live: the same canvas draws a flight's
 snapshot steps with their `step_states` — done dimmed with ✓, current glowing
 (gold perched on you, green while the flock works, red halted with the
 reason), skipped struck through, pending outlined; a perch waiting on you
@@ -409,7 +453,7 @@ URL in place):
 | `#flights`, `sky`, `sky/<title>`, `board` | the Sky (`#sky`, `#sky/<title>`) |
 | `flyways[/<id>]`, `plans[/<id>]` | the Sky with the shelf open (and that flyway's card) — `useUi.showFlyways(id)` |
 | `sources[/<x>]` | Intake, target `<x>` (`#intake/<x>`) |
-| `checklists[/<branch>]` | Verify, that checklist (`#verify/<branch>`) |
+| `checklists[/<branch>]` | the behaviors in the Sky (`openBehaviors`): the board (`#behaviors`), or that branch's frame (`#sky`) — docs/behaviors.md §4 |
 | `schedule[/<x>]` | Schedule, target `<x>` (`#schedule`) |
 | anything else | the Sky |
 
@@ -449,9 +493,12 @@ soon as the row exists, the way `templateRun.ts` already does.
 `<flyway> · Perch: <stop>`, and **Done** / **Skip**.
 
 **Tours.** A short `sky` CoachTour (`lib/tours/sky.ts`; it was the `flights`
-tour): the top bar's Grid · Sky toggle (`data-tour="view-sky"`), a line
-(`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`), each
-falling back to the toggle. Its **?** ends the Sky's toolbar; it opens by
+tour): the Grid · Sky toggle (`data-tour="view-sky"` — the sidebar View
+row's Sky chip on desktop, the top bar's toggle on a phone-narrow window), a
+line (`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`). No
+step falls back to the toggle; a step whose element is not on screen
+(including the toggle step on a desktop with the sidebar hidden) centres its
+card (see [the tour table](#as-built-round-12-guide)). Its **?** ends the Sky's toolbar; it opens by
 itself the first time the Sky is shown in the calm first hour. The Intake,
 Verify and Schedule tours walk their own dialogs again.
 
@@ -471,8 +518,9 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   "fit the focused line" and This session, 2 / 4 / 9 its Fit; the bell's
   needs-you rows are the drawer's Perched on you; New is a new-session card on
   the sky. The full table is in docs/web-ui.md.
-- **Switch points**: the top bar's Grid · Sky toggle (`data-tour="view-sky"`),
-  the sidebar View row's **Sky** chip (a number returns to the grid), `Ctrl+Y`,
+- **Switch points**: the sidebar View row's **Sky** chip
+  (`data-tour="view-sky"`; a number returns to the grid), the top bar's
+  Grid · Sky toggle (phone-narrow only), `Ctrl+Y`,
   the palette, `#sky` / `#sky/<title>`. Switching keeps the selection, the
   camera, the drawer and the shelf; each pane's ghost flies to its line and
   back (~250 ms; none under `prefers-reduced-motion`).
@@ -482,7 +530,9 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   pointer, Space+drag pans from anywhere; keys: arrows pan, + / − zoom, 0
   fits all, 1 the focused line, T tidies, Enter opens the focused line's box,
   Esc closes it. A faint dot grid scales with it, in both themes, the flock
-  (`SkyFlock {width, height, zoom, paused?, density?}`) drifting behind.
+  (`SkyFlock {width, height, zoom, paused?, density?, birds?}`) drifting
+  behind when you turn it on (Settings → Appearance → **Birds in the Sky**,
+  off by default; the weather's clouds and night tint show either way).
 - **Every session is a line** (`SkyLine {title, rows, plans, layout,
   onLayout, focused, onFocus, zoom, onDragStart?, onMeasure?, dropFlyway?}`):
   its title bar (drag handle, size control, ⋯), its
@@ -499,7 +549,9 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   area)` at their measured size (`onMeasure`, else `estimateLine`) — rows,
   newest at the top, never overlapping. **Tidy** (toolbar, `T`) clears every
   pin and the lines glide back; a line's `onLayout({pinned: false})` is "Tidy
-  this line".
+  this line". (Superseded: rows now wrap at `fillWidth`'s width, not the
+  window's, and Tidy ends on a fit — see "As built: Tidy fills the screen
+  (2026-11-03)".)
 - **The bird** (`birdPerch(diagram) -> {nodeId, tone} | null`, the canvas's
   `bird` prop): on the flight's current stop, else the fast-track's current
   rung, else the session box while its agent works (or asks you); none when
@@ -1150,9 +1202,9 @@ canvas per glyph.
   `birdLook(tone, reduced)` (the marker class, the sprite class, flaps or not),
   `prefersReducedMotion()`.
 
-**The ambient flock** — `SkyFlock {width, height, zoom, paused?, density?}`
-(`components/flights/SkyFlock.tsx`): a `<canvas>` the Sky mounts behind its
-plane with a few birds crossing the empty sky — ~8, times `density` (capped
+**The ambient flock** — `SkyFlock {width, height, zoom, paused?, density?,
+birds?}` (`components/flights/SkyFlock.tsx`): a `<canvas>` the Sky mounts
+behind its plane with a few birds crossing the empty sky — ~8, times `density` (capped
 at 40). Same sprite (flock.ts's `tinted()`), same 12-species plumage (the dark
 column, the light one in the light theme), same wing beat and belly-up mirror
 as the app's flock. They flock casually, each heads for a wandering target,
@@ -1163,10 +1215,23 @@ the Sky's zoom a little (√zoom, 0.7–1.3).
 Cheap by construction: one rAF, at most 60 frames a second (a 120 Hz frame is
 skipped), no work while the tab is hidden, `paused` asks for no frame at all
 (the last one stays painted), DPR-aware (capped at 2). Under
-`prefers-reduced-motion` it renders **nothing**. It is decoration:
+`prefers-reduced-motion` it flies no birds.
+
+**Off by default.** Settings → Appearance → **Birds in the Sky** turns the
+flock on (`skyBirds` in the store, saved under `mf_sky_flock`; the old
+`mf_sky_birds` key, saved when the default was on, is deliberately never
+read, so everyone starts with it off). It is a per-browser `localStorage`
+pref — not in `settings.json` or the synced `ui.*` prefs — so it is turned on
+separately on each device, and in the desktop app apart from a browser tab.
+The Sky always mounts `SkyFlock` and passes `birds={skyBirds}`: with the birds off, none are seeded or stepped, but
+the weather stays — the canvas still exists while there are clouds, the rAF
+runs only while they drift, and the night tint still dims the sky. A clear,
+bird-less sky renders nothing and asks for no frame (`skyMotion`). The birds
+on your chains are not part of it and always stay. It is decoration:
 `pointer-events: none`, 0.55 opacity (0.32 in the light theme). The simulation
-(`flockSize`, `seedBirds`, `fitBirds`, `stepBirds`) and the frame loop
-(`skyLoop`) are pure and tested without a DOM.
+(`flockSize`, `seedBirds`, `fitBirds`, `stepBirds`), what the sky draws
+(`skyMotion`) and the frame loop (`skyLoop`) are pure and tested without a
+DOM (`__tests__/skyBirds.test.ts`, `skyFlockOptIn.test.ts`).
 
 **The pane's Flight tab** (`components/grid/TabIcon.tsx`) is a route now —
 three stops joined by arrows, like the connectors — not a bird.
@@ -1388,7 +1453,7 @@ focused or selected. A branch whose worker leaves takes its card with it.
 - The palette and the inspector are driven by the registry
   (`GET /api/flights/kinds`). **Split** (robot: `prompts`, `count`, `model`,
   `fence_only`, `report_back`) and **Join** (robot: `of` all|spawned,
-  `on_failed` halt|continue) appear under "The flock does" once the server
+  `on_failed` halt|continue) appear under "MindFlock does" once the server
   lists them. The `agent` kind's `join` toggle ("Wait for its workers")
   renders as a normal bool field.
 - A Split's `prompts` is a textarea. Its inspector adds a "one worker per
@@ -1437,7 +1502,8 @@ focused or selected. A branch whose worker leaves takes its card with it.
   `INTAKE_W` 240 (was 300) with a 48px gap before the first line (`LINES_LEFT
   = SKY_MARGIN + INTAKE_W + 48`); a fit keeps `FIT_PAD` 56 (was 40) round
   what it shows. `placeLines` still flows rows newest first; **Tidy** (T)
-  forgets the pins and re-places at the new gap.
+  forgets the pins and re-places at the new gap. (Superseded for the wrap
+  width: see "As built: Tidy fills the screen (2026-11-03)".)
 - **Lines sit where they are placed**: each line's slot is translated to its
   `placeLines` spot (or where it was dropped). Before this, the slots sat in
   plain flow, one under the other, so the gap, Tidy and dragging never
@@ -1744,9 +1810,12 @@ owner moves it.**
   line is pinned where it was dropped. Its auto spot is dropped, so "Tidy this
   line" places it afresh.
 - **Tidy** (the button, `T`) forgets every auto spot and every pin. Every line
-  is placed again, in rows. It is **the only glide**: SkyView sets
-  `data-tidying` on `.sky-plane` for 350 ms (not under reduced motion), and
-  only `.sky-plane[data-tidying] .sky-line-slot` has a `transform` transition.
+  is placed again, in rows wrapped at `fillWidth`'s width (not a fixed window
+  width), and once every line has its spot the camera eases to the whole fit
+  (see "As built: Tidy fills the screen (2026-11-03)"). It is **the only
+  glide**: SkyView sets `data-tidying` on `.sky-plane` for 350 ms (not under
+  reduced motion), and only `.sky-plane[data-tidying] .sky-line-slot` has a
+  `transform` transition.
   No other rule eases a line's or a slot's transform. A dragged line follows
   the pointer live.
 - This session (one line) still sits at the plane's corner. It neither reads
@@ -1758,9 +1827,11 @@ The automatic fit (`firstFit`, or the focused line when the grid was on "1")
 runs once, on the sky's first show, after the lines have their spots (drawn
 and measured, or 0.9 s after the sessions load, whichever comes first). It
 runs again only when the view changes (All / Mine / Perched / This session,
-or This session's line). The effect's dependencies have no line sizes in
-them. A line growing, a new session arriving, or the window resizing never
-refits. A newcomer off screen is brought in by the rail's selection and the
+or This session's line), and once after a toolbar Tidy / `T` (armed for 2 s,
+fires once, `fitAll(true)`; Tidy these and the lane making way never fit). The
+effect's dependencies have no line sizes in them. A line growing, a new
+session arriving, or the window resizing never refits. A newcomer off screen
+is brought in by the rail's selection and the
 flash, as before. `Fit`, `0`, `1` and the zoom buttons work on demand. Back
 from the grid in the same view, the camera is where it was left.
 
@@ -5400,7 +5471,7 @@ if I describe a flight it should be able to set it up and run it." The
 MindFlock MCP gains six tools in `backend/mcp/flights.py`, a `Toolbox` mixin
 like `runs.py`. That takes it from 28 to 34 tools; peer mode keeps its own 10
 and never sees these six. The full reference, with a worked example, is in
-[mcp.md](mcp.md#flights-from-a-sentence-to-a-running-flight).
+[mcp.md](mcp.md#routes-from-a-sentence-to-a-running-route).
 
 | Tool | Route(s) |
 |---|---|
@@ -6705,8 +6776,9 @@ logic needs expanding out." Building a chain on a session is not running it.
 ### UI (integrator, after the backend lands)
 The head tile of a ready chain wears a "Ready" chip and a ▶ Run button; its
 ⋯ (and the chain's) says how it starts: "On your next prompt" / "Only when I
-press Run" / "Run it now". `lineWhere` says "ready · runs on your next
-prompt". Building a chain in the Sky no longer starts anything.
+press Run" / "Run it now". The ready wording lives only in `ReadyHead`; the
+tile's subtitle stays the session's own line (`lineWhere` / task headline).
+Building a chain in the Sky no longer starts anything.
 
 ### Round 19 — as built (2026-11-02)
 
@@ -6738,7 +6810,11 @@ so". Everything below is live on the server. The frontend types are in place
 - A ready flight whose session goes away is pruned and cancelled like any
   other unfinished flight.
 - `flight.*` event `detail`: `"<session>: ready · runs on your next prompt"`
-  or `"<session>: ready · runs when you press Run"`.
+  or `"<session>: ready · runs when you press Run"`. This deliberately
+  differs from the tile's start-on line ("starts on next prompt" /
+  "starts on ▶ Run", 2026-11-03): a notification names the session and must
+  read alone, while the tile already shows the Ready chip. Change both
+  together if either moves.
 
 ##### New flight fields (stored, and in every flight dto)
 
@@ -6888,6 +6964,618 @@ start_on: "prompt"})`).
   {start_on: "prompt"})`). The Intake Fly, ⋯ Fly on a session…, the new
   session block, schedules and MCP still take off at once.
 - The session tile of a ready chain (Sky and Flight tab): `ReadyHead` — a
-  "Ready" chip, ▶ Run (`runFlight`), and how it starts ("runs on your next
-  prompt" / "runs when you press ▶ Run"; a press flips it via `setStartOn`);
-  its subtitle says "ready · …".
+  "Ready" chip, ▶ Run (`runFlight`), and how it starts ("starts on next
+  prompt" / "starts on ▶ Run"; a press flips it via `setStartOn`); its
+  subtitle is the session's own line. ~~"runs on your next prompt" / "runs
+  when you press ▶ Run"; subtitle "ready · …"~~ (round-19 first cut, see
+  below).
+  - **Fixed 2026-11-03 (ready head layout)**: the head said "ready" three
+    times, the text collided, and ▶ Run was invisible. The button wore
+    `.sky-run`, and `.sky-chain .sky-run` (the free chain's hover-only ▶
+    circle, `opacity: 0`) caught it. Now: the subtitle is the session's own
+    line (`where` / task headline), never "ready · …", in SkyLine and
+    FlightChain alike. Under the name sits ONE row "[Ready] [▶ Run]", the
+    button `.sky-ready-run` (a pill; never `.sky-run`), and below it one
+    small, muted, un-underlined line, `.sky-start-on` ("starts on ▶ Run" /
+    "starts on next prompt"; it still flips `start_on`, and its title says
+    what a click does). The head's subtitle is one line with an ellipsis
+    (`.sky-head > .sky-node-sub`), its name is one line while ready, and its
+    rows never shrink (`flex-shrink: 0`). `.sky-node-sub`'s `overflow:
+    hidden` used to let it shrink in the 132×140 box, so the next row
+    drew over it. Budget at 100%: tile 64 + name 24 + sub 15 + head 4 + 18 +
+    1 + 13 = 139 of 140, so any extra row or bigger font overflows.
+  - The start-on toggle's tooltip comes from the exported `startTitle()`
+    (ReadyHead.tsx): "Starts only when you press ▶ Run. Click to start it on
+    this session's next prompt too." / "Starts on this session's next prompt
+    (or ▶ Run). Click to start it only on ▶ Run." It is a plain button, not
+    `.linklike`: `.sky button.linklike` is accent-coloured and underlined.
+  - **Rule for CSS work:** a control rendered inside `.sky-chain` gets its
+    own class and never reuses `.sky-run` or another free-chain class. The
+    chain's descendant rules (SkyChain.css: `.sky-chain .sky-plus`, the
+    hover-only `.sky-socket` at `opacity: 0`) style whatever wears those
+    names, wherever it sits in the chain.
+
+## Round 20: a session is a frame, the agent is a tile; parallel stops — contract
+
+The owner (2026-11-02): "we are weirdly conflating agent with session — I
+often click on session to edit what the agent is doing; a flight chain has to
+be connected to a session but I'm not sure a session block makes sense"; and
+"I placed two notifications after the PR and it forced them into a line —
+why couldn't they run in parallel?" Both answers chosen: **frame + agent
+tile**, **parallel side by side**.
+
+### A. Frames (task `frames`, frontend)
+- A **session** is no longer a block: it is a **frame** — a soft rounded
+  container (1px border in the session's colour at low alpha, faint fill)
+  around its chain, its title bar the session's name · branch · state chip ·
+  ⋯ (today's chain label, now the frame's top edge; still the drag handle;
+  double-click the bar = rename). The frame's size = its chain's bbox +
+  padding.
+- The **agent** is the chain's first tile, inside the frame: icon = the
+  agent kind's (sparkle), title "Agent" (or the provider's name: "Claude",
+  "Codex"), summary = what it is doing now (the task headline / last prompt,
+  2 lines), its state chip under it, the bird on it. A click opens the
+  session's terminal in that tile's place (today's in-place card); its
+  right-click menu: Open terminal, Send a prompt…, Stop, plus the session's
+  menu. Its out port starts the chain (today's head port).
+- **Sub-sessions** are small frames hung under their parent's frame (the
+  dashed bus from the parent's agent tile to each child frame's top), each
+  with its own agent tile (state, bird) and its own chain if it flies one;
+  opening one opens its card in its agent tile's place (today's `big`).
+- A **stops-only chain** has no frame: free tiles. Dragging it into a frame
+  (or wiring into the agent tile's out side) attaches it (today's merge
+  target is the frame rect).
+- The pane's Flight tab (FlightChain) draws the same frame + agent tile.
+- Tour (lib/tours/sky.ts) and SkyGuide wording follow ("frame", "agent").
+
+### B. Parallel stops (task `parallel`, backend + graph model)
+- A step may carry `parallel: {id}` (`p_<6hex>`): consecutive steps sharing
+  it form ONE parallel group — they run side by side; the flight goes on past
+  the group when every member is done (one failing: the group fails as its
+  `on_fail` says — the first failure's).
+- Only steps that don't use the session's agent or worktree lanes may be
+  parallel: a kind is **parallel-safe** unless it types to the agent
+  (`types_to_agent`), is `agent`, `ship`, `reviews`, `split`, `join`, `land`,
+  `sync`, `loop`, or a `you` perch… (perch IS allowed: it waits on a person).
+  The kinds dto gains `parallel_safe: bool`. A refused grouping is 400
+  `not_parallel_safe` naming the kind, with "use a Split for agents".
+- Driver: at a parallel group the cursor stands on its first member; every
+  pass judges/runs every unfinished member (each keeps its own step state);
+  `apply` advances past the group only when all are done/skipped.
+- Routes: `POST /api/flights/{id}/steps {step, at?, parallel_with?: sid}`
+  inserts a step into `sid`'s group (making one when `sid` has none); `PATCH
+  …/steps/{sid} {parallel: null}` takes a step out; ops are `_editable`
+  (pending only). Saved plans keep `parallel`.
+- Graph (lib/skyGraph): members of a group are placed in a column (the first
+  at the group's spot, the rest PITCH_Y below — unless pinned); wires fork
+  from the stop before to each member (`fan`) and join from each member into
+  the stop after (`join`); the + of a group trails its last member's row.
+  wireIntent gains `parallel`: a wire dropped from X's out port onto empty sky
+  while X already has a next → "add a stop in parallel with X's next"
+  (palette, then `parallel_with`); dropped on a stop Y of the same chain with
+  Shift → Y joins X's next's group.
+
+### Round 20 A — as built (frames, r20-frames)
+
+#### Round 20 A — a session is a frame, the agent is a tile (as built)
+
+Worker `r20-frames`. Spec: docs/flights.md "Round 20" part A. The owner:
+"we are weirdly conflating agent with session — I often click on session to
+edit what the agent is doing". This round draws the two as two things.
+
+##### What changed, by file
+
+All rendering-layer: no graph model change. `lib/skyGraph.ts`,
+`lib/flightDiagram.ts`, `lib/flights*.ts` and `useSkyWiring.ts` are untouched
+(r20-parallel owns them).
+
+- **SkyLine.tsx / SkyLine.css**: the line root (`.skl.skl-chainline.skl-frame`)
+  is the session's frame.
+  - `.skl-frame-box` is the frame itself: an absolutely positioned box behind
+    the chain, 1px session-colour border at ~38% alpha, ~5% fill, radius 14,
+    `pointer-events: none` (empty frame area still pans / marquees as empty sky
+    did). Its left/top go negative when a tile is dragged left of / above the
+    chain's origin (`graph.bbox.x/y < 0`), so the frame always holds every
+    tile. The bar follows with `margin-left` (widens it) and `translateY` (no
+    reflow, so `useChainEntry`'s dx/dy stay right).
+  - The bar (`.skl-bar.skl-label.skl-frame-bar`, still `data-tour="sky-line-bar"`,
+    still the drag handle) shows name · branch · state chip · where · age ·
+    📌 · ⋯. Double-click renames: an alias via `setAlias`, a name another
+    session has is refused (`nameTakenBy`), as the rail's row does. The Bird
+    glyph left the bar (the bird is on the agent tile).
+  - The head is the agent: `title` = `agentTitle(provider)` ("Claude",
+    "Codex", "Agent" when unknown); `sub` = the task headline, else the create
+    task, else the last prompt (or round 19's "ready · …"). "Where the flight
+    is" moved to the bar.
+  - Right-click on the agent tile (or a sub-session's agent) opens the agent
+    menu (`useAgentMenu`): Open terminal / Fold the terminal, Send a prompt…,
+    Stop (Resume while paused), then a "Session “name”" label line and the ⋯'s
+    items (minus Open, which Open terminal already is). Stops keep their menu.
+  - The ⋯ keeps "Open session" / "Fold the session back" (skyVisibility.test
+    pins those labels — outside this worker's fence).
+  - Sub-sessions: `subFramesOf(rows, title, flights, kinds)` → each child's
+    agent name and its own chain's stops; `subFrameBoxes` feeds every child
+    node's box to `chainGraph`'s `big` (an open card's box when open).
+    `hangFromAgent(diagram)` re-hangs every `below` child from the session
+    node (so the dashed bus leaves the agent tile) and restores the straight
+    wire across the stop they were hung at. `branch` workers (spawned at one
+    of the flight's stops) keep their stop: that is where they came from.
+  - CSS fix: the "card open → hide the head tile" rule was a descendant
+    selector, so the open card's own Flight tab lost its head tile. Now
+    `.skl-chain-wrap.has-card > .sky-chain > .sky-head …`.
+- **SkyChain.tsx / SkyChain.css**: the head of a session chain gets
+  `sky-agent` + `data-agent`, the sparkle icon (`TileIcon kind="agent"`), a
+  plain rounded tile (no session "pill" shape), aria "Agent: Claude — …".
+  A `child` / `branch` node with a session draws as `.sky-subframe`: a bar
+  with its name, its agent tile (sparkle in its own `chainColor`), agent
+  name, summary, chip, its bird on the tile, and a `MiniChain` strip (one
+  18px square per stop, state-coloured, capped at 8 + "+n") when it flies
+  one. Sub-frame tiles draw no ports. The bus (`fan` into a sub-session) gets
+  `sky-wire-bus` (dashed). New exports: `agentTitle`, `agentDoing`,
+  `subFramesOf`, `subFrameSize`, `subFrameBoxes`, `hangFromAgent`,
+  `isSubSession`, `SubFrame`, `MiniStop`, size constants.
+- **useChainMenu.tsx**: `agentMenuItems`, `useAgentMenu` (StopMenu in a
+  portal + a `PromptComposer`: textarea, Enter sends, Shift+Enter new line,
+  Esc/press outside closes, clamped to the viewport), `sendPrompt` →
+  `POST /api/instances/{title}/send {text, dialog_safe: true}`. Stop is
+  `pauseSession` (the app's "stops the agent, the session stays"); there is
+  no interrupt-only route on the server.
+- **FlightChain.tsx / Flights.css**: the Flight tab draws the same — a
+  `.fl-chain-frame` with its bar (name · branch · state · where) round the
+  chain, the agent head, sub-frames (`useInstances` + `useFlights` for
+  `subFramesOf`), `hangFromAgent`. A click on the agent (or Open terminal)
+  switches the pane to its Agent tab (`setLastTab(title, "agent")`); a
+  sub-session's selects it. Tiles dragged to negative spots shift the chain
+  in by margin (no host bookkeeping here).
+- **lib/tours/sky.ts, SkyGuide.tsx**: "A session is a frame" / "The agent
+  starts the chain" / stops-only chains "with no frame"; the guide's Lines
+  section and sketch describe frame, bar, agent tile, sub-session frames.
+
+##### Kept working
+
+ReadyHead on the agent tile; the Loop self-wire on the head (head id stays
+`"head"`); wire drags from the agent's out port; merge targets (the drop
+target is still the line's slot rect = the frame; the frame box lights);
+node drags (sub-frames drag as before: `isBranchRow`); the in-place own card
+and sub-session cards (`renderOpen`); double-click fold of an open card; tour
+hooks (`sky-session-box` = the agent tile, `sky-line-bar` = the frame bar,
+`sky-stop` now skips sub-frames, `sky-grounded`).
+
+##### Tests
+
+- New `src/__tests__/r20Frames.test.ts` (21 tests).
+- Rewritten to the new behaviour: skyLine.test (frame classes, agent head,
+  `hangFromAgent`, headSub, focus ring), skyChain.test (head classes),
+  r18Sky.test (tour hook selector), tours.test (word list: "frame", "agent").
+- Full run from a scratch copy: 311 files, 5845 tests passed; `tsc --noEmit`
+  clean.
+
+##### For the integrator
+
+- **Rebuild the committed bundle** (`npm run build` in `frontend/`) — this
+  worker was fenced out of `backend/web/static`.
+- Source-text tests outside the fence pinned some strings, so they were kept
+  rather than reworded: SkyLine's `aria-label={name + "'s chain"}`, the ⋯
+  labels "Open session" / "Fold the session back"
+  (skyVisibility/skyResize), and the literal
+  `firstLine(row.task_headline || row.task || "")` (skyZoom).
+- `endSession.test` forbids any `prompt(` call under src/, hence
+  `compose` (not `prompt`) for the composer opener.
+- Merging with r20-parallel: `hangFromAgent` reads `branch.from/to` and the
+  `branch` edges only; parallel groups don't touch those. If skyGraph's
+  `autoPlace` changes how branches lay out under the head, sub-frame sizes
+  come in through `big` as before.
+- Screenshots (scratch): sky.png (whole sky), c-close.png (one frame up
+  close), sky-menu.png, sky-prompt.png, sky-open.png (terminal in the agent
+  tile's place), c-flighttab.png (the Flight tab), m-merge.png (a stops-only
+  chain dragged onto a frame).
+
+### Round 20 B — as built (parallel stops, r20-parallel)
+
+#### Flights round 20 B — parallel stops (integrator notes)
+
+Spec: `docs/flights.md` → "Round 20: a session is a frame, the agent is a
+tile; parallel stops — contract", part **B**. The owner put two Notify stops
+after Open PR and they were forced into a line; now stops can run **side by
+side**. This branch (`emandel2630/r20-parallel`) ships the backend and the
+graph model. It changes **no UI component**: SkyChain / SkyLine / SkyView /
+FlightChain / the palette belong to the frames worker. The last section lists
+what they need to call.
+
+##### The field
+
+```jsonc
+// a step
+{ "id": "s2", "kind": "notify", "title": "Tell me", "config": {…}, "on_fail": "halt",
+  "parallel": { "id": "p_3fa9c1" } }   // omitted on a step of its own
+```
+
+- **A group is a run.** Consecutive steps that share `parallel.id` make up
+  one parallel group (`p_<hex>`; the normaliser accepts `p_[A-Za-z0-9]{1,16}`).
+  A run of one is not a group, so its `parallel` is dropped. If the same id
+  turns up again in a later run, that run gets its own id. The new id is
+  derived from the old one, not random, so reading a flight twice gives the
+  same id.
+- **Every path keeps it:** the step normaliser (`normalize_step`, then
+  `_tidy_parallel` in `normalize_steps`), saved plans, `take_off`, `ground`,
+  `attach`, tack-on (`/steps` single, `{steps}` and `{plan_id}`) and
+  `split_off`. If a split cuts through a group, each side keeps whatever
+  group is left on it, which is usually none.
+- **Unsafe kinds:** strict normalisation (a POSTed plan or step) refuses a
+  kind that isn't parallel-safe with `PlanError(code="not_parallel_safe")`,
+  shown as 400 `{"error": "not_parallel_safe", "detail": "Agent can't run in
+  parallel — use a Split for agents", "field": "…parallel"}`. Lenient
+  normalisation (a stored file) just drops the field.
+- **Placement inside a group:** a step inserted or moved strictly between two
+  members of a group joins that group. If its kind is unsafe, the request is
+  refused with 400 `not_parallel_safe` (field `at`). A step placed at the
+  group's edge stays a step of its own.
+
+##### Parallel-safe kinds (`parallel_safe` in `GET /api/flights/kinds`)
+
+| allowed (true) | refused (false) |
+|---|---|
+| notify, wait, command, checks, ticket, you (perch), someone, test, call, listen, handoff, screenshot, preview, budget, checkpoint, review (second-opinion worker) | agent, ship, reviews, verify, split, join, land, sync, loop, judge |
+
+How it is decided: `flights.parallel_safe(kind)`. The kinds in
+`NOT_PARALLEL` (agent, ship, reviews, verify, split, join, land, sync, loop)
+are always refused. A plug-in is also refused when it has
+`Kind.types_to_agent` (Judge does) or sets `spec["parallel_safe"] = False`.
+Everything else is allowed. The test `test_parallel_safe_per_kind` lists
+every registered kind, so a new kind has to be decided there. Why each
+refused kind is refused:
+
+- verify: its agent half prompts the agent.
+- loop: its prompt mode re-sends the session's prompt.
+- review (the plug-in) is allowed: it spawns its own reviewer worker and
+  never touches the agent.
+
+##### Driver semantics
+
+- **Cursor:** at a group, the cursor always stands on the group's first
+  member. `_normalize_flight` and `_advance` both enforce that.
+- **Each pass:** the driver (`flight_driver.step_flight` → `_step_member`)
+  takes every unfinished member of the cursor's group. For each one it
+  observes, judges (`next_action` on `member_view(flight, i)`, a shallow copy
+  with `cursor = i`) and applies, through the existing intent → effect →
+  outcome path (`_mark_intent` / `_record_outcome` / `_apply_if_unchanged`
+  now take the member index; `flights.apply_at`). Each member keeps its own
+  `step_states` entry.
+- **Leaving the group:** `_advance` moves past a group only once every member
+  is passed: done, skipped, or failed with `on_fail: skip` (`detail.moved_on`).
+  When that happens the chain carries on into the next step within the same
+  pass.
+- **A failing member** fails the group according to its own `on_fail`. The
+  first failure wins:
+  - `halt` halts the flight. The other members keep their state, and Resume
+    (`op_resume`) re-runs every failed member.
+  - `skip` marks that member as moved on.
+  - `you` parks the member on you.
+  - `agent` hands it to the agent.
+- **Flight state:** a flight at a group is `waiting_you` while any member
+  waits on you, otherwise `running` (`_group_state`). The "needs you"
+  notification and `you_text` use the member that is waiting
+  (`waiting_step`).
+- **Step ops:**
+  - Done, Skip and Retry accept any member of the current group.
+  - Skipping one member while the group is halted on *another* member's
+    failure leaves the flight halted.
+  - Jump onto a member jumps to the group's first member.
+  - Removing a member while its group is flying leaves the other members
+    flying; it does not pause the flight.
+  - Take-off on a prompt gates every member of a first group (`after_turn`).
+- **Where stops can change:** `_first_open` is the end of the current group,
+  so nothing can be inserted inside a group that is flying.
+- **`step_view` / `row_dto` / events:**
+  - The current step gains `parallel: [{id, kind, title, state, actor,
+    note}]` when it is a group.
+  - `_view_key` compares every member's state, so a member finishing emits
+    `flight.changed`.
+
+##### Routes
+
+| call | does | refusals |
+|---|---|---|
+| `POST /api/flights/{id}/steps {step, parallel_with: sid, at?}` | Puts the new step in `sid`'s group, after its last member (or at `at`, which must be in `lo..hi` of the group). If `sid` has no group, one is made from `sid` and the new step, minting `p_<6hex>` on both. | 400 `not_parallel_safe` (either kind), 400 `bad_at`, 404 `unknown_step`, 409 `in_progress` (making a group needs `sid` still ahead; growing the group in the air is fine), 409 `finished` |
+| `PATCH /api/flights/{id}/steps/{sid} {parallel: null}` | The step leaves its group and flies right after it. A group left with one member stops being a group. | 409 `in_progress` (only steps still ahead), 400 `bad_parallel` (anything but `null`) |
+| `PATCH /api/flights/{id}/steps/{sid} {parallel_with: other}` | The step joins `other`'s group (making one if needed) and moves to after its last member. This is the Shift-drop. | 400 `not_parallel_safe`, 400 `bad_parallel` (itself / empty), 409 `in_progress` |
+
+These follow the same rule as the other step edits: `_editable` (running,
+waiting, paused, halted, ready and grounded flights; not landed or cancelled
+ones) plus `_pending_index` (the step must be still ahead). MCP: the
+`edit_flight` / `start_flight` / `save_flight_plan` step schema gained an
+optional `parallel` object.
+
+##### Frontend model
+
+**`lib/flights.ts`**
+- `FlightStep.parallel?: {id}` and `StepKindDef.parallel_safe?`.
+- `parallelSpan(steps, i) → [lo, hi)` and `parallelGroups(steps)`.
+- `PARALLEL_UNSAFE` and `isParallelSafe(kind, kinds?)`: uses the kinds
+  list's `parallel_safe` when present, else the client's own list.
+
+**`lib/flightsApi.ts`**
+- `wireStep` keeps `parallel`.
+- `tackOn(flightId, step, at?, {parallel_with?})`.
+- `tackOnParallel(flightId, step, withSid, at?)`.
+- `leaveParallel(flightId, sid)`.
+- `joinParallel(flightId, sid, withSid)`.
+
+**`lib/flightDiagram.ts`**
+- Stop nodes of a group carry `node.parallel = {id, index, size}`
+  (`parallelMark`), in `flywayDiagram`, `flightStops`, `flightDiagram` and
+  `sessionDiagram`.
+- `lineEdges(line)` builds the line's edges:
+  - `fan` edges from the place before the group to each member.
+  - `join` edges from each member to the place after (`done` once that
+    member has flown).
+  - The `add` edge comes only from the last member.
+  - Two groups in a row are joined all-to-all.
+  - `chain()` and the Split-fans path of `sessionDiagram` both use it.
+- `lineRuns(line)` splits the line into its places (a group is one place).
+- `insertFromOf(f)` is the end of the current group. `flightStops` marks a
+  current group's members `current` / `paused`, and the failed member
+  `halted`. Members of a flying group are not `editable`.
+- `collapseFlown` never ends the flown pill inside a group. `foldRun` turns
+  a folded group's fan/join edges back into plain line.
+- `layoutDiagram` stacks members in one column (same x, `vgap` apart); the
+  line goes on past the widest member. In vertical layout the members are
+  indented, like a Split's branches.
+
+**`lib/skyGraph.ts`**
+- **Placement** (`autoPlace`): the first member sits at the group's spot; the
+  rest go `PITCH_Y` below the member before them, in the first member's
+  column, unless pinned. The line goes on from the first member's row.
+  Branch rows start under the deepest member.
+- **Wires:** fork and join wires are ordinary béziers out→in (`wirePath`),
+  with kind `fan` / `join` and ids `a>b:fan` / `a>b:join`. They are not the
+  dashed sub-session bus. A first group forks straight out of the head, one
+  `fan` per member.
+- **The +** hangs off the last member (`plus.after`).
+- **Helpers:**
+  - `groupLast(chain, node)`: a member's last sibling. "After a member"
+    always means after the whole group.
+  - `nextOf(chain, node)`
+  - `parallelOk(chain, next, kinds?)`
+- **`wireIntent`** gains `{op: "parallel", chain, after, with, at?, step?}`:
+  - **X's out port dropped on empty sky** while X already has a next that is
+    parallel-safe and still changeable (or already in a group that hasn't
+    flown) gives `{op:"parallel", after: X, with: next, at}`. Otherwise you
+    get today's `palette`.
+  - **Shift-drop on a stop Y of the same chain** (editable, parallel-safe,
+    not X, not X's next, not already in the next's group) gives
+    `{op:"parallel", after: X, with: next, step: Y}`. `wireTargets` lights
+    those Y's while Shift is held.
+  - **From a member X**, move / loop / merge / handoff / palette all use
+    `after` = the group's last member.
+  - `WireIntentCtx.kinds` (optional) lets the kinds list decide which kinds
+    are safe.
+
+**`components/flights/useSkyWiring.ts`**
+- `ChainEntry.paletteParallel?(withNode, pos)` (optional) and a 5th, optional
+  argument to `useChainEntry(register, graph, wrap, paletteAfter,
+  paletteParallel?)`.
+- `SkyWiringOpts.kinds?()` (optional) and `wireTargetsOf(…, shift, kinds?)`.
+- `runWireIntent` handles `parallel`:
+  - With no `step`, it calls `chain.paletteParallel(with, pos)`. If the chain
+    has no hook, it falls back to `paletteAfter(after, pos)`, which is
+    today's behaviour.
+  - With `step` (Shift), it calls `joinParallel(flight, step, with)` and
+    toasts "“Y” runs beside “N”".
+
+##### What the UI must do (frames worker / integrator)
+
+1. **SkyLine / GroundedLine:** pass a `paletteParallel` to `useChainEntry`.
+   It opens the same palette as `paletteAfter`, but when a stop is picked it
+   calls `tackOnParallel(flight.id, step, firstStepOf(withNode).id)` instead
+   of `tackOn(…, at)`. The new tile goes at `pos`; save it with
+   `queueStopPos` as `paletteAfter` does. A stops-only (grounded) chain uses
+   the same call, since the route accepts grounded flights. A session with no
+   flight yet has no group to join, so `paletteAfter` is fine there.
+2. **SkyView:** pass `kinds: () => kinds` in `useSkyWiring` opts, so
+   unsafe kinds never light up and an unsafe next falls back to the palette.
+3. **SkyChain (draw):**
+   - Members arrive already placed in a column, and their `fan` / `join`
+     wires arrive as ordinary bézier `GraphWire`s. Draw `fan` / `join` like
+     `line`, with no dash; `done` dims a join.
+   - Optionally draw a faint bracket or outline around the members. The
+     column is `nodes.filter(n => n.node.parallel?.id === pid)`.
+   - Show the + at `graph.plus`, as today.
+4. **Stop right-click menu (StopMenu / stopEditing):** add "Run in parallel
+   with the next stop" (`joinParallel(f, sid, nextSid)`) and, on a member,
+   "Run on its own" (`leaveParallel(f, sid)`). Both only on `editable`
+   stops of a parallel-safe kind (`isParallelSafe(step.kind, kinds)`).
+5. **FlightChain (pane Flight tab) / FlywayCanvas:** `layoutDiagram` already
+   stacks the members and draws the fork and join, so nothing is required.
+   An insert gap between two members inserts *into* the group (the server
+   adopts it); the canvas may hide those gaps.
+6. **Palette error:** a 400 `not_parallel_safe` arrives through
+   `flightAction`'s error card, with the sentence "… use a Split for agents".
+   No special handling is needed.
+
+##### Tests
+
+- `tests/unit/test_flights_r20_backend.py` — 37 tests: the kind table and the
+  dto, the normaliser, take-off / ground / attach / split-off, the pure
+  planner at a group, the driver passes (`step_flight` with a fake server),
+  and the routes.
+- `frontend/src/__tests__/r20Parallel.test.ts` — 24 tests: lib/flights,
+  flightsApi bodies, the diagram's fork / join / fold / layout, skyGraph's
+  column / wires / + / wireIntent, and runWireIntent.
+- No existing skyGraph or flightDiagram test had to change.
+
+#### Integrator (same day)
+- Both line hooks offer `paletteParallel(withNode, pos)` (its pick goes through
+  `tackOnParallel`), handed to the host by `useChainEntry`; SkyView passes
+  `kinds` to `useSkyWiring`; the Flight tab's own wire drop offers it too.
+- A tile's right-click menu: "Run in parallel with the next stop"
+  (`joinParallel`) / "Run on its own" (`leaveParallel`), on a stop still
+  ahead whose kind (and the next one's) is parallel-safe.
+- Parallel fork / join wires are solid (only the sub-session bus is dashed).
+- Also: only a DONE flight lingers on its session's line (cancelled ones —
+  old Loop tests — had reappeared); sub-session frames are left-aligned.
+
+## Free chains: a default FOLDER, not a default session (2026-11-02)
+
+The owner, after the default session shipped: "you still spawned a shell …
+I really don't like that some sort of agent thing is required … I just meant
+there should be a default dir we work in", plus the floating "▶ Run" label
+over stops-only chains looked wrong. Taken from n8n:
+
+| n8n | Sky before | Sky now |
+|---|---|---|
+| A workflow runs in the n8n process; nothing is started per workflow (Execute Command runs on the host) | ▶ Run made a `default` session (a zsh in tmux, or an agent) and moved the chain onto it | A chain that needs no session runs FREE: `session ""`, `free: true`, `repo_root` = the folder. Nothing is started |
+| The workflow stays; a run is an execution of it | The chain became the session's flight and left the board | The chain stays where it is while it runs (bird, ✓s, countdown); when the run ends it goes back on the ground with `last_run {state, reason, at}` and runs again from the top |
+| Run from the trigger: ▶ beside the trigger node / Execute workflow | "▶ Run" pill on the chain's label bar | ▶ on the LEFT of the first stop (SkyChain `run`, `.sky-run`): on hover at rest, ■ (stop the run) while it runs; the bar shows Running / Waiting on you / Last run done |
+| A node not wired to a trigger just does not run | — | (unchanged: a split-off stop is its own chain with its own ▶) |
+
+Backend: `attach {title: "@default"}` = the default folder
+(`general.default_folder`, else `~/.mindflock/default`); `attach {folder}` =
+that folder. `needs_session(flight)` = `needs_agent` or any stop in
+`SESSION_KINDS − FOLDER_KINDS` (`FOLDER_KINDS` = command, loop): a chain that
+needs one gets a NEW session in the folder (the old `title: "" + repo_path`
+path) — never a reused "default". A free chain's command / loop stops skip the
+session hold; `_session_obs` gives a sessionless flight its `repo_root` as
+`folder` (commands run there). `_finish` re-grounds a free chain unless it is
+really over (`_FREE_GONE`: replaced, last stop removed); `op_attach` on a
+chain with `last_run` resets every stop to pending, cursor 0. `prune` never
+touches a sessionless flight. Removed: `ensure_default_session`,
+`general.default_session`; `GET /api/flights/default-place` → `{folder}`.
+The picker says "Default folder" / "Run in <folder>".
+
+## A source's default stops, edited in the Sky (2026-11-02)
+
+**The rule.** The defaults are ours: every intake source (a ticketing source,
+a repo's PRs, a repo's issues) flies our built-in stops, cut at its Fast-track
+depth (`builtin:ticket@pr`…), until it names its own saved stop in its `plan`
+field (`TicketingSource.plan`; `plan` in `github.repo_settings[repo]` /
+`github.issue_repo_settings[repo]`). A ticket's flight is a COPY of that plan,
+so editing one ticket's line stays local to that ticket. The calls below are
+the ONLY way the Sky changes a source's default. Logic:
+`backend/web/core/flight_intake_default.py`; routes in `routes/flights.py`.
+
+A source is `{kind, target}`: `tickets` + the source's id (its provider as a
+fallback, like every intake lookup), or `prs` / `issues` + `owner/repo`
+(matched case-insensitively against `github.repos` / `issue_repos`, or the
+settings table).
+
+| Call | Does |
+|---|---|
+| `GET /api/flights/intake-default?kind=&target=` | `{kind, target, label, plan_id, name, own, steps}` — what a NEW item from the source flies now, resolved like an intake start (`server._intake_plan` with no per-start pick): its own plan when it exists (`own: true`), else the built-in cut at its depth. All empty (`plan_id ""`, `steps []`) when nothing flies (no depth, no plan). `label` is the lane's: "Tickets · Shortcut", "Tickets · Jira · Platform", "PRs · o/r", "Issues · o/r". 400 `bad_kind`, 404 `unknown_source` |
+| `PUT /api/flights/intake-default {kind, target, steps, name?}` | Steps (validated strictly: 400 `bad_step` + `field`) become the source's own saved stop. Its existing own plan is rewritten IN PLACE (name kept unless `name`) when it is not a built-in / depth cut, runs on no trigger of its own (schedule, main push/red, hook) and no other source or repo names it; otherwise a new plan "<label> stops" (or `name`), trigger = the intake kind, is made and the source pointed at it |
+| `PUT … {kind, target, plan_id}` | The source flies that existing plan (404 `unknown_plan`); `""` clears the field — back to our built-in |
+| `PUT … {from_flight}` | That flight's steps (reduced to plan shape) as `{kind, target, steps}`. Its source: an editor chain's `edits_default`, else its `subject` (ticket → tickets + `subject.source`; pr → prs; issue → issues). 404 `unknown_flight` / `no_source` |
+| `GET /api/flights/intake-default/for-flight/{id}` | The GET shape for that flight's source (mapped as above); 404 `no_source` for a hand-made flight or a source since removed |
+
+Every PUT answers the GET shape plus `previous_plan_id` (the field before the
+write, `""` when unset) so the UI can Undo with `{kind, target, plan_id:
+previous_plan_id}`. PUT is owner only (`auth.may_configure`, like the Intake
+dialog). The field is written the way the Intake dialog saves it —
+`settings.set_ticketing_sources` (the whole list, every other field kept) or
+`update_settings(github={repo_settings|issue_repo_settings: …})` (a block
+whose only key was `plan` is dropped) — then stamped for settings sync
+(`settings_sync.local_change`) and passed to `settings_hooks.
+after_settings_change`, so other devices get it and the pipeline's fresh read
+(`session_runner._fresh_settings`) sees it. Reads drop the per-process
+settings cache first. Saving steps drops the group a grounded editor puts round
+the stop it was seeded from (one wrapping the whole chain, or one labelling
+the source's current default); other groups are kept.
+
+**The editor chain.** `POST /api/flights/start {grounded: true, plan_id? |
+steps?, name?, edits_default: {kind, target}}` stores a grounded chain with
+`edits_default` (400 `bad_edits_default` when malformed; the flight
+normalizer drops a malformed one from the store). It is never flown:
+`validate_for_takeoff` and `op_attach` refuse it with 409 `edits_default`
+("this chain edits a source's default stops; save it as the default
+instead"), which covers `POST /attach` with a session, `"@default"` / a folder
+(refused before anything is started), and a Handoff aimed at it. Adding,
+moving and removing its stops work as on any grounded chain; Save as default
+is `PUT {from_flight: <its id>}`. A split-off piece is a plain chain.
+
+## Calm Sky objects; devices on drag; Finished on request (2026-11-03)
+
+- **One look** for every Sky object (the intake lane, the Finished strip, the
+  device targets): the session frame's — a hairline border, a 30px tinted
+  title bar in normal case, quiet rows instead of filled cards, small muted
+  kind tags, and text that scales like the frames' (no ballooning at far zoom).
+- **Devices are drop targets only while you drag.** No standing device block:
+  dragging a session's chain by its frame bar shows a dock along the top of
+  the view — "Move to <device> · N sessions there" — and dropping asks inline,
+  then calls `POST /api/instances/{title}/move` as before.
+- **The Finished strip is off by default.** The Sky's ⋯ → "Show the Finished
+  strip" (per device, `mf_sky_finished`); × on the strip hides it. Shown, it
+  says what it is: each repo's main branch (its CI and last merge) and the
+  chains merged today. Hidden, it is never placed, keeps no room, and
+  `/api/sky/landing` is not polled.
+- The board's off-screen pointers hide while any dialog or menu is open.
+
+## As built: Tidy fills the screen (2026-11-03)
+
+- **The rows are as wide as fills the window.** Every line with no spot yet
+  (all of them, after a Tidy, but also any session arriving later) is placed
+  by `assignSpots` at the wrap width `fillWidth` (lib/skyLayout) picks: it
+  tries about two dozen widths, from the old minimum (the window's width, at
+  least `LINES_LEFT + 900` plane px) up to every newcomer on one row, plus
+  each width at which one more fits on the
+  first row. It scores each layout by the zoom the toolbar's Fit would show it
+  at (the lines at full size; the intake lane, the palette and the right
+  column count for their width and top only, the column added right of
+  everything) and keeps
+  the largest. A wider width must show things at least 10% larger than the
+  minimum does (`FILL_GAIN`), and a tie goes to the narrowest: a few lines,
+  or a portrait monitor (which would gain a few percent from a second column
+  under the lane), are placed exactly as before; a landscape monitor gets
+  rows that fill it instead of a tall column with empty sides. The widest
+  candidate is also at least the placed lines' right edge, so a session
+  arriving on an already-wide sky can land in a row that wide. The placement
+  memo re-runs on window height too: a newcomer whose spot is not saved yet
+  can move when the window is resized vertically. Each recompute runs
+  `assignSpots` about 24 + N times (N newcomers).
+- **The score is close to Fit, not identical.** It counts the floating
+  palette for its width and top (Fit leaves it out), so with the palette open
+  the chosen width can differ slightly from what Fit would pick. (This
+  session's one line never reaches `fillWidth`: it sits at the corner.)
+- **Tidy ends on the whole fit.** The toolbar's Tidy and `T` arm a fit; once
+  every shown line (and the lane) has its new spot, the camera eases to the
+  whole fit (`fitAll(true)`, as Fit). Disarmed after 2 s regardless, so a line
+  never measured can't jump the camera later. Tidy these (the selection bar)
+  and the lane making way for lines it grew over leave the camera where it is.
+- **Tuning knobs:** `FILL_GAIN` (1.1) and the 24-step count live in
+  `fillWidth` in `frontend/src/lib/skyLayout.ts`; the 2 s Tidy-fit disarm is
+  `tidyFitTimer` in `frontend/src/components/flights/SkyView.tsx`.
+
+## As built: return wires explain themselves
+
+Every stop that can send work back to the agent draws a return wire on the
+Sky and in the pane's Route tab (docs/vision/fixwire.md): an arrowhead into
+the Agent stop before it (else the session's agent tile) and the case on the
+wire — "if pre-commit fails" (a Commit stop: what its lane really hands back
+on the rungs it climbs), "if the checks fail", "if CI checks fail" (any stop
+set to **If it fails: Let the agent fix it**), "if reviewers ask for changes".
+Quiet until it happens; then the wire turns the warning tone with the real
+reason and round ("pre-commit failed at ruff · fixing 1/2"), the stop says
+"Agent fixing · round 1" and the bird sits on the agent; after, "fixed after 1
+round" until the route passes the next stop. Loops say their case in words
+too ("↻ repeat ×3 · every 30 min"), and every return wire has an arrowhead.
+
+- Server: `flights.returns_of` (pure; the API adds it as `returns` — the store
+  never does), `detail.fix = {active, round, rounds, of, reason, since, to,
+  outcome}` on the step (`lane_fix` from a Ship stop's lane record, the
+  `on_fail: agent` hand-off, a Reviews stop's rounds), one `fixing` / `fixed`
+  history event each (`_track_fix`).
+- Client: edge kind `fix` (`returnEdges`), routed and stacked with the Loop
+  wires (`loopWirePathG`, shared lanes), `arrowAt`, `wireLabel` (inside its
+  own run, cut or dropped, never overlapping).
+
+### Done by the agent
+
+A Ship stop whose rung git already proves is done (the agent committed,
+pushed or opened the PR itself) is **done by the agent**: `flights.agent_did`
+reads the session's git stage (`flight_driver._ship_git_obs`; a dirty tree
+proves nothing) for a pending Ship stop before it arms its lane, and for a
+running one whose lane has not acted, never while the agent is mid-turn. The
+pass rolls on through every following Ship stop that is done too (Commit,
+Push, Open PR in one pass), each with `detail.by = "agent"`, a receipt
+("already committed · 3 commits", "already pushed", "PR #123") and one
+history event "done by the agent — …"; the face shows the agent glyph and
+"by the agent" under the receipt.

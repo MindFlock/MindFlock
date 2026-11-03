@@ -36,6 +36,7 @@ import {
 } from "./outbox";
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { stepDone, stepSkip } from "../../lib/flightsApi";
 import { perchedOnYou } from "../../lib/flights";
 import type { RunInfo } from "../../lib/runs";
@@ -451,20 +452,33 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
         <div className="ob-acts">
           {fl && (
             <>
-              <button
-                type="button"
-                className="btn-primary pr-review-btn"
-                disabled={busy}
-                title={"Mark “" + fl.step.title + "” done — the flight goes on"}
-                onClick={() => void run(() => stepDone(fl.id, fl.step.id))}
-              >
-                Done
-              </button>
+              {fl.step.kind === "verify" ? (
+                // A Verify stop moves on when its behaviors are answered, not
+                // on Done (the server refuses it): its card opens in the Sky.
+                <button
+                  type="button"
+                  className="btn-primary pr-review-btn"
+                  title={"Answer the behaviors of “" + fl.step.title + "” — the route goes on once each one has an answer"}
+                  onClick={() => openBehaviors({ title: w.title })}
+                >
+                  Behaviors
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary pr-review-btn"
+                  disabled={busy}
+                  title={"Mark “" + fl.step.title + "” done — the route goes on"}
+                  onClick={() => void run(() => stepDone(fl.id, fl.step.id))}
+                >
+                  Done
+                </button>
+              )}
               <button
                 type="button"
                 className="test-btn"
                 disabled={busy}
-                title={"Skip “" + fl.step.title + "” — the flight goes on without it"}
+                title={"Skip “" + fl.step.title + "” — the route goes on without it"}
                 onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
               >
                 Skip

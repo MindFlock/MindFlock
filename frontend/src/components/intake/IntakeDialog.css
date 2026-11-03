@@ -1935,7 +1935,7 @@
 
 /* Round 5 ------------------------------------------------------------------ */
 
-/* The Auto-start tab's three switches + Pause all: one home for auto-start. */
+/* The Auto-start tab's switches: one home for auto-start (no Pause all). */
 .ik-autostart-switches {
   display: flex;
   flex-direction: column;
@@ -2120,4 +2120,33 @@
   .ik-setup-body {
     grid-column: 2;
   }
+}
+
+/* "Goes as far as" (flights/PlanSelect.tsx): the ONE control on a source card
+   for how far its items go. The rungs, a divider, the saved chains, then "Edit
+   in the Sky…" as a link at the end of the row. The summary line under it is
+   read-only. */
+.fl-source-reach .fl-reach-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+
+.fl-source-reach .fl-reach-sep {
+  align-self: stretch;
+  width: 1px;
+  margin: 2px 4px;
+  background: var(--border);
+}
+
+.fl-source-reach .fl-reach-edit {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.fl-source-reach .fl-reach-summary {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }

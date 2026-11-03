@@ -74,8 +74,8 @@ def test_bot_pr():
         ("agent", "Agent reads it"),
         ("test", "Test"),
         ("sync", "Sync with main"),
-        ("checks", "Checks"),
-        ("ship", "Merge"),
+        ("checks", "CI checks"),
+        ("ship", "Merge when green"),
     ]
     assert lanes("builtin:botpr") == ["merge"]
     assert not any(s["kind"] == "you" for s in p["steps"])  # no perch
@@ -138,11 +138,11 @@ def test_release_ends_with_land():
         ("ship", "Commit"),
         ("ship", "Push"),
         ("ship", "Open PR"),
-        ("checks", "Checks"),
+        ("checks", "CI checks"),
         ("you", "Approve the release"),
-        ("ship", "Merge"),
+        ("ship", "Merge when green"),
         ("agent", "Agent tags and publishes"),
-        ("land", "Land"),
+        ("land", "Finish"),
     ]
     assert lanes("builtin:release") == ["commit", "push", "pr", "merge"]
 

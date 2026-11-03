@@ -260,7 +260,7 @@ def test_route_clears_a_halted_fast_track_but_never_a_live_one(routed):
     ap.arm("r1", "pr", source="session")
     ap.halt("r1", "pre-commit failed")
     _code, body = _reset("r1")
-    assert "fast-track" in body["cleared"]
+    assert "Goes as far as" in body["cleared"]
     assert ap.get("r1") is None
 
     ap.arm("r1", "pr", source="session")  # running

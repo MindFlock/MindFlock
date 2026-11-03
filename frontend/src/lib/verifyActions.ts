@@ -26,7 +26,8 @@ import type {
   TestStepActor,
   TestStepResult,
 } from "../api/types";
-import { groupPlans, isWaitingOnYou, planName } from "../components/dialogs/verify";
+import { isWaitingOnYou, planName } from "../components/dialogs/verify";
+import { behaviorSummary } from "./behaviors";
 import { queryClient, refreshInstances, refreshTestPlans } from "../state/queries";
 import { useUi } from "../state/store";
 import { errorPop } from "./errorPop";
@@ -123,7 +124,7 @@ export async function startChecklistRun(
     // `session.create_failed` retracts it (see bridgeTestPlanEvents).
     toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session"));
   } catch (err) {
-    errorPop("Couldn't start the run for " + planName(plan), errMsg(err));
+    errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
     // The optimistic state above never landed on a failure, but the plan may
     // have moved for another reason (it 409s when a run is already going), so
     // take the server's word for where it actually is.
@@ -173,7 +174,7 @@ export async function regeneratePlan(plan: TestPlan, focus = ""): Promise<boolea
       error: "",
       gen_started: Date.now() / 1000,
     }));
-    toast("Rewriting the checklist for " + planName(plan) + " — up to three minutes");
+    toast("Rewriting the behaviors for " + planName(plan) + " — up to three minutes");
     return true;
   } catch (err) {
     errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
@@ -205,9 +206,9 @@ export async function cancelChecklistRun(plan: TestPlan): Promise<void> {
     // showing it as live work.
     await refreshInstances();
     await refreshTestPlans();
-    toast(r?.session ? "Stopped " + r.session : "Run cancelled");
+    toast(r?.session ? "Stopped " + r.session : "Check cancelled");
   } catch (err) {
-    errorPop("Couldn't cancel the run", errMsg(err));
+    errorPop("Couldn't cancel the check", errMsg(err));
     void refreshTestPlans();
   }
 }
@@ -315,16 +316,9 @@ export async function recordStepAnswer(
   // it. The toast is the receipt, and it names where the row went so the
   // disappearance is an outcome instead of a glitch.
   if (next && wasAsking && !isWaitingOnYou(next)) {
-    // Where it lands, asked of the SAME rule that will file it there, rather
-    // than assumed to be "Checked" — a plan whose last answer was a Fail moves
-    // to "Steps failed", and a toast that named the wrong group would be one
-    // more thing on this surface that does not match what is on screen.
-    const dest = groupPlans([next])[0]?.label || "";
-    toast(
-      "All your steps are answered — " +
-        planName(plan) +
-        (dest ? " moves to " + dest : ""),
-    );
+    // Named with the status the behaviors now wear (lib/behaviors), the same
+    // word their tile and card show — never a group heading nobody sees now.
+    toast("All yours are answered — " + planName(plan) + ": " + behaviorSummary(next).status);
   }
   void refreshTestPlans();
 }
@@ -347,7 +341,7 @@ export async function editPlanStep(
     void refreshTestPlans();
     return true;
   } catch (err) {
-    errorPop("Couldn't change that step", errMsg(err));
+    errorPop("Couldn't change that behavior", errMsg(err));
     return false;
   }
 }
@@ -363,7 +357,7 @@ export async function removePlanStep(plan: TestPlan, step: TestStep): Promise<vo
     if (r?.plan) patchPlan(plan.id, () => r.plan as TestPlan);
     void refreshTestPlans();
   } catch (err) {
-    errorPop("Couldn't remove that step", errMsg(err));
+    errorPop("Couldn't remove that behavior", errMsg(err));
   }
 }
 
@@ -406,13 +400,13 @@ export async function writePlanForBranch(repo: VerifyRepo, branch: string): Prom
     });
     toast(
       r.existing
-        ? branch + " already has a checklist — it's in Verify"
-        : "Asked the agent for a checklist for " + branch + " — it'll appear in Verify (up to three minutes)"
+        ? branch + " already has behaviors — they're on the Behaviors board in the Sky"
+        : "Asked the agent to write the behaviors for " + branch + " — they'll appear on the Behaviors board (up to three minutes)"
     );
     refreshTestPlans();
     return true;
   } catch (err) {
-    errorPop("Couldn't write a checklist", errMsg(err));
+    errorPop("Couldn't write the behaviors", errMsg(err));
     return false;
   }
 }
@@ -433,17 +427,64 @@ export async function writePlanFor(target: string): Promise<boolean> {
     toast(
       r.existing
         ? (r.plan && r.plan !== target
-            ? target + "'s branch already has a checklist — it's under " + r.plan
-            : target + " already has a checklist") + " — it's in Verify"
+            ? target + "'s branch already has behaviors — they're under " + r.plan
+            : target + " already has behaviors") + " — they're on its route in the Sky"
         // "up to three minutes", matching the row this press creates and the
         // server's own budget. It used to promise "a minute" 200px above a row
         // saying three, which makes the faster of the two promises a broken one.
-        : "Asked the agent for a checklist for " + target + " — it'll appear in Verify (up to three minutes)"
+        : "Asked the agent to write the behaviors for " + target + " — they'll appear on its route in the Sky (up to three minutes)"
     );
     refreshTestPlans();
     return true;
   } catch (err) {
-    errorPop("Couldn't write a checklist", errMsg(err));
+    errorPop("Couldn't write the behaviors", errMsg(err));
     return false;
+  }
+}
+
+/** The Behaviors board's "Check another branch…" (docs/behaviors.md §3): ask
+ * the agent for behaviors for a branch no session has been on, or (`empty`)
+ * start an empty set to write by hand. Resolves to the plan id ("" when the
+ * server refused — the reason is popped). Behaviors words, unlike
+ * `writePlanForBranch` (the dialog's, kept until it retires). */
+export async function askBehaviorsForBranch(repo: VerifyRepo, branch: string, opts: { empty?: boolean } = {}): Promise<string> {
+  try {
+    const r = await api<{ plan: string; existing: boolean }>("/api/test-plans/branch", {
+      json: opts.empty ? { repo: repo.root, branch, empty: true } : { repo: repo.root, branch },
+    });
+    toast(
+      r.existing
+        ? branch + " already has behaviors — they're on the Behaviors board"
+        : opts.empty
+          ? "Started empty behaviors for " + branch + " — add what it should do"
+          : "Asked the agent to write behaviors for " + branch + " — up to three minutes",
+    );
+    void refreshTestPlans();
+    return r.plan || "";
+  } catch (err) {
+    errorPop("Couldn't start behaviors for " + branch, errMsg(err));
+    return "";
+  }
+}
+
+/** "Start empty behaviors for a session…": an empty set (origin "manual", no
+ * model call) on a session's branch, open or closed. Resolves to the plan id
+ * — new, or the one already covering the branch — or "" when refused. */
+export async function startEmptyBehaviors(session: string): Promise<string> {
+  try {
+    const r = await api<{ plan: string; existing: boolean }>(
+      "/api/instances/" + encodeURIComponent(session) + "/test-plan",
+      { method: "POST", json: { empty: true } },
+    );
+    await refreshTestPlans();
+    toast(
+      r.existing
+        ? session + " already has behaviors — add yours to them"
+        : "Started empty behaviors for " + session + " — add what it should do",
+    );
+    return r.plan || "";
+  } catch (err) {
+    errorPop("Couldn't start behaviors for " + session, errMsg(err));
+    return "";
   }
 }

@@ -1,5 +1,5 @@
 /** Shared registry + ordering for the movable sidebar sections. The
- * customizable bars (Usage, Tickets, Pull requests, Issues, Verify, Assistant)
+ * customizable bars (Usage, Tickets, Pull requests, Issues, Assistant, Prompts)
  * are draggable; the session list is a fixed anchor (the SESSIONS_KEY
  * sentinel) that bars can be dropped above or below but which never itself
  * moves.
@@ -22,10 +22,8 @@ export const SIDEBAR_BARS: BarDef[] = [
   { key: "ingestion", label: "Tickets" },
   { key: "pr-review", label: "Pull requests" },
   { key: "issue-handling", label: "Issues" },
-  // Last of the automations, and after the three that START work: Verify is the
-  // other end of the same pipeline — what came in through ingestion comes back
-  // here once it has actually shipped.
-  { key: "verify", label: "Verify" },
+  // (The Verify bar is gone: Verify is a stop on the route now. A saved order
+  // or hidden list that still names "verify" is fine — unknown keys drop.)
   { key: "assistant", label: "Assistant" },
   // Saved prompts, one click from any session. Last so a saved order from
   // before it existed meets it right where the defaults put it (see LATE_BARS).
@@ -42,7 +40,7 @@ export const LATE_BARS = new Set(["prompts"]);
  * ticket ingestion is the headline feature — connecting a tracker is the first
  * thing a new user does, and hiding its bar meant they had to go find the
  * product before they could use it (it still renders nothing until a tracker
- * is connected). The remaining three (Pull requests, Issues, Verify) start
+ * is connected). The rest (Pull requests, Issues, Prompts) start
  * hidden so a first run isn't overwhelming; they're one click away in
  * Customize → Sidebar. Only applied when the user has never touched that
  * checklist (no persisted hiddenBars) — order and length carry no meaning,

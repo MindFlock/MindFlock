@@ -181,6 +181,18 @@ body #mf-winctl {
   border-color: var(--border);
 }
 
+/* The calm first hour (lib/calm.ts topBarQuiet): an EMPTY Verify / Schedule
+   stays on the bar, labelled and clickable, just a step back in weight so
+   "③ Start your first session" leads. Hover / focus bring the full colour. */
+#topbar .tb-item.tb-quiet {
+  color: var(--muted);
+}
+
+#topbar .tb-item.tb-quiet:hover,
+#topbar .tb-item.tb-quiet:focus-visible {
+  color: var(--text);
+}
+
 /* Count riding inside a bar item (Verify's due plans). Same accent-tinted pill as
    .ik-tab-count on the Intake tabs — on both surfaces a non-zero count is the
    call to action, not decoration — one size down because it sits inside a 24px

@@ -120,13 +120,24 @@ describe("the Intake dialog has no Pause/Resume", () => {
     expect(html).not.toContain('id="tk-ingestion-enabled"');
   });
 
-  it("the Auto-start tab holds the three switches, and Pause all records nothing", () => {
+  it("the Auto-start tab holds the three switches, one per source, and no Pause all", () => {
     const auto = code("components/intake/AutoStartSwitches.tsx");
-    for (const id of ["tk-ingestion-enabled", "gh-pr-enabled", "gh-issues-enabled", "ik-pause-all"])
+    for (const id of ["tk-ingestion-enabled", "gh-pr-enabled", "gh-issues-enabled"]) {
       expect(auto).toContain(id);
-    expect(auto).toContain("Pause all auto-start");
-    // Pause all only flips switches off — no record, no Resume.
+      expect(auto.split('"' + id + '"').length - 1).toBe(1);
+    }
+    // The owner removed "pause everything": the code matches ./switches.ts.
+    expect(auto).not.toContain("ik-pause-all");
+    expect(auto).not.toMatch(/Pause all|pauseAll|All auto-start is off/);
     expect(auto).not.toMatch(/intake_paused|Resume|Pause intake/);
+    expect(code("components/intake/switches.ts")).not.toMatch(/Pause all|pauseAll/);
+  });
+
+  it("a tab's status line is just a status: the header line above it links to the switches", () => {
+    const auto = code("components/intake/AutoStartSwitches.tsx");
+    const link = auto.slice(auto.indexOf("export function AutoStartLink"));
+    expect(link).not.toContain("<button");
+    expect(link).not.toMatch(/Change ›|Turn on ›/);
   });
 
   it("legacy paused: the switches just read off, and Turn on… leads to them", () => {

@@ -120,7 +120,7 @@ def test_land_must_be_the_last_stop():
     steps = [{"kind": "land"}, {"kind": "notify", "config": {"text": "x"}}]
     with pytest.raises(F.PlanError) as err:
         F.normalize_plan({"name": "x", "steps": steps})
-    assert str(err.value) == "a Land stop is the last stop"
+    assert str(err.value) == "a Finish stop is the last stop"
     assert err.value.field == "steps[0].kind"
     assert F.normalize_plan({"name": "x", "steps": steps[::-1]})["steps"][-1][
         "kind"
@@ -143,8 +143,8 @@ def test_merged_lands_and_closes_after(srv, repo, started):
     _merge(repo)
     out = _run(_flight())
     assert out["action"] == "done"
-    assert out["note"] == "landed on main"
-    assert out["detail"]["receipt"] == "landed"
+    assert out["note"] == "finished on main"
+    assert out["detail"]["receipt"] == "finished"
     plan = out["detail"]["pending_close"]
     assert plan["mode"] == "delete" and plan["branch"] == "feat"
     assert plan["repo"] == str(repo.clone)
@@ -175,7 +175,7 @@ def test_uncommitted_files_close_instead_of_delete(srv, repo, started):
     assert out["detail"]["pending_close"]["mode"] == "close"
     assert (
         out["note"]
-        == "landed on main — closing, not deleting: it has uncommitted files"
+        == "finished on main — closing, not deleting: it has uncommitted files"
     )
 
 
@@ -194,7 +194,7 @@ def test_not_the_last_step_refuses_at_run(srv, repo, started):
     f = F.take_off(plan, session="s", now=NOW)
     with pytest.raises(StepFailed) as err:
         asyncio.run(L._run(f, f["steps"][0], {"action": "run"}, NOW))
-    assert str(err.value) == "a Land stop is the last stop"
+    assert str(err.value) == "a Finish stop is the last stop"
 
 
 def test_a_restart_mid_run_runs_again():
@@ -210,7 +210,7 @@ def test_driver_finishes_the_flight_done(srv, repo, started):
     out = asyncio.run(D._perform(f, {"action": "run", "note": ""}, NOW))
     F.apply(f, out, NOW)
     assert f["state"] == "done"
-    assert f["step_states"][f["steps"][0]["id"]]["detail"]["receipt"] == "landed"
+    assert f["step_states"][f["steps"][0]["id"]]["detail"]["receipt"] == "finished"
 
 
 def test_driver_turns_not_merged_into_a_halt(srv, repo, started):

@@ -325,6 +325,13 @@ export interface TemplateEditorProps {
   focusFolder?: boolean;
 }
 
+/** The fields a schedule's "when" edits — a template form's, and a
+ * scheduled plan's (lib/flights WhenForm has exactly these): the ONE schedule
+ * editor (ScheduleWhen / ScheduleEditor) serves both, so Schedule's cards and
+ * a saved stop's Takes off dialog say Every day / Weekdays / Once / Custom
+ * (cron) the same way. */
+export type WhenFields = Pick<TemplateForm, "days" | "at" | "date" | "cron" | "seeded">;
+
 /** Days ▾ + a 24-hour time (or a cron expression), and the line under them
  * that says what that means — "Every day at 07:30 EDT — next tomorrow 07:30,
  * Fri 07:30, Sat 07:30" — in every mode, from the server's own reading. */
@@ -336,8 +343,8 @@ export function ScheduleWhen({
   runs,
   focusTime,
 }: {
-  form: TemplateForm;
-  onForm: (patch: Partial<TemplateForm>) => void;
+  form: WhenFields;
+  onForm: (patch: Partial<WhenFields>) => void;
   tz?: string;
   cronPreview?: CronPreview | null;
   runs?: Pick<TemplateRunsStatus, "runs_here" | "runs_on">;
@@ -420,7 +427,7 @@ export function ScheduleWhen({
       </p>
       <p className="tpl-cron-preview tpl-sched-note muted">
         {elsewhere ? "Starts on " + status.runs_on + " — the computer that runs schedules. " : ""}
-        Skipped while the last run is still working or waiting on you.
+        Skipped while the last run is still working or needs you.
       </p>
     </>
   );
@@ -430,8 +437,8 @@ export function ScheduleWhen({
  * card — days, time, the next-runs line, Save. Edit keeps the whole form.
  * "Stop schedule" (a scheduled one) is what unticking the box was. */
 export function ScheduleEditor(p: {
-  form: TemplateForm;
-  onForm: (patch: Partial<TemplateForm>) => void;
+  form: WhenFields;
+  onForm: (patch: Partial<WhenFields>) => void;
   error: string;
   busy: boolean;
   onSave: () => void;
@@ -748,7 +755,7 @@ export function TemplateEditor(p: TemplateEditorProps) {
 
         <div className="rt-row rt-row-top" id="tpl-autopilot-row">
           <span className="rt-label" id="tpl-autopilot-label">
-            Fast-track
+            Goes as far as
           </span>
           <div className="rt-ctl tpl-fast-track">
             <span className="muted tpl-autopilot-hint">

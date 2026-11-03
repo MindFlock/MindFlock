@@ -1,11 +1,12 @@
 /** Settings → General (partial 101 + the scroll-speed wiring from
- * section 20): the workers request and model (lib/workersRequest); in the
- * Advanced fold, the cost budget, what happens when usage
+ * section 20): the terminal scroll speed; in the Advanced fold, the cost budget, what happens when usage
  * runs out or MindFlock restarts, idle sleep, the plan estimate and terminal
  * scroll speed; then, last, Help — the tours (replay any of them) and the
  * hints switch. One plain line per control; the long why sits in a "Learn
  * more" fold. The comfort switches (Reduce motion, Take a break, Idle flock)
- * live on Appearance — they are about how the app looks and feels. */
+ * live on Appearance — they are about how the app looks and feels. The
+ * workers request and model moved to Agent orchestration, beside the spawn
+ * limits: one place for workers. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
@@ -20,12 +21,8 @@ import { flashSaved } from "../savedCue";
 import { TOURS, TOUR_IDS, type TourId } from "../../../lib/tours";
 import { replayTour } from "../../onboarding/replayTour";
 import { replayPeopleTour } from "./peer/replayPeopleTour";
-import {
-  ASK_WORKERS_KEYS,
-  DEFAULT_WORKERS_MODEL,
-  DEFAULT_WORKERS_TEMPLATE,
-  FLOCK_KEYS,
-} from "../../../lib/workersRequest";
+import { openWhatsNew } from "../../whatsNew/WhatsNew";
+import { HOW_IT_WORKS_TITLE, HowItWorks, openHowItWorks } from "../../onboarding/HowItWorks";
 import "./General.css";
 
 export function General(_: ScreenProps) {
@@ -39,9 +36,6 @@ export function General(_: ScreenProps) {
       {/* The one everyday knob leads: the terminal's wheel speed (basic mode
           shows it too). */}
       <ScrollSpeedRow />
-      {/* Asking for MindFlock workers (lib/workersRequest): the words the
-          Alt+G hotkey types, and Flock mode adds to every prompt. */}
-      <WorkersRows />
       <AdvancedFold id="general-advanced" summary="Budgets, resume and sleep" defaultOpen={false}>
         <label className="set-row">
           <span className="set-label">Per-session budget (USD, 0 = off)</span>
@@ -63,48 +57,6 @@ export function General(_: ScreenProps) {
           first thing General is for (the owner found it odd up top). Basic
           mode shows only this; the Settings tour's last step points here. */}
       <Tours />
-    </>
-  );
-}
-
-/** The workers request: a template (`{model}` becomes "Workers model") the
- * server fills in and serves as `/api/config` → `flock.request`. Empty means
- * the default (shown as the placeholder). Saved on blur like every General
- * field; the row marks "✓ Saved", a failure toasts and re-syncs. */
-function WorkersRows() {
-  const s = useSettings();
-  const stored = s.get("general", "workers_request");
-  const display = typeof stored === "string" ? stored : "";
-  const [value, setValue] = useState(display);
-  useEffect(() => setValue(display), [display]);
-  return (
-    <>
-      <label className="set-row" id="general-workers">
-        <span className="set-label">Workers request</span>
-        <textarea
-          className="workers-request"
-          data-group="general"
-          data-field="workers_request"
-          rows={4}
-          style={{ resize: "vertical", lineHeight: 1.45 }}
-          spellCheck={false}
-          placeholder={DEFAULT_WORKERS_TEMPLATE}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          onBlur={() => {
-            if (value !== display) void s.saveField("general", "workers_request", value);
-          }}
-        />
-        <span className="set-hint">
-          Added to a prompt by the hotkey ({ASK_WORKERS_KEYS}), or to every prompt while a session's Flock is on
-          ({FLOCK_KEYS}). <code>{"{model}"}</code> becomes the model below; empty uses the default.
-        </span>
-      </label>
-      <label className="set-row">
-        <span className="set-label">Workers model</span>
-        <SettingField group="general" field="workers_model" placeholder={DEFAULT_WORKERS_MODEL} />
-        <span className="set-hint">The model the request asks workers to run on.</span>
-      </label>
     </>
   );
 }
@@ -219,6 +171,26 @@ function Tours() {
   return (
     <div className="onboarding-block general-help" id="general-tours" data-tour="settings-tours">
       <h3 className="set-section-title">Help</h3>
+      <div className="set-row onboarding-action" id="general-whats-new">
+        <div className="onboarding-action-text">
+          <span className="set-label">What's new</span>
+          <span className="set-hint">The new features in this release.</span>
+        </div>
+        <button type="button" className="test-btn" onClick={openWhatsNew}>
+          Show
+        </button>
+      </div>
+      {/* The welcome picture again, without re-running the checklist tour. */}
+      <div className="set-row onboarding-action" data-help-row="how-it-works">
+        <div className="onboarding-action-text">
+          <span className="set-label">{HOW_IT_WORKS_TITLE}</span>
+          <span className="set-hint">Sessions, routes, the Sky and what needs you, in one picture.</span>
+        </div>
+        <button type="button" className="test-btn" onClick={openHowItWorks}>
+          Show
+        </button>
+      </div>
+      <HowItWorks />
       <h4 className="set-subtitle">Tours</h4>
       {TOUR_IDS.map((id) => (
         <div className="set-row onboarding-action" key={id} data-tour-row={id}>
@@ -260,8 +232,8 @@ function Tours() {
 const TOUR_HINT: Record<TourId, string> = {
   welcome: "The three steps to your first session.",
   new: "Starting a session: the task, the repo, Start.",
-  sky: "The sky: every session a line, the bird on its stop, and the Stops shelf.",
-  intake: "Turning tickets, pull requests and issues into sessions.",
+  sky: "What the Sky is for: each session's route, + to add a stop, the bird, Needs you.",
+  intake: "Where work arrives by itself: tickets, pull requests and issues.",
   verify: "Checking that a change actually works.",
   schedule: "Templates, and sessions that start by themselves.",
   settings: "Where your connections and every setting live.",

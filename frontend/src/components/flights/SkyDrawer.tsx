@@ -3,8 +3,10 @@
  *
  *  - Perched on you — every flight perched on you (its perch's checklist and
  *    Done / Skip, the same block the line's box holds) or halted (Retry /
- *    Skip), and Verify's due or failing checklists (a row that opens it in
- *    Verify). A press on a flight's name flies the sky to its line.
+ *    Skip), and behaviors that need you or failed (a row that flies the sky
+ *    to them: the session's Behaviors tile, else the Behaviors board —
+ *    lib/behaviorsFocus `openBehaviors`). A press on a flight's name flies
+ *    the sky to its line.
  *  - Waiting to fly — the tickets, pull requests and issues that are eligible
  *    and have no session, under their own sub-headings, a kind badge on every
  *    row, the saved stop as a chip row and one action: Fly. Folded: the intake
@@ -17,6 +19,7 @@ import { useFlightKinds, useFlightPlans, useFlights, useSettingsDoc, useTestPlan
 import { ageText } from "../intake/kit";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { windowName } from "../../lib/windowName";
 import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
 import { FlightCard, YouStepActions, flightHeadline } from "./FlightStrip";
@@ -55,19 +58,20 @@ export function sourcePlan(settings: Record<string, unknown> | undefined, t: Wai
   return per?.[t.repo]?.plan || "";
 }
 
-/** A due / failing checklist: one line that opens it in Verify. */
-export function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(branch: string): void }) {
+/** Behaviors that need you or failed: one line that flies the sky to them
+ * (`onOpen(plan id)` → `openBehaviors({ planId })`). */
+export function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(planId: string): void }) {
   const failing = isFailing(plan);
   return (
     <button
       type="button"
       className={"fl-check-row" + (failing ? " is-failing" : "")}
-      title="Open this checklist in Verify"
-      onClick={() => onOpen(plan.branch || plan.id)}
+      title={failing ? "Show the behaviors that failed" : "Show the behaviors that need you"}
+      onClick={() => onOpen(plan.id)}
     >
       <span className="fl-check-glyph" aria-hidden="true">{failing ? "✗" : "☐"}</span>
       <span className="fl-check-name">{planName(plan)}</span>
-      <span className="fl-check-state">{failing ? "Failed" : "Waiting on you"}</span>
+      <span className="fl-check-state">{failing ? "Failed" : "Needs you"}</span>
       {plan.branch && <code className="fl-check-branch">{plan.branch}</code>}
     </button>
   );
@@ -134,17 +138,17 @@ export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPl
           <div className="fl-waiting-meta muted">
             {where && <span className="fl-waiting-where">→ {where}</span>}
             {meta && <span>{meta}</span>}
-            <span className={"fl-auto" + (w.auto ? " on" : "")}>{w.auto ? "flies by itself" : "flies when you say"}</span>
+            <span className={"fl-auto" + (w.auto ? " on" : "")}>{w.auto ? "starts by itself" : "starts when you say"}</span>
           </div>
         </div>
-        <button type="button" className="btn-primary fl-btn fl-fly" disabled={busy} title={"Take off on " + w.item.reference} onClick={() => void fly()}>
-          {busy ? "Taking off…" : "Fly"}
+        <button type="button" className="btn-primary fl-btn fl-fly" disabled={busy} title={"Run on " + w.item.reference} onClick={() => void fly()}>
+          {busy ? "Starting…" : "Run"}
         </button>
       </div>
       {plans.length > 0 && (
         <div className="fl-waiting-flyway">
-          <span className="fl-fld-label">Stops</span>
-          <ChipRow className="fl-plan-pick" label="Stops" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
+          <span className="fl-fld-label">Route</span>
+          <ChipRow className="fl-plan-pick" label="Route" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
         </div>
       )}
       {error && (
@@ -168,7 +172,7 @@ function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly
   const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
   return (
     <div className={"sky-perch" + (halted ? " is-halted" : "")} data-flight={flight.id}>
-      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s line" : undefined} onClick={() => onFocus(flight.session)}>
+      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s route" : undefined} onClick={() => onFocus(flight.session)}>
         {head}
       </button>
       <div className="sky-perch-step muted">
@@ -188,7 +192,7 @@ export interface SkyDrawerProps {
 }
 
 export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
-  // Its links open the flat dialogs: a checklist in Verify, sources in Intake.
+  // Its links: behaviors fly the sky (openBehaviors), sources open Intake.
   const openDialogFor = useUi((s) => s.openDialogFor);
   const flightsQ = useFlights();
   const plans = useFlightPlans().data || [];
@@ -205,50 +209,50 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
   const count = needs.length + dueChecklists.length;
 
   return (
-    <aside className={"sky-drawer" + (open ? " open" : "")} aria-label="Perched on you" data-tour="flights-drawer">
+    <aside className={"sky-drawer" + (open ? " open" : "")} aria-label="Needs you" data-tour="flights-drawer">
       <button
         type="button"
         className={"sky-drawer-tab" + (count > 0 ? " has-perch" : "")}
         aria-expanded={open}
-        title={open ? "Fold the drawer away" : count > 0 ? count + " perched on you — open the drawer" : "What is perched on you"}
+        title={open ? "Fold the drawer away" : count > 0 ? count + " need you — open the drawer" : "What needs you"}
         onClick={onToggle}
       >
-        <span className="sky-drawer-tab-word">Perched on you</span>
+        <span className="sky-drawer-tab-word">Needs you</span>
         {count > 0 && <span className="fl-count fl-count-you">{count}</span>}
       </button>
       {open && (
         <div className="sky-drawer-body">
           {flightsQ.data === null && (
             <p className="fl-note muted" role="status">
-              This server has no flights yet — update MindFlock to fly stops. Waiting items and checklists still work.
+              This server can't run routes yet — update MindFlock to run them. Waiting items and behaviors still work.
             </p>
           )}
           <section className="fl-group fl-group-needs" id="fl-group-needs" aria-labelledby="fl-group-needs-h">
             <h3 id="fl-group-needs-h" className="fl-group-head">
-              Perched on you
+              Needs you
               {count > 0 && <span className="fl-count">{count}</span>}
             </h3>
             {count === 0 ? (
-              <p className="fl-empty muted">Nothing is perched on you.</p>
+              <p className="fl-empty muted">Nothing needs you.</p>
             ) : (
               <>
                 {needs.map((f) => (
                   <PerchRow key={f.id} flight={f} kinds={kinds} onFocus={onFocus} />
                 ))}
                 {dueChecklists.map((p) => (
-                  <ChecklistRow key={p.id} plan={p} onOpen={(b) => openDialogFor("verify", b)} />
+                  <ChecklistRow key={p.id} plan={p} onOpen={(planId) => openBehaviors({ planId })} />
                 ))}
               </>
             )}
           </section>
           <details className="fl-group fl-group-waiting" id="fl-group-waiting">
             <summary className="fl-group-head">
-              Waiting to fly
+              Waiting to start
               {waiting.length > 0 && <span className="fl-count">{waiting.length}</span>}
             </summary>
             {waiting.length === 0 ? (
               <p className="fl-empty muted">
-                Nothing is waiting to fly.{" "}
+                Nothing is waiting to start.{" "}
                 <button type="button" className="linklike" onClick={() => openDialogFor("intake")}>
                   Intake ›
                 </button>{" "}
@@ -277,7 +281,7 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
           {landed.length > 0 && (
             <details className="fl-group fl-group-landed" open={landedOpen} onToggle={(e) => setLandedOpen((e.target as HTMLDetailsElement).open)}>
               <summary className="fl-group-head">
-                Landed<span className="fl-count muted">{landed.length}</span>
+                Finished<span className="fl-count muted">{landed.length}</span>
               </summary>
               {landedOpen && landed.map((f) => <FlightCard key={f.id} flight={f} kinds={kinds} />)}
             </details>

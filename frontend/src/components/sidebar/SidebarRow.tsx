@@ -328,8 +328,8 @@ export const SidebarRow = memo(function SidebarRow({
         aria-expanded={!folded}
         title={
           folded
-            ? `Show its ${kids.length} sub-session${kids.length === 1 ? "" : "s"} in the sidebar`
-            : `Hide its ${kids.length} sub-session${kids.length === 1 ? "" : "s"} from the sidebar — they keep running`
+            ? `Show its ${kids.length} worker${kids.length === 1 ? "" : "s"} in the sidebar`
+            : `Hide its ${kids.length} worker${kids.length === 1 ? "" : "s"} from the sidebar — they keep running`
         }
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => act(() => useUi.getState().toggleFamilyCollapsed(title), e)}

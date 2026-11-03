@@ -56,15 +56,15 @@ export const PANE_TABS: PaneItemDef[] = [
   {
     id: "flight",
     kind: "tab",
-    label: "Flight",
-    note: "The session's live diagram: its flight or fast-track, its workers — once it has one (⋯ → Add a stop… always opens it)",
+    label: "Route",
+    note: "The session's live diagram: its route — how far it goes — and its workers — once it has one (⋯ → Add a stop… always opens it)",
     on: true,
   },
   { id: "thread", kind: "tab", label: "Thread", note: "Workers and what passed between them — only once a session has some", on: false },
 ];
 
 export const PANE_BUTTONS: PaneItemDef[] = [
-  { id: "fasttrack", kind: "button", label: "Fast-track ⏩", note: "Where the session goes when its turn ends: commit, push, PR…", on: true },
+  { id: "fasttrack", kind: "button", label: "Goes as far as ⏩", note: "Where the session goes when its turn ends: commit, push, PR…", on: true },
   { id: "copy", kind: "button", label: "Copy entire history", note: "The open terminal tab's whole scrollback to the clipboard", on: true },
   { id: "next", kind: "button", label: "Next step (Commit…)", note: "The guided button: Commit…, then Push, then Open PR", on: false },
   { id: "history", kind: "button", label: "History", note: "Scroll and select the full history like a page", on: false },

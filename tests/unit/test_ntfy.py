@@ -1117,7 +1117,7 @@ def test_the_two_ends_of_a_plan_are_separately_switchable(pushes):
     addon._on_event(_verify_env("session.test_plan_checked", data={"failed": 0}))
     assert pushes == []
     addon._on_event(_verify_env("session.test_plan_ready", data={"steps": 6}))
-    assert len(pushes) == 1 and "checklist ready" in pushes[0]["title"]
+    assert len(pushes) == 1 and "behaviors written" in pushes[0]["title"]
 
 
 def test_a_failed_generation_rings_by_default_and_can_be_muted(pushes):
@@ -1145,7 +1145,7 @@ def test_a_failed_check_rings_but_a_clean_one_does_not(pushes):
     bad = _verify_env("session.test_plan_checked", data={"failed": 2})
     bad["new"] = "failed"
     addon._on_event(bad)
-    assert len(pushes) == 1 and pushes[0]["title"] == "alpha: checklist failed"
+    assert len(pushes) == 1 and pushes[0]["title"] == "alpha: a behavior failed"
     assert pushes[0]["priority"] == 4
 
 

@@ -62,14 +62,15 @@ describe("a stop that can change", () => {
     expect(html).toContain(">Lane<");
     expect(html).toContain(">If it fails<");
     expect(html).toMatch(/class="fl-toggle"[^>]*aria-pressed="false"/);
-    expect(html).toContain("Halt point — the flight stops here, before doing this stop");
+    expect(html).toContain("Halt point — the route stops here, before doing this stop");
     // No inline inspector panel.
     expect(html).not.toContain('class="fl-inspector');
   });
 
-  it("Remove · Duplicate on the left, Cancel · Save (nothing to save yet)", () => {
+  it("Remove · Duplicate on the left, Cancel · Save — Save works with nothing changed (a new stop's defaults)", () => {
     expect(buttons(html).filter((b) => ["Remove", "Duplicate", "Cancel", "Save"].includes(b))).toEqual(["Remove", "Duplicate", "Cancel", "Save"]);
-    expect(html).toMatch(/<button type="submit" class="btn-primary" disabled="">Save<\/button>/);
+    expect(html).toMatch(/<button type="submit" class="btn-primary" title="Keep it as it is">Save<\/button>/);
+    expect(code("components/flights/StopDialog.tsx")).toContain("if (dirty) void save();\n          else p.onClose();");
     expect(html).toContain('class="test-btn stop-dialog-danger"');
   });
 
@@ -92,11 +93,11 @@ describe("a stop that can't change", () => {
   it("the current one: what the menu offers — Done on a perch, Skip; Retry when halted; its halt point set at once", () => {
     const perch = stop({ state: "perched", editable: false, step: { ...push, kind: "you", title: "Approve" }, icon: "you" });
     const html = render({ node: perch, def: YOU, onRemove: () => {}, onDone: () => {}, onSkip: () => {}, onToggleHalt: () => {} });
-    expect(html).toContain("<strong>Perch</strong>");
+    expect(html).toContain("<strong>Wait for me</strong>");
     expect(html).toContain("stop-dialog-perch");
-    expect(html).toContain(">Perched on you<");
-    expect(buttons(html).filter((b) => ["Remove", "Done", "Retry", "Skip", "Close"].includes(b))).toEqual(["Remove", "Done", "Skip", "Close"]);
-    expect(html).toContain("Halt point — the flight stops here");
+    expect(html).toContain(">Needs you<");
+    expect(buttons(html.replace(/<div class="rt-seg" role="group" aria-label="If it fails">.*?<\/div>/, "")).filter((b) => ["Remove", "Done", "Retry", "Skip", "Close"].includes(b))).toEqual(["Remove", "Done", "Skip", "Close"]);
+    expect(html).toContain("Halt point — the route stops here");
     const halted = render({ node: stop({ state: "halted", editable: false }), def: SHIP, onRetry: () => {}, onSkip: () => {} });
     expect(buttons(halted)).toContain("Retry");
   });
@@ -123,9 +124,9 @@ describe("a group's dialog", () => {
   const html = render({ node: group, kindOf: new Map([["ship", SHIP]]), onRename: () => {}, onOpenSub: () => {}, onRemoveSub: () => {}, onUngroup: () => {}, onSaveShelf: () => {}, onRemove: () => {} });
 
   it("its name, and what it is", () => {
-    expect(html).toContain('aria-label="Stop name"');
+    expect(html).toContain('aria-label="Group name"');
     expect(html).toContain('value="Ticket to merge"');
-    expect(html).toContain("A stop with 3 sub-steps");
+    expect(html).toContain("A group of 3 stops");
     expect(html).toContain("1 of 3 done");
   });
 
@@ -149,6 +150,13 @@ describe("the session line's wiring", () => {
   const src = code("components/flights/useSessionLine.tsx");
   const canvas = code("components/flights/FlywayCanvas.tsx");
 
+  it("a finished route's stop dialog (a loop pill's too) still offers Remove: it clears that route", () => {
+    expect(src).toContain("(flight || landedId) && open.step");
+    expect(src).toContain("if (await clearLanded()) setDialog(null);");
+    expect(src).toContain('"Remove clears the finished route."');
+    expect(src).toContain("if (!flight && landedId) return clearLanded();");
+  });
+
   it("the dialog IS the line's inspector output; no inline inspector any more", () => {
     expect(src).toContain("<StopDialog");
     expect(src).not.toContain("<StopInspector");
@@ -166,9 +174,9 @@ describe("the session line's wiring", () => {
   });
 
   it("Remove on the stop the flight is at says where the flight now waits", () => {
-    expect(removedToast("Push", false, "Merge")).toBe("Removed “Push” from the line");
-    expect(removedToast("Push", true, "Merge")).toBe("Removed “Push” — the flight is paused before “Merge”");
-    expect(removedToast("Merge", true, undefined)).toBe("Removed “Merge” — the flight is paused at the end");
+    expect(removedToast("Push", false, "Merge")).toBe("Removed “Push” from the route");
+    expect(removedToast("Push", true, "Merge")).toBe("Removed “Push” — the route is paused before “Merge”");
+    expect(removedToast("Merge", true, undefined)).toBe("Removed “Merge” — the route is paused at the end");
     expect(src).toMatch(/toast\(removedToast\(step\.title, wasHere, next\), \{\s+action: \{\s+label: "Undo"/);
   });
 

@@ -137,7 +137,7 @@ describe("the ingestion dot cannot be deformed by the global .error rule", () =>
     // The red state used to carry a bare `error` class; `.error` sets
     // min-height: 16px for error TEXT and rendered a 9x16 oval.
     expect(code("components/sidebar/AutomationBar.tsx")).toContain('"dc-error"');
-    expect(code("components/sidebar/VerifyBar.tsx")).toContain('"dc-error"');
+    // (The sidebar Verify bar is gone: Verify is a stop on the route.)
     expect(codeFilesWith('"dc-dot " + (netIssue ? "error"')).toEqual([]);
     expect(codeFilesWith('(netIssue ? "error"')).toEqual([]);
     const bars = css("components/sidebar/toolbars.css");

@@ -255,11 +255,11 @@ export function CommitDialog() {
           />
         </div>
         <div id="commit-ft-row">
-          <span className="cm-ft-label">Then fast-track to</span>
+          <span className="cm-ft-label">Then goes as far as</span>
           <div className="cm-ft-ctl">
             <FastTrackChoice
               id="commit-ft"
-              label="Then fast-track to"
+              label="Then goes as far as"
               value={lane}
               onChange={setLane}
               askFirst={askFirst}

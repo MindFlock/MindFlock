@@ -15,11 +15,14 @@ import type { FlightPlan, FlightStep, StepKindDef } from "../lib/flights";
 
 vi.mock("../api/client", () => ({ api: vi.fn(() => new Promise(() => {})), ApiError: class extends Error {} }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
+// The Takes off dialog is portaled to <body>; a string render has no DOM, so
+// the portal renders its children in place.
+vi.mock("react-dom", async (orig) => ({ ...(await orig<typeof import("react-dom")>()), createPortal: (node: unknown) => node }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { FLYWAY_MIME } = await import("../lib/skyLayout");
 const { StopShelf, savedMenuItems } = await import("../components/flights/StopShelf");
-const { savedDragData } = await import("../lib/stopCatalog");
+const { savedChainLabel, savedDragData } = await import("../lib/stopCatalog");
 const { TakeoffDialog, triggerCron } = await import("../components/flights/TakeoffDialog");
 const { NAME_MAX, checkRename, planDots, savedStopOrder } = await import("../lib/groundedLines");
 
@@ -68,12 +71,15 @@ describe("the saved stops on the shelf", () => {
   it("the Multi-step region: after the kinds and a divider, built-ins first, each draggable with its id, then All blocks…", () => {
     const ids = [...html.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1]);
     expect(ids).toEqual(["builtin:ticket", "p_mine"]);
-    expect(html).toContain('<span class="sky-stops-divider" aria-hidden="true"></span><div class="sky-stops-region" data-region="multi" role="list" aria-label="Multi-step"><span class="sky-stops-label" aria-hidden="true">Multi-step</span>');
+    expect(html).toContain('<span class="sky-stops-divider" aria-hidden="true"></span><div class="sky-stops-region" data-region="multi" role="list" aria-label="Saved routes"><span class="sky-stops-label" aria-hidden="true">Saved routes</span>');
     expect(html.indexOf('data-region="multi"')).toBeGreaterThan(html.indexOf('data-kind="ship"'));
     expect(html.indexOf('data-plan="builtin:ticket"')).toBeGreaterThan(html.indexOf('data-region="multi"'));
     expect(html.indexOf("sky-catalog-chip")).toBeGreaterThan(html.indexOf('data-plan="p_mine"'));
     expect(html).toMatch(/<span class="sky-stop-chip sky-saved-chip builtin drag-only" data-plan="builtin:ticket" draggable="true"/);
     expect(html).toContain('<span class="sky-stop-name">Mine</span>');
+    // what it is, in the house words: "Saved chain · N stops", then its stops
+    expect(html).toMatch(/data-plan="p_mine" draggable="true" title="Saved route · 3 stops: [^"\n]+ → [^"\n]+\n/);
+    expect(savedChainLabel(1)).toBe("Saved route · 1 stop");
   });
 
   it("a dot per step, a perch's gold, +N past ten", () => {
@@ -94,18 +100,18 @@ describe("the saved stops on the shelf", () => {
     ]);
   });
 
-  it("a click adds it to the focused line when the host takes it", () => {
+  it("a click adds it to the focused route when the host takes it", () => {
     const tap = render(createElement(StopShelf, { onTackPlan() {} }));
     expect(tap).toMatch(/<button type="button" class="sky-stop-chip sky-saved-chip" data-plan="p_mine"/);
-    expect(tap).toContain('aria-label="Add “Mine” to the focused line"');
+    expect(tap).toContain('aria-label="Add “Mine” to the focused route"');
   });
 
-  it("round 13 — with onPlace a click puts it on the board instead", () => {
+  it("round 13 — with onPlace a click puts it on the Sky instead", () => {
     const tap = render(createElement(StopShelf, { onPlace() {}, onTackPlan() {} }));
     expect(tap).toMatch(/<button type="button" class="sky-stop-chip sky-saved-chip" data-plan="p_mine"/);
-    expect(tap).toContain('aria-label="Put “Mine” on the board"');
-    expect(tap).toContain("Click to put it on the board, or drag it onto a line or the sky — right-click for more");
-    expect(tap).not.toContain("to the focused line");
+    expect(tap).toContain('aria-label="Put “Mine” on the Sky"');
+    expect(tap).toContain("Click to put it on the Sky, or drag it onto a route or the sky — right-click for more");
+    expect(tap).not.toContain("to the focused route");
   });
 
   it("no saved stops (or not loaded yet): no Multi-step region, one divider before All blocks…", () => {
@@ -119,9 +125,9 @@ describe("the saved stops on the shelf", () => {
 });
 
 describe("a saved stop's menu", () => {
-  it("Rename and Takes off… on every one; Reset on a built-in, Delete on yours", () => {
-    expect(savedMenuItems(TICKET).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Take off the shelf", "Reset to default"]);
-    expect(savedMenuItems(MINE).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Take off the shelf", "Delete"]);
+  it("Rename and What starts it… on every one; Reset on a built-in, Delete on yours", () => {
+    expect(savedMenuItems(TICKET).map((i) => i.label)).toEqual(["Rename", "What starts it…", "Take off the shelf", "Reset to default"]);
+    expect(savedMenuItems(MINE).map((i) => i.label)).toEqual(["Rename", "What starts it…", "Take off the shelf", "Delete"]);
     expect(savedMenuItems(MINE)[3].danger).toBe(true);
   });
 
@@ -149,9 +155,9 @@ describe("rename rules (checkRename)", () => {
   const plans = [MINE, TICKET];
   it("trimmed; empty, too long, or another's name refused; its own name fine", () => {
     expect(checkRename("  Ship it  ", plans, "p_mine")).toEqual({ ok: true, name: "Ship it" });
-    expect(checkRename("   ", plans, "p_mine")).toEqual({ ok: false, error: "A saved stop needs a name" });
+    expect(checkRename("   ", plans, "p_mine")).toEqual({ ok: false, error: "A saved route needs a name" });
     expect(checkRename("x".repeat(NAME_MAX + 1), plans, "p_mine").ok).toBe(false);
-    expect(checkRename("ticket TO merge", plans, "p_mine")).toEqual({ ok: false, error: "Another saved stop is already called “Ticket to merge”" });
+    expect(checkRename("ticket TO merge", plans, "p_mine")).toEqual({ ok: false, error: "Another saved route is already called “Ticket to merge”" });
     expect(checkRename("Mine", plans, "p_mine")).toEqual({ ok: true, name: "Mine" });
   });
   it("built-ins first, then yours", () => {
@@ -163,8 +169,8 @@ describe("Takes off… (TakeoffDialog)", () => {
   it("a Modal: its heading, the trigger chips, Save and Cancel", () => {
     const html = render(createElement(TakeoffDialog, { plan: MINE, onClose() {} }));
     expect(html).toContain('id="takeoff-dialog"');
-    expect(html).toContain("<h2>“Mine” takes off</h2>");
-    expect(html).toContain("Takes off");
+    expect(html).toContain("<h2>When “Mine” starts</h2>");
+    expect(html).toContain(">Starts<");
     expect(html).toContain('class="modal-actions"');
     expect(html).toContain(">Cancel</button>");
     expect(html).toContain(">Save</button>");
@@ -185,6 +191,6 @@ describe("Takes off… (TakeoffDialog)", () => {
     const src = code("components/flights/TakeoffDialog.tsx");
     expect(src).toContain("const saved = await savePlan(draft);");
     expect(src).toContain("setError(errMsg(err));");
-    expect(src).toContain('<Modal id="takeoff-dialog" onClose={onClose}>');
+    expect(src).toContain('<Modal id="takeoff-dialog" portal onClose={onClose}>');
   });
 });

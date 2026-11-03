@@ -694,7 +694,7 @@ def test_arm_pending_flies_at_once():
     assert f["state"] == "running" and f["start_on"] == "now"
 
 
-def test_mcp_control_flight_has_run_and_start_flight_sends_no_start_on():
+def test_mcp_control_flight_has_run_and_start_flight_sends_start_on_only_when_asked():
     assert "run" in mcp_flights.FLIGHT_OPS and "run" in mcp_flights.CONTROL_OPS
     assert "run" in mcp_flights.D_CONTROL
     assert "ready" in mcp_flights.D_STATUS
@@ -702,5 +702,8 @@ def test_mcp_control_flight_has_run_and_start_flight_sends_no_start_on():
     assert out["state"] == "ready" and out["start_on"] == "prompt"
     import inspect
 
+    # An agent may ask for start_on ("prompt" / "run": the route waits for the
+    # agent's work — docs/vision/mcp-routes.md); a plain start sends none
+    # (test_mcp_flights pins the default payload).
     src = inspect.getsource(mcp_flights.FlightTools.start_flight)
-    assert "start_on" not in src
+    assert 'args.get("start_on") in ("prompt", "run")' in src

@@ -1,7 +1,7 @@
 /** The New dialog's runs (SPEC §7.C.1). A BATCH — New opened by Intake's
  * "Start together…" — reads the box as "one thing per line, or ticket IDs",
  * shown back as a list of rows; every other opening's box is ONE prompt,
- * started as one session or, with "Auto-split into up to N" ticked, as an
+ * started as one session or, with "Let it split into up to N workers" ticked, as an
  * optional split. Plus the choices that decide how far each one is
  * fast-tracked and how they ship.
  *
@@ -87,7 +87,7 @@ export interface RunDraft {
    * (returned) when a row can't start, else POST /api/runs. */
   start(o: {
     split: boolean;
-    /** N of "Auto-split into up to N" (a split only). */
+    /** N of "Let it split into up to N workers" (a split only). */
     maxPieces?: number;
     /** The group's name (a split only; empty lets the server name it). */
     name?: string;
@@ -113,7 +113,7 @@ export function useRunDraft(o: {
   /** New was opened as a batch (Intake's "Start together…"): the box is a
    * list, one session per line or ticket. Typing never makes one. */
   batch: boolean;
-  /** The auto-split box is ticked (and the agent can take one): `text` is the
+  /** The "Let it split" box is ticked (and the agent can take one): `text` is the
    * one task its lead may split. */
   split: boolean;
   /** caps.team_runs.together — false: every group is one PR per line. */
@@ -379,7 +379,7 @@ function rememberOptionsOpen(on: boolean) {
 /** The folded Options line: what a closed fold is holding, so nothing it hides
  * is a surprise. */
 export function optionsSummary(lane: Lane, askFirst: boolean): string {
-  return "Options · Fast-track: " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
+  return "Options · Goes as far as " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
 }
 
 /** Everything under the list: the fast-track (always), the batch rows (two or
@@ -405,7 +405,7 @@ export function RunOptions({
   /** How many sessions this would start (1 for the single flow). */
   n: number;
   split: boolean;
-  /** N of "Auto-split into up to N" — what the sentence promises. */
+  /** N of "Let it split into up to N workers" — what the sentence promises. */
   maxPieces?: number;
   splitBox: React.ReactNode;
   /** The folder the typed tasks (or a split's lead) start in — only when one
@@ -435,11 +435,11 @@ export function RunOptions({
   const body = (
     <>
       <div className="rt-row rt-row-top">
-        <span className="rt-label">{many ? "Fast-track each to" : "Fast-track to"}</span>
+        <span className="rt-label">{many ? "Each goes as far as" : "Goes as far as"}</span>
         <div className="rt-ctl">
           <FastTrackChoice
             id="new-lane"
-            label={many ? "Fast-track each to" : "Fast-track to"}
+            label={many ? "Each goes as far as" : "Goes as far as"}
             value={draft.lane}
             onChange={draft.setLane}
             askFirst={draft.askFirst}
@@ -568,7 +568,7 @@ export function RunOptions({
         }}
       >
         <summary
-          title={split ? "Stays open while Auto-split is ticked" : undefined}
+          title={split ? "Stays open while “Let it split into workers” is ticked" : undefined}
           onClick={(e) => {
             // A split's rows live in here; closing it would hide what a
             // start is about to do.

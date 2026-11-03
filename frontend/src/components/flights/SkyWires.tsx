@@ -79,6 +79,13 @@ export function SkyWires({ band, wires }: SkyWiresProps): JSX.Element | null {
         <g className={"sky-band" + (band.over ? " is-over" : "") + (band.side === "in" ? " is-split" : "")}>
           <path className="sky-band-path" d={band.side === "in" ? wirePath(band.to, band.from) : wirePath(band.from, band.to)} />
           <circle className="sky-band-end" cx={band.to.x} cy={band.to.y} r={5} />
+          {band.hint && (
+            // By the pointer, below-right of it (em: screen-sized with the
+            // zoom-counter-scaled font, SkyChain.css `.sky-band-hint`).
+            <text className="sky-band-hint" x={band.to.x} y={band.to.y} dx="1.1em" dy="2.1em" data-hint="">
+              {band.hint}
+            </text>
+          )}
         </g>
       )}
     </svg>

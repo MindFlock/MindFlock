@@ -374,6 +374,10 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  /* A card opened inside a tile (a sub-session's, in its agent tile's place)
+     must not inherit the tile's centred text: the terminal reads left-aligned. */
+  text-align: left;
+  align-items: stretch;
   box-sizing: content-box;
   border-radius: 10px;
   background: var(--panel);
@@ -1096,11 +1100,12 @@
   top: 0;
   z-index: 3;
 }
-.skl-chain-wrap.has-card .sky-head > :not(.sky-tile),
-.skl-chain-wrap.has-card .sky-head .sky-tile > :not(.sky-port-out) {
+/* (Only this chain's own head: the card's Flight tab draws a chain too.) */
+.skl-chain-wrap.has-card > .sky-chain > .sky-head > :not(.sky-tile),
+.skl-chain-wrap.has-card > .sky-chain > .sky-head .sky-tile > :not(.sky-port-out) {
   visibility: hidden;
 }
-.skl-chain-wrap.has-card .sky-head .sky-tile {
+.skl-chain-wrap.has-card > .sky-chain > .sky-head .sky-tile {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -1118,4 +1123,124 @@
 .skl-chainline.skl-grounded.is-selected > .skl-bar.skl-label,
 .skl-chainline.skl-grounded.is-focused > .skl-bar.skl-label {
   opacity: 1;
+}
+
+/* --- Round 20: a session is a FRAME round its chain ------------------------
+   (docs/flights.md "Round 20" A, docs/flights-r20-frames.md). A soft rounded
+   box in the session's colour at low alpha (`.skl-frame-box`, drawn behind
+   the chain and grown to a tile dragged left of / above the origin), its
+   title bar on the frame's top edge: name · branch · state chip · where ·
+   ⋯ — the drag handle (double-click renames). The chain's first tile is the
+   agent (SkyChain.css `.sky-agent`). A stops-only chain (`.skl-grounded`)
+   has no frame. */
+
+.skl.skl-chainline.skl-frame {
+  padding: 0 16px 12px;
+  min-width: 200px;
+}
+
+.skl-frame-box {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+  border: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 38%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 5%, transparent);
+  pointer-events: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.skl-frame > .skl-chain-wrap,
+.skl-frame > .skl-ruler,
+.skl-frame > .skl-cards,
+.skl-frame > .skl-close-confirm {
+  position: relative;
+  z-index: 1;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  box-sizing: border-box;
+  width: auto;
+  max-width: none;
+  height: 30px;
+  margin: 0 -16px 12px;
+  padding: 0 6px 0 12px;
+  border: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 26%, transparent);
+  border-radius: 14px 14px 0 0;
+  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 11%, transparent);
+  outline: none;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-name {
+  flex: 0 1 auto;
+  max-width: 260px;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-menu {
+  margin-left: auto;
+}
+
+.skl-frame-bar .skl-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 200px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-state-chip {
+  flex: none;
+  height: auto;
+  padding: 1px 7px;
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.skl-frame-bar .skl-name-input {
+  width: 200px;
+  height: 22px;
+  font-size: 12.5px;
+}
+
+/* Focus, selection, a grounded chain dropped on it: the frame lights. */
+.skl-chainline.skl-frame.is-focused > .skl-frame-box,
+.skl-chainline.skl-frame:focus-visible > .skl-frame-box {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.skl-chainline.skl-frame.is-selected > .skl-frame-box {
+  border-color: var(--accent);
+}
+.skl.skl-chainline.skl-frame.is-merge-target {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+.skl-chainline.skl-frame.is-merge-target > .skl-frame-box,
+.skl-chainline.skl-frame.is-drop > .skl-frame-box {
+  border: 1.5px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: 0 0 0 calc(4px / var(--sky-z, 1)) rgba(var(--accent-rgb), 0.4);
+}
+.skl-chainline.skl-frame.is-merge-target .sky-head,
+.skl-chainline.skl-frame.is-drop .sky-head {
+  outline: none;
+}
+
+
+/* "Use these stops for every ticket from <source>": a long source name wraps
+   rather than stretching the whole menu wide. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-promote {
+  max-width: 300px;
+  white-space: normal;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }

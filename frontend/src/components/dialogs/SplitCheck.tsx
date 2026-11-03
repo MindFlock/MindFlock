@@ -1,11 +1,11 @@
-/** The New dialog's "Auto-split into up to N sessions if it's worth it" box,
+/** The New dialog's "Let it split into up to N workers if it's worth it" box,
  * on the form (page 2), under Fast-track. Off by default.
  *
  * Ticking it makes the start an OPTIONAL split run (`POST /api/runs` with
  * `split: true, split_optional: true, max_pieces: N`): MindFlock creates one
  * session in its own worktree, and its agent decides. Not worth splitting →
- * it says so (`propose_run_plan` with no pieces), the group dissolves and that
- * session just does the task. Worth it → it proposes up to N pieces with
+ * it says so (`propose_run_plan` with no workers), the group dissolves and that
+ * session just does the task. Worth it → it proposes up to N workers with
  * separate paths, the user approves the plan in its Thread tab, and the
  * server starts the workers, fences each to its paths and merges them back.
  * Nothing is pasted into an agent.
@@ -61,7 +61,7 @@ export function SplitCheck({
         title={
           ok
             ? "Its agent reads the code first and decides. Not worth it: it just does the task. " +
-              "Worth it: it proposes the pieces, each with its own paths — you approve, MindFlock " +
+              "Worth it: it proposes the workers, each with its own paths — you approve, MindFlock " +
               "starts the workers and merges them back."
             : why
         }
@@ -73,13 +73,13 @@ export function SplitCheck({
           disabled={!ok}
           onChange={(e) => onSplit(e.target.checked)}
         />
-        Auto-split into up to
+        Let it split into up to
       </label>{" "}
       {/* Outside the <label>: a click on − or + must not toggle the box. */}
-      <span className="rt-step nf-split-n" role="group" aria-label="Most sessions">
+      <span className="rt-step nf-split-n" role="group" aria-label="Most workers">
         <button
           type="button"
-          aria-label="Fewer sessions"
+          aria-label="Fewer workers"
           disabled={!ok || maxPieces <= SPLIT_MIN}
           onClick={() => onMaxPieces(maxPieces - 1)}
         >
@@ -90,18 +90,18 @@ export function SplitCheck({
         </span>
         <button
           type="button"
-          aria-label="More sessions"
+          aria-label="More workers"
           disabled={!ok || maxPieces >= limit}
           onClick={() => onMaxPieces(maxPieces + 1)}
         >
           +
         </button>
       </span>{" "}
-      <span className={ok ? "" : "muted"}>sessions if it's worth it</span>
+      <span className={ok ? "" : "muted"}>workers if it's worth it</span>
       {sug && (
         <span
           className="nf-split-pill"
-          title="Your sentence lists separate pieces. Nothing is ticked for you."
+          title="Your sentence lists separate tasks. Nothing is ticked for you."
         >
           {suggestionPill(sug)}
         </span>

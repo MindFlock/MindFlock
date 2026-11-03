@@ -31,7 +31,6 @@ import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
-import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CustomizeDialog } from "./components/customize/CustomizeDialog";
 import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
@@ -49,11 +48,13 @@ import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
+import { WhatsNew } from "./components/whatsNew/WhatsNew";
 import { CoachTourHost } from "./components/onboarding/CoachTour";
 import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
 import { FolderPickerWindow } from "./components/FolderPickerWindow";
 import { installSurfaceHash } from "./lib/surfaceHash";
+import { installVerifyRedirect } from "./lib/behaviorsFocus";
 import { installViewFlip } from "./lib/viewMode";
 import { SkyView } from "./components/flights/SkyView";
 
@@ -300,10 +301,13 @@ export default function App() {
   }, []);
 
   useEffect(() => installKeymap(host), [host]);
-  // New / Intake / Verify / Schedule / Settings (and the old #flights links)
+  // New / Intake / Schedule / Settings (and the old #flights / #verify links)
   // in the URL hash: browser
   // Back closes the open one, a link opens it (lib/surfaceHash).
   useEffect(() => installSurfaceHash(), []);
+  // Verify is a stop on the route, not a dialog: anything that still asks
+  // for the Verify dialog lands on the behaviors in the Sky.
+  useEffect(() => installVerifyRedirect(), []);
   // Grid ⇄ sky: each session's pane flies to its line and back (lib/viewMode).
   useEffect(() => installViewFlip(), []);
   const view = useUi((s) => s.view);
@@ -328,7 +332,6 @@ export default function App() {
       <IntakeDialog />
       <CustomizeDialog />
       <PromptsDialog />
-      <VerifyDialog />
       <CommitDialog />
       <PeerSessionViewer />
       <MakePrDialog />
@@ -349,6 +352,7 @@ export default function App() {
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />
+      <WhatsNew />
       {/* The coach-mark tour on screen, if any (lib/tours): last, so its card
           and ring sit above whichever dialog it walks. */}
       <CoachTourHost />

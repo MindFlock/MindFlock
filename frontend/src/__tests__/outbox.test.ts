@@ -79,10 +79,10 @@ describe("waiting rows: say it before it happens", () => {
   });
 
   it("says what happens after it, from the session's fast-track", () => {
-    expect(thenText("commit", "commit")).toBe("stays local — its fast-track ends at commit");
+    expect(thenText("commit", "commit")).toBe("stays local — it goes as far as commit");
     expect(thenText("commit", "pr")).toBe("then push, PR");
     expect(thenText("make_pr", "merge")).toBe("then merge");
-    expect(thenText("pr", "pr")).toBe("its fast-track ends at PR");
+    expect(thenText("pr", "pr")).toBe("it goes as far as PR");
   });
 
   it("chips a waiting row by kind", () => {

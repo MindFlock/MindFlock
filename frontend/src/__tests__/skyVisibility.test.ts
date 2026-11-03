@@ -38,7 +38,7 @@ const STEPS = [
   step("s3", "ship", "Push", { lane: "push" }),
   step("s4", "reviews", "Reviews settle", { quiet_minutes: 10 }),
   step("s5", "you", "Approve the merge"),
-  step("s6", "ship", "Merge", { lane: "merge" }),
+  step("s6", "ship", "Merge when green", { lane: "merge" }),
 ];
 const KINDS: StepKindDef[] = [
   { kind: "agent", label: "Agent", actor: "robot", summary: "", fields: [], default_title: "Agent" },
@@ -160,7 +160,7 @@ describe("the stops a flight has flown fold into one pill — when the line asks
     const d = diagramAt(3, { fold: true });
     expect(mainIds(d)).toEqual(["session:me", "flown", "stop:s4", "stop:s5", "stop:s6", "add"]);
     const pill = d.nodes.find((n) => n.kind === "flown")!;
-    expect(pill).toMatchObject({ id: "flown", kind: "flown", row: "main", title: "3 flown", sub: "Work the ticket … Push", state: "done", count: 3 });
+    expect(pill).toMatchObject({ id: "flown", kind: "flown", row: "main", title: "3 done", sub: "Work the ticket … Push", state: "done", count: 3 });
     expect(pill.flown).toEqual(["Work the ticket", "Commit", "Push"]);
     // The line chains through it.
     expect(edge(d, "session:me", "flown")?.kind).toBe("line");
@@ -194,7 +194,7 @@ describe("the stops a flight has flown fold into one pill — when the line asks
   it("from the row alone (no full flight cached): the numbered stops fold the same way", () => {
     const d = sessionDiagram([me(3)], "me", { foldFlown: true });
     const pill = d.nodes.find((n) => n.kind === "flown")!;
-    expect(pill.title).toBe("3 flown");
+    expect(pill.title).toBe("3 done");
     expect(pill.sub).toBe("Stop 1 … Stop 3");
     expect(mainIds(d)).toEqual(["session:me", "flown", "stop:i3", "stop:i4", "stop:i5", "add"]);
   });
@@ -290,7 +290,7 @@ describe("lineWhere: the bar's 'at <stop>'", () => {
   });
 
   it("perched on you, halted with the reason", () => {
-    expect(lineWhere(diagramAt(4, { state: "waiting_you" }))).toBe("waiting on you at Perch: Approve the merge · waits for your Done");
+    expect(lineWhere(diagramAt(4, { state: "waiting_you" }))).toBe("needs you at Approve the merge · waits for your Done");
     expect(lineWhere(diagramAt(3, { state: "halted" }))).toBe("halted at Reviews settle · Checks went red");
   });
 
@@ -300,7 +300,7 @@ describe("lineWhere: the bar's 'at <stop>'", () => {
 
   it("a fast-track rung", () => {
     const d = sessionDiagram([rowOf("me", { stage: "committed", autopilot: { depth: "pr", state: "running", step: "", reason: "", note: "" } })], "me");
-    expect(lineWhere(d)).toBe("fast-track at Push");
+    expect(lineWhere(d)).toBe("goes as far as Push");
   });
 });
 
@@ -353,16 +353,16 @@ describe("a line in the sky", () => {
     expect(labels.map(([l]) => l)).toEqual([
       "Open session",
       "Open in the grid",
-      "Show only this line",
+      "Show only this route",
       // Nothing folds by default; the line offers to fold what has flown.
       // (Round 18: a chain's tiles have one size — no box sizes.)
-      "Fold flown stops",
+      "Fold finished stops",
       "Pin here",
       "Add a stop…",
       "Close session",
     ]);
     const cls = Object.fromEntries(labels);
-    expect(cls["Fold flown stops"]).toContain("skl-mi-group");
+    expect(cls["Fold finished stops"]).toContain("skl-mi-group");
     expect(cls["Add a stop…"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("vf-menu-danger");
@@ -370,11 +370,11 @@ describe("a line in the sky", () => {
 
   it("a pinned line offers Tidy instead of Pin; an open one folds back", () => {
     const html = line({ pinned: true, open: false });
-    expect(html).toContain(">Tidy this line<");
+    expect(html).toContain(">Tidy this route<");
     expect(html).not.toContain(">Pin here<");
   });
 
-  it("round 18: no ◧ on a chain's label (its tiles have one size)", () => {
+  it("round 18: no ◧ on a route's label (its tiles have one size)", () => {
     const html = line({ size: "wide" });
     expect(html).not.toContain('class="skl-size"');
   });
@@ -432,10 +432,10 @@ describe("type and contrast", () => {
     expect(cssRule(vis, ".sky-line-slot:has(.skl-menu .vf-menu[open])")).toContain("z-index: 40");
   });
 
-  it("the intake lane: 13px cards, a bold id, a 28px Fly; the drawer: 14px bodies, 36px Done / Skip", () => {
-    expect(cssRule(lane, ".sky-lane-item-ref")).toMatch(/font-size: 13px;[\s\S]*font-weight: 700/);
-    expect(cssRule(lane, ".sky-lane-fly.fl-btn")).toContain("height: 28px");
-    expect(cssRule(lane, ".sky-lane-block-name")).toMatch(/font-size: 13px;[\s\S]*text-transform: uppercase/);
+  it("the intake lane: 13px rows, a 600 id, a 24px Run; the drawer: 14px bodies, 36px Done / Skip", () => {
+    expect(cssRule(lane, ".sky-lane-item-ref")).toMatch(/font-size: 13px;[\s\S]*font-weight: 600/);
+    expect(cssRule(lane, ".sky-lane-fly.fl-btn")).toContain("height: 24px");
+    expect(cssRule(lane, ".sky-lane-block-name")).toMatch(/font-size: 13px;[\s\S]*-webkit-line-clamp: 2/);
     expect(cssRule(vis, ".sky-drawer-body")).toContain("font-size: 14px");
     expect(cssRule(vis, ".sky-drawer .fl-you-acts .fl-btn")).toContain("min-height: 36px");
     expect(cssRule(vis, ".sky-drawer .fl-fly")).toContain("min-height: 36px");

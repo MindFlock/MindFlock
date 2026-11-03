@@ -1,8 +1,25 @@
 /* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
-   The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
+   The fields' own look (.fl-form) is StopParts.css's; the schedule row is TemplateEditor's. */
 
+/* Its own card: the Modal is only the fixed backdrop (NewSessionDialog.css
+   .modal), so without these the form floated bare over the Sky. Portaled to
+   <body> (`portal`), so no transformed sky/shelf ancestor captures it. */
 .fl-takeoff {
   width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  box-sizing: border-box;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.fl-takeoff h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
 }
 
 .fl-takeoff-lede {
@@ -37,4 +54,14 @@
 
 .fl-hook-pending {
   font-style: italic;
+}
+
+/* The Schedule branch is THE schedule editor (TemplateEditor's ScheduleWhen,
+   the one Schedule's cards show): its row, the next-runs line and the note
+   stacked under the field caption. */
+.fl-takeoff .fl-schedule-when {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }

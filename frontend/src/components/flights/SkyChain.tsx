@@ -15,13 +15,34 @@
  * counts; the preview follows the pointer at chain-local delta = client
  * delta / zoom, snapped to `GRID_SNAP` (Alt: free); release calls
  * `onNodeMove`, Esc cancels. A press without movement is a click
- * (`onSelect`; a head / child / flown tile: `onOpen`). */
+ * (`onSelect`; a head / child / flown tile: `onOpen`).
+ *
+ * Round 20 (docs/flights.md "Round 20" A, docs/flights-r20-frames.md): a
+ * session is a FRAME (SkyLine draws it round the chain), and the head tile is
+ * the session's AGENT — the agent icon, its name ("Claude", "Codex", else
+ * "Agent"), what it is doing now, its state chip, the bird. A sub-session
+ * (a `child` / `branch` node) draws as a small frame of its own: its name on
+ * the frame's bar, its agent tile inside (state, bird), and its own chain as
+ * a strip of mini stops when it flies one (`subFrames`). The graph gives each
+ * sub-frame its box (`subFrameSize` through `ChainGraphOpts.big`). */
 
-import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
-import type { BirdPerch, DiagramNode } from "../../lib/flightDiagram";
-import { leftWord, loopIdlePill, loopPill, loopPillTitle } from "../../lib/flightDiagram";
-import type { StepKindDef } from "../../lib/flights";
-import { HEAD_ID, TILE, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import type { Instance, TestPlan } from "../../api/types";
+import type { BehaviorsMark, BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
+import { leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
+import { isLive, type Flight, type StepKindDef } from "../../lib/flights";
+import { behaviorSummary, nextNeedingYou, planForSession } from "../../lib/behaviors";
+import { findPlan, useBehaviorsFocus, type BehaviorsTarget } from "../../lib/behaviorsFocus";
+import { removePlan } from "../../lib/verifyActions";
+import { useTestPlans } from "../../state/queries";
+import { BehaviorsCard } from "../behaviors/BehaviorsCard";
+import { InlineConfirm } from "../InlineConfirm";
+import { StopMenu, type SkyMenuItem } from "./StopMenu";
+import { agentName } from "../../lib/agentNames";
+import { firstLine } from "../../lib/format";
+import { windowName } from "../../lib/windowName";
+import { HEAD_ID, NODE_W, TILE, chainColor, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
 import type { Pos } from "../../lib/skyLayout";
 import { haltMark } from "../../lib/stopEditing";
 import { riskTitle } from "../../lib/stopRisk";
@@ -58,6 +79,9 @@ export interface SkyChainProps {
   onPortDown?(node: GraphNode, side: "in" | "out", e: PointerEvent<HTMLElement>): void;
   /** The trailing + clicked without a drag: the palette after the last node. */
   onPlus?(after: GraphNode | null): void;
+  /** A chain with no session (n8n's trigger button): ▶ on the left of its
+   * first stop runs it; while it runs the same button stops it. */
+  run?: { running: boolean; label: string; onRun(): void; onStop(): void } | null;
   /** Extra content in or under a tile (a perch's Done / Skip …). */
   renderInBox?(n: DiagramNode): ReactNode;
   /** A node drawn open instead of as a tile (an open sub-session's card):
@@ -73,14 +97,145 @@ export interface SkyChainProps {
   /** A loop pill pressed down (before its click): the host may start a
    * re-aim drag from here (`onLoopTo` on the classic canvas). */
   onPillDown?(via: DiagramNode, e: PointerEvent<HTMLElement>): void;
+  /** Round 20: each sub-session's frame (by its title): its agent's name and
+   * its own chain's stops (`subFramesOf`). Without one, the frame still draws
+   * ("Agent", no strip). */
+  subFrames?: Readonly<Record<string, SubFrame>>;
+}
+
+// --- Round 20: agents and frames -------------------------------------------------
+
+/** The agent's name on its tile: the provider's product name, short
+ * ("Claude", "Codex"), else "Agent". */
+export function agentTitle(provider?: string | null, program?: string | null): string {
+  const p = String(provider || "").trim();
+  // A session with no agent (a plain shell — the default session when no stop
+  // needs one): it is a place, the tile says "Shell".
+  const shell = (s: string) => /^(bash|zsh|sh|fish|dash|ksh)$/.test(s.trim().split(/\s+/)[0]?.split("/").pop() || "");
+  if (shell(String(program || "")) || shell(p)) return "Shell";
+  return p ? agentName(p).replace(/ Code$/, "") : "Agent";
+}
+
+/** What the agent is doing now (the agent tile's summary): the task
+ * headline (read from its newest meaningful prompt), else the create task,
+ * else the last prompt — one line. */
+export function agentDoing(row: Pick<Instance, "task_headline" | "last_prompt" | "task"> | null | undefined): string {
+  if (!row) return "";
+  return firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "");
+}
+
+/** One stop of a sub-session's own chain, drawn small inside its frame. */
+export interface MiniStop {
+  id: string;
+  title: string;
+  state: string;
+  icon: string;
+}
+
+export interface SubFrame {
+  /** The agent tile's title (`agentTitle`). */
+  agent: string;
+  /** Its own chain's stops (empty: it flies none). */
+  stops: MiniStop[];
+}
+
+/** A sub-frame's bar (its name), the gap under it, a mini stop's square and
+ * the strip it sits in, and how many mini stops show before "+n". */
+export const SUB_BAR = 22;
+export const SUB_PAD = 8;
+export const MINI = 18;
+export const MINI_GAP = 6;
+export const MINI_STRIP = 30;
+export const MINI_MAX = 8;
+/** A sub-frame without a chain: its bar, the agent tile, name, summary, chip. */
+export const SUB_W = NODE_W + 24;
+export const SUB_H = SUB_BAR + SUB_PAD + 152;
+
+/** The box a sub-session's frame takes on its parent's chain (plane px): the
+ * room for its agent tile, and for its own chain's strip when it flies one. */
+export function subFrameSize(sf?: SubFrame | null): { w: number; h: number } {
+  const n = Math.min(sf?.stops.length || 0, MINI_MAX + 1);
+  if (!n) return { w: SUB_W, h: SUB_H };
+  return { w: Math.max(SUB_W, 2 * SUB_PAD + n * MINI + (n - 1) * MINI_GAP), h: SUB_H + MINI_STRIP };
+}
+
+const MINI_KINDS: ReadonlySet<string> = new Set(["stop", "group", "rung", "flown"]);
+
+/** Every sub-session's frame under `parent` (rows from /api/instances): its
+ * agent's name and its own chain (lib/flightDiagram `sessionDiagram` of the
+ * child alone: its flight's stops, or its fast-track's rungs). */
+export function subFramesOf(rows: readonly Instance[], parent: string, flights?: readonly Flight[] | null, kinds?: readonly StepKindDef[] | null): Record<string, SubFrame> {
+  const out: Record<string, SubFrame> = {};
+  for (const k of rows) {
+    if (k.parent !== parent || k.title === parent) continue;
+    const d = sessionDiagram(rows, k.title, { family: false, flights: flights || undefined, kinds: kinds || undefined });
+    const stops = d.mode === "none" ? [] : d.nodes.filter((n) => n.row === "main" && MINI_KINDS.has(n.kind)).map((n) => ({ id: n.id, title: n.title, state: n.state, icon: n.perch ? "perch" : n.icon }));
+    out[k.title] = { agent: agentTitle(k.provider || k.program, k.program), stops };
+  }
+  return out;
+}
+
+/** Every sub-session node's box for `ChainGraphOpts.big` (by node id): its
+ * frame, or `open[title]` (an open card's box) when it is open. */
+export function subFrameBoxes(nodes: readonly DiagramNode[], frames: Readonly<Record<string, SubFrame>>, open: Readonly<Record<string, { w: number; h: number }>> = {}): Record<string, { w: number; h: number }> {
+  const out: Record<string, { w: number; h: number }> = {};
+  for (const n of nodes) {
+    if (!isSubSession(n)) continue;
+    out[n.id] = open[n.session!] || subFrameSize(frames[n.session!]);
+  }
+  return out;
+}
+
+/** Round 20: a session's sub-sessions hang from its AGENT tile (the dashed
+ * bus from the agent to each small frame), not from wherever its flight is:
+ * every `below` child's split becomes the session node, and the line it was
+ * hung across (the stop it hung at → the next) is drawn straight again. A
+ * worker spawned at one of the flight's stops (`branch`) keeps its stop —
+ * that is where it came from. A rendering view: lib/flightDiagram's own
+ * diagram is untouched. */
+export function hangFromAgent(d: Diagram): Diagram {
+  const me = d.nodes.find((n) => n.kind === "session" && n.row === "main");
+  const below = d.nodes.filter((n) => n.kind === "child" && n.row === "below" && n.branch && n.branch.from !== me?.id);
+  if (!me || !below.length) return d;
+  const moved = new Set(below.map((n) => n.id));
+  const hang = below[0].branch!.from;
+  const next = below[0].branch!.to;
+  const nodes = d.nodes.map((n) => (moved.has(n.id) ? { ...n, branch: { ...n.branch!, from: me.id } } : n));
+  const edges: DiagramEdge[] = d.edges.map((e) => (e.kind === "branch" && moved.has(e.to) ? { ...e, from: me.id } : e));
+  const nextNode = d.nodes.find((n) => n.id === next);
+  if (nextNode && !edges.some((e) => e.from === hang && e.to === next && (e.kind === "line" || e.kind === "add"))) edges.push({ from: hang, to: next, kind: nextNode.kind === "add" ? "add" : "line" });
+  return { ...d, nodes, edges };
+}
+
+/** A sub-session (or a worker branched off a stop): a small frame. */
+export const isSubSession = (n: Pick<DiagramNode, "kind" | "session">) => (n.kind === "child" || n.kind === "branch") && !!n.session;
+
+const MINI_WORD: Record<string, string> = { done: "done", current: "running now", perched: "needs you", halted: "halted", paused: "paused", failed: "failed", skipped: "skipped", pending: "to come" };
+
+/** A sub-session's own chain, small: one square per stop, a line through them. */
+function MiniChain({ stops }: { stops: readonly MiniStop[] }): JSX.Element {
+  const shown = stops.length > MINI_MAX + 1 ? stops.slice(0, MINI_MAX) : stops;
+  const more = stops.length - shown.length;
+  const at = stops.findIndex((s) => s.state === "current" || s.state === "perched" || s.state === "halted" || s.state === "paused");
+  const said = stops.length + (stops.length === 1 ? " stop" : " stops") + (at >= 0 ? ", at “" + stops[at].title + "”" : "");
+  return (
+    <div className="sky-mini-chain" role="img" aria-label={"Its own route: " + said} title={stops.map((s) => s.title + (MINI_WORD[s.state] ? " — " + MINI_WORD[s.state] : "")).join("\n")}>
+      {shown.map((s) => (
+        <span key={s.id} className={"sky-mini st-" + s.state} data-mini={s.id}>
+          <TileIcon kind={s.icon} size={11} />
+        </span>
+      ))}
+      {more > 0 && <span className="sky-mini sky-mini-more">+{more}</span>}
+    </div>
+  );
 }
 
 const DRAG_MIN = 4;
 
 const STATE_WORD: Record<string, string> = {
   done: "done",
-  current: "flying now",
-  perched: "waiting on you",
+  current: "running now",
+  perched: "needs you",
   halted: "halted",
   paused: "paused",
   pending: "to come",
@@ -102,10 +257,16 @@ export function tileSub(n: DiagramNode): string {
 
 /** What a screen reader says for a tile. */
 export function tileLabel(n: DiagramNode, head = false): string {
-  if (head) return (n.title || "Session") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
+  if (head) return (n.title || "Agent") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
   const word = STATE_WORD[n.state] ?? "";
   const sub = tileSub(n);
-  return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
+  return n.title + (word ? " — " + word : "") + (n.by === "agent" ? " by the agent" : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
+}
+
+/** What a screen reader says for the Behaviors tile (or the Verify stop
+ * standing in for it). */
+export function behaviorsLabel(n: Pick<DiagramNode, "kind" | "title">, bh: BehaviorsMark): string {
+  return (n.kind === "behaviors" ? "Behaviors" : n.title + ", the behaviors") + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
 }
 
 interface Drag {
@@ -136,7 +297,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
 
   const activate = (n: GraphNode) => {
     if (justDragged.current) return;
-    if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
+    if (n.id !== HEAD_ID && n.node.behaviors) p.onOpen?.(n.node);
+    else if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
     else p.onOpen?.(n.node);
   };
   const edit = (n: GraphNode) => (p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node));
@@ -217,7 +379,12 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const live = side === "in" ? n.inPort : n.outPort;
     if (!live && !wired) return null;
     const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
-    const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : "Drag from here to wire it to a stop, another chain or empty sky";
+    const title =
+      side === "in"
+        ? "Drag from here to pull this stop and the ones after it off into a route of their own"
+        : n.id === HEAD_ID
+          ? "Drag from here to wire it to a stop, another route or empty sky"
+          : "Drag from here: drop on an earlier stop or the agent to loop, on empty sky to add a stop";
     return live ? (
       <span className={cls} data-port={side} data-node={n.id} title={title} onPointerDown={(e) => portDown(e, n, side)} />
     ) : (
@@ -238,12 +405,23 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
   const tile = (n: GraphNode) => {
     const isHead = n.id === HEAD_ID;
     const dn = n.node;
+    // The head of a session's chain is its AGENT (round 20); a sub-session is
+    // a small frame round its own agent tile.
+    const isAgent = isHead && head.kind === "session";
+    const sub_ = !isHead && isSubSession(dn);
+    const frame = sub_ ? p.subFrames?.[dn.session!] : undefined;
     const fam = nodeFamily(dn, p.kinds);
     const halt = isHead ? null : haltMark(dn);
-    const sub = isHead ? head.sub : tileSub(dn);
+    // The Behaviors tile, or the Verify stop standing in for it (docs/behaviors.md §1).
+    const bh = isHead ? undefined : dn.behaviors;
+    const bhTile = !isHead && dn.kind === "behaviors";
+    const sub = isHead ? head.sub : bh ? bh.short : tileSub(dn);
     const cls = [
       "sky-node",
       isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
+      isAgent ? "sky-agent" : "",
+      sub_ ? "sky-subframe" : "",
+      bh ? "sky-behaviors is-" + bh.tone : "",
       "st-" + dn.state,
       "sky-fam-" + fam,
       // A session-like tile (the head, a sub-session, a worker) wears its
@@ -251,17 +429,25 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       dn.chip ? "tone-" + dn.chip.tone : "",
       dn.kind === "group" ? "is-group" : "",
       dn.perch ? "is-perch" : "",
+      // Its failure is with the agent (its return wire is lit).
+      !isHead && dn.ret?.shown === "fixing" && dn.state === "current" ? "is-fixing" : "",
       n.inPort || n.outPort ? "" : "is-fixed",
       isSel(n) ? "is-selected" : "",
       p.highlighted?.has(n.id) || (isHead && headNodeId && p.highlighted?.has(headNodeId)) ? "is-highlighted" : "",
       p.targets?.has(n.id) ? "is-target" : "",
+      // The agent tile as a wire's drop (a Loop back to the agent).
+      isAgent && p.targets?.has(n.id) ? "is-agent-target" : "",
       p.over === n.id ? "is-over" : "",
       drag?.live && drag.id === n.id ? "is-dragging" : "",
       draggable(n) ? "is-draggable" : "",
     ]
       .filter(Boolean)
       .join(" ");
-    const said = tileLabel(isHead ? { ...dn, title: head.title, sub: head.sub } : dn, isHead);
+    const said = sub_
+      ? "Sub-session " + dn.title + " — its agent" + (frame ? " (" + frame.agent + ")" : "") + (dn.chip ? " " + dn.chip.label.toLowerCase() : "") + (sub ? ", " + sub : "")
+      : bh
+        ? behaviorsLabel(dn, bh)
+        : (isAgent ? "Agent: " : "") + tileLabel(isHead ? { ...dn, title: head.title, sub: head.sub } : dn, isHead);
     const opened = !isHead && p.renderOpen ? p.renderOpen(dn) : null;
     if (opened)
       return (
@@ -279,8 +465,15 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         data-diagram-node={dn.id}
         aria-label={said}
         aria-current={isSel(n) ? "true" : undefined}
-        title={isHead ? undefined : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title}
-        style={{ transform: `translate(${n.x}px, ${n.y}px)`, width: n.w, height: n.h, ...(isHead ? { ["--sky-head-color" as string]: head.color } : {}) }}
+        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title}
+        style={{
+          transform: `translate(${n.x}px, ${n.y}px)`,
+          width: n.w,
+          height: n.h,
+          ...(isHead ? { ["--sky-head-color" as string]: head.color } : {}),
+          ...(sub_ ? { ["--sky-sub-color" as string]: chainColor(dn.session) } : {}),
+        }}
+        data-agent={isAgent || sub_ ? "" : undefined}
         onPointerDown={(e) => onDown(e, n)}
         onPointerMove={onMove}
         onPointerUp={onUp}
@@ -303,11 +496,21 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           p.onMenu(dn, { clientX: e.clientX, clientY: e.clientY });
         }}
       >
+        {sub_ && (
+          <div className="sky-subframe-bar" title={dn.title}>
+            {dn.title}
+          </div>
+        )}
         <div className="sky-tile" style={{ width: TILE, height: TILE }}>
           <span className="sky-tile-icon">
-            <TileIcon kind={isHead ? (head.kind === "trigger" ? "handoff" : "session") : dn.perch ? "perch" : dn.icon} size={28} />
+            <TileIcon kind={isAgent || sub_ ? "agent" : isHead ? (head.kind === "trigger" ? "handoff" : "session") : bh ? "behaviors" : dn.perch ? "perch" : dn.icon} size={28} />
           </span>
           {isHead && head.kind !== "none" && <span className="sky-head-dot" aria-hidden="true" />}
+          {bhTile && bh && (bh.tone === "ok" || bh.tone === "bad") && (
+            <span className={"sky-badge " + (bh.tone === "ok" ? "sky-badge-done" : "sky-badge-failed")} aria-hidden="true">
+              {bh.tone === "ok" ? "✓" : "!"}
+            </span>
+          )}
           {!isHead && dn.state === "done" && (
             <span className="sky-badge sky-badge-done" aria-hidden="true">
               ✓
@@ -328,8 +531,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
               if
             </span>
           )}
-          {port(n, "in", wiredIn.has(n.id))}
-          {port(n, "out", wiredOut.has(n.id))}
+          {/* A sub-frame's bus lands on its frame, not on a port. */}
+          {!sub_ && port(n, "in", wiredIn.has(n.id))}
+          {!sub_ && port(n, "out", wiredOut.has(n.id))}
           {!isHead && dn.risk && dn.risk.length > 0 && (
             <span className="sky-risk" title={riskTitle(dn.risk)} role="img" aria-label={"Touches: " + riskTitle(dn.risk)} data-risk={dn.risk.join(" ")}>
               {dn.risk.map((t) => (
@@ -338,13 +542,38 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
             </span>
           )}
         </div>
-        <div className="sky-node-title">{isHead ? head.title : dn.title}</div>
+        <div className="sky-node-title">{isHead ? head.title : sub_ ? frame?.agent || "Agent" : dn.title}</div>
         {sub && <div className="sky-node-sub">{sub}</div>}
+        {!isHead && dn.by === "agent" && (
+          // A Ship stop the agent did itself: who did it, under the receipt.
+          <div className="sky-node-by" title="The agent did this itself — the route found it already done">
+            <TileIcon kind="agent" size={11} /> by the agent
+          </div>
+        )}
         {!isHead && dn.until && (dn.state === "current" || dn.state === "paused" || dn.state === "halted") ? <Countdown until={dn.until} /> : null}
         {isHead ? (
           <div className="sky-head-extra" data-no-drag>
             {p.renderHead ? p.renderHead() : dn.chip ? <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span> : null}
           </div>
+        ) : bhTile ? (
+          // Derived, not a stop: no Done / Skip, only its ⋯ (its right-click too).
+          p.onMenu && (
+            <div className="sky-node-extra" data-no-drag>
+              <button
+                type="button"
+                className="fl-icon-btn sky-bh-more"
+                aria-label="Actions for these behaviors"
+                title="What you can do with these behaviors"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  p.onMenu?.(dn, { clientX: r.left, clientY: r.bottom });
+                }}
+              >
+                ⋯
+              </button>
+            </div>
+          )
         ) : dn.chip && !isStopish(dn) ? (
           // A sub-session / worker: its state, always (the owner: "I should be
           // able to see the states of the sub-sessions, always").
@@ -354,8 +583,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         ) : (
           p.renderInBox && <div className="sky-node-extra" data-no-drag>{p.renderInBox(dn)}</div>
         )}
+        {sub_ && frame && frame.stops.length > 0 && <MiniChain stops={frame.stops} />}
         {!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && (
-          <BirdMarker tone={dn.chip.tone === "working" ? "working" : "you"} x={n.w / 2} y={0} size={18} label={dn.title + " — " + dn.chip.label} className="sky-kid-bird" />
+          <BirdMarker tone={dn.chip.tone === "working" ? "working" : "you"} x={sub_ ? 8 + TILE / 2 : n.w / 2} y={sub_ ? SUB_BAR + SUB_PAD : 0} size={18} label={dn.title + " — " + dn.chip.label} className="sky-kid-bird" />
         )}
       </div>
     );
@@ -364,28 +594,32 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
   const wireClass = (w: GraphWire) => {
     const to = byId.get(w.to)?.node;
     const live = (w.kind === "line" || w.kind === "head" || w.kind === "fan") && to && (to.state === "current" || to.state === "perched");
-    return ["sky-wire", "sky-wire-" + w.kind, w.done ? "is-done" : "", live ? "is-live" : "", w.loop ? "sky-loop-" + w.loop.state : ""].filter(Boolean).join(" ");
+    // The bus down to a sub-session's frame is dashed (round 20).
+    const bus = w.kind === "fan" && !!to && isSubSession(to) && isBranchRow(to);
+    return ["sky-wire", "sky-wire-" + w.kind, bus ? "sky-wire-bus" : "", w.done ? "is-done" : "", live ? "is-live" : "", w.loop ? "sky-loop-" + w.loop.state : "", w.ret ? "sky-ret-" + w.ret.shown : ""].filter(Boolean).join(" ");
   };
   const tinted = (w: GraphWire) => w.kind === "line" || w.kind === "head";
 
   const b = g.bbox;
   const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
-  const socket = head.kind === "none" && firstStop ? inPortOf(firstStop) : null;
+  const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
 
   return (
     <div
-      className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "")}
+      className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "") + (p.targets && p.targets.size ? " is-wiring" : "")}
       style={{ position: "relative", width: Math.max(0, b.x + b.w), height: Math.max(0, b.y + b.h), ["--sky-chain-color" as string]: head.color }}
       data-chain={g.key}
       data-flight={g.flightId || undefined}
       data-head={head.kind}
       role="list"
-      aria-label={(head.kind === "session" ? "Chain in " + head.title : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it"}
+      aria-label={(head.kind === "session" ? "Route in " + (head.session ? windowName(head.session) : head.title) : head.kind === "trigger" ? head.title : "Route with no session yet") + " — drag a stop to move it, drag a port to wire it"}
     >
       <svg className="sky-wires" aria-hidden="true" focusable="false" style={{ left: b.x, top: b.y }} width={Math.max(1, b.w)} height={Math.max(1, b.h)} viewBox={`${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`}>
         {g.wires.map((w) => (
           <path key={w.id} className={wireClass(w)} d={w.d} data-wire={w.kind} data-from={w.from} data-to={w.to} style={tinted(w) ? { stroke: head.color } : undefined} />
         ))}
+        {/* A return wire (a Loop, a stop going back to the agent) ends in an arrowhead. */}
+        {g.wires.map((w) => (w.arrow ? <path key={"arrow:" + w.id} className={wireClass(w) + " sky-wire-arrow"} d={w.arrow} data-arrow={w.id} /> : null))}
         {socket && <path className="sky-wire sky-wire-socket" d={`M ${socket.x - 16} ${socket.y} H ${socket.x}`} />}
       </svg>
       {all.map(tile)}
@@ -401,6 +635,31 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           title="Wire a session's out port here to run it"
         />
       )}
+      {p.run && firstStop && (() => {
+        const at = inPortOf(firstStop);
+        const r = p.run;
+        return (
+          <button
+            type="button"
+            className={"sky-run fl-icon-btn" + (r.running ? " is-running" : "")}
+            // One affordance, not two circles: the ▶ sits where the empty
+            // socket does (the socket shows again only while something is
+            // dragged that could land there — SkyChain.css `.has-run`).
+            style={{ left: at.x - 24, top: at.y }}
+            data-no-drag
+            aria-label={r.label}
+            title={r.label}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (r.running) r.onStop();
+              else r.onRun();
+            }}
+          >
+            {r.running ? "■" : "▶"}
+          </button>
+        );
+      })()}
       {g.plus && (
         <button
           type="button"
@@ -496,7 +755,25 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           </span>
         );
       })}
-      {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
+      {g.wires.map((w) =>
+        w.label ? (
+          // The words on a return wire: why it goes back (quiet), or the real
+          // reason and round while the agent fixes it. Plane-sized, inside its
+          // own run (lib/skyGraph `wireLabel`).
+          <span
+            key={"label:" + w.id}
+            className={"sky-ret-label sky-ret-label-" + w.kind + (w.ret ? " sky-ret-" + w.ret.shown : w.loop ? " sky-loop-" + w.loop.state : "")}
+            style={{ left: w.label.at.x, top: w.label.at.y, maxWidth: w.label.w }}
+            data-label={w.id}
+            title={w.label.title}
+            aria-label={w.label.title}
+            role="img"
+          >
+            {w.label.text}
+          </span>
+        ) : null,
+      )}
+      {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The route is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
     </div>
   );
 }
@@ -515,4 +792,202 @@ function Countdown({ until }: { until: number }): JSX.Element {
       ⏱ {leftWord(until - now)}
     </div>
   );
+}
+
+// --- The Behaviors tile (docs/behaviors.md §1) -------------------------------------
+
+/** The open Behaviors card's box on the chain (plane px): its width, and a
+ * height that grows with its rows up to a cap (the card scrolls past it). */
+export const BH_CARD_W = 380;
+export const BH_CARD_MIN_H = 220;
+export const BH_CARD_MAX_H = 560;
+/** The "Delete these behaviors?" question, asked in the tile's place. */
+export const BH_ASK_W = 300;
+export const BH_ASK_H = 170;
+
+/** The card's head + foot, and one row (its text, expect line, who checks it
+ * and its answer buttons or the agent's note), as drawn at BH_CARD_W:
+ * measured rows run 89–108 px, so a smaller guess hid all but the first. */
+const BH_CARD_CHROME_H = 132;
+const BH_ROW_H = 100;
+export function behaviorsCardBox(plan: Pick<TestPlan, "steps"> | null | undefined): { w: number; h: number } {
+  const rows = (plan?.steps || []).length;
+  return { w: BH_CARD_W, h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, BH_CARD_CHROME_H + rows * BH_ROW_H)) };
+}
+
+/** A session's behaviors as its tile draws them, or null (no behaviors). */
+export function behaviorsMarkOf(plan: TestPlan | null | undefined): BehaviorsMark | null {
+  if (!plan) return null;
+  const s = behaviorSummary(plan);
+  return { planId: plan.id, short: s.short, status: s.status, tone: s.tone };
+}
+
+/** The frame's tone class (docs/behaviors.md §1): a thin red top edge when a
+ * behavior failed, the Needs-you mark when one waits on you. */
+export function behaviorsFrameClass(mark: BehaviorsMark | null | undefined): string {
+  return mark?.tone === "bad" ? "is-bh-bad" : mark?.tone === "you" ? "is-bh-you" : "";
+}
+
+/** Does a Behaviors focus request (`openBehaviors`) name this plan? Its plan
+ * id / title / branch through `findPlan`, Alt+V's `next` through
+ * `nextNeedingYou`, or the session's own title. */
+export function requestNamesPlan(plans: readonly TestPlan[], req: BehaviorsTarget | null | undefined, plan: TestPlan, title: string): boolean {
+  if (!req) return false;
+  const t = findPlan(plans, req) || (req.next ? nextNeedingYou(plans) : null);
+  return t?.id === plan.id || (!!req.title && req.title === title);
+}
+
+export interface BehaviorsTile {
+  plan: TestPlan | null;
+  mark: BehaviorsMark | null;
+  /** The diagram with the tile on it (lib/flightDiagram `withBehaviors`). */
+  apply(d: Diagram): Diagram;
+  /** The open card's (or question's) box, by node id — merge into
+   * `ChainGraphOpts.big` so the chain makes room. */
+  big(d: Diagram): Record<string, { w: number; h: number }>;
+  /** Handle a tile's click (the tile, or the Verify stop standing in for
+   * it): true when it was the Behaviors tile's. */
+  onOpen(n: DiagramNode): boolean;
+  /** Its right-click / ⋯: true when it was the Behaviors tile's. */
+  onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): boolean;
+  /** The open card in the tile's place (SkyChain `renderOpen`), else null. */
+  renderOpen(n: DiagramNode): ReactNode;
+  /** The ⋯ menu's portal (render it beside the chain). */
+  menu: ReactNode;
+  /** The frame's tone class (`behaviorsFrameClass`). */
+  frameClass: string;
+  open: boolean;
+}
+
+/** The Behaviors tile of one session's chain: its plan (`planForSession`
+ * over `useTestPlans`), the tile on the diagram, the BehaviorsCard opened in
+ * its place (Esc / × folds it back; recorded in `useBehaviorsFocus.openPlan`),
+ * its ⋯ ("Delete these behaviors", asked in place). `listen`: open the card
+ * when a focus request names this plan (the Sky; the request itself is
+ * SkyView's to take). */
+export function useBehaviorsTile(
+  title: string,
+  row: Pick<Instance, "title" | "branch" | "repo"> | null | undefined,
+  opts: { flight?: Flight | null; listen?: boolean } = {}
+): BehaviorsTile {
+  const plans = useTestPlans().data?.plans;
+  const plan = useMemo(() => (row ? planForSession(plans || [], row) : null), [plans, row]);
+  const mark = useMemo(() => behaviorsMarkOf(plan), [plan]);
+  const [mode, setMode] = useState<null | "card" | "ask">(null);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const planId = plan?.id || "";
+
+  // Behaviors gone (deleted, the session's branch moved on): the card goes too.
+  useEffect(() => {
+    if (!planId && mode) setMode(null);
+  }, [planId, mode]);
+
+  // The open card is the Sky's to know (the board, the shell read it).
+  useEffect(() => {
+    if (!planId) return;
+    const st = useBehaviorsFocus.getState();
+    if (mode === "card") st.setOpenPlan(planId);
+    else if (st.openPlan === planId) st.setOpenPlan("");
+  }, [mode, planId]);
+  useEffect(
+    () => () => {
+      const st = useBehaviorsFocus.getState();
+      if (planId && st.openPlan === planId) st.setOpenPlan("");
+    },
+    [planId]
+  );
+
+  // A request (openBehaviors) naming this plan opens its card. Each request
+  // carries a fresh `n`; SkyView takes it once the camera has flown.
+  const req = useBehaviorsFocus((st) => st.request);
+  const seen = useRef(0);
+  useEffect(() => {
+    if (!opts.listen || !req || !plan || req.n === seen.current) return;
+    seen.current = req.n;
+    if (requestNamesPlan(plans || [], req, plan, title)) setMode("card");
+  }, [opts.listen, req, plan, plans, title]);
+
+  const close = () => setMode(null);
+  const apply = useCallback((d: Diagram) => withBehaviors(d, mark), [mark]);
+  const big = useCallback(
+    (d: Diagram): Record<string, { w: number; h: number }> => {
+      const host = mode && plan ? d.nodes.find((n) => !!n.behaviors) : undefined;
+      if (!host) return {};
+      return { [host.id]: mode === "ask" ? { w: BH_ASK_W, h: BH_ASK_H } : behaviorsCardBox(plan) };
+    },
+    [mode, plan]
+  );
+  const onOpen = (n: DiagramNode) => {
+    if (!n.behaviors || !plan) return false;
+    setMode((m) => (m ? null : "card"));
+    return true;
+  };
+  const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => {
+    // A Verify stop keeps its own stop menu; the tile's ⋯ is the tile's.
+    if (n.kind !== "behaviors" || !plan) return false;
+    setMenuAt({ x: at.clientX, y: at.clientY });
+    return true;
+  };
+  const flightStep = (n: DiagramNode) => {
+    const f = opts.flight;
+    if (!f || !n.step || n.step.kind !== "verify" || !isLive(f) || f.steps[f.cursor]?.id !== n.step.id) return null;
+    return { flightId: f.id, stepId: n.step.id };
+  };
+  const renderOpen = (n: DiagramNode): ReactNode => {
+    if (!mode || !plan || !n.behaviors) return null;
+    const esc = (e: KeyboardEvent<HTMLDivElement>) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    };
+    if (mode === "ask")
+      return (
+        <div className="sky-bh-open sky-bh-ask sky-own-scroll" data-no-drag data-plan={plan.id} onKeyDown={esc}>
+          <InlineConfirm
+            title="Delete these behaviors?"
+            body={"What “" + title + "” should do in real use, and every answer to it, go for good."}
+            confirmLabel="Delete these behaviors"
+            cancelLabel="Keep them"
+            busy={busy}
+            onConfirm={() => {
+              setBusy(true);
+              void removePlan(plan, { onGone: close }).finally(() => setBusy(false));
+            }}
+            onCancel={close}
+          />
+        </div>
+      );
+    return (
+      <div className="sky-bh-open sky-own-scroll" data-no-drag data-plan={plan.id} onKeyDown={esc}>
+        <BehaviorsCard plan={plan} onClose={close} flightStep={flightStep(n)} />
+      </div>
+    );
+  };
+  const items: SkyMenuItem[] = [
+    { key: "open", label: mode === "card" ? "Fold the behaviors back" : "Open the behaviors", title: mode === "card" ? "Back to the stop" : "Read, answer and edit them here, in the tile's place" },
+    { key: "delete" as SkyMenuItem["key"], label: "Delete these behaviors", title: "They go for good, with every answer to them", danger: true },
+  ];
+  const menu =
+    menuAt && plan && typeof document !== "undefined"
+      ? createPortal(
+          <div className="sky-chain-menu" style={{ position: "fixed", left: 0, top: 0, width: 0, height: 0, zIndex: 80, ["--sky-z" as string]: 1 }}>
+            <StopMenu
+              x={menuAt.x}
+              y={menuAt.y}
+              label="Behaviors — what you can do"
+              items={items}
+              onPick={(key) => {
+                setMenuAt(null);
+                if (key === "open") setMode((m) => (m === "card" ? null : "card"));
+                else if ((key as string) === "delete") setMode("ask");
+              }}
+              onClose={() => setMenuAt(null)}
+            />
+          </div>,
+          document.body
+        )
+      : null;
+  return { plan, mark, apply, big, onOpen, onMenu, renderOpen, menu, frameClass: behaviorsFrameClass(mark), open: mode === "card" };
 }

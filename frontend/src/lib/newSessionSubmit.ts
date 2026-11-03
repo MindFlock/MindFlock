@@ -111,7 +111,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
     setError("");
     if (splitOn && !prompt.trim()) {
       setPromptOpen(true);
-      fail("Auto-split needs a task — write it in the Task below, or untick Auto-split.");
+      fail("Splitting into workers needs a task — write it in the Task below, or untick “Let it split”.");
       return;
     }
     const r = await draft.start({
@@ -136,7 +136,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
     else if (n >= 2) {
       const c = Math.min(n, draft.concurrency);
       toast(
-        `Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · fast-track ${draft.lane === "leave" ? "off" : "→ " + LANE_LABEL[draft.lane]}`,
+        `Started “${name}” — ${n} sessions, ${c === n ? "all at once" : c + " at a time"} · goes as far as ${LANE_LABEL[draft.lane]}`,
         { duration: 6000 }
       );
     } else toast("Starting it — the session appears in the rail", { duration: 4000 });

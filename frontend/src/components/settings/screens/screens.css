@@ -242,7 +242,7 @@
 }
 
 /* A switch row's description drawn as the NEXT sibling rather than inside the
-   row ("Scheduled refresh", "Ticket sessions in MindFlock"): it belongs to the
+   row ("Scheduled refresh"): it belongs to the
    switch, so it sits at the in-field gap, not a whole rhythm away where it
    would read as a separate item. */
 :is(.set-screen, .set-screen > section, .mobile-body) > .set-switch-row + .set-hint {

@@ -1,8 +1,10 @@
 # Architecture
 
 MindFlock is three cooperating layers over one core idea: **a session = a git
-workspace + a tmux session running a coding agent**, all observable and steerable
-from a browser.
+worktree + a tmux session running a coding agent**, all observable and steerable
+from a browser. In the UI's words (docs/vocabulary.md): each session is one agent
+working on its own branch, its **route** is the stops the work goes through until
+it is merged, and the **Sky** shows every route at once and what needs you.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐

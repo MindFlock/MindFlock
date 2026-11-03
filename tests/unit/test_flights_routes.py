@@ -58,7 +58,7 @@ def test_kinds():
     assert lane == {
         "name": "lane",
         "type": "select",
-        "label": "How far",
+        "label": "Goes as far as",
         "options": ["commit", "push", "pr", "merge"],
         "default": "push",
     }
@@ -298,7 +298,7 @@ def test_start_with_steps_and_no_plan():
     assert body["absorbed"] == []
     assert (f["plan_id"], f["plan_name"], f["session"]) == (
         "adhoc",
-        "Flight on sess",
+        "Route on sess",
         "sess",
     )
     assert [s["id"] for s in f["steps"]] == ["s1", "s2"] and f["cursor"] == 1

@@ -22,6 +22,7 @@ from .base import (
 )
 from .claude import ClaudeProvider
 from .codex import CodexProvider
+from .copilot import CopilotProvider
 from .config import BUILTIN_CONFIGS, load_user_configs
 from .generic import GenericProvider
 
@@ -34,7 +35,11 @@ from . import effort, launch_script, local_models, mcp_attach  # noqa: E402
 # Bundled config names whose behaviour needs a dedicated GenericProvider
 # subclass (live usage / telemetry / resume-thread discovery). Anything not
 # listed uses GenericProvider.
-_CONFIG_PROVIDER_CLASSES = {"codex": CodexProvider, "antigravity": AntigravityProvider}
+_CONFIG_PROVIDER_CLASSES = {
+    "codex": CodexProvider,
+    "antigravity": AntigravityProvider,
+    "copilot": CopilotProvider,
+}
 
 __all__ = [
     "BaseProvider",

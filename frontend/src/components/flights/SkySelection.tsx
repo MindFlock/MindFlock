@@ -15,7 +15,7 @@
 
 import { optimisticDelete, patchFlightCache, withoutSteps } from "../../lib/flightOptimism";
 import { useEffect, useRef, useState, type JSX } from "react";
-import type { Flight, FlightStep, StepKindDef } from "../../lib/flights";
+import type { Flight, FlightStep, IntakeSourceRef, StepKindDef } from "../../lib/flights";
 import { isLive, planFromSteps } from "../../lib/flights";
 import { flightStops } from "../../lib/flightDiagram";
 import { deleteFlight, dropGroup, dropStop, groupStops, savePlan, startGrounded, tackOn, tackOnNew, tackOnSteps } from "../../lib/flightsApi";
@@ -75,8 +75,10 @@ export function putBackAt(taken: readonly Pick<TakenStops, "index" | "steps">[],
 /** A flight as the page knows it now (an Undo pressed minutes later). */
 const flightNow = (id: string): Flight | null => (queryClient.getQueryData<Flight[] | null>(["flights"]) || []).find((f) => f.id === id) || null;
 
-/** The name a new group or saved stop gets unless the owner types one. */
-export const NEW_STOPS = "New stops";
+/** The name a new saved chain gets unless the owner types one. */
+export const NEW_STOPS = "New route";
+/** The name a new group gets unless the owner types one. */
+export const NEW_GROUP = "New group";
 
 export interface SkySelectionProps {
   selection: SkySelection;
@@ -98,17 +100,17 @@ export interface SkySelectionProps {
   /** Where a line sits now (plane px): a grounded line put back lands there. */
   posOf?(id: string): Pos | undefined;
   /** Make a removed grounded line again from its stops, pinned at `at`. */
-  restoreGrounded?(steps: FlightStep[], name: string, at: Pos | undefined): Promise<unknown>;
+  restoreGrounded?(steps: FlightStep[], name: string, at: Pos | undefined, editsDefault?: IntakeSourceRef): Promise<unknown>;
 }
 
 const plural = (n: number, one: string, many = one + "s") => n + " " + (n === 1 ? one : many);
 
 /** Why Group can't run on these steps of `f` (or "" when it can). */
 export function groupHint(f: Flight | null, idx: readonly number[], kinds?: readonly StepKindDef[]): string {
-  if (!f || !idx.length) return "These stops aren't on a flight any more";
+  if (!f || !idx.length) return "These stops aren't on a route any more";
   if (!consecutive(idx)) return "Pick stops that sit next to each other";
   const stops = flightStops(f, kinds);
-  if (idx.some((i) => !stops[i]?.editable)) return "A stop that has flown, or is flying, can't join a group";
+  if (idx.some((i) => !stops[i]?.editable)) return "A stop that has run, or is running, can't join a group";
   const gid = f.steps[idx[0]]?.group?.id;
   if (gid && f.steps.every((s, i) => (s.group?.id === gid) === idx.includes(i))) return "These already are one stop";
   return "";
@@ -129,7 +131,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const askRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (p.ask !== "group" && p.ask !== "save") return;
-    setName(NEW_STOPS);
+    setName(p.ask === "group" ? NEW_GROUP : NEW_STOPS);
     const input = askRef.current?.querySelector("input");
     input?.focus({ preventScroll: true });
     input?.select();
@@ -158,12 +160,12 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const removeLines = () =>
     run(async () => {
       const closed: string[] = [];
-      const gone: Array<{ steps: FlightStep[]; name: string; at: Pos | undefined }> = [];
+      const gone: Array<{ steps: FlightStep[]; name: string; at: Pos | undefined; ed?: IntakeSourceRef }> = [];
       for (const id of removable) {
         if (isGroundedKey(id)) {
           const f = p.flightOf(id);
           const at = p.posOf?.(id);
-          if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at });
+          if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at, ed: f?.edits_default });
         } else {
           await closeSession(id);
           if (!sessionOpen(id)) closed.push(id);
@@ -176,11 +178,11 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       const entry = pushUndo({
         label: "Remove " + plural(n, "line"),
         undo: async () => {
-          for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at) : startGrounded({ steps: g.steps, ...(g.name ? { name: g.name } : {}) }));
+          for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at, g.ed) : startGrounded({ steps: g.steps, ...(g.name ? { name: g.name } : {}), ...(g.ed ? { edits_default: g.ed } : {}) }));
           await reopenClosed(closed);
         },
       });
-      const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "line") + " of stops" : ""].filter(Boolean).join(", ");
+      const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "route") + " with no session" : ""].filter(Boolean).join(", ");
       toast(said.charAt(0).toUpperCase() + said.slice(1), { action: undoAction(entry, "Undo: put " + plural(n, "line") + " back") });
     });
 
@@ -222,7 +224,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const group = () =>
     run(async () => {
       if (!flight || hint) return;
-      await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_STOPS);
+      await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_GROUP);
     });
 
   const save = () =>
@@ -251,7 +253,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
 
   if (!lines.length && !one) return null;
 
-  const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "line") + " selected";
+  const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "route") + " selected";
   const sessions = removable.filter((id) => !isGroundedKey(id));
   const groundedLines = removable.filter(isGroundedKey);
   const names = (ids: string[]) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
@@ -270,19 +272,19 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
         <span className="sky-selbar-count">{what}</span>
         {one ? (
           <>
-            <button type="button" className="test-btn fl-btn" disabled={busy || !!hint} title={hint || "Make these one stop with sub-steps"} onClick={() => p.setAsk("group")}>
+            <button type="button" className="test-btn fl-btn" disabled={busy || !!hint} title={hint || "Make these one group: a stop with these stops inside"} onClick={() => p.setAsk("group")}>
               Group into a stop
             </button>
-            <button type="button" className="test-btn fl-btn" disabled={busy || !idx.length} title="Keep these stops on the shelf as a saved stop" onClick={() => p.setAsk("save")}>
+            <button type="button" className="test-btn fl-btn" disabled={busy || !idx.length} title="Keep these stops on the shelf as a saved route" onClick={() => p.setAsk("save")}>
               Save to the shelf
             </button>
-            <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy || !flight} title="Take these stops off the line" onClick={askRemove}>
+            <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy || !flight} title="Take these stops off the route" onClick={askRemove}>
               Remove
             </button>
           </>
         ) : (
           <>
-            <span className="sky-selbar-hint" title="Drag the bar of any selected line: they all move together">
+            <span className="sky-selbar-hint" title="Drag the bar of any selected route: they all move together">
               ✥ Drag a bar to move them
             </span>
             <button type="button" className="test-btn fl-btn" disabled={busy} title="Forget where you put them: back to their places in the rows" onClick={() => p.onTidy(lines)}>
@@ -299,10 +301,10 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
           Clear
         </button>
       </div>
-      {one && hint && hint !== "These stops aren't on a flight any more" && <p className="sky-selbar-note muted">{hint}</p>}
+      {one && hint && hint !== "These stops aren't on a route any more" && <p className="sky-selbar-note muted">{hint}</p>}
       {(p.ask === "group" || p.ask === "save") && one && (
         <div ref={askRef} className="sky-selbar-ask">
-          <TextField value={name} onChange={setName} label={p.ask === "group" ? "The new stop's name" : "The saved stop's name"} placeholder={NEW_STOPS} onEnter={() => void (p.ask === "group" ? group() : save())} />
+          <TextField value={name} onChange={setName} label={p.ask === "group" ? "The new group's name" : "The saved route's name"} placeholder={p.ask === "group" ? NEW_GROUP : NEW_STOPS} onEnter={() => void (p.ask === "group" ? group() : save())} />
           <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={() => void (p.ask === "group" ? group() : save())}>
             {p.ask === "group" ? "Group" : "Save"}
           </button>
@@ -313,7 +315,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       )}
       {p.ask === "remove" && asks && !one && removable.length > 0 && (
         <InlineConfirm
-          title={"Remove " + plural(removable.length, "line") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + "."}
+          title={"Remove " + plural(removable.length, "route") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + "."}
           body={
             <>
               {sessions.length > 0 && (
@@ -323,7 +325,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
               )}
               {groundedLines.length > 0 && (
                 <span className="sky-selbar-says">
-                  {plural(groundedLines.length, "line")} of stops with no session {groundedLines.length === 1 ? "leaves" : "leave"} the board ({names(groundedLines)}). A saved stop on the shelf stays.
+                  {plural(groundedLines.length, "route")} with no session {groundedLines.length === 1 ? "leaves" : "leave"} the Sky ({names(groundedLines)}). A saved route on the shelf stays.
                 </span>
               )}
             </>
@@ -336,8 +338,8 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       )}
       {p.ask === "remove" && asks && one && (
         <InlineConfirm
-          title={"Remove " + plural(one.nodes.length, "stop") + "? The flight is at “" + runningStop + "” right now."}
-          body={"They leave “" + p.nameOf(one.line) + "”, and the flight pauses right before what follows. Ctrl+Z puts them back."}
+          title={"Remove " + plural(one.nodes.length, "stop") + "? The route is at “" + runningStop + "” right now."}
+          body={"They leave “" + p.nameOf(one.line) + "”, and the route pauses right before what follows. Ctrl+Z puts them back."}
           confirmLabel="Remove"
           busy={busy}
           onConfirm={() => void removeStops()}

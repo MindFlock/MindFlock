@@ -74,7 +74,7 @@ def test_the_dto_row():
     assert list(fields) == [
         "back_to",
         "times",
-        "every_minutes",
+        "every_seconds",
         "wait_limits",
         "fresh",
         "until",
@@ -88,7 +88,8 @@ def test_the_dto_row():
         "default": "",
         "dynamic": "stops_before",
     }
-    assert fields["times"]["default"] == 3 and fields["every_minutes"]["default"] == 0
+    assert fields["times"]["default"] == 3 and fields["every_seconds"]["default"] == 0
+    assert fields["every_seconds"]["type"] == "duration"
     assert fields["wait_limits"]["default"] is True
     assert fields["fresh"]["default"] is False
     assert fields["until"]["type"] == "text"
@@ -117,7 +118,7 @@ def test_default_title(config, title):
         ({"back_to": "no spaces allowed"}, "steps[0].config.back_to"),
         ({"times": -1}, "steps[0].config.times"),
         ({"times": 1001}, "steps[0].config.times"),
-        ({"every_minutes": 7 * 24 * 60 + 1}, "steps[0].config.every_minutes"),
+        ({"every_minutes": 7 * 24 * 60 + 1}, "steps[0].config.every_seconds"),
     ],
 )
 def test_strict_config_names_the_bad_field(config, field):
@@ -562,6 +563,7 @@ def test_route_round_trip(tmp_path, monkeypatch, sent):
         "back_to": "",
         "times": 2,
         "every_minutes": 0,
+        "every_seconds": 0,
         "wait_limits": True,
         "fresh": True,
         "until": "",
@@ -637,3 +639,21 @@ def test_a_saved_stop_keeps_its_loops_target():
     f = fly(AGENT, AGENT)
     F.op_add_plan(f, plan, now=NOW)
     assert f["steps"][-1]["config"]["back_to"] == f["steps"][3]["id"]
+
+
+def test_waits_and_loops_take_seconds_and_hours():
+    """The owner: loops and waits in seconds or hours, not only minutes."""
+    w = F.normalize_steps([{"kind": "wait", "config": {"seconds": 45}}])[0]
+    assert w["config"]["seconds"] == 45 and w["title"] == "Wait 45 s"
+    w = F.normalize_steps([{"kind": "wait", "config": {"seconds": 7200}}])[0]
+    assert w["title"] == "Wait 2 h"
+    old = F.normalize_steps([{"kind": "wait", "config": {"minutes": 5}}])[0]
+    assert old["config"]["seconds"] == 300
+    lp = F.normalize_steps(
+        [{"kind": "loop", "config": {"times": 2, "every_seconds": 90}}]
+    )[0]
+    assert (
+        lp["config"]["every_seconds"] == 90
+        and lp["title"] == "Loop ×2 every 1 min 30 s"
+    )
+    assert F.duration_word(30) == "30 s" and F.duration_word(5400) == "1 h 30 min"

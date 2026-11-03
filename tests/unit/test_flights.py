@@ -79,7 +79,14 @@ def test_kinds_registry_drives_the_editor():
         assert k["actor"] in ("robot", "you")
         assert k["default_title"] and k["label"] and k["summary"]
         for fld in k["fields"]:
-            assert fld["type"] in ("text", "textarea", "int", "bool", "select")
+            assert fld["type"] in (
+                "text",
+                "textarea",
+                "int",
+                "bool",
+                "select",
+                "duration",
+            )
             if fld["type"] == "select":
                 # A dynamic select (the Loop's back_to) is filled by the editor.
                 assert fld["options"] or fld.get("dynamic") in (
@@ -141,13 +148,13 @@ def test_steps_get_ids_titles_and_defaults():
     ids = [s["id"] for s in p["steps"]]
     assert len(set(ids)) == 6 and ids[0] == "a"
     assert [s["title"] for s in p["steps"][:4]] == [
-        "Merge",
+        "Merge when green",
         "Push",
         "Wait 5 min",
         "Wait until 18:30",
     ]
     assert p["steps"][1]["config"]["lane"] == "push"
-    assert p["steps"][3]["config"] == {"minutes": 0, "until": "18:30"}
+    assert p["steps"][3]["config"] == {"seconds": 0, "minutes": 0, "until": "18:30"}
     assert p["steps"][4]["config"]["items"] == ["one", "two"]
     assert p["steps"][4]["on_fail"] == "halt"  # a you step cannot fail
     assert p["steps"][5]["config"] == {
@@ -273,7 +280,7 @@ def test_a_depth_is_the_ship_ladder_only():
         ("ship", "Open PR"),
     ]
     assert [s["id"] for s in cut["steps"]] == ["s1", "s2", "s3", "s4"]
-    assert cut["id"] == "builtin:ticket@pr" and cut["name"] == "Fast-track to Open PR"
+    assert cut["id"] == "builtin:ticket@pr" and cut["name"] == "Goes as far as Open PR"
     merge = F.get_plan("builtin:ticket@merge")
     assert [s["config"].get("lane") for s in merge["steps"][1:]] == [
         "commit",
@@ -489,7 +496,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     f = run_step(fly(step("verify", who="both")))
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW)["note"]
-        == "writing the checklist"
+        == "writing the behaviors"
     )
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW + 4000)["action"]
@@ -498,7 +505,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     gen = _vfacts(state="generating")
     assert (
         F.next_action(f, {"session": sess(), "verify": gen}, NOW)["note"]
-        == "writing the checklist"
+        == "writing the behaviors"
     )
     v = _vfacts(open_agent=["curl it"], open_human=["look at it"])
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
@@ -506,7 +513,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW)
     assert f["step_states"]["s1"]["state"] == "running"
     a = F.next_action(f, {"session": sess(), "verify": _vfacts(state="running")}, NOW)
-    assert a["note"] == "the agent is working through the checklist"
+    assert a["note"] == "the agent is checking the behaviors"
     a = F.next_action(
         f, {"session": sess(), "verify": _vfacts(open_human=["look at it"])}, NOW
     )
@@ -542,6 +549,105 @@ def test_verify_agent_only_and_failures_and_wait_live():
         "model down"
         in F.next_action(f, {"session": sess(), "verify": v}, NOW)["reason"]
     )
+
+
+def test_verify_kind_reads_as_a_stop_and_halts_by_default():
+    spec = F.STEP_KINDS["verify"]
+    assert spec["summary"] == (
+        "Checks this work's behaviors; the agent checks what it can, the rest waits for you."
+    )
+    assert spec["default_on_fail"] == "halt"
+    kinds = {k["kind"]: k for k in F.kinds_dto()["kinds"]}
+    assert kinds["verify"]["default_on_fail"] == "halt"
+    assert F.normalize_step({"kind": "verify"})["on_fail"] == "halt"
+
+
+def test_failed_behaviors_halt_the_route_with_the_count():
+    f = run_step(fly(step("verify", who="both"), step("notify")))
+    v = _vfacts(failed=["login works", "logout works"], failed_at=NOW + 1)
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 2)
+    assert a["action"] == "fail" and a["then"] == "halt"
+    assert a["reason"] == "Failed · 2: login works; logout works"
+    f = F.apply(f, a, NOW + 2)
+    assert f["state"] == "halted" and f["step_states"]["s1"]["state"] == "failed"
+    assert f["reason"].startswith("Failed · 2")
+
+
+def test_let_the_agent_fix_it_then_the_behaviors_are_checked_again():
+    """Halted → op_fix (the agent's turn) → the stop runs again → the old
+    failure is stale: the agent checks again → a pass carries the route on;
+    a fresh failure halts it again."""
+    f = run_step(fly(step("verify", who="both"), step("notify")))
+    old = _vfacts(failed=["login works"], failed_at=NOW)
+    f = F.apply(
+        f, F.next_action(f, {"session": sess(), "verify": old}, NOW + 1), NOW + 1
+    )
+    assert f["state"] == "halted"
+    f = F.op_fix(f, "s1", now=NOW + 10)
+    ss = f["step_states"]["s1"]
+    assert (
+        f["state"] == "running" and ss["detail"]["phase"] == "fix" and ss["rounds"] == 1
+    )
+    with pytest.raises(F.FlightError):
+        F.op_fix(copy.deepcopy(f), "s1", now=NOW + 11)
+    # The agent worked and went idle: the stop runs again.
+    worked = sess(activity="idle", turn_ended_at=NOW + 50)
+    a = F.next_action(f, {"session": worked}, NOW + 60)
+    f = F.apply(f, a, NOW + 60)
+    a = F.next_action(f, {"session": worked}, NOW + 60 + F.IDLE_SETTLE_S + 1)
+    assert a["action"] == "run" and a.get("retry"), a
+    f = F.apply(f, a, NOW + 100)
+    assert f["step_states"]["s1"]["since"] == NOW + 100
+    # The failure on record is from before this attempt: check again first.
+    a = F.next_action(f, {"session": sess(), "verify": old}, NOW + 101)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+    assert a["detail"]["recheck"] is True
+    f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW + 101)
+    running = _vfacts(state="running", failed=["login works"], failed_at=NOW)
+    assert (
+        F.next_action(f, {"session": sess(), "verify": running}, NOW + 102)["action"]
+        == "wait"
+    )
+    # Fixed: every behavior answered → the route carries on.
+    a = F.next_action(
+        f, {"session": sess(), "verify": _vfacts(settled=True)}, NOW + 200
+    )
+    assert a["action"] == "done"
+    # …or the fresh check failed again → halted again.
+    again = _vfacts(failed=["login works"], failed_at=NOW + 150)
+    a = F.next_action(f, {"session": sess(), "verify": again}, NOW + 200)
+    assert a["action"] == "fail" and a["then"] == "halt"
+
+
+def test_a_persons_old_fail_is_theirs_to_answer_again_after_a_retry():
+    f = run_step(fly(step("verify", who="both")), now=NOW + 100)
+    # The agent's recheck ran; a person's Fail from before the retry is left.
+    f["step_states"]["s1"]["detail"]["run_started"] = True
+    v = _vfacts(failed=["it looks right"], failed_at=NOW, settled=True)
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 101)
+    assert a["action"] == "you" and a["detail"]["items"] == ["it looks right"]
+    assert a["note"] == "1 behavior for you"
+
+
+def test_retry_on_a_halted_verify_checks_again():
+    f = run_step(fly(step("verify", who="agent")))
+    old = _vfacts(failed=["curl it"], failed_at=NOW)
+    f = F.apply(
+        f, F.next_action(f, {"session": sess(), "verify": old}, NOW + 1), NOW + 1
+    )
+    f = F.op_retry(f, "s1", now=NOW + 5)
+    f = run_step(f, now=NOW + 6)
+    a = F.next_action(f, {"session": sess(), "verify": old}, NOW + 7)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+
+
+def test_a_route_parked_on_verify_needs_you():
+    f = run_step(fly(step("verify", who="you")))
+    a = F.next_action(
+        f, {"session": sess(), "verify": _vfacts(open_human=["look"])}, NOW
+    )
+    f = F.apply(f, a, NOW)
+    assert f["state"] == "waiting_you"
 
 
 def test_verify_who_you_never_starts_the_agent():
@@ -757,7 +863,7 @@ def test_on_fail_you_parks_with_the_failure_text():
     f, a = _failing("you")
     f = F.apply(f, a, NOW)
     assert f["state"] == "waiting_you"
-    assert F.you_text(f)[0].startswith("Checks failed: failing checks")
+    assert F.you_text(f)[0].startswith("CI checks failed: failing checks")
     f = F.op_done(f, "s1", now=NOW)
     assert f["cursor"] == 1
 
@@ -778,9 +884,10 @@ def test_on_fail_agent_hands_off_retries_then_halts():
     a = F.next_action(f, {"session": sess()}, NOW + 40)
     assert a["action"] == "run" and a["retry"]
     f = F.apply(f, a, NOW + 40)
-    assert (
-        f["step_states"]["s1"]["detail"] == {} and f["step_states"]["s1"]["rounds"] == 1
-    )
+    # The retry keeps only the fix it came from, over (docs/vision/fixwire.md).
+    d1 = f["step_states"]["s1"]["detail"]
+    assert set(d1) == {"fix"} and d1["fix"]["active"] is False
+    assert f["step_states"]["s1"]["rounds"] == 1
     f["step_states"]["s1"]["rounds"] = F.MAX_FIX_ROUNDS
     a = F.next_action(f, {"session": sess(), "checks": {"verdict": "failed"}}, NOW + 50)
     assert a["then"] == "halt" and "after 2 fix rounds" in a["reason"]
@@ -1025,7 +1132,10 @@ def test_ship_ignores_a_persons_own_fast_track_run():
         ap(f, "merge", state="halted", reason="x"),
     ):
         a = F.next_action(f, {"session": sess(), "autopilot": rec}, NOW)
-        assert a == {"action": "wait", "note": "Fast-track is busy with your own run"}
+        assert a == {
+            "action": "wait",
+            "note": "the session is already shipping by itself (Goes as far as)",
+        }
     assert (
         F.next_action(
             f, {"session": sess(), "autopilot": ap(f, "pr", state="done")}, NOW
@@ -1086,7 +1196,7 @@ def test_replaced_halted_flight_is_reported_to_the_caller():
     assert [r["id"] for r in replaced] == [f1["id"]]
     assert (
         replaced[0]["state"] == "cancelled"
-        and replaced[0]["reason"] == "replaced by a new flight"
+        and replaced[0]["reason"] == "replaced by a new route"
     )
 
 

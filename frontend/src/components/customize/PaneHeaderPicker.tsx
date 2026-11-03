@@ -176,7 +176,7 @@ export function PaneHeaderPicker() {
         Buttons
         <InfoTip label="About hidden buttons">
           Everything you switch off here is still one click away in the header's ⋯ menu: the next step
-          (Commit…, Push, Open PR), Fast-track…, Browse history, Copy entire history and Hide window. The
+          (Commit…, Push, Open PR), Goes as far as…, Browse history, Copy entire history and Hide window. The
           cost and the diff stats are read out at the top of ⋯. During the calm first hour an untouched
           header also leaves Queue and ⏩ to ⋯; once you change anything here it shows exactly your choice.
         </InfoTip>

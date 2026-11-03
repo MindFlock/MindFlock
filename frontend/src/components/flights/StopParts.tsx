@@ -6,7 +6,7 @@
  * DESCRIBE (a sentence → new stops, through the server's
  * one-shot model). Shared by the Flyways editor and the session diagram. */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import { errMsg } from "../../lib/format";
 import { LANE_LABEL, normalizeLane } from "../../lib/autopilot";
@@ -16,10 +16,11 @@ import { queryClient } from "../../state/queries";
 import { groundedFlights } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { stopSummary } from "../../lib/flightDiagram";
+import { catalogMatch } from "../../lib/stopCatalog";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
 import { StopIcon } from "./Bird";
-import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
+import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle, DurationField } from "./controls";
 import "./Flights.css";
 import "./StopParts.css";
 
@@ -28,31 +29,158 @@ import "./StopParts.css";
  * Someone (round 15). */
 export function kindName(def: Pick<StepKindDef, "kind" | "label"> | undefined, kind = ""): string {
   const k = def?.kind || kind;
-  if (k === "you") return "Perch";
+  if (k === "you") return "Wait for me";
   if (k === "someone") return "Someone";
   return def?.label || kind;
 }
 
 // --- The palette -------------------------------------------------------------------
 
+/** A saved chain the palette offers under the two groups ("A saved chain —
+ * all of its stops"): its name on the chip, `title` its stops as a hover
+ * line ("a → b → c"), which the filter reads too. */
+export interface PaletteSaved {
+  id: string;
+  name: string;
+  title?: string;
+  disabled?: boolean;
+  onPick(): void;
+}
+
+/** One row the palette shows, in the order it draws them: the "MindFlock
+ * does" kinds, the "You do" kinds, then the saved chains. `rank`: how well
+ * it matches the filter (0 = the label starts with it … 3 = only found
+ * somewhere in it). */
+export type PaletteRow<K = StepKindDef, S = PaletteSaved> =
+  | { group: "robot" | "you"; kind: K; rank: number }
+  | { group: "saved"; saved: S; rank: number };
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** How well `query` matches: -1 none (the floating palette's own rule,
+ * `catalogMatch`: every word found, case-blind), 0 `primary` starts with
+ * it, 1 a word of `primary` does, 2 a word of another text does, 3 it is
+ * only inside one. An empty query is 0 for everything. */
+export function paletteRank(query: string, primary: string, ...rest: Array<string | undefined>): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  if (!catalogMatch(q, primary, ...rest)) return -1;
+  const atWord = new RegExp("(^|[^\\p{L}\\p{N}])" + escapeRe(q), "u");
+  const p = primary.toLowerCase();
+  if (p.startsWith(q)) return 0;
+  if (atWord.test(p)) return 1;
+  if (rest.some((t) => !!t && atWord.test(t.toLowerCase()))) return 2;
+  return 3;
+}
+
+/** What the palette shows for `query`: the kinds (label as `kindName` says
+ * it, kind id, summary) and the saved chains (name, stops) that match, each
+ * group best match first (ties keep the server's order). */
+export function paletteRows<K extends Pick<StepKindDef, "kind" | "label" | "summary" | "actor">, S extends Pick<PaletteSaved, "name" | "title">>(
+  kinds: readonly K[],
+  saved: readonly S[],
+  query: string
+): PaletteRow<K, S>[] {
+  const ranked = <T,>(list: readonly T[], rank: (t: T) => number) =>
+    list
+      .map((t, i) => ({ t, i, r: rank(t) }))
+      .filter((x) => x.r >= 0)
+      .sort((a, b) => a.r - b.r || a.i - b.i);
+  const kindRank = (k: K) => paletteRank(query, kindName(k), k.label, k.kind, k.summary);
+  return [
+    ...ranked(kinds.filter((k) => k.actor !== "you"), kindRank).map((x): PaletteRow<K, S> => ({ group: "robot", kind: x.t, rank: x.r })),
+    ...ranked(kinds.filter((k) => k.actor === "you"), kindRank).map((x): PaletteRow<K, S> => ({ group: "you", kind: x.t, rank: x.r })),
+    ...ranked(saved, (p) => paletteRank(query, p.name, p.title)).map((x): PaletteRow<K, S> => ({ group: "saved", saved: x.t, rank: x.r })),
+  ];
+}
+
+/** The row the highlight starts on: the best match, the first drawn among
+ * equals (with no query, the first row) — -1 when nothing matches. */
+export function bestRow(rows: readonly Pick<PaletteRow, "rank">[]): number {
+  let best = -1;
+  rows.forEach((r, i) => {
+    if (best < 0 || r.rank < rows[best].rank) best = i;
+  });
+  return best;
+}
+
+/** What a key in the palette's filter does: ↓ / ↑ move the highlight
+ * through the rows (round the ends), Enter picks the highlighted row, Esc
+ * clears the text, or with none closes. null: the key is the field's own
+ * (it types). */
+export function paletteKey(key: string, query: string, hi: number, count: number): { hi?: number; query?: string; pick?: number; close?: boolean } | null {
+  if (key === "ArrowDown") return count ? { hi: hi < 0 ? 0 : (hi + 1) % count } : {};
+  if (key === "ArrowUp") return count ? { hi: hi <= 0 ? count - 1 : hi - 1 } : {};
+  if (key === "Enter") return hi >= 0 && hi < count ? { pick: hi } : {};
+  if (key === "Escape") return query ? { query: "" } : { close: true };
+  return null;
+}
+
 export function StopPalette({
   kinds,
   onPick,
   onClose,
   title = "Add a stop",
+  saved = [],
+  savedHead = "A saved route — all of its stops",
   extra,
+  initialQuery = "",
 }: {
   kinds: readonly StepKindDef[];
   onPick(k: StepKindDef): void;
   onClose(): void;
   title?: string;
-  /** More rows under the two groups (the session diagram's "Fly a flyway"). */
+  /** The saved chains, as chips under the two groups; the filter narrows
+   * them with the kinds. */
+  saved?: readonly PaletteSaved[];
+  /** The saved chips' heading. */
+  savedHead?: string;
+  /** More under the groups, drawn as given (not filtered) — prefer `saved`. */
   extra?: ReactNode;
+  /** The filter's text when the palette opens (empty: everything). */
+  initialQuery?: string;
 }) {
-  const groups: Array<[string, string, StepKindDef[]]> = [
-    ["robot", "The flock does", kinds.filter((k) => k.actor !== "you")],
-    ["you", "You do", kinds.filter((k) => k.actor === "you")],
+  const [query, setQuery] = useState(initialQuery);
+  const [hiPick, setHi] = useState<number | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const rows = paletteRows(kinds, saved, query);
+  // Typing puts the highlight back on the best match.
+  const hi = hiPick !== null && hiPick < rows.length ? hiPick : bestRow(rows);
+  useEffect(() => {
+    listRef.current?.querySelector(".is-hi")?.scrollIntoView?.({ block: "nearest" });
+  }, [hi, query]);
+  const pick = (r: PaletteRow) => {
+    if (r.group !== "saved") onPick(r.kind);
+    else if (!r.saved.disabled) r.saved.onPick();
+  };
+  const typed = query.trim();
+  const uid = useId();
+  const listId = uid + "-list";
+  const rowId = (n: number) => uid + "-row-" + n;
+
+  const onFilterKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    // The Sky's own keys (T tidies, arrows pan, Delete removes…) never see
+    // what is typed here.
+    e.stopPropagation();
+    if (e.nativeEvent.isComposing) return;
+    const out = paletteKey(e.key, query, hi, rows.length);
+    if (!out) return;
+    e.preventDefault();
+    if (out.hi !== undefined) setHi(out.hi);
+    if (out.query !== undefined) {
+      setQuery(out.query);
+      setHi(null);
+    }
+    if (out.pick !== undefined && rows[out.pick]) pick(rows[out.pick]);
+    if (out.close) onClose();
+  };
+
+  const groups: Array<[PaletteRow["group"], string]> = [
+    ["robot", "MindFlock does"],
+    ["you", "You do"],
   ];
+  const numbered = rows.map((r, n) => ({ r, n }));
+  const chips = numbered.filter((x) => x.r.group === "saved");
   return (
     <div
       className="fl-palette"
@@ -72,32 +200,87 @@ export function StopPalette({
           ✕
         </button>
       </div>
-      {kinds.length === 0 && <p className="fl-note muted">The stop list didn't load — this server may not know Flights yet.</p>}
-      <div className="fl-palette-groups">
-        {groups.map(([id, head, list]) =>
-          list.length ? (
-            <div className={"fl-palette-group fl-palette-" + id} key={id}>
-              <div className="fl-palette-head">{head}</div>
-              {list.map((k, i) => (
-                <button
-                  key={k.kind}
-                  type="button"
-                  className={"fl-palette-item fl-kind-" + k.actor}
-                  autoFocus={i === 0 && id === "robot"}
-                  onClick={() => onPick(k)}
-                >
-                  <span className="fl-palette-icon">
-                    <StopIcon kind={k.actor === "you" ? "perch" : k.kind} />
-                  </span>
-                  <span className="fl-palette-words">
-                    <span className="fl-palette-label">{kindName(k)}</span>
-                    <span className="fl-palette-summary">{k.summary}</span>
-                  </span>
-                </button>
-              ))}
+      {kinds.length === 0 && saved.length === 0 ? (
+        <p className="fl-note muted">The stop list didn't load — this server may not know routes yet.</p>
+      ) : (
+        <input
+          className="fl-input fl-palette-filter"
+          type="text"
+          placeholder="Type to filter…"
+          aria-label="Filter stops"
+          role="combobox"
+          aria-expanded="true"
+          aria-autocomplete="list"
+          aria-controls={listId}
+          aria-activedescendant={hi >= 0 ? rowId(hi) : undefined}
+          autoComplete="off"
+          spellCheck={false}
+          autoFocus
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setHi(null);
+          }}
+          onKeyDown={onFilterKey}
+        />
+      )}
+      <div className="fl-palette-list" id={listId} role="listbox" aria-label="Stops" ref={listRef}>
+        <div className="fl-palette-groups">
+          {groups.map(([id, head]) => {
+            const list = numbered.filter((x) => x.r.group === id);
+            return list.length ? (
+              <div className={"fl-palette-group fl-palette-" + id} key={id}>
+                <div className="fl-palette-head">{head}</div>
+                {list.map(({ r, n }) =>
+                  r.group === "saved" ? null : (
+                    <button
+                      key={r.kind.kind}
+                      id={rowId(n)}
+                      type="button"
+                      role="option"
+                      aria-selected={n === hi}
+                      className={"fl-palette-item fl-kind-" + r.kind.actor + (n === hi ? " is-hi" : "")}
+                      onClick={() => onPick(r.kind)}
+                    >
+                      <span className="fl-palette-icon">
+                        <StopIcon kind={r.kind.actor === "you" ? "perch" : r.kind.kind} />
+                      </span>
+                      <span className="fl-palette-words">
+                        <span className="fl-palette-label">{kindName(r.kind)}</span>
+                        <span className="fl-palette-summary">{r.kind.summary}</span>
+                      </span>
+                    </button>
+                  )
+                )}
+              </div>
+            ) : null;
+          })}
+        </div>
+        {chips.length > 0 && (
+          <div className="fl-palette-flyways">
+            <div className="fl-palette-head">{savedHead}</div>
+            <div className="fl-chiprow">
+              {chips.map(({ r, n }) =>
+                r.group === "saved" ? (
+                  <button
+                    key={r.saved.id}
+                    id={rowId(n)}
+                    type="button"
+                    role="option"
+                    aria-selected={n === hi}
+                    className={"fl-pick" + (n === hi ? " is-hi" : "")}
+                    disabled={r.saved.disabled}
+                    title={r.saved.title}
+                    onClick={() => r.saved.onPick()}
+                  >
+                    {r.saved.name}
+                  </button>
+                ) : null
+              )}
             </div>
-          ) : null
+          </div>
         )}
+        {typed && rows.length === 0 && <p className="fl-note muted fl-palette-none">No stop matches “{typed}”</p>}
       </div>
       {extra}
     </div>
@@ -144,8 +327,8 @@ export const boardDynamic = (f: Pick<StepKindField, "dynamic">): BoardDynamic | 
  * copy). */
 export function chainChoices(flights: readonly Flight[] | null | undefined, plans: readonly FlightPlan[] | null | undefined): StopChoice[] {
   const out: StopChoice[] = [];
-  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Stops", group: "On the board" });
-  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved stops — a fresh copy each time" });
+  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Route", group: "On the Sky" });
+  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved routes — a fresh copy each time" });
   return out;
 }
 
@@ -197,6 +380,12 @@ export function StopField({
           options={fieldOptions(f).map((o) => ({ v: o.value, label: choiceLabel(f.name, o.value, o.label), disabled: readOnly }))}
           onChange={(x) => onChange(x)}
         />
+      </FlField>
+    );
+  if (f.type === "duration")
+    return (
+      <FlField label={label}>
+        <DurationField label={label} value={v} onChange={(x) => !readOnly && onChange(x)} />
       </FlField>
     );
   if (f.type === "int")
@@ -256,7 +445,7 @@ export function StopsBeforeField({
   if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: "a stop no longer before this one" }] });
   const pick = (x: string) => !readOnly && onChange(x);
   return (
-    <FlField label={label} wide hint="The flight goes back to this stop for each new run.">
+    <FlField label={label} wide hint="The route goes back to this stop for each new run.">
       <div className="fl-stops-before" data-dynamic="stops_before">
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
@@ -264,7 +453,7 @@ export function StopsBeforeField({
             <ChipRow
               label={r.group ? label + " — " + r.group : label}
               value={value}
-              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the line (or this group) starts" }))}
+              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the route (or this group) starts" }))}
               onChange={pick}
             />
           </div>
@@ -299,13 +488,13 @@ export function BoardChoiceField({
     if (last && last.group === g) last.items.push(c);
     else runs.push({ group: g, items: [c] });
   }
-  if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: kind === "chains" ? "a chain no longer on the board" : value }] });
+  if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: kind === "chains" ? "a route no longer on the Sky" : value }] });
   const pick = (x: string) => !readOnly && onChange(x);
-  const hint = kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved stop starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.";
+  const hint = kind === "chains" ? "A route on the Sky takes off (it leaves the Sky); a saved route starts a fresh copy each time." : "Where the route runs: a new session forks from this one.";
   return (
     <FlField label={label} wide hint={hint}>
       <div className="fl-stops-before fl-board-choice" data-dynamic={kind}>
-        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No stops-only chain on the board yet — drop some stops on empty sky first." : "No session yet."}</p>}
+        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No route on the Sky yet — drop some stops on empty sky first." : "No session yet."}</p>}
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
             {r.group && <span className="fl-stops-before-name">{r.group}</span>}
@@ -531,7 +720,7 @@ function WhenHelp({ onClose }: { onClose(): void }) {
       }}
     >
       <div className="fl-when-help-top">
-        <strong>The stop flies only when…</strong>
+        <strong>The stop runs only when…</strong>
         <button type="button" className="fl-icon-btn" aria-label="Close" title="Close" autoFocus onClick={onClose}>
           ✕
         </button>

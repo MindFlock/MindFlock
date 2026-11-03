@@ -222,7 +222,7 @@ export function InitRepoCheck({
 }
 
 /** "This folder directly"'s plain line (the New form swaps it for a warning
- * when picking it would turn fast-track or auto-split off). */
+ * when picking it would turn fast-track or the split into workers off). */
 export const IN_PLACE_HINT = "Edits your checkout as it is, on its current branch";
 
 /** The line under "Separate worktree" naming the branch Create will cut: ONE
@@ -331,7 +331,7 @@ export function PlainWorksIn({
             title="Just run in the folder"
             desc={
               laneNeedsWorktree
-                ? "Turns Fast-track off — there is no repo to commit to"
+                ? "Sets Goes as far as to Agent only — there is no repo to commit to"
                 : "The agent edits the files as they are; no diff, commit or PR"
             }
           />
@@ -396,9 +396,9 @@ export function WorksIn({
       }}
       inPlaceDesc={
         splitOn
-          ? "Turns auto-split off — a split works in its own worktree"
+          ? "Turns “Let it split into workers” off — a split works in its own worktree"
           : laneNeedsWorktree
-          ? "Turns fast-track off (it commits for this session, so it needs its own worktree)"
+          ? "Sets Goes as far as to Agent only (it commits for this session, so it needs its own worktree)"
           : IN_PLACE_HINT
       }
       underWorktree={

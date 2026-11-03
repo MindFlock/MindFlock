@@ -6,8 +6,11 @@
  *
  *  - one rAF, capped at 60 fps, and no work at all while the tab is hidden;
  *  - `paused` = no rAF (the last frame stays painted);
- *  - `prefers-reduced-motion` = no birds (and no canvas at all in clear
- *    weather);
+ *  - `birds={false}` (Settings → Appearance → Birds in the Sky, off by
+ *    default) = no birds, seeded or stepped — the weather still shows;
+ *  - `prefers-reduced-motion` = no birds either;
+ *  - with no birds, the canvas only exists while there are clouds, and the
+ *    rAF only runs while they drift: a clear, bird-less sky draws nothing;
  *  - DPR-aware, `pointer-events: none`, quieter in the light theme
  *    (SkyFlock.css).
  *
@@ -16,8 +19,9 @@
  * under reduced motion), and a night tint dims the sky during the
  * notification quiet hours. `WeatherWord` is the title bar's word for it.
  *
- * The simulation (`flockSize`, `seedBirds`, `stepBirds`) and the frame loop
- * (`skyLoop`) are pure, so the tests drive them without a DOM. */
+ * The simulation (`flockSize`, `seedBirds`, `stepBirds`), what the sky draws
+ * (`skyMotion`) and the frame loop (`skyLoop`) are pure, so the tests drive
+ * them without a DOM. */
 
 import { useContext, useEffect, useRef, type JSX } from "react";
 import { QueryClientContext } from "@tanstack/react-query";
@@ -173,6 +177,19 @@ export function stepBirds(birds: SkyBird[], w: number, h: number, rand: () => nu
   }
 }
 
+/** What a sky draws, given whether the flock is wanted (`birds`), reduced
+ * motion, and the weather: `flying` = birds seeded and stepped; `canvas` =
+ * the canvas exists (birds, or clouds to paint); `loop` = a rAF runs
+ * (something moves — birds, or clouds drifting). */
+export function skyMotion(o: { birds: boolean; reduced: boolean; clouds: number; drift: boolean }): {
+  flying: boolean;
+  canvas: boolean;
+  loop: boolean;
+} {
+  const flying = o.birds && !o.reduced;
+  return { flying, canvas: flying || o.clouds > 0, loop: flying || (o.drift && o.clouds > 0) };
+}
+
 /** Run `tick` once per animation frame, at most 60 times a second and never
  * while the tab is hidden. `paused` never asks for a frame. Returns stop(). */
 export function skyLoop(
@@ -275,6 +292,8 @@ interface SkyFlockProps {
   zoom: number;
   paused?: boolean;
   density?: number;
+  /** The ambient flock (default true). False = no birds; the weather stays. */
+  birds?: boolean;
 }
 
 /** The weather needs the app's query client (useUsage, the settings doc); a
@@ -293,6 +312,7 @@ function SkyCanvas({
   zoom,
   paused = false,
   density = 1,
+  birds: wantBirds = true,
   weather,
 }: SkyFlockProps & { weather: Weather }): JSX.Element {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -304,8 +324,9 @@ function SkyCanvas({
   const view = useRef({ width, height, zoom, thick: false });
   const { night, drift } = weather;
   const nClouds = cloudCount(weather.clouds);
-  // Under reduced motion the canvas only carries clouds (static ones).
-  const canvas = !reduced || nClouds > 0;
+  // Without birds (turned off, or reduced motion) the canvas only carries
+  // clouds, and only drifting ones ask for frames.
+  const { flying, canvas, loop } = skyMotion({ birds: wantBirds, reduced, clouds: nClouds, drift });
 
   // Size (DPR-aware), fit the flock and the clouds to the sky, and paint a
   // frame — so a paused sky, and a zoom while paused, still shows its birds.
@@ -322,27 +343,27 @@ function SkyCanvas({
       c.height = ph;
     }
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    birds.current = reduced ? [] : fitBirds(birds.current, flockSize(width, height, density), width, height);
+    birds.current = !flying ? [] : fitBirds(birds.current, flockSize(width, height, density), width, height);
     // New clouds drift in from the left, cleared ones drift out — unless
     // nothing drifts, when they are simply there (or gone).
     clouds.current = fitClouds(clouds.current, nClouds, width, height, drift);
     paint(g, birds.current, clouds.current, view.current.thick, width, height, zoom, frame.current);
-  }, [width, height, zoom, density, reduced, nClouds, weather.clouds, drift, canvas]);
+  }, [width, height, zoom, density, flying, nClouds, weather.clouds, drift, canvas]);
 
   useEffect(() => {
-    if (reduced) return;
+    if (!loop) return;
     return skyLoop(
       () => {
         const g = ref.current?.getContext("2d");
         if (!g) return;
         const v = view.current;
-        stepBirds(birds.current, v.width, v.height);
+        if (flying) stepBirds(birds.current, v.width, v.height);
         if (drift) clouds.current = stepClouds(clouds.current, v.width);
         paint(g, birds.current, clouds.current, v.thick, v.width, v.height, v.zoom, ++frame.current);
       },
       { paused }
     );
-  }, [paused, reduced, drift]);
+  }, [paused, loop, flying, drift]);
 
   if (!canvas && !night) return <></>;
   return (

@@ -9,11 +9,12 @@
  *            Merge PR, View PR, Fast-track…, Verify checklist…, Run checks now
  *   Session  Rename…, Move to a folder… (this machine's own rows), Resume
  *            (only on a paused session: there is no Pause here — the
- *            palette, `mindflock pause` and the API still pause), Workers on
- *            every prompt (a ✓ switch: Flock mode)
+ *            palette, `mindflock pause` and the API still pause), Workers…
+ *            (the ONE entry for workers: it opens the picker under the pane's
+ *            Workers control — let the agent split this now, ask for workers
+ *            once, workers on every prompt; see `workersModes`)
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
- *            history, Copy entire history (pane only), Split into parallel
- *            pieces…, Duplicate, Open in the IDE,
+ *            history, Copy entire history (pane only), Duplicate, Open in the IDE,
  *            Open preview, Select, Hide window, Move out of a group, Re-run
  *            worktree setup, Copy folder path
  *   Danger   Close, Delete…
@@ -40,7 +41,12 @@ import { openChecklist } from "./checklistLink";
 import { openSettings } from "./openSettings";
 import { PEER_SCREEN } from "./peer";
 import { copyText } from "./clipboard";
-import { flockTooltip } from "./workersRequest";
+import {
+  ASK_WORKERS_KEYS,
+  FLOCK_KEYS,
+  insertWorkersRequest,
+  toggleFlock,
+} from "./workersRequest";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
@@ -219,7 +225,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     ft &&
       !peer && {
         key: "fast-track",
-        label: "Fast-track…",
+        label: "Goes as far as…",
         note: LANE_SHORT[laneChoice(inst).lane],
         keys: sessionAction("fastTrack").keys,
         title: ft.title,
@@ -228,15 +234,15 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     !!inst.branch &&
       !peer && {
         key: "checklist",
-        label: "Verify checklist…",
-        title: "Verify's checklist for " + inst.branch + " — what to check before or after it merges",
+        label: "Behaviors…",
+        title: "The behaviors Verify checks for " + inst.branch + " — what it should do, before or after it merges",
         run: () => openChecklist(inst.branch),
       },
     inst.check &&
       inst.check.state !== "running" &&
       !peer && {
         key: "run-checks",
-        label: "Run checks now",
+        label: "Run the check command",
         run: () =>
           instApi(title, "/check", { method: "POST" })
             .then(() => toast("Checks running…"))
@@ -269,9 +275,9 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   // No Pause here (the owner found the button pointless; the palette, the
   // CLI and the API still pause). A session that IS paused — from those, or
   // by an older build — must still come back from the menu: Resume.
-  // Workers on every prompt (Flock mode) is a switch: the ✓ says it is on,
-  // the note what it does. Same rows as Resume — this machine's own, settled.
-  const flockOn = !!inst.flock;
+  // Workers… opens the one workers picker (its three modes are
+  // `workersModes`); the note says when every prompt asks for them. Same rows
+  // as Resume — this machine's own, settled.
   const moving = isMovingRow(inst);
   const session = keep([
     fromTable("rename"),
@@ -291,15 +297,12 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
         run: () => openMoveSession(title),
       },
     fromTable("resume", { note: actionNote("resume", ctx) }),
-    fromTable("flock", {
-      label: (flockOn ? "✓ " : "") + "Workers on every prompt",
-      checked: flockOn,
-      note: flockOn ? "on — the workers request is added to everything you send" : actionNote("flock", ctx),
-      title: flockTooltip(flockOn),
+    fromTable("workers", {
+      note: inst.flock ? "on every prompt" : undefined,
+      title: "Sessions this one starts: let the agent split this now, ask for workers once, or on every prompt",
     }),
   ]);
 
-  const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
   const group = remote ? null : detachableGroup(inst);
   const folder = inst.folder || inst.path || "";
   const more = keep([
@@ -307,14 +310,14 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     ctx.caps.git !== false &&
       !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => useUi.getState().openDiff(title) },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
-    // Flights: the session's Flight tab — its live diagram, with + to tack a
-    // stop on and the saved stops to add (docs/flights.md "The session diagram").
+    // Chains: the session's Chain tab — its live diagram, with + to tack a
+    // stop on and the saved chains to add (docs/flights.md "The session diagram").
     !remote &&
       !peer &&
       !inst.pending && {
         key: "flyway",
         label: "Add a stop…",
-        title: "Open this session's Flight tab: tack a stop, or a saved stop, onto its line",
+        title: "Open this session's Route tab: add a stop, or a saved route, to its route",
         run: () => openTab(title, "flight"),
       },
     // The Sky on this one session: its line filling the sky, the bird where
@@ -340,25 +343,14 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       title: "Copy the open terminal tab's whole history to the clipboard",
       run: opts.onCopyHistory,
     },
-    !remote &&
-      !peer &&
-      !inst.pending && {
-        key: "split",
-        label: "Split into parallel pieces…",
-        disabled: !!splitWhy,
-        title:
-          splitWhy ||
-          "The agent proposes pieces with separate paths; you approve them and pick where they run — separate worktrees merged back, or this folder",
-        run: () => call(name, () => splitSession(inst, name)),
-      },
     group && {
       key: "detach",
       label: "Move out of " + group.name,
-      title: "The team run stops driving it; the session and its fast-track stay",
+      title: "The team run stops driving it; the session and how far it goes stay",
       run: () =>
         call(name, async () => {
           await moveOutOfGroup(group.id, group.task);
-          return `${name} is out of ${group.name} — its session and fast-track stay as they are`;
+          return `${name} is out of ${group.name} — its session and how far it goes stay as they are`;
         }),
     },
     fromTable("duplicate"),
@@ -433,4 +425,67 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     { id: "danger" as const, label: "", items: danger },
   ].filter((g) => g.items.length);
   return { groups, more };
+}
+
+/** One mode of the Workers… picker. */
+export interface WorkersMode {
+  key: "split" | "ask" | "flock";
+  label: string;
+  /** The picker's letter for it. */
+  letter: string;
+  /** The default shortcut (the pane passes the live rebinds). */
+  keys?: string;
+  note: string;
+  /** A switch (Workers on every prompt): its state. */
+  checked?: boolean;
+  /** Why it doesn't apply right now ("" = it does). */
+  why: string;
+  run(): void | Promise<unknown>;
+}
+
+/** The Workers… picker's three modes — the one entry for workers, whatever
+ * engine each runs on:
+ *
+ *   Let the agent split this now   a split team run (POST …/split): the agent
+ *                                  proposes workers with separate paths, you
+ *                                  approve them on its Thread tab
+ *   Ask for workers once           Alt+G: the workers request typed into its
+ *                                  terminal, no Enter
+ *   Workers on every prompt        Alt+Shift+G: a ✓ switch, the server adds the
+ *                                  request to everything you send */
+export function workersModes(inst: Instance, ctx: ActionCtx): WorkersMode[] {
+  const title = inst.title;
+  const name = displayName(title);
+  const on = !!inst.flock;
+  const splitWhy = isRemote(inst) ? "Split runs on the machine the session lives on" : splitBlockReason(ctx.caps, inst);
+  const paused = inst.status === "paused";
+  return [
+    {
+      key: "split",
+      label: "Let the agent split this now",
+      letter: "S",
+      note: "It proposes workers, each with its own paths; you approve them on its Thread tab",
+      why: splitWhy,
+      run: () => call(name, () => splitSession(inst, name)),
+    },
+    {
+      key: "ask",
+      label: "Ask for workers once",
+      letter: "A",
+      keys: ASK_WORKERS_KEYS,
+      note: "Types the workers request into its terminal — add the task, press Enter",
+      why: paused ? "Its agent is paused — resume it first" : "",
+      run: () => void insertWorkersRequest(title),
+    },
+    {
+      key: "flock",
+      label: "Workers on every prompt",
+      letter: "E",
+      keys: FLOCK_KEYS,
+      checked: on,
+      note: on ? "On — everything you send asks for workers" : "Adds the workers request to everything you send here",
+      why: "",
+      run: () => void toggleFlock(title),
+    },
+  ];
 }

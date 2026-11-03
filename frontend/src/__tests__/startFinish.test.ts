@@ -21,11 +21,9 @@ describe("a failed settings save is never followed by a success line", () => {
     expect(SETTINGS.match(/toast\("Save failed: [^\n]*\n[^\n]*\n\s*return false;/g)).toHaveLength(2);
   });
 
-  it("Pause all stops before 'All auto-start is off' when the save failed", () => {
-    const body = squash(AUTOSTART);
-    const guard = body.indexOf('!(await settings.saveGroup("github", patch))) return;');
-    expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(body.indexOf("All auto-start is off"));
+  it("no Pause all, so no 'All auto-start is off' line to claim after a failed save", () => {
+    expect(AUTOSTART).not.toContain("All auto-start is off");
+    expect(AUTOSTART).not.toContain("pauseAll");
   });
 
   it("adding a repository stays on the step and re-sweeps only on success", () => {
@@ -97,17 +95,13 @@ describe("Verify keeps an edit or a retry when the server refused", () => {
     const va = squash(code("lib/verifyActions.ts"));
     expect(va).toContain("fields: Partial<TestStep> ): Promise<boolean> {");
     expect(va).toContain("export async function writePlanFor(target: string): Promise<boolean> {");
-    expect(va).toMatch(/errorPop\("Couldn't change that step", errMsg\(err\)\); return false;/);
-    expect(fn("lib/verifyActions.ts", "writePlanFor")).toMatch(/errorPop\("Couldn't write a checklist", errMsg\(err\)\);\s*return false;/);
+    expect(va).toMatch(/errorPop\("Couldn't change that behavior", errMsg\(err\)\); return false;/);
+    expect(fn("lib/verifyActions.ts", "writePlanFor")).toMatch(/errorPop\("Couldn't write the behaviors", errMsg\(err\)\);\s*return false;/);
   });
 
   it("the step editor closes, and the banner clears, only on success", () => {
-    expect(code("components/dialogs/VerifyStep.tsx")).toContain(
-      "if ((await onEdit(step, fields)) !== false) setEditing(false);"
-    );
-    expect(code("components/dialogs/VerifyDialog.tsx")).toContain(
-      'if (await writePlanFor(missingTarget.title)) setMissingBranch("");'
-    );
+    // The Behaviors card's row editor (the Verify dialog's step editor is gone).
+    expect(code("components/behaviors/BehaviorRow.tsx")).toContain("if (await onEdit(step, fields)) setEditing(false);");
   });
 });
 
@@ -181,10 +175,10 @@ describe("accessible names and live regions", () => {
 });
 
 describe("finishing says what happened", () => {
-  it("Run now in Intake closes Intake on the new session", () => {
-    expect(squash(code("components/intake/ScheduledTemplates.tsx"))).toContain(
-      "const title = await runTemplateNow(r.name); if (title) openSessionFromIntake(title);"
-    );
+  it("Intake keeps no second Run now: its line opens Schedule, where every run starts", () => {
+    const line = squash(code("components/intake/ScheduledTemplates.tsx"));
+    expect(line).not.toContain("runTemplateNow");
+    expect(line).toContain('onClick={() => useUi.getState().openDialogFor("schedule")}');
   });
 
   it("a scheduled save toasts its schedule line; Stop schedule offers Undo", () => {

@@ -1066,7 +1066,7 @@ async def _checklist_store_errors(request, call_next):
             pass
         return JSONResponse(
             {
-                "error": "couldn't save the checklist — %s. Nothing was recorded; "
+                "error": "couldn't save the behaviors — %s. Nothing was recorded; "
                 "try again once there is somewhere to write." % err
             },
             status_code=503,
@@ -8270,7 +8270,20 @@ async def _reopen_closed_entry(entry_id: str) -> JSONResponse:
         log.ErrorLog.Printf("reopen %s: agent boot deferred: %s", title, boot_err)
     ENGINE.save()
     _save_recently_closed([e for e in items if e.get("id") != entry_id])
-    return JSONResponse(_instance_json(inst))
+    # The chain the close cancelled comes back with it (docs/flights-reopen.md).
+    restored = None
+    if isinstance(entry.get("flight"), dict):
+        try:
+            from backend.web.core import flight_driver as _flight_driver
+
+            restored = _flight_driver.restore_on_reopen(entry["flight"], title)
+        except Exception as err:  # noqa: BLE001
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("reopen %s: chain not restored: %s", title, err)
+    out = _instance_json(inst)
+    if restored:
+        out["flight_restored"] = restored["id"]
+    return JSONResponse(out)
 
 
 @app.post("/api/recently-closed/{entry_id}/forget")
@@ -8710,7 +8723,7 @@ async def instance_reset_stage(title: str) -> JSONResponse:
         cleared = []
         run = _autopilot.get(title)
         if run and run.get("state") == "halted" and _autopilot.disarm(title):
-            cleared.append("fast-track")
+            cleared.append("Goes as far as")
         chk = _wt_setup.check_summary(wt)
         if (
             chk
@@ -9316,7 +9329,7 @@ async def instance_fast_track(
     if held:
         return JSONResponse(
             {
-                "error": "its team run is paused — the fast-track is kept and armed on resume",
+                "error": "its team run is paused — Goes as far as is kept and armed on resume",
                 "held": True,
             },
             status_code=409,
@@ -9337,7 +9350,7 @@ async def instance_fast_track(
     except _lanes.LaneError as err:
         return JSONResponse({"error": err.message}, status_code=err.status)
     if rec is None:
-        return JSONResponse({"error": "could not arm fast-track"}, status_code=500)
+        return JSONResponse({"error": "could not arm Goes as far as"}, status_code=500)
     # Cheap: no probes, no network. Arming changes a field in a JSON file, so the
     # press must not wait on a PR lookup (that cost ~700ms on a cold cache, ON the
     # event loop). The response carries the authoritative record so the client can
@@ -9436,9 +9449,9 @@ def _lane_refusal(title: str, lane: str, ship: bool = False):
     if sharer:
         return JSONResponse(
             {
-                "error": "%s works in this same folder — fast-tracking here would commit "
+                "error": "%s works in this same folder — shipping by itself here would commit "
                 "both sessions' work as one; start this session in its own "
-                "worktree to fast-track it" % sharer,
+                "worktree to let it ship by itself" % sharer,
                 "shared_with": sharer,
             },
             status_code=409,
@@ -10632,7 +10645,7 @@ def _empty_plan_for_closed(title: str) -> JSONResponse:
         return JSONResponse(
             {
                 "error": "that session's branch is gone",
-                "detail": "That session's branch is gone, so there is nothing to attach a checklist to.",
+                "detail": "That session's branch is gone, so there is nothing to attach behaviors to.",
             },
             status_code=409,
         )
@@ -10699,7 +10712,7 @@ async def instance_write_test_plan(
         # away, so refusing there made the button useless at the only moment
         # people reach for it. See `_closed_session_plan_inputs`.
         return await _write_test_plan_for_closed(title)
-    peer_err = _peer_guard.refusal(inst, "test plans")
+    peer_err = _peer_guard.refusal(inst, "Verify")
     if peer_err is not None:
         return peer_err
     wt = inst.GetWorktreePath()
@@ -10817,7 +10830,7 @@ async def run_test_plan(
     plan = _test_plans.get(plan_id)
     if plan is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     # A RECORD IS NOT A SESSION, here as much as below: a run whose workspace has
     # gone (cleared by hand, a disk that went away) keeps its record and its
@@ -10854,7 +10867,7 @@ async def run_test_plan(
         # as above — the request is fine, the plan is not one an agent can work.
         return JSONResponse(
             {
-                "error": "every step in this checklist is for a person to check — "
+                "error": "every behavior here is for a person to check — "
                 "there is nothing here an agent can settle"
             },
             status_code=409,
@@ -10870,7 +10883,7 @@ async def run_test_plan(
     if not await asyncio.to_thread(_is_verify_repo_usable, repo_root):
         return JSONResponse(
             {
-                "error": "the repo this checklist was written from is gone (%s) — "
+                "error": "the repo these behaviors were written from is gone (%s) — "
                 "a run needs it to check out the live branch"
                 % (repo_root or "no path recorded")
             },
@@ -11011,7 +11024,7 @@ async def run_test_plan(
         # window measures from the session and the poller only looks at plans.
         await _end_verify_session(title)
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     # The plan comes back with it. The row needs the run record `start_run` just
     # opened (the "last checked" line, the give-up clock, the carried human
@@ -11111,8 +11124,8 @@ async def _fix_failed_test_plan_steps(
     if plan is None:
         return _fix_refusal(
             404,
-            "test plan not found: %s" % plan_id,
-            "That checklist no longer exists.",
+            "behaviors not found: %s" % plan_id,
+            "Those behaviors no longer exist.",
         )
     if not git_available():
         return _fix_refusal(
@@ -11127,7 +11140,7 @@ async def _fix_failed_test_plan_steps(
         # wrong in the direction that wastes a session. A non-list (``"s3"``)
         # failed the isinstance test and silently widened the request to every
         # failure on the checklist; an id that does not exist, or one that
-        # exists and did not fail, answered "nothing on this checklist failed"
+        # exists and did not fail, answered "no behavior here failed"
         # on a checklist with three red steps — which reads as the feature being
         # broken rather than the request being wrong.
         if not isinstance(only, list) or not only:
@@ -11143,7 +11156,7 @@ async def _fix_failed_test_plan_steps(
             return _fix_refusal(
                 400,
                 "no such step: %s" % ", ".join(unknown),
-                "That step isn't on this checklist any more — refresh and try again.",
+                "That behavior isn't on the list any more — refresh and try again.",
                 unknown_steps=unknown,
             )
         chosen = {f["step"]["id"] for f in failures if f["step"]["id"] in wanted}
@@ -11158,14 +11171,14 @@ async def _fix_failed_test_plan_steps(
     if not failures:
         return _fix_refusal(
             409,
-            "nothing on this checklist failed",
-            "Nothing on this checklist failed, so there is nothing to fix.",
+            "no behavior here failed",
+            "No behavior here failed, so there is nothing to fix.",
         )
     if not plan.get("repo_root"):
         return _fix_refusal(
             409,
-            "this checklist has no repository to work in",
-            "This checklist isn't tied to a repo, so a fix session has nowhere to work.",
+            "these behaviors have no repository to work in",
+            "These behaviors aren't tied to a repo, so a fix session has nowhere to work.",
         )
     title = "fix-%s" % plan_id
     prompt = _test_plans.build_fix_prompt(plan, failures)
@@ -11194,10 +11207,10 @@ async def _fix_failed_test_plan_steps(
         ):
             return _fix_refusal(
                 409,
-                "the repo this checklist was written from is gone "
+                "the repo these behaviors were written from is gone "
                 "(%s) — a fix session needs it to work in"
                 % (plan.get("repo_root") or "no path recorded"),
-                "The repo this checklist was written from is gone — "
+                "The repo these behaviors were written from is gone — "
                 "a fix session needs it to work in.",
                 repo_root=plan.get("repo_root") or "",
             )
@@ -11284,12 +11297,12 @@ async def regenerate_test_plan(
     plan = _test_plans.get(plan_id)
     if plan is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     if plan["state"] == "running":
         return JSONResponse(
             {
-                "error": "an agent is checking this checklist right now — "
+                "error": "an agent is checking these behaviors right now — "
                 "cancel the run first"
             },
             status_code=409,
@@ -11322,7 +11335,7 @@ async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
     plan = _test_plans.get(plan_id)
     if plan is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     try:
         updated = await asyncio.to_thread(
@@ -11336,7 +11349,7 @@ async def add_test_plan_step(plan_id: str, payload: dict) -> JSONResponse:
         return JSONResponse({"error": str(err)}, status_code=400)
     if updated is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     return JSONResponse({"ok": True, "plan": updated})
 
@@ -11423,7 +11436,7 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
         # — from the caller's side they are the same mistake: it named something
         # that isn't there.
         return JSONResponse(
-            {"error": "test plan or step not found: %s / %s" % (plan_id, step_id)},
+            {"error": "behavior not found: %s / %s" % (plan_id, step_id)},
             status_code=404,
         )
     if result == "fail" and not was_failing:
@@ -11513,16 +11526,16 @@ def mark_test_plan_deployed(plan_id: str) -> JSONResponse:
     plan = _test_plans.get(plan_id)
     if plan is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     if plan["state"] != "generated" or not plan["merged_at"]:
         return JSONResponse(
-            {"error": "this checklist is not waiting on a deploy"}, status_code=409
+            {"error": "these behaviors are not waiting on a deploy"}, status_code=409
         )
     updated = _test_plans.mark_due(plan_id)
     if updated is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     _events.BUS.emit(
         "session.test_plan_due",
@@ -11553,7 +11566,7 @@ async def cancel_test_plan_run(plan_id: str) -> JSONResponse:
     plan = _test_plans.get(plan_id)
     if plan is None:
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     session_title = plan["run_session"]
     closed = await _end_verify_session(session_title)
@@ -11583,7 +11596,7 @@ async def delete_test_plan(plan_id: str) -> JSONResponse:
     plan = _test_plans.get(plan_id)
     if plan is None or not _test_plans.delete(plan_id):
         return JSONResponse(
-            {"error": "test plan not found: %s" % plan_id}, status_code=404
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     closed = await _end_verify_session(plan["run_session"])
     return JSONResponse({"ok": True, "closed": closed})

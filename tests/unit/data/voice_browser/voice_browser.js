@@ -612,8 +612,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     state.dialog = null;
     await page.evaluate(() => { window.mfVoice.answeredAt = 0; });
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 12, event: "session.activity_changed", session: "login-fix", old: "working", new: "clarify", ts: Date.now() / 1000, data: {} }));
-    await waitFor(page, () => window.__spoken.includes("Login fix is waiting on you: open the screen."), 3000, "204 line");
-    check("dialog 204 → 'is waiting on you: open the screen.'", (await spoken(page)).includes("Login fix is waiting on you: open the screen."));
+    await waitFor(page, () => window.__spoken.includes("Login fix needs you: open the screen."), 3000, "204 line");
+    check("dialog 204 → 'needs you: open the screen.'", (await spoken(page)).includes("Login fix needs you: open the screen."));
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after 204");
     // approve_dialogs false → read, "Answer it on the screen.", no listening
     state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: false };
@@ -1757,7 +1757,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page6.click("#asking-mic");
     await waitFor(page6, () => window.mfVoice.state === "dialog" && window.__rec && window.__rec.started, 4000, "dialog listening from the sheet");
     check("ask: the sheet's mic → voice on, the dialog mode listening", (await page6.evaluate(() => window.mfVoice.state)) === "dialog" && (await page6.evaluate(() => document.getElementById("asking-mic").dataset.state)) === "listening");
-    check("ask: …the strip's state mirrored on the sheet", /Waiting on you/.test(await txt6("asking-voice")), await txt6("asking-voice"));
+    check("ask: …the strip's state mirrored on the sheet", /Needs you/.test(await txt6("asking-voice")), await txt6("asking-voice"));
     await page6.evaluate(() => window.__hear("yes"));
     await waitShut6("answered by voice");
     const av = posts6("/answer").slice(ans0);

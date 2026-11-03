@@ -107,6 +107,25 @@
   line-height: 1.5;
 }
 
+/* Start here opens with the picture in one breath, set off from the steps. */
+.sky-guide-words .sky-guide-breath {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+/* Start here: the five essentials, numbered. */
+.sky-guide-start {
+  margin: 0 0 10px;
+  padding-left: 20px;
+  line-height: 1.5;
+}
+
+.sky-guide-start li + li {
+  margin-top: 6px;
+}
+
 .sky-guide-words kbd,
 .sky-guide-keys kbd {
   font: 12px/1 ui-monospace, monospace;

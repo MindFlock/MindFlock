@@ -102,7 +102,7 @@ class TestNewDialog:
         code = _code(_read("components/dialogs/NewList.tsx"))
         assert 'id="new-options"' in code
         assert 'className="rt-fold"' in code
-        assert '"Options · Fast-track: " + LANE_LABEL[lane]' in code
+        assert '"Options · Goes as far as " + LANE_LABEL[lane]' in code
         assert '"mf_new_options_open"' in code
         # A list keeps every row on screen.
         assert 'if (many) return <div className="rt-opts">{body}</div>;' in code

@@ -116,12 +116,14 @@ describe("the rail: railOrder stays the numbering authority", () => {
 describe("no Outbox: the bell and the group header", () => {
   it("the top bar carries only the daily loop", () => {
     // The Outbox, Prompts and Recent buttons are gone (dropped, Customize, the
-    // session list), and so is the Flights button (Intake / Verify / Schedule
-    // are back on the bar); the palette is the last item, after Settings.
+    // session list), and so are the Flights and Verify buttons (Intake /
+    // Schedule are on the bar; Verify is a stop on the route); the palette is
+    // the last item, after Settings.
     const top = fn("components/TopBar.tsx", "TopBar");
     for (const gone of ['"outbox-btn"', '"prompts-btn"', '"recent-btn"', '"flights-btn"']) expect(top, gone).not.toContain(gone);
     const i = top.indexOf('id="intake-btn"');
-    const v = top.indexOf('id="verify-btn"');
+    const v = top.indexOf('id="schedule-btn"');
+    expect(top).not.toContain('id="verify-btn"');
     const s = top.indexOf('id="settings-btn"');
     const p = top.indexOf('id="palette-btn"');
     expect(i).toBeGreaterThanOrEqual(0);
@@ -259,7 +261,7 @@ describe("no Outbox: the bell and the group header", () => {
     expect(has(fn("lib/laneActions.ts", "splitBlockReason"), "teamRunCaps(caps).split")).toBe(true);
     const all = allCode();
     expect(all).not.toContain("coming next");
-    expect(all).toContain("this MindFlock server can't split a line into pieces — update it");
+    expect(all).toContain("this MindFlock server can't split a session into workers — update it");
     expect(all).toContain("this MindFlock server can't make one PR for a team run — update it");
   });
 
@@ -444,12 +446,12 @@ describe("phase 3: split and one for all", () => {
     // now turns fast-track off rather than sitting disabled.
     expect(has(normCode("lib/newSessionSubmit.ts"), "inPlace: inPlace && !laneNeedsWorktree")).toBe(true);
     expect(normCode("components/dialogs/newSession/WorkspaceFold.tsx")).toContain(
-      "Turns fast-track off (it commits for this session"
+      "Sets Goes as far as to Agent only (it commits for this session"
     );
     expect(allCode()).not.toContain("not with a lane");
   });
 
-  it("the plan card asks where the pieces run", () => {
+  it("the plan card asks where the workers run", () => {
     // Split modes: the plan card offers "In separate worktrees (merge back)"
     // (default) and "In this folder (no merge)", one short line each, posts
     // the choice as `{mode}`, and — for a lead on its trunk — offers the
@@ -462,7 +464,7 @@ describe("phase 3: split and one for all", () => {
       '"/lead/branch"',
       "Start a branch here first",
       "Use separate worktrees",
-      "Where the pieces run",
+      "Where the workers run",
       "rb-modes",
       'type="radio"',
       "threadOpen(lead)",
@@ -471,8 +473,8 @@ describe("phase 3: split and one for all", () => {
     expectAll(modes, [
       '"In separate worktrees (merge back) — default"',
       '"In this folder (no merge)"',
-      "no per-piece undo.",
-      "the pieces would commit onto it",
+      "no per-worker undo.",
+      "the workers would commit onto it",
     ]);
     for (const body of [panel, modes]) {
       for (const absent of ["window.prompt", "prompt(", "confirm(", "alert("]) expect(body, absent).not.toContain(absent);

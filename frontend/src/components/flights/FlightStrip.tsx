@@ -12,7 +12,10 @@
 
 import { useState, type MouseEvent, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
-import { useFlightKinds, useFlights, useInstances } from "../../state/queries";
+import { useFlightKinds, useFlights, useInstances, useTestPlans } from "../../state/queries";
+import { planForSession } from "../../lib/behaviors";
+import { openBehaviors } from "../../lib/behaviorsFocus";
+import { BehaviorsCard } from "../behaviors/BehaviorsCard";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { useNow } from "../../lib/useNow";
@@ -34,7 +37,7 @@ import {
 } from "../../lib/flights";
 import { flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
-import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
 import "./Flights.css";
@@ -67,14 +70,65 @@ export function flightHeadline(f: Flight): string {
   return f.session || f.plan_name;
 }
 
+/** A Verify stop parked on you (docs/behaviors.md §5): its behaviors, each
+ * answered on its own in the Behaviors card — no blanket Done. The stop moves
+ * on once the last one is answered (the server settles it), or the card's
+ * Skip. `compact` (the pane's one-line strip): a way to the card in the Sky,
+ * and Skip. Before the behaviors are written: what it waits for, and Skip. */
+export function VerifyStopActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
+  const step = flight.steps[flight.cursor];
+  const plans = useTestPlans().data?.plans;
+  const rows = useInstances().data;
+  const row = rows?.find((r) => r.title === flight.session) || { title: flight.session, branch: "", repo: "" };
+  const plan = planForSession(plans || [], row);
+  const [busy, setBusy] = useState(false);
+  if (!step) return null;
+  const skip = (
+    <button
+      type="button"
+      className="test-btn fl-btn fl-skip"
+      disabled={busy}
+      title={"Skip “" + step.title + "” — the route goes on without it"}
+      onClick={() => {
+        setBusy(true);
+        void stepSkip(flight.id, step.id).finally(() => setBusy(false));
+      }}
+    >
+      Skip
+    </button>
+  );
+  if (compact || !plan)
+    return (
+      <div className={"fl-you fl-you-verify" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
+        {!compact && <p className="fl-you-text">Writing the behaviors… they show here to answer once they are written.</p>}
+        <div className="fl-you-acts">
+          {plan && (
+            <button type="button" className="btn-primary fl-btn fl-behaviors" title="Answer the behaviors that wait on you, on the session's frame in the Sky" onClick={() => openBehaviors({ planId: plan.id })}>
+              Behaviors
+            </button>
+          )}
+          {skip}
+        </div>
+      </div>
+    );
+  return (
+    <div className="fl-you fl-you-verify" onClick={stop} data-no-drag>
+      <BehaviorsCard plan={plan} compact flightStep={{ flightId: flight.id, stepId: step.id }} />
+    </div>
+  );
+}
+
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
- * what enables Done); Retry / Skip on a halted stop. */
+ * what enables Done); Retry / Skip on a halted stop (+ Let the agent fix it on
+ * a halted Verify stop). A Verify stop parked on you answers its behaviors
+ * instead (`VerifyStopActions`). */
 export function YouStepActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   if (!step || (flight.state !== "waiting_you" && flight.state !== "halted")) return null;
+  if (step.kind === "verify" && flight.state === "waiting_you") return <VerifyStopActions flight={flight} compact={compact} />;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -122,17 +176,28 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
             type="button"
             className="btn-primary fl-btn fl-done"
             disabled={busy || !allTicked}
-            title={allTicked ? "Mark “" + step.title + "” done — the flight flies on" : "Tick every item first"}
+            title={allTicked ? "Mark “" + step.title + "” done — the route goes on" : "Tick every item first"}
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
             Done
+          </button>
+        )}
+        {halted && step.kind === "verify" && (
+          <button
+            type="button"
+            className="test-btn fl-btn fl-fix"
+            disabled={busy}
+            title="Hand the failure to the agent — the behaviors are checked again after its fix"
+            onClick={() => void run(() => stepFix(flight.id, step.id))}
+          >
+            Let the agent fix it
           </button>
         )}
         <button
           type="button"
           className="test-btn fl-btn fl-skip"
           disabled={busy}
-          title={"Skip “" + step.title + "” — the flight flies on without it"}
+          title={"Skip “" + step.title + "” — the route goes on without it"}
           onClick={() => void run(() => stepSkip(flight.id, step.id))}
         >
           Skip
@@ -161,14 +226,14 @@ export function FlightMenu({
   if (live) {
     items.push(
       flight.state === "halted" || flight.state === "paused"
-        ? { key: "resume", label: "Carry on", title: "Fly on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Halt now", title: "Stop the flight at its current stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
+        ? { key: "resume", label: "Carry on", title: "Go on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
+        : { key: "pause", label: "Halt now", title: "Halt the route at its current stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
     );
-    items.push({ key: "cancel", label: "Cancel", danger: true, title: "End this flight — its session is kept", onSelect: onCancelAsk });
+    items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   }
   return (
     <span onClick={stop} className="fl-menu" data-no-drag>
-      <OverflowMenu label="Flight actions" items={items} />
+      <OverflowMenu label="Route actions" items={items} />
     </span>
   );
 }
@@ -181,16 +246,16 @@ export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () =>
   if (!step) return [];
   const items: MenuItem[] = [];
   const atCursor = n.index === flight.cursor;
-  if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the flight to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
+  if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the route to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
   if (n.state === "halted" || n.state === "failed")
     items.push({ key: "retry", label: "Retry", title: "Run this stop again", onSelect: () => void stepRetry(flight.id, step.id) });
   if (atCursor)
     items.push(
       flight.state === "halted" || flight.state === "paused"
-        ? { key: "resume", label: "Carry on", title: "Fly on from here", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Halt now", title: "Stop the flight at this stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
+        ? { key: "resume", label: "Carry on", title: "Go on from here", onSelect: () => void controlFlight(flight.id, "resume") }
+        : { key: "pause", label: "Halt now", title: "Halt the route at this stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
     );
-  items.push({ key: "cancel", label: "Cancel flight", danger: true, title: "End this flight — its session is kept", onSelect: onCancelAsk });
+  items.push({ key: "cancel", label: "Stop the route", danger: true, title: "End this route — its session is kept", onSelect: onCancelAsk });
   return items;
 }
 
@@ -202,10 +267,10 @@ export function useCancelAsk(flight: Flight | null) {
     asking && flight ? (
       <div onClick={stop}>
         <InlineConfirm
-          title="Cancel this flight?"
+          title="Stop this route?"
           body="It stops where it is. Its session, branch and work are kept."
-          confirmLabel="Cancel flight"
-          cancelLabel="Keep flying"
+          confirmLabel="Stop the route"
+          cancelLabel="Keep it running"
           busy={busy}
           onCancel={() => setAsking(false)}
           onConfirm={async () => {
@@ -225,11 +290,19 @@ export function useCancelAsk(flight: Flight | null) {
 
 /** What goes inside a live flight's boxes: the ⋯, and — when `expand` — a
  * perch's checklist with Done / Skip (or a halted stop's Retry / Skip) in the
- * current box, which is drawn bigger to hold them. */
-export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void) {
+ * current box, which is drawn bigger to hold them. `verifyInPlace` (a chain
+ * drawn by SkyChain): a Verify stop parked on you stays a tile — its
+ * Behaviors card opens in the tile's place (docs/behaviors.md §1). */
+export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void, opts: { verifyInPlace?: boolean } = {}) {
   const cur = flight ? flight.steps[flight.cursor] : null;
+  const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
   const expanded = (n: DiagramNode) =>
-    !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted");
+    !!flight &&
+    expand &&
+    n.kind === "stop" &&
+    n.index === flight.cursor &&
+    (n.state === "perched" || n.state === "halted") &&
+    !(opts.verifyInPlace && verifyHere);
   const renderInBox = (n: DiagramNode): ReactNode => {
     if (!flight || n.kind !== "stop") return null;
     const items = stopMenuItems(flight, n, onCancelAsk);
@@ -246,6 +319,8 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
   };
   const sizeOf = (n: DiagramNode, base: BoxSize): BoxSize => {
     if (!expanded(n)) return base;
+    // A Verify stop's behaviors: room for the card (it scrolls past it).
+    if (verifyHere) return { w: Math.max(base.w, 320), h: base.h + 220 };
     const items = n.state === "perched" ? youItems(cur).length : 0;
     const text = n.state === "perched" && youText(flight!) ? 24 : 0;
     return { w: Math.max(base.w, 250), h: base.h + text + items * 23 + 38 };
@@ -316,7 +391,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
         </div>
         <div className="fl-strip-now">
           {flight.state === "done" ? (
-            <span className="fl-landed">Landed</span>
+            <span className="fl-landed">Finished</span>
           ) : flight.state === "cancelled" ? (
             <span className="muted">Cancelled{flight.reason ? " — " + flight.reason : ""}</span>
           ) : step ? (
@@ -325,7 +400,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
               <span className="fl-now-title">{you ? perchLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
               {flight.state === "paused" && (
-                <span className="fl-now-paused" title={flight.reason === "halt point" ? "The flight reached a halt point and stopped before this stop — Carry on to fly on" : "Halted by you — Carry on to fly on"}>
+                <span className="fl-now-paused" title={flight.reason === "halt point" ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Halted by you — Carry on to go on"}>
                   {flight.reason === "halt point" ? "Paused at a halt point" : "Paused"}
                 </span>
               )}
@@ -375,7 +450,7 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
         <button
           type="button"
           className="fl-strip-line"
-          title={"Open the Flight tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
+          title={"Open the Route tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
           onClick={() => openFlightTab(inst.title)}
         >
           <Bird size={13} />

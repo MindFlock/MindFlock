@@ -143,7 +143,7 @@ def model_prompt(question: str, options: List[str], stat: str) -> str:
 def agent_prompt(question: str, options: List[str]) -> str:
     return "\n".join(
         [
-            "[MindFlock flight] A judge stop asks you one question about your "
+            "[MindFlock route] A judge stop asks you one question about your "
             "work so far. Answer it and do nothing else this turn.",
             question,
             "",

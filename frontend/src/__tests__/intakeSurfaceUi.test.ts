@@ -261,7 +261,7 @@ describe("each row's per-launch overrides", () => {
     // A CLI with no effort setting gets a disabled control that says so.
     expect(KIT).toContain('"No effort (" + (effortProvider || "this CLI") + ")"');
     // Each picker carries its own small label.
-    for (const label of ["Agent", "Fast-track", "Effort"])
+    for (const label of ["Agent", "Just this one", "Effort"])
       expect(KIT).toContain('<span className="ik-item-pick-label">' + label + "</span>");
     // Three pickers share the line, so it has to be allowed to fold…
     expect(rule(INTAKE_CSS_RAW, ".ik-item-start .ik-item-picks")).toContain("flex-wrap: wrap");

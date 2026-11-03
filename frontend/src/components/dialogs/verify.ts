@@ -1,4 +1,4 @@
-/** The decision rules behind the Verify surface: what a plan's run says, and
+/** The decision rules behind a session's behaviors (Verify): what a plan's run says, and
  * which plans are actually asking something of you.
  *
  * Verify exists because the pipeline's last honest checkpoint is "the PR
@@ -16,14 +16,9 @@
  * first time either is edited; one exported rule, unit-tested against plain
  * fixtures, cannot.
  *
- * The dependency runs one way and must keep running one way:
- *
- *     isWaitingOnYou  →  dueCount (the badge)
- *                     →  planGroup → groupPlans (the headings)
- *                     →  planStatus (the sentence, the tone, the button)
- *
- * Deriving the badge from whatever the list happened to render would invert it,
- * and the badge is the thing that has to be true when the dialog is shut.
+ * The Verify dialog that first rendered these is retired (Verify is a stop
+ * on the route; its behaviors live in the Sky — docs/behaviors.md): the
+ * Behaviors card, tile and board read these rules through lib/behaviors.ts.
  *
  * Two judgement calls worth knowing before reading the code:
  *
@@ -55,12 +50,6 @@ import type {
   TestStepResult,
   TestStepResultEntry,
 } from "../../api/types";
-// The list dialogs' shared matcher (Recently closed, Verify): every
-// whitespace-separated token has to appear somewhere in the row, so "sitecheck
-// grafana" narrows without anybody having to remember the separator. Verify is
-// the third list to grow a filter and it must not be the one that behaves
-// differently.
-import { matchesTokens } from "../../lib/rowSearch";
 
 /** A plan's human label. `title` is what the generator was told the work was
  * called; `id` is the session title it was keyed by, and is never empty. */
@@ -460,79 +449,6 @@ export function isNoCommits(plan: TestPlan): boolean {
   return text.includes("this branch has no commits") || text.includes("this branch changed nothing");
 }
 
-/** What the top-bar badge shows: the checklists in "Needs you" and "Failed".
- *
- * Each plan counts at most once, and it is the same two groups the dialog
- * draws first, so the number on the top bar is the number of rows under those
- * two headings. */
-export function dueCount(plans: TestPlan[]): number {
-  return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
-}
-
-/** The top bar's Verify tooltip, second line: what its count counts, now. */
-export function verifyCountLine(due: number, failing: number): string {
-  if (!due) return "Checklists that need you or failed: none right now";
-  const what = due + " checklist" + (due === 1 ? "" : "s") + " need" + (due === 1 ? "s" : "") + " you or failed";
-  return failing ? what + " — " + failing + " failed" : what;
-}
-
-/** How many of those are failures — the VerifyBar's red pill. */
-export function failingCount(plans: TestPlan[]): number {
-  return (plans || []).filter(isFailing).length;
-}
-
-/** Whether the one branch in the header is the whole story.
- *
- * The header names a live branch, and that branch is the FLOCK-WIDE default:
- * `GET /api/test-plans` resolves it with no repo in hand, so it deliberately
- * skips the per-repo link. Stating it as a fact about everything would
- * contradict the repo card two folds below ("Acme/App · live: staging") and the
- * chips on the rows, which is what the "+ per-repo" admission exists to
- * prevent — and why it must be true whenever a different answer exists
- * anywhere on the surface.
- *
- * BOTH SOURCES, UNIONED, because either can hold an answer the other has never
- * heard of:
- *
- * - The PLANS: a plan carries the branch it was actually stamped with, and a
- *   plan outlives its repo's membership in the list — a plan written before
- *   somebody removed the repo still waits on the branch it recorded.
- * - The CONFIGURED repos: writing a plan costs a model call and only happens on
- *   a push, so a repo added and given `staging` this minute has NO plans yet.
- *   That is the normal state right after configuring one, it can last
- *   indefinitely, and it is exactly when the header would otherwise state
- *   `main` as fact six lines above a card reading `staging`.
- *
- * Only blocks for repos on `trackedRepos` count. An override for a repo that is
- * not tracked does nothing at all (the backend reads tracking off the list
- * alone), and the dialog keeps such a block on purpose so a re-added repo comes
- * back with the branch the user typed — so counting it here would put a
- * "+ per-repo" on a header describing repos that have all been removed.
- * Compared case-insensitively for the same reason the backend does it: GitHub
- * slugs are case-preserving but not case-sensitive. */
-export function liveBranchOverridden(
-  liveBranch: string,
-  plans: TestPlan[],
-  trackedRepos?: string[],
-  blocks?: Record<string, { live_branch?: string } | undefined>,
-): boolean {
-  if (
-    (plans || []).some(
-      (plan) => plan.effective_live_branch && plan.effective_live_branch !== liveBranch,
-    )
-  )
-    return true;
-  const tracked = new Set(
-    (trackedRepos || []).map((slug) => String(slug || "").trim().toLowerCase()),
-  );
-  return Object.entries(blocks || {}).some(([slug, block]) => {
-    const own = String(block?.live_branch || "").trim();
-    return (
-      !!own && own !== liveBranch && tracked.has(String(slug || "").trim().toLowerCase())
-    );
-  });
-}
-
 /** The sessions a plan can be written for right now, in list order.
  *
  * A session qualifies when it has a branch (there is no diff to read a plan out
@@ -553,60 +469,6 @@ export interface ClosedTarget {
   branch?: string;
 }
 
-/** Sessions a checklist could be written for — OPEN OR RECENTLY CLOSED.
- *
- * WHY CLOSED ONES BELONG HERE. Every other part of this feature is built on a
- * checklist outliving its session: the plan stores the main repo rather than the
- * worktree precisely because the worktree is reclaimed, and a plan can be
- * rewritten and run months after the work merged. Creation was the one half that
- * still demanded a live window — so "write me a checklist for that" stopped
- * being possible at exactly the moment people reach for it, which is after the
- * work is done and the window has been put away.
- *
- * Open sessions come first: they are the ones on screen, and the closed list is
- * fifty entries deep. A title is offered once even if it appears in both (a
- * session reopened under the same name), because the thing being named is the
- * session, not the window.
- */
-export function planTargets(
-  instances: Instance[],
-  plans: TestPlan[],
-  closed: ClosedTarget[] = [],
-): string[] {
-  const havePlans = new Set((plans || []).map((plan) => plan.id));
-  // Branches a checklist already covers, keyed by repo + branch. A branch can be
-  // open
-  // in two windows (one duplicated, a repo adopted twice), and the checklist for
-  // it is keyed by whichever window got there first — so the OTHER window is not
-  // a candidate either. Offering it would promise a second checklist the server
-  // rightly refuses to write (`test_plans._branch_owner`), and the honest answer
-  // is the one this list already gives for a session with a plan: nothing to
-  // press, its plan is in the list below.
-  const covered = new Set(
-    (plans || [])
-      .map((plan) => coverageKey(repoName(plan.repo_root), plan.branch))
-      .filter(Boolean),
-  );
-  const out: string[] = [];
-  const seen = new Set<string>();
-  const take = (title: string, branch: string | undefined, repo: string) => {
-    if (!title || !branch || havePlans.has(title) || seen.has(title)) return;
-    // Only when BOTH sides name a repo. An unknown repo on either side means
-    // branch names alone would decide it, and two unrelated repos sharing a
-    // branch name are two real things to check.
-    const key = coverageKey(repo, branch);
-    if (key && covered.has(key)) return;
-    seen.add(title);
-    out.push(title);
-  };
-  for (const inst of instances || []) take(inst.title, inst.branch, inst.repo);
-  // A closed session carries no repo, so it is matched on nothing and stays
-  // offered — the server still declines to write a second checklist for a
-  // branch it already covers, and says which one covers it.
-  for (const entry of closed || []) take(entry.title, entry.branch, "");
-  return out;
-}
-
 /** `repo/branch`, or "" when either half is missing (which matches nothing). */
 function coverageKey(repo: string, branch: string): string {
   const r = (repo || "").trim();
@@ -620,33 +482,6 @@ function coverageKey(repo: string, branch: string): string {
 function repoName(repoRoot: string): string {
   const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || "";
-}
-
-/** Which of those titles is a closed session — the picker labels them, because
- * "no window will open" is worth knowing before you press the button. */
-export function closedTargets(
-  instances: Instance[],
-  closed: ClosedTarget[] = [],
-): Set<string> {
-  const live = new Set((instances || []).map((i) => i.title));
-  return new Set(
-    (closed || []).map((e) => e.title).filter((t) => t && !live.has(t)),
-  );
-}
-
-/** THE DEEP LINK, for other surfaces (a session row's or pane's "Checklist"):
- *
- *     useUi.getState().openDialogFor("verify", <branch>)
- *
- * `dialogTarget` is a BRANCH NAME (a session title is accepted too). The dialog
- * opens filtered to that branch with its checklist expanded and scrolled into
- * view; if no checklist covers it, a line at the top says so and offers "Ask
- * the agent" for the session on that branch, with New checklist opened and that
- * session picked. A null target is the plain Alt+V open. */
-export function verifyDeepLinkPlan(plans: TestPlan[], target: string): TestPlan | null {
-  const t = (target || "").trim();
-  if (!t) return null;
-  return plans.find((p) => p.branch === t) || plans.find((p) => p.id === t) || null;
 }
 
 /** One entry in "Ask the agent for a checklist": a branch, the session it
@@ -716,7 +551,7 @@ export function checklistTargets(
     // the server refuses it, so the picker says so first.
     const noCommits = !covering && !onLive && empty;
     const reason = covering
-      ? "has a checklist"
+      ? "has behaviors"
       : onLive
         ? "on " + b + " — nothing to compare"
         : noCommits
@@ -732,69 +567,6 @@ export function checklistTargets(
   // Pickable first, in the order they came (open sessions, then closed); the
   // ones that can't be picked after them, so the default is always a real one.
   return [...out.filter((t) => !t.reason), ...out.filter((t) => !!t.reason)];
-}
-
-/** Why :func:`planTargets` came back empty — one sentence, or "" when it didn't.
- *
- * Three unlike situations used to share one sentence ("Start a session first"),
- * which is simply false for the user with five sessions who is being told to
- * start a sixth. The three are genuinely different problems with different next
- * moves, and the whole cost of telling them apart is this function.
- *
- * Lives here rather than in the picker because the answer is a fact about the
- * data, and because a rule with three branches is worth pinning with a test. */
-export function noTargetsReason(
-  instances: Instance[],
-  plans: TestPlan[],
-  closed: ClosedTarget[] = [],
-): string {
-  if (planTargets(instances, plans, closed).length) return "";
-  const list = [...(instances || []), ...(closed || [])];
-  if (!list.length)
-    return "Start a session first — a checklist is written from a branch's diff.";
-  if (!list.some((inst) => inst.branch))
-    return "No session has a branch yet — a checklist is written from a branch's diff.";
-  return "Every session's branch already has a checklist.";
-}
-
-/** The groups, in the order the dialog draws them — ONE axis: what the
- * checklist says about the branch, and whose move it is.
- *
- * Round 3's judge put the question this list has to answer as "is this branch
- * verified, yes or no, before I merge?", and the old headings could not answer
- * it: "Not checked yet / Not shipped yet / Checked" mixed "has it merged?" with
- * "has it been checked?", so a branch whose every step passed before merge
- * landed under "Not shipped yet" and was never "Checked" at all. Merged or not
- * is now a fact ON the row (its verdict chip says "on branch" or "live"), and
- * the heading says only the outcome.
- *
- * Fixed order, loudest first: a failure is the most valuable thing the feature
- * produces, then what is asking for you, then what an agent or a merge is still
- * doing, then what finished short of verified, then what is verified.
- *
- * The first two groups are the badge — :func:`dueCount` counts exactly the
- * plans filed under them.
- *
- * KEYS ARE KEPT where the meaning survived. ``mf_verify_groups`` persists these
- * keys as collapse exceptions, so ``due`` / ``fail`` / ``generated`` / ``done``
- * keep their spelling; "Couldn't be written" (``failed``) folded into Failed,
- * and "Not verified" (``partial``) is new. */
-const GROUPS: Array<{ key: string; label: string }> = [
-  { key: "fail", label: "Failed" },
-  { key: "due", label: "Needs you" },
-  { key: "generated", label: "In progress" },
-  // "Couldn't be written" is back in its own group (round 5): grey, after the
-  // work in flight, and never on the badge — see `isUnwritten`.
-  { key: "failed", label: "Not written yet" },
-  { key: "partial", label: "Not verified" },
-  { key: "done", label: "Verified" },
-];
-
-/** The groups' keys in drawing order, and one group's heading — for the list's
- * "moved to Verified" notice, which has to draw a heading its plan just left. */
-export const GROUP_KEYS: readonly string[] = GROUPS.map((g) => g.key);
-export function groupLabel(key: string): string {
-  return GROUPS.find((g) => g.key === key)?.label || key;
 }
 
 /** Which group one plan belongs to.
@@ -816,97 +588,6 @@ export function planGroup(plan: TestPlan): string {
   if (verdictOf(plan) === "pass") return "done";
   if (latestRun(plan)) return "partial";
   return "generated";
-}
-
-/** Does this checklist match the dialog's filter?
- *
- * Everything the row SHOWS is searchable, plus the two things it does not: the
- * repo path (which is how you find "everything from sitecheck") and the STEP
- * TEXT. Steps matter because a checklist is remembered by what it asks — "the
- * one about the Grafana collage board" — long after its ticket number has
- * stopped meaning anything, and they are the only place those words appear.
- *
- * The group's own label is matched too, so "failed" and "not shipped" narrow
- * the list to the heading a reader can already see.
- */
-export function planMatches(plan: TestPlan, tokens: string[]): boolean {
-  if (!tokens.length) return true;
-  const fields: Array<string | null | undefined> = [
-    plan.title,
-    plan.id,
-    plan.summary,
-    plan.branch,
-    plan.sha,
-    plan.repo_root,
-    plan.live_branch,
-    GROUPS.find((g) => g.key === planGroup(plan))?.label,
-  ];
-  for (const step of plan.steps || []) {
-    fields.push(step.text, step.expect, step.actor === "human" ? "you" : "agent");
-  }
-  return matchesTokens(fields, tokens);
-}
-
-/** Whether "Check now" / "Check again" would actually do something for this plan.
- *
- * The bulk bar asks it of every selected row, because the alternative is firing
- * a request per row and reading back a wall of 409s: the run route refuses a
- * checklist that is still generating, one an agent is already working, and one
- * with no agent step in it (an agent may not settle a human step, so the
- * session would provision a workspace and hand the whole list straight back).
- */
-export function canRunNow(plan: TestPlan): boolean {
-  const action = planStatus(plan).action;
-  return action === "run" || action === "rerun" || action === "early";
-}
-
-/** Group plans for the list, dropping groups that would render empty.
- *
- * Input order is preserved inside each group — ``GET /api/test-plans`` returns
- * newest ``generated_at`` first, and re-sorting here would fight whatever the
- * caller chose.
- *
- * Empty groups are omitted rather than rendered as headers with nothing under
- * them: the common steady state is one group with one item in it, and four empty
- * headings around it would bury it. */
-export function groupPlans(
-  plans: TestPlan[],
-): Array<{ key: string; label: string; detail?: string; plans: TestPlan[] }> {
-  const buckets = new Map<string, TestPlan[]>();
-  for (const plan of plans || []) {
-    if (!plan) continue;
-    const key = planGroup(plan);
-    const bucket = buckets.get(key);
-    if (bucket) bucket.push(plan);
-    else buckets.set(key, [plan]);
-  }
-  return GROUPS.filter((g) => (buckets.get(g.key) || []).length > 0).map((g) => {
-    const found = buckets.get(g.key) || [];
-    // WHAT THE WHOLE PILE ADDS UP TO, on the heading. A collapsed group is a
-    // number and a noun — "Needs you · 7" — which says how many checklists are
-    // in there and nothing about how much is being asked: seven plans might be
-    // two steps or forty. The two groups on the badge say what the ask is,
-    // from the same tally the rows and the roll-ups use.
-    if (g.key === "due" || g.key === "fail") {
-      const sum = found.reduce(
-        (acc, p) => {
-          const t = checkTally(p);
-          return { yours: acc.yours + t.yours, failed: acc.failed + t.failed };
-        },
-        { yours: 0, failed: 0 },
-      );
-      const bits: string[] = [];
-      if (sum.failed) bits.push(sum.failed + (sum.failed === 1 ? " step failed" : " steps failed"));
-      if (sum.yours) bits.push(sum.yours + (sum.yours === 1 ? " step needs" : " steps need") + " you");
-      return {
-        key: g.key,
-        label: g.label,
-        detail: bits.length ? bits.join(" · ") : undefined,
-        plans: found,
-      };
-    }
-    return { key: g.key, label: g.label, plans: found };
-  });
 }
 
 /** What one row says and what its button does.
@@ -1125,14 +806,14 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
         "wait",
         "Not written yet — writing stopped part-way, nothing for five minutes.",
         "rewrite",
-        "Rewrite the checklist",
+        "Rewrite the behaviors",
       );
     // "Up to three minutes" is a promise; past it, the row says so (m11).
     return at(
       "wait",
       isGenerationSlow(plan)
-        ? "Writing the checklist — taking longer than usual…"
-        : "Writing the checklist from the diff — up to three minutes.",
+        ? "Writing the behaviors — taking longer than usual…"
+        : "Writing the behaviors from the diff — up to three minutes.",
       "none",
     );
   }
@@ -1165,9 +846,9 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
       "wait",
       why
         ? "Not written yet — " + why.charAt(0).toLowerCase() + why.slice(1)
-        : "Not written yet — the agent couldn't write a checklist for this.",
+        : "Not written yet — the agent couldn't write behaviors for this.",
       "rewrite",
-      "Rewrite the checklist",
+      "Rewrite the behaviors",
     );
   }
   // Steps, and a recorded failure: an older store's rewrite that timed out.
@@ -1175,23 +856,23 @@ function planStatusOf(plan: TestPlan, liveBranch = ""): PlanStatus {
   if (plan.state === "failed")
     return at(
       "warn",
-      "Rewriting this didn't work — the steps below are unchanged.",
+      "Rewriting this didn't work — the behaviors below are unchanged.",
       "rewrite",
       "Try rewriting again",
     );
 
   // Made empty on purpose ("Start an empty checklist"): nothing failed, a
   // person is about to write the steps.
-  if (isEmptyByChoice(plan)) return at("you", "Empty — add the steps to check.", "answer", "Add a step");
+  if (isEmptyByChoice(plan)) return at("you", "Empty — add the behaviors to check.", "answer", "Add a behavior");
 
   // A plan that came back empty looks identical to one still being written, so
   // it has to say which it is.
   if (!steps.length)
     return at(
       "wait",
-      "Not written yet — it came back with no steps.",
+      "Not written yet — it came back with no behaviors.",
       "rewrite",
-      "Rewrite the checklist",
+      "Rewrite the behaviors",
     );
 
   // An agent is on it right now. The one thing worth doing is watching — but
@@ -1510,7 +1191,7 @@ export function planVerdict(plan: TestPlan): PlanVerdict {
     ({ key, label, short, tone, glyph }) as PlanVerdict;
   const steps = plan.steps || [];
   if (plan.state === "generating" && !isGenerationStalled(plan))
-    return v("writing", "Being written", "busy", "\u2026", "Checklist…");
+    return v("writing", "Being written", "busy", "\u2026", "Writing…");
   if (plan.state === "running") return v("checking", "Agent checking", "busy", "\u2026", "Checking…");
   if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
   // Grey, not red: nothing about the change is known yet (M4).
@@ -1606,68 +1287,6 @@ export function checkTally(plan: TestPlan): CheckTally {
   };
   for (const step of steps) t[key[stepCheck(plan, step.id)]]++;
   return t;
-}
-
-/** One tally bit: a state, how many steps are in it, and what to call it. */
-export interface TallyBit {
-  state: CheckState;
-  count: number;
-  /** Already agreed with `count` — see `tallyBits`. */
-  label: string;
-  /** The few-word version the COLLAPSED row prints beside the glyph, so
-   * "●2 ○2" reads "● 2 for you · ○ 2 not checked" without a hover. */
-  short: string;
-}
-
-/** The tally as a list to render — the non-zero states, in a fixed order.
- *
- * WHY THIS EXISTS RATHER THAN TWO MAPS OVER `checkTally`. The roll-up above the
- * steps and the one on the COLLAPSED row are the same sentence said twice, and
- * the moment they are written twice they drift: a state added here would appear
- * in one place and not the other, and — worse — the two would word the same
- * bucket differently, so a row saying "2 open" would sit above a head saying "2
- * need you" and the reader would reasonably conclude they counted different
- * things. The order is fixed and is the order of the legend: what went well,
- * what did not, what is being asked of you, what you looked at and could not
- * settle, what nobody has touched.
- *
- * Zeroes are dropped: "0 failed" is noise on a row that has room for about five
- * words, and the absence of the red bit is the same information.
- */
-export function tallyBits(plan: TestPlan): TallyBit[] {
-  const t = checkTally(plan);
-  const bits: TallyBit[] = [
-    { state: "pass", count: t.passed, label: "passed", short: "passed" },
-    { state: "fail", count: t.failed, label: "failed", short: "failed" },
-    // The one label with a verb in it, so the one that has to agree with its
-    // number: this string is read out as the tally's whole aria-label, and "1
-    // need you" is where a screen reader gives the surface away.
-    {
-      state: "yours",
-      count: t.yours,
-      label: t.yours === 1 ? "needs you" : "need you",
-      short: "for you",
-    },
-    { state: "cant", count: t.cant, label: "you couldn't check", short: "couldn't check" },
-    { state: "pending", count: t.pending, label: "not checked yet", short: "not checked" },
-  ];
-  return bits.filter((b) => b.count > 0);
-}
-
-/** The tally as one plain sentence, for a `title` and for a screen reader.
- *
- * The row renders glyphs and numbers, which are quick to scan and impossible to
- * read aloud: `✓ 5` announces as "5" if the glyph is hidden and as "check mark
- * 5" if it is not, and neither says "passed". So the visual tally is marked
- * `aria-hidden` and this is what is announced instead — the same numbers, in
- * words, from the same source. */
-export function tallySentence(plan: TestPlan): string {
-  const t = checkTally(plan);
-  if (!t.total) return "";
-  const bits = tallyBits(plan);
-  const head = t.total + (t.total === 1 ? " step" : " steps");
-  if (!bits.length) return head;
-  return head + ": " + bits.map((b) => b.count + " " + b.label).join(", ");
 }
 
 /** The check state of one step — what its glyph and colour say.
@@ -1809,53 +1428,8 @@ export function noteDraftAfter(
   return { open: noteOpen, text: note };
 }
 
-/** Whether a keypress on a step row may record an answer right now.
- *
- * The three answer BUTTONS are `disabled` while a POST is in flight; the keys
- * were not, and did not look at `repeat` either — so holding "1" fired one POST
- * per key-repeat (roughly fifteen a second), and "2" then "1" raced two writes
- * whose last-arriving response need not be the last one the server processed.
- */
-export function stepKeyAllowed(busy: boolean, repeat: boolean): boolean {
-  return !busy && !repeat;
-}
-
 export function stepKeyIsUndo(key: string): boolean {
   return key === "u" || key === "U";
-}
-
-/** What a run is evidence ABOUT, in one line — or "" when there is nothing
- * worth saying.
- *
- * This is the only answer this surface can give to "did that actually validate
- * production", and it is worth a line of its own precisely because the honest
- * answer varies: a repo with a deployment configured had its steps worked
- * against that deployment; one without had them worked against a checkout of the
- * live branch on this machine. Saying which is the difference between evidence
- * and a claim. */
-export function runEvidence(run: TestRun | null, liveBranch = "", branch = ""): string {
-  if (!run) return "";
-  if (run.target) return "Checked against " + run.target;
-  const sha = (run.tested_sha || "").slice(0, 7);
-  if (!sha) return "";
-  // A check made BEFORE merge ran on the branch, not on the live branch — and
-  // saying "Checked on main @ 63794a4" under "Not merged yet" was a line
-  // contradicting the one above it.
-  const where = isBeforeMerge(run) && branch ? branch : liveBranch || "the live branch";
-  return "Checked on " + where + " @ " + sha;
-}
-
-/** Whether this run demonstrably worked a tree other than the one asked for.
- *
- * Three-valued in effect: either sha unknown answers false. Unknown is not
- * mismatched — a run recorded before the server asked, or one whose worktree was
- * reclaimed first, must not have its answers thrown away over a question nobody
- * was able to put. Mirrors `test_plans.run_tree_mismatch`, which is the half
- * that actually downgrades the passes. */
-export function runTreeMismatch(run: TestRun | null): boolean {
-  const tested = (run?.tested_sha || "").trim();
-  const expected = (run?.expected_sha || "").trim();
-  return !!(tested && expected && tested !== expected);
 }
 
 /** The warning a rewrite has to carry, or "" when it costs nothing.

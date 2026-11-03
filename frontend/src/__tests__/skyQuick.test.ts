@@ -53,3 +53,45 @@ describe("sub-sessions keep their spot per device", () => {
     expect(withNodePos(d, {})).toBe(d);
   });
 });
+
+describe("a stops-only route's name", () => {
+  it("is the one it was given, else its first stop and how many more — never the placeholder 'Stops'", async () => {
+    const { groundedName } = await import("../components/flights/GroundedLine");
+    expect(groundedName({ plan_name: "Iterate on the sky" })).toBe("Iterate on the sky");
+    expect(groundedName({ plan_name: "Stops", steps: [{ title: "Commit" }] })).toBe("Commit");
+    expect(groundedName({ plan_name: "", steps: [{ title: "Loop ×3" }, { title: "Commit" }, { title: "Push" }] })).toBe("Loop ×3 + 2 more");
+    expect(groundedName({ plan_name: "" })).toBe("Route");
+  });
+});
+
+describe("a landed route's blocks come off", () => {
+  it("removing one clears the finished route (Delete and the menu's Remove)", async () => {
+    const src = (await import("../components/flights/useSessionLine.tsx?raw")).default;
+    expect(src).toContain("if (!flight && landedId) return clearLanded();");
+    expect(src).toContain("landedId ? () => void clearLanded() : undefined");
+    const sky = (await import("../components/flights/SkyLine.tsx?raw")).default;
+    expect(sky).toContain("useChainMenu(gc, line.flight?.id || line.landedId");
+  });
+});
+
+describe("waits and loops in seconds, minutes or hours", () => {
+  it("durationWord and the stop summaries", async () => {
+    const { durationWord, stopSummary } = await import("../lib/flightDiagram");
+    expect(durationWord(45)).toBe("45 s");
+    expect(durationWord(600)).toBe("10 min");
+    expect(durationWord(90)).toBe("1 min 30 s");
+    expect(durationWord(7200)).toBe("2 h");
+    expect(stopSummary({ kind: "wait", config: { seconds: 30 } } as never)).toBe("30 s");
+    expect(stopSummary({ kind: "wait", config: { minutes: 5 } } as never)).toBe("5 min");
+    expect(stopSummary({ kind: "loop", config: { times: 2, every_seconds: 3600 } } as never)).toBe("2 runs · every 1 h");
+  });
+  it("the duration field shows the amount in the unit that fits, with a unit switch", async () => {
+    const { createElement } = await import("react");
+    const { renderToStaticMarkup } = await import("react-dom/server");
+    const { DurationField } = await import("../components/flights/controls");
+    const html = renderToStaticMarkup(createElement(DurationField, { label: "How long", value: 7200, onChange: () => {} }));
+    expect(html).toContain('value="2"');
+    expect(html).toContain("hours");
+    expect(renderToStaticMarkup(createElement(DurationField, { label: "How long", value: 45, onChange: () => {} }))).toContain('value="45"');
+  });
+});

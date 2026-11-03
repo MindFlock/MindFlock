@@ -1,7 +1,8 @@
-/** The New dialog's action row: page 1's ONE primary (Start ↵) with "More
- * options" and "Let the agent pick the folder…" beside it (or an Intake batch's
- * Start N), or the form's ← Back / Start, with the error line beside them.
- * "Save as template…" lives in the form's More options. */
+/** The New dialog's action row: page 1's ONE primary (Start ↵) with "Set it
+ * up myself" and "Let the agent pick the folder…" beside it (or an Intake
+ * batch's Start N), or the form's ← Back / Start, with the error line beside
+ * them. "Save as template…" lives in the form's More options fold — a name
+ * page 1's button gave up so the two never read as one thing. */
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { startLabel } from "../../../lib/runStart";
@@ -80,7 +81,7 @@ export function FooterActions({
         <p id="new-error" className="error" role="alert">{error}</p>
         {page === 1 ? (
           <>
-            {/* ONE primary. "More options" (the full form, nothing read) is
+            {/* ONE primary. "Set it up myself" (the full form, nothing read) is
                 quiet and far left; "Let the agent pick the folder…" — a model
                 turn that reads the sentence and fills the form in for review —
                 is secondary, and named for the one choice it makes instead of
@@ -91,10 +92,10 @@ export function FooterActions({
               id="new-describe-skip"
               className="nf-quiet"
               data-tour="new-more"
-              title="The full form — folder, agent, task, name and Fast-track — with what you typed as the task"
+              title="The full form — folder, agent, task, name and how far it goes — with what you typed as the task"
               onClick={setUpMyself}
             >
-              More options
+              Set it up myself
             </button>
             {/* For ONE session only: a list (or a split) starts from the rows
                 and choices above, so in run mode it is not drawn. */}
@@ -188,7 +189,7 @@ export function SaveTemplateRow({ saveTpl }: { saveTpl: SaveTemplateUi }) {
           id="new-save-tpl"
           className="linklike"
           aria-expanded={false}
-          title="Save this whole setup — folder, agent, where it works, task and Fast-track — to start again in one click or on a schedule"
+          title="Save this whole setup — folder, agent, where it works, task and how far it goes — to start again in one click or on a schedule"
           onClick={() => saveTpl.setName("")}
         >
           Save as template…
@@ -232,7 +233,7 @@ export function SaveTemplateRow({ saveTpl }: { saveTpl: SaveTemplateUi }) {
           </button>
           <span className="muted nf-save-tpl-hint">
             {saveTpl.blocked ||
-              "Saves the folder, agent, where it works, task and Fast-track. Run it from Templates, now or on a schedule."}
+              "Saves the folder, agent, where it works, task and how far it goes. Run it from Templates, now or on a schedule."}
           </span>
         </div>
       )}

@@ -1,5 +1,5 @@
-/** The Thread tab (MindFlock MCP, from the UI): a session's family on one
- * page — the workers it forked, what each one needs from you, what passed
+/** The Thread tab (MindFlock MCP, from the UI): a session and its workers on
+ * one page — the workers it started, what each one needs from you, what passed
  * between them, and a composer that types into a member's prompt AS YOU.
  *
  * Two kinds of action, never mixed (the MCP UX contract):
@@ -17,13 +17,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FinishedChild, Instance, ThreadResponse } from "../../api/types";
 import { instApi } from "../../api/client";
-import { useInstances } from "../../state/queries";
+import { useConfig, useInstances } from "../../state/queries";
 import { displayName, useUi } from "../../state/store";
 import { effectiveActivity, stageMeta } from "../../lib/stage";
 import { errMsg, relTime } from "../../lib/format";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { fetchDialog } from "../../lib/flockActions";
+import { flockAvailable, openWorkersMenu } from "../../lib/workersRequest";
 import { forkBlockReason, runPlaybook } from "../../lib/playbooks";
 import {
   ALL_WORKERS,
@@ -84,10 +85,11 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
   const { data: rowsData } = useInstances();
   const rows = useMemo(() => (rowsData ?? []) as Instance[], [rowsData]);
   const me = rows.find((r) => r.title === title && !r.device);
+  const { data: config } = useConfig();
   const { parent, children } = useMemo(() => familyOf(title, rows), [title, rows]);
   // A split's lead (or a one-for-all group's): MindFlock merges its workers
-  // back itself, so its Thread shows the plan, the pieces and the one PR —
-  // not the paste buttons a hand-run family uses.
+  // back itself, so its Thread shows the plan, the workers and the one PR —
+  // not the paste buttons a hand-run lead uses.
   const leadOf = me?.run?.role === "lead" ? me.run : null;
   const { data: leadRun } = useRun(leadOf?.id);
   const [data, setData] = useState<ThreadResponse | null>(threadCache.get(title) ?? null);
@@ -360,7 +362,7 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
                     · forked from <b className="th-sha">{selfMember.base_sha.slice(0, 7)}</b>
                   </>
                 ) : null}
-                . Its reports and messages are below; {nameOf(parent)}'s Thread has the whole family.
+                . Its reports and messages are below; {nameOf(parent)}'s Thread has all its workers.
               </p>
               {me?.order?.state === "held" && (
                 <p className="thread-sub od-self">
@@ -395,9 +397,16 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
             <>
               <h2 className="thread-title">{myName}</h2>
               <p className="thread-sub">
-                No workers yet — use Split into parallel pieces… in the session's › menu. Or write to{" "}
-                {myName} below; it is typed into its prompt as you.
+                No workers yet — Workers… lets the agent split this now, or asks for workers once or on
+                every prompt. Or write to {myName} below; it is typed into its prompt as you.
               </p>
+              {flockAvailable(me, config) && (
+                <div className="thread-head-btns">
+                  <button type="button" className="th-btn" onClick={() => openWorkersMenu(title)}>
+                    Workers…
+                  </button>
+                </div>
+              )}
             </>
           )}
         </header>

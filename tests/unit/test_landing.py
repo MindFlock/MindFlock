@@ -83,6 +83,8 @@ def test_git_facts_of_a_repo_with_no_origin(repo):
     assert len(facts["head"]) == 40
     # No merge commit yet: the last commit's time stands in.
     assert isinstance(facts["last_merge_at"], float) and facts["last_merge_at"] > 0
+    # ...and says so, so the strip reads "last commit", never "merged".
+    assert facts["last_merge_kind"] == "commit"
     # A merge commit is what the age reads.
     _git(repo, "checkout", "-q", "-b", "feat")
     (os.path.join(repo, "b.txt")) and open(os.path.join(repo, "b.txt"), "w").write("b")
@@ -92,6 +94,9 @@ def test_git_facts_of_a_repo_with_no_origin(repo):
     _git(repo, "merge", "-q", "--no-ff", "-m", "merge feat", "feat")
     merged = L.last_merge_at(repo, "main")
     assert merged is not None and merged >= facts["last_merge_at"]
+    assert L.last_merge(repo, "main") == (merged, "merge")
+    assert L.repo_facts(repo)["last_merge_kind"] == "merge"
+    assert L.last_merge(repo, "") == (None, None)
     assert L.default_branch("/nonexistent/path") == ""
     assert L.head_of(repo, "") == ""
 

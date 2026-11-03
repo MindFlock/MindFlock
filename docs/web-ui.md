@@ -1,5 +1,23 @@
 # Web UI guide
 
+**MindFlock runs your coding agents side by side.** Each **session** is one
+agent working on its own branch. Its **route** is the stops the work goes
+through until it is merged — the agent, its checks, your OK, the PR. The
+**Sky** shows every route at once, and what **needs you**.
+
+The main area has two views of the same sessions (Ctrl+Y switches):
+
+- **Sky** — air traffic control for your agents: every piece of work in
+  flight, the route it's cleared to fly, and the ones that need you.
+- **Grid** — inside the work: your sessions side by side, talk to the agents.
+
+A first launch says exactly this: the welcome card (the picture above plus a
+three-part sketch, session → route → Needs you), then three coach marks over
+the Get set up checklist. An empty Sky and an empty Grid each say what the
+view is for, with **New session** (and, on the Sky, **Connect a source in
+Intake**); Settings → General → Help → **How MindFlock works** shows the
+picture again. As built: `docs/vision/firstrun.md`.
+
 The frontend is a React + TypeScript app. Source lives in `frontend/` (Vite;
 `npm run dev` proxies to the FastAPI server, `npm run build` emits committed,
 unminified `app.js` / `style.css` / `index.html` into
@@ -12,19 +30,40 @@ and the contracts to preserve.
 ## Vocabulary
 
 One word per thing, everywhere a person reads it — the web UI, the phone page,
-CLI output, MCP tool descriptions and these docs. API paths, JSON and settings
-keys, event names and MCP tool names keep their older names (`/api/instances`,
-`autopilot`, `lane`, `set_autopilot`).
+CLI output, MCP tool descriptions and these docs. **The binding list is
+[`docs/vocabulary.md`](vocabulary.md)**; the short form is below. API paths,
+JSON and settings keys, event names and MCP tool names keep their older names
+(`/api/instances`, `/api/flights/*`, `autopilot`, `lane`, `set_autopilot`).
 
 | Thing | Word |
 |---|---|
-| An agent working on a worktree | **session** |
-| Assistant, log tail, Verify and extension rows on the rail | **window** |
-| The ladder that ships a session when its turn ends (off / Commit / Push / Open PR / Merge) | **Fast-track** |
+| One agent working in one folder/branch (a worktree + an agent CLI) | **session** |
+| The coding CLI working in a session (Claude, Codex, …) | **agent** |
+| Assistant, log tail and extension rows on the rail | **window** |
+| The row of stops a piece of work goes through | **route** (the pane tab that shows it is **Route**; cancelling it is **Stop the route**) |
+| One box on a route, every kind | **stop** (a stop with stops inside is a **group**) |
+| A route kept on the shelf to reuse | **saved route** (what starts it: **Starts:** By hand / Ticket / Schedule / …) |
+| Start a route or a template now | **Run** / **Run now** |
+| The route pauses at a stop until you Retry / Skip / Continue | **Halt** / **Halted** / **Halt here** |
+| How far a session's work goes by itself (Agent only / Commit / Push / Open PR / Merge when green) | **Goes as far as** |
+| What the work should do in real use, each checked by the agent or by you | **behaviors** (the stop that checks them is **Verify**) |
 | Several sessions started together and shipped by MindFlock | **team run** |
 | The git steps | **Commit**, **Push**, **Open PR**, **Merge** (an existing PR's link is **View PR ↗**) |
 | Leaving a session | **Close** (keeps the worktree), **Delete** (removes it) |
 | Waiting on the person | **Needs you**, with its reason: Question, Pre-commit failed, Checks failing, Setup failed |
+| The stop kind that waits for you | **Wait for me** |
+| The stop that waits for CI | **CI checks** |
+| Sessions a session starts | **workers** ("Let it split into up to N workers") |
+| Where work arrives by itself (tickets, PRs, issues) | **Intake** — each **source** says which route its items take |
+| Sessions and saved routes that start on a timer | **Schedule** |
+| The strip of work that landed | **Finished** / **Merged today** |
+
+Older sections below may still say *chain* (a route), *flyway* or *plan* (a
+saved route), *flight* (a route running on a session), *perch* (a Wait for me
+stop), *Fast-track* (Goes as far as) or *pieces* (workers); the UI copy no
+longer does.
+Internal names keep them: `/api/flights/*`, the `#flyways` deep link and the hook
+URL `/api/hooks/flyway/`.
 
 ## Layout
 
@@ -34,7 +73,8 @@ everything that needs you (see [Notifications](#notifications-)), and the
 mic right after it (below: talk to the focused session). Then the menu,
 which carries only the daily loop — **New**, the **Grid · Sky** toggle
 (`Ctrl+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
-while the sidebar, its home, is hidden or the window is phone-narrow), **Intake**
+on a phone-narrow window; its home is the sidebar, and a desktop with the
+sidebar hidden switches with `Ctrl+Y` or the palette), **Intake**
 (`Alt+I`; see [Intake](#intake)), **Verify** (`Alt+V`), **Schedule**
 (`Alt+S`; see [Schedule](#schedule)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
@@ -47,7 +87,7 @@ is the drag region that moves the desktop shell's window.
 For a while (Sky rounds 4–7) Intake, Verify and Schedule were tabs of one
 **Flights** dialog behind one top-bar button. The owner didn't love menus
 within menus, so round 8 put the three back on the bar exactly as they were;
-the Flights dialog is retired, flyways live on the [Sky](#flights-flyways-and-the-sky)'s
+the Flights dialog is retired, saved chains live on the [Sky](#chains-and-the-sky)'s
 shelf, and every old `#flights/…` link still lands (below).
 
 The bar never wraps and never clips (any width from 360 px up): it measures
@@ -87,10 +127,12 @@ working. It refreshes on `template.run_started` / `template.run_failed`
 **The Grid · Sky toggle**'s Sky half wears the count of flights **perched on
 you** (parked on a *you* stop, or halted until someone retries or skips; a
 flight parked on a Verify stop is Verify's count, not this one) — nothing at
-zero, red when one halted (`lib/flights.ts` `perchBadge`). Its folded ⋯ row
-carries the same count, and so does the sidebar View row's Sky half — the
-toggle's home, where it lives whenever the sidebar is shown (see
-[Switching](#switching)).
+zero, red when one halted (`lib/flights.ts` `perchBadge`). The toggle's home
+is the sidebar View row, whose Sky half carries the count; the bar wears the
+toggle (and its folded ⋯ row the same count) only on a phone-narrow window
+(see [Switching](#switching)). A desktop window with the sidebar hidden shows
+no perch count on the bar; perched flights still reach you through
+notifications and the Sky's drawer.
 
 **The bar's tooltips read their shortcuts off the live keymap**
 (`shortcutLabels`), rebinds included — and in a browser tab they leave out
@@ -114,8 +156,14 @@ place (`lib/flights.ts` `legacyFlightsRoute`):
 | `#flights`, `#flights/sky[/<title>]`, `#flights/board` | the Sky (`#sky`, `#sky/<title>`) |
 | `#flights/flyways[/<id>]` (and `#flights/plans[/<id>]`) | the Sky with the flyway shelf open — and that flyway's card |
 | `#flights/sources[/<tab>[:<source>]]` | Intake (`#intake/…`) |
-| `#flights/checklists[/<branch>]` | Verify (`#verify/…`) |
+| `#flights/checklists` | the Behaviors board in the Sky (`#behaviors`) |
+| `#flights/checklists/<branch>` | that branch's behaviors in the Sky (`#sky`; docs/behaviors.md §4) |
 | `#flights/schedule` | Schedule (`#schedule`) |
+
+`#behaviors` / `#behaviors/<plan id>` is a Sky link, not a surface: it switches
+to the Sky and flies to the Behaviors board or that plan's card
+(`lib/behaviorsFocus.ts` `openBehaviors`), and stays the address until the
+view moves.
 
 Four entries left the bar:
 
@@ -3186,7 +3234,7 @@ and *To send text to a session that's already running, use Prompts.*, with
 - **Not scheduled (n)** *run now or add a schedule* — the templates without a
   schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
 - **Scheduled flyways (n)** *flyways that take off by themselves* — the
-  [flyways](#flights-flyways-and-the-sky) whose trigger is a schedule
+  [saved chains](#chains-and-the-sky) whose trigger is a schedule
   (`useFlightPlans`, the plans with `trigger.kind === "schedule"`; the server
   puts their run record on each as `runs`), soonest next run first, paused
   last, as cards with a template's anatomy: the bird and the name, *2 stops ·
@@ -3838,8 +3886,8 @@ toolbar and dialog, the shelf, a grounded line, selection, the Drag / Click
 tools, Delete, the intake lane, the zoom, the ? — each centring when its
 element isn't on screen; its **?** ends the Sky's toolbar as a two-item menu,
 *Replay the tour* · *Open the guide* (the long-form **Sky guide**), and it
-opens by itself the first time the Sky is shown; see [Flights, flyways and the
-Sky](#flights-flyways-and-the-sky)),
+opens by itself the first time the Sky is shown; see [Chains and the
+Sky](#chains-and-the-sky)),
 **Intake**, **Verify**, **Schedule** (six
 steps: the top-bar **Schedule** — or **Create a template** while that item is
 still hidden — then Create a template, Name + Folder, Task, Run on a schedule
@@ -3881,6 +3929,22 @@ be the hooked element or inside it, never earlier in the page).
 
 The Map tab's own tour ([The Map tour](#the-map-tour)) is the same coach mark,
 contained in the Map's pane.
+
+### What's new
+
+After an update to a release with big features, a **What's new** window
+explains them once (`components/whatsNew/WhatsNew.tsx`; the entries are data in
+`frontend/src/whatsNew/releases.ts`, the rules pure in `lib/whatsNew.ts`). Each
+feature is a quiet row with an optional **Show me** (the Sky, its tour, the
+saved routes shelf, the Behaviors board, Settings → Agents); **Got it**, ×,
+`Esc` and the backdrop all record the running version as seen — in the synced
+`prefs.whats_new_seen`, so the tab, the desktop app and the phone share it, with
+this browser's localStorage (`mf_whats_new_seen`) as the fallback. It never
+opens on a fresh install (the version is marked seen; the welcome tour is
+theirs), never before onboarding is done or over the welcome card, a tour or a
+dialog, and never lists an entry above the running version. Reopen it from the
+palette (**What's new**), **Settings → General → Help**, or a click on the
+version beside the wordmark. Details: `docs/vision/whats-new.md`.
 
 ### Connect GitHub
 
@@ -4015,7 +4079,11 @@ count, so the number is checkable against what is on screen. When it finds
 nothing it says why: how many are in use, how many were used this week, how many
 are repositories it will never touch.
 
-## Flights, flyways and the Sky
+<a id="flights-flyways-and-the-sky"></a>
+
+## Chains and the Sky
+
+*Words: this section predates the 2026-11-02 vocabulary (see [Vocabulary](#vocabulary)). Read *flyway* as **saved chain**, *flight* as a **chain** running on a session, *perch* as a **Wait for me** stop and *Checks* as **CI checks**.*
 
 **One route from waiting to landed** (`docs/flights.md` is the design
 contract). The words are birds', never planes': a **flyway** is the route a
@@ -4202,7 +4270,9 @@ and **Schedule…**.
 **The Sky tour** (`lib/tours/sky.ts`, id `sky`; the ? at the end of the Sky's
 toolbar, and by itself once, the first time the Sky is shown in the calm
 first hour) walks every surface in the order a newcomer meets it, one plain
-sentence each: the Grid · Sky toggle (`view-sky`) · a line's bar (drag it, ⋯)
+sentence each: the Grid · Sky toggle (`view-sky` — the sidebar View row's Sky
+chip on desktop, the bar's toggle only on a phone; with the desktop sidebar
+hidden the step has no target and centres its card) · a line's bar (drag it, ⋯)
 · the boxes (the session box opens the real terminal) · the bird (click halts
 or carries on, drag jumps) · a stop's hover toolbar · a stop's dialog · the
 shelf (default blocks, saved stops, All blocks…) · a grounded line (drop a
@@ -4299,10 +4369,14 @@ All through `lib/viewMode.ts` (`setView`, `toggleView`, `showInSky`):
   only the numbers (unless a count other than Auto was picked), never the
   toggle.
 - **The top bar's Grid · Sky toggle**, beside New — the same pair, worn only
-  while the View row is out of sight: the sidebar hidden, or a phone-narrow
-  window (glyphs only there, and the last thing a narrow bar folds — into ⋯,
-  after Settings, Schedule and Verify, as *Switch to the Sky / grid*). With the
-  sidebar shown there is exactly one toggle on screen, the sidebar's.
+  on a phone-narrow window, whose sidebar is an overlay and which has no
+  `Ctrl+Y` (glyphs only there, and the last thing a narrow bar folds — into ⋯,
+  after Settings, Schedule and Verify, as *Switch to the Sky / grid*). A
+  desktop window never wears it on the bar, not even with the sidebar hidden
+  (`Ctrl+Y` and the palette switch there), so the only toggle on screen is
+  the sidebar's. The perched-on-you count rides wherever a toggle is: with a
+  desktop sidebar hidden it is on no bar (notifications and the drawer still
+  carry it).
 - **`Ctrl+Y`** — from anywhere but a text field or behind a dialog (a terminal
   included).
 - **The palette**: *Switch to the Sky* / *Switch to the grid*.
@@ -4324,8 +4398,10 @@ scrolls it; **Ctrl/⌘+wheel** or a pinch zooms about the pointer, from 40% to
 group: **−**, the readout (*100%*), **+**, **1** (fit the focused line),
 **Fit** and **100%**. The background is a faint dot grid that scales and pans
 with the plane — a dark sky in the dark theme, a white expanse in the light
-one — with the flock drifting behind it (`SkyFlock`; still while a line is
-being dragged or motion is reduced).
+one — with, if you turn it on (Settings → Appearance → **Birds in the Sky**,
+off by default), a flock drifting behind it (`SkyFlock`; paused while a line is
+being dragged, and no birds at all under reduced motion). The weather's
+clouds and night tint show either way.
 
 **Lines.** Each session is a line (`SkyLine`): a title bar — the bird, the
 name, its state chip, a 📌 when you placed it by hand, a size control and a ⋯
@@ -4472,16 +4548,18 @@ often it checks (*checks every 20 s* / *every minute*, from the source's
 `poll_interval_seconds` or `github.poll_interval_seconds` /
 `issue_poll_interval_seconds`, else the pipeline's defaults) or why it can't be
 on yet (*Add a repository first — on the GitHub PRs tab*; *Jira can't connect —
-press Fix on the Tickets tab*). Beside them, **Pause all auto-start**
-(`#ik-pause-all`) turns every switch that is on, off, in one press. It is not
-the old pause — there is no **Pause intake** any more: Pause all records nothing
-and has no Resume, and turning one back on is that switch (an older build's
+press Fix on the Tickets tab*). There is no **Pause all**, and
+there is no **Pause intake** any more: turning a source off is its own switch (an older build's
 `general.intake_paused` is still never read). The toasts keep the switches'
 long names (*Auto-start tickets on*, *Auto-address review comments off*,
-*Auto-start new issues on*).
-The Tickets / GitHub PRs / GitHub issues tabs show one line where their switch
-used to be — *Auto-start: on — checks every 20 s* · **Change ›** (or *off* ·
-**Turn on ›**) — which goes to the switches.
+*Auto-start new issues on*). Under the switches a folded **Ticket sessions**
+section holds the ticket-session settings that used to sit in Settings: how
+ticket sessions copy the repo (`engine.mode`), **Open IDE when a ticket
+starts**, and **Ticket sessions in MindFlock** (`engine.enabled`); Settings
+keeps a **Set in Intake ›** row under each old name.
+The Tickets / GitHub PRs / GitHub issues tabs show one status line where their
+switch used to be — *Auto-start: on — checks every 20 s* — and the dialog
+header's **Auto-start switches ›** goes to the switches.
 
 **What auto-starts, in one line.** A line above the tabs says what starts on its
 own right now across the three switches (*Auto-start is on for tickets and PR
@@ -5976,8 +6054,8 @@ A few screens got quieter:
   chips). Its flags field suggests a
   harmless per-agent example (never a permission-skipping flag), and
   **Sessions running at once** says it plainly: no limit on sessions you
-  start, **Ticket sessions at once** (`engine.max_sessions`, the same field
-  as Intake → Queue) for auto-started ticket sessions, and a link to Agent
+  start, a **Set in Intake ›** row for auto-started ticket sessions
+  (`engine.max_sessions` is set only in Intake › Auto-start), and a link to Agent
   orchestration's spawn limits for sessions an agent starts.
 - **Connections** leads with **What you use** — the default agent, GitHub
   and the ticket tracker — and its header count covers exactly those rows in
@@ -6844,6 +6922,12 @@ labels above the inputs.
   choice persists server-side
   (`ui.surface` / `ui.accent` via `/api/settings`) so desktop and `/m` match,
   with `localStorage` (`cs_surface` / `cs_accent`) as a pre-paint cache.
+- **Appearance → Birds in the Sky** (`mf_sky_flock`, **off by default**,
+  browser-local, not synced) — flies the ambient flock behind the Sky. Off
+  keeps the weather (clouds, the night tint) and the birds on your chains. The
+  old `mf_sky_birds` key is ignored, so the flock starts off once for everyone
+  after the release that made it opt-in; turn it back on per device and per
+  browser (the desktop app and a browser tab are separate).
 
 Theme (dark/light), sidebar visibility, view mode, pane order/layout, diff mode,
 last-used tab, and saved prompts are persisted in `localStorage` (`cs_*` /

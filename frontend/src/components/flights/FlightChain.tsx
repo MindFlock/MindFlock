@@ -5,18 +5,26 @@
  * right-click menu, the Loop pill (click = the Loop, drag = re-aim it). Wires
  * are dragged within the chain (there is no sky to reach another one): onto a
  * later stop moves it right after, onto an earlier one (or itself) loops back
- * to it, onto empty space opens the palette after it. */
+ * to it, onto empty space opens the palette after it.
+ *
+ * Round 20 (docs/flights.md "Round 20" A): drawn as the Sky draws it — the
+ * session a FRAME round the chain (its bar: name · branch · state), the
+ * agent the chain's first tile (its name, what it is doing, its chip, the
+ * bird; a click or Open terminal goes to the pane's Agent tab; right-click:
+ * Open terminal, Send a prompt…, Stop), sub-sessions small frames under it. */
 import { useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { birdPerch, lineWhere, type DiagramNode } from "../../lib/flightDiagram";
-import { firstLine } from "../../lib/format";
 import { deriveSessionState } from "../../lib/sessionState";
 import { chainColor, chainGraph, wireIntent, HEAD_ID, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { windowName } from "../../lib/windowName";
 import type { StepKindDef } from "../../lib/flights";
-import { ReadyHead, startWord } from "./ReadyHead";
-import { SkyChain } from "./SkyChain";
-import { pillAimer, useChainMenu } from "./useChainMenu";
+import { ReadyHead } from "./ReadyHead";
+import { SkyChain, agentDoing, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from "./SkyChain";
+import { agentMenuItems, pillAimer, useAgentMenu, useChainMenu } from "./useChainMenu";
+import { useFlights, useInstances } from "../../state/queries";
+import { selectSession } from "../../lib/sessionActions";
+import { useUi } from "../../state/store";
 import { useNodeMoves } from "./useSkyWiring";
 import type { useSessionLine } from "./useSessionLine";
 
@@ -29,14 +37,26 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const where = row ? lineWhere(line.diagram) : "";
-  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  // While ready, ReadyHead says so; the sub never repeats it.
+  const agent = agentTitle(row?.provider || row?.program, row?.program);
+  const headSub = agentDoing(row);
   const head: ChainHead = useMemo(
-    () => ({ kind: "session", title: windowName(title), sub: headSub, session: title, color: chainColor(title), node: sessionNode }),
-    [title, headSub, sessionNode]
+    () => ({ kind: "session", title: agent, sub: headSub, session: title, color: chainColor(title), node: sessionNode }),
+    [agent, title, headSub, sessionNode]
   );
-  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: title, flightId }), [moves.diagram, head, title, flightId]);
+  // Sub-sessions draw as small frames, as on the Sky.
+  const rows = useInstances().data;
+  const flights = useFlights().data;
+  const subFrames = useMemo(() => subFramesOf(rows || [], title, flights, kinds), [rows, title, flights, kinds]);
+  // The session's behaviors: the chain's last tile, as on the Sky
+  // (docs/behaviors.md §1; on `line.graphDiagram`) — its card opens in the
+  // tile's place here too.
+  const behaviors = line.behaviors;
+  const big = useMemo(() => ({ ...subFrameBoxes(moves.diagram.nodes, subFrames), ...behaviors.big(moves.diagram) }), [moves.diagram, subFrames, behaviors.big]);
+  const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: title, flightId, big }), [moves.diagram, head, title, flightId, big]);
   const gc = line.graphCanvas;
-  const chainMenu = useChainMenu(gc, flightId);
+  const chainMenu = useChainMenu(gc, flightId || line.landedId, { steps: line.flight?.steps, kinds });
+  const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [band, setBand] = useState<{ x1: number; y1: number; x2: number; y2: number; over: boolean } | null>(null);
@@ -78,8 +98,11 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
       if (!moved) return;
       const it = intentFor(ev.clientX, ev.clientY);
       if (!it) {
-        // Empty space: a stop right after this one.
-        if (src.id === HEAD_ID) line.togglePalette(true);
+        // Empty space: a stop beside this one's next when it may run in
+        // parallel (round 20), else a stop right after this one.
+        const sky = wireIntent({ chain: graph, node: src, side: "out" }, { sky: { x: 0, y: 0 } });
+        if (sky.op === "parallel" && line.paletteParallel) line.paletteParallel(sky.with, null);
+        else if (src.id === HEAD_ID) line.togglePalette(true);
         else line.paletteAfter(src.node, null);
         return;
       }
@@ -96,36 +119,86 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
     window.addEventListener("pointercancel", stop);
   };
 
-  const onOpen = (n: DiagramNode) => gc.onOpen?.(n);
+  // The agent's terminal is this pane's Agent tab; a sub-session's, its own.
+  const openTerminal = (t: string) => {
+    if (t === title) useUi.getState().setLastTab(title, "agent");
+    else selectSession(t);
+  };
+  const onOpen = (n: DiagramNode) => {
+    if (behaviors.onOpen(n)) return;
+    if (n.kind === "session") openTerminal(title);
+    else gc.onOpen?.(n);
+  };
+  const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => {
+    if (behaviors.onMenu(n, at)) return;
+    const t = n.kind === "session" ? title : (n.kind === "child" || n.kind === "branch") && n.session ? n.session : "";
+    if (!t) return chainMenu.onMenu(n, at);
+    const r = t === title ? row : rows?.find((x) => x.title === t);
+    agentMenu.open(t, at, agentMenuItems(r, { openTerminal: () => openTerminal(t), compose: () => agentMenu.compose(t, at) }));
+  };
+  // The frame holds every tile: one dragged left of / above the origin
+  // moves the chain in by as much.
+  const shift = { marginLeft: -Math.min(0, Math.floor(graph.bbox.x)), marginTop: -Math.min(0, Math.floor(graph.bbox.y)) };
   return (
-    <div ref={rootRef} className="fl-chain-view sky-own-scroll" aria-label={label}>
-      <SkyChain
-        graph={graph}
-        zoom={1}
-        selected={gc.selected}
-        bird={birdPerch(moves.diagram)}
-        kinds={kinds}
-        onSelect={gc.onSelect}
-        onEdit={gc.onEdit}
-        onOpen={onOpen}
-        onRemove={gc.onRemove}
-        onLoopPill={(via) => gc.onEdit?.(via)}
-        onPillDown={onPillDown}
-        onMenu={chainMenu.onMenu}
-        onNodeMove={moves.move}
-        onPortDown={onPortDown}
-        onPlus={(after) => (after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
-        renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
-        renderHead={() =>
-          line.flight?.state === "ready" ? (
-            <ReadyHead flight={line.flight} />
-          ) : (
-          <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
-            {ss.label}
-          </span>
-        )}
-      />
+    <div ref={rootRef} className={"fl-chain-view sky-own-scroll" + (behaviors.frameClass ? " " + behaviors.frameClass : "")} aria-label={label}>
+      <div className="fl-chain-frame" style={{ ["--sky-chain-color" as string]: head.color }}>
+        <div className="fl-chain-frame-bar">
+          <span className="fl-chain-frame-name">{windowName(title)}</span>
+          {row?.branch && (
+            <span className="fl-chain-frame-branch" title={"Branch " + row.branch}>
+              {row.branch}
+            </span>
+          )}
+          {row && (
+            <span className={"fl-box-chip fl-chain-frame-chip tone-" + ss.tone} title={ss.hint}>
+              {ss.label}
+            </span>
+          )}
+          {behaviors.mark?.tone === "you" && ss.tone !== "attention" && (
+            <span className="fl-box-chip fl-chain-frame-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors stop to answer it">
+              Needs you
+            </span>
+          )}
+          {where && (
+            <span className="fl-chain-frame-where" title={where}>
+              {where}
+            </span>
+          )}
+        </div>
+        <div className="fl-chain-frame-body" style={shift}>
+          <SkyChain
+            graph={graph}
+            zoom={1}
+            selected={gc.selected}
+            bird={birdPerch(moves.diagram)}
+            kinds={kinds}
+            onSelect={gc.onSelect}
+            onEdit={gc.onEdit}
+            onOpen={onOpen}
+            onRemove={gc.onRemove}
+            onLoopPill={(via) => gc.onEdit?.(via)}
+            onPillDown={onPillDown}
+            onMenu={onMenu}
+            subFrames={subFrames}
+            onNodeMove={moves.move}
+            onPortDown={onPortDown}
+            onPlus={(after) => (after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+            renderOpen={behaviors.renderOpen}
+            renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
+            renderHead={() =>
+              line.flight?.state === "ready" ? (
+                <ReadyHead flight={line.flight} />
+              ) : (
+                <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
+                  {ss.label}
+                </span>
+            )}
+          />
+        </div>
+      </div>
       {chainMenu.menu}
+      {agentMenu.menu}
+      {behaviors.menu}
       {band &&
         createPortal(
           <svg className={"sky-connect" + (band.over ? " is-over" : "")} aria-hidden="true" focusable="false">

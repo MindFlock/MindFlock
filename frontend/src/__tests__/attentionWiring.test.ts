@@ -127,7 +127,7 @@ describe("O2/O3: chips, menu actions, gate override", () => {
     expect(has(menu, 'instApi(title, "/setup/rerun", { method: "POST" })')).toBe(true);
     expect(menu).toContain('label: "Re-run worktree setup"');
     expect(has(menu, 'instApi(title, "/check", { method: "POST" })')).toBe(true);
-    expect(menu).toContain('label: "Run checks now"');
+    expect(menu).toContain('label: "Run the check command"');
     const toasts = normCode("components/EventToasts.tsx");
     expect(has(toasts, 'ev.subscribe("session.setup_finished"')).toBe(true);
     expect(has(toasts, 'ev.subscribe("session.check_finished"')).toBe(true);

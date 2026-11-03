@@ -34,10 +34,18 @@
  * a group box as one place (`drawnIndexes` / `drawnCanvas` map its places to
  * the flight's indexes and back).
  *
+ * Round 20: consecutive stops sharing `step.parallel.id` are ONE parallel
+ * group — they fly side by side. Each member stays a stop box (marked
+ * `parallel: {id, index, size}`); the line forks into them (`fan` edges from
+ * the place before) and joins after them (`join` edges into the place after),
+ * the same edge kinds a Split's branches use (`lineEdges`). `layoutDiagram`
+ * stacks a group's members in one column.
+ *
  * `layoutDiagram` places the boxes and draws the connectors as SVG paths from
  * fixed box sizes, so the markup (and a test of it) needs no DOM measuring. */
 
 import type { AutopilotRun, Instance } from "../api/types";
+import { verifyStopFace, type BehaviorTone } from "./behaviors";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
@@ -46,14 +54,17 @@ import {
   isLive,
   isShown,
   newStep,
+  parallelSpan,
   perchLabel,
   stepActor,
   stepStateOf,
   stripDots,
   youItems,
   type Flight,
+  type FlightReturn,
   type FlightRow,
   type FlightStep,
+  type StepFix,
   type StepKindDef,
   type StepRunState,
 } from "./flights";
@@ -64,7 +75,7 @@ import {
  * done or skipped, before its current one), folded into one pill. `group`
  * is a stop with sub-steps: consecutive steps sharing `step.group.id`, drawn
  * as ONE box until its line expands it (docs/flights.md "Round 11"). */
-export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown" | "group";
+export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown" | "group" | "behaviors";
 
 /** What a box shows. `edit` is a flyway's stop being drawn (no run yet). */
 export type DiagramNodeState =
@@ -167,6 +178,48 @@ export interface DiagramNode {
   when?: string;
   /** Round 16: a Loop stop's count (its return arc's pill). */
   loop?: LoopMark;
+  /** Round 20: a member of a parallel group — its id (`step.parallel.id`),
+   * its place in the group (0-based) and the group's size. */
+  parallel?: ParallelMark;
+  /** The Behaviors tile (docs/behaviors.md §1): the `behaviors` node, or the
+   * chain's Verify stop standing in for it — the session's behaviors in brief. */
+  behaviors?: BehaviorsMark;
+  /** A stop that may send work back to the agent (docs/vision/fixwire.md):
+   * where to, why, and the fix under way or just over (its return wire). */
+  ret?: ReturnMark;
+  /** A Ship stop the agent did itself (`detail.by` "agent": it had already
+   * committed, pushed or opened the PR) — its face says "by the agent". */
+  by?: "agent";
+}
+
+/** A stop's return wire as drawn: the server's `returns` entry (`to`,
+ * `case`, `of`), the stop's `detail.fix` when it has one, and what the wire
+ * says now — `case` (quiet: why it would go back), `fixing` (the agent is
+ * fixing it), `fixed` (just fixed, until the route passes the next stop),
+ * `halted` (it ran out of rounds). */
+export interface ReturnMark {
+  to: string;
+  case: string;
+  of: number | null;
+  fix?: StepFix;
+  shown: "case" | "fixing" | "fixed" | "halted";
+}
+
+/** A session's behaviors as its tile draws them (lib/behaviors
+ * `behaviorSummary`): the plan, the tile's sub line, its tone. */
+export interface BehaviorsMark {
+  planId: string;
+  /** "3 of 5 verified", "Needs you · 2", "Failed · 1", "Writing…", "Not checked". */
+  short: string;
+  status: string;
+  tone: BehaviorTone;
+}
+
+/** Round 20: where a stop sits in its parallel group. */
+export interface ParallelMark {
+  id: string;
+  index: number;
+  size: number;
 }
 
 /** A Loop's count, for its return arc: `runs` completed so far
@@ -183,7 +236,7 @@ export interface LoopMark {
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
  * join point, `loop` from the last stop a Loop repeats back to the first one
  * (a return wire under the line — the Loop itself draws no box). */
-export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join" | "loop";
+export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join" | "loop" | "fix";
 
 export interface DiagramEdge {
   from: string;
@@ -196,6 +249,8 @@ export interface DiagramEdge {
   /** A `loop` edge: the Loop stop it stands for (in the flight's indexes) —
    * the wire's pill opens, edits and removes it. */
   via?: DiagramNode;
+  /** A `fix` edge (a stop's return wire back to the agent): its mark. */
+  ret?: ReturnMark;
 }
 
 export interface Diagram {
@@ -245,7 +300,9 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     }
     case "wait": {
       const until = String(c.until ?? "").trim();
-      return until ? "until " + until : num(c.minutes, 10) + " min";
+      // Seconds since 2026-11-02 (an older `minutes` still reads).
+      const secs = num(c.seconds, 0) > 0 ? num(c.seconds, 0) : num(c.minutes, 10) * 60;
+      return until ? "until " + until : durationWord(secs);
     }
     case "reviews":
       return num(c.quiet_minutes, 10) + " min quiet";
@@ -272,10 +329,10 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     case "loop": {
       const times = Math.max(0, num(c.times, 3));
       const until = String(c.until ?? "").trim();
-      const every = Math.max(0, num(c.every_minutes, 0));
+      const every = num(c.every_seconds, 0) > 0 ? num(c.every_seconds, 0) : Math.max(0, num(c.every_minutes, 0)) * 60;
       const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
       if (until) parts.push("until " + clip(until, 22));
-      if (every) parts.push("every " + minutesWord(every));
+      if (every) parts.push("every " + durationWord(every));
       if (c.fresh) parts.push("fresh context");
       return parts.filter(Boolean).join(" · ");
     }
@@ -284,6 +341,16 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     default:
       return step.kind;
   }
+}
+
+/** A duration in seconds the way a box says it: "45 s", "10 min", "1 min 30
+ * s", "2 h", "1 h 30 min" (the server's `duration_word`). */
+export function durationWord(seconds: number): string {
+  const n = Math.round(Math.max(0, seconds));
+  if (n < 60) return n + " s";
+  if (n % 3600 === 0) return n / 3600 + " h";
+  if (n < 3600) return n % 60 === 0 ? n / 60 + " min" : Math.floor(n / 60) + " min " + (n % 60) + " s";
+  return Math.floor(n / 3600) + " h " + Math.floor((n % 3600) / 60) + " min";
 }
 
 /** Minutes the way a box says them: "30 min", "2 h", "1 h 30 min", "1 d". */
@@ -338,7 +405,9 @@ export function loopLine(step: Pick<FlightStep, "config">, rec?: Pick<StepRunSta
 /** The line's return wires: for every Loop stop of `line`, an edge from the
  * last stop before it (the end of what it repeats) back to the box drawn for
  * its `back_to` — `""` is the line's first stop, or its own group's first
- * sub-step when it is in one. The edge carries the Loop node (`via`). A Loop
+ * sub-step when it is in one; `"agent"` (`LOOP_AGENT`) is the session box
+ * (`head`: a wire from the end of what it repeats into the session tile).
+ * The edge carries the Loop node (`via`). A Loop
  * with nothing before it to repeat (or whose target is gone) draws no wire —
  * it stays a box. Folding (the flown pill, a collapsed group) re-aims the
  * wires at the box that holds their ends (`foldRun`). */
@@ -350,6 +419,15 @@ export function loopEdges(line: readonly DiagramNode[], head?: string): DiagramE
     if (s.kind !== "loop") return;
     const before = stops.slice(0, i).filter((b) => b.step!.kind !== "loop");
     const back = String(s.config?.back_to ?? "").trim();
+    // Back to the AGENT (`back_to: "agent"`): the session's agent is
+    // re-prompted, then the chain runs again — a wire from the end of what
+    // it repeats into the session tile. Only a session's chain has one.
+    if (back === LOOP_AGENT) {
+      if (!head) return;
+      const last = before[before.length - 1];
+      out.push({ from: last ? last.id : head, to: head, kind: "loop", loop: n.loop || loopMark(s), via: n });
+      return;
+    }
     const gid = s.group?.id;
     const target = back ? before.find((b) => b.step!.id === back) : gid ? before.find((b) => b.step!.group?.id === gid) : before[0];
     const end = before[before.length - 1];
@@ -396,10 +474,74 @@ export function loopSlotAfter(n: Pick<DiagramNode, "index" | "kind" | "group">):
   return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
 }
 
-/** A new Loop step of `def` that repeats from `target` (its `back_to`). */
-export function loopStepTo(def: StepKindDef, taken: readonly string[], target: FlightStep): FlightStep {
+/** A Loop's `back_to` that means the session's AGENT (the backend's
+ * contract): the agent is re-prompted (the Loop's `prompt`, else the prompt
+ * that started its turn), its turn runs, then the chain runs again from its
+ * first stop. Only on a chain that has a session. */
+export const LOOP_AGENT = "agent";
+
+/** A Loop step goes back to the agent. */
+export const loopsToAgent = (step: Pick<FlightStep, "kind" | "config"> | null | undefined): boolean =>
+  !!step && step.kind === "loop" && String(step.config?.back_to ?? "").trim() === LOOP_AGENT;
+
+/** A new Loop step of `def` that repeats from `target` (its `back_to`): a
+ * stop, or `LOOP_AGENT` — the session's agent. */
+export function loopStepTo(def: StepKindDef, taken: readonly string[], target: FlightStep | typeof LOOP_AGENT): FlightStep {
   const step = newStep(def, taken);
-  return { ...step, config: { ...step.config, back_to: target.id } };
+  return { ...step, config: { ...step.config, back_to: target === LOOP_AGENT ? LOOP_AGENT : target.id } };
+}
+
+/** The `back_to` a Loop re-aimed at `to` takes: the agent for a session
+ * box, else `to`'s first step's id ("" when it has none). */
+export function loopBackTo(to: Pick<DiagramNode, "kind" | "step" | "group">): string {
+  if (to.kind === "session") return LOOP_AGENT;
+  return firstStepOf(to)?.id || "";
+}
+
+/** One choice of a stop's "Loop back to…" (its ⋯ menu): the agent, or a stop
+ * at or before it. `to` is what the wire would land on. */
+export interface LoopChoice {
+  key: string;
+  label: string;
+  title: string;
+  agent: boolean;
+  /** What the Loop goes after (`n`, or the last of its parallel group) and
+   * what it goes back to — a line's `onLoopFrom(from, to)`. */
+  from: DiagramNode;
+  to: DiagramNode;
+}
+
+/** Where a Loop drawn out of `n` may go back to, for its ⋯ menu's "Loop
+ * back to…" — exactly what a wire dropped from `n`'s out port may land on:
+ * the session's agent (`session`: the line's session box, when it has
+ * one) first, then every stop / group box at or before `n` that can
+ * repeat (not a Loop). `nodes` is the line in flight order (its main row);
+ * `insertFrom` is the line's (a Loop may only go after an open slot).
+ * Empty when `n` can't have a Loop after it. */
+export function loopChoices(n: DiagramNode, nodes: readonly DiagramNode[], opts: { session?: DiagramNode | null; insertFrom?: number } = {}): LoopChoice[] {
+  const canRepeat = (m: DiagramNode) => (m.kind === "stop" ? !!m.step && m.step.kind !== "loop" : m.kind === "group") && m.index !== undefined && m.row === "main";
+  if (!canRepeat(n)) return [];
+  const from = loopFromOf(n, nodes);
+  const slot = loopSlotAfter(from);
+  if (slot === undefined || slot < (opts.insertFrom ?? 0)) return [];
+  const out: LoopChoice[] = [];
+  if (opts.session)
+    out.push({ key: "loop-to-agent", label: "The agent (run it again)", title: "After this stop the agent is prompted again, then the route runs again", agent: true, from, to: opts.session });
+  for (const m of nodes) {
+    if (!canRepeat(m) || m.index! > n.index!) continue;
+    out.push({ key: "loop-to:" + m.id, label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”", title: "After this stop the route goes back to “" + m.title + "”", agent: false, from, to: m });
+  }
+  return out;
+}
+
+/** "After `n`" for a Loop drawn out of it: `n`, or the last member of the
+ * parallel group it is in (a Loop goes after the whole group). */
+export function loopFromOf(n: DiagramNode, nodes: readonly DiagramNode[]): DiagramNode {
+  const pid = n.parallel?.id;
+  if (!pid) return n;
+  let last = n;
+  for (const m of nodes) if (m.parallel?.id === pid && m.index !== undefined && last.index !== undefined && m.index > last.index) last = m;
+  return last;
 }
 
 /** A node by id: the line's own, a sub-step of one of its group boxes, or
@@ -417,9 +559,124 @@ export function findNode(d: Pick<Diagram, "nodes" | "edges">, id: string | null 
 /** The pill on a Loop's wire before it runs: "↻ ×3", "↻ until checks
  * green", "↻ until stopped". */
 export function loopIdlePill(m: LoopMark, via?: Pick<DiagramNode, "step"> | null): string {
-  if (m.times > 0) return "↻ ×" + m.times;
+  const pace = loopPace(via);
+  if (m.times > 0) return "↻ repeat ×" + m.times + pace;
   const until = String(via?.step?.config?.until ?? "").trim();
-  return until ? "↻ until " + clip(until, 18) : "↻ until stopped";
+  return (until ? "↻ until " + clip(until, 18) : "↻ until stopped") + pace;
+}
+
+/** " · every 30 min" for a paced Loop (`every_seconds`, else the older
+ * `every_minutes`), "" otherwise. */
+function loopPace(via?: Pick<DiagramNode, "step"> | null): string {
+  const c = via?.step?.config || {};
+  let secs = Math.floor(num(c.every_seconds, 0));
+  if (secs <= 0) secs = Math.floor(num(c.every_minutes, 0)) * 60;
+  return secs > 0 ? " · every " + durationWord(secs) : "";
+}
+
+/** The case on a running Loop's wire, beside its "2 / 3" pill — what the
+ * count does not say: its `until`, its pace ("until checks green · every 30
+ * min"); "" when the count says it all. */
+export function loopCaption(m: LoopMark, via?: Pick<DiagramNode, "step"> | null): string {
+  if (m.state === "pending" && m.runs === 0) return "";
+  const until = String(via?.step?.config?.until ?? "").trim();
+  const pace = loopPace(via);
+  if (until) return "until " + clip(until, 18) + pace;
+  return pace ? pace.slice(3) : m.times > 0 ? "" : "until stopped";
+}
+
+// --- A stop's return wire back to the agent (docs/vision/fixwire.md) ------------
+
+/** A stop's `detail.fix`, read defensively; undefined when it has none. */
+export function fixOf(detail: Record<string, unknown> | null | undefined): StepFix | undefined {
+  const f = detail?.fix as Partial<StepFix> | undefined;
+  if (!f || typeof f !== "object") return undefined;
+  const round = Math.max(1, Math.floor(num(f.round, 1)));
+  const of = f.of === null || f.of === undefined ? null : Math.max(0, Math.floor(num(f.of, 0))) || null;
+  return {
+    active: !!f.active,
+    round,
+    rounds: Math.max(round, Math.floor(num(f.rounds, round))),
+    of,
+    reason: String(f.reason ?? ""),
+    since: num(f.since, 0),
+    to: String(f.to ?? "") || LOOP_AGENT,
+    ...(f.kind ? { kind: String(f.kind) } : {}),
+    ...(f.outcome === "fixed" || f.outcome === "halted" ? { outcome: f.outcome } : {}),
+  };
+}
+
+/** Stop `i`'s return mark: the server's `returns` entry and its fix (either
+ * makes a wire). `passedNext`: the route is past the stop after it — a fix
+ * it just finished goes quiet again. */
+export function returnMark(ret: FlightReturn | null | undefined, fix: StepFix | undefined, stopState: DiagramNodeState, passedNext: boolean): ReturnMark | undefined {
+  if (!ret && !fix) return undefined;
+  const shown: ReturnMark["shown"] = fix?.active
+    ? "fixing"
+    : fix?.outcome === "fixed" && !passedNext
+      ? "fixed"
+      : fix?.outcome === "halted" && (stopState === "halted" || stopState === "failed")
+        ? "halted"
+        : "case";
+  return {
+    to: ret?.to || fix?.to || LOOP_AGENT,
+    case: ret?.case || "if it fails",
+    of: ret ? ret.of : (fix?.of ?? null),
+    ...(fix ? { fix } : {}),
+    shown,
+  };
+}
+
+/** "fixing 1/2", "fixing round 3" — a fix's round as its label says it. */
+export function fixingWord(m: Pick<ReturnMark, "of">, fix: Pick<StepFix, "round">): string {
+  return "fixing " + (m.of ? fix.round + "/" + m.of : "round " + fix.round);
+}
+
+/** The text on a stop's return wire: quiet, the case ("if pre-commit
+ * fails"); while fixing the real reason and the round ("pre-commit failed
+ * at ruff · fixing 1/2"); just after, "fixed after 1 round"; out of rounds,
+ * "halted after 2 rounds". */
+export function returnLabel(m: ReturnMark): string {
+  const f = m.fix;
+  if (m.shown === "fixing" && f) return (f.reason ? clip(f.reason, 40) + " · " : "") + fixingWord(m, f);
+  if (m.shown === "fixed" && f) return "fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
+  if (m.shown === "halted" && f) return "halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
+  return m.case;
+}
+
+/** The wire's tooltip: the case, and the whole reason while it fixes. */
+export function returnTitle(m: ReturnMark, to = "the agent"): string {
+  const f = m.fix;
+  const cap = m.of ? " (at most " + m.of + (m.of === 1 ? " round)" : " rounds)") : "";
+  const base = "If it fails: Let the agent fix it — " + m.case + ", back to " + to + cap;
+  if (m.shown === "fixing" && f) return (f.reason || "It failed") + " — the agent is fixing it (round " + f.round + (m.of ? " of " + m.of : "") + ")";
+  if (m.shown === "fixed" && f) return "Fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
+  if (m.shown === "halted" && f) return "Halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
+  return base;
+}
+
+/** The face of a stop whose failure is with the agent: "Agent fixing ·
+ * round 1". */
+export function fixFace(fix: StepFix): string {
+  return "Agent fixing · round " + fix.round;
+}
+
+/** The line's return wires back to the agent: for every stop of `line` with
+ * a return mark (`ret`), an edge from it back to its `to` — an Agent stop
+ * drawn before it, else the session tile (`head`). With no head and no such
+ * stop it draws none. */
+export function returnEdges(line: readonly DiagramNode[], head?: string): DiagramEdge[] {
+  const stops = line.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group"));
+  const out: DiagramEdge[] = [];
+  stops.forEach((n, i) => {
+    const m = n.ret;
+    if (!m) return;
+    const target = m.to === LOOP_AGENT ? undefined : stops.slice(0, i).find((b) => b.step?.id === m.to || b.group?.steps.some((s) => s.id === m.to));
+    const to = target ? target.id : head;
+    if (!to) return;
+    out.push({ from: n.id, to, kind: "fix", ret: m });
+  });
+  return out;
 }
 
 /** A stop's title as its box says it: a perch reads "Perch: <title>". */
@@ -431,10 +688,65 @@ export function stopTitle(step: FlightStep, kinds?: readonly StepKindDef[] | nul
 
 const stopId = (s: FlightStep, i: number) => "stop:" + (s.id || "i" + i);
 
+/** Round 20: step `i`'s place in its parallel group, or nothing for a step
+ * of its own. */
+export function parallelMark(steps: readonly FlightStep[], i: number): { parallel?: ParallelMark } {
+  const [lo, hi] = parallelSpan(steps, i);
+  if (hi - lo < 2) return {};
+  return { parallel: { id: steps[i].parallel!.id, index: i - lo, size: hi - lo } };
+}
+
+/** The line cut into its places: a parallel group's consecutive members
+ * (sharing `parallel.id`) are one place, every other node one of its own. */
+export function lineRuns(line: readonly DiagramNode[]): DiagramNode[][] {
+  const out: DiagramNode[][] = [];
+  for (const n of line) {
+    const last = out[out.length - 1];
+    const pid = n.parallel?.id;
+    if (pid && last && last[0].parallel?.id === pid) last.push(n);
+    else out.push([n]);
+  }
+  return out;
+}
+
+const FLOWN_STATES: ReadonlySet<DiagramNodeState> = new Set(["done", "skipped", "failed"]);
+
+/** The line's edges, in line order: one place to the next, a `line` (an
+ * `add` into the trailing +). Round 20: into a parallel group the line FORKS
+ * — a `fan` edge from the place before to each member — and out of it it
+ * JOINS — a `join` edge from each member into the place after (drawn `done`
+ * once that member has flown); the + after a group trails its last member
+ * only. Two groups in a row join every member of the first into every
+ * member of the second. */
+export function lineEdges(line: readonly DiagramNode[]): DiagramEdge[] {
+  const runs = lineRuns(line);
+  const edges: DiagramEdge[] = [];
+  for (let k = 1; k < runs.length; k++) {
+    const a = runs[k - 1];
+    const b = runs[k];
+    if (b.length === 1 && b[0].kind === "add") {
+      edges.push({ from: a[a.length - 1].id, to: b[0].id, kind: "add" });
+      continue;
+    }
+    for (const x of a)
+      for (const y of b) {
+        if (a.length > 1) edges.push(FLOWN_STATES.has(x.state) ? { from: x.id, to: y.id, kind: "join", done: true } : { from: x.id, to: y.id, kind: "join" });
+        else edges.push({ from: x.id, to: y.id, kind: b.length > 1 ? "fan" : "line" });
+      }
+  }
+  return edges;
+}
+
 function chain(nodes: DiagramNode[], edges: DiagramEdge[], line: DiagramNode[]) {
-  for (let i = 1; i < line.length; i++)
-    edges.push({ from: line[i - 1].id, to: line[i].id, kind: line[i].kind === "add" ? "add" : "line" });
+  edges.push(...lineEdges(line));
   nodes.push(...line);
+}
+
+/** Where a live flight takes new stops: past its current place (a parallel
+ * group at the cursor: past its last member); anywhere on a ready one. */
+export function insertFromOf(f: Pick<Flight, "cursor" | "steps"> & { state?: string }): number {
+  if (f.state === "ready" || f.state === "grounded") return 0;
+  return Math.max(f.cursor + 1, parallelSpan(f.steps, f.cursor)[1]);
 }
 
 function addNode(title: string): DiagramNode {
@@ -457,6 +769,7 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     editable: true,
     ...looksOf(s, kinds),
     ...(s.kind === "loop" ? { loop: loopMark(s) } : {}),
+    ...parallelMark(steps, i),
   }));
   const { line, loops } = liftLoops(stops);
   line.push(addNode("Add a stop"));
@@ -473,12 +786,22 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
   // Stops with no session yet, or built and not yet flying (round 19 ready):
   // nothing has flown, every one can change.
   const grounded = f.state === "grounded" || f.state === "ready";
+  // Round 20: the cursor's parallel group — every member flies at once.
+  const [glo, ghi] = parallelSpan(f.steps, f.cursor);
+  const open = Math.max(f.cursor + 1, ghi);
   return f.steps.map((s, i) => {
     const st = stepStateOf(f, s, i);
-    const atCursor = i === f.cursor && live;
+    const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
+    const atCursor = live && (i === f.cursor || inGroup);
     let state: DiagramNodeState =
       st === "done" ? "done" : st === "skipped" ? "skipped" : st === "failed" ? "failed" : st === "waiting_you" ? "perched" : st === "running" ? "current" : "pending";
-    if (atCursor && f.state === "halted") state = "halted";
+    if (inGroup && state === "done") {
+      // A member through, its group still flying: it stays done.
+    } else if (inGroup && f.state === "halted") {
+      if (st === "failed") state = "halted";
+    } else if (inGroup && f.state === "paused") {
+      if (state === "current" || state === "pending") state = "paused";
+    } else if (atCursor && f.state === "halted") state = "halted";
     else if (atCursor && f.state === "paused") state = "paused";
     const rec = f.step_states?.[s.id];
     // A Loop that sent the flight back keeps its record `running` while the
@@ -488,23 +811,30 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     if (loop && state === "current" && live && i > f.cursor) state = "pending";
     const flown = state === "done" || state === "skipped" || state === "failed";
     const looping = !!loop && !flown && (loop.runs > 0 || (atCursor && state !== "pending"));
+    const fix = fixOf(rec?.detail);
+    const next = f.steps[i + 1];
+    const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
+    const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
     return {
       id: stopId(s, i),
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
-      sub: looping ? loopLine(s, rec) : stopSummary(s),
+      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSummary(s),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",
       step: s,
       index: i,
-      editable: grounded || (live && state === "pending" && i > f.cursor),
+      editable: grounded || (live && state === "pending" && i >= open),
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
+      ...(ret ? { ret } : {}),
+      ...(state === "done" && rec?.detail?.by === "agent" ? { by: "agent" as const } : {}),
       ...(!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}),
+      ...parallelMark(f.steps, i),
     };
   });
 }
@@ -548,12 +878,13 @@ export function receiptOf(detail: Record<string, unknown> | null | undefined): s
  * while it is in the air. */
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
   const { line, loops } = liftLoops(flightStops(f, kinds));
+  const rets = returnEdges(line);
   if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
-  edges.push(...loops);
-  return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.cursor + 1 };
+  edges.push(...loops, ...rets);
+  return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.state === "grounded" || f.state === "ready" ? f.cursor + 1 : insertFromOf(f) };
 }
 
 // --- The fast-track ladder as boxes --------------------------------------------------
@@ -609,12 +940,13 @@ function sessionBox(row: Instance, kind: "parent" | "session" | "child", rowAt: 
   };
 }
 
-/** The session's most recent flight that has landed (done or cancelled), from
- * the flights query (it keeps the last finished ones), else null. */
+/** The session's most recent flight that LANDED (done), from the flights query
+ * (it keeps the last finished ones), else null. A cancelled one is gone: you
+ * threw it away (the owner saw old cancelled Loops reappear on sessions). */
 export function landedFlightOf(title: string, flights?: readonly Flight[] | null): Flight | null {
   let best: Flight | null = null;
   for (const f of flights || []) {
-    if (f.session !== title || (f.state !== "done" && f.state !== "cancelled")) continue;
+    if (f.session !== title || f.state !== "done") continue;
     if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
   }
   return best;
@@ -675,9 +1007,11 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
     insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
     const full = opts.flights?.find((f) => f.id === fl.id);
     if (full) {
+      // Round 20: a parallel group at the cursor takes no stop inside it.
+      if (fl.state !== "ready") insertFrom = Math.max(insertFrom, insertFromOf(full));
       const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
       line.push(...lifted.line);
-      loops = lifted.loops;
+      loops = [...lifted.loops, ...returnEdges(line, me.id)];
     } else
       for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
         const cur = i === fl.cursor;
@@ -705,7 +1039,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
     insertFrom = done.steps.length;
     const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
     line.push(...lifted.line);
-    loops = lifted.loops;
+    loops = [...lifted.loops, ...returnEdges(line, me.id)];
   } else {
     const rungs = ladderRungs(row);
     if (rungs.length) {
@@ -717,7 +1051,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
           kind: "rung",
           row: "main",
           title: LANE_LABEL[r.lane],
-          sub: "fast-track" + (r.state === "current" && row.autopilot?.note ? " · " + clip(row.autopilot.note, 24) : ""),
+          sub: "goes as far as" + (r.state === "current" && row.autopilot?.note ? " · " + clip(row.autopilot.note, 24) : ""),
           state: r.state,
           icon: "ship",
           reason: r.state === "halted" ? reason : "",
@@ -729,11 +1063,12 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
   const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
   if (fans) {
     nodes.push(...line);
+    const plain = lineEdges(line);
     for (let i = 1; i < line.length; i++) {
       const a = line[i - 1];
       const b = line[i];
       // A stop with branches reaches the next box THROUGH them.
-      if (!fans.out.has(a.id)) edges.push({ from: a.id, to: b.id, kind: b.kind === "add" ? "add" : "line" });
+      if (!fans.out.has(a.id)) edges.push(...plain.filter((e) => e.from === a.id));
       for (const c of fans.out.get(a.id) || []) {
         nodes.push(c);
         edges.push({ from: a.id, to: c.id, kind: "fan" });
@@ -828,9 +1163,16 @@ function foldRun(d: Diagram, run: readonly DiagramNode[], into: DiagramNode): Di
     else nodes.push(n);
   }
   const fanned = inner.size > 0;
+  // Round 20: a parallel group's fork / join folded into the box: the
+  // box's own wires are plain line again.
+  const members = new Set(run.filter((n) => n.parallel).map((n) => n.id));
   const edges: DiagramEdge[] = [];
   const seen = new Set<string>();
-  for (const e of d.edges) {
+  for (const e0 of d.edges) {
+    const e: DiagramEdge =
+      (e0.kind === "fan" && members.has(e0.to)) || (e0.kind === "join" && members.has(e0.from))
+        ? { from: e0.from, to: e0.to, kind: d.nodes.find((n) => n.id === e0.to)?.kind === "add" ? "add" : "line" }
+        : e0;
     const from = to(e.from);
     let dest = to(e.to);
     // A fan-in into a folded box from a branch of the run joins past it.
@@ -870,6 +1212,12 @@ export function collapseFlown(d: Diagram): Diagram {
     if (n.kind !== "stop" || n.inGroup || (n.state !== "done" && n.state !== "skipped")) break;
     run.push(n);
   }
+  // Round 20: the pill never ends inside a parallel group (one member still
+  // flying): it stops before the group's first member.
+  if (run.length < FLOWN_MIN) return d;
+  const after = main[main.indexOf(run[run.length - 1]) + 1];
+  const pid = run[run.length - 1].parallel?.id;
+  if (pid && after?.parallel?.id === pid) while (run.length && run[run.length - 1].parallel?.id === pid) run.pop();
   if (run.length < FLOWN_MIN) return d;
   const first = run[0];
   const last = run[run.length - 1];
@@ -877,7 +1225,7 @@ export function collapseFlown(d: Diagram): Diagram {
     id: FLOWN_ID,
     kind: "flown",
     row: "main",
-    title: run.length + " flown",
+    title: run.length + " done",
     sub: first.title + " … " + last.title,
     state: "done",
     icon: "flown",
@@ -951,6 +1299,9 @@ export function collapseGroups(d: Diagram, expanded?: ReadonlySet<string> | null
   let out = d;
   const seen = new Set<string>();
   for (const run of runs) {
+    // A group of ONE stop is that stop (the owner saw a lone Commit "boxed
+    // out" as a "Stops · 0 of 1" group after a chain was joined on).
+    if (run.length < 2) continue;
     const g = run[0].step!.group!;
     const id = "group:" + g.id + (seen.has(g.id) ? "@" + run[0].index : "");
     seen.add(g.id);
@@ -1102,9 +1453,11 @@ export function lineWhere(d: Diagram): string {
     b = { nodeId: parked.id, tone: STOP_TONE[parked.state]! };
   }
   if (!b) return "";
-  const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+  const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
   const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
-  return head + n.title + (tail ? " · " + tail : "");
+  // "needs you at" already says whose stop it is: no "Wait for me:" after it.
+  const title = b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title;
+  return head + title + (tail ? " · " + tail : "");
 }
 
 /** How many stops a line's `flown` pill folds (0: none). The canvas speaks
@@ -1312,6 +1665,10 @@ export function birdPerch(d: Diagram): BirdPerch | null {
   const stop: Pick<DiagramNode, "id" | "state"> | undefined =
     main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]) || (lp ? { id: lp.from, state: lp.via!.state } : undefined);
   const me = main.find((n) => n.kind === "session");
+  // A stop's failure is with the agent (its return wire is lit): the bird
+  // sits on the agent it went back to while it fixes.
+  const fixing = d.edges.find((e) => e.kind === "fix" && e.ret?.shown === "fixing" && main.some((n) => n.id === e.from && n.state === "current"));
+  if (fixing) return { nodeId: fixing.to, tone: "working" };
   // The bird follows the work: a flight halted or paused at a stop while
   // the agent itself is busy puts the bird on the session box, not on the
   // stop it is parked at (the owner: "why is the bird on Commit when the
@@ -1514,12 +1871,35 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     const top = above.length ? m.box.h + m.vgap : 0;
     let x = 0;
     let fanBottom = 0;
-    for (const n of main) {
+    // Round 20: a parallel group's members share one column (the first on
+    // the line, the rest below it); the line goes on past the widest.
+    let colX = 0;
+    let colY = 0;
+    let colW = 0;
+    for (let k = 0; k < main.length; k++) {
+      const n = main[k];
       const s = size(n);
-      // A smaller box (the +, the flown pill) sits centred on the line's anchor.
-      put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
-      x += s.w + m.gap;
-      const col = fans.get(n.id);
+      const pid = n.parallel?.id;
+      if (pid) {
+        const first = main[k - 1]?.parallel?.id !== pid;
+        if (first) {
+          colX = x;
+          colY = top;
+          colW = 0;
+        }
+        put(n, colX, colY);
+        colY += s.h + m.vgap;
+        colW = Math.max(colW, s.w);
+        const lastOne = main[k + 1]?.parallel?.id !== pid;
+        if (!lastOne) continue;
+        x = colX + colW + m.gap;
+        fanBottom = Math.max(fanBottom, colY - m.vgap);
+      } else {
+        // A smaller box (the +, the flown pill) sits centred on the line's anchor.
+        put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
+        x += s.w + m.gap;
+      }
+      const col = pid ? main.filter((g) => g.parallel?.id === pid).flatMap((g) => fans.get(g.id) || []) : fans.get(n.id);
       if (!col?.length) continue;
       const sizes = col.map(size);
       const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
@@ -1548,8 +1928,10 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     }
     for (const n of main) {
       const s = size(n);
-      put(n, n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
-      y += s.h + m.vgap;
+      // Round 20: a parallel group's members indented under the place
+      // before, as a Split's branches are (its fork runs down their side).
+      put(n, n.parallel ? m.indent : n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
+      y += s.h + (n.parallel && n.parallel.index < n.parallel.size - 1 ? m.bgap : m.vgap);
       const col = fans.get(n.id);
       if (!col?.length) continue;
       for (const c of col) {
@@ -1584,7 +1966,9 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     // A child hung off the line: its `branch` wire runs the way a fan-out does.
     const kind: DiagramEdgeKind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
     let path = "";
-    if (kind === "loop") {
+    if (kind === "loop" || kind === "fix") {
+      // A stop's return wire back to the agent (`fix`) arcs back the way a
+      // Loop's does (the Sky draws its words; this canvas only the arc).
       const arc = loopArc(a, b, anchorOf, !!opts.vertical, boxes);
       wires.push({ from: e.from, to: e.to, kind, d: arc.d, apex: arc.apex, ...(e.loop ? { loop: e.loop } : {}), ...(e.via ? { via: e.via } : {}) });
       continue;
@@ -1742,4 +2126,41 @@ export function reorderDiagram(d: Diagram, from: number, to: number): Diagram {
   for (const b of [...branches, ...hung])
     if (b.branch) edges.push({ from: b.id, to: b.branch.to, kind: "join", ...(joinDone.get(b.id) ? { done: true } : {}) });
   return { ...d, nodes: [...rest, ...line, ...branches], edges };
+}
+
+// --- The Behaviors tile (docs/behaviors.md §1) --------------------------------------
+
+/** The Behaviors tile's node id. */
+export const BEHAVIORS_ID = "behaviors";
+
+/** The chain's Verify stop that stands in for the Behaviors tile: the LAST
+ * plain stop of kind `verify` on the line, else null. */
+export function verifyStopOf(d: Pick<Diagram, "nodes">): DiagramNode | null {
+  const main = d.nodes.filter((n) => n.row === "main" && n.kind === "stop" && n.step?.kind === "verify");
+  return main.length ? main[main.length - 1] : null;
+}
+
+/** The line with its session's behaviors on it, as the LAST tile of the
+ * chain: the Verify stop wears `mark` when the chain has one (that stop IS
+ * the tile — no second one), else a derived `behaviors` node goes after the
+ * last stop (right of the session's agent when there are none), wired in
+ * with a plain line (a join out of every member of a trailing parallel
+ * group). It is not a flight step: no index, no step, never editable. A
+ * rendering view — `mark` null leaves the diagram as it is. */
+export function withBehaviors(d: Diagram, mark: BehaviorsMark | null | undefined): Diagram {
+  if (!mark) return d;
+  const verify = verifyStopOf(d);
+  // A halted Verify stop says so on its face ("Failed · 2 — halted").
+  if (verify) return { ...d, nodes: d.nodes.map((n) => (n.id === verify.id ? { ...n, behaviors: { ...mark, short: verifyStopFace(mark.short, n.state) } } : n)) };
+  const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "add" && n.kind !== "parent");
+  const session = main.find((n) => n.kind === "session");
+  const line = main.filter((n) => n.kind !== "session");
+  const last = line[line.length - 1] || session;
+  if (!last) return d;
+  const node: DiagramNode = { id: BEHAVIORS_ID, kind: "behaviors", row: "main", title: "Behaviors", sub: mark.short, state: "pending", icon: "behaviors", behaviors: mark };
+  // A trailing parallel group joins into the tile out of each member.
+  const pid = last.parallel?.id;
+  const from = pid ? line.filter((n) => n.parallel?.id === pid) : [last];
+  const edges: DiagramEdge[] = [...d.edges, ...from.map((n): DiagramEdge => ({ from: n.id, to: BEHAVIORS_ID, kind: from.length > 1 ? "join" : "line" }))];
+  return { ...d, nodes: [...d.nodes, node], edges };
 }

@@ -8,41 +8,45 @@ import type { StepKindDef } from "../../lib/flights";
 import type { DiagramNode } from "../../lib/flightDiagram";
 import { StopIcon } from "./Bird";
 
-/** The palette's families (round 15) plus `flow` (the kinds that steer the
- * line: Loop, Handoff). A tile's icon is painted in its family's colour
+/** The palette's families (round 15) plus `flow` (one chain driving
+ * another: the Handoff). A tile's icon is painted in its family's colour
  * (SkyChain.css `.sky-fam-*`). */
 export type StopFamily = "work" | "ship" | "outside" | "people" | "flow";
 
-/** The server's own map (backend/web/core/flights.py `_FAMILY`) and the
- * plug-in kinds we know, for when no `kinds` list is at hand. Unknown kinds
- * are "outside", as the server says. */
+/** The server's own families (backend/web/core/flights.py `_FAMILY` plus
+ * each plug-in kind's `spec["family"]` in core/flight_kinds/, as
+ * `GET /api/flights/kinds` sends them), for when no `kinds` list is at hand.
+ * Keep it the server's word for word: Loop is work (it repeats earlier
+ * stops), Checkpoint is ship. `perch` is the tile's name for `you`. Unknown
+ * kinds are "outside", as the server says. */
 const FAMILY: Record<string, StopFamily> = {
   agent: "work",
   split: "work",
   join: "work",
   command: "work",
   test: "work",
-  sync: "work",
-  checkpoint: "work",
   judge: "work",
-  screenshot: "work",
-  preview: "work",
+  review: "work",
+  loop: "work",
   ship: "ship",
   checks: "ship",
   reviews: "ship",
   land: "ship",
+  sync: "ship",
+  checkpoint: "ship",
   wait: "outside",
   notify: "outside",
   ticket: "outside",
   budget: "outside",
   call: "outside",
   listen: "outside",
+  preview: "outside",
+  screenshot: "outside",
   you: "people",
   perch: "people",
   verify: "people",
-  review: "people",
+  behaviors: "people",
   someone: "people",
-  loop: "flow",
   handoff: "flow",
 };
 
@@ -64,7 +68,8 @@ export function nodeFamily(n: Pick<DiagramNode, "kind" | "icon" | "perch" | "gro
   return kindFamily(n.icon, kinds);
 }
 
-/** The icon a tile shows for `kind` (`n.perch ? "perch" : n.icon`). */
+/** The icon a tile shows for `kind` (`n.perch ? "perch" : n.icon`; the
+ * Behaviors tile and a Verify stop standing in for it: "behaviors"). */
 export function TileIcon({ kind, size = 28 }: { kind: string; size?: number }) {
   if (kind === "handoff")
     return (
@@ -72,6 +77,14 @@ export function TileIcon({ kind, size = 28 }: { kind: string; size?: number }) {
         <path d="M13.5 4.5H19.5V10.5" />
         <path d="M19.5 4.5L10 14" />
         <path d="M17 13.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4.5" />
+      </svg>
+    );
+  // The Behaviors tile (docs/behaviors.md §1): a shield with a tick.
+  if (kind === "behaviors")
+    return (
+      <svg className="fl-stop-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false" data-icon="behaviors">
+        <path d="M12 3l7.5 2.8v5.4c0 4.6-3.1 8.1-7.5 9.8-4.4-1.7-7.5-5.2-7.5-9.8V5.8z" />
+        <path d="M8.6 12.2l2.4 2.4 4.6-4.8" />
       </svg>
     );
   if (kind === "group")

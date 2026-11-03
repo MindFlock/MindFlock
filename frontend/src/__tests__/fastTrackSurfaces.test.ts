@@ -11,9 +11,9 @@
  * picker (grid/FastTrackMenu.tsx — Off / Commit / Push / Open PR / Merge when
  * green, and "Ask me before it ships"), every item a
  * `POST /api/instances/{t}/lane`. The row › menu (sidebar/SessionRowItems.tsx),
- * the palette and Ctrl+K F open that same picker; Split into parallel
- * pieces… and Move out of a group are row › menu (and palette) actions of
- * their own; the New and Commit dialogs draw the same choices
+ * the palette and Ctrl+K F open that same picker; "Let the agent split this
+ * now" (a mode of the one Workers… entry, and a palette action) and Move out
+ * of a group are actions of their own; the New and Commit dialogs draw the same choices
  * (dialogs/FastTrackChoice.tsx).
  *
  * Every removal is pinned as the OLD call site being ABSENT, not only the new
@@ -243,7 +243,7 @@ describe("every item is a server call", () => {
     // The row flips at once and rolls back on a refusal.
     expect(pick.split("patchInstance(title,").length - 1).toBe(3);
     // A copy window / a lead / a one-for-all member is locked in the picker.
-    expect(fn("laneLockReason")).toContain("drives this branch — set its fast-track from that session");
+    expect(fn("laneLockReason")).toContain("drives this branch — set how far it goes from that session");
     // Every run route goes through lib/runsApi's one path builder.
     expect(fn("moveOutOfGroup")).toContain('taskPath(runId, taskId, "skip")');
     expect(mod("lib/runsApi.ts")).toContain('"/api/runs/"');
@@ -265,7 +265,7 @@ describe("every item is a server call", () => {
     expect(f).toContain('if (lane === "leave") return true;');
     // 409 "workspace not ready" is retried; anything else is said.
     expect(f).toContain("err.status === 409");
-    expect(f).toContain("Couldn't fast-track ");
+    expect(f).toContain("Couldn't set ${title} to go as far as ");
     expect(newDialog()).toContain('if (lane !== "leave") void setLaneWhenReady(inst.title, lane, askFirst);');
   });
 });
@@ -299,15 +299,15 @@ describe("the ⏩ button and its picker", () => {
     expect(btn).not.toContain("aria-pressed");
     const step = fn("fastTrackStep");
     expect(has(step, 'label: "⏩ " + LANE_SHORT[lane] + (halted ? " ✗" : "")')).toBe(true);
-    expect(step).toContain("Click to change it or turn it off (Ctrl+K F).");
+    expect(step).toContain("Click to change how far it goes (Ctrl+K F).");
     expect(LANE_SHORT).toEqual({ leave: "off", commit: "Commit", push: "Push", pr: "PR", merge: "Merge" });
   });
 
   it("the picker offers every rung and ask-first", () => {
     const menu = mod(MENU);
     expect(menu).toContain('id="fast-track-menu"');
-    expect(menu).toContain("<b>⏩ Fast-track</b>");
-    expect(menu).toContain(">When the agent is done, go as far as<");
+    expect(menu).toContain("<b>⏩ Goes as far as</b>");
+    expect(menu).toContain(">When the agent is done, it goes as far as<");
     expect(menu).toContain("ASK_FIRST_LABEL");
     expect(menu).toContain("fastTrackModel(inst || {})");
     // Each pick is ONE call, through the server.
@@ -320,7 +320,7 @@ describe("the ⏩ button and its picker", () => {
     expect(menu).toContain("keyOf(x) === k.toUpperCase()");
     // Nothing in it pastes or messages: Message… stays in the Thread.
     expect(menu).not.toContain("threadOpen(");
-    expect(LANE_LABEL).toEqual({ leave: "Off", commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge when green" });
+    expect(LANE_LABEL).toEqual({ leave: "Agent only", commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge when green" });
     expect(LANE_KEY).toEqual({ leave: "O", commit: "C", push: "U", pr: "P", merge: "M" });
     // All five are offered — Push included (the old menu lacked it).
     expect(LANE_ORDER).toEqual(["leave", "commit", "push", "pr", "merge"]);
@@ -384,16 +384,19 @@ describe("the other doors: row › menu, palette, chords", () => {
     // Fast-track… opens THE picker (the table's row), never a second copy of
     // its choices.
     expect(group).toContain('run: () => sessionAction("fastTrack").run(title)');
-    expect(group).toContain('label: "Fast-track…"');
+    expect(group).toContain('label: "Goes as far as…"');
     expect(group).toContain('keys: sessionAction("fastTrack").keys');
-    expect(SESSION_ACTIONS.fastTrack).toMatchObject({ label: "Fast-track…", keys: "Ctrl+K F", chord: "f" });
-    expect(has(mod(TABLE), 'label: "Fast-track…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
+    expect(SESSION_ACTIONS.fastTrack).toMatchObject({ label: "Goes as far as…", keys: "Ctrl+K F", chord: "f" });
+    expect(has(mod(TABLE), 'label: "Goes as far as…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
     expect(mod(TABLE)).toContain("run: (t) => openFastTrackMenu(t)");
     expect(group).toContain("LANE_SHORT[laneChoice(inst).lane]");
     expect(group).not.toContain("setLane(");
     expect(group).not.toContain("pickFastTrack(");
-    // Split is its own action; Move out is a member's; Message… stays.
-    expect(group).toContain('label: "Split into parallel pieces…"');
+    // Split is a mode of the ONE Workers… entry (its picker), no longer its
+    // own menu row; Move out is a member's; Message… stays.
+    expect(group).toContain('fromTable("workers"');
+    expect(group).toContain('label: "Let the agent split this now"');
+    expect(group).not.toContain("Split into parallel pieces");
     expect(group).toContain("detachableGroup(inst)");
     expect(group).toContain("moveOutOfGroup(group.id, group.task)");
     expect(group).toContain('label: "Move out of " + group.name');
@@ -411,14 +414,14 @@ describe("the other doors: row › menu, palette, chords", () => {
     expect(has(palette, "label: `${actionLabel(id, c)} — ${name}`")).toBe(true);
     expect(has(palette, "const name = windowName(t);")).toBe(true);
     for (const [id, label] of [
-      ["fastTrack", 'label: "Fast-track…"'],
-      ["split", 'label: "Split into parallel pieces…"'],
+      ["fastTrack", 'label: "Goes as far as…"'],
+      ["split", 'label: "Workers: let the agent split this now"'],
       ["thread", 'label: "Thread"'],
     ]) {
       expect(palette, id).toContain(`"${id}",`);
       expect(has(table, label), label).toBe(true);
     }
-    expect(SESSION_ACTIONS.split.label).toBe("Split into parallel pieces…");
+    expect(SESSION_ACTIONS.split.label).toBe("Workers: let the agent split this now");
     expect(SESSION_ACTIONS.thread.label).toBe("Thread");
     // "Start several sessions…" was New under a second name (its box takes a
     // list on its own) — one action, one entry.
@@ -443,7 +446,7 @@ describe("the other doors: row › menu, palette, chords", () => {
           "run: (t) => useUi.getState().threadOpen(t, { composeTo: t })"
       )
     ).toBe(true);
-    expect(has(table, 'label: "Fast-track…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
+    expect(has(table, 'label: "Goes as far as…", keys: "Ctrl+K F", chord: "f",')).toBe(true);
     expect(has(table, 'label: "Thread", keys: "Ctrl+K T", chord: "t", note: "workers and messages",')).toBe(true);
     expect(SESSION_ACTIONS.message).toMatchObject({ label: "Message…", keys: "Ctrl+K S", chord: "s" });
     expect(SESSION_ACTIONS.thread).toMatchObject({
@@ -480,7 +483,7 @@ describe("the dialogs draw the same choice", () => {
     expect(choice).toContain("LANE_LABEL[l]");
     expect(choice).toContain("ASK_FIRST_LABEL");
     const nl = mod("components/dialogs/NewList.tsx");
-    expect(nl).toContain('"Fast-track each to" : "Fast-track to"');
+    expect(nl).toContain('"Each goes as far as" : "Goes as far as"');
     expect(nl).toContain("<FastTrackChoice");
     // THE default is Settings', for every shape: the preview's own is unread.
     // "Off unless I pick": a single session starts Off, a batch on Settings'
@@ -506,11 +509,11 @@ describe("the dialogs draw the same choice", () => {
     expect(dlg).not.toContain("config?.fasttrack_depth");
     expect(dlg).toContain("single: page !== 1");
     // The shared-folder radio turns fast-track off instead of being disabled.
-    expect(dlg).toContain("Turns fast-track off (it commits for this session");
+    expect(dlg).toContain("Sets Goes as far as to Agent only (it commits for this session");
     expect(dlg).toContain('if (laneNeedsWorktree) draft.setLane("leave");');
     expect(dlg).not.toContain("(not with a lane");
     const commit = mod("components/dialogs/CommitDialog.tsx");
-    expect(commit).toContain(">Then fast-track to<");
+    expect(commit).toContain(">Then goes as far as<");
     expect(
       has(
         commit,
@@ -525,11 +528,11 @@ describe("the dialogs draw the same choice", () => {
 
   it("Settings holds the one default, Off out of the box", () => {
     const ws = mod("components/settings/screens/Workspace.tsx");
-    expect(ws).toContain(">Fast-track goes as far as<");
+    expect(ws).toContain(">Goes as far as<");
     // Unset is Off, and the screen says who reads it.
-    expect(has(ws, '{ value: "", label: "Off (default)" }')).toBe(true);
+    expect(has(ws, '{ value: "", label: "Agent only (default)" }')).toBe(true);
     expect(ws).not.toContain("Open a PR (default)");
-    expect(ws).toContain(">New sessions start Off; batches and ticket runs start at this default.<");
+    expect(ws).toContain(">New sessions start at Agent only; batches and ticket runs start at this default.<");
     for (const [value, label] of [
       ["commit", "Commit"],
       ["push", "Push"],
@@ -608,7 +611,7 @@ describe("New dialog: auto-split is an optional split run", () => {
     expect(dlg).toContain("const runMode = (page === 1 && draft.listMode) || splitOn;");
     // The form's Prompt is the lead's task, and an empty one is refused there.
     expect(dlg).toContain("text: page === 1 ? describe : prompt,");
-    expect(dlg).toContain("Auto-split needs a task");
+    expect(dlg).toContain("Splitting into workers needs a task");
     expect(ALL).not.toContain("splitShapeReason");
     // A split starts through the run with its N, and its button stays
     // "Create session" — it may well not split.
@@ -619,8 +622,9 @@ describe("New dialog: auto-split is an optional split run", () => {
 
   it("the split check's copy and pill", () => {
     const box = mod("components/dialogs/SplitCheck.tsx");
-    expect(box).toMatch(/>\s*Auto-split into up to\s*</);
-    expect(box).toContain(">sessions if it's worth it<");
+    // One word for parallel work: the box splits into WORKERS.
+    expect(box).toMatch(/>\s*Let it split into up to\s*</);
+    expect(box).toContain(">workers if it's worth it<");
     expect(ALL).not.toContain("Split a big line");
     expect(box).not.toContain("Split across workers");
     expect(box).toContain("suggestionPill(sug)");
@@ -669,7 +673,10 @@ describe("review: remote rows get no split, and one children-of rule", () => {
     expect(isRemote({ title: "api" })).toBe(false);
     const group = mod(ROW_ITEMS);
     expect(group).toContain("const remote = isRemote(inst);");
-    expect(group).toContain('const splitWhy = remote ? "" : splitBlockReason');
+    // Split is a Workers… mode: the entry is never offered on a remote row
+    // (flockAvailable), and the mode itself refuses one too.
+    expect(group).toContain("const splitWhy = isRemote(inst) ? ");
+    expect(mod(TABLE)).toContain("enabled: (c) => flockAvailable(c.inst, cfg()),\n    run: (t) => openWorkersMenu(t),");
     expect(group).toContain("const group = remote ? null : detachableGroup(inst);");
     expect(mod(TABLE)).toContain('!c.inst!.device && !c.title.includes("::")');
   });

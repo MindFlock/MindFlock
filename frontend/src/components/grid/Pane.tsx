@@ -80,8 +80,11 @@ import {
   flockAvailable,
   flockChipLabel,
   flockTooltip,
-  toggleFlock,
+  closeWorkersMenu,
+  openWorkersMenu,
+  useWorkersMenu,
 } from "../../lib/workersRequest";
+import { WorkersMenu } from "./WorkersMenu";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
@@ -185,10 +188,10 @@ export function Pane({
     threadOpened || lastTab === "thread"
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
-  // The Flight tab: shown once the session has a live diagram worth drawing
-  // (a flight, workers, a parent, an armed fast-track — lib/flightDiagram);
-  // ⋯ → "Fly a flyway…" opens it on any session. Its badge: perched on you,
-  // or halted.
+  // The Chain tab (key "flight"): shown once the session has a live diagram
+  // worth drawing (a chain, workers, a parent, an armed fast-track —
+  // lib/flightDiagram); ⋯ → "Chain…" opens it on any session. Its badge: the
+  // chain needs you, or halted.
   const flightNeeds = rowWaitsOnYou(inst.flight) || inst.flight?.state === "halted";
   const newestReport = newestReportTs(family.children);
   // The Map tab's badge: the rail row's zone chip (a breach, an unseen block,
@@ -211,6 +214,11 @@ export function Pane({
   // picker opened in the same frame the pane mounts must re-render once it
   // exists.
   const [ftEl, setFtEl] = useState<HTMLButtonElement | null>(null);
+  // This pane's Workers… picker (lib/workersRequest keeps which one is open:
+  // the ⋯ menus and the palette open it from anywhere), hung under the
+  // Workers control.
+  const wkMenu = useWorkersMenu(title);
+  const [wkEl, setWkEl] = useState<HTMLButtonElement | null>(null);
   // Same "assume capable until the server says otherwise" fallback as the other
   // caps consumers (SidebarRow, CommandPalette, lib/sessionActions) — keep the
   // four literals identical so a PR affordance added here can't silently start
@@ -608,6 +616,11 @@ export function Pane({
   useEffect(() => {
     if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
   }, [ftMenu, ftGone]);
+  // Likewise the Workers… picker once its control has gone.
+  const wkGone = missing || loading || !flockAvailable(inst, config);
+  useEffect(() => {
+    if (wkMenu && wkGone) closeWorkersMenu();
+  }, [wkMenu, wkGone]);
   const me = useMe(); // before the early returns: hooks run every render
   // The calm first hour (lib/calm.ts) folds Queue and ⏩ from a header that
   // is still the default; a customized one is left as chosen (headerItems).
@@ -773,8 +786,9 @@ export function Pane({
   // its strip is the next step. Both come back once it halts or lands.
   const flying = flightDrives(inst.flight);
   const ft = flying ? null : fastTrackStep(inst);
-  // Flock (workers on every prompt): this machine's own sessions, never a
-  // guest's, a peer's, a shared folder or another device's.
+  // Workers (the Workers… picker; "Workers ✓" while every prompt asks for
+  // them): this machine's own sessions, never a guest's, a peer's, a shared
+  // folder or another device's.
   const flockShown = flockAvailable(inst, config);
   const flockOn = !!inst.flock;
   // ↺ is the owner's: never on a peer's session.
@@ -811,7 +825,7 @@ export function Pane({
     calm,
     queueBusy: pending > 0 || holding,
     mapBusy: mapHasState(inst, rzChip),
-    // Every session's pane has its Flight tab (the owner: "I want all to show"):
+    // Every session's pane has its Chain tab (the owner: "I want all to show"):
     // building a chain starts there even before the session has one.
     flight: true,
     ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu),
@@ -976,13 +990,13 @@ export function Pane({
         aria-selected={tab === "flight"}
         className={"flight-tab" + (tab === "flight" ? " active" : "")}
         title={
-          "Flight — this session's live diagram: its workers, its fast-track or flight, and + to tack a stop on" +
-          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The flight halted — it needs you" : "The flight is perched on you") : "")
+          "Route — this session's live diagram: its workers, its route and how far it goes, and + to add a stop" +
+          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The route halted — it needs you" : "The route needs you") : "")
         }
         onClick={(e) => { e.stopPropagation(); showTab("flight"); }}
       >
         <TabIcon name="flight" />
-        <span className="tab-label">Flight</span>
+        <span className="tab-label">Route</span>
         {flightNeeds && (
           <span className="queue-tab-badge flight-badge needs" aria-hidden="true">
             !
@@ -1053,8 +1067,8 @@ export function Pane({
         aria-haspopup="menu"
         aria-expanded={!!ftMenu}
         aria-label={
-          "Fast-track: " +
-          (ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, "")) +
+          "Goes as far as: " +
+          (ft.lane === "leave" ? "Agent only" : ft.label.replace(/^⏩ /, "")) +
           (ft.askFirst ? ", asks first" : "")
         }
         title={ft.title}
@@ -1065,7 +1079,7 @@ export function Pane({
         }}
       >
         {/* Off is just the glyph: a word there read as a second
-            next step. The aria-label still says "Fast-track: off". */}
+            next step. The aria-label still says "Goes as far as: Agent only". */}
         {ft.lane === "leave" && !ft.halted ? "⏩" : ft.label}
         {ft.askFirst && (
           <span className="ft-ask" aria-hidden="true">
@@ -1255,26 +1269,30 @@ export function Pane({
           {/* The keyboard is one person's at a time (lib/presence): "Driving"
               / "Watching — take control", only once someone else is here. */}
           <DriveButton inst={inst} me={me} />
-          {/* Flock: workers on every prompt (lib/workersRequest). A CONTROL
-              like ⏩, never a .stagechip (those are hidden in a pane head). */}
+          {/* Workers (lib/workersRequest): opens the Workers… picker — let
+              the agent split this now, ask once, on every prompt ("Workers ✓"
+              while that is on). A CONTROL like ⏩, never a .stagechip (those
+              are hidden in a pane head). */}
           {flockShown && (
             <button
               key="flock"
-              className={"nextstep nextstep-flock" + (flockOn ? " is-on" : "")}
+              ref={setWkEl}
+              className={"nextstep nextstep-flock" + (flockOn ? " is-on" : "") + (wkMenu ? " open" : "")}
               type="button"
-              aria-pressed={flockOn}
-              aria-label={"Workers on every prompt: " + (flockOn ? "on" : "off")}
+              aria-haspopup="menu"
+              aria-expanded={wkMenu}
+              aria-label={"Workers" + (flockOn ? " — on every prompt" : "")}
               title={flockTooltip(flockOn, [
                 shortcutLabels("flock")[0] || FLOCK_KEYS,
                 shortcutLabels("workers")[0] || ASK_WORKERS_KEYS,
               ])}
               onClick={(ev) => {
                 ev.stopPropagation();
-                void toggleFlock(title);
+                openWorkersMenu(title, true);
               }}
             >
               <span className="flock-bird" aria-hidden="true" />
-              {flockChipLabel()}
+              {flockChipLabel(flockOn)}
             </button>
           )}
           {/* The person's buttons, in their order (Customize → Pane header). */}
@@ -1324,8 +1342,8 @@ export function Pane({
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
       {/* Its own row, not in .pane-head (which hides chips): the flight's
-          bird · flyway · ●●●○○ · stop (elapsed), with Done / Skip on a perch;
-          the line itself opens the Flight tab. */}
+          bird · chain · ●●●○○ · stop (elapsed), with Done / Skip on a Wait
+          for me stop; the line itself opens the Chain tab. */}
       {inst.flight && <PaneFlightStrip inst={inst} />}
       {strip && (
         <div
@@ -1467,6 +1485,20 @@ export function Pane({
             // Esc hands the keyboard back to the terminal the picker took it
             // from. Nothing else does: an outside click has put it wherever
             // the user clicked.
+            if (refocus) setTimeout(() => focusTerm(title), 0);
+          }}
+        />
+      )}
+      {wkMenu && flockShown && wkEl && (
+        <WorkersMenu
+          title={title}
+          anchor={wkEl}
+          keys={[
+            shortcutLabels("workers")[0] || ASK_WORKERS_KEYS,
+            shortcutLabels("flock")[0] || FLOCK_KEYS,
+          ]}
+          onClose={(refocus) => {
+            closeWorkersMenu();
             if (refocus) setTimeout(() => focusTerm(title), 0);
           }}
         />

@@ -4,6 +4,9 @@
  * button posts.
  *
  *  - Done / Skip / Retry   POST /api/flights/{id}/steps/{sid}/done {note?} · /skip · /retry
+ *                          (Done on a Verify stop parked on you is 409
+ *                          `answer_behaviors`: `stepDone` opens its behaviors)
+ *  - Let the agent fix it  POST /api/flights/{id}/steps/{sid}/op/fix (a halted stop)
  *  - Jump to…              POST /api/flights/{id}/jump {step}
  *  - Pause / Resume / Cancel  POST /api/flights/{id}/pause · /resume · /cancel
  *  - Take off              POST /api/flights/start {plan_id, repo_path?}
@@ -22,14 +25,15 @@
  * Every start ends in `selectSession(title)` as soon as the row exists — the
  * way lib/templateRun.ts does. */
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { Instance } from "../api/types";
 import { queryClient, refreshInstances } from "../state/queries";
+import { type BehaviorsTarget, openBehaviors } from "./behaviorsFocus";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { selectSession } from "./sessionActions";
 import { toast } from "./toast";
-import type { Flight, FlightPlan, FlightStartOn, FlightStep, StepKindDef } from "./flights";
+import type { Flight, FlightPlan, FlightStartOn, FlightStep, IntakeDefault, IntakeSourceRef, StepKindDef } from "./flights";
 
 const enc = encodeURIComponent;
 export const flightPath = (id: string, rest = "") => "/api/flights/" + enc(id) + rest;
@@ -78,8 +82,57 @@ export async function flightAction(what: string, path: string, body: unknown = {
   }
 }
 
-export function stepDone(flightId: string, stepId: string, note = ""): Promise<boolean> {
-  return flightAction("Done", stepPath(flightId, stepId, "done"), note ? { note } : {});
+/** A Verify stop parked on you moves on when its behaviors are answered,
+ * not on Done (docs/behaviors.md §5): the server refuses it with 409
+ * `answer_behaviors`. */
+export function isAnswerBehaviors(err: unknown): boolean {
+  if (!(err instanceof ApiError) || err.status !== 409) return false;
+  const b = err.body as { error?: unknown } | null;
+  return !!b && typeof b === "object" && b.error === "answer_behaviors";
+}
+
+/** Where a flight's behaviors live: its session's (or branch's) card on the
+ * route, else the next behaviors that need you. */
+export function flightBehaviorsTarget(flightId: string): BehaviorsTarget {
+  const flights = queryClient.getQueryData<Flight[] | null>(["flights"]) || [];
+  const fl = flights.find((f) => f.id === flightId);
+  if (fl?.session) return { title: fl.session, ...(fl.branch ? { branch: fl.branch } : {}) };
+  if (fl?.branch) return { branch: fl.branch };
+  return { next: true };
+}
+
+/** "Behaviors" on a Verify stop parked on you: its card, in the stop's place. */
+export function answerBehaviors(flightId: string): void {
+  openBehaviors(flightBehaviorsTarget(flightId));
+}
+
+/** Done on a stop parked on you. A Verify stop refuses it (409
+ * `answer_behaviors`): that is not an error — its behaviors open instead. */
+export async function stepDone(flightId: string, stepId: string, note = ""): Promise<boolean> {
+  try {
+    await api(stepPath(flightId, stepId, "done"), { json: note ? { note } : {} });
+    return true;
+  } catch (err) {
+    if (isAnswerBehaviors(err)) {
+      toast("Answer its behaviors (or Skip it) — the route goes on once each one has an answer");
+      answerBehaviors(flightId);
+    } else errorPop("Done failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
+}
+
+/** Let the agent fix it, on a halted stop: the failure goes to the session's
+ * agent and the stop runs again once its turn ends. */
+export function stepFix(flightId: string, stepId: string): Promise<boolean> {
+  return flightAction(
+    "Let the agent fix it",
+    flightPath(flightId, "/steps/" + enc(stepId) + "/op/fix"),
+    {},
+    "Handed to the agent — the stop runs again after its fix"
+  );
 }
 
 export function stepSkip(flightId: string, stepId: string): Promise<boolean> {
@@ -97,13 +150,13 @@ export function jumpFlight(flightId: string, stepId: string, title = ""): Promis
 export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel" | "run"): Promise<boolean> {
   const said =
     verb === "pause"
-      ? "Flight halted — Carry on picks it up again"
+      ? "Route halted — Carry on picks it up again"
       : verb === "resume"
-        ? "Flight carrying on"
+        ? "Route carrying on"
         : verb === "run"
-          ? "Chain started"
-          : "Flight cancelled — its session is kept";
-  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Cancel";
+          ? "Route started"
+          : "Route stopped — its session is kept";
+  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the route";
   return flightAction(what, flightPath(flightId, "/" + verb), {}, said);
 }
 
@@ -132,7 +185,7 @@ export async function setStartOn(flightId: string, startOn: FlightStartOn): Prom
 export async function setHalt(flightId: string, stepId: string, halt: boolean): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: { halt } });
-    toast(halt ? "Halt point set — the flight stops before this stop" : "Halt point taken off");
+    toast(halt ? "Halt point set — the route stops before this stop" : "Halt point taken off");
     return true;
   } catch (err) {
     errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
@@ -182,12 +235,12 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
     const flight = d?.flight || null;
     void refreshFlights();
     if (flight?.session) {
-      toast("Took off: " + flight.plan_name);
+      toast("Started: " + flight.plan_name);
       void openWhenReady(flight.session);
     }
     return flight;
   } catch (err) {
-    errorPop("Take off failed", errMsg(err));
+    errorPop("Starting the route failed", errMsg(err));
     return null;
   }
 }
@@ -281,6 +334,8 @@ export function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
   if (step.when) out.when = step.when;
   // Round 18: where the Sky draws it (a stop dropped at a spot keeps it).
   if (step.pos) out.pos = step.pos;
+  // Round 20: its parallel group rides along (a copied row keeps its forks).
+  if (step.parallel) out.parallel = step.parallel;
   return out;
 }
 
@@ -305,8 +360,49 @@ export async function tackOnNew(title: string, steps: FlightStep[], startOn?: Fl
 
 /** Tack one stop onto a live flight: appended, or at `at` (only after its
  * current stop — the server refuses anything earlier). */
-export function tackOn(flightId: string, step: FlightStep, at?: number): Promise<boolean> {
-  return flightAction("Tack on", flightPath(flightId, "/steps"), { step: wireStep(step), ...(at === undefined ? {} : { at }) });
+export function tackOn(flightId: string, step: FlightStep, at?: number, opts: TackOnOpts = {}): Promise<boolean> {
+  return flightAction("Tack on", flightPath(flightId, "/steps"), {
+    step: wireStep(step),
+    ...(at === undefined ? {} : { at }),
+    ...(opts.parallel_with ? { parallel_with: opts.parallel_with } : {}),
+  });
+}
+
+/** Round 20: how a stop is tacked on — `parallel_with` (a step id) puts it in
+ * that step's parallel group, making one when it has none. */
+export interface TackOnOpts {
+  parallel_with?: string;
+}
+
+/** Round 20: a stop that flies side by side with `withSid` (after the group's
+ * last member; `at` within the group). 400 `not_parallel_safe` names a kind
+ * that can't (the error card says "use a Split for agents"). */
+export function tackOnParallel(flightId: string, step: FlightStep, withSid: string, at?: number): Promise<boolean> {
+  return tackOn(flightId, step, at, { parallel_with: withSid });
+}
+
+async function patchParallel(flightId: string, stepId: string, body: { parallel: null } | { parallel_with: string }): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: body });
+    return true;
+  } catch (err) {
+    errorPop("Saving the stop failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
+}
+
+/** Round 20: a stop still ahead leaves its parallel group (it then flies
+ * right after the group). */
+export function leaveParallel(flightId: string, stepId: string): Promise<boolean> {
+  return patchParallel(flightId, stepId, { parallel: null });
+}
+
+/** Round 20: a stop still ahead joins `withSid`'s parallel group (making one),
+ * moving to after its last member — the Sky's Shift-drop. */
+export function joinParallel(flightId: string, stepId: string, withSid: string): Promise<boolean> {
+  return patchParallel(flightId, stepId, { parallel_with: withSid });
 }
 
 /** Every stop of a flyway, appended to a live flight in order. */
@@ -401,7 +497,7 @@ export async function dropGroup(flightId: string, stepId: string): Promise<boole
 
 /** Stops on the board with no session yet (`state: "grounded"`): from a saved
  * stop (one group) or from loose steps (grouped under `name` when set). */
-export async function startGrounded(body: { plan_id?: string; steps?: FlightStep[]; name?: string }): Promise<Flight | null> {
+export async function startGrounded(body: { plan_id?: string; steps?: FlightStep[]; name?: string; edits_default?: IntakeSourceRef }): Promise<Flight | null> {
   try {
     const d = await api<{ flight?: Flight }>("/api/flights/start", {
       json: {
@@ -409,6 +505,7 @@ export async function startGrounded(body: { plan_id?: string; steps?: FlightStep
         ...(body.plan_id ? { plan_id: body.plan_id } : {}),
         ...(body.steps ? { steps: body.steps.map(wireStep) } : {}),
         ...(body.name ? { name: body.name } : {}),
+        ...(body.edits_default ? { edits_default: body.edits_default } : {}),
       },
     });
     return d?.flight || null;
@@ -424,19 +521,25 @@ export async function startGrounded(body: { plan_id?: string; steps?: FlightStep
  * the session first (`title: ""` + `repo_path`…) and then attach. */
 export async function attachGrounded(
   flightId: string,
-  body: { title: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string; start_on?: FlightStartOn }
+  body: { title: string; folder?: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string; start_on?: FlightStartOn }
 ): Promise<Flight | null> {
   try {
     const d = await api<{ flight?: Flight }>(flightPath(flightId, "/attach"), { json: body });
     return d?.flight || null;
   } catch (err) {
-    errorPop("Flying the stops failed", errMsg(err));
+    errorPop("Running the stops failed", errMsg(err));
     return null;
   } finally {
     void refreshFlights();
     void refreshInstances();
   }
 }
+
+/** "No session — the default folder" for `attachGrounded` (`{title:
+ * DEFAULT_SESSION}`): a chain that needs no session runs there on its own
+ * (nothing is started); one that needs a session gets a new one there.
+ * `{folder}` names another folder the same way. */
+export const DEFAULT_SESSION = "@default";
 
 /** Delete a flight that is not in the air (a grounded one, or a finished one). */
 export async function deleteFlight(flightId: string): Promise<boolean> {
@@ -486,7 +589,7 @@ export async function splitOffChain(flightId: string, stepId: string, pos?: { x:
     const d = await api<{ chain?: Flight }>(flightPath(flightId, "/steps/" + enc(stepId) + "/split_off"), { json: pos ? { pos } : {} });
     return d?.chain || null;
   } catch (err) {
-    errorPop("Splitting the chain failed", errMsg(err));
+    errorPop("Splitting the route failed", errMsg(err));
     return null;
   } finally {
     void refreshFlights();
@@ -521,5 +624,57 @@ export function flushStopPos(): void {
     clearTimeout(q.timer);
     posQueue.delete(id);
     void saveStopPositions(id, q.positions).then((ok) => q.done.forEach((f) => f(ok)));
+  }
+}
+
+// --- An intake source's default stops (2026-11-02) ------------------------------
+// Our built-in stops are every source's default; the owner edits one source's
+// in the Sky with the blocks (the lane's stops chip, or a ticket line's ⋯ "Use
+// these stops for every ticket from …"). Editing ONE ticket's line never
+// changes the default — only these calls do.
+
+const defaultQuery = (ref: IntakeSourceRef) => "kind=" + encodeURIComponent(ref.kind) + "&target=" + encodeURIComponent(ref.target);
+
+/** The stops a source's new items fly now (its own saved stop, else the
+ * built-in at its depth); null when the server can't say (logged as a pop). */
+export async function getIntakeDefault(ref: IntakeSourceRef): Promise<IntakeDefault | null> {
+  try {
+    return await api<IntakeDefault>("/api/flights/intake-default?" + defaultQuery(ref));
+  } catch (err) {
+    errorPop("Couldn't read the default stops", errMsg(err));
+    return null;
+  }
+}
+
+/** The intake source a session line's flight came from (its subject), or
+ * null — a hand-made flight, or a source since removed. Quiet on failure. */
+export async function intakeSourceOfFlight(flightId: string): Promise<IntakeDefault | null> {
+  try {
+    return await api<IntakeDefault>("/api/flights/intake-default/for-flight/" + encodeURIComponent(flightId));
+  } catch {
+    return null;
+  }
+}
+
+/** Set a source's default stops. One of: `steps` (saved as the source's own
+ * saved stop — its existing own one is replaced when no other source shares
+ * it), `from_flight` (that flight's steps, its source from its subject), or
+ * `plan_id` (an existing saved stop; "" = back to our built-in). Returns the
+ * default as it now stands, with `previous_plan_id` for an Undo. */
+export async function setIntakeDefault(
+  body: (IntakeSourceRef & ({ steps: FlightStep[]; name?: string } | { plan_id: string })) | { from_flight: string }
+): Promise<(IntakeDefault & { previous_plan_id: string }) | null> {
+  try {
+    const json = "steps" in body ? { ...body, steps: body.steps.map(wireStep) } : body;
+    const d = await api<IntakeDefault & { previous_plan_id: string }>("/api/flights/intake-default", { method: "PUT", json });
+    return d;
+  } catch (err) {
+    errorPop("Saving the default stops failed", errMsg(err));
+    return null;
+  } finally {
+    void refreshFlights();
+    // The lane reads each source's plan off the settings doc; Intake off these.
+    void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    void queryClient.invalidateQueries({ queryKey: ["ticketing-sources"] });
   }
 }

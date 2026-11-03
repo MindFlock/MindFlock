@@ -106,12 +106,15 @@ describe("SkyChain markup", () => {
   it("the loop pill: a button for the Loop, screen-sized", () => {
     const html = render(liveGraph(), { selected: "stop:s4" });
     expect(html).toMatch(/<span role="button" tabindex="0" class="sky-loop-pill sky-loop-pending st-pending is-selected"[^>]*data-node="stop:s4"/);
-    expect(html).toContain("↻ ×3");
+    expect(html).toContain("↻ repeat ×3");
   });
 
-  it("the head: the session tile with its colour, chip (or the host's renderHead), and the bird", () => {
+  it("the head: the agent tile with its session's colour, chip (or the host's renderHead), and the bird", () => {
     const html = render(liveGraph(), { bird: { nodeId: "session:lead", tone: "working" } });
-    expect(html).toMatch(/class="sky-node sky-head sky-head-session st-session sky-fam-work tone-working/);
+    // Round 20: a session's head is its AGENT (the sparkle, `sky-agent`).
+    expect(html).toMatch(/class="sky-node sky-head sky-head-session sky-agent st-session sky-fam-work tone-working/);
+    expect(html).toMatch(/aria-label="Agent: lead — Working/);
+    expect(html).toContain('data-agent=""');
     expect(html).toContain("--sky-head-color:hsl");
     expect(html).toContain('class="sky-head-dot"');
     expect(html).toContain('class="sky-head-chip tone-working">Working<');
@@ -170,7 +173,7 @@ describe("SkyChain markup", () => {
   it("labels and summaries", () => {
     const g = liveGraph();
     const s2 = g.nodes.find((n) => n.id === "stop:s2")!.node;
-    expect(tileLabel(s2)).toBe("Screenshot — flying now, npm run shots");
+    expect(tileLabel(s2)).toBe("Screenshot — running now, npm run shots");
     expect(tileLabel({ ...me, title: "lead", sub: "Opus" }, true)).toBe("lead — Working, Opus");
     expect(tileSub({ ...s2, receipt: "ok" })).toBe("ok");
     expect(g.headNode!.id).toBe(HEAD_ID);
@@ -179,7 +182,9 @@ describe("SkyChain markup", () => {
   it("families: the server's word when it names one, else ours", () => {
     expect(kindFamily("ship")).toBe("ship");
     expect(kindFamily("mystery")).toBe("outside");
-    expect(kindFamily("loop")).toBe("flow");
+    expect(kindFamily("loop")).toBe("work");
+    expect(kindFamily("checkpoint")).toBe("ship");
+    expect(kindFamily("handoff")).toBe("flow");
     expect(kindFamily("agent", [{ kind: "agent", family: "people" }])).toBe("people");
     expect(nodeFamily({ kind: "stop", icon: "agent", perch: true })).toBe("people");
   });

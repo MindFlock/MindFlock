@@ -17,6 +17,13 @@
  * and a scheduled one **Skip next** / **Pause** (schedule.skip_until /
  * schedule.paused). An optional **Fast-track** level arms each run.
  *
+ * Saved chains whose trigger is a schedule are cards in the SAME list, with
+ * the same verbs: **Run now** (a flight takes off on it in a new session; one
+ * with no repository asks for a folder in the card first, never a dead-end
+ * error), **Schedule…** / **Change schedule** (the same compact row),
+ * **Skip next** / **Pause** (trigger.schedule.skip_until / trigger.paused),
+ * and **Edit** — its Takes off dialog (when, repository, agent, model).
+ *
  * Every confirm is a row in the card, never a browser dialog: Electron has
  * no window.confirm/prompt/alert, and a Delete that silently does nothing is
  * the bug this dialog exists to not have again.
@@ -64,9 +71,11 @@ import { LANE_LABEL } from "../../lib/autopilot";
 import { api } from "../../api/client";
 import type { FleetStatus } from "../../api/types";
 import { useConfig, useFlightPlans, useGithubConnected, useInstances } from "../../state/queries";
-import type { FlightPlan } from "../../lib/flights";
-import { takeOff } from "../../lib/flightsApi";
+import { scheduleOfWhen, whenFormOf, type FlightPlan, type FlightSchedule, type WhenForm } from "../../lib/flights";
+import { savePlan, takeOff } from "../../lib/flightsApi";
 import { Bird } from "../flights/Bird";
+import { TakeoffDialog } from "../flights/TakeoffDialog";
+import { PathField } from "../PathField";
 import { leafName, newSessionResume, type InstalledMap, type RepoSuggestion } from "./newSession";
 import {
   ScheduleEditor,
@@ -75,6 +84,7 @@ import {
   formFromTemplate,
   templateBody,
   type TemplateForm,
+  type WhenFields,
 } from "./TemplateEditor";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
@@ -207,7 +217,7 @@ export function templateMeta(t: Template): string {
         : "separate worktree"
   );
   if (t.init_repo) bits.push("git init");
-  if (t.autopilot) bits.push("Fast-track: " + (AUTOPILOT_THEN[t.autopilot] || t.autopilot));
+  if (t.autopilot) bits.push("goes as far as " + (AUTOPILOT_THEN[t.autopilot] || t.autopilot));
   return bits.join(" · ");
 }
 
@@ -229,7 +239,7 @@ export function historyLine(h: TemplateRunEntry, now: Date = new Date()): string
   let line = bits.join(" · ");
   if (h.skipped) line += " — skipped: " + h.skipped;
   else if (failedRow(h)) line += " — failed: " + (h.error || "it couldn't start");
-  else if (h.session) line += " → " + h.session + (h.autopilot ? " (Fast-track: " + levelWord(h.autopilot) + ")" : "");
+  else if (h.session) line += " → " + h.session + (h.autopilot ? " (goes as far as " + levelWord(h.autopilot) + ")" : "");
   return line;
 }
 
@@ -286,12 +296,13 @@ export function scheduledOrder(templates: Template[], status: Pick<TemplateRunsS
     .map((x) => x.t);
 }
 
-// --- Scheduled saved stops ------------------------------------------------------
-// A saved stop whose trigger is a schedule starts itself like a template does
-// (docs/flights.md "Scheduled plans"), so Schedule lists it too — under its
-// own heading, the card anatomy a template's has (name, schedule line, next
-// run, last result), and two actions: Fly now, and Edit in the Sky (its card
-// on the flyway shelf, where flyways are made and edited).
+// --- Scheduled saved chains ------------------------------------------------------
+// A saved chain whose trigger is a schedule starts itself like a template does
+// (docs/flights.md "Scheduled plans"), so Schedule lists it IN THE SAME LIST
+// as the templates — one list of what starts by itself on a timer — with a
+// template card's anatomy (name, schedule line, next run, last result) and
+// its verbs: Run now, Schedule… / Change schedule, Skip next, Pause / Resume,
+// and Edit (its Takes off dialog).
 
 /** A flyway's schedule record (`runs` on GET /api/flights/plans): a
  * template's run record, plus where schedules fire. */
@@ -313,13 +324,95 @@ export function scheduledFlyways(plans: readonly ScheduledFlyway[] | null | unde
     .map((x) => x.p);
 }
 
-/** A scheduled flyway's "when next" — the words a template card uses:
- * "Paused", "Starts on mac-mini", "in 9h", or "". */
-export function flywayNextLine(p: ScheduledFlyway, now: Date = new Date()): string {
-  const r = p.runs || {};
-  if (p.trigger.paused || r.paused) return "Paused";
-  if (r.runs_here === false && r.runs_on) return "Starts on " + r.runs_on;
-  return r.next_at ? inLabel(r.next_at, now) : "";
+/** A scheduled plan read as a template, so its card says its schedule in a
+ * template card's exact words (templateScheduleLine, nextLine, Skip next):
+ * a stand-in template named by the plan id, whose schedule is the trigger's
+ * (its `paused` folded in), and a run status holding the plan's row. */
+export function planAsTemplate(f: ScheduledFlyway): { t: Template; info: TemplateRunInfo; status: TemplateRunsStatus } {
+  const r: FlywayRuns = f.runs || {};
+  const sched = f.trigger.schedule ? ({ ...f.trigger.schedule } as NonNullable<Template["schedule"]>) : undefined;
+  if (sched && f.trigger.paused) sched.paused = true;
+  const info: TemplateRunInfo = { ...r };
+  return {
+    t: { name: f.id, repo_path: f.session?.repo_path || "", schedule: sched },
+    info,
+    status: { runs: { [f.id.trim().toLowerCase()]: info }, runs_here: r.runs_here !== false, runs_on: r.runs_on || "", tz: r.tz || "" },
+  };
+}
+
+/** One card of Schedule's list: a template or a saved chain on a schedule. */
+export type ScheduleEntry = { kind: "template"; t: Template } | { kind: "plan"; f: ScheduledFlyway };
+
+/** Schedule's ONE list of what starts by itself on a timer: the scheduled
+ * templates and the scheduled saved chains together — soonest next run
+ * first, then any with no next run, then the paused ones; a tie keeps
+ * templates first. A saved chain whose trigger is a schedule with no time
+ * set yet is not on it (it is "Not scheduled"). */
+export function scheduleEntries(
+  templates: Template[],
+  status: Pick<TemplateRunsStatus, "runs">,
+  plans: readonly ScheduledFlyway[] | null | undefined
+): ScheduleEntry[] {
+  const rank = (paused: boolean, at: number): [number, number] => (paused ? [2, 0] : at ? [0, at] : [1, 0]);
+  const rows: Array<{ e: ScheduleEntry; r: [number, number] }> = [
+    ...scheduledOrder(templates, status).map((t) => ({
+      e: { kind: "template" as const, t },
+      r: rank(!!t.schedule?.paused, Number(status.runs[t.name.trim().toLowerCase()]?.next_at) || 0),
+    })),
+    ...scheduledFlyways(plans)
+      .filter((f) => !!f.trigger.schedule)
+      .map((f) => ({
+        e: { kind: "plan" as const, f },
+        r: rank(!!(f.trigger.paused || f.runs?.paused), Number(f.runs?.next_at) || 0),
+      })),
+  ];
+  return rows
+    .map((x, i) => ({ ...x, i }))
+    .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.i - b.i)
+    .map((x) => x.e);
+}
+
+/** What runs next across the whole list, templates and saved chains alike. */
+export function nextAcross(
+  templates: Template[],
+  status: Pick<TemplateRunsStatus, "runs">,
+  plans: readonly ScheduledFlyway[] | null | undefined
+): { name: string; at: number } | null {
+  let best = nextUp(templates, status);
+  for (const f of scheduledFlyways(plans)) {
+    if (!f.trigger.schedule || f.trigger.paused || f.runs?.paused || f.runs?.runs_here === false) continue;
+    const at = Number(f.runs?.next_at) || 0;
+    if (at && (!best || at < best.at)) best = { name: f.name, at };
+  }
+  return best;
+}
+
+/** A plan's schedule after Skip next (the slot's epoch) / Undo skip (0). */
+export function planWithSkip(f: FlightPlan, until: number, nowSec: number = Date.now() / 1000): FlightPlan {
+  const sched = { ...(f.trigger.schedule || {}) } as Record<string, unknown>;
+  if (until && until > nowSec) sched.skip_until = until;
+  else delete sched.skip_until;
+  return { ...f, trigger: { ...f.trigger, schedule: sched as unknown as FlightSchedule } };
+}
+
+/** The plan with the compact row's schedule: its cadence; a Skip next held
+ * only while the cadence is the same one it was set for. null = the fields
+ * don't name a schedule yet. */
+export function planWithWhen(f: FlightPlan, when: WhenFields): FlightPlan | null {
+  const next = scheduleOfWhen({ ...when, seeded: when.seeded || "" } as WhenForm);
+  if (!next) return null;
+  const old = f.trigger.schedule as (FlightSchedule & { skip_until?: number }) | null;
+  const same = !!old && JSON.stringify(scheduleOfWhen(whenFormOf(old))) === JSON.stringify(next);
+  const sched = { ...next } as Record<string, unknown>;
+  if (same && old?.skip_until) sched.skip_until = old.skip_until;
+  return { ...f, trigger: { ...f.trigger, schedule: sched as unknown as FlightSchedule } };
+}
+
+/** The plan as savePlan sends it: the run record is the server's to add. */
+export function barePlan(f: ScheduledFlyway): FlightPlan {
+  const out = { ...f } as ScheduledFlyway;
+  delete out.runs;
+  return out;
 }
 
 interface ViewProps {
@@ -384,14 +477,38 @@ interface ViewProps {
   onDiscard?: () => void;
   /** Drawn inside another surface: no Modal of its own and no Close. */
   embedded?: boolean;
-  /** Every flyway (GET /api/flights/plans); the scheduled ones get a section. */
+  /** Every flyway (GET /api/flights/plans); the scheduled ones are cards in
+   * the list beside the templates. */
   flyways?: readonly ScheduledFlyway[] | null;
-  /** A scheduled flyway's Fly now: a flight takes off on it. */
-  onFlyFlyway?: (plan: ScheduledFlyway) => void;
-  /** A scheduled flyway's Edit in the Sky: close Schedule, open its card. */
-  onEditFlyway?: (plan: ScheduledFlyway) => void;
-  /** The flyway whose Fly now is starting. */
-  flying?: string;
+  /** A plan card's Run now: a flight takes off on it in a new session (one
+   * with no repository opens the card's folder row instead). */
+  onRunPlan?: (plan: ScheduledFlyway) => void;
+  /** The plan whose Run now is starting. */
+  runningPlan?: string;
+  /** A plan card's Edit: its Takes off dialog. */
+  onEditPlan?: (plan: ScheduledFlyway) => void;
+  /** A plan card's Pause / Resume (true = pause: trigger.paused). */
+  onPausePlan?: (plan: ScheduledFlyway, paused: boolean) => void;
+  /** A plan card's Skip next (the slot's epoch) / Undo skip (0). */
+  onSkipPlan?: (plan: ScheduledFlyway, until: number) => void;
+  /** The plan whose Pause / Skip is being saved. */
+  planFlagging?: string;
+  /** A plan card's open Schedule… / Change schedule row. */
+  planSched?: { id: string; form: WhenFields; error: string; busy: boolean } | null;
+  /** Open (a plan) or close (null) that row. */
+  onPlanSchedule?: (plan: ScheduledFlyway | null) => void;
+  onPlanForm?: (patch: Partial<WhenFields>) => void;
+  onPlanSave?: () => void;
+  /** "Stop schedule": the trigger keeps no time (it starts nothing). */
+  onPlanStop?: () => void;
+  /** The server's reading of the plan row's schedule. */
+  planPreview?: CronPreview | null;
+  /** A plan card's folder row (Run now with no repository). */
+  planFolder?: { id: string; path: string; keep: boolean } | null;
+  /** Change it (a patch) or close it (null). */
+  onPlanFolder?: (patch: Partial<{ path: string; keep: boolean }> | null) => void;
+  /** The folder row's Run now: start it in `path` (and keep it when `keep`). */
+  onRunPlanIn?: (plan: ScheduledFlyway, path: string, keep: boolean) => void;
 }
 
 /** Markup only: everything it shows comes in as props. */
@@ -530,13 +647,21 @@ export function TemplatesDialogView(p: ViewProps) {
     </div>
   );
 
-  /** The schedule strip of a scheduled card: cadence, when next, and its
-   * three switches — Change schedule, Skip next / Undo skip, Pause / Resume. */
-  const strip = (t: Template, info: TemplateRunInfo) => {
+  /** The schedule strip of a scheduled card — a template's, or a saved
+   * stop's read as one (planAsTemplate): cadence, when next, and its three
+   * switches — Change schedule, Skip next / Undo skip, Pause / Resume. */
+  type StripActs = { flagging: boolean; onChange(): void; onSkip(until: number): void; onPause(paused: boolean): void };
+  const templateActs = (t: Template): StripActs => ({
+    flagging: p.flagging === t.name,
+    onChange: () => p.dispatch({ t: "schedule", name: t.name }),
+    onSkip: (until) => p.onSkip?.(t.name, until),
+    onPause: (paused) => p.onPause?.(t.name, paused),
+  });
+  const strip = (t: Template, info: TemplateRunInfo, st: TemplateRunsStatus = runs, acts: StripActs = templateActs(t)) => {
     const paused = !!(t.schedule?.paused || info.paused);
-    const next = nextLine(t, info, runs, now);
+    const next = nextLine(t, info, st, now);
     const skipping = !paused && info.skipping_at ? info.skipping_at : 0;
-    const flagging = p.flagging === t.name;
+    const flagging = acts.flagging;
     return (
       <div className={"sch-strip" + (paused ? " is-paused" : "")}>
         <div className="sch-when">
@@ -544,12 +669,12 @@ export function TemplatesDialogView(p: ViewProps) {
               far off the next run is. */}
           {paused ? (
             <>
-              <span className="sch-cadence">{cadenceText(t, info, runs)}</span>
+              <span className="sch-cadence">{cadenceText(t, info, st)}</span>
               <span className="sch-next sch-paused-chip">Paused</span>
             </>
           ) : (
             <>
-              <span className="sch-cadence">{templateScheduleLine(t, runs, now)}</span>
+              <span className="sch-cadence">{templateScheduleLine(t, st, now)}</span>
               {next && <span className="sch-next">{next}</span>}
             </>
           )}
@@ -559,7 +684,7 @@ export function TemplatesDialogView(p: ViewProps) {
             type="button"
             className="sch-sw tpl-sched"
             title="Change when it runs, or stop its schedule — just the schedule"
-            onClick={() => p.dispatch({ t: "schedule", name: t.name })}
+            onClick={acts.onChange}
           >
             Change schedule
           </button>
@@ -569,7 +694,7 @@ export function TemplatesDialogView(p: ViewProps) {
                 type="button"
                 className="sch-sw sch-skip"
                 disabled={flagging}
-                onClick={() => p.onSkip?.(t.name, 0)}
+                onClick={() => acts.onSkip(0)}
               >
                 Undo skip
               </button>
@@ -580,7 +705,7 @@ export function TemplatesDialogView(p: ViewProps) {
                   className="sch-sw sch-skip"
                   disabled={flagging}
                   title={"Let " + whenLabel(info.next_at, now) + " pass without a session — the one after runs as usual"}
-                  onClick={() => p.onSkip?.(t.name, Number(info.next_at))}
+                  onClick={() => acts.onSkip(Number(info.next_at))}
                 >
                   Skip next
                 </button>
@@ -594,7 +719,7 @@ export function TemplatesDialogView(p: ViewProps) {
               className="sch-sw sch-pause"
               disabled={flagging}
               title={paused ? "Start running on its schedule again" : "Keep the schedule, start nothing until you resume"}
-              onClick={() => p.onPause?.(t.name, !paused)}
+              onClick={() => acts.onPause(!paused)}
             >
               {paused ? "Resume" : "Pause"}
             </button>
@@ -729,17 +854,70 @@ export function TemplatesDialogView(p: ViewProps) {
     );
   };
 
-  /** A scheduled flyway, as a template card: what it is, when it runs, how
-   * its last run went — and Fly now / Edit in the Sky. */
-  const flywayCard = (f: ScheduledFlyway) => {
-    const info: FlywayRuns = f.runs || {};
-    const paused = !!(f.trigger.paused || info.paused);
-    const next = flywayNextLine(f, now);
-    const stops = f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+  /** A plan card's folder row: Run now on a saved chain with no repository
+   * asks where, in the card — the folder picker (Browse…), the most recent
+   * repo already filled in, and "Keep it for its scheduled runs" (its
+   * schedule can't start without one either). Never a dead-end error. */
+  const folderRow = (f: ScheduledFlyway) => {
+    const pf = p.planFolder;
+    if (!pf || pf.id !== f.id) return null;
+    const running = p.runningPlan === f.id;
+    return (
+      <div className="tpl-sched-row sch-plan-folder">
+        <form
+          className="tpl-editor tpl-sched-editor"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (pf.path.trim()) p.onRunPlanIn?.(f, pf.path.trim(), pf.keep);
+          }}
+        >
+          <label className="sch-plan-folder-label" htmlFor={"sch-plan-folder-" + f.id}>
+            Which folder should it start in?
+          </label>
+          <PathField
+            id={"sch-plan-folder-" + f.id}
+            value={pf.path}
+            placeholder="A folder — usually a git repository"
+            pickerTitle={"The folder “" + f.name + "” starts its session in"}
+            onChange={(v) => p.onPlanFolder?.({ path: v })}
+          />
+          <label className="check sch-plan-keep">
+            <input type="checkbox" checked={pf.keep} onChange={(e) => p.onPlanFolder?.({ keep: e.target.checked })} />
+            Keep it for its scheduled runs too
+          </label>
+          <div className="tpl-row-actions">
+            <p className="error" aria-live="polite" />
+            <button type="button" className="tpl-cancel" onClick={() => p.onPlanFolder?.(null)}>
+              Cancel
+            </button>
+            <button type="submit" className="tpl-save" disabled={!pf.path.trim() || running}>
+              {running ? "Starting…" : "▶ Run now"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  };
+
+  /** A saved chain that starts on a timer, as a template card: what it is,
+   * when it runs, how its last run went — and a template card's verbs. */
+  const planCard = (f: ScheduledFlyway) => {
+    const { t, info, status: st } = planAsTemplate(f);
+    const scheduled = hasSchedule(t);
+    const paused = scheduled && !!(t.schedule?.paused || info.paused);
+    const stops = "Saved route · " + f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+    const schedOpen = p.planSched?.id === f.id;
+    const folderOpen = p.planFolder?.id === f.id;
+    const noFolder = !(f.session?.repo_path || "").trim();
     return (
       <div
-        key={f.id}
-        className={"tpl-card is-scheduled sch-flyway" + (paused ? " is-paused" : "") + (!paused && lastRunFailed(info) ? " is-failing" : "")}
+        key={"plan:" + f.id}
+        className={
+          "tpl-card sch-flyway" +
+          (scheduled ? " is-scheduled" : "") +
+          (paused ? " is-paused" : "") +
+          (!paused && lastRunFailed(info) ? " is-failing" : "")
+        }
         data-plan={f.id}
       >
         <div className="tpl-card-top">
@@ -755,40 +933,85 @@ export function TemplatesDialogView(p: ViewProps) {
           <div className="tpl-actions">
             <button
               type="button"
-              className="tpl-btn tpl-run sch-flyway-fly"
-              disabled={!!p.flying}
-              title="Fly now — a flight takes off on these stops in a new session"
-              onClick={() => p.onFlyFlyway?.(f)}
+              className="tpl-btn tpl-run sch-plan-run"
+              disabled={!!p.runningPlan}
+              title={
+                noFolder
+                  ? "Run now — pick the folder its new session starts in"
+                  : "Run now — starts a new session and runs these stops in it"
+              }
+              onClick={() => p.onRunPlan?.(f)}
             >
-              {p.flying === f.id ? "Taking off…" : "Fly now"}
+              {p.runningPlan === f.id ? "Starting…" : "▶ Run now"}
             </button>
+            {!scheduled && (
+              <button
+                type="button"
+                className="tpl-btn tpl-sched"
+                title="Start it by itself — every day, weekdays, once or on a cron"
+                onClick={() => p.onPlanSchedule?.(f)}
+              >
+                Schedule…
+              </button>
+            )}
             <button
               type="button"
-              className="tpl-btn sch-flyway-edit"
-              title="Open it on the Sky's Stops shelf — its stops and its schedule"
-              onClick={() => p.onEditFlyway?.(f)}
+              className="tpl-btn sch-plan-edit"
+              title="Edit — when it runs, and the repository, agent and model its sessions start in"
+              onClick={() => p.onEditPlan?.(f)}
             >
-              Edit in the Sky
+              Edit
             </button>
           </div>
         </div>
-        <div className={"sch-strip" + (paused ? " is-paused" : "")}>
-          <div className="sch-when">
-            <span className="sch-cadence">{info.schedule_label || "No schedule set"}</span>
-            {next && <span className={"sch-next" + (paused ? " sch-paused-chip" : "")}>{next}</span>}
+        {schedOpen && p.planSched ? (
+          <div className="tpl-sched-row">
+            <ScheduleEditor
+              form={p.planSched.form}
+              onForm={(patch) => p.onPlanForm?.(patch)}
+              error={p.planSched.error}
+              busy={p.planSched.busy}
+              onSave={() => p.onPlanSave?.()}
+              onCancel={() => p.onPlanSchedule?.(null)}
+              onStop={scheduled ? p.onPlanStop : undefined}
+              tz={info.tz || st.tz || p.tz}
+              cronPreview={p.planPreview}
+              runs={st}
+            />
           </div>
-        </div>
+        ) : (
+          scheduled &&
+          strip(t, info, st, {
+            flagging: p.planFlagging === f.id,
+            onChange: () => p.onPlanSchedule?.(f),
+            onSkip: (until) => p.onSkipPlan?.(f, until),
+            onPause: (paused) => p.onPausePlan?.(f, paused),
+          })
+        )}
+        {folderRow(f)}
         {outcome(info)}
+        {noFolder && !folderOpen && (
+          <div className="tpl-needs">
+            Run now and schedules need a folder.{" "}
+            <button type="button" className="linklike" onClick={() => p.onRunPlan?.(f)}>
+              Pick one
+            </button>
+          </div>
+        )}
       </div>
     );
   };
-  const flywayList = scheduledFlyways(p.flyways);
+  const planList = scheduledFlyways(p.flyways);
+  const unscheduledPlans = planList.filter((f) => !f.trigger.schedule);
 
-  const scheduledList = scheduledOrder(templates, runs);
+  const entries = scheduleEntries(templates, runs, p.flyways);
   const saved = templates.filter((t) => !hasSchedule(t));
-  const up = nextUp(templates, runs);
+  const up = nextAcross(templates, runs, p.flyways);
   const elsewhere = !runs.runs_here && !!runs.runs_on;
+  // No templates yet: the invitation to make one leads (saved chains on a
+  // schedule, the built-ins among them, still list below it).
   const empty = loaded && templates.length === 0 && ui.editing !== "";
+  const entry = (e: ScheduleEntry) => (e.kind === "template" ? card(e.t) : planCard(e.f));
 
   const onEscape = () => {
     if (ui.discarding) {
@@ -831,7 +1054,7 @@ export function TemplatesDialogView(p: ViewProps) {
         </div>
         {!empty && (
           <p className="tpl-intro muted">
-            Templates start a <strong>new</strong> session — when you run one, or by themselves on a schedule.
+            Everything here starts a <strong>new</strong> session by itself on a timer — or right now, with Run now.
             <span className="tpl-intro-aside">To send text to a session that's already running, use Prompts.</span>
           </p>
         )}
@@ -868,7 +1091,7 @@ export function TemplatesDialogView(p: ViewProps) {
               </button>
             </div>
           )}
-          {templates.length > 0 && (
+          {(templates.length > 0 || planList.length > 0) && (
             <>
               {(up || elsewhere) && (
                 <div className="sch-next-up" id="schedule-next">
@@ -888,40 +1111,34 @@ export function TemplatesDialogView(p: ViewProps) {
                   )}
                 </div>
               )}
-              <section className="sch-section" id="schedule-scheduled" aria-labelledby="schedule-scheduled-h">
-                <h3 id="schedule-scheduled-h">
-                  Scheduled{scheduledList.length > 0 && <span className="sch-count">{scheduledList.length}</span>}
-                </h3>
-                {scheduledList.length ? (
-                  scheduledList.map(card)
-                ) : (
-                  <p className="sch-none muted">
-                    Nothing runs by itself yet — <strong>Schedule…</strong> on a template below starts it every day,
-                    weekday, once or on any cron.
-                  </p>
-                )}
-              </section>
-              {saved.length > 0 && (
+              {/* ONE list of what starts by itself on a timer: templates and
+                  saved chains on a schedule, side by side, the same verbs. */}
+              {(entries.length > 0 || templates.length > 0) && (
+                <section className="sch-section" id="schedule-scheduled" aria-labelledby="schedule-scheduled-h">
+                  <h3 id="schedule-scheduled-h">
+                    Scheduled{entries.length > 0 && <span className="sch-count">{entries.length}</span>}
+                  </h3>
+                  {entries.length ? (
+                    entries.map(entry)
+                  ) : (
+                    <p className="sch-none muted">
+                      Nothing runs by itself yet — <strong>Schedule…</strong> on a card below starts it every day,
+                      weekday, once or on any cron.
+                    </p>
+                  )}
+                </section>
+              )}
+              {saved.length + unscheduledPlans.length > 0 && (
                 <section className="sch-section" id="schedule-saved" aria-labelledby="schedule-saved-h">
                   <h3 id="schedule-saved-h">
-                    Not scheduled<span className="sch-count">{saved.length}</span>
+                    Not scheduled<span className="sch-count">{saved.length + unscheduledPlans.length}</span>
                     <span className="sch-section-hint">run now or add a schedule</span>
                   </h3>
                   {saved.map(card)}
+                  {unscheduledPlans.map(planCard)}
                 </section>
               )}
             </>
-          )}
-          {/* Nothing scheduled hides: no section at all until a flyway has a
-              schedule trigger. */}
-          {flywayList.length > 0 && (
-            <section className="sch-section" id="schedule-flyways" aria-labelledby="schedule-flyways-h">
-              <h3 id="schedule-flyways-h">
-                Scheduled stops<span className="sch-count">{flywayList.length}</span>
-                <span className="sch-section-hint">saved stops that take off by themselves</span>
-              </h3>
-              {flywayList.map(flywayCard)}
-            </section>
           )}
         </div>
       </div>
@@ -971,9 +1188,17 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
   const [flagging, setFlagging] = useState("");
-  // Scheduled stops (the plans with a schedule trigger) list here too.
+  // Saved chains on a schedule (the plans with a schedule trigger) are cards
+  // in the same list.
   const flyways = useFlightPlans(open).data as ScheduledFlyway[] | null | undefined;
-  const [flying, setFlying] = useState("");
+  const [runningPlan, setRunningPlan] = useState("");
+  const [planFlagging, setPlanFlagging] = useState("");
+  const [planSched, setPlanSched] = useState<{ id: string; form: WhenFields; error: string; busy: boolean } | null>(null);
+  const [planPreview, setPlanPreview] = useState<CronPreview | null>(null);
+  const [planFolder, setPlanFolder] = useState<{ id: string; path: string; keep: boolean } | null>(null);
+  const planFolderSeeded = useRef(false);
+  // A plan card's Edit: its Takes off dialog, over Schedule.
+  const [takeoff, setTakeoff] = useState<ScheduledFlyway | null>(null);
   const [agents, setAgents] = useState<string[]>([]);
   const [installed, setInstalled] = useState<InstalledMap | null>(null);
   const [otherDevices, setOtherDevices] = useState(false);
@@ -992,7 +1217,7 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
   // The editor's folder chips — the New form's Recent / Home line. Asked
   // once per opening, and only when an editor opens: the endpoint walks the
   // disk, which a glance at the list should not pay for.
-  const editorOpen = open && ui.editing !== null;
+  const editorOpen = open && (ui.editing !== null || !!planFolder);
   useEffect(() => {
     if (!open) suggestAsked.current = false;
     if (!editorOpen || suggestAsked.current) return;
@@ -1019,6 +1244,46 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
       setSeed((f) => (f && !f.repo_path ? { ...f, repo_path: path } : f));
     }
   }, [ui.editing, folderSuggestions]);
+
+  // A plan's folder row starts on the most recent repo too, once the chips
+  // are in (a path typed meanwhile is never replaced).
+  useEffect(() => {
+    if (!planFolder) {
+      planFolderSeeded.current = false;
+      return;
+    }
+    if (planFolderSeeded.current || !folderSuggestions.length) return;
+    planFolderSeeded.current = true;
+    const path = defaultFolder(folderSuggestions);
+    if (path) setPlanFolder((pf) => (pf && !pf.path ? { ...pf, path } : pf));
+  }, [planFolder, folderSuggestions]);
+
+  // A plan row's schedule, previewed by the server as it is typed — the
+  // template editor's rule (debounced; a stale answer never lands).
+  const planCron = planSched
+    ? (planSched.form.days === "cron"
+        ? planSched.form.cron
+        : planSched.form.days === "once"
+          ? onceOf(planSched.form.date, planSched.form.at)
+          : cronOf(planSched.form.at, planSched.form.days)
+      ).trim()
+    : "";
+  useEffect(() => {
+    if (!open || !planCron) {
+      setPlanPreview(null);
+      return;
+    }
+    let live = true;
+    const timer = setTimeout(() => {
+      cronPreview(planCron)
+        .then((pv) => live && setPlanPreview(pv))
+        .catch(() => live && setPlanPreview(null));
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [open, planCron]);
 
   // Delete says "your other linked devices" only when there are some.
   useEffect(() => {
@@ -1063,6 +1328,9 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
   useEffect(() => {
     if (!open) return;
     dispatch({ t: "cancel" });
+    setPlanSched(null);
+    setPlanFolder(null);
+    setTakeoff(null);
     // The palette's "Schedule a session…" opens straight onto a NEW template's
     // editor with its schedule already switched on; a template chip's ⏰ in
     // New opens that template's.
@@ -1256,83 +1524,185 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
     }
   };
 
-  return (
-    <TemplatesDialogView
-      templates={templates}
-      flagging={flagging}
-      onPause={(name, paused) =>
-        void flag(name, { paused }, paused ? `Paused “${name}” — it starts nothing until you resume it` : `Resumed “${name}”`)
-      }
-      onSkip={(name, until) =>
-        void flag(
-          name,
-          { skip_until: until },
-          until ? `“${name}” will skip ${whenLabel(until)} — the run after it goes ahead` : `“${name}” runs next time as usual`
-        )
-      }
-      runs={runs}
-      running={running}
-      cronPreview={preview}
-      onRun={(name) => void run(name)}
-      ui={ui}
-      form={form}
-      busy={busy}
-      loaded={loaded}
-      loadError={loadError}
-      onForm={(patch) => setForm((f) => ({ ...f, ...patch }))}
-      dispatch={(a) => {
-        if (needsDiscard(ui, a, dirty)) {
-          dispatch({ t: "ask-discard", then: a });
-          return;
-        }
-        if (a.t !== "keep-editing") setScheduleFocus(a.t === "schedule");
-        dispatch(a);
-      }}
-      dirty={dirty}
-      embedded={embedded}
-      onDiscard={() => {
-        const then = ui.discarding?.then;
-        if (!then) return;
-        dispatch({ t: "cancel" });
-        if (then === "close") {
-          close();
-          return;
-        }
-        setScheduleFocus(then.t === "schedule");
-        dispatch(then);
-      }}
-      agents={agents}
-      folderSuggestions={folderSuggestions}
-      homePath={config?.home || ""}
-      scheduleFocus={scheduleFocus}
-      tz={Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || runs.tz || localZone()}
-      onSave={() => void save()}
-      onStopSchedule={() => void save({ ...form, scheduled: false }, true)}
-      onDelete={(name) => void del(name)}
-      onClose={() => (dirty ? dispatch({ t: "ask-discard", then: "close" }) : close())}
-      installed={installed}
-      githubConnected={github.data ?? null}
-      liveSessions={liveSessions}
-      onOpenSession={(title) => {
+  // --- Saved chains on a schedule: a template card's verbs -------------------
+
+  /** Save the plan as `change` makes it (the run record left off), and say
+   * so; a refusal is the server's own sentence. */
+  const putPlan = async (f: ScheduledFlyway, change: (b: FlightPlan) => FlightPlan, said: string): Promise<boolean> => {
+    try {
+      await savePlan(change(barePlan(f)));
+      if (said) toast(said);
+      return true;
+    } catch (err) {
+      toast("Couldn't change “" + f.name + "”: " + errMsg(err));
+      return false;
+    }
+  };
+
+  const flagPlan = async (f: ScheduledFlyway, change: (b: FlightPlan) => FlightPlan, said: string) => {
+    setPlanFlagging(f.id);
+    try {
+      await putPlan(f, change, said);
+    } finally {
+      setPlanFlagging("");
+    }
+  };
+
+  /** Run now: a flight takes off on the plan in a new session. With no
+   * repository there is nowhere to start one, so the card asks (its folder
+   * row) instead of failing with "pick a folder". */
+  const runPlan = async (f: ScheduledFlyway, path = "", keep = false) => {
+    if (runningPlan) return;
+    const repo = (path || f.session?.repo_path || "").trim();
+    if (!repo) {
+      setPlanSched(null);
+      setPlanFolder({ id: f.id, path: defaultFolder(folderSuggestions), keep: true });
+      return;
+    }
+    setRunningPlan(f.id);
+    try {
+      if (path && keep) await putPlan(f, (b) => ({ ...b, session: { ...b.session, repo_path: repo } }), "");
+      // takeOff selects the new session once its row exists.
+      const flight = await takeOff(path ? { plan_id: f.id, repo_path: repo } : { plan_id: f.id });
+      if (flight) {
+        setPlanFolder(null);
         closeDialog();
-        selectSession(title);
-      }}
-      otherDevices={otherDevices}
-      flyways={flyways}
-      flying={flying}
-      onFlyFlyway={(f) => {
-        if (flying) return;
-        setFlying(f.id);
-        // takeOff selects the new session once its row exists.
-        void takeOff({ plan_id: f.id }).then((flight) => {
-          setFlying("");
-          if (flight) closeDialog();
+      }
+    } finally {
+      setRunningPlan("");
+    }
+  };
+
+  const savePlanSchedule = async (stop = false) => {
+    if (!planSched) return;
+    const f = (flyways || []).find((x) => x.id === planSched.id);
+    if (!f) return setPlanSched(null);
+    const next = stop ? { ...barePlan(f), trigger: { ...f.trigger, schedule: null } } : planWithWhen(barePlan(f), planSched.form);
+    if (!next) {
+      setPlanSched({ ...planSched, error: "Pick a time (24-hour, like 21:00), a date, or a cron expression" });
+      return;
+    }
+    setPlanSched({ ...planSched, busy: true, error: "" });
+    try {
+      await savePlan(next);
+      setPlanSched(null);
+      if (stop) {
+        const before = barePlan(f);
+        toast(`Stopped the schedule of “${f.name}” — nothing starts on its own`, {
+          action: { label: "Undo", onClick: () => void putPlan(f, () => before, `“${f.name}” runs on its schedule again`) },
         });
-      }}
-      onEditFlyway={(f) => {
-        closeDialog();
-        useUi.getState().showFlyways(f.id);
-      }}
-    />
+      } else toast(`Saved the schedule of “${f.name}”`);
+    } catch (err) {
+      setPlanSched((ps) => (ps ? { ...ps, busy: false, error: errMsg(err) } : ps));
+    }
+  };
+
+  return (
+    <>
+      <TemplatesDialogView
+        templates={templates}
+        flagging={flagging}
+        onPause={(name, paused) =>
+          void flag(name, { paused }, paused ? `Paused “${name}” — it starts nothing until you resume it` : `Resumed “${name}”`)
+        }
+        onSkip={(name, until) =>
+          void flag(
+            name,
+            { skip_until: until },
+            until ? `“${name}” will skip ${whenLabel(until)} — the run after it goes ahead` : `“${name}” runs next time as usual`
+          )
+        }
+        runs={runs}
+        running={running}
+        cronPreview={preview}
+        onRun={(name) => void run(name)}
+        ui={ui}
+        form={form}
+        busy={busy}
+        loaded={loaded}
+        loadError={loadError}
+        onForm={(patch) => setForm((f) => ({ ...f, ...patch }))}
+        dispatch={(a) => {
+          if (needsDiscard(ui, a, dirty)) {
+            dispatch({ t: "ask-discard", then: a });
+            return;
+          }
+          if (a.t !== "keep-editing") setScheduleFocus(a.t === "schedule");
+          // A template's editor or row and a plan's row are never open at once.
+          if (a.t === "new" || a.t === "edit" || a.t === "schedule") {
+            setPlanSched(null);
+            setPlanFolder(null);
+          }
+          dispatch(a);
+        }}
+        dirty={dirty}
+        embedded={embedded}
+        onDiscard={() => {
+          const then = ui.discarding?.then;
+          if (!then) return;
+          dispatch({ t: "cancel" });
+          if (then === "close") {
+            close();
+            return;
+          }
+          setScheduleFocus(then.t === "schedule");
+          dispatch(then);
+        }}
+        agents={agents}
+        folderSuggestions={folderSuggestions}
+        homePath={config?.home || ""}
+        scheduleFocus={scheduleFocus}
+        tz={Object.values(runs.runs || {}).map((r) => r.tz).find(Boolean) || runs.tz || localZone()}
+        onSave={() => void save()}
+        onStopSchedule={() => void save({ ...form, scheduled: false }, true)}
+        onDelete={(name) => void del(name)}
+        onClose={() => (dirty ? dispatch({ t: "ask-discard", then: "close" }) : close())}
+        installed={installed}
+        githubConnected={github.data ?? null}
+        liveSessions={liveSessions}
+        onOpenSession={(title) => {
+          closeDialog();
+          selectSession(title);
+        }}
+        otherDevices={otherDevices}
+        flyways={flyways}
+        runningPlan={runningPlan}
+        onRunPlan={(f) => void runPlan(f)}
+        onRunPlanIn={(f, path, keep) => void runPlan(f, path, keep)}
+        planFolder={planFolder}
+        onPlanFolder={(patch) => setPlanFolder((pf) => (patch && pf ? { ...pf, ...patch } : null))}
+        onEditPlan={(f) => setTakeoff(f)}
+        planFlagging={planFlagging}
+        onPausePlan={(f, paused) =>
+          void flagPlan(
+            f,
+            (b) => ({ ...b, trigger: { ...b.trigger, paused } }),
+            paused ? `Paused “${f.name}” — it starts nothing until you resume it` : `Resumed “${f.name}”`
+          )
+        }
+        onSkipPlan={(f, until) =>
+          void flagPlan(
+            f,
+            (b) => planWithSkip(b, until),
+            until ? `“${f.name}” will skip ${whenLabel(until)} — the run after it goes ahead` : `“${f.name}” runs next time as usual`
+          )
+        }
+        planSched={planSched}
+        planPreview={planPreview}
+        onPlanSchedule={(f) => {
+          if (!f) return setPlanSched(null);
+          // Its row replaces a template's (an unsaved template edit keeps its
+          // place; only a clean one steps aside).
+          if (!dirty) dispatch({ t: "cancel" });
+          setPlanFolder(null);
+          const when = whenFormOf(f.trigger.schedule);
+          setPlanSched({ id: f.id, form: { ...when, seeded: "" }, error: "", busy: false });
+        }}
+        onPlanForm={(patch) => setPlanSched((ps) => (ps ? { ...ps, form: { ...ps.form, ...patch }, error: "" } : ps))}
+        onPlanSave={() => void savePlanSchedule()}
+        onPlanStop={() => void savePlanSchedule(true)}
+      />
+      {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
+    </>
   );
 }

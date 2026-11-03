@@ -17,9 +17,10 @@ import { agentName } from "../../../lib/agentNames";
 import { openSettings } from "../../../lib/openSettings";
 import { pickerOptions } from "../../../lib/providerRows";
 import { FlagChips } from "../../dialogs/FlagChips";
-import { SettingField, useSettings } from "../useSettings";
+import { useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 import { AdvancedFold } from "../settingsMode";
+import { SetInIntake } from "./SetInIntake";
 import { AgentCard } from "../../setup/AgentCard";
 
 /** The flags field's example, per agent: a harmless flag that agent really
@@ -276,8 +277,9 @@ export function CodingCli({ gotoScreen }: ScreenProps) {
 
 /** "How many sessions can run at once?" — answered plainly. There is no
  * cap on the sessions you start; auto-started ticket sessions have one
- * (engine.max_sessions, the same field as Intake → Queue), and sessions an
- * agent starts have their own limits under Agent orchestration. */
+ * (engine.max_sessions), set ONLY in Intake › Auto-start — this row was the
+ * same field a second time under another name, so it is a link now; and
+ * sessions an agent starts have their own limits under Agent orchestration. */
 function SessionsAtOnce({ gotoScreen }: { gotoScreen(name: string): void }) {
   return (
     <>
@@ -285,13 +287,12 @@ function SessionsAtOnce({ gotoScreen }: { gotoScreen(name: string): void }) {
         Sessions running at once
       </h3>
       <p className="set-hint">Sessions you start yourself have no limit. Start as many as you like.</p>
-      <label className="set-row">
-        <span className="set-label">Ticket sessions at once</span>
-        <SettingField group="engine" field="max_sessions" type="number" placeholder="no limit" />
-        <span className="set-hint">
-          The most auto-started ticket sessions running together. Extra tickets wait their turn.
-        </span>
-      </label>
+      <SetInIntake
+        id="coding-ticket-sessions-at-once"
+        label="Ticket sessions at once"
+        hint="Auto-started ticket sessions have a limit of their own; extra tickets wait their turn."
+        selector="#ik-max-sessions-row"
+      />
       <p className="set-hint">
         Sessions an agent starts for you have their own limits, under{" "}
         <button

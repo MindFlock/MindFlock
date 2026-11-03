@@ -52,6 +52,12 @@ diffs and terminal output are sample data.</sub>
 
 ## What is MindFlock?
 
+**MindFlock runs your coding agents side by side.** Each **session** is one
+agent working on its own branch. Its **route** is the stops the work goes
+through until it is merged — the agent, its checks, your OK, the PR. The
+**Sky** shows every route at once, and what **needs you**; the **Grid** is
+inside the work — your sessions side by side, talk to the agents.
+
 Work assigned to you in **GitHub Issues, Jira, Linear, Shortcut, or Asana**
 becomes an isolated AI coding session **on your own machine**: its own **git
 worktree** on its own `feature/<ticket>/<slug>` branch, dependencies installed,
@@ -86,7 +92,7 @@ a hand-started session runs whichever agent CLI you point it at.
 none. By default MindFlock never commits, pushes, opens or merges a PR by
 itself: every one of those is your click, you write the commit message, and the
 PR text is filled in from your commits. It goes further only when you say so —
-**fast-track** sets a depth (commit → push → PR → merge) per session or per
+**Goes as far as** sets how far (commit → push → PR → merge when green) per session or per
 [team run](docs/team-runs.md), and the agents' own `ship_session` /
 `set_autopilot` tools reach the same depths — never by default. It doesn't
 write to your tracker unless you opt in per source: **Move to state on

@@ -68,7 +68,7 @@ describe("More options", () => {
     // The block's own rows are as they were, and the footer too.
     expect(html).toContain('class="fl-prompt sky-new-prompt"');
     expect(html).toContain(">Cancel</button>");
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Fly<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Run<\/button>/);
   });
 
   it("open (remembered): account, workspace, base, launch flags pre-filled from the agent's defaults, device — chips, never a <select>", () => {

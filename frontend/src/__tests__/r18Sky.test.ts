@@ -53,14 +53,14 @@ const KINDS: StepKindDef[] = [
   { kind: "loop", label: "Loop", actor: "robot", summary: "", fields: [{ name: "back_to", type: "select", label: "Repeat from", default: "" }], default_title: "Loop" },
   {
     kind: "handoff",
-    label: "Start a chain",
+    label: "Start a route",
     actor: "robot",
     summary: "",
-    default_title: "Start a chain",
+    default_title: "Start a route",
     fields: [
-      { name: "target", type: "select", label: "Start which chain", default: "", options: [], dynamic: "chains" as never },
+      { name: "target", type: "select", label: "Start which route", default: "", options: [], dynamic: "chains" as never },
       { name: "session", type: "select", label: "Run it on", default: "new", options: ["new"], dynamic: "sessions" as never },
-      { name: "wait", type: "bool", label: "Wait for it to land", default: false },
+      { name: "wait", type: "bool", label: "Wait for it to finish", default: false },
     ],
   },
 ];
@@ -90,20 +90,20 @@ const FB = flight({ id: "f_b", state: "grounded", plan_name: "Release", steps: [
 
 // --- Heads and handoffs (lib/groundedLines) ---------------------------------------------
 
-describe("one chain starts another: the links and the trigger head", () => {
+describe("one route starts another: the links and the trigger head", () => {
   const withHandoff = (detail?: Record<string, unknown>) =>
     flight({
       id: "f_a",
       session: "me",
-      steps: [step("s1", "agent", "Work"), step("s2", "handoff", "Start a chain", { target: "flight:f_b", session: "new", wait: false })],
+      steps: [step("s1", "agent", "Work"), step("s2", "handoff", "Start a route", { target: "flight:f_b", session: "new", wait: false })],
       step_states: detail ? ({ s2: { state: "done", detail } } as never) : {},
     });
 
-  it("a Handoff naming a stops-only chain links to it; nothing else does", () => {
+  it("a Handoff naming a stops-only route links to it; nothing else does", () => {
     const links = G.handoffLinks([withHandoff(), FB]);
-    expect(links).toEqual([{ fromFlight: "f_a", fromStep: "s2", stepTitle: "Start a chain", fromSession: "me", fromName: "", target: "f_b", started: false, session: "new" }]);
+    expect(links).toEqual([{ fromFlight: "f_a", fromStep: "s2", stepTitle: "Start a route", fromSession: "me", fromName: "", target: "f_b", started: false, session: "new" }]);
     // A saved stop target names no chain until it has started one.
-    const plan = flight({ id: "f_p", steps: [step("s1", "handoff", "Start a chain", { target: "plan:p_1" })] });
+    const plan = flight({ id: "f_p", steps: [step("s1", "handoff", "Start a route", { target: "plan:p_1" })] });
     expect(G.handoffLinks([plan])).toEqual([]);
     expect(G.handoffLinks(null)).toEqual([]);
   });
@@ -113,15 +113,15 @@ describe("one chain starts another: the links and the trigger head", () => {
     expect(links[0]).toMatchObject({ target: "f_c", started: true, session: "me-w1" });
   });
 
-  it("the trigger head: “When <chain> reaches <stop>”, where it runs, the SOURCE session's colour", () => {
+  it("the trigger head: “When <route> reaches <stop>”, where it runs, the SOURCE session's colour", () => {
     const head = G.triggerHeadFor(FB, [withHandoff(), FB], (t) => t.toUpperCase());
     expect(head).toEqual({
       kind: "trigger",
-      title: "When ME reaches Start a chain",
+      title: "When ME reaches Start a route",
       sub: "runs on a new session",
       session: "new",
       color: chainColor("me"),
-      from: { flight: "f_a", step: "s2", title: "Start a chain" },
+      from: { flight: "f_a", step: "s2", title: "Start a route" },
     });
     // Nothing hands off to the source; a started link leaves the chain headless.
     expect(G.triggerHeadFor(FA, [withHandoff(), FB])).toBeNull();
@@ -130,16 +130,16 @@ describe("one chain starts another: the links and the trigger head", () => {
     expect(G.sessionWord("sc-1", () => "Login fix")).toBe("Login fix");
   });
 
-  it("a Handoff stop: the kind's defaults, aimed at the chain, on a new session, not waiting", () => {
+  it("a Handoff stop: the kind's defaults, aimed at the route, on a new session, not waiting", () => {
     const st = G.handoffStepFor(KINDS[2], ["s1", "s2"], "flight:f_b");
-    expect(st).toMatchObject({ id: "s3", kind: "handoff", title: "Start a chain", config: { target: "flight:f_b", session: "new", wait: false } });
+    expect(st).toMatchObject({ id: "s3", kind: "handoff", title: "Start a route", config: { target: "flight:f_b", session: "new", wait: false } });
   });
 });
 
 // --- The wires between chains (SkyWires) ------------------------------------------------
 
 describe("handoff wires", () => {
-  it("run from the Handoff tile's out port to the target chain's entry, dashed in the source's colour", () => {
+  it("run from the Handoff tile's out port to the target route's entry, dashed in the source's colour", () => {
     const links = [{ fromFlight: "f_a", fromStep: "s3", stepTitle: "Push", fromSession: "me", fromName: "", target: "f_b", started: false, session: "new" }];
     const [w] = handoffWires(links, [A, B]);
     const o = outPortOf(A_NODES[2]);
@@ -170,7 +170,7 @@ describe("handoff wires", () => {
 // --- The host's wiring helpers (useSkyWiring) --------------------------------------------
 
 describe("wiring helpers", () => {
-  it("the targets of a drag: every node wireIntent says something about, by chain", () => {
+  it("the targets of a drag: every node wireIntent says something about, by route", () => {
     const src: WireEnd = { chain: A.graph, node: A_NODES[0], side: "out" };
     const lit = W.wireTargetsOf(src, [A, B]);
     expect([...lit.keys()]).toEqual(["me"]);
@@ -178,7 +178,7 @@ describe("wiring helpers", () => {
     expect(intentOf).toHaveBeenCalledWith(src, expect.objectContaining({ side: "in" }), { shift: false });
   });
 
-  it("the node under the pointer: a tile, port or socket inside a chain — never inside an open card", () => {
+  it("the node under the pointer: a tile, port or socket inside a route — never inside an open card", () => {
     const el = (attrs: Record<string, string | null>) => {
       const node = { getAttribute: (k: string) => attrs[k] ?? null, closest: (s: string) => (s.includes(".sky-chain") ? chainEl : s === ".skl-card" ? (attrs.card ? {} : null) : null) };
       const chainEl = { getAttribute: (k: string) => (k === "data-chain" ? attrs.chain : null) };
@@ -203,7 +203,7 @@ describe("wiring helpers", () => {
     expect(code("components/flights/SkyLine.tsx")).toContain("kinds: kinds || NO_KINDS");
   });
 
-  it("plane ↔ chain px go through the slot's origin and the chain's place in it", () => {
+  it("plane ↔ route px go through the slot's origin and the route's place in it", () => {
     expect(W.onPlane(A, { x: 10, y: 5 })).toEqual({ x: 110, y: 239 });
     expect(W.inChain(A, { x: 110, y: 239 })).toEqual({ x: 10, y: 5 });
   });
@@ -248,7 +248,7 @@ describe("running a dropped wire", () => {
     expect(said).toHaveBeenCalledWith("Loops back to “stop:s1”");
   });
 
-  it("merge: a stops-only chain's stops spliced in right after the tile; attach: onto the session", async () => {
+  it("merge: a stops-only route's stops spliced in right after the tile; attach: onto the session", async () => {
     const d = deps();
     await W.runWireIntent({ op: "merge", chain: "me", after: A_NODES[1].node, from: "flight:f_b" }, { src, at }, d);
     expect(d.merge).toHaveBeenCalledWith("flight:f_b", "me", 2);
@@ -256,7 +256,7 @@ describe("running a dropped wire", () => {
     expect(d.merge).toHaveBeenLastCalledWith("flight:f_b", "me");
   });
 
-  it("handoff: a Start a chain stop after the tile, aimed at the chain, on a new session", async () => {
+  it("handoff: a Start a route stop after the tile, aimed at the route, on a new session", async () => {
     await W.runWireIntent({ op: "handoff", chain: "me", from: A_NODES[1].node, target: "flight:f_b" }, { src, at }, deps());
     const [fid, st, where] = routes.tackOn.mock.calls[0] as [string, FlightStep, number];
     expect(fid).toBe("f_a");
@@ -268,16 +268,16 @@ describe("running a dropped wire", () => {
   it("handoff on a server without the kind says so and changes nothing", async () => {
     await W.runWireIntent({ op: "handoff", chain: "me", from: A_NODES[1].node, target: "flight:f_b" }, { src, at }, deps({ kinds: KINDS.slice(0, 2) }));
     expect(routes.tackOn).not.toHaveBeenCalled();
-    expect(said).toHaveBeenCalledWith("This server has no “Start a chain” stop yet");
+    expect(said).toHaveBeenCalledWith("This server has no “Start a route” stop yet");
   });
 
-  it("palette: the chain's palette opens for a stop after the tile, its tile centred on the drop (8 px grid)", async () => {
+  it("palette: the route's palette opens for a stop after the tile, its tile centred on the drop (8 px grid)", async () => {
     const drop = { x: 100 + 300, y: 200 + 34 + 50 };
     await W.runWireIntent({ op: "palette", chain: "me", after: A_NODES[1].node, at: drop }, { src, at: drop }, deps());
     expect(A.paletteAfter).toHaveBeenCalledWith(A_NODES[1].node, { x: 232, y: 16 });
   });
 
-  it("split: the tile and the stops after it leave into a chain placed at the drop, its tiles kept relative to it", async () => {
+  it("split: the tile and the stops after it leave into a route placed at the drop, its tiles kept relative to it", async () => {
     routes.splitOffChain.mockResolvedValueOnce({ id: "f_new", plan_name: "Fix (from Push)", steps: [step("s1", "agent", "Push", {}, { pos: { x: 0, y: 0 } }), step("s2", "agent", "Tell", { }, { pos: { x: 600, y: 40 } })] });
     const d = deps();
     const drop = { x: 500, y: 700 };
@@ -288,7 +288,7 @@ describe("running a dropped wire", () => {
     expect(said).toHaveBeenCalledWith("Split off “Fix (from Push)”");
   });
 
-  it("none, or a chain with no flight, does nothing", async () => {
+  it("none, or a route with no flight, does nothing", async () => {
     const d = deps();
     await W.runWireIntent({ op: "none" }, { src, at }, d);
     await W.runWireIntent({ op: "move", chain: "gone", step: A_NODES[3].node, after: null }, { src, at }, d);
@@ -327,11 +327,11 @@ describe("node spots", () => {
 // --- The Handoff's dialog (StopParts) -------------------------------------------------------
 
 describe("the Handoff dialog's board-filled selects", () => {
-  it("chains: the board's stops-only chains, then the saved stops; sessions: a new one, then each", () => {
+  it("routes: the board's stops-only routes, then the saved stops; sessions: a new one, then each", () => {
     const plans = [{ id: "p_1", name: "Ticket to merge" }] as never;
     expect(SP.chainChoices([FA, FB], plans)).toEqual([
-      { value: "flight:f_b", label: "Release", group: "On the board" },
-      { value: "plan:p_1", label: "Ticket to merge", group: "Saved stops — a fresh copy each time" },
+      { value: "flight:f_b", label: "Release", group: "On the Sky" },
+      { value: "plan:p_1", label: "Ticket to merge", group: "Saved routes — a fresh copy each time" },
     ]);
     expect(SP.sessionChoices([{ title: "sc-1" }], (t) => t + "!")).toEqual([
       { value: "new", label: "a new session" },
@@ -341,12 +341,12 @@ describe("the Handoff dialog's board-filled selects", () => {
     expect(SP.boardDynamic({ dynamic: "stops_before" })).toBe("");
   });
 
-  it("draws as chips; a value no longer on the board stays visible", () => {
+  it("draws as chips; a value no longer on the Sky stays visible", () => {
     const f = KINDS[2].fields[0];
     const html = renderToStaticMarkup(createElement(SP.StopField, { f, value: "flight:f_gone", onChange() {}, choices: SP.chainChoices([FB], []) }));
     expect(html).toContain('data-dynamic="chains"');
     expect(html).toContain(">Release<");
-    expect(html).toContain("a chain no longer on the board");
+    expect(html).toContain("a route no longer on the Sky");
     const s = renderToStaticMarkup(createElement(SP.StopField, { f: KINDS[2].fields[1], value: "new", onChange() {}, choices: SP.sessionChoices([]) }));
     expect(s).toContain('data-dynamic="sessions"');
     expect(s).toContain(">a new session<");
@@ -360,9 +360,9 @@ describe("the sky wires it", () => {
   const line = code("components/flights/SkyLine.tsx");
   const grounded = code("components/flights/GroundedLine.tsx");
 
-  it("every chain registers with the host, takes its port drags, lights its targets", () => {
+  it("every route registers with the host, takes its port drags, lights its targets", () => {
     for (const src of [line, grounded]) {
-      expect(src).toContain("useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);");
+      expect(src).toContain("useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);");
       expect(src).toContain("onPortDown={p.onPortDown}");
       expect(src).toContain("targets={p.targets}");
       expect(src).toContain("over={p.over}");
@@ -374,7 +374,7 @@ describe("the sky wires it", () => {
     expect(sky).toContain("head={triggerHeads.get(f.id) || null}");
   });
 
-  it("draws the wires between chains on the plane; a port press is the wire's in either tool", () => {
+  it("draws the wires between routes on the plane; a port press is the wire's in either tool", () => {
     expect(sky).toContain("<SkyWires band={wiring.band} wires={xwires} />");
     expect(sky).toContain('if (el?.closest(".sky-chain [data-port]")) return;');
     expect(sky).not.toContain("startConnect");
@@ -387,15 +387,16 @@ describe("the sky wires it", () => {
     expect(sky).toContain(".sky-node.is-selected[data-node], .fl-box.selected[data-node]");
   });
 
-  it("keeps the coach tour's hooks on the chain markup", () => {
+  it("keeps the coach tour's hooks on the route markup", () => {
     expect(line).toContain('data-tour="sky-line-bar"');
     expect(line).toContain('".sky-head": "sky-session-box"');
-    expect(line).toContain('".sky-node:not(.sky-head)": "sky-stop"');
+    // Round 20: the head is the agent tile; a sub-session's frame is no stop.
+    expect(line).toContain('".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop"');
     expect(grounded).toContain('data-tour="sky-grounded"');
     expect(sky).toContain('data-tour={l.flight ? undefined : "sky-line"}');
   });
 
-  it("no “No session yet” box: a headless chain, or the trigger tile of the chain that starts it", () => {
+  it("no “No session yet” box: a headless route, or the trigger tile of the route that starts it", () => {
     expect(grounded).not.toContain("No session yet");
     expect(grounded).toContain("const head = p.head || NO_HEAD;");
     expect(sky).toContain("triggerHeadFor(f, flights, windowName)");

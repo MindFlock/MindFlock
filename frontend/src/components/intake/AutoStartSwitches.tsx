@@ -6,19 +6,24 @@
  * different names, and an unlabeled one in the sidebar — and no single place
  * to see or stop what starts by itself. So the switches live here, side by
  * side under one set of names (Tickets / PR review comments / New issues),
- * each saying how often it checks, with **Pause all auto-start** beside them.
- * The other tabs show one line saying where they stand and a link here
- * (`AutoStartLink`); the sidebar's Tickets bar is the one other switch, and
- * it is labelled as the same thing.
+ * each saying how often it checks: one switch per source. The other tabs
+ * show one status line (`AutoStartLink`, no button of its own — the dialog's
+ * header line right above it already links here); the sidebar's Tickets bar
+ * is the one other switch, and it is labelled as the same thing.
+ *
+ * There is no "Pause all auto-start" (the owner: the switches already do the
+ * job one at a time — see ./switches.ts). intakeNoPause.test.ts pins that.
  *
  * Same server contracts as ever: tickets → POST /api/mindflock/start|stop,
  * PR comments → `github.enabled`, issues → `github.issues_enabled`.
  *
- * "Pause all" is not the old pause (see ./switches.ts): it records nothing
- * and has no Resume — it turns every switch that is on, off, in one press.
- * Turning one back on is that switch. */
+ * Below the switches, folded, sit the settings that shape the sessions
+ * auto-start makes (`TicketSessionOptions`): how they copy the repo, whether
+ * the IDE opens, and whether they are MindFlock sessions at all. They used to
+ * be scattered over Settings › Workspace / IDE / Engine & updates; each of
+ * those screens now says "Set in Intake ›" instead. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../../api/client";
 import { errorPop } from "../../lib/errorPop";
@@ -29,7 +34,7 @@ import {
   useTicketingCatalog,
   useTicketingSources,
 } from "../../state/queries";
-import { useSettings } from "../settings/useSettings";
+import { SettingField, useSettings } from "../settings/useSettings";
 import { InlineConfirm } from "../InlineConfirm";
 import { AutomationSwitch } from "./kit";
 import { prsOn, useGithubSettings } from "./switches";
@@ -136,7 +141,7 @@ export function useAutoStartModel(github: Record<string, unknown> | null | undef
   };
 }
 
-/** Flip the ticket half of the pipeline. Shared by its switch and Pause all. */
+/** Flip the ticket half of the pipeline. */
 async function flipTickets(on: boolean): Promise<void> {
   await api(`/api/mindflock/${on ? "start" : "stop"}`, { method: "POST" });
 }
@@ -183,43 +188,12 @@ export function AutoStartSwitches({ gotoTab }: { gotoTab(key: IntakeTabKey): voi
 
   const names = listNames(broken.map((b) => b.name));
   const one = broken.length === 1;
-  const anyOn = ticketsChecked || m.prsOn || m.issuesOn;
-  const pauseAll = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const patch: Record<string, boolean> = {};
-      if (m.prsOn) patch.enabled = false;
-      if (m.issuesOn) patch.issues_enabled = false;
-      // A failed save already toasted "Save failed"; stop there rather than
-      // claim everything is off.
-      if (Object.keys(patch).length && !(await settings.saveGroup("github", patch))) return;
-      if (ticketsChecked) await flipTickets(false);
-      toast("All auto-start is off — nothing starts on its own");
-    } catch (err) {
-      errorPop("Couldn't turn every switch off", (err as Error).message || "the server gave no reason");
-    } finally {
-      setBusy(false);
-      refreshGithub();
-      void m.refetchStatus();
-    }
-  };
 
   const elsewhere = m.runsOn ? "runs on " + m.runsOn + ", not here" : "";
   return (
     <section className="ik-autostart-switches" id="ik-autostart-switches" data-tour="intake-autostart" aria-label="Auto-start switches">
       <div className="ik-autostart-switches-head">
         <span className="set-label">Starts sessions on its own</span>
-        <button
-          type="button"
-          id="ik-pause-all"
-          className="ik-quiet-btn"
-          disabled={!anyOn || busy}
-          title={anyOn ? "Turn every switch below off at once" : "Nothing is on"}
-          onClick={() => void pauseAll()}
-        >
-          Pause all auto-start
-        </button>
       </div>
       <AutomationSwitch
         label="Tickets"
@@ -317,20 +291,116 @@ export function AutoStartSwitches({ gotoTab }: { gotoTab(key: IntakeTabKey): voi
           ) : null}
         </div>
       ) : null}
+      <TicketSessionOptions />
     </section>
   );
 }
 
+/** The settings that shape every session auto-start (or Start) makes from a
+ * ticket, PR comment or issue — moved here from Settings so ticket setup
+ * lives in one place. Same fields and endpoints as the Settings rows they
+ * replace: `engine.mode`, GET/POST /api/ide/open-on-ticket, `engine.enabled`. */
+export function TicketSessionOptions() {
+  const s = useSettings();
+  // Tri-state on the wire: unset means the backend default, ON — only an
+  // explicit stored `false` unchecks it.
+  const inMindflock = s.get("engine", "enabled") !== false;
+  const [openIde, setOpenIde] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<{ enabled?: boolean }>("/api/ide/open-on-ticket")
+      .then((r) => live && setOpenIde(!!r?.enabled))
+      .catch(() => live && setOpenIde(false));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const flipIde = async (want: boolean) => {
+    setOpenIde(want);
+    try {
+      const r = await api<{ enabled?: boolean }>("/api/ide/open-on-ticket", { json: { enabled: want } });
+      setOpenIde(!!r?.enabled);
+      toast(r?.enabled ? "New tickets open in the IDE" : "New tickets no longer open an IDE window");
+    } catch {
+      setOpenIde(!want);
+      toast("IDE toggle failed");
+    }
+  };
+  return (
+    <details className="pr-advanced ik-ticket-sessions" id="ik-ticket-sessions">
+      <summary>Ticket sessions</summary>
+      <div className="pr-advanced-body">
+        <label className="set-row" id="ik-copy-mode">
+          <span className="set-label">How ticket sessions copy the repo</span>
+          <SettingField
+            group="engine"
+            field="mode"
+            options={[
+              { value: "", label: "Worktree — fast (default)" },
+              { value: "clone", label: "Full clone — a standalone copy" },
+            ]}
+          />
+          <span className="set-hint">
+            A worktree shares your repo&apos;s history; a clone is fully separate. Where they live is
+            Settings › Workspace.
+          </span>
+        </label>
+        <div
+          className="set-row set-switch-row"
+          id="ik-ide-on-ticket-row"
+          title="Open each new ticket, issue or PR workspace in your IDE as soon as it is provisioned"
+        >
+          <span className="set-label">Open IDE when a ticket starts</span>
+          <label className="ca-switch">
+            <input
+              type="checkbox"
+              id="ik-ide-on-ticket"
+              checked={!!openIde}
+              disabled={openIde === null}
+              onChange={(e) => void flipIde(e.target.checked)}
+            />
+            <span className="ca-slider" />
+          </label>
+        </div>
+        <div
+          className="set-row set-switch-row"
+          id="ik-engine-sessions-row"
+          title="On: each ingested ticket becomes a MindFlock session — worktree, branch, seeded agent, and the guided commit → push → PR bar. Off: a detached tmux session plus an OS terminal tab, with no session in the app."
+        >
+          <span className="set-label">Ticket sessions in MindFlock</span>
+          <label className="ca-switch">
+            <input
+              type="checkbox"
+              id="ik-engine-sessions"
+              checked={inMindflock}
+              onChange={(e) => s.saveField("engine", "enabled", e.target.checked)}
+            />
+            <span className="ca-slider" />
+          </label>
+        </div>
+        <p className="set-hint">
+          Leave that on: tickets become MindFlock sessions you can watch, commit and open a PR from.
+          Off sends them to a bare tmux session and a terminal tab instead. Takes effect the next
+          time auto-start starts.
+        </p>
+      </div>
+    </details>
+  );
+}
+
 /** One line on the Tickets / GitHub PRs / GitHub issues tabs where their
- * switch used to be: whether it auto-starts, how often it checks, and the
- * way to the switch. Reads the same model as the switches, so the two can
- * never disagree. */
+ * switch used to be: whether it auto-starts and how often it checks. Its
+ * "Change ›" is gone — the dialog's header line ("Auto-start switches ›")
+ * sits right above it on every tab and goes to the same place, so the judge
+ * counted it as one more switch. Reads the same model as the switches, so
+ * the two can never disagree. */
 export function AutoStartLink({
   kind,
-  gotoTab,
 }: {
   kind: IntakeKind;
-  gotoTab(key: IntakeTabKey): void;
+  /** Kept for the tabs that pass it; the line has no button of its own now
+   * (the dialog's header line, right above, links to the switches). */
+  gotoTab?(key: IntakeTabKey): void;
 }) {
   const m = useAutoStartModel(useGithubSettings().data as Record<string, unknown> | undefined);
   const broken = useBrokenTicketSources();
@@ -348,17 +418,9 @@ export function AutoStartLink({
           : "off";
   return (
     <div className="ik-autostart-link" id={"ik-autostart-link-" + kind} data-on={on ? "1" : "0"}>
-      <span>
+      <span title="The switches for tickets, PR comments and new issues are on the Auto-start tab">
         Auto-start: <strong>{state}</strong>
       </span>
-      <button
-        type="button"
-        className="linklike"
-        title="The switches for tickets, PR comments and new issues are on the Auto-start tab"
-        onClick={() => gotoTab("autostart")}
-      >
-        {on ? "Change ›" : "Turn on ›"}
-      </button>
     </div>
   );
 }

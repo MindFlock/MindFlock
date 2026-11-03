@@ -15,12 +15,12 @@ import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
-import { dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, tackOn, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
+import { dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
 import { groundedDiagram } from "../../lib/groundedLines";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { StopDialog } from "./StopDialog";
-import { StopPalette } from "./StopParts";
+import { StopPalette, type PaletteSaved } from "./StopParts";
 import { inspectorDef, orderedPlans, shelfPlanFor } from "./useSessionLine";
 
 /** What a chip dropped on a line carries (the canvas's `onDropStop`): a stop
@@ -38,7 +38,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
   // Round 18: the palette from a wire dropped on empty sky — the node it
   // hangs off and the spot the new stop takes (chain-local).
-  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null } | null>(null);
+  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null; withStep?: string } | null>(null);
   // The open dialog (a node id), and the group's to go back to from a sub-step.
   const [dialog, setDialog] = useState<{ id: string; back?: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -77,6 +77,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
 
   const tackOne = async (def: StepKindDef, at: number | null) => {
     const pos = paletteHang?.pos;
+    const withStep = paletteHang?.withStep;
     setBusy(true);
     setPaletteAt(null);
     setPaletteHang(null);
@@ -84,7 +85,9 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       const fresh = newStep(def, flight.steps.map((s) => s.id));
       const step = pos ? { ...fresh, pos } : fresh;
       // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
-      if (await optimistic(flight.id, withSteps([step], where(at)), () => tackOn(flight.id, step, where(at)))) setSelectIndex(where(at) ?? end);
+      // In parallel with a stop (round 20): into its group, else after `at`.
+      const go = withStep ? () => tackOnParallel(flight.id, step, withStep) : () => tackOn(flight.id, step, where(at));
+      if (await optimistic(flight.id, withSteps([step], where(at)), go)) setSelectIndex(where(at) ?? end);
     } finally {
       setBusy(false);
     }
@@ -174,19 +177,27 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     setPaletteHang({ node: after ? after.id : null, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null });
   };
 
+
+  /** Round 20: the palette for a stop that runs side by side with `withNode`
+   * (its parallel group, made when it has none); the pick goes through
+   * `tackOnParallel`. */
+  const paletteParallel = (withNode: DiagramNode, pos?: { x: number; y: number } | null) => {
+    const first = firstStepOf(withNode);
+    if (!first) return paletteAfter(withNode, pos);
+    paletteAfter(withNode, pos);
+    setPaletteHang({ node: withNode.id, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null, withStep: first.id });
+  };
+
   const ordered = orderedPlans(plans);
-  const savedChips = (
-    <div className="fl-palette-flyways">
-      <div className="fl-palette-head">A saved stop — all of its steps</div>
-      <div className="fl-chiprow">
-        {ordered.map((p) => (
-          <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void tackPlan(p, paletteAt)}>
-            {p.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  // The saved chains, as data: the palette's filter narrows them with the
+  // stop kinds ("A saved chain — all of its stops").
+  const savedChips: PaletteSaved[] = ordered.map((p) => ({
+    id: p.id,
+    name: p.name,
+    title: p.steps.map((s) => s.title).join(" → "),
+    disabled: busy,
+    onPick: () => void tackPlan(p, paletteAt),
+  }));
 
   const raw: Pick<
     FlywayCanvasProps,
@@ -234,7 +245,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       const d = readDrop(drop);
       if ("planId" in d) {
         const plan = plans.find((p) => p.id === d.planId);
-        void tackPlan(plan || { id: d.planId, name: "the saved stop" }, at);
+        void tackPlan(plan || { id: d.planId, name: "the saved route" }, at);
         return;
       }
       const def = kindOf.get(d.kind);
@@ -256,7 +267,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
           setPaletteAt(null);
           setPaletteHang(null);
         }}
-        extra={ordered.length > 0 ? savedChips : undefined}
+        saved={savedChips}
       />
     ) : null;
 
@@ -352,6 +363,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     graphDiagram: diagram,
     graphCanvas: raw,
     paletteAfter,
+    paletteParallel,
     /** Where the open palette / dialog hangs (a node id, "" = the end, null =
      * nothing open) and a spot asked for (chain-local). */
     anchor: inspector !== null && dialog ? dialog.id : palette !== null ? (paletteHang?.node ?? "") : null,

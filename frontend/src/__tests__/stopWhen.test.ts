@@ -288,7 +288,7 @@ describe("kind names", () => {
   it("someone is Someone, you is a Perch, the rest their label", () => {
     expect(kindName({ kind: "someone", label: "Someone else" })).toBe("Someone");
     expect(kindName(undefined, "someone")).toBe("Someone");
-    expect(kindName({ kind: "you", label: "You" })).toBe("Perch");
+    expect(kindName({ kind: "you", label: "You" })).toBe("Wait for me");
     expect(kindName(CHECKS)).toBe("Checks");
     expect(kindName(undefined, "judge")).toBe("judge");
   });
@@ -306,13 +306,13 @@ describe("the kind's default_on_fail", () => {
 
   it("the form presses it when the stop says nothing, and names it", () => {
     const html = form({ ...step(), on_fail: undefined as never });
-    expect(pressed(html)).toEqual(["Hand it to the agent"]);
-    expect(html).toContain("Default for Checks: Hand it to the agent");
-    expect(html).toMatch(/title="The default for this kind of stop"[^>]*>Hand it to the agent</);
+    expect(pressed(html)).toEqual(["Let the agent fix it"]);
+    expect(html).toContain("Default for Checks: Let the agent fix it");
+    expect(html).toMatch(/title="The default for this kind of stop"[^>]*>Let the agent fix it</);
   });
 
   it("the stop's own choice still wins", () => {
-    expect(pressed(form(step({ on_fail: "skip" })))).toEqual(["Skip it"]);
+    expect(pressed(form(step({ on_fail: "skip" })))).toEqual(["Skip"]);
   });
 
   it("no hint from an older server that sends none", () => {

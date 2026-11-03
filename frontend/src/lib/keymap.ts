@@ -27,7 +27,7 @@ import { ASK_WORKERS_KEYS, FLOCK_KEYS } from "./workersRequest";
 import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
-import { VERIFY_BLURB } from "./vocab";
+import { openBehaviors } from "./behaviorsFocus";
 import { jumpToNeedsYou } from "./needsYou";
 import { newSession, toggleView } from "./viewMode";
 
@@ -102,6 +102,16 @@ export interface KeymapHost {
 let _host: KeymapHost | null = null;
 
 // --- Guards ----------------------------------------------------------------
+
+/** The Sky is showing and the focus is on it (or on nothing): its own "?"
+ * opens the Sky's shortcut sheet, so the app-wide one must not open over it. */
+export function skyOwnsSheet(): boolean {
+  if (typeof document === "undefined") return false;
+  const sky = document.getElementById("sky-view");
+  if (!sky || !(sky as HTMLElement).offsetParent) return false;
+  const el = document.activeElement;
+  return !el || el === document.body || sky.contains(el);
+}
 
 export function isEditingTarget(el: Element | null): boolean {
   if (!el) return false;
@@ -566,10 +576,13 @@ export const KEYMAP: KeymapEntry[] = [
     // text field or a terminal.
     key: "v",
     alt: true,
+    // Verify is a stop on the route, not a place (docs/behaviors.md §4): Alt+V
+    // flies the Sky to the next behaviors that need you, else the next failed,
+    // else the Behaviors board.
     id: "verify",
-    help: ["Navigation", "Alt+V", "Verify — " + VERIFY_BLURB],
+    help: ["Navigation", "Alt+V", "Behaviors — the next that needs you"],
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("verify"),
+    run: () => openBehaviors({ next: true }),
   },
   {
     // The top bar's next word, on the same terms as Alt+I / Alt+V: Ctrl+S is
@@ -640,7 +653,9 @@ export const KEYMAP: KeymapEntry[] = [
     shift: "any",
     id: "sheet",
     help: ["Navigation", "?", "This shortcut sheet"],
-    when: () => !isEditingTarget(document.activeElement),
+    // The Sky has its own sheet (SkyView's "?"): while it is on screen and the
+    // focus is on the sky or nowhere, the app's sheet steps aside for it.
+    when: () => !isEditingTarget(document.activeElement) && !skyOwnsSheet(),
     run: () => _host?.toggleShortcuts(),
   },
   // -- View ----------------------------------------------------------------

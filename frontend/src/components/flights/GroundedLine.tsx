@@ -26,15 +26,30 @@
  * (docs/flights.md "As built: round 12 sky"): a stop or group box leaves
  * through the canvas's Remove, anything else (the head, the bar, the line)
  * removes the line. `merging`: dragged over a session's line, which
- * takes its stops on release (docs/flights.md "As built: round 13 sky"). */
+ * takes its stops on release (docs/flights.md "As built: round 13 sky").
+ *
+ * A chain with `flight.edits_default` EDITS an intake source's default stops
+ * (the intake lane's stops chip made it). It is a pending edit, so it reads as
+ * a draft at rest (GroundedLine.css: a dashed accent outline round the chain,
+ * its bar always shown): the bar names the source ("Jira — payments",
+ * lib/groundedLines `editorTitle`) with a "Default · <kind>" tag, and the
+ * caption under it says "New items from <source> fly these stops". It has no
+ * ▶ (lib/groundedLines `chainRunFor`) and no Run on a session…, and it is not
+ * renamed. Its bar's **Save as default** (pressable once its stops differ from
+ * the source's default — `defaultChanged`; "No changes" till then) writes its
+ * steps as the source's own default (`setIntakeDefault`), **Reset to default**
+ * (only while the source has its own) puts the source back on our built-in
+ * stops — each takes the editor off the board with an Undo toast — and the
+ * quiet **×** Discard (also ⋯, Delete) just takes it off. Its stops edit as
+ * any grounded chain's. */
 
 import { optimisticDelete } from "../../lib/flightOptimism";
 import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
+import type { Flight, FlightPlan, FlightStep, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
-import { deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
-import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
+import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, getIntakeDefault, renameFlight, savePlan, setIntakeDefault, startGrounded } from "../../lib/flightsApi";
+import { chainRunFor, defaultChanged, editorLabel, editorTitle, isDefaultEditor, isFreeRun, isRemoveKey, lastRunWords, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -100,7 +115,16 @@ export const NO_HEAD: ChainHead = { kind: "none", title: "", sub: "", color: "va
 export const cleanFlightName = (s: string) => s.trim().slice(0, 120);
 
 /** The name a grounded line shows. */
-export const groundedName = (f: Pick<Flight, "plan_name">) => f.plan_name || "Stops";
+/** A stops-only chain's name: the one it was given, else what it holds — its
+ * first stop's title (and how many more): "Commit", "Loop ×3 + 2 more". The
+ * server's placeholder "Stops" counts as no name. */
+export const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly { title: string }[] }) => {
+  const given = (f.plan_name || "").trim();
+  if (given && given !== "Stops") return given;
+  const steps = f.steps || [];
+  if (!steps.length) return "Route";
+  return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
+};
 
 export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const { flight } = p;
@@ -113,8 +137,35 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef(p.onMeasure);
   measureRef.current = p.onMeasure;
-  const name = groundedName(flight);
+  // An intake source's default stops, edited here (the lane's stops chip):
+  // never run — Save as default, Reset to default or Discard on its bar.
+  const ed = isDefaultEditor(flight) ? flight.edits_default! : null;
+  const edLabel = ed ? editorLabel(flight) : "";
+  const name = ed ? "Default stops · " + edLabel : groundedName(flight);
+  // Its bar names the source ("Jira — payments"); the kind rides the tag.
+  const edTitle = editorTitle(edLabel);
+  const edHint = "New items from " + (edTitle.name || "this source") + " run these stops";
   const lod = lodFor(p.zoom || 1);
+  // Whether the source has its own default now (Reset to default only then),
+  // and the steps it flies now — Save as default only once these differ.
+  const [ownDefault, setOwnDefault] = useState(false);
+  const [baseSteps, setBaseSteps] = useState<FlightStep[] | null>(null);
+  const edKind = ed?.kind;
+  const edTarget = ed?.target;
+  useEffect(() => {
+    if (!edKind || !edTarget) return;
+    let live = true;
+    void getIntakeDefault({ kind: edKind, target: edTarget }).then((d) => {
+      if (!live) return;
+      setOwnDefault(!!d?.own);
+      setBaseSteps(d ? d.steps : null);
+    });
+    return () => {
+      live = false;
+    };
+  }, [edKind, edTarget]);
+  // Unknown (not read yet, or unreadable): Save stays pressable.
+  const changed = !baseSteps || defaultChanged(flight.steps, baseSteps);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -144,8 +195,44 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     }
   };
 
+  /** Save as default / Reset to default: write the source's default, take the
+   * editor off the board, and say so with an Undo that puts back the saved
+   * stop the source had (`previous_plan_id`). */
+  const writeDefault = async (reset: boolean) => {
+    if (!ed || busy) return;
+    setBusy(true);
+    try {
+      const ref = { kind: ed.kind, target: ed.target };
+      const res = await setIntakeDefault(reset ? { ...ref, plan_id: "" } : { ...ref, steps: flight.steps });
+      if (!res) return;
+      await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+      const label = res.label || edLabel;
+      const prev = res.previous_plan_id || "";
+      const entry = pushUndo({
+        label: (reset ? "Reset the default stops for " : "Save the default stops for ") + label,
+        undo: () => setIntakeDefault({ ...ref, plan_id: prev }),
+      });
+      toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " run these stops", {
+        action: undoAction(entry, "Undo: " + label + " back on the stops it had"),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** Discard: the editor leaves the board; the default stays as it was. */
+  const discard = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Remove: at once, never asked — a grounded line has nothing in the air.
   const remove = async () => {
+    if (ed) return discard();
     if (busy) return;
     setBusy(true);
     try {
@@ -153,7 +240,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {
         const steps = flight.steps;
         const entry = pushUndo({ label: "Remove “" + name + "”", undo: () => startGrounded({ steps, ...(flight.plan_name ? { name: flight.plan_name } : {}) }) });
-        toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the board") });
+        toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the Sky") });
       }
     } finally {
       setBusy(false);
@@ -162,22 +249,25 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
 
   const updates = !!sourcePlanId(flight.steps, p.plans);
   const items: MenuItem[] = [
-    { key: "add", label: "Add a stop…", title: "One stop, or a saved stop, at the end of the line", onSelect: () => line.togglePalette(true) },
-    { key: "fly", label: "Fly on a session…", title: "Pick a session: these stops take off on it", onSelect: p.onFlyOn },
+    { key: "add", label: "Add a stop…", title: "One stop, or a saved route, at the end of the route", onSelect: () => line.togglePalette(true) },
+    ...(ed ? [] : [{ key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn }]),
     {
       key: "save",
       label: "Save to the shelf",
-      title: updates ? "Update the saved stop these came from" : "Keep these stops on the shelf as a saved stop",
+      title: updates ? "Update the saved route these came from" : "Keep these stops on the shelf as a saved route",
       className: "skl-mi-group",
       onSelect: () => void save(),
     },
-    { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board (Ctrl+Z puts them back)", onSelect: () => void remove() },
+    ed
+      ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the Sky — the default stops stay as they are", onSelect: () => void discard() }
+      : { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the Sky (Ctrl+Z puts them back)", onSelect: () => void remove() },
   ];
 
   // The edit ends once: Enter or Esc hands the focus back to the line, and
   // the input's blur that follows must not save it again.
   const named = useRef(false);
   const startRename = () => {
+    if (ed) return;
     named.current = false;
     setNaming(name);
   };
@@ -247,13 +337,27 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const moves = useNodeMoves(flight.id, line.graphDiagram, "flight:" + flight.id);
   const head = p.head || NO_HEAD;
   const graph = useMemo(() => chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id }), [moves.diagram, head, flight.id]);
-  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
   useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
-  const chainMenu = useChainMenu(gc, flight.id);
+  const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const shift = useRef(false);
+  // A chain with no session runs on its own in a folder — nothing is started
+  // for it (only a stop that needs a session gets one, made in that folder).
+  const running = isFreeRun(flight);
+  // No ▶ on a default-stops editor (it never runs), nor on a chain another starts.
+  const run = chainRunFor(flight, head.kind, () => ({
+    running,
+    label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
+    onRun: () =>
+      void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
+        if (!f) return;
+        toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
+      }),
+    onStop: () => void controlFlight(flight.id, "cancel"),
+  }));
 
   return (
     <div
@@ -265,15 +369,17 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         (p.selected ? " is-selected" : "") +
         (p.sessionOver ? " is-session-over" : "") +
         (p.merging ? " is-merging" : "") +
-        (line.editing ? " is-editing" : "")
+        (line.editing ? " is-editing" : "") +
+        (ed ? " is-default-editor" : "")
       }
       data-flight={flight.id}
+      data-edits-default={ed ? ed.kind + ":" + ed.target : undefined}
       data-lod={lod}
       style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
       role="group"
       tabIndex={0}
       data-sky-box
-      aria-label={name + (head.kind === "trigger" ? " — " + head.title : " — stops with no session yet")}
+      aria-label={name + (ed ? " — new items from this source run these" : head.kind === "trigger" ? " — " + head.title : " — a route with no session yet")}
       onKeyDown={onKey}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
@@ -284,11 +390,20 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       <div
         className="skl-bar skl-label"
         data-tour="sky-grounded"
-        title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's chain to give them to it"}
+        title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's route to give them to it"}
         onPointerDown={onBarDown}
       >
         <Bird size={14} />
-        {naming === null ? (
+        {ed ? (
+          <>
+            <span className="skl-name skl-default-name" title={"Default stops for " + edLabel + ". New items from this source run these."}>
+              {edTitle.name}
+            </span>
+            <span className="fl-box-chip skl-chip skl-default-tag" title={"You are editing the stops new items from " + edLabel + " run"}>
+              {edTitle.kind ? "Default · " + edTitle.kind : "Default"}
+            </span>
+          </>
+        ) : naming === null ? (
           <span className="skl-name skl-name-edit" title="Click to rename (F2)" onClick={onNameClick}>
             {name}
           </span>
@@ -318,13 +433,53 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             it waits for a session) — only a chain another chain starts says so. */}
         {head.kind === "trigger" && (
           <span className="fl-box-chip skl-chip tone-working" title={head.title + " — " + head.sub}>
-            Started by a chain
+            Started by a route
+          </span>
+        )}
+        {/* No Run label up here: the chain's ▶ sits on the left of its first
+            stop, where a run starts (n8n's trigger button) — SkyChain `run`. */}
+        {running && (
+          <span className={"fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused")} title={flight.repo_root ? "Running in " + flight.repo_root : undefined}>
+            {flight.state === "waiting_you" ? "Needs you" : flight.state === "running" ? "Running" : "Paused"}
+          </span>
+        )}
+        {!running && flight.last_run && (() => {
+          const w = lastRunWords(flight.last_run);
+          return (
+            <span className={"fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted")} title={w.title}>
+              {w.label}
+            </span>
+          );
+        })()}
+        {/* An editor is a pending edit: its bar stays shown, Save as default
+            the one primary (pressable once the stops differ from the source's
+            default), Reset a quiet secondary, Discard a quiet ×. */}
+        {ed && (
+          <span className="skl-default-acts" data-no-drag>
+            <button
+              type="button"
+              className="btn-primary fl-btn skl-default-save"
+              disabled={busy || !flight.steps.length || !changed}
+              title={changed ? edHint : "These are the stops " + edLabel + " runs now — change one to save"}
+              onClick={() => void writeDefault(false)}
+            >
+              {changed ? "Save as default" : "No changes"}
+            </button>
+            {ownDefault && (
+              <button type="button" className="test-btn fl-btn skl-default-reset" disabled={busy} title={"Put " + edLabel + " back on our built-in stops"} onClick={() => void writeDefault(true)}>
+                Reset to default
+              </button>
+            )}
+            <button type="button" className="fl-icon-btn skl-default-discard" disabled={busy} aria-label="Discard this edit" title="Discard — take this editor off the Sky; the default stops stay as they are" onClick={() => void discard()}>
+              ×
+            </button>
           </span>
         )}
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
       </div>
+      {ed && <div className="skl-default-hint">{edHint}</div>}
       <div ref={wrapRef} className="skl-chain-wrap" onPointerDownCapture={(e) => (shift.current = e.shiftKey)}>
         <SkyChain
           graph={graph}
@@ -345,6 +500,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           onNodeMove={moves.move}
           onPortDown={p.onPortDown}
           onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+          run={run}
         />
         {chainMenu.menu}
           <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>

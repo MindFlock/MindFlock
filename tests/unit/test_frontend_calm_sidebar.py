@@ -445,7 +445,9 @@ def test_row_failures_raise_a_titled_card():
 
 
 def test_the_rename_kept_every_persisted_bar_key():
-    """Saved hiddenBars / barOrder in localStorage are keyed, not labelled."""
+    """Saved hiddenBars / barOrder in localStorage are keyed, not labelled.
+    (The "verify" bar is retired — Verify is a stop on the route; a saved
+    order naming it resolves fine, unknown keys drop.)"""
     defs = _code("components/sidebar/barDefs.ts")
     block = defs[
         defs.index("SIDEBAR_BARS: BarDef[] = [") : defs.index(
@@ -458,7 +460,6 @@ def test_the_rename_kept_every_persisted_bar_key():
         "ingestion",
         "pr-review",
         "issue-handling",
-        "verify",
         "assistant",
         "prompts",
     ]

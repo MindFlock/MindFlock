@@ -42,38 +42,46 @@
  * `count` once its prompts name more than one worker. */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
-import { isShown, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
-import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
+import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
+import { LOOP_AGENT, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
   dropGroup,
+  deleteFlight,
   dropStop,
   moveStop,
   patchStop,
   patchStopGroup,
   savePlan,
   setHalt,
+  answerBehaviors,
   stepDone,
+  stepFix,
   stepRetry,
   stepSkip,
   tackOn,
   tackOnNew,
+  tackOnParallel,
   tackOnPlan,
   tackOnSteps,
   takeOff,
+  intakeSourceOfFlight,
+  setIntakeDefault,
   ungroupStops,
 } from "../../lib/flightsApi";
 import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
-import { pushUndo, takeUndo } from "../../lib/skyUndo";
+import { pushUndo, takeUndo, undoAction } from "../../lib/skyUndo";
 import { removalNeedsAsk } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
-import { StopPalette } from "./StopParts";
+import { StopPalette, type PaletteSaved } from "./StopParts";
 import { StopDialog } from "./StopDialog";
+import { useBehaviorsTile } from "./SkyChain";
 
 export interface LineSource {
   rows: readonly Instance[];
@@ -91,6 +99,9 @@ export interface SessionLineOpts {
    * it comes off (`removeAsk`, drawn by the line); everything else goes at
    * once. Off (the pane's Flight tab): every stop goes at once, as before. */
   askRunning?: boolean;
+  /** The Sky: a Behaviors focus request (`openBehaviors`) naming this
+   * session's behaviors opens their card on the tile. */
+  listenBehaviors?: boolean;
 }
 
 /** The flight's step indexes a box stands for: a stop its own, a group all
@@ -117,11 +128,81 @@ export function inspectorDef(def: StepKindDef | undefined, step: FlightStep): St
 /** Built-ins first, then the owner's own. */
 export const orderedPlans = (plans: readonly FlightPlan[]) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
 
+/** A source's default stops, promoted from one ticket's line (docs/flights.md
+ * "default stops"): our built-in stops are every intake source's default, and
+ * editing ONE ticket's line never changes it — only this explicit choice in
+ * the line's ⋯ does. It changes what NEW items from that source fly; the
+ * ticket whose line it was keeps flying as it is. */
+
+/** The subjects that came from intake (a flight Intake started). */
+export const INTAKE_SUBJECTS: readonly SubjectKind[] = ["ticket", "pr", "issue"];
+
+/** The ⋯ item applies only to a flight Intake started. */
+export const isIntakeSubject = (kind: SubjectKind | undefined | null): boolean => !!kind && INTAKE_SUBJECTS.includes(kind);
+
+/** A source kind in words: one item, many items. */
+export function intakeWords(kind: IntakeSourceRef["kind"]): { one: string; many: string } {
+  if (kind === "prs") return { one: "PR", many: "PRs" };
+  if (kind === "issues") return { one: "issue", many: "issues" };
+  return { one: "ticket", many: "tickets" };
+}
+
+/** The source's name for a sentence: the lane's label without its kind
+ * prefix ("Tickets · Shortcut" → "Shortcut"), so "every ticket from
+ * Shortcut" doesn't say the kind twice. A label with no such prefix stays. */
+export function intakeSourceName(src: Pick<IntakeDefault, "kind" | "label" | "target">): string {
+  const label = (src.label || "").trim();
+  const m = /^(tickets|prs|pull requests|issues)\s*[·:—-]\s*(.+)$/i.exec(label);
+  return (m ? m[2].trim() : label) || src.target;
+}
+
+/** The ⋯ item's label, its tooltip, and the toast once it is done. */
+export function promoteWords(src: Pick<IntakeDefault, "kind" | "label" | "target">): { label: string; title: string; done: string } {
+  const w = intakeWords(src.kind);
+  const name = intakeSourceName(src);
+  return {
+    label: "Use these stops for every " + w.one + " from " + name,
+    title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this route's stops. This " + w.one + " keeps running as it is.",
+    done: "New " + w.many + " from " + name + " run this route",
+  };
+}
+
+/** Make one flight's stops its source's default (`from_flight`), with Undo
+ * in the toast and on Ctrl+Z: the source back to the stops it flew before
+ * (`previous_plan_id`; "" = our built-in). False when the server refused. */
+export async function promoteStops(flightId: string): Promise<boolean> {
+  const res = await setIntakeDefault({ from_flight: flightId });
+  if (!res) return false;
+  const words = promoteWords(res);
+  const back = { kind: res.kind, target: res.target, plan_id: res.previous_plan_id };
+  // One undo, two roads: the toast's button and Ctrl+Z in the sky.
+  const promoted = pushUndo({ label: words.label, undo: () => setIntakeDefault(back) });
+  toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " run the route they did before") });
+  return true;
+}
+
+/** The line's "Use these stops for every …" (null: not from intake, or its
+ * source is gone). The source is fetched once per flight id, not per render. */
+export function usePromoteStops(flight: Pick<Flight, "id" | "subject"> | null | undefined): { label: string; title: string; run(): Promise<boolean> } | null {
+  const id = flight?.id || "";
+  const intake = !!id && isIntakeSubject(flight?.subject?.kind);
+  const q = useQuery({
+    queryKey: ["intake-source-of-flight", id],
+    queryFn: () => intakeSourceOfFlight(id),
+    enabled: intake,
+    staleTime: Infinity,
+  });
+  const src = intake ? q.data : null;
+  if (!src) return null;
+  const words = promoteWords(src);
+  return { label: words.label, title: words.title, run: () => promoteStops(id) };
+}
+
 /** The toast after a stop came off: removing the one the flight was at
  * pauses the flight right before the stop that followed (or at the end). */
 export function removedToast(title: string, wasHere: boolean, next: string | null | undefined): string {
-  if (!wasHere) return "Removed “" + title + "” from the line";
-  return "Removed “" + title + "” — the flight is paused " + (next ? "before “" + next + "”" : "at the end");
+  if (!wasHere) return "Removed “" + title + "” from the route";
+  return "Removed “" + title + "” — the route is paused " + (next ? "before “" + next + "”" : "at the end");
 }
 
 /** The saved stop a group's "Save to the shelf" writes: the plan it came
@@ -203,7 +284,7 @@ export function stopLog(n: DiagramNode, flight: Flight | null, rec: StepRunState
       )}
       {ap && (
         <p className="fl-note">
-          Fast-track: <b>{ap.state}</b>
+          Goes as far as: <b>{ap.state}</b>
           {ap.step ? " · " + ap.step : ""}
           {ap.reason ? " — " + ap.reason : ""}
         </p>
@@ -231,7 +312,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
   // Round 18: the palette opened from a wire dropped on empty sky — the node
   // it hangs off (its panel opens beside it) and the spot the new stop takes.
-  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null } | null>(null);
+  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null; withStep?: string } | null>(null);
   // The open dialog (a node id), and the group's to go back to from a
   // sub-step's.
   const [dialog, setDialog] = useState<{ id: string; back?: string } | null>(null);
@@ -245,8 +326,15 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
   // The line in the flight's own indexes (what every handler below speaks).
   const line = useMemo(() => sessionDiagram(rows, title, { flights, kinds, family, foldFlown, expandedGroups }), [rows, title, flights, kinds, family, foldFlown, expandedGroups]);
+  // The session's behaviors: the LAST tile of the chain the Sky and the
+  // Flight tab draw (docs/behaviors.md §1) — a rendering view; the line's own
+  // edits keep speaking `line`.
+  const behaviors = useBehaviorsTile(title, row, { flight, listen: !!opts.listenBehaviors });
+  const graphDiagram = useMemo(() => behaviors.apply(line), [behaviors.apply, line]);
   const cancel = useCancelAsk(flight);
-  const parts = liveBoxParts(flight, true, cancel.ask);
+  // Both homes draw SkyChain: a Verify stop parked on you is the Behaviors
+  // tile, whose card opens in its place (docs/behaviors.md §1).
+  const parts = liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true });
   const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
   const stops = line.nodes.filter((n) => n.kind === "stop");
   const end = flight ? flight.steps.length : 0;
@@ -282,6 +370,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const fresh = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
     // Dropped at a spot on the sky: it is drawn there (round 18).
     const step = paletteHang?.pos ? { ...fresh, pos: paletteHang.pos } : fresh;
+    const withStep = paletteHang?.withStep;
     setBusy(true);
     setPaletteAt(null);
     setPaletteHang(null);
@@ -289,13 +378,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
         // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
-        if ((await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where))) && openIt) setSelectIndex(where ?? end);
+        // In parallel with a stop (round 20): into its group, else before `where`.
+        const fid = flight.id;
+        const go = withStep ? () => tackOnParallel(fid, step, withStep) : () => tackOn(fid, step, where);
+        if ((await optimistic(fid, withSteps([step], where), go)) && openIt) setSelectIndex(where ?? end);
       } else {
         // Round 19: building a chain on a session doesn't fly it — it waits,
         // ready, for ▶ Run or the session's next prompt.
         const f = await tackOnNew(title, [step], "prompt");
         if (f) {
-          toast("Ready: " + (f.plan_name || "a new chain") + " — it runs on ▶ Run or your next prompt");
+          toast("Ready: " + (f.plan_name || "a new route") + " — it runs on ▶ Run or your next prompt");
           if (openIt) setSelectIndex(f.steps.length - 1);
         }
       }
@@ -343,7 +435,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     toast(removedToast(step.title, wasHere, next), {
       action: {
         label: "Undo",
-        ariaLabel: "Undo: put “" + step.title + "” back on the line",
+        ariaLabel: "Undo: put “" + step.title + "” back on the route",
         // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
           if (takeUndo(entry)) void entry.undo();
@@ -374,7 +466,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     toast(removedToast(g.name, wasHere, next), {
       action: {
         label: "Undo",
-        ariaLabel: "Undo: put “" + g.name + "” back on the line",
+        ariaLabel: "Undo: put “" + g.name + "” back on the route",
         // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
           if (takeUndo(entry)) void entry.undo();
@@ -384,7 +476,20 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     return true;
   };
 
+  // A flight that LANDED stays drawn on the line (lib/flightDiagram
+  // landedFlightOf) but its stops are read-only: removing one of them clears
+  // that finished chain off the session (the owner couldn't delete a finished
+  // Commit). Its record goes; there is nothing to undo into.
+  const landedId = !flight && line.mode === "flight" && line.flightId ? line.flightId : "";
+  const clearLanded = async (): Promise<boolean> => {
+    if (!landedId) return false;
+    const ok = await optimisticDelete(landedId, () => deleteFlight(landedId));
+    if (ok) toast("Cleared the finished route");
+    return ok;
+  };
+
   const removeNode = async (n: DiagramNode): Promise<boolean> => {
+    if (!flight && landedId) return clearLanded();
     if (n.kind === "group") return removeGroup(n);
     return n.step && n.index !== undefined ? removeStop(n.step, n.index) : false;
   };
@@ -402,7 +507,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     <div className="skl-close-confirm skl-remove-confirm" data-no-drag>
       <InlineConfirm
         title={"Remove “" + askName + "”?"}
-        body={"The flight is at it right now: it pauses before what follows. Undo puts it back."}
+        body={"The route is at it right now: it pauses before what follows. Undo puts it back."}
         confirmLabel="Remove"
         busy={busy}
         onConfirm={() => {
@@ -473,6 +578,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     setPaletteHang({ node: after ? after.id : null, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null });
   };
 
+  /** Round 20: the palette for a stop that runs side by side with `withNode`
+   * (its parallel group, made when it has none); the pick goes through
+   * `tackOnParallel`. */
+  const paletteParallel = (withNode: DiagramNode, pos?: { x: number; y: number } | null) => {
+    const first = firstStepOf(withNode);
+    if (!first) return paletteAfter(withNode, pos);
+    paletteAfter(withNode, pos);
+    setPaletteHang({ node: withNode.id, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null, withStep: first.id });
+  };
+
   const toggleGroup = (gid: string) =>
     setExpandedGroups((cur) => {
       const next = new Set(cur);
@@ -493,18 +608,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   };
 
   const ordered = orderedPlans(plans);
-  const savedStops = (at: number | null) => (
-    <div className="fl-palette-flyways">
-      <div className="fl-palette-head">Saved stops — tack one on as a stop with sub-steps</div>
-      <div className="fl-chiprow">
-        {ordered.map((p) => (
-          <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void tackPlan(p, at)}>
-            {p.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  // The saved chains, as data: the palette's filter narrows them with the
+  // stop kinds ("Saved chains — tack one on as a group").
+  const savedStops = (at: number | null): PaletteSaved[] =>
+    ordered.map((p) => ({
+      id: p.id,
+      name: p.name,
+      title: p.steps.map((s) => s.title).join(" → "),
+      disabled: busy,
+      onPick: () => void tackPlan(p, at),
+    }));
 
   const raw: LineCanvasProps = {
     selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
@@ -516,7 +629,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       else if (n.session && n.session !== title) opts.onSession(n.session);
     },
     onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined,
-    onRemove: flight ? (n) => requestRemove(own(n)) : undefined,
+    // A landed chain's tiles come off too: that clears the finished chain.
+    onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : undefined,
     // Indexes among the line's stops are the flight's (drawnCanvas maps the
     // canvas's places onto them).
     onMove: flight
@@ -538,32 +652,37 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     onToggleHalt: flight ? (n) => toggleHalt(own(n)) : undefined,
     onToggleGroup: toggleGroup,
     // A loop drawn by hand (only on a flight: the Loop needs stops to repeat).
+    // The session box as `to` (its agent tile on the Sky): back to the AGENT
+    // — `back_to: "agent"`, the agent runs again (round 21).
     onLoopFrom: flight
       ? (from, to) => {
           const def = kindOf.get("loop");
-          const target = firstStepOf(to);
+          const target = to.kind === "session" ? LOOP_AGENT : firstStepOf(to);
           const at = loopSlotAfter(from);
-          if (!def || !target || at === undefined) return void toast("This server has no Loop stop");
-          void tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : undefined).then((ok) => ok && toast("Loops back to “" + target.title + "”"));
+          if (!def) return void toast("This server has no Loop stop");
+          if (!target || at === undefined) return;
+          const said = target === LOOP_AGENT ? "Loops back to the agent — it runs again after “" + from.title + "”" : "Loops back to “" + target.title + "”";
+          void tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : undefined).then((ok) => ok && toast(said));
         }
       : undefined,
     onLoopTo: flight
       ? (loop, to) => {
-          const target = firstStepOf(to);
-          if (!loop.step || !target || loop.step.config?.back_to === target.id) return;
-          void patchStop(flight.id, loop.step.id, { config: { ...loop.step.config, back_to: target.id } }).then((ok) => ok && toast("Loops back to “" + target.title + "” now"));
+          const back = loopBackTo(to);
+          if (!loop.step || !back || loop.step.config?.back_to === back) return;
+          const said = back === LOOP_AGENT ? "Loops back to the agent now" : "Loops back to “" + (firstStepOf(to)?.title || to.title) + "” now";
+          void patchStop(flight.id, loop.step.id, { config: { ...loop.step.config, back_to: back } }).then((ok) => ok && toast(said));
         }
       : undefined,
     onDropStop: (drop: StopDrop, at) => {
       if ("planId" in drop) {
         const plan = plans.find((p) => p.id === drop.planId);
-        if (plan || flight) void tackPlan(plan || { id: drop.planId, name: "the saved stop" }, at);
-        else toast("That saved stop isn't on this server any more");
+        if (plan || flight) void tackPlan(plan || { id: drop.planId, name: "the saved route" }, at);
+        else toast("That saved route isn't on this server any more");
         return;
       }
       const def = kindOf.get(drop.kind);
       if (def) void tackOne(def, at);
-      else toast("This line has no “" + drop.kind + "” stop to tack on");
+      else toast("This route has no “" + drop.kind + "” stop to tack on");
     },
     renderInBox: parts.renderInBox,
     sizeOf: parts.sizeOf,
@@ -571,6 +690,11 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   };
   // The canvas counts a group box (and the flown pill) as one place.
   const shown = drawnCanvas(line, raw);
+  // Round 21: a stop's ⋯ "Loop back to…" (the Sky's chain menu): the agent
+  // first, then every stop at or before it — the line in flight indexes.
+  const sessionBox = line.nodes.find((n) => n.kind === "session" && n.row === "main") || null;
+  const loopChoicesOf = (n: DiagramNode): LoopChoice[] =>
+    flight ? loopChoices(own(n), line.nodes.filter((m) => m.row === "main"), { session: sessionBox, insertFrom: line.insertFrom }) : [];
 
   const palette: ReactNode =
     paletteAt !== null ? (
@@ -582,7 +706,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
           setPaletteAt(null);
           setPaletteHang(null);
         }}
-        extra={ordered.length > 0 ? savedStops(paletteAt >= end ? null : paletteAt) : undefined}
+        saved={savedStops(paletteAt >= end ? null : paletteAt)}
+        savedHead="Saved routes — tack one on as a group"
       />
     ) : null;
 
@@ -606,7 +731,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         kindOf={kindOf}
         busy={busy}
-        note={open.editable ? undefined : open.state === "done" || open.state === "skipped" ? "This stop has flown." : "The flight is in this stop — only its sub-steps still ahead can change."}
+        note={open.editable ? undefined : open.state === "done" || open.state === "skipped" ? "This stop has finished." : "The route is in this stop — only its stops still ahead can change."}
         onClose={close}
         onRename={
           flight && changeable
@@ -643,7 +768,12 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
                 void act(async () => {
                   if (await removeGroup(open)) setDialog(null);
                 })
-            : undefined
+            : landedId
+              ? () =>
+                  void act(async () => {
+                    if (await clearLanded()) setDialog(null);
+                  })
+              : undefined
         }
       />
     );
@@ -652,7 +782,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const editable = !!flight && !!open.editable && !!open.step;
     const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
     const rec = flight && open.step ? flight.step_states?.[open.step.id] : undefined;
-    const why = editable ? "" : flown ? "This stop has flown — it can't change now." : here ? "The flight is at this stop — it can't change while it is here." : "It can't change here.";
+    const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The route is at this stop — it can't change while it is here." : "It can't change here.";
+    const clears = !flight && landedId ? "Remove clears the finished route." : "";
     const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : undefined;
     inspector = (
       <StopDialog
@@ -660,8 +791,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         def={def}
         lineSteps={flight?.steps}
+        loopAgent
         busy={busy}
-        note={[why, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
+        note={[why, clears, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
         onClose={close}
         onSave={
           editable
@@ -681,7 +813,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             : undefined
         }
         onRemove={
-          flight && open.step
+          // A finished chain's stop (its loop pill too) comes off as on the
+          // canvas: that clears the finished chain (removeNode / clearLanded).
+          (flight || landedId) && open.step
             ? () =>
                 void act(async () => {
                   if (await removeNode(open)) close();
@@ -689,8 +823,21 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             : undefined
         }
         onToggleHalt={here && open.step && !flown ? () => toggleHalt(open) : undefined}
-        onDone={here && open.state === "perched" ? () => void act(() => stepDone(flight!.id, open.step!.id)) : undefined}
+        onDone={
+          here && open.state === "perched"
+            ? open.step?.kind === "verify"
+              ? // A Verify stop moves on when its behaviors are answered: its card opens.
+                () => {
+                  close();
+                  answerBehaviors(flight!.id);
+                }
+              : () => void act(() => stepDone(flight!.id, open.step!.id))
+            : undefined
+        }
+        doneLabel={open.step?.kind === "verify" ? "Behaviors" : undefined}
+        doneTitle={open.step?.kind === "verify" ? "Answer its behaviors — the route goes on once each one has an answer" : undefined}
         onRetry={here && open.state === "halted" ? () => void act(() => stepRetry(flight!.id, open.step!.id)) : undefined}
+        onFix={here && open.state === "halted" && open.step?.kind === "verify" ? () => void act(() => stepFix(flight!.id, open.step!.id)) : undefined}
         onSkip={here ? () => void act(() => stepSkip(flight!.id, open.step!.id)) : undefined}
         extra={
           <>
@@ -700,7 +847,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
             )}
             {offerJoin && (
               <div className="fl-chiprow fl-join-offer">
-                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the line waits until every worker is done" onClick={() => void addJoin()}>
+                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the route waits until every worker is done" onClick={() => void addJoin()}>
                   + Join
                 </button>
               </div>
@@ -714,6 +861,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   return {
     row,
     flight,
+    /** A landed flight drawn on the line (read-only), "" when none. */
+    landedId,
     /** The line as the canvas counts it (drawn places). */
     diagram: shown.diagram,
     busy,
@@ -732,9 +881,14 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     canvas: shown.canvas,
     /** Round 18: the line in the FLIGHT's indexes and its handlers (the Sky's
      * chain speaks them: lib/skyGraph `chainGraph` / `wireIntent`). */
-    graphDiagram: line,
-    graphCanvas: raw,
+    /** With the Behaviors tile on it (docs/behaviors.md §1). */
+    graphDiagram,
+    /** The session's Behaviors tile: its plan, its card in the tile's place,
+     * its ⋯ (SkyChain `useBehaviorsTile`). */
+    behaviors,
+    graphCanvas: { ...raw, loopChoicesOf },
     paletteAfter,
+    paletteParallel,
     /** Where the open palette / dialog hangs: a node id, "" = the end of the
      * line, null = nothing open; `pos` a spot asked for (chain-local). */
     anchor: inspector !== null && dialog ? dialog.id : palette !== null ? (paletteHang?.node ?? "") : null,

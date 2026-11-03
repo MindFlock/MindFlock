@@ -191,7 +191,9 @@ describe("the switch points", () => {
     expect(app).toContain("useEffect(() => installViewFlip(), []);");
     expect(app).toContain("<TopBar />");
     // The flat dialogs, each its own; no Flights dialog any more.
-    for (const d of ["<IntakeDialog />", "<VerifyDialog />"]) expect(app).toContain(d);
+    for (const d of ["<IntakeDialog />"]) expect(app).toContain(d);
+    // Verify is a stop on the route: no dialog (docs/behaviors.md §4).
+    expect(app).not.toContain("<VerifyDialog />");
     expect(app).not.toContain("FlightsDialog");
   });
 });
@@ -295,7 +297,7 @@ describe("the layout store", () => {
     expect(sky.tidySkyLayout(all, "b", s)).toEqual({ a: all.a, c: { open: true } });
     expect(sky.pinnedPositions(all)).toEqual({ a: { x: 1, y: 2 }, b: { x: 3, y: 4 } });
     // The host reads `{ pinned: false }` from a line as "Tidy this line".
-    expect(code("components/flights/SkyView.tsx")).toContain("patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch)");
+    expect(code("components/flights/SkyView.tsx")).toContain("patch.pinned === false ? closeSkyWindows(tidySkyLayout(l, id), [id]) : patchSkyLine(l, id, patch)");
   });
 
   it("sizes cycle compact → normal → wide, and a line's layout fills the defaults", () => {
@@ -331,7 +333,7 @@ describe("the layout store", () => {
     // Round 18: the estimate is a chain's (its tiles at the pitch, its label).
     expect(v).toContain("...(measured[t] || estimateLine(chainSize(diagram, true), layout[t]))");
     expect(v).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
-    expect(v).toContain("const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]),");
+    expect(v).toContain("const fresh = assignSpots(existing, newcomers, area);");
     expect(v).toMatch(/className="fl-btn sky-tidy"[^>]*onClick=\{tidy\}/);
     expect(v).toContain('} else if (k === "t" || k === "T") {');
   });
@@ -406,7 +408,7 @@ describe("round 12: workers live inside their lead's line", () => {
     const v = code("components/flights/SkyView.tsx");
     expect(v).toContain("const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });");
     expect(code("components/flights/SkyLine.tsx")).toContain("useSessionLine(p.title, src, { family: true,");
-    expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's line");
+    expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's route");
   });
 });
 
@@ -438,12 +440,12 @@ describe("round 13: nothing focused, place don't tack, the floating palette", ()
     // A drop on empty sky makes its line, unfocused.
     expect(v).not.toMatch(/pinned: true \}\)\);\s*setGroundFocus\(id\);/);
     // This session with nothing focused says what to do.
-    expect(v).toContain('"Pick a line to show it alone."');
+    expect(v).toContain('"Pick a route to show it alone."');
     // Enter opens only the focused line's box.
     expect(v).toContain('} else if (k === "Enter" && focusLine) {');
   });
 
-  it("a palette click places its block on the board, near the palette; chips never tack onto the focused line", () => {
+  it("a palette click places its block on the Sky, near the palette; chips never tack onto the focused line", () => {
     expect(v).toContain("onPlace={(d) => void placeGrounded(d, \"shelf\")}");
     expect(v).toContain("onPlace={(d) => void placeGrounded(d, \"palette\")}");
     expect(v).toContain("const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };");
@@ -478,7 +480,7 @@ describe("round 13: nothing focused, place don't tack, the floating palette", ()
   });
 });
 
-describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board", () => {
+describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the Sky", () => {
   const v = code("components/flights/SkyView.tsx");
   const line = code("components/flights/SkyLine.tsx");
   const grounded = code("components/flights/GroundedLine.tsx");
@@ -503,7 +505,7 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
   it("a grounded line goes at once through the host: one entry, its toast takes it, Undo makes it again where it sat", () => {
     expect(v).toContain("onRemove={() => removeGrounded(id)}");
     // Round 17: the entry carries redo (the remade line, by its new id, goes again).
-    expect(v).toMatch(/const entry = pushUndo\(\{\s*label: "Remove “" \+ shown \+ "”",\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was\);\s*if \(g\) cur = g\.id;[\s\S]*?redo: \(\) => deleteFlight\(cur\),/);
+    expect(v).toMatch(/const entry = pushUndo\(\{\s*label: "Remove “" \+ shown \+ "”",\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was, ed\);\s*if \(g\) cur = g\.id;[\s\S]*?redo: \(\) => deleteFlight\(cur\),/);
     expect(v).toContain('toast("Removed “" + shown + "”", { action: undoAction(entry, ');
     expect(grounded).not.toContain("InlineConfirm");
   });
@@ -521,7 +523,7 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(hook.match(/const entry = pushUndo\(\{/g)?.length).toBe(2);
     expect(hook.match(/onClick: \(\) => \{\s*if \(takeUndo\(entry\)\) void entry\.undo\(\);\s*\}/g)?.length).toBe(2);
     expect(hook).toContain('if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);');
-    expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : undefined,");
+    expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : undefined,");
     expect(line).toContain("askRunning: true");
     // Delete from the sky reaches the stop the flight is at (not editable), which then asks.
     expect(line).toContain("nodeIndexes(n).includes(line.flight.cursor);");
@@ -536,7 +538,7 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(v).toContain("restoreGrounded={reground}");
   });
 
-  it("All blocks… floats the palette LARGE on the board (a sky object, not a modal); × and Esc dock it", () => {
+  it("All blocks… floats the palette LARGE on the Sky (a sky object, not a modal); × and Esc dock it", () => {
     expect(v).toContain("onCatalog={narrow ? undefined : openCatalog}");
     expect(v).toContain("const f = catalogFrame(view, screen, c.z, stored);");
     expect(v).toContain("onLayout(PALETTE_KEY, { x: f.x, y: f.y, pinned: true });");

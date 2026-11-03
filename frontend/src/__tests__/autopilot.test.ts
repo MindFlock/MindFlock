@@ -66,7 +66,7 @@ describe("the ladder", () => {
     // Lane routes say "leave", autopilot/intake "off", older intake "agent".
     for (const v of ["leave", "off", "OFF ", "agent", "none"]) {
       expect(normalizeLane(v)).toBe("leave");
-      expect(laneLabel(v)).toBe("Off");
+      expect(laneLabel(v)).toBe("Agent only");
     }
   });
 
@@ -80,8 +80,8 @@ describe("the ladder", () => {
 
   it("labels empty as Off and shows an unknown value as-is", () => {
     expect(laneLabel("pr")).toBe("Open PR");
-    expect(laneLabel("")).toBe("Off");
-    expect(laneLabel(undefined)).toBe("Off");
+    expect(laneLabel("")).toBe("Agent only");
+    expect(laneLabel(undefined)).toBe("Agent only");
     expect(laneLabel("someday")).toBe("someday");
   });
 });
@@ -110,7 +110,7 @@ describe("chip tooltip", () => {
   });
 
   it("marks a finished run", () => {
-    expect(autopilotChipTitle(run({ state: "done" }))).toContain("switched itself off");
+    expect(autopilotChipTitle(run({ state: "done" }))).toContain("back to Agent only");
   });
 });
 
@@ -131,8 +131,8 @@ describe("the ⏩ control: THE per-session fast-track control", () => {
     expect(s!.lane).toBe("pr");
     expect(s!.active).toBe(true);
     expect(s!.halted).toBe(false);
-    expect(s!.title).toContain("Fast-track → Open PR");
-    expect(s!.title).toContain("change it or turn it off");
+    expect(s!.title).toContain("Goes as far as Open PR");
+    expect(s!.title).toContain("change how far it goes");
   });
 
   it("reads 'off' with no target, and says what a click does", () => {
@@ -141,7 +141,7 @@ describe("the ⏩ control: THE per-session fast-track control", () => {
     expect(s!.label).toBe("⏩ off");
     expect(s!.lane).toBe("leave");
     expect(s!.active).toBe(false);
-    expect(s!.title).toMatch(/^Fast-track is off\. Click to choose/);
+    expect(s!.title).toMatch(/^Goes as far as Agent only\. Click to choose/);
   });
 
   it("says each rung in its own short word", () => {

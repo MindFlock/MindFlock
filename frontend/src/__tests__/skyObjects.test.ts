@@ -26,7 +26,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const sky = await import("../lib/skyLayout");
 const O = await import("../lib/skyObjects");
 const { PersonBlock, shareBlockReason } = await import("../components/flights/PeopleBlocks");
-const { DeviceBlock, deviceBlockReason, deviceMoveError, NO_DEVICE_MOVE } = await import("../components/flights/DeviceBlocks");
+const { DeviceBlock, DeviceDock, deviceBlockReason, deviceMoveError, deviceTargetWords, NO_DEVICE_MOVE } = await import("../components/flights/DeviceBlocks");
 const { StickyNote, NOTE_MAX_CHARS } = await import("../components/flights/StickyNote");
 const { ApiError } = await import("../api/client");
 
@@ -39,10 +39,10 @@ const row = (title: string, over: Partial<Instance> = {}): Instance => ({ title,
 const data = (over: Partial<SkyObjectData> = {}): SkyObjectData => ({ mode: "all", narrow: false, intakeOn: true, paletteOn: false, links: [], devices: [], notes: [], ...over });
 
 describe("the registry", () => {
-  it("one entry per kind, in placement order: left (lane, palette), right (strip, devices, people), free (notes)", () => {
-    expect(O.SKY_OBJECTS.map((d) => d.kind)).toEqual(["intake", "palette", "landing", "device", "person", "note"]);
-    expect(O.SKY_OBJECTS.map((d) => d.place)).toEqual(["left", "left", "right", "right", "right", "free"]);
-    expect(O.SKY_OBJECTS.map((d) => d.key)).toEqual(["intake", "palette", "landing", "device:", "person:", "note:"]);
+  it("one entry per kind, in placement order: left (lane, palette), right (Behaviors board, strip, devices, people), free (notes)", () => {
+    expect(O.SKY_OBJECTS.map((d) => d.kind)).toEqual(["intake", "palette", "behaviors", "landing", "device", "person", "note"]);
+    expect(O.SKY_OBJECTS.map((d) => d.place)).toEqual(["left", "left", "right", "right", "right", "right", "free"]);
+    expect(O.SKY_OBJECTS.map((d) => d.key)).toEqual(["intake", "palette", "behaviors", "landing", "device:", "person:", "note:"]);
     expect(O.SKY_OBJECTS.filter((d) => d.accepts === "session").map((d) => d.kind)).toEqual(["device", "person"]);
     // Every def has what the host needs.
     for (const d of O.SKY_OBJECTS) {
@@ -56,7 +56,7 @@ describe("the registry", () => {
 
   it("the keys", () => {
     expect([O.personKey("L1"), O.deviceKey("mini"), O.noteKey("n1")]).toEqual(["person:L1", "device:mini", "note:n1"]);
-    expect(["intake", "palette", "landing", "person:L1", "device:mini", "note:n1", "fix-login", "flight:f1"].map(O.objectKind)).toEqual(["intake", "palette", "landing", "person", "device", "note", "", ""]);
+    expect(["intake", "palette", "behaviors", "landing", "person:L1", "device:mini", "note:n1", "fix-login", "flight:f1"].map(O.objectKind)).toEqual(["intake", "palette", "behaviors", "landing", "person", "device", "note", "", ""]);
     expect(O.isObjectKey("landing")).toBe(true);
     expect(O.isObjectKey("fix-login")).toBe(false);
     expect(O.noteIdOf("note:n1")).toBe("n1");
@@ -65,13 +65,17 @@ describe("the registry", () => {
     expect(O.newNoteId()).not.toBe(O.newNoteId());
   });
 
-  it("which objects are on the board: the lane when on, the palette when floating, the strip and blocks in All / Mine / Perched, never on a phone or in This session, a note per note", () => {
+  it("which objects are on the Sky: the lane when on, the palette when floating, the strip and blocks in All / Mine / Perched, never on a phone or in This session, a note per note", () => {
     const d = data({ links: [link()], devices: [device(), device({ device: "pi", host: "pi" })], notes: [note(), note({ id: "n2" })] });
     expect(O.skyObjects(d).map((o) => o.key)).toEqual(["intake", "landing", "device:mini", "device:pi", "person:L1", "note:n1", "note:n2"]);
     expect(O.skyObjects({ ...d, paletteOn: true }).map((o) => o.key).slice(0, 2)).toEqual(["intake", "palette"]);
     expect(O.skyObjects({ ...d, intakeOn: false, mode: "one" }).map((o) => o.key)).toEqual([]);
     expect(O.skyObjects({ ...d, narrow: true }).map((o) => o.key)).toEqual(["intake"]);
     expect(O.skyObjects({ ...d, mode: "perched" }).map((o) => o.key)).toContain("landing");
+    // The Behaviors board: at the top of the right column, only while shown.
+    expect(O.skyObjects({ ...d, behaviorsOn: true }).map((o) => o.key).slice(0, 3)).toEqual(["intake", "behaviors", "landing"]);
+    expect(O.skyObjects({ ...d, behaviorsOn: true, mode: "one" }).map((o) => o.key)).not.toContain("behaviors");
+    expect(O.skyObjects({ ...d, behaviorsOn: true, narrow: true }).map((o) => o.key)).toEqual(["intake"]);
     // The item carries its data.
     const items = O.skyObjects(d);
     expect((items.find((o) => o.key === "person:L1")!.data as PeerLink).peer_name).toBe("Bob");
@@ -79,7 +83,7 @@ describe("the registry", () => {
   });
 
   it("frames and sizes: the lane's and the palette's as before, the strip's range, a block's fixed width, a note's own numbers", () => {
-    const [intake, palette, landing, dev, , noteDef] = O.SKY_OBJECTS;
+    const [intake, palette, behaviors, landing, dev, , noteDef] = O.SKY_OBJECTS;
     expect(intake.size(undefined, undefined)).toEqual({ w: sky.INTAKE_W, h: 320 });
     expect(intake.size({ open: true }, undefined)).toEqual({ w: sky.INTAKE_OPEN_W, h: 520 });
     expect(intake.size(undefined, { w: 100, h: 900 })).toEqual({ w: sky.INTAKE_W, h: 900 });
@@ -90,6 +94,9 @@ describe("the registry", () => {
     expect(landing.size(undefined, { w: 320, h: 410 })).toEqual({ w: 320, h: 410 });
     expect(landing.frame({ w: 5000, h: 10 })).toEqual({ w: sky.LANDING_MAX.w, h: sky.LANDING_MIN.h });
     expect(sky.landingFrame(undefined)).toBeNull();
+    expect(behaviors.size(undefined, undefined)).toEqual({ w: 300, h: 200 });
+    expect(behaviors.size(undefined, { w: 320, h: 410 })).toEqual({ w: 320, h: 410 });
+    expect(behaviors.frame({ w: 10, h: 99999 })).toEqual({ w: behaviors.min.w, h: behaviors.max.h });
     expect(dev.size(undefined, undefined)).toEqual({ w: sky.BLOCK_W, h: sky.BLOCK_H });
     expect(dev.frame({ w: 1, h: 1 })).toBeNull();
     expect(noteDef.size({ w: 300, h: 90 }, undefined)).toEqual({ w: 300, h: 90 });
@@ -98,7 +105,8 @@ describe("the registry", () => {
   });
 
   it("the wrapper's class carries the drag, selection and drop-target states", () => {
-    const [, , landing] = O.SKY_OBJECTS;
+    const [, , behaviors, landing] = O.SKY_OBJECTS;
+    expect(O.objectClass(behaviors, {})).toBe("sky-object sky-object-behaviors");
     expect(O.objectClass(landing, {})).toBe("sky-object sky-object-landing");
     expect(O.objectClass(landing, { dragging: true, selected: true, target: true })).toBe("sky-object sky-object-landing is-dragging is-selected is-merge-target");
   });
@@ -149,7 +157,9 @@ describe("SkyView iterates the one list", () => {
   const v = code("components/flights/SkyView.tsx");
 
   it("builds the objects from the registry and draws them in one loop; the lane and the palette keep their JSX", () => {
-    expect(v).toContain("const objects = useMemo(() => skyObjects(objData), [objData]);");
+    // Devices are never board objects (drop targets during a session drag);
+    // the Finished strip only when turned on.
+    expect(v).toContain('const objects = useMemo(() => skyObjects(objData).filter((o) => o.def.kind !== "device" && (o.def.kind !== "landing" || finishedOn)), [objData, finishedOn]);');
     expect(v).toContain("{objects.map(objectFor)}");
     expect(v).toContain('if (o.def.kind === "intake" || o.def.kind === "palette") return <Fragment key={o.key}>{o.def.render(host)}</Fragment>;');
     expect(v).toContain("renderIntake,\n    renderPalette,");
@@ -170,7 +180,7 @@ describe("SkyView iterates the one list", () => {
     expect(v).toContain('const obj = el.closest(".sky-object[data-object]");');
   });
 
-  it("a session line dragged alone onto a person or device block asks the block; a note onto a line attaches", () => {
+  it("a session line dragged alone onto a person block or a device target asks it; a note onto a line attaches", () => {
     expect(v).toContain("const toBlock = !kind && !merging && !isGroundedKey(id) && ids.length === 1;");
     expect(v).toContain('const toLine = kind === "note" && ids.length === 1;');
     expect(v).toContain('const blocks = toBlock ? objects.filter((o) => o.def.accepts === "session").map((o) => ({ id: o.key, rect: rectOf(o.key)! })) : [];');
@@ -180,7 +190,14 @@ describe("SkyView iterates the one list", () => {
     expect(v).toContain('const into = merging ? landed : "";');
     expect(v).toContain('(mergeOver && !l.flight && drag?.from[l.id] ? " is-merging" : "")');
     // The merge hit test's own path for grounded lines is untouched.
-    expect(v).toContain("merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? hitAt(");
+    expect(v).toContain("merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? deviceAt(ev) || hitAt(");
+    // The device targets: shown once a session's chain moves, gone on release,
+    // hit in screen px (the dock is over the viewport, not on the plane).
+    expect(v).toContain('const toDevice = toBlock && devices.length > 0 && mode !== "one";');
+    expect(v).toContain("if (!g.moved && toDevice) setSessionDrag(true);");
+    expect(v).toMatch(/setMergeOver\(""\);\s*setSessionDrag\(false\);/);
+    expect(v).toContain("const r = el.getBoundingClientRect();");
+    expect(v).toMatch(/<DeviceDock\s+devices=\{devices\}\s+dragging=\{sessionDrag\}\s+over=\{mergeOver\}\s+dropped=\{dropped\}\s+keyOf=\{deviceKey\}\s+onDone=\{objView\.answerDrop\}/);
     // A block's answer clears what it was asked.
     expect(v).toMatch(/answerDrop: \(key\) =>\s*setDropped\(\(d\) => \{\s*const \{ \[key\]: _gone, \.\.\.rest \} = d;\s*return rest;/);
   });
@@ -216,10 +233,10 @@ describe("a person block", () => {
 
   it("names the peer, the state dot, and invites a drop", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-block sky-person" data-person="L1" data-state="verified" role="group" aria-label="Bob — drop a line here to share its session">/);
+    expect(h).toMatch(/^<div class="sky-block sky-person" data-person="L1" data-state="verified" role="group" aria-label="Bob — drop a route here to share its session">/);
     expect(h).toContain('<div class="sky-block-head" data-sky-head="true" title="Drag to move">');
     expect(h).toContain('<strong class="sky-block-name">Bob</strong>');
-    expect(h).toContain("Drop a line to share it");
+    expect(h).toContain("Drop a route to share it");
     expect(html({ connected: false })).toContain('data-state="offline"');
     expect(html({ sas_verified: false })).toContain('data-state="unverified"');
   });
@@ -251,14 +268,20 @@ describe("a person block", () => {
   });
 });
 
-describe("a device block", () => {
-  const html = (over: Partial<Device> = {}, dropped = "") => renderToStaticMarkup(createElement(DeviceBlock, { device: device(over), dropped, onHeadDown() {}, onDone() {} }));
+describe("a device drop target", () => {
+  const html = (over: Partial<Device> = {}, dropped = "", target = false) => renderToStaticMarkup(createElement(DeviceBlock, { device: device(over), dropped, target, onDone() {} }));
 
-  it("names the device, its state, its sessions; a dropped line asks to move with the mid-turn tick", () => {
+  it("says where the route goes and what is there; a dropped line asks to move with the mid-turn tick", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-block sky-device" data-device="mini" data-state="on" role="group" aria-label="mac-mini — drop a line here to move its session there">/);
-    expect(h).toContain("darwin · 2 sessions");
+    expect(h).toMatch(/^<div class="sky-device" data-device="mini" data-state="on" role="group" aria-label="Move to mac-mini — drop the route here">/);
+    expect(h).toContain('<span class="sky-device-title" title="mini">Move to mac-mini</span>');
+    expect(h).toContain('<div class="sky-device-sub">2 sessions there · darwin</div>');
+    expect(html({}, "", true)).toMatch(/^<div class="sky-device is-over"/);
+    expect(deviceTargetWords({ connected: true, sessions: 1 })).toBe("1 session there");
+    expect(deviceTargetWords({ connected: true, sessions: 0 })).toBe("No sessions there");
+    expect(deviceTargetWords({ connected: false, sessions: 4 })).toBe("Not connected");
     const ask = html({}, "fix-login");
+    expect(ask).toMatch(/^<div class="sky-device is-asking"/);
     expect(ask).toContain("Move <strong>fix-login</strong> to mac-mini? Its agent pauses while it moves.");
     expect(ask).toContain("Even if it is mid-turn");
     expect(ask).toContain('<button type="submit" class="fl-btn btn-primary">Move</button>');
@@ -266,6 +289,29 @@ describe("a device block", () => {
     expect(off).toContain("Not connected");
     expect(off).not.toContain('type="submit"');
     expect(deviceBlockReason({ connected: true })).toBe("");
+  });
+
+  it("the dock: every device while a route is dragged, only the asked one after a drop, nothing otherwise", () => {
+    const keyOf = (d: string) => "device:" + d;
+    const dock = (dragging: boolean, dropped: Record<string, string> = {}) =>
+      renderToStaticMarkup(createElement(DeviceDock, { devices: [device(), device({ device: "pi", host: "pi" })], dragging, over: "", dropped, keyOf, onDone() {}, targetRef() {} }));
+    expect(dock(false)).toBe("");
+    const drag = dock(true);
+    expect(drag).toContain('<div class="sky-device-dock is-dragging" role="region" aria-label="Move the session to another device" data-no-drag="true">');
+    expect(drag).toContain("Drop the route on a device to move the session there");
+    expect([...drag.matchAll(/data-device="([^"]+)"/g)].map((m) => m[1])).toEqual(["mini", "pi"]);
+    const asked = dock(false, { "device:pi": "fix-login" });
+    expect([...asked.matchAll(/data-device="([^"]+)"/g)].map((m) => m[1])).toEqual(["pi"]);
+    expect(asked).not.toContain("Drop the route");
+  });
+
+  it("the calm sky-object look (SKY_OBJECT_STYLE): one hairline, radius 14, a 30px bar, 13px / 600 title, muted 11.5px second line", () => {
+    const c = cssOf("components/flights/DeviceBlocks.css");
+    expect(c).toMatch(/\.sky-device \{[^}]*border: 1px solid color-mix\(in srgb, var\(--muted\) 30%, transparent\);[^}]*border-radius: 14px;/);
+    expect(c).toMatch(/\.sky-device-bar \{[^}]*height: 30px;/);
+    expect(c).toMatch(/\.sky-device-title \{[^}]*font-size: 13px;[^}]*font-weight: 600;/);
+    expect(c).toMatch(/\.sky-device-sub \{[^}]*color: var\(--muted\);[^}]*font-size: 11\.5px;/);
+    expect(c).not.toMatch(/text-transform: uppercase/);
   });
 
   it("calls the existing move route with the device; a folder-only server's refusal is named plainly", () => {

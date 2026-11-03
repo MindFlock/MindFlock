@@ -154,7 +154,7 @@ export function runStages(
       label: "Plan",
       how: "the lead proposes, you approve",
       state: st === "planning" ? "now" : st === "plan_ready" ? "now" : "done",
-      detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " pieces — needs you" : pieces ? pieces + " pieces" : "",
+      detail: st === "planning" ? "the lead is reading the code" : st === "plan_ready" ? pieces + " workers — needs you" : pieces ? pieces + " workers" : "",
     });
   }
   const working = tasks.filter((t) => !TERMINAL.has(t.state) && t.state !== "queued" && t.state !== "integrating").length;
@@ -164,7 +164,7 @@ export function runStages(
   const cap = Number(run.concurrency) || 0;
   out.push({
     key: "pieces",
-    label: run.split ? "Pieces" : "Lines",
+    label: run.split ? "Workers" : "Tasks",
     how: sf ? "together, in this folder" : cap && n > cap ? "together, " + cap + " at a time" : "together",
     state: planning ? "next" : failed ? "bad" : n && finishedWork === n ? "done" : n ? "now" : "next",
     detail: n

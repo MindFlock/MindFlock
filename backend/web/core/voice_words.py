@@ -134,6 +134,15 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "mind flog",
         "min flock",
         "mindflocked",
+        # The wake bench's plain decodes (docs/voice-wake.md).
+        "mind flunk",
+        "mind fluck",
+        "mind flop",
+        "mind clock",
+        "minh flock",
+        "minflock",
+        "me flock",
+        "meeflock",
     ),
 }
 

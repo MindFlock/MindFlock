@@ -77,7 +77,7 @@ import {
   type DiagramNode,
   type LayoutOpts,
 } from "../../lib/flightDiagram";
-import { controlFlight, flightPath, jumpFlight, refreshFlights, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flightPath, jumpFlight, refreshFlights, answerBehaviors, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { api } from "../../api/client";
 import { refreshInstances } from "../../state/queries";
 import { errMsg } from "../../lib/format";
@@ -254,7 +254,7 @@ function RemoveTool({ n, here = false, onRemove }: { n: DiagramNode; here?: bool
   const t = removeTool(n, here);
   const said = n.kind === "stop" && t.label !== "Remove" ? "Remove “" + n.title + "”" + t.label.slice("Remove".length) : "Remove “" + n.title + "”";
   return (
-    <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={said} title={n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the line (Delete)" : t.title} onClick={() => onRemove(n)}>
+    <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={said} title={n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the route (Delete)" : t.title} onClick={() => onRemove(n)}>
       🗑
     </button>
   );
@@ -263,7 +263,7 @@ function RemoveTool({ n, here = false, onRemove }: { n: DiagramNode; here?: bool
 /** Round 15: a flown checkpoint stop's menu line. Danger, since it resets
  * the worktree; the press opens an inline confirm on the stage, never
  * `window.confirm` (the desktop app has none). */
-export const REWIND_ITEM: SkyMenuItem = { key: "rewind", label: "Rewind to here", title: "Reset the worktree to this checkpoint and fly on from the stop after it", danger: true };
+export const REWIND_ITEM: SkyMenuItem = { key: "rewind", label: "Rewind to here", title: "Reset the worktree to this checkpoint and go on from the stop after it", danger: true };
 
 /** A stop whose menu offers Rewind: a checkpoint that has flown (done), on a
  * live flight. */
@@ -301,7 +301,7 @@ const STATE_WORD: Partial<Record<DiagramNode["state"], string>> = {
   failed: "failed",
   halted: "halted",
   current: "under way",
-  perched: "perched on you",
+  perched: "needs you",
   paused: "paused here",
   pending: "still to come",
 };
@@ -726,7 +726,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     try {
       await api(flightPath(flight, "/steps/" + encodeURIComponent(sid) + "/op/rewind"), { json: {} });
       setRewind(null);
-      toast("Rewound to “" + rewindNode.title + "” — the flight goes on from the stop after it");
+      toast("Rewound to “" + rewindNode.title + "” — the route goes on from the stop after it");
       void refreshFlights();
       void refreshInstances();
     } catch (err) {
@@ -750,6 +750,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     else if (key === "duplicate") p.onDuplicate?.(n);
     else if (key === "remove") p.onRemove?.(n);
     else if (key === "done") void stepDone(flight, step);
+    else if (key === "behaviors") answerBehaviors(flight);
+    else if (key === "fix") void stepFix(flight, step);
     else if (key === "skip") void stepSkip(flight, step);
     else if (key === "retry") void stepRetry(flight, step);
     else if (key === "halt") p.onToggleHalt?.(n);
@@ -1039,9 +1041,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 <button
                   type="button"
                   className="fl-icon-btn fl-group-chev"
-                  aria-label={"Fold “" + f.name + "” into one box"}
+                  aria-label={"Fold “" + f.name + "” into one stop"}
                   aria-expanded={true}
-                  title="Fold its sub-steps into one box"
+                  title="Fold its stops into one"
                   onClick={() => p.onToggleGroup!(f.id)}
                 >
                   ▾
@@ -1122,7 +1124,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 ? addLabel!
                 : n.title
               : n.title +
-                (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") +
+                (n.group ? ", a group of " + n.group.total + (n.group.total === 1 ? " stop" : " stops") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") +
                 (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD[n.state] || "") : "") +
                 (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") +
                 (mark ? ", halt point" : "") +
@@ -1213,16 +1215,16 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                     </button>
                   )}
                   {(p.onEdit || p.onSelect) && (
-                    <button type="button" className="fl-icon-btn fl-tool" aria-label={"Edit “" + n.title + "”"} title="Open this stop and its sub-steps (Enter)" onClick={() => edit(n)}>
+                    <button type="button" className="fl-icon-btn fl-tool" aria-label={"Edit “" + n.title + "”"} title="Open this group and its stops (Enter)" onClick={() => edit(n)}>
                       ✎
                     </button>
                   )}
                   {p.onMove && (
                     <>
-                      <button type="button" className="fl-icon-btn fl-tool" aria-label={"Move “" + n.title + "” earlier"} title="A stop with sub-steps doesn't move yet" disabled>
+                      <button type="button" className="fl-icon-btn fl-tool" aria-label={"Move “" + n.title + "” earlier"} title="A group doesn't move yet" disabled>
                         ⇤
                       </button>
-                      <button type="button" className="fl-icon-btn fl-tool" aria-label={"Move “" + n.title + "” later"} title="A stop with sub-steps doesn't move yet" disabled>
+                      <button type="button" className="fl-icon-btn fl-tool" aria-label={"Move “" + n.title + "” later"} title="A group doesn't move yet" disabled>
                         ⇥
                       </button>
                     </>
@@ -1297,7 +1299,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 </div>
               )}
               {waiting && !open && (
-                <span className="fl-join-pill" title={"The line goes on once its workers are done: " + joinLabel(waiting)} aria-hidden="true">
+                <span className="fl-join-pill" title={"The route goes on once its workers are done: " + joinLabel(waiting)} aria-hidden="true">
                   {waiting.waiting + " of " + waiting.total}
                 </span>
               )}
@@ -1320,9 +1322,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                       <button
                         type="button"
                         className="fl-icon-btn fl-group-chev"
-                        aria-label={"Show the sub-steps of “" + n.title + "”"}
+                        aria-label={"Show the stops in “" + n.title + "”"}
                         aria-expanded={false}
-                        title="Show its sub-steps on the line"
+                        title="Show its stops on the route"
                         data-no-drag
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1417,7 +1419,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                   {more && <div className="fl-box-detail">{more}</div>}
                   {n.reason && <div className="fl-box-reason">{n.reason}</div>}
                   {n.dots && (
-                    <div className="fl-box-dots" aria-label="Its line">
+                    <div className="fl-box-dots" aria-label="Its stops">
                       {n.dots}
                     </div>
                   )}
@@ -1456,12 +1458,12 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             x={birdDrag?.live ? birdDrag.x : perch.x + pad + perch.w / 2}
             y={birdDrag?.live ? birdDrag.y : perch.y + top}
             hand={birdHand}
-            label={"The bird: " + (p.bird!.tone === "you" ? "perched on you at " : p.bird!.tone === "halted" ? "halted at " : p.bird!.tone === "paused" ? "paused at " : "flying ") + perch.node.title}
+            label={"The bird: " + (p.bird!.tone === "you" ? "needs you at " : p.bird!.tone === "halted" ? "halted at " : p.bird!.tone === "paused" ? "paused at " : "flying ") + perch.node.title}
           />
         )}
         {branchBirds.map(({ perch: bp, box }) => {
           const n = box.node;
-          const doing = bp.tone === "you" ? "waiting on you" : "working";
+          const doing = bp.tone === "you" ? "needs you" : "working";
           const open = () => p.onOpen?.(n);
           const inV = leaderAt && bp.formation ? formationAt(leaderAt, bp.formation, 18, vertical) : null;
           return (
@@ -1529,7 +1531,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               body={
                 "The worktree goes back to " +
                 (rewindNode.receipt ? "where it was " + rewindNode.receipt : "this checkpoint") +
-                " — work since then is lost unless it was committed somewhere else — and the flight flies on from the stop after it."
+                " — work since then is lost unless it was committed somewhere else — and the route goes on from the stop after it."
               }
               confirmLabel="Rewind"
               busy={rewind.busy}

@@ -115,34 +115,44 @@ def head_of(root: str, ref: str) -> str:
     return _git(root, "rev-parse", ref) if ref else ""
 
 
-def last_merge_at(root: str, ref: str) -> Optional[float]:
-    """When the branch last took a merge commit (unix seconds); with no
-    merge commit, its last commit; None for an empty branch."""
+def last_merge(root: str, ref: str) -> Tuple[Optional[float], Optional[str]]:
+    """When the branch last took a merge commit (unix seconds) and ``"merge"``;
+    with no merge commit, its last commit and ``"commit"``; ``(None, None)``
+    for an empty branch. The kind lets the strip say "merged" only when a
+    merge is what it saw (a fresh repo has commits, not merges)."""
     if not ref:
-        return None
-    for args in (
-        ("log", "-1", "--merges", "--format=%ct", ref),
-        ("log", "-1", "--format=%ct", ref),
+        return None, None
+    for kind, args in (
+        ("merge", ("log", "-1", "--merges", "--format=%ct", ref)),
+        ("commit", ("log", "-1", "--format=%ct", ref)),
     ):
         out = _git(root, *args)
         if out:
             try:
-                return float(out.splitlines()[0])
+                return float(out.splitlines()[0]), kind
             except ValueError:
                 continue
-    return None
+    return None, None
+
+
+def last_merge_at(root: str, ref: str) -> Optional[float]:
+    """When the branch last took a merge commit (unix seconds); with no
+    merge commit, its last commit; None for an empty branch."""
+    return last_merge(root, ref)[0]
 
 
 def repo_facts(root: str) -> Dict[str, Any]:
     """The git half of a repo's row (no network)."""
     branch = default_branch(root)
     ref = branch_ref(root, branch)
+    at, kind = last_merge(root, ref)
     return {
         "root": root,
         "name": os.path.basename(root.rstrip(os.sep)) or root,
         "branch": branch,
         "head": head_of(root, ref),
-        "last_merge_at": last_merge_at(root, ref),
+        "last_merge_at": at,
+        "last_merge_kind": kind,
     }
 
 

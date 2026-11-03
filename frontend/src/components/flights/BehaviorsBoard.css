@@ -1,0 +1,252 @@
+/* The Behaviors board (BehaviorsBoard.tsx), in the one look every Sky object
+ * shares (the Finished strip's, LandingStrip.css; the reference is the
+ * session frame): one hairline, radius 14px, a 30px faint title strip with
+ * the title in normal case and quiet `fl-icon-btn`s; a one-line explanation;
+ * quiet rows grouped by tone, separated by hairlines. Tokens only: it reads
+ * in the light and the dark theme alike (text in --text / --fl-ink-*). */
+
+.sky-bh {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  /* Its size before the owner sizes it (the inline frame wins). */
+  width: 300px;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--muted) 4%, var(--panel));
+  color: var(--text);
+  font-size: 13px;
+  transition: box-shadow 120ms ease;
+}
+
+/* The wrapper's ring (SkyObjects.css) hugs the frame's radius. */
+.sky-object-behaviors {
+  border-radius: 14px;
+}
+.sky-object-behaviors:where(:has(.sky-bh-bar:hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.sky-object-behaviors.is-dragging > .sky-bh {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+/* --- The title bar: the session frame's strip ------------------------------ */
+
+.sky-bh-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 18%, transparent);
+  background: color-mix(in srgb, var(--muted) 7%, transparent);
+  user-select: none;
+}
+
+.sky[data-tool="drag"] .sky-bh-bar {
+  cursor: grab;
+}
+
+.sky-bh-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* How many need you or failed: a small quiet count, not a badge. */
+.sky-bh-count {
+  flex: none;
+  color: var(--fl-ink-red, var(--text));
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.sky-bh-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.sky-bh-tools .fl-icon-btn {
+  padding: 1px 6px;
+  font-size: 12px;
+}
+
+.sky-bh-explain {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px 4px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+/* --- The rows ------------------------------------------------------------- */
+
+.sky-bh-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px 10px;
+}
+
+.sky-bh-empty {
+  margin: 6px 0 0;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12px;
+}
+
+.sky-bh-group {
+  padding: 6px 0 2px;
+}
+.sky-bh-group + .sky-bh-group {
+  border-top: 1px solid color-mix(in srgb, var(--muted) 18%, transparent);
+}
+
+/* A small muted kind tag, as the lane's sub-heads. */
+.sky-bh-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0 2px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sky-bh-group.is-you .sky-bh-group-head,
+.sky-bh-group.is-bad .sky-bh-group-head {
+  color: var(--text);
+}
+.sky-bh-group-n {
+  font-weight: 400;
+  color: var(--fl-ink-muted, var(--muted));
+}
+
+.sky-bh-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sky-bh-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+/* The row: quiet (no card) — the drawer's check row with its box taken off. */
+.sky-bh .fl-check-row.sky-bh-row {
+  gap: 8px;
+  padding: 4px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 13px;
+}
+.sky-bh .fl-check-row.sky-bh-row:hover,
+.sky-bh .fl-check-row.sky-bh-row[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+}
+
+.sky-bh-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  box-sizing: border-box;
+}
+.sky-bh-dot.is-you {
+  background: var(--gold);
+  border-color: var(--gold);
+}
+.sky-bh-dot.is-bad {
+  background: var(--red);
+  border-color: var(--red);
+}
+.sky-bh-dot.is-busy {
+  border-color: var(--accent);
+}
+.sky-bh-dot.is-ok {
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.sky-bh-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-bh-short {
+  flex: none;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 11.5px;
+}
+.sky-bh-item.is-bad .sky-bh-short {
+  color: var(--fl-ink-red, var(--text));
+}
+
+.sky-bh-branch {
+  margin-left: 20px;
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The open row: the one Behaviors card, narrow. */
+.sky-bh-card {
+  margin: 4px 0 6px;
+  min-width: 0;
+}
+
+/* The corner that sizes it (the strip's). */
+.sky-bh-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+}
+
+/* --- The ⋯ popover (on the page, not the plane) ---------------------------- */
+
+.sky-bh-pop {
+  position: fixed;
+  z-index: 60;
+  box-sizing: border-box;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(70vh, 640px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-bh {
+    transition: none;
+  }
+}

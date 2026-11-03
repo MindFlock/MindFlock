@@ -42,7 +42,7 @@ const rec = (state: StepRunState["state"], detail: Record<string, unknown> = {})
 const STEPS = [
   step("s1", "test", "Tests"),
   step("s2", "checkpoint", "Checkpoint"),
-  step("s3", "ship", "Merge", { lane: "merge" }, { when: "diff touches frontend/**" }),
+  step("s3", "ship", "Merge when green", { lane: "merge" }, { when: "diff touches frontend/**" }),
   step("s4", "budget", "Budget", { max_usd: 5 }),
 ];
 const flight = (over: Partial<Flight> = {}): Flight =>
@@ -184,7 +184,7 @@ describe("time under the line", () => {
     const segs = segmentsFor(flight());
     const html = renderToStaticMarkup(createElement(LineRuler, { segments: segs }));
     expect(html).toContain('class="skl-ruler"');
-    expect(html).toContain('aria-label="Time flown: 12 min over 2 stops"');
+    expect(html).toContain('aria-label="Time so far: 12 min over 2 stops"');
     expect(html).toContain('title="Tests · 12 min"');
     expect(html).toContain('title="Checkpoint · 5 s"');
     expect(html).toMatch(/skl-ruler-seg skl-ruler-done" style="flex-grow:720"/);

@@ -201,7 +201,7 @@ def test_fast_track_to_a_pr_without_github_is_409(tpl_store):
     assert r.status_code == 409
     assert r.json()["reason"] == "github_required"
     assert r.json()["detail"] == (
-        "Fast-track “Open a PR” needs GitHub — connect GitHub, or pick Commit or Push"
+        "Goes as far as “Open a PR” needs GitHub — connect GitHub, or pick Commit or Push"
     )
     assert (
         client.post(

@@ -20,6 +20,9 @@ import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
 import type { SkyMode } from "../lib/skyLayout";
 import { legacyFlightsRoute } from "../lib/flights";
+// A cycle (behaviorsFocus reads this store), safe because each side only
+// calls the other inside an action, never at module load.
+import { openBehaviors } from "../lib/behaviorsFocus";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -287,8 +290,12 @@ interface UiState {
    * "running" panel instead of showing the live (flickering) output. Off by
    * default; the cover lifts on interaction and re-covers after a short idle. */
   reduceMotion: boolean;
-  /** The birds that drift across the Sky's background (SkyFlock). On by
-   * default; off draws none at all. */
+  /** The ambient flock drifting across the Sky's background (SkyFlock's
+   * birds). Off by default: the Settings → Appearance switch turns it on.
+   * Off keeps the weather (clouds, the night tint) and the birds on your
+   * chains. Stored under `mf_sky_flock`; the old `mf_sky_birds` key (saved
+   * when the default was on) is deliberately never read, so everyone starts
+   * with the flock off until they turn it on again. */
   skyBirds: boolean;
   setSkyBirds(on: boolean): void;
   /** Take a break: pop a full-screen reminder every `breakEveryMin` minutes.
@@ -543,7 +550,7 @@ export const useUi = create<UiState>((set, get) => ({
   showFilter: load<boolean>("mf_show_filter", true),
   filterPeek: false,
   reduceMotion: load<boolean>("mf_reduce_motion", false),
-  skyBirds: load<boolean>("mf_sky_birds", true),
+  skyBirds: load<boolean>("mf_sky_flock", false) === true,
   breakReminder: load<boolean>("mf_break_on", false),
   breakEveryMin: clampBreakMinutes(load<number>("mf_break_every", BREAK_DEFAULT_MINUTES)),
   idleFlock: load<boolean>("mf_idle_flock", true),
@@ -810,7 +817,7 @@ export const useUi = create<UiState>((set, get) => ({
     set({ reduceMotion: on });
   },
   setSkyBirds: (on) => {
-    save("mf_sky_birds", on);
+    save("mf_sky_flock", on);
     set({ skyBirds: on });
   },
   setBreakReminder: (on) => {
@@ -886,8 +893,12 @@ export const useUi = create<UiState>((set, get) => ({
       return;
     }
     const r = legacyFlightsRoute(target);
-    if (r.to === "sky") get().showSky(r.focus);
-    else if (r.to === "flyways") get().showFlyways(r.plan);
+    if (r.to === "sky") {
+      get().showSky(r.focus);
+      // An old `checklists[/<branch>]` target: the behaviors (the board, or
+      // that branch's frame) — docs/behaviors.md §4.
+      if (r.behaviors) openBehaviors(r.behaviors);
+    } else if (r.to === "flyways") get().showFlyways(r.plan);
     else set({ openDialog: r.to, dialogTarget: r.target });
   },
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),

@@ -1,7 +1,10 @@
 /** Settings → Workspace (partial 108): where every session's copy of the
- * repo lives (the one answer to "where do my worktrees live?"), how ticket
- * sessions copy it, and the base branches. Fast-track tuning and the live
- * branch are advanced mode only.
+ * repo lives (the one answer to "where do my worktrees live?") and the base
+ * branches. Fast-track tuning and the default live branch are advanced mode
+ * only. How ticket sessions copy the repo (worktree or clone) moved to Intake
+ * › Auto-start's "Ticket sessions" fold with the rest of ticket setup; the
+ * row here is a "Set in Intake ›" pointer (SetInIntake.tsx). The ticket
+ * sessions' FOLDER stays: it is half of "where do my worktrees live?".
  *
  * The paths come from GET /api/settings/workspace-paths: absolute, for every
  * kind of session — the ones you start (always <config dir>/worktrees) and
@@ -18,6 +21,7 @@ import { InfoTip } from "../../InfoTip";
 import { AdvancedFold } from "../settingsMode";
 import { PathField } from "../../PathField";
 import { RepoBranches } from "./RepoBranches";
+import { SetInIntake } from "./SetInIntake";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -135,18 +139,12 @@ function WorktreeHome() {
           {warn || "A full path like ~/mindflock/workspaces is clearest. Blank = ./workspaces."}
         </span>
       </label>
-      <label className="set-row" id="workspace-copy-mode">
-        <span className="set-label">How ticket sessions copy the repo</span>
-        <SettingField
-          group="engine"
-          field="mode"
-          options={[
-            { value: "", label: "Worktree — fast (default)" },
-            { value: "clone", label: "Full clone — a standalone copy" },
-          ]}
-        />
-        <span className="set-hint">A worktree shares your repo's history; a clone is fully separate.</span>
-      </label>
+      <SetInIntake
+        id="workspace-copy-mode"
+        label="How ticket sessions copy the repo"
+        hint="Worktree or full clone, with the rest of ticket setup."
+        selector="#ik-copy-mode"
+      />
     </section>
   );
 }
@@ -190,20 +188,21 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           retries: tuning for a flow that already works — advanced mode only. */}
       <AdvancedFold id="workspace-advanced">
         <label className="set-row">
-          <span className="set-label">Live branch</span>
+          <span className="set-label">Default live branch</span>
           <SettingField group="repository" field="live_branch" placeholder="main" />
           <span className="set-hint">
             The branch that means <em>shipped</em>. Verify asks you to check a change once it
-            lands here. Blank = the PR base branch, then the default base branch.
+            lands here. A repository can set its own in Intake. Blank = the PR base branch,
+            then the default base branch.
           </span>
         </label>
         <label className="set-row">
-          <span className="set-label">Fast-track goes as far as</span>
+          <span className="set-label">Goes as far as</span>
           <SettingField
             group="repository"
             field="fasttrack_depth"
             options={[
-              { value: "", label: "Off (default)" },
+              { value: "", label: "Agent only (default)" },
               { value: "commit", label: "Commit" },
               { value: "push", label: "Push" },
               { value: "pr", label: "Open PR" },
@@ -211,12 +210,12 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             ]}
           />
           <span className="set-hint">
-            <strong>New sessions start Off; batches and ticket runs start at this default.</strong>{" "}
+            <strong>New sessions start at Agent only; batches and ticket runs start at this default.</strong>{" "}
             Change one session any time with its <strong>⏩</strong> button.
             <InfoTip>
-              A batch is a list in the New dialog or Intake's <em>Start together</em>. Fast-track
+              A batch is a list in the New dialog or Intake's <em>Start together</em>. MindFlock
               waits for the agent to finish, then commits, pushes and carries on to this step. A
-              ticket source keeps its own <em>Fast-track tickets to</em> (Intake), which never
+              ticket source keeps its own <em>Goes as far as</em> (Intake), which never
               merges.
             </InfoTip>
           </span>
@@ -229,10 +228,10 @@ export function Workspace({ gotoScreen }: ScreenProps) {
             placeholder="e.g. black"
           />
           <span className="set-hint">
-            Hooks fast-track may skip when they fail without changing any files.
+            Hooks MindFlock may skip when they fail without changing any files.
             <InfoTip>
               Comma-separated pre-commit hook <strong>IDs</strong> (not display names:{" "}
-              <code>Black format</code> is the hook <code>black</code>). Fast-track retries the
+              <code>Black format</code> is the hook <code>black</code>). MindFlock retries the
               commit once, then re-runs it with <code>SKIP=&lt;id&gt;</code> and says which hook it
               skipped. Test and secret-scanning hooks are refused here.
             </InfoTip>
@@ -254,12 +253,12 @@ function FailureNotesRow() {
   return (
     <div className="set-row set-switch-row" id="workspace-failure-notes">
       <span className="notif-rule-text">
-        <span className="set-label">Tell the agent when fast-track stops</span>
+        <span className="set-label">Tell the agent when shipping halts</span>
         <span className="set-hint notif-rule-desc">
           When a pre-commit step or the verification check fails, CI goes red or the PR
-          conflicts with its base, fast-track stops and leaves the agent a one-line note: what
+          conflicts with its base, shipping halts and MindFlock leaves the agent a one-line note: what
           failed and to fix it — or, when it is a conflict with someone else's change, to stop
-          and tell you. You still get the usual &quot;fast-track stopped&quot; notice.
+          and tell you. You still get the usual &quot;shipping halted&quot; notice.
         </span>
       </span>
       {/* label wraps only the switch, so clicking the row text doesn't flip it */}
@@ -269,7 +268,7 @@ function FailureNotesRow() {
           checked={on}
           onChange={(e) => {
             s.saveField("repository", "fasttrack_failure_notes", e.target.checked);
-            toast(e.target.checked ? "Fast-track will tell the agent what failed" : "Fast-track failure notes off");
+            toast(e.target.checked ? "MindFlock will tell the agent what failed" : "Failure notes off");
           }}
         />
         <span className="ca-slider" />

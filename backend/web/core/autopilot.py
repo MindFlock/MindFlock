@@ -114,7 +114,7 @@ DEPTH_LABELS = {
     "commit": "Commit",
     "push": "Push",
     "pr": "Open PR",
-    "merge": "Merge",
+    "merge": "Merge when green",
 }
 
 #: Which rung a given session stage PROVES has been completed. Stages that mean
@@ -740,7 +740,7 @@ _NOTE_ESCALATE = (
 #: wording, for a caller that does not say which steps are left (see
 #: :func:`remaining_steps`).
 _NOTE_RESUMES = (
-    "When you finish, Fast-track carries on from your commit (push, PR) by itself."
+    "When you finish, MindFlock carries on from your commit (push, PR) by itself."
 )
 #: Stripped from every value a note interpolates (hook names and step names
 #: read off the pane, GitHub's blocker text, the repo's check command, the
@@ -864,10 +864,10 @@ def remaining_steps(rec: dict, snap: dict) -> List[str]:
 
 def _steps_sentence(steps: List[str]) -> str:
     if not steps:
-        return "That commit is the last step of this Fast-track run."
+        return "That commit is as far as this session goes by itself."
     said = steps[0] if len(steps) == 1 else ", ".join(steps[:-1]) + " and " + steps[-1]
     return (
-        "Fast-track will then %s by itself, so fixing and committing is all "
+        "MindFlock will then %s by itself, so fixing and committing is all "
         "that is left for you." % said
     )
 
@@ -951,13 +951,13 @@ def failure_note(
         return ""
     if resumes:
         then = _NOTE_RESUMES if remaining is None else _steps_sentence(remaining)
-        head, rest = "Fast-track paused: " + what, "%s %s %s" % (
+        head, rest = "Shipping paused: " + what, "%s %s %s" % (
             todo,
             then,
             _NOTE_ESCALATE,
         )
     else:
-        head, rest = "Fast-track stopped: " + what, "%s %s" % (todo, _NOTE_ESCALATE)
+        head, rest = "Shipping stopped: " + what, "%s %s" % (todo, _NOTE_ESCALATE)
     block = [
         _OUTPUT_GUTTER + ln
         for ln in (_NOTE_UNSAFE.sub("", raw).rstrip() for raw in output.splitlines())

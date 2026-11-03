@@ -39,7 +39,7 @@ const { FLYWAY_MIME } = await import("../lib/skyLayout");
 const G = { id: "g1", name: "Ticket to merge", plan_id: "builtin:ticket" };
 const step = (id: string, kind: string, title: string, group?: typeof G): FlightStep => ({ id, kind, title, config: {}, on_fail: "halt", ...(group ? { group } : {}) });
 // s1 alone, s2..s4 one group, s5 and s6 alone.
-const STEPS = [step("s1", "agent", "Work the ticket"), step("s2", "ship", "Push", G), step("s3", "ship", "Open the PR", G), step("s4", "reviews", "Reviews settle", G), step("s5", "you", "Approve"), step("s6", "ship", "Merge")];
+const STEPS = [step("s1", "agent", "Work the ticket"), step("s2", "ship", "Push", G), step("s3", "ship", "Open the PR", G), step("s4", "reviews", "Reviews settle", G), step("s5", "you", "Approve"), step("s6", "ship", "Merge when green")];
 const KINDS: StepKindDef[] = [
   { kind: "agent", label: "Agent", actor: "robot", summary: "", fields: [], default_title: "Agent" },
   { kind: "ship", label: "Ship", actor: "robot", summary: "", fields: [], default_title: "Ship" },
@@ -146,9 +146,12 @@ describe("a group is one stop on the line", () => {
     expect(groupHaltStep(node(at(5), "group:g1"))).toBeNull();
   });
 
-  it("the same id back later on the line is a box of its own", () => {
-    const steps = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge", G)];
+  it("the same id back later on the line is a box of its own — a lone member draws as itself", () => {
+    const steps = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge when green", G), step("s7", "ship", "Tag", G)];
     expect(mainIds(at(0, { steps }))).toEqual(["session:me", "stop:s1", "group:g1", "stop:s5", "group:g1@5", "add"]);
+    // A group of ONE stop is that stop (a joined-on lone Commit stays "Commit").
+    const lone = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge when green", G)];
+    expect(mainIds(at(0, { steps: lone }))).toEqual(["session:me", "stop:s1", "group:g1", "stop:s5", "stop:s6", "add"]);
   });
 
   it("a line's expandedGroups draws its sub-steps as stops, marked for the outline", () => {
@@ -281,8 +284,8 @@ describe("the group box on the canvas", () => {
     const html = render({ diagram: drawnIndexes(at(2)), ...handlers });
     const g = boxOf(html, "group:g1");
     expect(g).toContain("fl-box fl-box-group fl-st-current");
-    expect(g).toMatch(/aria-label="Ticket to merge, a stop of 3 sub-steps, 1 of 3 done, under way"/);
-    expect(g).toContain('aria-label="Show the sub-steps of “Ticket to merge”"');
+    expect(g).toMatch(/aria-label="Ticket to merge, a group of 3 stops, 1 of 3 done, under way"/);
+    expect(g).toContain('aria-label="Show the stops in “Ticket to merge”"');
     expect(g).toContain('aria-expanded="false"');
     expect(g).toContain('<span class="fl-group-count">1 of 3</span>');
     expect(g.match(/class="fl-gdot /g)).toHaveLength(3);
@@ -293,10 +296,10 @@ describe("the group box on the canvas", () => {
     const g = boxOf(render({ diagram: drawnIndexes(at(0)), ...handlers }), "group:g1");
     expect(g).toContain('role="toolbar" aria-label="Change “Ticket to merge”"');
     expect(g).toContain('aria-label="Edit “Ticket to merge”"');
-    expect(g).toMatch(/aria-label="Move “Ticket to merge” earlier" title="A stop with sub-steps doesn&#x27;t move yet" disabled=""/);
+    expect(g).toMatch(/aria-label="Move “Ticket to merge” earlier" title="A group doesn&#x27;t move yet" disabled=""/);
     expect(g).toMatch(/aria-label="Move “Ticket to merge” later"[^>]*disabled=""/);
     expect(g).toContain('aria-label="Halt here — “Ticket to merge”"');
-    expect(g).toMatch(/aria-label="Remove “Ticket to merge”" title="Remove this stop and its 3 sub-steps from the line"/);
+    expect(g).toMatch(/aria-label="Remove “Ticket to merge”" title="Remove this group and its 3 stops from the route"/);
     // It never drags.
     expect(g).not.toContain("fl-draggable");
   });
@@ -304,7 +307,7 @@ describe("the group box on the canvas", () => {
   it("open: its sub-steps inside a labelled outline with ▾", () => {
     const html = render({ diagram: drawnIndexes(at(2, { expanded: ["g1"] })), ...handlers });
     expect(html).toContain('class="fl-group-frame"');
-    expect(html).toContain('aria-label="Fold “Ticket to merge” into one box"');
+    expect(html).toContain('aria-label="Fold “Ticket to merge” into one stop"');
     expect(html).toContain('aria-expanded="true"');
     expect(boxOf(html, "stop:s3")).toContain("fl-in-group");
     expect(boxOf(html, "stop:s3")).toMatch(/aria-label="Open the PR, under way, in “Ticket to merge”"/);
@@ -321,16 +324,16 @@ describe("the group box on the canvas", () => {
     const keys = (n: DiagramNode, c: Parameters<typeof menuItemsFor>[1] = ctx) => menuItemsFor(n, c).map((i) => i.key);
     const ahead = node(at(0), "group:g1");
     expect(keys(ahead)).toEqual(["edit", "expand", "halt", "remove"]);
-    expect(menuItemsFor(ahead, ctx).find((i) => i.key === "expand")!.label).toBe("Show its sub-steps");
-    expect(menuItemsFor(ahead, { ...ctx, expanded: true }).find((i) => i.key === "expand")!.label).toBe("Fold its sub-steps");
+    expect(menuItemsFor(ahead, ctx).find((i) => i.key === "expand")!.label).toBe("Show its stops");
+    expect(menuItemsFor(ahead, { ...ctx, expanded: true }).find((i) => i.key === "expand")!.label).toBe("Fold its stops");
     const flying = node(at(2), "group:g1");
     expect(menuItemsFor(flying, { ...ctx, here: true }).map((i) => i.label)).toEqual([
       "Halt now",
       "Details",
-      "Show its sub-steps",
+      "Show its stops",
       "Halt here",
       "Remove",
-      "The flight is in this stop — only what is still ahead can change",
+      "The route is in this group — only what is still ahead can change",
     ]);
     expect(removeTool(flying).danger).toBe(true);
   });

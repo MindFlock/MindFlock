@@ -1,10 +1,12 @@
-/** Intake → Auto-start's last section: templates that start a session on
- * their own (a schedule). The rest of the tab is what tickets, PRs and issues
- * will start; a nightly template is the same kind of answer to "what starts
- * by itself?" — its home is Schedule (the top bar), linked from here.
+/** Intake → Auto-start's last line: how many things start by themselves on a
+ * timer, and the way to them — "2 scheduled — Open Schedule ›". The rest of
+ * the tab is what tickets, PRs and issues will start; a nightly template or
+ * a scheduled saved chain is the same kind of answer to "what starts by
+ * itself?", but its home is Schedule (the top bar): it used to be a second,
+ * read-only list here with its own Run now, which is one list too many.
  *
- * Each row: name · when · next run, with Run now (the same call as the
- * Templates card and the palette's "Run template: …"). */
+ * The helpers (scheduledRows, nextScheduledText, useScheduledTemplates) stay:
+ * the Intake banner and the Auto-start count say what runs next. */
 
 import { useEffect, useState } from "react";
 import {
@@ -20,9 +22,9 @@ import {
   type Template,
   type TemplateRunsStatus,
 } from "../../lib/templates";
-import { runTemplateNow } from "../../lib/templateRun";
 import { useUi } from "../../state/store";
-import { openSessionFromIntake } from "./kit";
+import { useFlightPlans } from "../../state/queries";
+import type { FlightPlan } from "../../lib/flights";
 
 export interface ScheduledRow {
   name: string;
@@ -127,57 +129,36 @@ export function useScheduledTemplates(): { templates: Template[]; status: Templa
   return { templates, status };
 }
 
-export function ScheduledTemplates() {
-  const { templates, status } = useScheduledTemplates();
-  const [running, setRunning] = useState("");
+/** How many things Schedule lists as starting on a timer: the templates
+ * with a schedule, and the saved chains whose trigger is a schedule that has
+ * its time set. Pure, for tests. */
+export function scheduledCount(templates: Template[], plans: readonly FlightPlan[] | null | undefined): number {
+  const stops = (plans || []).filter((p) => p.trigger?.kind === "schedule" && !!p.trigger.schedule).length;
+  return templates.filter(hasSchedule).length + stops;
+}
 
-  const rows = scheduledRows(templates, status);
-  if (!rows.length) return null;
+/** "2 scheduled" / "Nothing on a timer yet" — the line's words. */
+export function scheduledLineText(n: number): string {
+  return n > 0 ? n + " scheduled" : "Nothing on a timer yet";
+}
+
+export function ScheduledTemplates() {
+  const { templates } = useScheduledTemplates();
+  const plans = useFlightPlans().data;
+  const n = scheduledCount(templates, plans);
   return (
-    <div className="ik-queue-section" id="ik-queue-scheduled">
+    <div className="ik-queue-section ik-queue-scheduled-line" id="ik-queue-scheduled">
       <div className="ik-queue-head">
-        <span className="ik-queue-kind">Scheduled templates</span>
-        <span className="ik-tab-count">{rows.length}</span>
+        <span className="ik-queue-kind">{scheduledLineText(n)}</span>
         <button
           type="button"
           className="test-btn ik-queue-goto"
           onClick={() => useUi.getState().openDialogFor("schedule")}
-          title="Open Schedule to change, pause or skip a schedule"
+          title="Schedule — templates and saved routes that start by themselves: run, pause, skip or change them there"
         >
           Open Schedule ›
         </button>
       </div>
-      {rows.map((r) => (
-        <div className="pr-open-item" key={r.name} title={r.name + " — " + scheduleLine(r)}>
-          <div className="pr-open-main">
-            <span className="pr-open-title">{r.name}</span>
-          </div>
-          <div className="pr-open-meta">
-            <span className="ik-scheduled-when">{scheduleLine(r)}</span>
-          </div>
-          <div className="ik-item-start">
-            <button
-              type="button"
-              className="btn-primary pr-review-btn"
-              disabled={!!r.problem || running === r.name}
-              title={r.problem || "Run now — starts a new session from this template"}
-              onClick={async () => {
-                setRunning(r.name);
-                try {
-                  // Started: Intake steps aside and the new session is what
-                  // shows — it used to stay covered by this dialog.
-                  const title = await runTemplateNow(r.name);
-                  if (title) openSessionFromIntake(title);
-                } finally {
-                  setRunning("");
-                }
-              }}
-            >
-              {running === r.name ? "Starting…" : "Run now"}
-            </button>
-          </div>
-        </div>
-      ))}
     </div>
   );
 }

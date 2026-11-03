@@ -4,6 +4,7 @@
  * paste. The ⏩ button's own descriptor is pinned in autopilot.test.ts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Caps, Instance } from "../api/types";
+import { SRC } from "./sourceText";
 
 const api = vi.fn();
 const instApi = vi.fn();
@@ -55,7 +56,7 @@ describe("the vocabulary", () => {
   it("every control offers all five rungs, Push included, in ladder order", () => {
     expect(L.LANE_CHOICES).toEqual(["leave", "commit", "push", "pr", "merge"]);
     expect(L.LANE_CHOICES.map((l) => L.LANE_LABEL[l])).toEqual([
-      "Off",
+      "Agent only",
       "Commit",
       "Push",
       "Open PR",
@@ -121,7 +122,7 @@ describe("the ⏩ picker's model", () => {
     expect(m.items.filter((i) => i.current).map((i) => i.lane)).toEqual(["leave"]);
     expect(m.lock).toBe("");
     expect(m.ask.on).toBe(false);
-    expect(m.ask.why).toMatch(/Fast-track is off/);
+    expect(m.ask.why).toMatch(/goes as far as Agent only/);
     const pr = L.fastTrackModel(inst({ lane: { target: "pr", ask_first: true, owner: "api" } }));
     expect(pr.items.find((i) => i.current)?.lane).toBe("pr");
     expect(pr.ask).toEqual({ on: true, why: "" });
@@ -134,11 +135,11 @@ describe("the ⏩ picker's model", () => {
       return [m.lock, m.ask.why];
     };
     const copy = lockOf({ title: "api-copy", lane: { target: "commit", ask_first: true, owner: "api" } });
-    expect(copy.every((w) => /api drives this branch — set its fast-track/.test(w))).toBe(true);
+    expect(copy.every((w) => /api drives this branch — set how far it goes/.test(w))).toBe(true);
     const lead = lockOf({ run: { id: "r1", name: "G", task: "", role: "lead", grouping: "together" } });
     expect(lead.every((w) => /release/.test(w))).toBe(true);
     const piece = lockOf({ run: { id: "r1", name: "G", task: "t1", role: "piece", grouping: "together" } });
-    expect(piece.every((w) => /one PR — move it out of the team run to fast-track it on its own/.test(w))).toBe(
+    expect(piece.every((w) => /one PR — move it out of the team run to set how far it goes on its own/.test(w))).toBe(
       true
     );
     // Its own target, or a member of an each-their-own group: not locked.
@@ -147,10 +148,10 @@ describe("the ⏩ picker's model", () => {
     expect(lockOf({ run: each, lane: { target: "pr", ask_first: false, owner: "api" } })[0]).toBe("");
   });
 
-  it("the sentence a pick is confirmed with names fast-track, never a lane", () => {
-    expect(L.fastTrackSaid("api", "pr", true)).toBe("api: fast-track → Open PR, asks first");
-    expect(L.fastTrackSaid("api", "push", false)).toBe("api: fast-track → Push");
-    expect(L.fastTrackSaid("api", "leave", true)).toMatch(/^api: fast-track off/);
+  it("the sentence a pick is confirmed with says how far it goes, never a lane", () => {
+    expect(L.fastTrackSaid("api", "pr", true)).toBe("api: goes as far as Open PR, asks first");
+    expect(L.fastTrackSaid("api", "push", false)).toBe("api: goes as far as Push");
+    expect(L.fastTrackSaid("api", "leave", true)).toMatch(/^api: goes as far as Agent only/);
   });
 });
 
@@ -215,7 +216,7 @@ describe("the calls", () => {
     expect(patchInstance.mock.calls[0]).toEqual(["api", { lane }]);
     expect(patchInstance.mock.calls[1][1].lane).toEqual(lane);
     expect(patchInstance.mock.calls[1][1].autopilot.depth).toBe("merge");
-    expect(toast.mock.calls[0][0]).toBe("api: fast-track → Merge when green");
+    expect(toast.mock.calls[0][0]).toBe("api: goes as far as Merge when green");
   });
 
   it("…and rolls back with the server's sentence on a refusal", async () => {
@@ -263,7 +264,7 @@ describe("the calls", () => {
     const said = await L.splitSession(inst({ last_prompt: "x" }), "api");
     expect(api.mock.calls[0][1].json.policy.lane).toBe("pr");
     expect(threadOpen).toHaveBeenCalledWith("api");
-    expect(said).toMatch(/approve the plan in its Thread tab/);
+    expect(said).toMatch(/approve the split in its Thread tab/);
     await L.splitSession(inst({ last_prompt: "x", lane: { target: "merge", ask_first: true } }), "api");
     expect(api.mock.calls[1][1].json.policy).toMatchObject({ lane: "merge", ask_first: true });
   });
@@ -280,7 +281,7 @@ describe("the calls", () => {
   it("…says the server's other refusals, and never calls for Off", async () => {
     instApi.mockRejectedValueOnce(new ApiError(400, "unknown lane", null));
     expect(await L.setLaneWhenReady("api", "pr", false, [0])).toBe(false);
-    expect(String(toast.mock.calls[0][0])).toMatch(/^Couldn't fast-track api to “Open PR”/);
+    expect(String(toast.mock.calls[0][0])).toMatch(/^Couldn't set api to go as far as “Open PR”/);
     instApi.mockReset();
     expect(await L.setLaneWhenReady("api", "leave", false)).toBe(true);
     expect(instApi).not.toHaveBeenCalled();
@@ -290,5 +291,39 @@ describe("the calls", () => {
     const mod = L as unknown as Record<string, unknown>;
     for (const gone of ["shipNow", "shipMenuModel", "shipEntries", "runShipEntry", "openShipMenu", "LANE_MENU"])
       expect(mod[gone], gone).toBeUndefined();
+  });
+});
+
+describe("the ⏩ picker while the session's stops decide", () => {
+  const row = (state: string, plan_name = "Ship it") => ({ id: "f1", plan_name, state }) as never;
+  const ship = (lane: string) => ({ kind: "ship", config: { lane } });
+
+  it("a flight that is built, waiting to take off or flying decides; halted, done and cancelled hand back to ⏩", () => {
+    for (const s of ["grounded", "ready", "running", "waiting_you", "paused"]) expect(L.flightDecides(row(s)), s).toBe(true);
+    for (const s of ["halted", "done", "cancelled"]) expect(L.flightDecides(row(s)), s).toBe(false);
+    expect(L.flightDecides(null)).toBe(false);
+    // The branch-only dto (no id) is not a flight of its own.
+    expect(L.flightDecides({ id: "", state: "ready" } as never)).toBe(false);
+  });
+
+  it("says how far the stops go — the last ship stop — never Off", () => {
+    const r = L.flightReach(row("ready"), [{ kind: "agent", config: {} }, { kind: "verify", config: {} }, ship("push")]);
+    expect(r.head).toBe("This session's stops go as far as Push");
+    expect(r.lane).toBe("push");
+    expect(r.desc).toBe("Its stops (“Ship it”) decide how far it goes — edit them to change it.");
+    expect(L.flightReach(row("ready"), [ship("commit"), ship("pr")]).head).toBe("This session's stops go as far as Open PR");
+    expect(L.flightReach(row("ready"), [{ kind: "agent", config: {} }]).head).toBe("This session's stops don't commit anything");
+    // Its steps not loaded yet: no guess.
+    expect(L.flightReach(row("ready", ""), undefined)).toEqual({ lane: "", head: "This session's stops decide how far it goes", desc: "Its stops decide how far it goes — edit them to change it." });
+  });
+
+  it("the picker swaps its rungs for the stops' reach and two doors: its Flight tab and the Sky", () => {
+    const menu = SRC["components/grid/FastTrackMenu.tsx"];
+    expect(menu).toContain("const flightRow = inst && flightDecides(inst.flight) ? inst.flight : null;");
+    expect(menu).toContain('? [{ kind: "stops" as const }, { kind: "sky" as const }]');
+    expect(menu).toContain('if (e.kind === "stops") ui.setLastTab(title, "flight");');
+    expect(menu).toContain("else ui.showSky(title);");
+    expect(menu).toContain('{e.kind === "stops" ? "Edit its stops" : "Open in the Sky"}');
+    expect(menu).toContain('<div className="ft-flight-head">{reach.head}</div>');
   });
 });

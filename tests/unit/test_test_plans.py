@@ -6314,9 +6314,9 @@ def test_the_fix_route_refuses_when_nothing_failed(client):
     tp.upsert(_plan("sc-1", state="due", live_at=1.0))
     r = client.post("/api/test-plans/sc-1/fix", json={})
     assert r.status_code == 409
-    assert "nothing on this checklist failed" in r.json()["error"]
+    assert "no behavior here failed" in r.json()["error"]
     assert r.json()["detail"] == (
-        "Nothing on this checklist failed, so there is nothing to fix."
+        "No behavior here failed, so there is nothing to fix."
     )
 
 
@@ -6511,7 +6511,7 @@ def test_a_store_write_that_fails_is_said_in_words_not_a_bare_500(client, monkey
 
     assert r.status_code == 503
     body = r.json()
-    assert "couldn't save the checklist" in body["error"]
+    assert "couldn't save the behaviors" in body["error"]
     assert "No space left on device" in body["error"]
 
 

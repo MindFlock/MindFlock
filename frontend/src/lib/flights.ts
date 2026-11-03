@@ -10,6 +10,9 @@
  * the top-bar badge read one rule each and are pinned by tests without a DOM. */
 
 import { relTime } from "./format";
+import { capSourceDepth, sourceRungLabel, type Lane } from "./autopilot";
+// Type only: lib/behaviorsFocus reads the store, which reads this module.
+import type { BehaviorsTarget } from "./behaviorsFocus";
 
 // --- The contract's shapes ---------------------------------------------------
 
@@ -54,6 +57,52 @@ export interface FlightStep {
   /** Round 18: where the Sky draws this stop, chain-local plane px (relative
    * to the chain's origin); omitted = auto-placed. Layout only. */
   pos?: { x: number; y: number };
+  /** Round 20: consecutive steps sharing `parallel.id` (`p_<hex>`) are ONE
+   * parallel group — they fly side by side and the flight goes on once every
+   * one is through (docs/flights-r20-parallel.md). Omitted on a step of its
+   * own; only `parallel_safe` kinds carry it. */
+  parallel?: StepParallel;
+}
+
+export interface StepParallel {
+  id: string;
+}
+
+/** Round 20: the parallel group of step `i` as `[lo, hi)` (hi exclusive);
+ * `[i, i + 1]` for a step of its own. Groups are RUNS of consecutive steps
+ * sharing `parallel.id` — the server's rule (a run of one is no group). */
+export function parallelSpan(steps: readonly Pick<FlightStep, "parallel">[], i: number): [number, number] {
+  const pid = steps[i]?.parallel?.id || "";
+  if (!pid) return [i, i + 1];
+  let lo = i;
+  let hi = i + 1;
+  while (lo > 0 && steps[lo - 1]?.parallel?.id === pid) lo--;
+  while (hi < steps.length && steps[hi]?.parallel?.id === pid) hi++;
+  return [lo, hi];
+}
+
+/** Kinds the server never lets run side by side (backend `NOT_PARALLEL`,
+ * plus Judge, which types to the agent) — the fallback when the kinds list
+ * (its `parallel_safe`) is not at hand. */
+export const PARALLEL_UNSAFE: ReadonlySet<string> = new Set(["agent", "ship", "reviews", "verify", "split", "join", "land", "sync", "loop", "judge"]);
+
+/** May a step of `kind` sit in a parallel group? The kinds list's
+ * `parallel_safe` when it says, else `PARALLEL_UNSAFE`. */
+export function isParallelSafe(kind: string, kinds?: readonly Pick<StepKindDef, "kind" | "parallel_safe">[] | null): boolean {
+  const def = kinds?.find((k) => k.kind === kind);
+  if (def && typeof def.parallel_safe === "boolean") return def.parallel_safe;
+  return !PARALLEL_UNSAFE.has(kind);
+}
+
+/** Every parallel group of `steps` (two members or more), in order. */
+export function parallelGroups(steps: readonly Pick<FlightStep, "parallel">[]): { id: string; lo: number; hi: number }[] {
+  const out: { id: string; lo: number; hi: number }[] = [];
+  for (let i = 0; i < steps.length; ) {
+    const [lo, hi] = parallelSpan(steps, i);
+    if (hi - lo > 1) out.push({ id: steps[i].parallel!.id, lo, hi });
+    i = hi;
+  }
+  return out;
 }
 
 export interface StepGroup {
@@ -117,6 +166,15 @@ export interface FlightHistoryEntry {
 export interface Flight {
   /** Round 18: started by another chain's Handoff stop. */
   triggered_by?: { flight: string; step: string; session: string };
+  /** A FREE chain (2026-11-02): run with no session, in the folder
+   * `repo_root` — like an n8n workflow, nothing is started for it. When a run
+   * ends it goes back on the ground (`last_run` says how it went). */
+  free?: boolean;
+  last_run?: { state: "done" | "cancelled"; reason: string; at: number };
+  /** A grounded chain that EDITS an intake source's default stops (the Sky's
+   * intake lane, 2026-11-02): never run; Save as default writes its steps as
+   * that source's own saved stop (`PUT /api/flights/intake-default`). */
+  edits_default?: IntakeSourceRef;
   id: string;
   plan_id: string;
   plan_name: string;
@@ -141,9 +199,39 @@ export interface Flight {
   start_on?: FlightStartOn;
   /** Round 19: when it became `ready` (0 when it never was). */
   ready_since?: number;
+  /** The stops that may send work back to the agent, by step id — the
+   * server's `returns_of` (docs/vision/fixwire.md): each draws a return wire
+   * with its case on it. Only on flights the API sends. */
+  returns?: Record<string, FlightReturn>;
 }
 
-export type FieldType = "text" | "textarea" | "int" | "bool" | "select";
+/** Where a stop's failure goes back to and why (the server's `returns_of`):
+ * `to` an Agent stop's id or `"agent"` (the session's agent tile), `case`
+ * the words on its wire ("if pre-commit fails"), `of` the most rounds
+ * (null: no cap), `kinds` the lane fix kinds a Ship stop covers. */
+export interface FlightReturn {
+  to: string;
+  case: string;
+  of: number | null;
+  kinds?: string[];
+}
+
+/** A stop's fix (`step_states[id].detail.fix`): the agent is fixing what the
+ * stop found (`active`), round `round` of `of`; once over it stays with
+ * `outcome` "fixed" / "halted". */
+export interface StepFix {
+  active: boolean;
+  round: number;
+  rounds?: number;
+  of: number | null;
+  reason: string;
+  since: number;
+  to: string;
+  kind?: string;
+  outcome?: "fixed" | "halted";
+}
+
+export type FieldType = "text" | "textarea" | "int" | "bool" | "select" | "duration";
 
 export interface StepKindField {
   name: string;
@@ -177,6 +265,10 @@ export interface StepKindDef {
   family?: string;
   /** What a new step of this kind does on failure when the plan says nothing. */
   default_on_fail?: string;
+  /** Round 20: may a step of this kind sit in a parallel group (it neither
+   * types to the agent nor uses the worktree's lanes)? Older servers omit it
+   * — treat that as false. */
+  parallel_safe?: boolean;
 }
 
 /** The session row's `flight` field (`/api/instances`): all the pane strip
@@ -216,16 +308,16 @@ export function flightDrives(f: Pick<Flight, "state"> | null | undefined): boole
 export function perchLabel(title: string | null | undefined): string {
   const t = String(title || "")
     .trim()
-    .replace(/^(you|perch):\s*/i, "");
-  return t ? "Perch: " + t : "Perch";
+    .replace(/^(you|perch|wait for me):\s*/i, "");
+  return t ? "Wait for me: " + t : "Wait for me";
 }
 
 /** The bell's words for a flight perched on you: "Perched on you: <stop>". */
 export function perchedOnYou(stepTitle: string | null | undefined): string {
   const t = String(stepTitle || "")
     .trim()
-    .replace(/^(you|perch):\s*/i, "");
-  return "Perched on you" + (t ? ": " + t : "");
+    .replace(/^(you|perch|wait for me):\s*/i, "");
+  return "Needs you" + (t ? ": " + t : "");
 }
 
 /** A step's chip glyph: done ✓ · current ● · pending ○ · failed ✗ · skipped –. */
@@ -327,7 +419,7 @@ export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   const elapsed = "steps" in f ? currentElapsed(f, now) : "";
   const tail =
     f.state === "done"
-      ? "Landed"
+      ? "Finished"
       : f.state === "cancelled"
         ? "Cancelled"
         : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
@@ -365,11 +457,11 @@ export interface PerchBadge {
 }
 
 /** The Sky toggle's badge: flights perched on you (or halted until someone
- * retries, skips or cancels). A flight parked on a VERIFY step is one of
- * Verify's due checklists, which Verify's own badge counts, so it is left
- * out here rather than counted twice. */
+ * retries, skips or cancels). A flight parked on a VERIFY step counts too:
+ * its behaviors wait on you on the session's frame in the Sky
+ * (docs/behaviors.md §5) — there is no Verify badge any more. */
 export function perchBadge(flights: readonly Flight[]): PerchBadge {
-  const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
+  const perched = needsYouFlights(flights);
   return { count: perched.length, failing: perched.some((f) => f.state === "halted") };
 }
 
@@ -515,7 +607,7 @@ export function planDirty(a: FlightPlan | null, b: FlightPlan | null): boolean {
 export function blankPlan(): FlightPlan {
   return {
     id: "",
-    name: "New stops",
+    name: "New route",
     description: "",
     builtin: false,
     trigger: { kind: "manual", schedule: null, paused: false },
@@ -536,7 +628,7 @@ export function planFromSteps(
   trigger?: FlightPlan["trigger"]
 ): Omit<FlightPlan, "id" | "updated"> {
   return {
-    name: name.trim() || "New stops",
+    name: name.trim() || "New route",
     description: "",
     builtin: false,
     trigger: trigger ? { ...trigger } : { kind: "manual", schedule: null, paused: false },
@@ -583,9 +675,9 @@ export function hookUrl(trigger: Pick<FlightTrigger, "token">, origin?: string):
 
 /** The `on_fail` chips' words. */
 export const ON_FAIL_LABEL: Record<OnFail, string> = {
-  halt: "Stop and tell me",
-  agent: "Hand it to the agent",
-  skip: "Skip it",
+  halt: "Halt",
+  agent: "Let the agent fix it",
+  skip: "Skip",
   you: "Ask me",
 };
 
@@ -595,7 +687,7 @@ export const ON_FAIL_LABEL: Record<OnFail, string> = {
  * Sky (on a session: `focus`), the Sky with the flyway shelf open (and one
  * flyway's card: `plan`), or one of the flat dialogs with its own deep link. */
 export type LegacyFlightsRoute =
-  | { to: "sky"; focus: string }
+  | { to: "sky"; focus: string; behaviors?: BehaviorsTarget }
   | { to: "flyways"; plan: string }
   | { to: "intake" | "verify" | "schedule"; target: string | null };
 
@@ -605,7 +697,9 @@ export type LegacyFlightsRoute =
  *   ""  sky[/<title>]  board        → the Sky (on that session)
  *   flyways[/<id>]  plans[/<id>]    → the Sky, shelf open (that flyway's card)
  *   sources[/<x>]                   → Intake (x = its tab / source)
- *   checklists[/<branch>]           → Verify (that checklist)
+ *   checklists[/<branch>]           → the Sky's behaviors (`behaviors`: that
+ *                                     branch's, else the Behaviors board) —
+ *                                     `#behaviors`, through openBehaviors
  *   schedule[/<x>]                  → Schedule (x = its own deep link)
  *
  * Anything else is the Sky. */
@@ -616,7 +710,7 @@ export function legacyFlightsRoute(target: string | null | undefined): LegacyFli
   const rest = cut < 0 ? "" : raw.slice(cut + 1);
   if (word === "flyways" || word === "plans") return { to: "flyways", plan: rest };
   if (word === "sources") return { to: "intake", target: rest || null };
-  if (word === "checklists") return { to: "verify", target: rest || null };
+  if (word === "checklists") return { to: "sky", focus: "", behaviors: rest ? { branch: rest } : { board: true } };
   if (word === "schedule") return { to: "schedule", target: rest || null };
   return { to: "sky", focus: word === "sky" ? rest : "" };
 }
@@ -670,6 +764,96 @@ export function planChoices(
   return out;
 }
 
+// --- A source's "Goes as far as" ---------------------------------------------
+// ONE control per Intake source (components/flights/PlanSelect.tsx): the rungs
+// (Stop after the agent · Commit · Push · Open PR) or one of its saved stops.
+// The server's chain (server._intake_plan) is unchanged: a source's own saved
+// stop, when it still exists, wins; else the built-in ship ladder cut at its
+// depth (flights._ladder_plan: the agent, then commit → push → pr). A rung
+// pick writes the depth AND clears the plan, so a depth can no longer sit
+// ignored beside a plan.
+
+/** The ship ladder a depth means, in the words a ship step's title uses. */
+const SHIP_WORD: Record<string, string> = { commit: "Commit", push: "Push", pr: "Open PR", merge: "Merge when green" };
+
+/** A ship lane in the words a ship step's title uses ("Open PR", "Merge"). */
+export function shipWord(lane: string): string {
+  return SHIP_WORD[lane] || lane;
+}
+const LADDER: readonly Lane[] = ["commit", "push", "pr", "merge"];
+
+/** A row of steps in words, for one line: "Agent → Commit → Push → Open PR".
+ * The agent step reads "Agent"; every other step by its title. */
+export function stopsSummaryWords(steps: readonly Pick<FlightStep, "kind" | "title" | "config">[] | null | undefined): string[] {
+  return (steps || []).map((s) =>
+    s.kind === "agent" ? "Agent" : String(s.title || "").trim() || (s.kind === "ship" ? SHIP_WORD[String(s.config?.lane || "")] || "" : "") || s.kind
+  );
+}
+
+/** Where a source's items go, as every surface names it (the Intake card,
+ * the Sky lane's chip). */
+export interface SourceReach {
+  /** The control's chip that is on: a rung ("leave", "commit", "push", "pr")
+   * or "plan:<id>" for a saved stop. */
+  choice: string;
+  /** THE words: "Open PR", "Payments stops", "Stop after the agent". */
+  words: string;
+  /** A saved stop decides (not the rungs). */
+  own: boolean;
+  /** The depth as the server reads it (lib/autopilot capSourceDepth). */
+  rung: Lane;
+  /** A saved stop the source names that no longer exists: the server goes by
+   * the rung instead. "" when none. */
+  missing: string;
+  /** The stops it resolves to, in words (`stopsSummaryWords`); [] when the
+   * saved stop's steps aren't known here. */
+  steps: string[];
+  /** The plan id a new item flies (what GET /api/flights/intake-default
+   * answers as `plan_id`): the saved stop, `builtin:<kind>@<depth>`, or "". */
+  planId: string;
+}
+
+/** The built-in a source's ladder is cut from (flights._BUILTIN_FOR_KIND). */
+const LADDER_BASE: Record<WaitingKind, string> = { tickets: "builtin:ticket", issues: "builtin:ticket", prs: "builtin:pr" };
+
+/** Where a source with this `plan` and `depth` sends its items (the server's
+ * chain, minus a per-start pick). `plans` undefined/null = not known here:
+ * a named plan is then trusted to exist. */
+export function sourceReach(
+  kind: WaitingKind,
+  src: { plan?: string | null; depth?: string | null },
+  plans: ReadonlyArray<Pick<FlightPlan, "id" | "name"> & { steps?: FlightStep[] }> | null | undefined
+): SourceReach {
+  const rung = capSourceDepth(src.depth);
+  const plan = String(src.plan || "").trim();
+  const found = plan && plans ? plans.find((p) => p.id === plan) : undefined;
+  if (plan && (found || !plans))
+    return { choice: "plan:" + plan, words: found?.name || plan, own: true, rung, missing: "", steps: found ? stopsSummaryWords(found.steps) : [], planId: plan };
+  const ship = rung === "leave" ? [] : LADDER.slice(0, LADDER.indexOf(rung) + 1);
+  return {
+    choice: rung,
+    words: sourceRungLabel(rung),
+    own: false,
+    rung,
+    missing: plan,
+    steps: ["Agent", ...ship.map((l) => SHIP_WORD[l])],
+    planId: rung === "leave" ? "" : LADDER_BASE[kind] + "@" + rung,
+  };
+}
+
+/** The saved stops a source can pick, after the rungs: your own saved stops
+ * (by name), then our built-ins made for this kind of item ("Ticket to merge"
+ * — the full built-in, with its reviews, checks and your OK before merging). */
+export function sourcePlanOptions(
+  plans: readonly Pick<FlightPlan, "id" | "name" | "builtin" | "trigger">[] | null | undefined,
+  kind: WaitingKind
+): Array<{ value: string; label: string; builtin: boolean }> {
+  const triggers: Record<WaitingKind, string[]> = { tickets: ["ticket"], prs: ["pr"], issues: ["issue", "ticket"] };
+  const mine = (plans || []).filter((p) => !p.builtin);
+  const ours = (plans || []).filter((p) => p.builtin && triggers[kind].includes(String(p.trigger?.kind || "")));
+  return [...mine, ...ours].map((p) => ({ value: p.id, label: p.name, builtin: !!p.builtin }));
+}
+
 /** The per-source setting's key: `TicketingSource.plan`,
  * `github.repo_settings[repo].plan`, `github.issue_repo_settings[repo].plan`. */
 export const PLAN_FIELD = "plan";
@@ -685,4 +869,23 @@ export function normalizeFlightRows<T extends { flight?: (FlightRow & { branch?:
     if (!f || f.id) return r;
     return { ...r, flight: null, flight_branch: f.branch && f.branch.step ? { parent: f.branch.parent, step: f.branch.step } : null };
   });
+}
+
+/** An intake source a default belongs to: a ticketing source (its id), or a
+ * GitHub repo's PRs / issues (the repo). The intake lane's block `kind`/`id`. */
+export interface IntakeSourceRef {
+  kind: "tickets" | "prs" | "issues";
+  target: string;
+}
+
+/** A source's default stops as the server resolves them
+ * (`GET /api/flights/intake-default`): its own saved stop (`own`) or the
+ * built-in, cut at its Fast-track depth — the steps new items really fly. */
+export interface IntakeDefault extends IntakeSourceRef {
+  /** What the lane calls the source ("Tickets · Shortcut", "PRs · o/r"). */
+  label: string;
+  plan_id: string;
+  name: string;
+  own: boolean;
+  steps: FlightStep[];
 }

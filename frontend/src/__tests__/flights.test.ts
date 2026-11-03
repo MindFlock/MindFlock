@@ -156,8 +156,9 @@ describe("what waits on you", () => {
     expect(perchBadge([flight(), parked])).toEqual({ count: 1, failing: false });
   });
 
-  it("never counts a flight parked on a verify step (Verify's own badge does)", () => {
-    expect(perchBadge([onVerify]).count).toBe(0);
+  it("counts a flight parked on a verify step: its behaviors wait on you in the Sky (docs/behaviors.md §5)", () => {
+    expect(perchBadge([onVerify]).count).toBe(1);
+    expect(perchBadge([flight(), parked, onVerify])).toEqual({ count: 2, failing: false });
   });
 
   it("says nothing at all on zero", () => {
@@ -195,17 +196,17 @@ describe("a paused flight", () => {
 
 describe("a perch's words", () => {
   it("Perch: is added once, never twice (nor after the old You:)", () => {
-    expect(perchLabel("Approve the merge")).toBe("Perch: Approve the merge");
-    expect(perchLabel("Perch: approve the merge")).toBe("Perch: approve the merge");
-    expect(perchLabel("You: approve the merge")).toBe("Perch: approve the merge");
-    expect(perchLabel("you:check it")).toBe("Perch: check it");
-    expect(perchLabel("")).toBe("Perch");
+    expect(perchLabel("Approve the merge")).toBe("Wait for me: Approve the merge");
+    expect(perchLabel("Perch: approve the merge")).toBe("Wait for me: approve the merge");
+    expect(perchLabel("You: approve the merge")).toBe("Wait for me: approve the merge");
+    expect(perchLabel("you:check it")).toBe("Wait for me: check it");
+    expect(perchLabel("")).toBe("Wait for me");
   });
 
   it("the bell says Perched on you", () => {
-    expect(perchedOnYou("Approve the merge")).toBe("Perched on you: Approve the merge");
-    expect(perchedOnYou("Perch: approve")).toBe("Perched on you: approve");
-    expect(perchedOnYou("")).toBe("Perched on you");
+    expect(perchedOnYou("Approve the merge")).toBe("Needs you: Approve the merge");
+    expect(perchedOnYou("Perch: approve")).toBe("Needs you: approve");
+    expect(perchedOnYou("")).toBe("Needs you");
   });
 
   it("a perch's checklist reads a list or the editor's lines", () => {
@@ -234,8 +235,8 @@ describe("the pane strip's line", () => {
     expect(rowWaitsOnYou(null)).toBe(false);
   });
 
-  it("says Landed once it is done", () => {
-    expect(stripLabel(flight({ state: "done", cursor: 6 }), NOW_MS)).toMatch(/· Landed$/);
+  it("says Finished once it is done", () => {
+    expect(stripLabel(flight({ state: "done", cursor: 6 }), NOW_MS)).toMatch(/· Finished$/);
   });
 });
 
@@ -328,8 +329,9 @@ describe("the retired Flights dialog's addresses", () => {
     expect(legacyFlightsRoute("plans/builtin:ticket")).toEqual({ to: "flyways", plan: "builtin:ticket" });
     expect(legacyFlightsRoute("sources")).toEqual({ to: "intake", target: null });
     expect(legacyFlightsRoute("sources/tickets:jira")).toEqual({ to: "intake", target: "tickets:jira" });
-    expect(legacyFlightsRoute("checklists")).toEqual({ to: "verify", target: null });
-    expect(legacyFlightsRoute("checklists/feature/x")).toEqual({ to: "verify", target: "feature/x" });
+    // Verify's old checklists land on the Sky's behaviors (docs/behaviors.md §4).
+    expect(legacyFlightsRoute("checklists")).toEqual({ to: "sky", focus: "", behaviors: { board: true } });
+    expect(legacyFlightsRoute("checklists/feature/x")).toEqual({ to: "sky", focus: "", behaviors: { branch: "feature/x" } });
     expect(legacyFlightsRoute("schedule")).toEqual({ to: "schedule", target: null });
     expect(legacyFlightsRoute("schedule/new")).toEqual({ to: "schedule", target: "new" });
     expect(legacyFlightsRoute("nope/x")).toEqual({ to: "sky", focus: "" });

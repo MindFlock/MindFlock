@@ -20,7 +20,9 @@
  * ones read there.
  *
  * With nothing on the line yet the tab also offers the saved stops as cards
- * ("Fly these stops") and "Describe stops…" to make some from a sentence
+ * ("Run these stops") — the first `SAVED_SHOWN` (`featuredPlans`: yours,
+ * newest first, then the built-ins), the rest behind "More…" so a pane isn't
+ * a gallery — and "Describe stops…" to make some from a sentence
  * and fly it right away. The line's editing (the +, the palette, the
  * dialog) is useSessionLine's, shared with the Sky's lines; "Open in the
  * Sky" shows this session's line there (`#sky/<title>`). */
@@ -43,7 +45,20 @@ import { useSessionLine } from "./useSessionLine";
 import { Bird } from "./Bird";
 import "./Flights.css";
 
-/** One saved stop as a card: its name, its stops as tiny boxes, "Fly these stops". */
+/** How many saved stops the tab shows as cards before "More…". */
+export const SAVED_SHOWN = 3;
+
+/** The saved stops the tab shows, most relevant first — your own (the last
+ * one you saved first), then the built-ins in the server's order — cut to
+ * `SAVED_SHOWN` unless `all`; `more` is how many wait behind "More…". */
+export function featuredPlans(plans: readonly FlightPlan[], all: boolean): { shown: FlightPlan[]; more: number } {
+  const mine = plans.filter((p) => !p.builtin).sort((a, b) => (b.updated || 0) - (a.updated || 0));
+  const ranked = [...mine, ...plans.filter((p) => p.builtin)];
+  const shown = all ? ranked : ranked.slice(0, SAVED_SHOWN);
+  return { shown, more: ranked.length - shown.length };
+}
+
+/** One saved stop as a card: its name, its stops as tiny boxes, "Run these stops". */
 function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: readonly StepKindDef[]; onFly(): void; busy: boolean }) {
   const d = flywayDiagram(plan.steps, kinds);
   return (
@@ -63,7 +78,7 @@ function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: rea
           ))}
       </ol>
       <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={onFly}>
-        Fly these stops
+        Run these stops
       </button>
     </div>
   );
@@ -77,6 +92,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
   const plans = useFlightPlans(active).data || [];
   const line = useSessionLine(title, { rows, flights, kinds, plans }, { onSession: (t) => selectSession(t) });
   const [busy, setBusy] = useState(false);
+  const [allSaved, setAllSaved] = useState(false);
   // The line comes counted the canvas's way (a group box is one place); its
   // flown stops stay as boxes.
   const { row, flight, diagram, ordered, cancel } = line;
@@ -84,6 +100,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
   if (!row) return <p className="fl-note muted">This session isn't listed right now.</p>;
 
   const prog = flight ? flightProgress(flight) : null;
+  const saved = featuredPlans(ordered, allSaved);
   const working = busy || line.busy;
 
   return (
@@ -95,25 +112,25 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
             <strong>{flight.plan_name}</strong>
             <span className="muted">
               {prog!.done}/{prog!.total} stops
-              {flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · perched on you" : ""}
+              {flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · needs you" : ""}
             </span>
             <FlightMenu flight={flight} onCancelAsk={cancel.ask} openSession={false} />
           </>
         ) : diagram.mode === "ladder" ? (
           <>
-            <strong>Fast-track</strong>
-            <span className="muted">tack a stop on and the flight takes over its rungs</span>
+            <strong>Goes as far as</strong>
+            <span className="muted">tack a stop on and the route takes over its rungs</span>
           </>
         ) : (
           <>
-            <strong>No flight yet</strong>
-            <span className="muted">tack a stop onto the line, or fly a saved stop below</span>
+            <strong>No route yet</strong>
+            <span className="muted">tack a stop onto the route, or run a saved route below</span>
           </>
         )}
         <button
           type="button"
           className="linklike fl-open-sky"
-          title="Switch to the sky on this session's line, with the bird where it is"
+          title="Switch to the Sky on this session's route, with the bird where it is"
           onClick={() => showInSky(title)}
         >
           Open in the Sky
@@ -125,16 +142,23 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (
-        <section className="fl-flyway-cards" aria-label="Saved stops">
-          <h4 className="fl-group-head">Saved stops</h4>
+        <section className="fl-flyway-cards" aria-label="Saved routes">
+          <h4 className="fl-group-head">Saved routes</h4>
           {ordered.length ? (
-            <div className="fl-flyway-grid">
-              {ordered.map((p) => (
-                <FlywayCard key={p.id} plan={p} kinds={kinds} busy={working} onFly={() => void line.flyFlyway(p)} />
-              ))}
-            </div>
+            <>
+              <div className="fl-flyway-grid">
+                {saved.shown.map((p) => (
+                  <FlywayCard key={p.id} plan={p} kinds={kinds} busy={working} onFly={() => void line.flyFlyway(p)} />
+                ))}
+              </div>
+              {(saved.more > 0 || allSaved) && (
+                <button type="button" className="test-btn fl-flyway-more" aria-expanded={allSaved} onClick={() => setAllSaved((v) => !v)}>
+                  {allSaved ? "Fewer" : "More… (" + saved.more + ")"}
+                </button>
+              )}
+            </>
           ) : (
-            <p className="fl-note muted">No saved stops on this server yet.</p>
+            <p className="fl-note muted">No saved routes on this server yet.</p>
           )}
           <DescribeField
             want="plan"
@@ -147,7 +171,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
                 const words = steps.map((s) => s.title).join(" → ");
                 const plan = await savePlan({
                   id: "",
-                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described stops",
+                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described route",
                   description: "",
                   builtin: false,
                   trigger: { kind: "manual", schedule: null, paused: false },

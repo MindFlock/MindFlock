@@ -97,23 +97,16 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
     assert src.index('id="settings-btn"') < src.index('id="palette-btn"')
 
 
-def test_verify_always_shows_in_the_top_bar():
-    """The owner: Verify should "always show" — no earn-its-slot rule, no
-    per-device memory of it; the badge still says nothing on zero. (Sky round
-    8 put it back on the bar after its stint as a tab of Flights.)"""
+def test_verify_is_not_on_the_top_bar():
+    """docs/behaviors.md §4: Verify stopped being a place — it is a stop on the
+    route, and its behaviors live in the Sky. The bar is Grid·Sky / Intake /
+    Schedule / Settings; Alt+V and the palette fly to the behaviors."""
     src = _code("components/TopBar.tsx")
-    assert 'id="verify-btn"' in src
+    assert 'id="verify-btn"' not in src
+    assert 'openDialogFor("verify")' not in src
     assert 'id="flights-btn"' not in src
-    assert "showVerify" not in src
-    assert "useVerifySettings" not in src
-    assert "mf_tb_verify" not in src
-    assert (
-        '{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}'
-        in src
-    )
     assert (
         src.index('id="intake-btn"')
-        < src.index('id="verify-btn"')
         < src.index('id="schedule-btn"')
         < src.index('id="settings-btn"')
     )
@@ -121,7 +114,7 @@ def test_verify_always_shows_in_the_top_bar():
 
 def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
     """The owner couldn't find templates ("only through the command prompt"):
-    Schedule sits on the bar between Verify and Settings, opens on Alt+S, and
+    Schedule sits on the bar between Intake and Settings, opens on Alt+S, and
     wears the worded items' type (by id in TopBar.css, or it reads as fine
     print beside them)."""
     src = _code("components/TopBar.tsx")
@@ -235,7 +228,6 @@ def test_no_native_dialog_calls_in_the_new_or_edited_files():
         "components/NotificationsBell.tsx",
         "components/EventToasts.tsx",
         "components/TopBar.tsx",
-        "components/sidebar/VerifyBar.tsx",
         "components/palette/CommandPalette.tsx",
         "lib/keymap.ts",
         "lib/revealGroup.ts",
@@ -267,8 +259,8 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Verify…"',
-        "keywords: VERIFY_BLURB",
+        'label: "Behaviors — next that needs you"',
+        'label: "Show the Behaviors board"',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label

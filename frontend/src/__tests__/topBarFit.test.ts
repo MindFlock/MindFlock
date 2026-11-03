@@ -70,23 +70,27 @@ describe("fitTopBar: what a narrow bar gives up, and in which order", () => {
 
 describe("TopBar wiring around the fold", () => {
   it("keeps every id on its own bar button, and folds by class, not by unmounting", () => {
-    for (const id of ["new-btn", "intake-btn", "verify-btn", "schedule-btn", "settings-btn", "palette-btn"])
+    for (const id of ["new-btn", "intake-btn", "schedule-btn", "settings-btn", "palette-btn"])
       expect(TOPBAR, id).toContain(`id="${id}"`);
+    // Verify is a stop on the route, not a place: no button (docs/behaviors.md §4).
+    expect(TOPBAR).not.toContain('id="verify-btn"');
     // The Flights button is gone (Sky round 8: the bar is flat again).
     expect(TOPBAR).not.toContain('id="flights-btn"');
-    for (const key of ["verify", "schedule", "settings"]) {
-      expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("${key}") ? " tb-folded" : "")}`);
+    for (const key of ["schedule"]) {
+      expect(TOPBAR).toContain(`className={"tb-item" + (quiet.${key} ? " tb-quiet" : "") + (isFolded("${key}") ? " tb-folded" : "")}`);
       expect(TOPBAR).toContain(`data-fold="${key}"`);
     }
+    expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}`);
+    expect(TOPBAR).toContain(`data-fold="settings"`);
     // New, Intake and the palette never fold.
     for (const id of ["new-btn", "intake-btn", "palette-btn"]) {
       const at = TOPBAR.indexOf(`id="${id}"`);
       expect(TOPBAR.slice(at, at + 200), id).not.toContain("tb-folded");
     }
     // The Grid · Sky toggle folds last: it is first of the foldable items, and
-    // the fold takes items from the right end (Settings, Schedule, Verify).
+    // the fold takes items from the right end (Settings, Schedule).
     expect(TOPBAR).toContain('<span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view"');
-    const order = ['key: "view"', 'key: "verify"', 'key: "schedule"', '{ key: "settings"'].map((k) => TOPBAR.indexOf(k));
+    const order = ['key: "view"', 'key: "schedule"', '{ key: "settings"'].map((k) => TOPBAR.indexOf(k));
     expect(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1]))).toBe(true);
     // ...and it sits right after New on the bar, before Intake.
     expect(TOPBAR.indexOf('id="new-btn"')).toBeLessThan(TOPBAR.indexOf('data-fold="view"'));
@@ -109,11 +113,10 @@ describe("TopBar wiring around the fold", () => {
     expect(TOPBAR.slice(mic - 80, mic + 80)).not.toContain("tb-folded");
   });
 
-  it("the calm rule still decides what is on the bar; the fold only lays it out", () => {
-    expect(TOPBAR).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
-    expect(TOPBAR).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);
-    expect(TOPBAR).toMatch(/shows\.verify && \{\s*key: "verify"/);
-    expect(TOPBAR).toMatch(/shows\.schedule && \{\s*key: "schedule"/);
+  it("Schedule is always a foldable item (the calm rule only draws it quiet); Verify is no item", () => {
+    expect(TOPBAR).not.toMatch(/shows\.(verify|schedule) &&/);
+    expect(TOPBAR).not.toMatch(/key: "verify"/);
+    expect(TOPBAR).toMatch(/\{\s*key: "schedule",\s*label: "Schedule"/);
   });
 
   it("⋯ carries the folded items' counts and opens a real menu", () => {
@@ -121,7 +124,6 @@ describe("TopBar wiring around the fold", () => {
     expect(TOPBAR).toContain('aria-haspopup="menu"');
     expect(TOPBAR).toContain('role="menuitem"');
     // Each row wears its bar button's tooltip (shortcut and count line).
-    expect(TOPBAR).toContain("title: verifyTitle,");
     expect(TOPBAR).toContain("title: scheduleTitle,");
     // The toggle's row carries the perch count, as its Sky half does.
     expect(TOPBAR).toContain("count: perch.count,");

@@ -7,7 +7,7 @@
  * chip. Every control lives under `.fl-form` (FlywayCanvas.css), which mirrors
  * the New dialog's tokens. */
 
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { Seg } from "../dialogs/FastTrackChoice";
 
 export { Seg };
@@ -194,3 +194,49 @@ export function ChipRow<T extends string>({
     </div>
   );
 }
+
+/** A duration in SECONDS shown as an amount and a unit (seconds / minutes /
+ * hours) — the owner wants waits and loop paces in seconds or hours, not only
+ * minutes. The unit follows the value (the largest that divides it evenly)
+ * until one is picked. */
+export function DurationField({ value, onChange, label }: { value: unknown; onChange(seconds: number | ""): void; label: string }) {
+  const secs = value === undefined || value === null || value === "" ? null : Math.max(0, Math.trunc(Number(value) || 0));
+  const auto: DurationUnit = secs && secs % 3600 === 0 ? "h" : secs && secs % 60 === 0 ? "min" : secs ? "s" : "min";
+  const [picked, setPicked] = useState<DurationUnit | null>(null);
+  const unit = picked ?? auto;
+  const per = DURATION_UNITS[unit];
+  const amount = secs === null ? "" : secs % per === 0 ? secs / per : Math.round((secs / per) * 100) / 100;
+  return (
+    <span className="fl-num fl-duration">
+      <input
+        type="text"
+        inputMode="decimal"
+        className="fl-input fl-num-input"
+        aria-label={label + " (" + unit + ")"}
+        value={String(amount)}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^\d.]/g, "");
+          onChange(raw === "" ? "" : Math.max(0, Math.round(Number(raw) * per)));
+        }}
+      />
+      <Seg
+        label={label + " unit"}
+        value={unit}
+        options={[
+          { v: "s", label: "sec" },
+          { v: "min", label: "min" },
+          { v: "h", label: "hours" },
+        ]}
+        onChange={(x) => {
+          const next = x as DurationUnit;
+          setPicked(next);
+          // The amount stays as typed; the seconds follow the new unit.
+          if (secs !== null) onChange(Math.max(0, Math.round(Number(amount) * DURATION_UNITS[next])));
+        }}
+      />
+    </span>
+  );
+}
+
+export type DurationUnit = "s" | "min" | "h";
+export const DURATION_UNITS: Record<DurationUnit, number> = { s: 1, min: 60, h: 3600 };

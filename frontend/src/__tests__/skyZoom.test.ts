@@ -8,7 +8,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { code, css } from "./sourceText";
+import { code, css, cssRule } from "./sourceText";
 import type { Instance } from "../api/types";
 import {
   FIT_PAD,
@@ -122,7 +122,7 @@ describe("the first picture", () => {
     expect(sky).toContain("else fitAll(false, true);");
     expect(sky).toContain("onClick={() => fitAll(true)}");
     expect(sky).toMatch(/k === "0"\) \{\s*handled\(\);\s*fitAll\(\);/);
-    expect(sky).toMatch(/title="See everything: every line in the window, however small/);
+    expect(sky).toMatch(/title="See everything: every route in the window, however small/);
   });
 });
 
@@ -170,11 +170,17 @@ describe("room on the screen", () => {
     expect(sheet).toContain(".sky-line-slot.is-flash .skl,");
   });
 
-  it("the intake lane keeps its width and reads from far: names and counts, no item rows", () => {
+  it("the intake lane keeps its width; from far it is the frames' silhouette (no item rows) at the frames' type scale", () => {
     expect(code("components/flights/SkyView.tsx")).toContain("data-lod={lodFor(cam.z)}");
     const lane = css("components/flights/IntakeLane.css");
-    expect(lane).toMatch(/\.sky-intake\[data-lod="far"\] \.sky-lane-block-name \{[^}]*font-size: calc\(13px \* var\(--sky-far\)\);/);
     expect(lane).toMatch(/\.sky-intake\[data-lod="far"\] :is\([^)]*\.sky-lane-items[^)]*\) \{\s*display: none;/);
+    // The owner: the lane's words ballooned when zoomed out. A session frame's
+    // bar type is fixed from far, so the lane's is too; at mid only the names
+    // grow, as a frame's name does (at most 1.3×).
+    expect(lane).not.toContain("--sky-far");
+    expect(cssRule(lane, '.sky-intake[data-lod="mid"]')).toContain("--sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3)");
+    expect(lane).toMatch(/\.sky-intake\[data-lod="mid"\] :is\(\.sky-lane-title, \.sky-lane-block-name\) \{\s*font-size: calc\(13px \* var\(--sky-mid\)\);\s*\}/);
+    expect(lane).not.toMatch(/\[data-lod="mid"\][^{]*(sky-lane-item|sky-lane-auto|sky-lane-stops|sky-lane-fly)/);
   });
 });
 
@@ -230,7 +236,7 @@ describe("a line at three zooms", () => {
     expect(near).toContain("--sky-z:2.5;--sky-lines:5");
   });
 
-  it("never changes a chain's geometry with the zoom (round 18: the graph's, plane px)", () => {
+  it("never changes a route's geometry with the zoom (round 18: the graph's, plane px)", () => {
     const at = [0.4, 1, 2.5].map((z) => chainStyle(lineAt(z)));
     expect(at[0]).toBeTruthy();
     expect(at[0]).toMatch(/width:\d+px/);

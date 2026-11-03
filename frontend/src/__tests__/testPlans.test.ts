@@ -15,42 +15,30 @@
 import { describe, it, expect } from "vitest";
 import {
   cantCheckCount,
-  dueCount,
   failCount,
-  failingCount,
   GENERATION_STALE_S,
-  groupPlans,
   isGenerationStalled,
   isWaitingOnYou,
   latestRun,
-  liveBranchOverridden,
   CHECK_MARK,
   checkTally,
-  closedTargets,
   isYourAnswer,
   needsConfirmation,
-  noTargetsReason,
   openHumanSteps,
   planForSession,
   planGroup,
   planShipped,
   planStatus,
-  planTargets,
   planVerdict,
   rewriteBlockedReason,
   rewriteWarning,
   stepCheck,
-  canRunNow,
   errorHeadline,
   HEADLINE_MAX,
-  planMatches,
   noteDraftAfter,
   runElapsed,
   stepKeyAction,
-  stepKeyAllowed,
   stepKeyIsUndo,
-  tallyBits,
-  tallySentence,
   stepResult,
   unansweredCount,
   verdictOf,
@@ -58,7 +46,6 @@ import {
   beforeMergeSummary,
   checklistTargets,
   isBeforeMerge,
-  verifyDeepLinkPlan,
 } from "../components/dialogs/verify";
 import type {
   Instance,
@@ -390,165 +377,6 @@ describe("needsConfirmation", () => {
   });
 });
 
-describe("dueCount", () => {
-  const humanStep = [step("s1", "human")];
-  const unconfirmed = [run({ results: results({ s1: "blocked" }) })];
-  const one = [step("s1")];
-
-  it("counts a shipped plan nobody has checked, but not one an agent is checking", () => {
-    // Round 4, one axis: a running plan is "In progress" — its row says
-    // "Agent checking" — so it is not on the badge, which counts Needs you +
-    // Failed.
-    expect(
-      dueCount([
-        plan({ id: "a", state: "due", steps: one }),
-        plan({ id: "b", state: "running", steps: one, run_session: "verify-b" }),
-      ]),
-    ).toBe(1);
-  });
-
-  it("counts a plan whose human steps are still open, whatever its state", () => {
-    // The done-with-a-list case: the agent finished, and what came back is a
-    // short list for you. This is the badge's most important entry.
-    expect(
-      dueCount([plan({ id: "a", state: "done", steps: humanStep, runs: unconfirmed })]),
-    ).toBe(1);
-  });
-
-  it("ignores plans that are not yet the reader's problem", () => {
-    // generating is still being written; generated is waiting for the branch to
-    // reach the live branch. Nothing to check until it ships.
-    expect(
-      dueCount([
-        plan({ id: "a", state: "generating", steps: one }),
-        plan({ id: "b", state: "generated", steps: one }),
-      ]),
-    ).toBe(0);
-  });
-
-  it("drops a shipped plan from the badge while a rewrite runs — an agent is on it", () => {
-    expect(
-      dueCount([plan({ id: "a", state: "generating", live_at: 500, steps: one })]),
-    ).toBe(0);
-  });
-
-  it("counts a failed step — and NOT a checklist that couldn't be written", () => {
-    // Round 4: failures are loud, and the badge is where a lead looks first.
-    // Round 5 (M4): "Not written yet" is grey and off the badge — it says
-    // nothing about whether the change works.
-    expect(
-      dueCount([
-        plan({
-          id: "a",
-          state: "done",
-          steps: one,
-          runs: [run({ results: results({ s1: "fail" }) })],
-        }),
-        plan({ id: "b", state: "failed", error: "no <testplan> block" }),
-      ]),
-    ).toBe(1);
-    expect(
-      failingCount([
-        plan({ id: "b", state: "failed", error: "no <testplan> block" }),
-        plan({ id: "c", state: "due", steps: one }),
-      ]),
-    ).toBe(0);
-  });
-
-  it("ignores a verified plan", () => {
-    expect(
-      dueCount([
-        plan({
-          id: "a",
-          state: "done",
-          steps: [step("s1", "human")],
-          runs: [run({ results: results({ s1: "pass" }) })],
-        }),
-      ]),
-    ).toBe(0);
-  });
-
-  it("counts a plan once even when both rules apply", () => {
-    // A due plan whose earlier run left human steps open matches the state test
-    // AND the confirmation test; counting it twice would make the badge exceed
-    // the number of rows the dialog can show.
-    expect(
-      dueCount([plan({ id: "a", state: "due", steps: humanStep, runs: unconfirmed })]),
-    ).toBe(1);
-  });
-
-  it("is zero, not broken, before any plan exists", () => {
-    expect(dueCount([])).toBe(0);
-  });
-});
-
-describe("the badge and the first two groups are one set", () => {
-  // The whole point of dueCount. One number used to be printed in four places
-  // and no two of them were ever equal, which taught the reader that the badge
-  // was approximate. This is that promise, machine-checked: the badge counts
-  // exactly the rows under "Failed" and "Needs you".
-  const one = [step("s1")];
-  const everything = [
-    plan({ id: "due", state: "due", steps: one }),
-    plan({ id: "running", state: "running", steps: one, run_session: "verify-r" }),
-    plan({ id: "generating", state: "generating", steps: one }),
-    plan({ id: "generated", state: "generated", steps: one }),
-    plan({
-      id: "rewriting-shipped",
-      state: "generating",
-      live_at: 500,
-      steps: one,
-    }),
-    plan({
-      id: "rewriting-checked",
-      state: "generating",
-      live_at: 500,
-      steps: one,
-      runs: [run({ results: results({ s1: "pass" }) })],
-    }),
-    plan({ id: "nogen", state: "failed", error: "no <testplan> block" }),
-    plan({
-      id: "handed-back",
-      state: "done",
-      steps: [step("s1", "human")],
-      runs: [run({ results: results({ s1: "blocked" }) })],
-    }),
-    plan({
-      id: "flunked",
-      state: "done",
-      steps: one,
-      runs: [run({ results: results({ s1: "fail" }) })],
-    }),
-    plan({
-      id: "clean",
-      state: "done",
-      steps: one,
-      runs: [run({ results: results({ s1: "pass" }) })],
-    }),
-  ];
-
-  it("counts exactly the plans the first two groups render", () => {
-    const top = groupPlans(everything).filter((g) => g.key === "due" || g.key === "fail");
-    expect(dueCount(everything)).toBe(top.reduce((n, g) => n + g.plans.length, 0));
-  });
-
-  it("agrees plan by plan, not just in total", () => {
-    const due = groupPlans(everything).find((g) => g.key === "due");
-    expect(due?.plans.map((p) => p.id)).toEqual(["due", "handed-back"]);
-    const fail = groupPlans(everything).find((g) => g.key === "fail");
-    expect(fail?.plans.map((p) => p.id)).toEqual(["flunked"]);
-    expect(groupPlans(everything).find((g) => g.key === "failed")?.plans.map((p) => p.id)).toEqual([
-      "nogen",
-    ]);
-    expect(everything.filter(isWaitingOnYou).map((p) => p.id)).toEqual(["due", "handed-back"]);
-  });
-
-  it("puts every plan in exactly one group", () => {
-    const filed = groupPlans(everything).flatMap((g) => g.plans.map((p) => p.id));
-    expect(filed.slice().sort()).toEqual(everything.map((p) => p.id).sort());
-  });
-});
-
 describe("failCount / unansweredCount / openHumanSteps", () => {
   it("are all zero before anything has run", () => {
     // An unchecked step is not a failed one, and a plan nobody has run is not a
@@ -757,10 +585,10 @@ describe("planStatus (the one sentence and the one button)", () => {
     // They look identical — no steps, nothing to do — and only one of them is
     // going to fix itself.
     expect(planStatus(plan({ state: "generating" })).line).toBe(
-      "Writing the checklist from the diff — up to three minutes.",
+      "Writing the behaviors from the diff — up to three minutes.",
     );
     expect(planStatus(plan({ state: "due", steps: [] })).line).toBe(
-      "Not written yet — it came back with no steps.",
+      "Not written yet — it came back with no behaviors.",
     );
     expect(planStatus(plan({ state: "due", steps: [] })).action).toBe("rewrite");
   });
@@ -779,7 +607,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     // Grey since round 5 (M4): not written is not a failure.
     expect(status.tone).toBe("wait");
     expect(status.action).toBe("rewrite");
-    expect(status.actionLabel).toBe("Rewrite the checklist");
+    expect(status.actionLabel).toBe("Rewrite the behaviors");
     expect(status.line).toContain("stopped part-way");
   });
 
@@ -812,7 +640,7 @@ describe("planStatus (the one sentence and the one button)", () => {
     const status = planStatus(broken, "main");
     expect(status.group).toBe("failed");
     expect(status.tone).toBe("wait");
-    expect(status.actionLabel).toBe("Rewrite the checklist");
+    expect(status.actionLabel).toBe("Rewrite the behaviors");
     // M1: the reason is in the headline, not only in the expanded body.
     expect(status.line).toBe("Not written yet — no <testplan> block.");
   });
@@ -831,7 +659,7 @@ describe("planStatus (the one sentence and the one button)", () => {
 
   it("says a write past three minutes is taking longer than usual (m11)", () => {
     const slow = plan({ state: "generating", gen_started: Date.now() / 1000 - 200 });
-    expect(planStatus(slow).line).toBe("Writing the checklist — taking longer than usual…");
+    expect(planStatus(slow).line).toBe("Writing the behaviors — taking longer than usual…");
     expect(planStatus(slow).action).toBe("none");
   });
 
@@ -857,205 +685,6 @@ describe("planStatus (the one sentence and the one button)", () => {
       }),
     ];
     for (const p of cases) expect(planStatus(p, "main").group).toBe(planGroup(p));
-  });
-});
-
-describe("groupPlans", () => {
-  const one = [step("s1")];
-
-  it("groups by ONE axis, loudest first", () => {
-    // Round 4: the outcome and whose move it is — never "merged?" mixed in.
-    // The input is deliberately shuffled: nothing about the caller's order may
-    // leak into it.
-    const groups = groupPlans([
-      plan({ id: "e", state: "failed" }),
-      plan({
-        id: "d",
-        state: "done",
-        steps: one,
-        runs: [run({ results: results({ s1: "pass" }) })],
-      }),
-      plan({ id: "c", state: "generated", steps: one }),
-      plan({
-        id: "f",
-        state: "done",
-        steps: one,
-        runs: [run({ results: results({ s1: "fail" }) })],
-      }),
-      plan({
-        id: "g",
-        state: "done",
-        steps: [step("s1"), step("s2")],
-        runs: [run({ results: results({ s1: "pass" }) })],
-      }),
-      plan({
-        id: "b",
-        state: "done",
-        steps: [step("s1", "human")],
-        runs: [run({ results: results({ s1: "blocked" }) })],
-      }),
-      plan({ id: "a", state: "due", steps: one }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["fail", "due", "generated", "failed", "partial", "done"]);
-    expect(groups.map((g) => g.label)).toEqual([
-      "Failed",
-      "Needs you",
-      "In progress",
-      "Not written yet",
-      "Not verified",
-      "Verified",
-    ]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["f"]);
-    expect(groups[3].plans.map((p) => p.id)).toEqual(["e"]);
-  });
-
-  it("files a branch that passed before merge under Verified, not 'not shipped'", () => {
-    // The judge's core complaint: every step passed on an unmerged branch,
-    // and the row jumped into "Not shipped yet" — never "Checked".
-    const groups = groupPlans([
-      plan({
-        id: "a",
-        state: "generated",
-        live_at: 0,
-        steps: one,
-        runs: [run({ results: results({ s1: "pass" }), prelive: true } as Partial<TestRun>)],
-      }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["done"]);
-    expect(groups[0].label).toBe("Verified");
-  });
-
-  it("gives a shipped thing that flunked its own plan a group of its own", () => {
-    // finish_run writes state="done" whatever the results said, so without this
-    // the single most valuable output of the whole feature — it shipped and it
-    // is broken — filed among the successes.
-    const groups = groupPlans([
-      plan({
-        id: "a",
-        state: "done",
-        steps: [step("s1"), step("s2")],
-        runs: [run({ results: results({ s1: "pass", s2: "fail" }) })],
-      }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["fail"]);
-  });
-
-  it("counts a fail on the badge — failures are loud", () => {
-    const flunked = plan({
-      id: "a",
-      state: "done",
-      steps: one,
-      runs: [run({ results: results({ s1: "fail" }) })],
-    });
-    expect(dueCount([flunked])).toBe(1);
-    expect(planGroup(flunked)).toBe("fail");
-  });
-
-  it("files a run that stopped short under Not verified, apart from the verified", () => {
-    const groups = groupPlans([
-      plan({
-        id: "clean",
-        state: "done",
-        steps: one,
-        runs: [run({ results: results({ s1: "pass" }) })],
-      }),
-      plan({
-        id: "short",
-        state: "done",
-        steps: [step("s1"), step("s2")],
-        runs: [run({ results: results({ s1: "pass" }) })],
-      }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["partial", "done"]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["short"]);
-    expect(groups[1].detail).toBe(undefined);
-  });
-
-  it("omits groups that would render empty", () => {
-    // The steady state is one group with one item in it; four empty headings
-    // around it would bury the only thing worth reading.
-    const groups = groupPlans([plan({ id: "a", state: "due", steps: one })]);
-    expect(groups.map((g) => g.key)).toEqual(["due"]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["a"]);
-  });
-
-  it("has nothing to group when there are no plans", () => {
-    expect(groupPlans([])).toEqual([]);
-  });
-
-  it("files a plan awaiting confirmation with the rest of what needs you", () => {
-    const groups = groupPlans([
-      plan({
-        id: "a",
-        state: "due",
-        steps: [step("s1", "human")],
-        runs: [run({ results: results({ s1: "blocked" }) })],
-      }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["due"]);
-  });
-
-  it("lets a failure outrank an open step for you", () => {
-    // A plan can be both; the verdict is "Failed", and the red group is where a
-    // lead about to merge looks first. Its open step is still counted on the
-    // heading and answerable inside.
-    const groups = groupPlans([
-      plan({
-        id: "a",
-        state: "done",
-        steps: [step("s1"), step("s2", "human")],
-        runs: [run({ results: results({ s1: "fail", s2: "blocked" }) })],
-      }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["fail"]);
-    expect(groups[0].detail).toBe("1 step failed · 1 step needs you");
-  });
-
-  it("files an agent at work under In progress", () => {
-    const groups = groupPlans([
-      plan({ id: "a", state: "due", steps: one }),
-      plan({ id: "b", state: "running", steps: one, run_session: "verify-b" }),
-      plan({ id: "c", state: "generating" }),
-      plan({ id: "d", state: "generating", live_at: 500, steps: one }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["due", "generated"]);
-    expect(groups[1].plans.map((p) => p.id)).toEqual(["b", "c", "d"]);
-  });
-
-  it("files a write that stalled under Not written yet, with no detail line", () => {
-    const groups = groupPlans([
-      plan({
-        id: "a",
-        state: "generating",
-        gen_started: Date.now() / 1000 - (GENERATION_STALE_S + 1),
-      }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["failed"]);
-    expect(groups[0].detail).toBeUndefined();
-  });
-
-  it("preserves the caller's order inside a group", () => {
-    // GET /api/test-plans returns newest generated_at first; re-sorting here
-    // would fight whatever the caller chose.
-    const groups = groupPlans([
-      plan({ id: "new", state: "due", steps: one, generated_at: 300 }),
-      plan({ id: "mid", state: "due", steps: one, generated_at: 200 }),
-      plan({ id: "old", state: "due", steps: one, generated_at: 100 }),
-    ]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["new", "mid", "old"]);
-  });
-
-  it("shows a state this bundle has never heard of rather than dropping it", () => {
-    // A newer server can write a state name this frontend predates. Filing it
-    // somewhere harmless keeps it visible; silently dropping it would make a
-    // plan simply not exist.
-    const groups = groupPlans([
-      // Double assertion because the union is exactly what is being stepped
-      // outside of; the server is under no obligation to stay inside it.
-      plan({ id: "a", state: "quarantined" as unknown as TestPlan["state"], steps: one }),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["generated"]);
-    expect(groups[0].plans.map((p) => p.id)).toEqual(["a"]);
   });
 });
 
@@ -1209,10 +838,6 @@ describe("withdrawn answers (a phantom run)", () => {
     expect(needsConfirmation(withdrawn)).toBe(false);
   });
 
-  it("does not put the plan in the badge", () => {
-    expect(dueCount([withdrawn])).toBe(0);
-  });
-
   it("comes back the moment one real answer lands", () => {
     const answered = plan({
       ...withdrawn,
@@ -1233,136 +858,6 @@ describe("withdrawn answers (a phantom run)", () => {
     expect(latestRun(inflight)).not.toBe(null);
   });
 });
-
-describe("liveBranchOverridden (is the header's one branch the whole story?)", () => {
-  it("says no when every plan ships from the flock-wide branch", () => {
-    expect(liveBranchOverridden("main", [plan(), plan({ id: "p2" })], [], {})).toBe(false);
-  });
-
-  it("says yes when a plan was stamped with a different branch", () => {
-    // A plan outlives its repo's membership in the list, so the plans are a
-    // source the settings cannot replace.
-    const shipped = plan({ id: "p2", effective_live_branch: "staging" });
-    expect(liveBranchOverridden("main", [shipped], [], {})).toBe(true);
-  });
-
-  it("says yes for a configured repo that has no plans yet", () => {
-    // The normal state right after adding a repo: a plan costs a model call and
-    // is written on push, so there is nothing in `plans` to notice. This is
-    // exactly when the header would otherwise state "main" as fact six lines
-    // above a card reading "staging".
-    expect(
-      liveBranchOverridden("main", [], ["Acme/App"], {
-        "Acme/App": { live_branch: "staging" },
-      }),
-    ).toBe(true);
-  });
-
-  it("ignores a block whose repo is no longer tracked", () => {
-    // Remove keeps the block on purpose (it is text the user wrote, and a
-    // re-add hands it straight back), and an untracked block does nothing at
-    // all — so it must not put a "+ per-repo" on a header describing repos that
-    // have all been removed.
-    expect(
-      liveBranchOverridden("main", [], [], { "Acme/App": { live_branch: "staging" } }),
-    ).toBe(false);
-  });
-
-  it("matches the tracked slug case-insensitively", () => {
-    // GitHub slugs are case-preserving but not case-sensitive, and the backend
-    // compares lowercased; a header that disagreed with the backend about which
-    // repos exist would be a second, quieter bug.
-    expect(
-      liveBranchOverridden("main", [], ["acme/app"], {
-        "Acme/App": { live_branch: "staging" },
-      }),
-    ).toBe(true);
-  });
-
-  it("ignores a block that only repeats the flock-wide branch", () => {
-    expect(
-      liveBranchOverridden("main", [], ["Acme/App"], {
-        "Acme/App": { live_branch: "main" },
-      }),
-    ).toBe(false);
-  });
-
-  it("ignores a blank or whitespace-only override", () => {
-    expect(
-      liveBranchOverridden("main", [], ["Acme/App"], { "Acme/App": { live_branch: " " } }),
-    ).toBe(false);
-  });
-});
-
-/** A session, cut down to the three fields these rules read. The full
- * `Instance` is two dozen fields of grid/stage state, and spelling them out
- * would bury the branch — the one that decides most of what happens here. */
-const session = (title: string, branch: string, repo = ""): Instance =>
-  ({ title, branch, repo }) as Instance;
-
-describe("planTargets (what the Write-plan bar may offer)", () => {
-  it("offers a started session with no plan", () => {
-    expect(planTargets([session("feature-a", "feature/a")], [])).toEqual(["feature-a"]);
-  });
-
-  it("skips a session that has not started, so has no branch to diff", () => {
-    // `Instance.branch` is "" until the session starts, and there is nothing to
-    // write a plan FROM before that.
-    expect(planTargets([session("fresh", "")], [])).toEqual([]);
-  });
-
-  it("skips a session that already has a plan", () => {
-    // Not an error to explain: its plan is in the list below, which is a better
-    // answer than a disabled row with a tooltip.
-    const targets = planTargets(
-      [session("feature-a", "feature/a"), session("feature-b", "feature/b")],
-      [plan({ id: "feature-a" })],
-    );
-    expect(targets).toEqual(["feature-b"]);
-  });
-
-  it("answers empty for a flock with no sessions at all", () => {
-    // The fresh install. The bar renders nothing here, which is why the empty
-    // state has to ask this same question before telling anyone to press it.
-    expect(planTargets([], [])).toEqual([]);
-  });
-
-  it("skips the second window on a branch another window's plan covers", () => {
-    // Two windows on one branch (`bot7` and a duplicate) are ONE thing to
-    // check. The server refuses to write a second checklist for the branch, so
-    // offering the copy would promise something that cannot happen.
-    const targets = planTargets(
-      [
-        session("bot7", "feature/sc-1", "bot7-repo"),
-        session("bot7-copy", "feature/sc-1", "bot7-repo"),
-      ],
-      [plan({ id: "bot7", branch: "feature/sc-1", repo_root: "/src/bot7-repo" })],
-    );
-    expect(targets).toEqual([]);
-  });
-
-  it("still offers the same branch name in a DIFFERENT repo", () => {
-    // Two clones sit on different commits and can push to different remotes:
-    // one branch name, two real diffs.
-    const targets = planTargets(
-      [session("other", "feature/sc-1", "app")],
-      [plan({ id: "bot7", branch: "feature/sc-1", repo_root: "/src/bot7-repo" })],
-    );
-    expect(targets).toEqual(["other"]);
-  });
-
-  it("offers a session whose repo is unknown rather than guessing on the branch", () => {
-    // `Instance.repo` is "" before the worktree resolves. Matching on the
-    // branch alone there would hide the button for whoever happens to share a
-    // branch name with a plan in another repo.
-    const targets = planTargets(
-      [session("starting", "feature/sc-1")],
-      [plan({ id: "bot7", branch: "feature/sc-1", repo_root: "/src/bot7-repo" })],
-    );
-    expect(targets).toEqual(["starting"]);
-  });
-});
-
 
 /** A results map whose entries were recorded by a PERSON. `results()` above
  * stamps `by: "agent"`, which is right for everything it is used for and is
@@ -1394,26 +889,6 @@ describe("a person's \"Can't check\" is an answer; an agent's \"blocked\" is not
     expect(isYourAnswer("blocked", "agent")).toBe(false);
     expect(isYourAnswer("blocked")).toBe(false);
     expect(isYourAnswer("")).toBe(false);
-  });
-
-  it("stops asking once you have said you couldn't check it", () => {
-    const answered = plan({
-      state: "done",
-      live_at: 500,
-      steps: humanStep,
-      runs: [
-        run({
-          results: {
-            ...results({ s1: "pass" }),
-            ...mine({ s2: "blocked" }, "staging was down"),
-          },
-        }),
-      ],
-    });
-    expect(openHumanSteps(answered)).toEqual([]);
-    expect(needsConfirmation(answered)).toBe(false);
-    expect(isWaitingOnYou(answered)).toBe(false);
-    expect(dueCount([answered])).toBe(0);
   });
 
   it("keeps asking while the AGENT is the one who said blocked", () => {
@@ -1481,25 +956,6 @@ describe("a person's \"Can't check\" is an answer; an agent's \"blocked\" is not
     expect(status.group).toBe("partial");
   });
 
-  it("files both kinds of gap under Not verified, and never under Needs you", () => {
-    // A person's "Can't check" is an answer: it must not pin the row on the
-    // badge forever — and nothing about it is verified either.
-    const yours = plan({
-      id: "yours",
-      state: "done",
-      steps: [step("s1", "human")],
-      runs: [run({ results: mine({ s1: "blocked" }) })],
-    });
-    const stopped = plan({
-      id: "stopped",
-      state: "done",
-      steps: [step("s1"), step("s2")],
-      runs: [run({ results: results({ s1: "pass" }) })],
-    });
-    expect(groupPlans([yours]).map((g) => g.key)).toEqual(["partial"]);
-    expect(groupPlans([stopped]).map((g) => g.key)).toEqual(["partial"]);
-    expect(dueCount([yours, stopped])).toBe(0);
-  });
 });
 
 describe("the row says what a run will and won't cover", () => {
@@ -1518,42 +974,6 @@ describe("the row says what a run will and won't cover", () => {
     expect(status.line).toBe("Shipped — all 2 steps are yours to check.");
     expect(status.action).toBe("answer");
     expect(status.actionLabel).toBe("Answer 2 steps");
-  });
-
-  it("counts the steps the run handed back into the button", () => {
-    // THE REAL SHAPE OF A BAD AFTERNOON, and the bug this rule was written for.
-    // A plan of 8 (2 written as yours, 6 as the agent's) whose run could not
-    // observe the change at all — not deployed where it could look — comes back
-    // with all 8 blocked. Every mark in the body said "yours" and the tally
-    // said 8; the sentence and the button said 2, because they asked whose step
-    // it was WRITTEN to be instead of who owes it now.
-    const steps = [
-      step("s1", "human"),
-      step("s2"),
-      step("s3"),
-      step("s4"),
-      step("s5"),
-      step("s6"),
-      step("s7"),
-      step("s8", "human"),
-    ];
-    const handedBackAll = plan({
-      state: "due",
-      live_at: 500,
-      steps,
-      runs: [
-        run({
-          results: results(
-            Object.fromEntries(steps.map((st) => [st.id, "blocked" as const])),
-          ),
-        }),
-      ],
-    });
-    const status = planStatus(handedBackAll);
-    expect(status.line).toBe("8 steps need your eyes — an agent can't judge them.");
-    expect(status.actionLabel).toBe("Answer 8 steps");
-    // ...and it agrees with the tally beside it, which is the whole point.
-    expect(tallyBits(handedBackAll).find((b) => b.state === "yours")?.count).toBe(8);
   });
 
   it("says the split when an agent can do some of it", () => {
@@ -1622,36 +1042,6 @@ describe("the row says what a run will and won't cover", () => {
     expect(status.line).toBe("An agent is checking the steps it can.");
   });
 });
-
-describe("noTargetsReason", () => {
-  // One sentence used to cover three unlike situations, and it was simply false
-  // for the commonest: telling somebody with five open sessions to start one.
-  const inst = (title: string, branch: string): Instance =>
-    ({ title, branch }) as Instance;
-
-  it("says nothing at all while there is something to offer", () => {
-    expect(noTargetsReason([inst("a", "feature/a")], [])).toBe("");
-  });
-
-  it("tells a user with no sessions to start one", () => {
-    expect(noTargetsReason([], [])).toBe(
-      "Start a session first — a checklist is written from a branch's diff.",
-    );
-  });
-
-  it("tells a user whose sessions have no branch yet what is missing", () => {
-    expect(noTargetsReason([inst("a", "")], [])).toBe(
-      "No session has a branch yet — a checklist is written from a branch's diff.",
-    );
-  });
-
-  it("points at the list when everything already has one", () => {
-    expect(noTargetsReason([inst("a", "feature/a")], [plan({ id: "a" })])).toBe(
-      "Every session's branch already has a checklist.",
-    );
-  });
-});
-
 
 describe("the gaps are named apart, and a run nobody ran is not \"a run\"", () => {
   it("does not call the steps you couldn't check unanswered", () => {
@@ -1755,7 +1145,6 @@ describe("a running plan with no session left to watch", () => {
   });
 });
 
-
 /* ---------------------------------------------------------------------------
  * The checks view — the tally, the per-step mark, and the fact that they are
  * two renderings of ONE state rather than two opinions about it.
@@ -1833,69 +1222,6 @@ describe("checkTally / stepCheck", () => {
   });
 });
 
-describe("finding one checklist among many", () => {
-  const tokens = (q: string) => q.toLowerCase().split(/\s+/).filter(Boolean);
-  const p = plan({
-    id: "sc-21255",
-    title: "sc-21255",
-    summary: "Parked pages stop alerting",
-    branch: "feature/sc-21255/classifier-collage",
-    sha: "78fd955aaa",
-    repo_root: "/home/me/workspaces/_base_sitecheck-bot",
-    state: "due",
-    live_at: 500,
-    steps: [step("s1"), { ...step("s2", "human"), text: "Open the Grafana board 06" }],
-  });
-
-  it("takes every token, in any order, across any field", () => {
-    // The way people actually type: bits of the ticket, the repo and the thing
-    // they remember the checklist being about.
-    expect(planMatches(p, tokens("21255"))).toBe(true);
-    expect(planMatches(p, tokens("sitecheck collage"))).toBe(true);
-    expect(planMatches(p, tokens("parked alerting"))).toBe(true);
-    expect(planMatches(p, tokens("78fd955"))).toBe(true);
-    expect(planMatches(p, tokens("sitecheck 99999"))).toBe(false);
-  });
-
-  it("searches what the STEPS say, which is how a checklist is remembered", () => {
-    // Long after the ticket number stops meaning anything, "the one about the
-    // Grafana board" is the only handle a person has — and those words appear
-    // nowhere else on the row.
-    expect(planMatches(p, tokens("grafana"))).toBe(true);
-    expect(planMatches(p, tokens("grafana board 06"))).toBe(true);
-  });
-
-  it("narrows to a heading a reader can already see", () => {
-    expect(planMatches(p, tokens("needs you"))).toBe(true);
-    expect(planMatches(p, tokens("couldn't be written"))).toBe(false);
-  });
-
-  it("matches everything when nothing is typed", () => {
-    expect(planMatches(p, [])).toBe(true);
-    expect(planMatches(plan({ steps: [] }), [])).toBe(true);
-  });
-});
-
-describe("what a bulk Run may actually start", () => {
-  it("takes the ones a run would take, and no others", () => {
-    const shipped = (over: Partial<TestPlan> = {}) =>
-      plan({ state: "due", live_at: 500, steps: [step("s1"), step("s2", "human")], ...over });
-
-    expect(canRunNow(shipped())).toBe(true);
-    // An agent is already working it — the route 409s a second run.
-    expect(canRunNow(shipped({ state: "running", run_session: "verify-x" }))).toBe(false);
-    // Still being written.
-    expect(canRunNow(plan({ state: "generating", steps: [] }))).toBe(false);
-    // Every step is a person's own: an agent may not settle one, so the session
-    // would provision a workspace and hand the whole list straight back.
-    expect(canRunNow(shipped({ steps: [step("s1", "human"), step("s2", "human")] }))).toBe(
-      false,
-    );
-    // Not merged yet: Check now checks the branch, so it can be run too.
-    expect(canRunNow(plan({ state: "generated", steps: [step("s1")] }))).toBe(true);
-  });
-});
-
 describe("how long a run has been going", () => {
   const now = 1_000_000;
 
@@ -1961,74 +1287,6 @@ describe("the note composer after an answer", () => {
     expect(noteDraftAfter("pass", false, "")).toEqual({ open: false, text: "" });
   });
 
-  it("will not let a held key fire one POST per repeat", () => {
-    expect(stepKeyAllowed(false, false)).toBe(true);
-    expect(stepKeyAllowed(false, true)).toBe(false); // key-repeat
-    expect(stepKeyAllowed(true, false)).toBe(false); // a POST already in flight
-  });
-});
-
-describe("what a collapsed group heading adds up to", () => {
-  it("says how much is being asked of you, not just how many plans", () => {
-    const shipped = (id: string, over: Partial<TestPlan> = {}) =>
-      plan({
-        id,
-        title: id,
-        state: "due",
-        live_at: 500,
-        steps: [step("s1"), step("s2", "human")],
-        ...over,
-      });
-    const groups = groupPlans([shipped("a"), shipped("b")]);
-    const due = groups.find((g) => g.key === "due");
-    expect(due?.plans).toHaveLength(2);
-    // Two plans, one human step each — the number that matters is 2 steps, not
-    // 2 checklists.
-    expect(due?.detail).toBe("2 steps need you");
-  });
-
-  it("leads with the red ones where a group has both", () => {
-    // A failure AND a step still open for you: `planGroup` files this under
-    // Failed, and the heading has to carry both numbers.
-    const mixed = plan({
-      id: "a",
-      title: "a",
-      state: "due",
-      live_at: 500,
-      steps: [step("s1"), step("s2", "human")],
-      runs: [run({ results: { s1: { result: "fail", note: "", at: 1, by: "agent" } } })],
-    });
-    expect(groupPlans([mixed]).find((g) => g.key === "fail")?.detail).toBe(
-      "1 step failed · 1 step needs you",
-    );
-  });
-
-  it("counts the steps in a plan that is entirely red", () => {
-    const red = plan({
-      id: "a",
-      title: "a",
-      state: "done",
-      live_at: 500,
-      steps: [step("s1"), step("s2")],
-      runs: [
-        run({
-          results: {
-            s1: { result: "fail", note: "", at: 1, by: "agent" },
-            s2: { result: "pass", note: "", at: 1, by: "agent" },
-          },
-        }),
-      ],
-    });
-    expect(groupPlans([red]).find((g) => g.key === "fail")?.detail).toBe("1 step failed");
-  });
-
-  it("says nothing when there is nothing outstanding to say", () => {
-    const clean = plan({
-      state: "generated",
-      steps: [step("s1")],
-    });
-    expect(groupPlans([clean]).find((g) => g.key === "generated")?.detail).toBeUndefined();
-  });
 });
 
 describe("a run that died says so on the row", () => {
@@ -2086,89 +1344,6 @@ describe("a run that died says so on the row", () => {
   });
 });
 
-describe("the tally on the collapsed row", () => {
-  const shipped = (over: Partial<TestPlan> = {}) =>
-    plan({
-      state: "due",
-      live_at: 500,
-      steps: [step("s1"), step("s2"), step("s3", "human"), step("s4", "human")],
-      ...over,
-    });
-
-  it("says where the work has got to before anyone opens the plan", () => {
-    const bits = tallyBits(
-      shipped({
-        runs: [
-          run({
-            results: {
-              s1: { result: "pass", note: "", at: 1, by: "agent" },
-              s2: { result: "fail", note: "", at: 1, by: "agent" },
-            },
-          }),
-        ],
-      }),
-    );
-    expect(bits.map((b) => [b.state, b.count])).toEqual([
-      ["pass", 1],
-      ["fail", 1],
-      ["yours", 2],
-    ]);
-  });
-
-  it("drops the zeroes rather than printing '0 failed' on a clean row", () => {
-    const clean = shipped({
-      steps: [step("s1")],
-      runs: [run({ results: { s1: { result: "pass", note: "", at: 1, by: "agent" } } })],
-    });
-    expect(tallyBits(clean)).toHaveLength(1);
-    expect(tallyBits(clean)[0].state).toBe("pass");
-  });
-
-  it("renders nothing at all for a plan that has no steps yet", () => {
-    // A plan still being written: the row is already saying so, and a tally of
-    // nothing is furniture.
-    expect(tallyBits(plan({ state: "generating", steps: [] }))).toEqual([]);
-    expect(tallySentence(plan({ state: "generating", steps: [] }))).toBe("");
-  });
-
-  it("counts exactly what the roll-up inside the plan counts", () => {
-    // The two are one sentence said twice; if they can disagree, one of them is
-    // lying to somebody triaging a list.
-    const p = shipped({
-      runs: [
-        run({
-          results: {
-            s1: { result: "pass", note: "", at: 1, by: "agent" },
-            s3: { result: "blocked", note: "", at: 1, by: "human" },
-          },
-        }),
-      ],
-    });
-    const t = checkTally(p);
-    const summed = tallyBits(p).reduce((n, b) => n + b.count, 0);
-    expect(summed).toBe(t.total);
-    const byState = Object.fromEntries(tallyBits(p).map((b) => [b.state, b.count]));
-    expect(byState.pass).toBe(t.passed);
-    expect(byState.cant).toBe(t.cant);
-    expect(byState.yours).toBe(t.yours);
-  });
-
-  it("announces the glyphs as words, since a screen reader gets no colour", () => {
-    const p = shipped({
-      runs: [
-        run({
-          results: {
-            s1: { result: "pass", note: "", at: 1, by: "agent" },
-            s2: { result: "fail", note: "", at: 1, by: "agent" },
-          },
-        }),
-      ],
-    });
-    expect(tallySentence(p)).toBe("4 steps: 1 passed, 1 failed, 2 need you");
-    expect(tallySentence(plan({ steps: [step("s1")] }))).toBe("1 step: 1 not checked yet");
-  });
-});
-
 describe("the rewrite box", () => {
   it("warns only when there is something to lose", () => {
     expect(rewriteWarning(plan())).toBe("");
@@ -2210,72 +1385,6 @@ describe("answering from the keyboard", () => {
     expect(stepKeyIsUndo("u")).toBe(true);
     expect(stepKeyIsUndo("U")).toBe(true);
     expect(stepKeyIsUndo("a")).toBe(false);
-  });
-});
-
-/* ---------------------------------------------------------------------------
- * Writing a checklist for a session you already closed.
- *
- * Every other part of this feature is built on a checklist outliving its
- * session. Creation was the one half that still demanded a live window — so
- * "write me a checklist for that" stopped being possible at exactly the moment
- * people reach for it, which is after the work is done and the window is gone.
- * ------------------------------------------------------------------------ */
-describe("planTargets with closed sessions", () => {
-  const open = (title: string, branch = "feature/" + title) =>
-    ({ title, branch }) as unknown as Instance;
-
-  it("offers a closed session that has a branch", () => {
-    expect(planTargets([], [], [{ title: "sc-9", branch: "feature/sc-9" }])).toEqual([
-      "sc-9",
-    ]);
-  });
-
-  it("puts the sessions on screen first", () => {
-    const got = planTargets(
-      [open("live-1")],
-      [],
-      [{ title: "closed-1", branch: "feature/closed-1" }],
-    );
-    expect(got).toEqual(["live-1", "closed-1"]);
-  });
-
-  it("names a session once, however many lists it is in", () => {
-    // A session reopened under the same name is in both. The thing being named
-    // is the session, not the window.
-    const got = planTargets([open("both")], [], [{ title: "both", branch: "x" }]);
-    expect(got).toEqual(["both"]);
-  });
-
-  it("still skips anything that already has a checklist, or has no branch", () => {
-    const plans = [plan({ id: "done-already" })];
-    const got = planTargets(
-      [open("done-already")],
-      plans,
-      [
-        { title: "done-already", branch: "b" },
-        { title: "no-branch" },
-        { title: "fresh", branch: "feature/fresh" },
-      ],
-    );
-    expect(got).toEqual(["fresh"]);
-  });
-
-  it("labels which ones are closed, so the picker can say so", () => {
-    const marks = closedTargets(
-      [open("live-1")],
-      [{ title: "live-1", branch: "b" }, { title: "gone", branch: "b" }],
-    );
-    // "live-1" is in the closed store AND on screen — it was reopened, so it is
-    // not a closed target.
-    expect(marks.has("live-1")).toBe(false);
-    expect(marks.has("gone")).toBe(true);
-  });
-
-  it("stops telling you to start a session when closed ones are available", () => {
-    expect(noTargetsReason([], [], [{ title: "sc-9", branch: "b" }])).toBe("");
-    expect(noTargetsReason([], [], [{ title: "sc-9" }])).toContain("has a branch yet");
-    expect(noTargetsReason([], [], [])).toContain("Start a session first");
   });
 });
 
@@ -2330,7 +1439,6 @@ describe("a plan waiting on a branch that isn't there", () => {
     expect(planStatus(shipped).line).not.toContain("can never come due");
   });
 });
-
 
 describe("a check before merge, and the check after it", () => {
   const before = (answers: Record<string, TestStepResult>) =>
@@ -2397,7 +1505,7 @@ describe("checklistTargets (Ask the agent for a checklist)", () => {
       ["open-a", false, ""],
       ["closed-c", true, ""],
       ["on-main", false, "on main — nothing to compare"],
-      ["closed-b", true, "has a checklist"],
+      ["closed-b", true, "has behaviors"],
     ]);
     expect(targets.find((t) => t.title === "closed-b")?.planId).toBe("closed-b");
   });
@@ -2407,13 +1515,3 @@ describe("checklistTargets (Ask the agent for a checklist)", () => {
   });
 });
 
-describe("the Verify deep link (openDialogFor(\"verify\", <branch>))", () => {
-  it("finds a checklist by its branch, or by its session title", () => {
-    const a = plan({ id: "sess-a", branch: "feature/a" });
-    const b = plan({ id: "sess-b", branch: "feature/b" });
-    expect(verifyDeepLinkPlan([a, b], "feature/b")?.id).toBe("sess-b");
-    expect(verifyDeepLinkPlan([a, b], "sess-a")?.id).toBe("sess-a");
-    expect(verifyDeepLinkPlan([a, b], "feature/zzz")).toBeNull();
-    expect(verifyDeepLinkPlan([a, b], "")).toBeNull();
-  });
-});

@@ -1272,3 +1272,100 @@ class TestWake:
             "/api/voice/wake", content=b"", headers={"Content-Type": "audio/wav"}
         )
         assert r.status_code == 400
+
+
+class TestWakeCheck:
+    """The un-hinted check pass (``wake_verify_transcribe`` + ``core.wake.veto``)
+    and ``GET /api/voice/wake/recent``."""
+
+    @pytest.fixture(autouse=True)
+    def _recent(self):
+        routes._WAKE_RECENT.clear()
+        yield
+        routes._WAKE_RECENT.clear()
+
+    def _plain(self, fakes, monkeypatch, plain):
+        def verify(audio, mime, lang=""):
+            fakes.stt.calls.append(("plain", audio, mime, lang))
+            if isinstance(plain, BaseException):
+                raise plain
+            return plain
+
+        monkeypatch.setattr(fakes.stt, "wake_verify_transcribe", verify, raising=False)
+
+    def _wake(self, fakes, heard):
+        fakes.stt.text = heard
+        return client.post(
+            "/api/voice/wake?lang=en",
+            content=b"RIFFclip",
+            headers={"Content-Type": "audio/wav"},
+        ).json()
+
+    def _plains(self, fakes):
+        return [c for c in fakes.stt.calls if c[0] == "plain"]
+
+    def test_a_backend_without_the_pass_keeps_the_yes(self, fakes):
+        body = self._wake(fakes, "Hey, MindFlock!")
+        assert body["wake"] is True and body["reason"] == "word"
+        assert body["plain"] is None
+
+    def test_the_plain_pass_vetoes_another_word(self, fakes, monkeypatch):
+        self._plain(fakes, monkeypatch, "Mine.")
+        body = self._wake(fakes, "MindFlock")
+        assert body["wake"] is False and body["reason"] == "plain:mine"
+        assert body["text"] == "MindFlock" and body["plain"] == "Mine."
+        assert self._plains(fakes) == [("plain", b"RIFFclip", "audio/wav", "en")]
+
+    def test_the_plain_pass_keeps_the_word(self, fakes, monkeypatch):
+        self._plain(fakes, monkeypatch, "Mind flunk.")
+        body = self._wake(fakes, "MindFlock")
+        assert body["wake"] is True and body["reason"] == "word"
+        assert body["plain"] == "Mind flunk."
+
+    def test_a_no_never_runs_the_plain_pass(self, fakes, monkeypatch):
+        self._plain(fakes, monkeypatch, "Mind flock")
+        body = self._wake(fakes, "Windlock")
+        assert body["wake"] is False and body["reason"] == "other"
+        assert body["plain"] is None and self._plains(fakes) == []
+
+    def test_a_custom_word_skips_the_plain_pass(self, fakes, monkeypatch):
+        _voice(words={"wake": "Jarvis"})
+        self._plain(fakes, monkeypatch, "mine")
+        body = self._wake(fakes, "Jarvis")
+        assert body["wake"] is True and self._plains(fakes) == []
+
+    def test_a_failed_plain_pass_keeps_the_yes(self, fakes, monkeypatch):
+        self._plain(fakes, monkeypatch, speech.SpeechError("model busy"))
+        body = self._wake(fakes, "MindFlock")
+        assert body["wake"] is True and body["plain"] is None
+
+    def test_recent_keeps_the_last_checks_newest_first(self, fakes, monkeypatch):
+        assert client.get("/api/voice/wake/recent").json() == {"attempts": []}
+        self._plain(fakes, monkeypatch, "mind")
+        self._wake(fakes, "MindFlock")
+        self._wake(fakes, "MindFlock is great")
+        rows = client.get("/api/voice/wake/recent").json()["attempts"]
+        assert [set(r) for r in rows] == [
+            {"ts", "text_prompted", "text_plain", "wake", "reason", "ms"}
+        ] * 2
+        assert rows[0]["text_prompted"] == "MindFlock is great"
+        assert rows[0]["text_plain"] is None and rows[0]["reason"] == "long"
+        assert rows[1]["text_plain"] == "mind"
+        assert rows[1]["wake"] is False and rows[1]["reason"] == "plain:mind"
+        assert rows[0]["ts"] >= rows[1]["ts"] and isinstance(rows[1]["ms"], int)
+        for _ in range(routes.WAKE_RECENT_MAX + 5):
+            self._wake(fakes, "Okay.")
+        rows = client.get("/api/voice/wake/recent").json()["attempts"]
+        assert len(rows) == routes.WAKE_RECENT_MAX == 50
+
+    def test_a_failed_check_is_recorded(self, fakes):
+        fakes.stt.fail = speech.SpeechError("no model")
+        fakes.stt.text = "MindFlock"
+        r = client.post(
+            "/api/voice/wake",
+            content=b"RIFFclip",
+            headers={"Content-Type": "audio/wav"},
+        )
+        assert r.status_code == 502
+        row = client.get("/api/voice/wake/recent").json()["attempts"][0]
+        assert row["wake"] is False and row["reason"] == "error: SpeechError"

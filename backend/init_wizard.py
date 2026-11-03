@@ -226,6 +226,7 @@ _AGENT_NAMES = {
     "antigravity": "Antigravity",
     "cline": "Cline",
     "goose": "Goose",
+    "copilot": "GitHub Copilot",
 }
 
 #: A tool's name on the "Install the tools" row (check id → name).

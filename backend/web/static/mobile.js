@@ -960,7 +960,7 @@
   };
   var REASON_LABEL = {
     question: "Question",
-    flight_you: "Perch",
+    flight_you: "Wait for me",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
@@ -986,7 +986,7 @@
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
   // the old "You: …") is read without it (lib/flights.ts perchLabel).
   function youStepLabel(title) {
-    var t = String(title || "").trim().replace(/^(you|perch):\s*/i, "");
+    var t = String(title || "").trim().replace(/^(you|perch|wait for me):\s*/i, "");
     return t ? REASON_LABEL.flight_you + ": " + t : REASON_LABEL.flight_you;
   }
   // The row's `flight` is perched on you (lib/flights.ts rowWaitsOnYou).
@@ -1021,7 +1021,7 @@
     // A flight perched on you waits for Done, whatever the agent does.
     if (flightWaitsOnYou(inst)) {
       var you = youStepLabel(inst.flight.step.title);
-      var flHint = you + " — flight “" + (inst.flight.plan_name || "") + "” is perched on you; press Done";
+      var flHint = you + " — route “" + (inst.flight.plan_name || "") + "” needs you; press Done";
       return st("needs_you", { reason: "flight_you", label: you, inBell: true, hint: flHint });
     }
     if (act === "working") return st("working", { hint: "Agent is working" });
@@ -1046,8 +1046,8 @@
     var dirty = un && (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
     // A paused flight: calm and out of the bell (sessionState.ts).
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
-      return st("idle", { label: "Paused flight",
-                          hint: "Flight “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
+      return st("idle", { label: "Paused route",
+                          hint: "Route “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
     if (idleFor > STUCK_IDLE_S && dirty)
       return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
@@ -1400,7 +1400,7 @@
       'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
       '<path d="M2 9.5c3.4-2.8 6.8-2.3 10 2 3.2-4.3 6.6-4.8 10-2"/></svg>';
     var words = document.createElement("span");
-    words.textContent = (fl.plan_name || "Flight") + " · " + youStepLabel(fl.step.title);
+    words.textContent = (fl.plan_name || "Route") + " · " + youStepLabel(fl.step.title);
     head.appendChild(words);
     card.appendChild(head);
     var btns = document.createElement("div");
@@ -1431,7 +1431,7 @@
         if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) {
           throw new Error((j && (j.detail || j.error)) || "request failed (" + r.status + ")");
         });
-        flashStatus(verb === "done" ? "done — the flight flies on" : "skipped — the flight flies on");
+        flashStatus(verb === "done" ? "done — the route carries on" : "skipped — the route carries on");
         setTimeout(poll, 600);
       })
       .catch(function (err) { flashStatus((verb === "done" ? "Done" : "Skip") + " failed: " + err.message); })
@@ -5252,7 +5252,7 @@
   // sessionState's label as a voice says it ("Question" is a chip, not a sentence).
   function voiceStateWord(ss) {
     if (ss.reason === "question") return "waiting on a question";
-    if (ss.reason === "flight_you") return "waiting on you: " + String(ss.label || "").replace(/^you:\s*/i, "");
+    if (ss.reason === "flight_you") return "needs you: " + String(ss.label || "").replace(/^you:\s*/i, "");
     if (ss.reason === "precommit_failed") return "stuck on a failed pre-commit";
     if (ss.reason === "checks_failing") return "waiting on failing checks";
     if (ss.reason === "setup_failed") return "stuck on a failed setup";
@@ -5386,7 +5386,7 @@
   // VOICE_WORDS names the states for the ask sheet's mirror.
   var VOICE_WORDS = {
     idle: "Your turn", listening: "Listening…", sending: "Sending…",
-    working: "Working…", speaking: "Speaking…", awaiting: "Listening…", dialog: "Waiting on you",
+    working: "Working…", speaking: "Speaking…", awaiting: "Listening…", dialog: "Needs you",
   };
   function voiceBtnState(s) {
     if (s === "off") return "off";
@@ -6549,7 +6549,7 @@
     if (mode !== "dialog" && (p.kind === "over" || p.kind === "out")) { voiceHeardWords({ kind: "out", text: p.text }); return; }
     voiceStopForCommand();
     if (mode !== "dialog" && p.kind !== "disregard" && p.text) voiceAppend(p.text);
-    if (mode === "dialog") { voiceIdle(nameOf(voice.session) + " is waiting on you"); return; }
+    if (mode === "dialog") { voiceIdle(nameOf(voice.session) + " needs you"); return; }
     voiceListenKept();
   }
   // The words of a phrase that is not a command: into the box, then
@@ -7394,7 +7394,7 @@
       .then(function (d) {
         if (voice.state !== "sending") return;
         if (!d || !d.parsed || !(d.options || []).length) {
-          voiceSayThenIdle(asks ? name + " is waiting on you: open the screen." : name + " isn't asking anything.");
+          voiceSayThenIdle(asks ? name + " needs you: open the screen." : name + " isn't asking anything.");
           return;
         }
         if (!voice.cfg.loaded || !voice.cfg.approve_dialogs) { voiceSayThenIdle("Answer it on the screen."); return; }
@@ -8179,8 +8179,8 @@
         var name = nameOf(title);
         if (key === "none") {
           voice.dialog = null;
-          speakLine(name + " is waiting on you: open the screen.").then(function (ok) {
-            if (ok) voiceIdle(name + " is waiting on you");
+          speakLine(name + " needs you: open the screen.").then(function (ok) {
+            if (ok) voiceIdle(name + " needs you");
           });
           return;
         }
@@ -8198,7 +8198,7 @@
       // never answer it — this is the one safety setting the page enforces.
       if (!voice.cfg.loaded || !voice.cfg.approve_dialogs) {
         speakLine("Answer it on the screen.").then(function (ok2) {
-          if (ok2) voiceIdle(nameOf(voice.session) + " is waiting on you");
+          if (ok2) voiceIdle(nameOf(voice.session) + " needs you");
         });
         return;
       }
@@ -8208,7 +8208,7 @@
   function voiceDialogRetry() {
     var d = voice.dialog;
     if (!d || voice.dialogTries >= 2) {
-      voiceIdle(nameOf(voice.session) + " is waiting on you");
+      voiceIdle(nameOf(voice.session) + " needs you");
       return;
     }
     voice.dialogTries++;
@@ -8467,7 +8467,7 @@
     var q = voiceAsks(title) === "question"
       ? String((inst && inst.last_say) || (title === voice.session ? voice.lastSay.text : "")) : "";
     voiceSayThenIdle(q ? name + ": " + endSentence(stripMarkdown(q))
-                     : inst && inst.activity === "clarify" ? name + " is waiting on you: open the screen."
+                     : inst && inst.activity === "clarify" ? name + " needs you: open the screen."
                      : name + " isn't asking anything.");
   }
   function voiceNeedsMe() {
@@ -9800,7 +9800,7 @@
     if (prev && prev.key === e.key) return;
     askVoiceRelease();
     // Voice listening for the dialog stepped away from: not its answer now.
-    if (prev && voice.session === prev.title && voice.state === "dialog") voiceIdle(nameOf(prev.title) + " is waiting on you");
+    if (prev && voice.session === prev.title && voice.state === "dialog") voiceIdle(nameOf(prev.title) + " needs you");
     ask.entry = { title: e.title, kind: e.kind, text: e.text, ts: e.ts, dialogId: e.dialogId,
                   parsed: e.parsed, source: e.source, key: e.key };
     ask.gone = false;
@@ -10448,7 +10448,7 @@
       }).catch(function () {});
     }
     // Voice listening for this one stops: "not now" is not "yes".
-    if (voice.session === e.title && voice.state === "dialog") voiceIdle(nameOf(e.title) + " is waiting on you");
+    if (voice.session === e.title && voice.state === "dialog") voiceIdle(nameOf(e.title) + " needs you");
     if (close) { askClose(); return; }
     askAdvance();
   }
@@ -10641,7 +10641,7 @@
     }
     if (e.kind === "dialog") {
       if (!d || !d.parsed || !(d.options || []).length) {
-        if (read) voiceSayThenIdle(nameOf(e.title) + " is waiting on you: open the screen.");
+        if (read) voiceSayThenIdle(nameOf(e.title) + " needs you: open the screen.");
         return;
       }
       voice.dialog = d;
@@ -10887,7 +10887,7 @@
   }
   function askNotify(e) {
     if (!askNotifyAllowed()) return;
-    var title = nameOf(e.title) + (e.kind === "dialog" ? " is waiting on you" : " asked you a question");
+    var title = nameOf(e.title) + (e.kind === "dialog" ? " needs you" : " asked you a question");
     var opts = { body: askLineText(e).slice(0, 240), tag: "mf-ask-" + e.title, renotify: true,
                  icon: "/apple-touch-icon.png", data: { title: e.title, key: e.key } };
     ask.notifications.push({ title: title, body: opts.body, session: e.title, key: e.key });

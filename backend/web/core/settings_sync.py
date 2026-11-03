@@ -212,6 +212,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "tours_seen",
         "settings_advanced",
         "pane_header",
+        "whats_new_seen",
     ),
     # The person all these devices share (docs/people.md). Its ``id`` is not
     # here: it is agreed, never last-edit-wins (see LOCAL and sync_once).
@@ -232,6 +233,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "auth_token",
         "auth_mode",
         "onboarded",
+        # The default folder: a path on THIS device.
+        "default_folder",
         "setup",
         "last_repo_path",
         "remote_control",
@@ -383,9 +386,9 @@ LABELS: Dict[str, str] = {
     "repository.repo_branches": "Per-repo base branches",
     "repository.live_branch": "Live branch",
     "repository.git_transport": "Git transport (SSH/HTTPS)",
-    "repository.fasttrack_depth": "Fast-track depth",
+    "repository.fasttrack_depth": "Goes as far as",
     "repository.precommit_retry_hooks": "Pre-commit retry hooks",
-    "repository.fasttrack_failure_notes": "Fast-track: tell the agent what failed",
+    "repository.fasttrack_failure_notes": "Goes as far as: tell the agent what failed",
     "repository.verify_repos": "Verify: repositories",
     "repository.verify_enabled": "Verify on/off",
     "repository.verify_use_conversation": "Verify: use the conversation",
@@ -442,6 +445,7 @@ LABELS: Dict[str, str] = {
     "prefs.theme": "Light/dark theme",
     "prefs.diff_mode": "Diff layout",
     "prefs.diff_base": "Diff base",
+    "prefs.whats_new_seen": "What's new seen",
     "prefs.hidden_bars": "Hidden toolbars",
     "prefs.bar_order": "Toolbar order",
     "prefs.reduce_motion": "Reduce motion",

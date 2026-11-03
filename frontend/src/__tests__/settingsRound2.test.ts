@@ -163,9 +163,11 @@ describe("Agents screen", () => {
     expect(codingSrc).toContain("placeholder={flagsPlaceholder(selected)}");
   });
 
-  it("answers 'how many at once' plainly, with the real field", () => {
+  it("answers 'how many at once' plainly; the ticket limit is Intake's, linked", () => {
     expect(codingSrc).toContain('id="coding-sessions-at-once"');
-    expect(codingSrc).toContain('<SettingField group="engine" field="max_sessions"');
+    // engine.max_sessions lives once, in Intake › Auto-start (settingsScreens pins it).
+    expect(codingSrc).not.toContain('field="max_sessions"');
+    expect(codingSrc).toMatch(/<SetInIntake\s+id="coding-ticket-sessions-at-once"[\s\S]{0,300}selector="#ik-max-sessions-row"/);
     expect(codingSrc).toContain("Sessions you start yourself have no limit.");
   });
 

@@ -169,10 +169,11 @@ describe("the return wire's edge", () => {
     // Open, the wire runs between the sub-steps themselves.
     const open = sessionDiagram(rows, "lead", { flights: [f], kinds: KINDS, expandedGroups: new Set(["g1"]) });
     expect(loops(open)[0]).toMatchObject({ from: "stop:s3", to: "stop:s2" });
-    // A loop inside the collapsed group, back to a sibling: round the box.
+    // A loop inside a group whose only other member is its target: the group
+    // is one stop then (a lone member draws as itself) — round that stop.
     const inner = [step("s1", "agent", "Plan"), step("s2", "agent", "Edit", {}, { group: g }), step("s3", "loop", "Loop", { back_to: "s2" }, { group: g }), step("s4", "ship", "Push")];
     const d2 = sessionDiagram(rows, "lead", { flights: [flight(inner, 0, { s1: rec("running") })], kinds: KINDS });
-    expect(loops(d2)).toEqual([expect.objectContaining({ from: "group:g1", to: "group:g1" })]);
+    expect(loops(d2)).toEqual([expect.objectContaining({ from: "stop:s2", to: "stop:s2" })]);
   });
 
   it("a loop folded whole into the flown pill goes round the pill", () => {
@@ -203,7 +204,7 @@ describe("the Loop's count, the pill and the box's line", () => {
   });
 
   it("before it runs the pill says what it will do", () => {
-    expect(loopIdlePill({ runs: 0, times: 3, state: "pending" })).toBe("↻ ×3");
+    expect(loopIdlePill({ runs: 0, times: 3, state: "pending" })).toBe("↻ repeat ×3");
     expect(loopIdlePill({ runs: 0, times: 0, state: "pending" })).toBe("↻ until stopped");
     expect(loopIdlePill({ runs: 0, times: 0, state: "pending" }, { step: step("l", "loop", "L", { until: "checks green" }) })).toBe("↻ until checks green");
   });
@@ -293,7 +294,7 @@ describe("the canvas draws the wire", () => {
   it("pending: a dashed wire under the line with an arrowhead, its pill saying what it will do, a button for the Loop", () => {
     const html = render(flywayDiagram(LINE(), KINDS));
     expect(html).toMatch(/<path class="fl-wire fl-wire-loop fl-edge-loop fl-loop-pending" d="M [^"]+ V [^"]+ Q [^"]+" marker-end="url\(#[^)]+-arrow\)"/);
-    expect(html).toMatch(/<span class="fl-loop-pill fl-loop-pending fl-st-edit" style="[^"]+" data-node="stop:s4" title="Loop: 3 runs — click to change it" aria-label="[^"]+" role="button" tabindex="0">↻ ×3<\/span>/);
+    expect(html).toMatch(/<span class="fl-loop-pill fl-loop-pending fl-st-edit" style="[^"]+" data-node="stop:s4" title="Loop: 3 runs — click to change it" aria-label="[^"]+" role="button" tabindex="0">↻ repeat ×3<\/span>/);
     // No Loop box.
     expect(html).not.toMatch(/class="fl-box[^"]*" data-node="stop:s4"/);
   });

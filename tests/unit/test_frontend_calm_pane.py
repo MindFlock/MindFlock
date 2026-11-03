@@ -122,7 +122,7 @@ def test_guided_next_step_has_a_quiet_variant():
 def test_fast_track_off_is_just_the_glyph():
     pane = _read("components/grid/Pane.tsx")
     assert '{ft.lane === "leave" && !ft.halted ? "⏩" : ft.label}' in pane
-    assert '(ft.lane === "leave" ? "off" : ft.label.replace(/^⏩ /, ""))' in pane
+    assert '(ft.lane === "leave" ? "Agent only" : ft.label.replace(/^⏩ /, ""))' in pane
 
 
 def test_pane_hide_is_a_minus_not_a_cross():
@@ -234,5 +234,6 @@ def test_stage_chip_says_question():
 
 def test_thread_empty_state_points_at_split():
     tab = _read("components/grid/ThreadTab.tsx")
-    assert "use Split into parallel pieces… in the session's › menu" in tab
+    # Consolidation: one "Workers…" entry (split now / ask once / every prompt).
+    assert "No workers yet — Workers… lets the agent split this now" in tab
     assert "fork button" not in tab

@@ -2,7 +2,7 @@
 /** Round 5's tours: the registry (lib/tours), the coach mark
  * (onboarding/CoachTour), when one opens by itself (onboarding/useAutoTour),
  * that every exit marks it seen, the welcome card that hands over to the
- * Welcome tour, and the top bar's calm first hour (lib/calm topBarShows). */
+ * Welcome tour, and the top bar's calm first hour (lib/calm topBarQuiet). */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -38,7 +38,7 @@ const { TOURS, TOUR_IDS, isTourId } = await import("../lib/tours");
 const { CoachTour, placeCard, findTarget, revealTarget } = await import("../components/onboarding/CoachTour");
 const { TourButton } = await import("../components/onboarding/TourButton");
 const { autoTourDue } = await import("../components/onboarding/useAutoTour");
-const { topBarShows } = await import("../lib/calm");
+const { topBarQuiet } = await import("../lib/calm");
 const { useUi } = await import("../state/store");
 
 describe("the tours registry", () => {
@@ -50,12 +50,12 @@ describe("the tours registry", () => {
     expect(isTourId("map")).toBe(false);
   });
 
-  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight; Sky: the whole sky's fifteen)", () => {
+  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight)", () => {
     for (const id of TOUR_IDS) {
       const { steps, title } = TOURS[id];
       expect(title, id).toMatch(/^[A-Z]/);
       expect(steps.length, id).toBeGreaterThanOrEqual(3);
-      expect(steps.length, id).toBeLessThanOrEqual(id === "voice" ? 8 : id === "sky" ? 15 : 7);
+      expect(steps.length, id).toBeLessThanOrEqual(id === "voice" ? 8 : 7);
       for (const s of steps) {
         expect(s.title.trim(), id).not.toBe("");
         expect(s.body.trim(), id).not.toBe("");
@@ -80,11 +80,14 @@ describe("the tours registry", () => {
       }
   });
 
-  it("points the Welcome tour at the Get set up checklist by its data-tour hooks", () => {
-    const targets = TOURS.welcome.steps.map((s) => s.target).join(" ");
-    for (const hook of ["setup-next", "setup-step-tools", "setup-step-agent_login", "setup-step-repo"])
-      expect(targets).toContain(`[data-tour="${hook}"]`);
-    expect(TOURS.welcome.steps.length).toBeLessThanOrEqual(5);
+  it("points the Welcome tour at the Get set up checklist's three steps — at most 3 before the user acts", () => {
+    // Vision round: the card says the picture; the tour only walks ①–③.
+    expect(TOURS.welcome.steps.map((s) => s.target.split(",")[0])).toEqual([
+      '[data-tour="setup-step-tools"]',
+      '[data-tour="setup-step-agent_login"]',
+      '[data-tour="setup-step-repo"]',
+    ]);
+    expect(TOURS.welcome.steps.length).toBeLessThanOrEqual(3);
   });
 
   it("walks Intake in setup order by its data-tour hooks", () => {
@@ -113,7 +116,12 @@ describe("the tours registry", () => {
     expect(all("new")).toContain("#new-describe-text");
     expect(all("intake")).toContain("#intake-add-source");
     expect(all("intake")).toContain("#intake-tab-autostart");
-    expect(all("verify")).toContain("#verify-title");
+    // Verify is a stop on the route: its tour walks the Sky (the stop, its
+    // card in place, the board), never a dialog.
+    expect(all("verify")).toContain('[data-tour="behaviors-stop"]');
+    expect(all("verify")).toContain('[data-tour="behaviors-card"]');
+    expect(all("verify")).toContain('[data-tour="behaviors-board"]');
+    expect(TOURS.verify.steps).toHaveLength(3);
     expect(all("schedule")).toContain("#templates-new");
     expect(all("settings")).toContain("#settings-search");
   });
@@ -152,38 +160,34 @@ describe("the tours registry", () => {
     for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
   });
 
-  it("the Sky tour walks every surface, in the order a newcomer meets them — never a Flights tab", () => {
+  it("the Sky tour is the on-ramp: what the Sky is for, then four essentials, the rest in the guide — never a Flights tab", () => {
     const steps = TOURS.sky.steps;
     expect(TOURS.sky.id).toBe("sky");
     expect(TOURS.sky.title).toBe("Sky");
-    expect(steps).toHaveLength(15);
-    // the first selector of each target: its data-tour hook (or "")
+    expect(steps).toHaveLength(5);
+    // first: the Sky in one line (docs/vocabulary.md), centred
+    expect(steps[0].target).toBe("");
+    expect(steps[0].body).toBe(
+      "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you."
+    );
+    // the first selector of each target: its hook (or class) on the sky, then the bell
     expect(steps.map((s) => s.target.split(",")[0])).toEqual([
-      '[data-tour="view-sky"]',
-      '[data-tour="sky-line-bar"]',
-      '[data-tour="sky-session-box"]',
-      '[data-tour="flights-bird"]',
-      '[data-tour="sky-stop"]',
-      ".sky-port-out:not(.sky-port-off)",
-      '[data-tour="sky-stop"]',
-      '[data-tour="sky-shelf"]',
-      '[data-tour="sky-grounded"]',
-      '[data-tour="sky-selbar"]',
-      '[data-tour="sky-tool"]',
       "",
-      '[data-tour="sky-intake"]',
-      '[data-tour="sky-zoom"]',
-      '[data-tour="sky-guide"]',
+      '[data-tour="sky-session-box"]',
+      ".sky-plus",
+      '[data-tour="flights-bird"]',
+      "#notif-btn",
     ]);
     // A selector list matches in DOCUMENT order and the top bar comes first:
-    // a fallback to the toggle would always win, so no step past the first
-    // names it — a missing target centres the card instead.
-    for (const s of steps.slice(1)) expect(s.target).not.toContain("view-sky");
+    // a fallback to the toggle would always win, so no step names it — a
+    // missing target centres the card instead.
+    for (const s of steps) expect(s.target).not.toContain("view-sky");
     expect(steps.some((s) => /flights-tab|flights-plans/.test(s.target))).toBe(false);
-    // every surface the contract names has its step
+    // what the Sky is for, each session's route, + adds a stop, the bird, Needs you
     const words = steps.map((s) => s.title + " " + s.body).join(" ");
-    for (const w of ["Grid · Sky", "label", "terminal", "bird", "duplicate", "dialog", "port", "loop", "All blocks…", "stops-only", "Group into a stop", "Save to the shelf", "V ", "H ", "Space", "Delete", "intake", "Fit", "0 ", "guide"])
-      expect(words, w).toContain(w);
+    for (const w of ["route", "agent", "+", "shelf", "moves the work, checks the work, or asks you", "▶ Run", "Needs you", "bird", "guide", "Ctrl+Y"]) expect(words, w).toContain(w);
+    // the nouns the guide keeps out of the on-ramp, and the retired words
+    for (const w of ["Perch", "frame", "socket", "stops-only", "Group into a stop", "intake", "Drag or Click", "chain", "flyway"]) expect(words, w).not.toContain(w);
   });
 });
 
@@ -452,19 +456,20 @@ describe("the ? button and the replays", () => {
 });
 
 describe("the top bar in the calm first hour", () => {
-  it("hides Verify until a checklist exists and Schedule until a template does", () => {
-    expect(topBarShows({ calm: true, checklists: 0, templates: 0 })).toEqual({ verify: false, schedule: false });
-    expect(topBarShows({ calm: true, checklists: 1, templates: 0 })).toEqual({ verify: true, schedule: false });
-    expect(topBarShows({ calm: true, checklists: 0, templates: 2 })).toEqual({ verify: false, schedule: true });
+  it("Schedule is always on the bar; empty, it is only drawn quiet while calm", () => {
+    expect(topBarQuiet({ calm: true, templates: 0 })).toEqual({ schedule: true });
+    expect(topBarQuiet({ calm: true, templates: 2 })).toEqual({ schedule: false });
   });
 
-  it("shows both whenever the first hour is over", () => {
-    expect(topBarShows({ calm: false, checklists: 0, templates: 0 })).toEqual({ verify: true, schedule: true });
+  it("it is never quiet once the first hour is over", () => {
+    expect(topBarQuiet({ calm: false, templates: 0 })).toEqual({ schedule: false });
   });
 
-  it("wires the rule to the two buttons only (Alt+V / Alt+S and the palette don't depend on them)", () => {
-    expect(TOPBAR_SRC).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
-    expect(TOPBAR_SRC).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);
+  it("both buttons always render; the rule only adds tb-quiet (muted, still labelled)", () => {
+    expect(TOPBAR_SRC).not.toMatch(/\{shows\.(verify|schedule) &&/);
+    // Verify has no button any more (docs/behaviors.md §4).
+    expect(TOPBAR_SRC).not.toContain("quiet.verify");
+    expect(TOPBAR_SRC).toContain('className={"tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(TOPBAR_SRC).toContain("calm: useCalm(),");
   });
 });

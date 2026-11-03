@@ -1,26 +1,122 @@
-/* The landing strip (LandingStrip.tsx): the intake lane's chrome (.sky-lane,
- * its head, its rail, its corner — IntakeLane.css), with one block per repo
- * in the sky: the checks dot, the folder's name, the default branch, the last
- * merge's age, and the flights that landed today. */
+/* The Finished strip (LandingStrip.tsx), in the one look every Sky object
+ * shares (ux-lab SKY_OBJECT_STYLE.md; the reference is the session frame,
+ * SkyLine.css `.skl-frame-box` / `.skl-frame-bar`): one hairline, radius
+ * 14px, a 30px faint title strip with the title in normal case, a muted
+ * count and quiet `fl-icon-btn`s; a one-line explanation under it; one quiet
+ * row per repo separated by hairlines — the checks dot, the folder's name,
+ * the default branch, the last merge's age, the chains merged today. The
+ * tokens only: it reads in the light and the dark theme alike. */
 
 .sky-landing {
-  border-right: none;
-  border-left: 1px solid var(--border);
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  /* Its size before the owner sizes it (the inline frame wins). */
+  width: 280px;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--muted) 4%, var(--panel));
+  color: var(--text);
+  font-size: 13px;
+  transition: box-shadow 120ms ease;
 }
 
-.sky-landing-glyph {
-  font-size: 15px;
+/* The wrapper's ring (SkyObjects.css) hugs the frame's radius. */
+.sky-object-landing {
+  border-radius: 14px;
+}
+.sky-object-landing:where(:has(.sky-landing-bar:hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.sky-object-landing.is-dragging > .sky-landing {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+/* --- The title bar: the session frame's strip ------------------------------ */
+
+.sky-landing-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--muted) 18%, transparent);
+  background: color-mix(in srgb, var(--muted) 7%, transparent);
+  user-select: none;
+}
+
+.sky[data-tool="drag"] .sky-landing-bar {
+  cursor: grab;
+}
+
+.sky-landing-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-landing-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.sky-landing-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.sky-landing-tools .fl-icon-btn {
+  padding: 1px 6px;
+  font-size: 12px;
+}
+
+.sky-landing-explain {
+  flex: none;
+  margin: 0;
+  padding: 6px 12px 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+/* --- The rows ------------------------------------------------------------- */
+
+.sky-landing-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px 10px;
+}
+
+.sky-landing-empty {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .sky-landing-repo {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
+  gap: 2px;
+  padding: 8px 0;
   font-size: 13px;
+}
+
+.sky-landing-repo + .sky-landing-repo {
+  border-top: 1px solid color-mix(in srgb, var(--muted) 18%, transparent);
 }
 
 .sky-landing-row {
@@ -34,6 +130,7 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -42,17 +139,18 @@
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 /* The checks dot: green, red, amber while running, hollow with none. */
 .sky-landing-dot {
   flex: none;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   border: 1.5px solid var(--muted);
   box-sizing: border-box;
@@ -71,17 +169,23 @@
 }
 
 .sky-landing-merge {
-  font-size: 12px;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 
 .sky-landing-landed {
   list-style: none;
-  margin: 2px 0 0;
-  padding: 4px 0 0;
-  border-top: 1px dashed var(--border);
+  margin: 4px 0 0 14px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+.sky-landing-landed-cap {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .sky-landing-flight {
@@ -89,7 +193,7 @@
   align-items: baseline;
   gap: 6px;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
 .sky-landing-flight-name {
@@ -107,6 +211,7 @@
 .sky-landing-pr {
   flex: none;
   color: var(--accent);
+  font-size: 11.5px;
   text-decoration: none;
 }
 .sky-landing-pr:hover {
@@ -116,10 +221,38 @@
 .sky-landing-at,
 .sky-landing-more {
   flex: none;
-  font-size: 11.5px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
-/* The mid band grows the type a little, as the lane's does. */
-.sky-landing[data-lod="mid"] .sky-landing-repo {
-  font-size: 14px;
+/* The corner handle, the session frame's (SkyLine.css `.skl-resize`). */
+.sky-landing > .sky-landing-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+}
+
+/* --- Level of detail: the session frames' type scale at the same zoom ------
+   (SkyLine.css: mid grows the bar's type by 0.8 / zoom, at most 1.3×; far by
+   0.6 / zoom for UI, at most 1.4×) — never more, so it never balloons. */
+.sky-object-landing[data-lod="mid"] {
+  --sky-obj-k: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+}
+.sky-object-landing[data-lod="far"] {
+  --sky-obj-k: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+.sky-object-landing:is([data-lod="mid"], [data-lod="far"]) .sky-landing-title {
+  font-size: calc(13px * var(--sky-obj-k));
+}
+.sky-object-landing:is([data-lod="mid"], [data-lod="far"]) .sky-landing-repo {
+  font-size: calc(13px * var(--sky-obj-k));
+}
+.sky-object-landing[data-lod="far"] :is(.sky-landing-explain, .sky-landing-landed, .sky-landing-tools) {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-landing {
+    transition: none;
+  }
 }

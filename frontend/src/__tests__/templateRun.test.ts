@@ -287,7 +287,7 @@ describe("cron schedules, autopilot and history", () => {
       "in 25 min"
     );
     expect(scheduleLabel({ cron: "0 9 * * 1" })).toBe("Cron 0 9 * * 1");
-    expect(templateMeta(CRON)).toContain("Fast-track: Open PR");
+    expect(templateMeta(CRON)).toContain("goes as far as Open PR");
   });
   it("a skip and the recent runs are on the card", () => {
     const at = new Date(2026, 9, 14, 9, 30).getTime() / 1000;
@@ -311,7 +311,7 @@ describe("cron schedules, autopilot and history", () => {
     });
     expect(html).toContain("Skipped ");
     expect(html).toContain("Recent runs (3)");
-    expect(html).toContain("→ watch-oct14-0900 (Fast-track: Open PR)");
+    expect(html).toContain("→ watch-oct14-0900 (goes as far as Open PR)");
     expect(html).toContain("by hand — failed: repo moved");
   });
   it("historyLine", () => {

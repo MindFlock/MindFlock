@@ -15,7 +15,7 @@ export const SCHEDULE_TOUR: TourDef = {
     {
       target: '#schedule-btn, #more-btn, [data-tour="schedule-new"], #templates-new, #schedule-empty-create',
       title: "Sessions you'll want again",
-      body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself.",
+      body: "Schedule starts sessions and saved routes on a timer — a template is a folder, an agent and a task, ready in one click.",
     },
     {
       target: '[data-tour="schedule-new"], #templates-new, #schedule-empty-create',

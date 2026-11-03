@@ -15,6 +15,7 @@ export const AGENT_NAMES: Record<string, string> = {
   opencode: "OpenCode",
   cline: "Cline",
   goose: "Goose",
+  copilot: "GitHub Copilot",
 };
 
 export function agentName(provider: string): string {

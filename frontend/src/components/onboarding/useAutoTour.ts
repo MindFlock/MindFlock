@@ -116,3 +116,33 @@ export function openTourOnFirstUse(id: TourId): boolean {
   }, AUTO_TOUR_DELAY_MS);
   return true;
 }
+
+/** Whether a tour that opens on FIRST SIGHT of what it explains (Verify: the
+ * first Behaviors stop on a route) should try now: its subject is on screen,
+ * the tour is not in `tours_seen`, and nothing else is touring — the rest of
+ * the first-use rule ({@link firstUseTourDue}) is checked when it opens.
+ * (Pure.) */
+export function firstSightTourDue(o: { shown: boolean; seen: readonly string[]; id: TourId; busy: boolean }): boolean {
+  return o.shown && !o.busy && !o.seen.includes(o.id);
+}
+
+/** Open tour `id` once, the first time `shown` turns true — by the first-use
+ * rule (any hour, after the first prefs pull, hints on, nothing else
+ * touring). Another tour or the welcome card on screen puts it off until
+ * that one closes; once it has opened (and so been seen) it never opens
+ * again. */
+export function useTourOnFirstSight(id: TourId, shown: boolean): void {
+  const seen = useUi((s) => s.toursSeen);
+  const busy = useUi((s) => s.coachTour !== null || s.tourOpen);
+  const due = firstSightTourDue({ shown, seen, id, busy });
+  useEffect(() => {
+    if (!due) return;
+    let gone = false;
+    void firstPrefsPull.then(() => {
+      if (!gone) openTourOnFirstUse(id);
+    });
+    return () => {
+      gone = true;
+    };
+  }, [due, id]);
+}

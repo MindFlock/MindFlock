@@ -162,7 +162,11 @@ def _view_key(f: Optional[dict]) -> tuple:
     if not f:
         return ()
     step = _flights.step_view(f)
-    return (f["state"], f["cursor"], step.get("state"), f["reason"], f["session"])
+    st = step.get("state")
+    if step.get("parallel"):
+        # At a parallel group: every member's state (round 20).
+        st = tuple(m["state"] for m in step["parallel"])
+    return (f["state"], f["cursor"], st, f["reason"], f["session"])
 
 
 def _announce(before: Optional[dict], after: Optional[dict]) -> None:
@@ -175,9 +179,10 @@ def _announce(before: Optional[dict], after: Optional[dict]) -> None:
     keys: List[str] = []
     step = _flights.step_view(after)
     if after["state"] == "waiting_you" and step:
-        rounds = after["step_states"][step["id"]]["rounds"]
-        key = "%s:%d:you" % (step["id"], rounds)
-        cur = _flights._current(after)
+        cur = _flights.waiting_step(after)
+        sid = cur["id"] if cur is not None else step["id"]
+        rounds = after["step_states"][sid]["rounds"]
+        key = "%s:%d:you" % (sid, rounds)
         quiet = (
             cur is not None
             and cur["kind"] == "you"
@@ -248,7 +253,8 @@ def _session_obs(flight: dict, now: float, agent: bool) -> dict:
     srv = _server()
     title = flight["session"]
     if not title:
-        return {"present": False}
+        # A free chain: no session, its folder is where it runs.
+        return {"present": False, "folder": str(flight.get("repo_root") or "")}
     inst = srv.ENGINE.instances.get(title)
     row = _row(title)
     try:
@@ -308,6 +314,31 @@ def _session_obs(flight: dict, now: float, agent: bool) -> dict:
     return out
 
 
+def _ship_git_obs(title: str) -> dict:
+    """``{stage, pr_url, ahead}``: the session's git stage — the one the lane
+    climbs by (``agent_state._session_stage``) — and its commits ahead of the
+    base, for a Ship stop the agent may already have done (blocking; ``{}``
+    when unreadable)."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        return {}
+    try:
+        st = srv._session_stage(inst) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {"stage": str(st.get("stage") or ""), "pr_url": str(st.get("pr_url") or "")}
+    if out["stage"] in _flights.STAGE_RUNG:
+        try:
+            wt = inst.GetWorktreePath()
+            out["ahead"] = int(
+                srv._commits_beyond_base(wt, srv._session_base_branch(inst)) or 0
+            )
+        except Exception:  # noqa: BLE001 — the receipt just omits the count
+            pass
+    return out
+
+
 def _repo_root(title: str) -> str:
     inst = _server().ENGINE.instances.get(title)
     if inst is None:
@@ -325,7 +356,7 @@ def _repo_root(title: str) -> str:
 
 
 def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
-    """Checklist facts for a verify step (blocking)."""
+    """The behaviors' facts for a verify step (blocking)."""
     from backend.web.core import test_plans as _tp
 
     title = flight["session"]
@@ -359,6 +390,16 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "open_human": [s["text"] for s in _tp.open_human_steps(plan)],
         "open_agent": open_agent,
         "failed": [f["step"]["text"] for f in _tp.failed_steps(plan)],
+        # When the newest of those failures was answered: older than the
+        # stop's attempt (a Retry, the agent's fix) = check again first.
+        "failed_at": max(
+            [
+                float((results.get(s["id"]) or {}).get("at") or 0.0)
+                for s in plan["steps"]
+                if (results.get(s["id"]) or {}).get("result") == "fail"
+            ]
+            or [0.0]
+        ),
         "live": plan.get("state") in ("due", "done") or bool(plan.get("live_at")),
         "live_branch": plan.get("live_branch") or "",
     }
@@ -727,6 +768,9 @@ async def observe(flight: dict, now: float) -> dict:
     )
     sess = await asyncio.to_thread(_session_obs, flight, now, agent)
     obs: dict = {"now": now, "session": sess}
+    if kind == "ship" and ss["state"] in ("pending", "running") and sess.get("present"):
+        # What git says is already done (the agent may have shipped itself).
+        obs["git"] = await asyncio.to_thread(_ship_git_obs, flight["session"])
     if ss["state"] in ("pending", "running"):
         await _guard_obs(flight, sess, now, obs)
     if ss["state"] == "pending" and step.get("when"):
@@ -911,6 +955,115 @@ def _session_payload(plan_session: dict, repo_path: str, prompt: str) -> dict:
     return payload
 
 
+#: What a client names "no session — the default folder" by (``attach
+#: {title}``); ``attach {folder}`` names another folder.
+DEFAULT_SESSION = "@default"
+
+
+#: MindFlock's own default folder (the owner: "a folder like mindflock
+#: pastes, created for this specific purpose"): where a chain runs when no
+#: session is picked. A git repo so a session made there can commit.
+DEFAULT_PLACE = "~/.mindflock/default"
+
+
+def _ensure_default_place() -> str:
+    """``~/.mindflock/default``, made (``git init`` + one empty commit) the
+    first time; never touched after."""
+    import os
+    import subprocess
+
+    folder = os.path.expanduser(DEFAULT_PLACE)
+    os.makedirs(folder, exist_ok=True)
+    if not os.path.isdir(os.path.join(folder, ".git")):
+        readme = os.path.join(folder, "README.md")
+        if not os.path.exists(readme):
+            with open(readme, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "# MindFlock's default place\n\n"
+                    "Routes run here when no session is picked.\n"
+                )
+        git = [
+            "git",
+            "-c",
+            "user.name=MindFlock",
+            "-c",
+            "user.email=mindflock@localhost",
+        ]
+        try:
+            subprocess.run(["git", "init", "-q", folder], check=True, timeout=30)
+            subprocess.run(
+                git + ["-C", folder, "add", "README.md"], check=True, timeout=30
+            )
+            subprocess.run(
+                git + ["-C", folder, "commit", "-q", "-m", "MindFlock default place"],
+                check=True,
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # a plain folder still works for agents
+    return folder
+
+
+def _default_folder() -> str:
+    """Where a chain with no session picked runs: the ``general.default_folder``
+    setting when it names a folder, else MindFlock's own place
+    (:data:`DEFAULT_PLACE`, made on first use)."""
+    import os
+
+    from backend.config.settings import load_settings
+
+    try:
+        folder = str(load_settings().general.default_folder or "").strip()
+    except Exception:  # noqa: BLE001
+        folder = ""
+    if folder and os.path.isdir(os.path.expanduser(folder)):
+        return os.path.expanduser(folder)
+    return _ensure_default_place()
+
+
+def needs_agent(flight: dict) -> bool:
+    """Whether a chain types into an agent: an agent / reviews stop, a verify
+    the agent takes part in, a plug-in that types to the agent, or a Loop that
+    repeats the session's prompt or goes back to the session's agent
+    (``back_to: "agent"``). A perch, a wait, a notify… need none."""
+    from backend.web.core import flight_kinds as _kinds
+
+    steps = flight.get("steps") or []
+    for i, st in enumerate(steps):
+        k = st.get("kind")
+        cfg = st.get("config") or {}
+        if k in _flights.AGENT_KINDS:
+            return True
+        if k == "verify" and str(cfg.get("who") or "both") != "you":
+            return True
+        plug = _kinds.get(k)
+        if plug is not None and getattr(plug, "types_to_agent", False):
+            return True
+        if k == "loop" and _flights.loops_to_agent(st):
+            return True
+        if (
+            k == "loop"
+            and not str(cfg.get("back_to") or "")
+            and all(x.get("kind") == "loop" for x in steps[:i])
+        ):
+            return True
+    return False
+
+
+def needs_session(flight: dict) -> bool:
+    """Whether a chain needs a session at all: an agent (:func:`needs_agent`)
+    or a stop that works on a session (a ship lane, a verify, checks, a
+    split…). A chain of perches, waits, notifies, commands and Loops runs on
+    its own in a folder — like an n8n workflow, nothing is started for it."""
+    if needs_agent(flight):
+        return True
+    for st in flight.get("steps") or []:
+        k = st.get("kind")
+        if k in _flights.SESSION_KINDS and k not in _flights.FOLDER_KINDS:
+            return True
+    return False
+
+
 async def _create_session(payload: dict) -> str:
     from backend.web.core import session_create as _session_create
 
@@ -967,7 +1120,7 @@ def _arm(flight: dict, lane: str, ask_first: bool = False, message: str = "") ->
         raise _StepFailed("the session is gone")
     try:
         if srv._peer_guard.refusal(inst, "autopilot") is not None:
-            raise _StepFailed("a peer's session can't be fast-tracked from here")
+            raise _StepFailed("a peer's session can't ship by itself from here")
     except _StepFailed:
         raise
     except Exception:  # noqa: BLE001
@@ -1001,14 +1154,15 @@ def _arm(flight: dict, lane: str, ask_first: bool = False, message: str = "") ->
 
 
 def _ensure_checklist(flight: dict) -> dict:
-    """Ask for the session's checklist (Verify's own manual path: create +
-    generate on a daemon thread). The plan id is observed on later passes."""
+    """Ask for the session's behaviors (Verify's own manual path: create +
+    generate on a daemon thread — the stop's face reads "Writing…" until they
+    are written). The plan id is observed on later passes."""
     srv = _server()
     title = flight["session"]
     try:
         srv._ensure_test_plan(title, manual=True)
     except Exception as err:  # noqa: BLE001
-        raise _StepFailed("could not ask for the checklist: %s" % err)
+        raise _StepFailed("could not ask for the behaviors: %s" % err)
     return {}
 
 
@@ -1023,7 +1177,7 @@ async def _start_verify_run(plan_id: str) -> None:
             msg = _json.loads(resp.body).get("error") or ""
         except Exception:  # noqa: BLE001
             msg = ""
-        raise _StepFailed(msg or "the checklist run could not start")
+        raise _StepFailed(msg or "the behaviors check could not start")
 
 
 def _start_command(flight: dict, step: dict, folder: str) -> None:
@@ -1530,7 +1684,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             until = (
                 _flights.next_until(cfg["until"], now)
                 if cfg.get("until")
-                else now + float(cfg.get("minutes") or 0) * 60.0
+                else now + float(_flights.wait_seconds(cfg))
             )
             return dict(action, detail={"until": until})
         if sk == "reviews":
@@ -1584,7 +1738,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
 
 def _fix_note(step: dict, action: dict) -> str:
     return (
-        "[MindFlock flight] %s failed: %s\nFix it; the flight retries the step "
+        "[MindFlock route] %s failed: %s\nFix it; the route retries the stop "
         "once you are done." % (step["title"], action.get("reason") or "failed")
     )
 
@@ -1597,18 +1751,19 @@ class _Stale(Exception):
 
 
 def _apply_if_unchanged(
-    fid: str, seen: dict, action: dict, now: float
+    fid: str, seen: dict, action: dict, now: float, at: Optional[int] = None
 ) -> Optional[dict]:
-    """Apply an effect-free ``action`` unless a route moved the flight since it
-    was read. None when stale; the stored record when applying it changed
-    nothing but the clock (no write — see :func:`_same`)."""
+    """Apply an effect-free ``action`` (to member ``at`` of a parallel group,
+    default the cursor) unless a route moved the flight since it was read.
+    None when stale; the stored record when applying it changed nothing but
+    the clock (no write — see :func:`_same`)."""
     out: dict = {}
 
     def fn(f: dict) -> None:
         if _view_key(f)[:3] != _view_key(seen)[:3]:
             raise _Stale()
         before = copy.deepcopy(f)
-        _flights.apply(f, action, now)
+        _flights.apply_at(f, f["cursor"] if at is None else at, action, now)
         if _same(before, f):
             out["unchanged"] = before
             raise _Stale()
@@ -1633,7 +1788,12 @@ def _needs_effect(action: dict) -> bool:
 
 
 def _mark_intent(
-    fid: str, seen: dict, action: dict, now: float, token: str
+    fid: str,
+    seen: dict,
+    action: dict,
+    now: float,
+    token: str,
+    at: Optional[int] = None,
 ) -> Optional[dict]:
     """Record, under the lock and only if nobody moved the flight, that this
     step's side effect is about to be carried out (``detail.performing``). A
@@ -1643,11 +1803,12 @@ def _mark_intent(
     def fn(f: dict) -> None:
         if _view_key(f)[:3] != _view_key(seen)[:3]:
             raise _Stale()
-        cur = _flights._current(f)
+        i = f["cursor"] if at is None else at
+        cur = f["steps"][i] if 0 <= i < len(f["steps"]) else None
         if cur is None or f["step_states"][cur["id"]]["detail"].get("performing"):
             raise _Stale()
         if action["action"] == "run" and not action.get("phase"):
-            _flights.apply(f, dict(action, detail={}), now)
+            _flights.apply_at(f, i, dict(action, detail={}), now)
         f["step_states"][cur["id"]]["detail"]["performing"] = {
             "token": token,
             "at": now,
@@ -1675,8 +1836,11 @@ def _record_outcome(
         if not isinstance(mark, dict) or mark.get("token") != token:
             raise _Stale()
         ss["detail"].pop("performing", None)
-        cur = _flights._current(f)
-        if f["state"] in _flights.FINAL or cur is None or cur["id"] != sid:
+        lo, hi = _flights.current_group(f)
+        here = [
+            k for k in range(lo, min(hi, len(f["steps"]))) if f["steps"][k]["id"] == sid
+        ]
+        if f["state"] in _flights.FINAL or not here:
             return
         if f["state"] == "halted":
             return
@@ -1693,7 +1857,7 @@ def _record_outcome(
                 ss["note"] = str(action["note"])
             f["updated"] = now
         else:
-            _flights.apply(f, action, now)
+            _flights.apply_at(f, here[0], action, now)
         if paused and f["state"] in _flights.ACTIVE:
             f["state"] = "paused"
 
@@ -1706,6 +1870,54 @@ def _record_outcome(
 #: At most this many steps finish within one pass (a notify followed by a
 #: wait, say) before the loop moves on to the next flight.
 _CHAIN = 4
+
+
+async def _step_member(
+    fid: str, f: dict, i: int, now: float
+) -> Optional[Tuple[dict, dict]]:
+    """Observe, judge and apply step ``i`` of ``f`` (the cursor, or one member
+    of the parallel group at it) → ``(after, action)``; None when stale or
+    nothing changed."""
+    view = _flights.member_view(f, i)
+    obs = await observe(view, now)
+    action = _flights.next_action(view, obs, now)
+    sess = obs.get("session") or {}
+    if not f["repo_root"] and sess.get("present"):
+        root = await asyncio.to_thread(_repo_root, f["session"])
+        if root:
+            action["repo_root"] = root
+    if sess.get("branch") and sess["branch"] != f["branch"]:
+        action["branch"] = sess["branch"]
+    cur = _flights._current(view)
+    if _needs_effect(action) and cur is not None:
+        token = uuid.uuid4().hex
+        marked = await asyncio.to_thread(_mark_intent, fid, f, action, now, token, i)
+        if marked is None:
+            return None
+        action = await _perform(_flights.member_view(marked, i), action, now)
+        after = await asyncio.to_thread(
+            _record_outcome, fid, cur["id"], token, action, now
+        )
+        if after is None and cur["kind"] in ("ship", "reviews"):
+            # The step was removed while its lane was being armed.
+            await asyncio.to_thread(_disarm_if_removed, fid, cur["id"])
+    else:
+        after = await asyncio.to_thread(_apply_if_unchanged, fid, f, action, now, i)
+    if after is None or _same(f, after):
+        return None
+    if action.get("by_agent") and cur is not None and cur["kind"] == "ship":
+        # Done by the agent while this stop's lane waited "for new work": the
+        # lane has nothing left to do for this flight.
+        await asyncio.to_thread(_disarm_ours, fid, f["session"])
+    if (
+        cur is not None
+        and cur["kind"] == "command"
+        and action["action"] in ("done", "fail", "advance")
+    ):
+        with _JOBS_LOCK:
+            _JOBS.pop((fid, cur["id"]), None)
+    await asyncio.to_thread(_announce, f, after)
+    return after, action
 
 
 async def step_flight(fid: str) -> None:
@@ -1728,52 +1940,37 @@ async def step_flight(fid: str) -> None:
         for _ in range(_CHAIN):
             if f["state"] not in _flights.ACTIVE:
                 return
-            obs = await observe(f, now)
-            action = _flights.next_action(f, obs, now)
-            sess = obs.get("session") or {}
-            if not f["repo_root"] and sess.get("present"):
-                root = await asyncio.to_thread(_repo_root, f["session"])
-                if root:
-                    action["repo_root"] = root
-            if sess.get("branch") and sess["branch"] != f["branch"]:
-                action["branch"] = sess["branch"]
-            cur = _flights._current(f)
-            if _needs_effect(action) and cur is not None:
-                token = uuid.uuid4().hex
-                marked = await asyncio.to_thread(
-                    _mark_intent, fid, f, action, now, token
-                )
-                if marked is None:
+            lo, hi = _flights.current_group(f)
+            if hi - lo < 2:
+                out = await _step_member(fid, f, f["cursor"], now)
+                if out is None:
+                    return  # stale, or nothing changed: no write, nothing to say
+                after, action = out
+                if (
+                    action["action"] not in ("done", "advance", "skip_when")
+                    or after["state"] not in _flights.ACTIVE
+                ):
                     return
-                action = await _perform(marked, action, now)
-                after = await asyncio.to_thread(
-                    _record_outcome, fid, cur["id"], token, action, now
-                )
-                if after is None and cur["kind"] in ("ship", "reviews"):
-                    # The step was removed while its lane was being armed.
-                    await asyncio.to_thread(_disarm_if_removed, fid, cur["id"])
-                before = f
-            else:
-                after = await asyncio.to_thread(
-                    _apply_if_unchanged, fid, f, action, now
-                )
-                before = f
-            if after is None or _same(before, after):
-                return  # stale, or nothing changed: no write, nothing to say
-            if (
-                cur is not None
-                and cur["kind"] == "command"
-                and action["action"] in ("done", "fail", "advance")
-            ):
-                with _JOBS_LOCK:
-                    _JOBS.pop((fid, cur["id"]), None)
-            await asyncio.to_thread(_announce, before, after)
-            if (
-                action["action"] not in ("done", "advance", "skip_when")
-                or after["state"] not in _flights.ACTIVE
-            ):
+                f = after
+                continue
+            # A parallel group (round 20): every open member, each its own
+            # verdict against the flight as the one before left it.
+            cursor = f["cursor"]
+            members = [f["steps"][k]["id"] for k in _flights.open_members(f)]
+            if not members:
+                members = [f["steps"][cursor]["id"]]  # all through: advance
+            for sid in members:
+                if f["state"] not in _flights.ACTIVE:
+                    return
+                k = next((n for n, st in enumerate(f["steps"]) if st["id"] == sid), -1)
+                glo, ghi = _flights.current_group(f)
+                if not glo <= k < ghi:
+                    continue  # the group moved on (or the member went)
+                out = await _step_member(fid, f, k, now)
+                if out is not None:
+                    f = out[0]
+            if f["state"] not in _flights.ACTIVE or f["cursor"] == cursor:
                 return
-            f = after
     except Exception as err:  # noqa: BLE001 — one flight never stops a pass
         _log("flight %s pass failed: %v", fid, err)
 
@@ -1928,11 +2125,47 @@ def on_session_removed(title: str) -> None:
         return
     try:
         after = _flights.mutate(
-            f["id"], lambda x: _flights.op_cancel(x, "its session was deleted")
+            f["id"], lambda x: _flights.op_cancel(x, _flights.SESSION_REMOVED)
         )
     except _flights.FlightError:
         return
     _announce(f, after)
+
+
+def restore_on_reopen(snap: Optional[dict], title: str) -> Optional[dict]:
+    """The reopen hook: a chain the session's close cancelled comes back on
+    the reopened session ``title`` (:func:`flights.op_restore`). Only from the
+    Recently-closed entry's own snapshot — a new session that merely reuses
+    the title gets nothing. Not when another chain is already live on
+    ``title``: that one is left alone, and the old one stays cancelled with a
+    note saying why. Returns the restored flight, else None."""
+    fid = str((snap or {}).get("id") or "")
+    if not fid or not title:
+        return None
+    before = _flights.get(fid)
+    if before is None:
+        return None
+    if _flights.for_session(title) is not None:
+        try:
+            _flights.mutate(
+                fid,
+                lambda x: _flights._hist(
+                    x,
+                    time.time(),
+                    "",
+                    "halted",
+                    "not restored: another route is live on the reopened session",
+                ),
+            )
+        except _flights.FlightError:
+            pass
+        return None
+    try:
+        after = _flights.mutate(fid, lambda x: _flights.op_restore(x, snap, title))
+    except _flights.FlightError:
+        return None
+    _announce(before, after)
+    return after
 
 
 # --------------------------------------------------------------------------- #
@@ -1962,16 +2195,16 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     adhoc = body.get("steps") is not None
     plan = _flights.get_plan(plan_id) if plan_id or not adhoc else None
     if plan is None and (plan_id or not adhoc):
-        raise _flights.FlightError("unknown_plan", 404, "no such plan")
+        raise _flights.FlightError("unknown_plan", 404, "no such saved route")
     if adhoc:
         if plan is None and not title and not str(body.get("repo_path") or "").strip():
             raise _flights.FlightError(
-                "needs_title", 400, "an ad-hoc flight needs a session (or a folder)"
+                "needs_title", 400, "an ad-hoc route needs a session (or a folder)"
             )
         plan = _flights.adhoc_plan(
             body.get("steps"),
             plan,
-            subject.get("title") or ("Flight on %s" % title if title else ""),
+            subject.get("title") or ("Route on %s" % title if title else ""),
         )
     if title and title not in srv.ENGINE.instances:
         raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
@@ -2021,7 +2254,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
             _session_payload(plan["session"], repo, prompt)
         )
         if adhoc and not plan_id and not subject.get("title"):
-            plan = dict(plan, name="Flight on %s" % new_title)
+            plan = dict(plan, name="Route on %s" % new_title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
                 plan,
@@ -2085,7 +2318,7 @@ def _take_over(flight: dict, rec: dict, lead: List[dict]) -> dict:
     title = flight["session"]
     ids = [s["id"] for s in flight["steps"][flight["cursor"] :][: len(lead)]]
     halted = (
-        str(rec.get("reason") or "Fast-track stopped")
+        str(rec.get("reason") or "shipping stopped")
         if rec.get("state") == "halted"
         else ""
     )
@@ -2129,25 +2362,66 @@ def set_start_on(flight_id: str, value) -> dict:
     return _changed(flight_id, lambda f: _flights.op_start_on(f, value))
 
 
-def _verify_done(flight: dict, sid: str, note: str) -> None:
-    """Done on a verify step waiting on you: the open human checklist items
-    are recorded as passed (by a human), which is what settles the plan."""
-    from backend.web.core import test_plans as _tp
+def _no_blanket_done(flight: dict, sid: str) -> None:
+    """There is no blanket Done on a Verify stop waiting on you
+    (docs/behaviors.md §5): it moves on when its behaviors are answered, or on
+    Skip. (It used to pass every open behavior unseen — "Done on the chain".)
+    A Verify stop whose FAILURE was handed to you (``on_fail`` you) still takes
+    Done: that answers the failure, not the behaviors."""
+    cur = _flights._current(flight)
+    ss = flight["step_states"].get(sid) or {}
+    if (
+        cur is not None
+        and cur["id"] == sid
+        and cur["kind"] == "verify"
+        and ss.get("state") == "waiting_you"
+        and not (ss.get("detail") or {}).get("failed_reason")
+    ):
+        raise _flights.FlightError(
+            "answer_behaviors",
+            409,
+            "answer its behaviors (or Skip it) — %s moves on once every one has "
+            "an answer" % cur["title"],
+        )
 
-    i = next((k for k, s in enumerate(flight["steps"]) if s["id"] == sid), -1)
-    if i < 0 or flight["steps"][i]["kind"] != "verify":
-        return
-    pid = str(flight["step_states"][sid]["detail"].get("plan") or "")
-    plan = _tp.get(pid) if pid else None
-    if plan is None:
-        return
-    for step in _tp.open_human_steps(plan):
-        try:
-            _tp.record_result(
-                pid, step["id"], "pass", note=note or "Done on the flight", by="human"
+
+def fix(flight_id: str, step_id: str) -> dict:
+    """The "Let the agent fix it" op on a halted stop (``POST
+    /api/flights/{id}/steps/{sid}/op/fix``): the failure goes to the session's
+    agent as a prompt, the stop waits for its turn to end, then runs again —
+    what ``on_fail: agent`` does by itself, asked for once by hand. A failed
+    Verify stop checks its behaviors again after the fix. 409 ``not_failed``
+    on a stop that has not failed; 409 ``no_session`` with no agent to ask."""
+    before = _flights.get(flight_id)
+    if before is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
+    if not before.get("session"):
+        raise _flights.FlightError(
+            "no_session", 409, "this route has no session whose agent could fix it"
+        )
+    after = _flights.mutate(flight_id, lambda f: _flights.op_fix(f, step_id))
+    if after is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
+    step = next((x for x in after["steps"] if x["id"] == step_id), None)
+    reason = str(
+        (after["step_states"].get(step_id) or {}).get("detail", {}).get("reason") or ""
+    )
+    try:
+        _deliver(
+            after["session"], _fix_note(step or {"title": step_id}, {"reason": reason})
+        )
+    except Exception as err:  # noqa: BLE001 — _StepFailed, or the queue's own
+        # The agent can't be asked: the stop halts again, saying why.
+        said = str(err) or "the agent could not be asked"
+        after = (
+            _flights.mutate(
+                flight_id, lambda f: _flights.op_fix_failed(f, step_id, said)
             )
-        except Exception as err:  # noqa: BLE001
-            _log("flight %s: could not record %s: %v", flight["id"], step["id"], err)
+            or after
+        )
+    _announce(before, after)
+    wake()
+    return after
 
 
 def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
@@ -2155,18 +2429,10 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     :class:`flights.FlightError` (404 unknown flight, 409 refusals)."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     fn = _OPS[op]
-    if op == "done" and not before["step_states"].get(step, {}).get("detail", {}).get(
-        "failed_reason"
-    ):
-        cur = _flights._current(before)
-        if (
-            cur is not None
-            and cur["id"] == step
-            and before["step_states"][step]["state"] == "waiting_you"
-        ):
-            _verify_done(before, step, note)
+    if op == "done":
+        _no_blanket_done(before, step)
 
     def _do(f: dict) -> None:
         if op == "done":
@@ -2180,7 +2446,7 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
 
     after = _flights.mutate(flight_id, _do)
     if after is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     _announce(before, after)
     wake()
     return after
@@ -2192,10 +2458,10 @@ def _changed(flight_id: str, fn) -> dict:
     not move — and wake the loop."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     after = _flights.mutate(flight_id, fn)
     if after is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     if _view_key(before) == _view_key(after):
         _emit("flight.changed", after)
     _announce(before, after)
@@ -2217,17 +2483,20 @@ def change_steps(
     under the lock, so a driver pass that moved it meanwhile wins and the
     route gets its 409. ``add_steps`` takes a list in ``raw`` (and ``group``:
     ``{name}``); ``add_plan`` a plan id; ``remove_group`` a step of the group;
-    ``ungroup`` the group id in ``step``. Raises
+    ``ungroup`` the group id in ``step``; ``add_parallel`` the step in
+    ``raw`` placed in ``step``'s parallel group (round 20). Raises
     :class:`flights.FlightError` / :class:`flights.PlanError`."""
     plan = None
     if op == "add_plan":
         plan = _flights.get_plan(str(raw or ""))
         if plan is None:
-            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+            raise _flights.FlightError("unknown_plan", 404, "no such saved route")
 
     def _do(f: dict) -> None:
         if op == "add":
             _flights.op_add_step(f, raw, at)
+        elif op == "add_parallel":
+            _flights.op_add_parallel(f, raw, step, at)
         elif op == "add_steps":
             _flights.op_add_steps(f, raw, at, group)
         elif op == "add_plan":
@@ -2242,6 +2511,8 @@ def change_steps(
             _flights.op_remove_group(f, step)
         else:
             _flights.op_remove_step(f, step)
+        # A Loop back to the agent on a chain running in a folder: no agent.
+        _flights.check_agent_loops(f)
 
     return _changed(flight_id, _do)
 
@@ -2258,7 +2529,7 @@ def split_off(flight_id: str, sid: str, pos=None) -> Tuple[dict, dict]:
     (:func:`flights.split_off`), both announced, the loop woken."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     after, chain = _flights.split_off(flight_id, sid, pos)
     if _view_key(before) == _view_key(after):
         _emit("flight.changed", after)
@@ -2333,7 +2604,7 @@ async def ground(body: dict) -> dict:
     if plan_id:
         plan = _flights.get_plan(plan_id)
         if plan is None:
-            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+            raise _flights.FlightError("unknown_plan", 404, "no such saved route")
     flight = await asyncio.to_thread(
         _flights.ground,
         plan,
@@ -2361,13 +2632,42 @@ async def attach(flight_id: str, body: dict) -> dict:
     ready = start_on != "now"
     f = _flights.get(flight_id)
     if f is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     if f["state"] != _flights.GROUNDED:
         raise _flights.FlightError(
-            "not_grounded", 409, "this flight already has a session"
+            "not_grounded", 409, "this route already has a session"
         )
     _flights.validate_for_takeoff(f)
     title = str(body.get("title") or "").strip()
+    folder = str(body.get("folder") or "").strip()
+    if title == DEFAULT_SESSION or folder:
+        # No session picked: the chain runs in a folder (the default one
+        # unless named). Nothing is started for a chain that needs no
+        # session; one that does gets a new session there.
+        folder = (
+            os.path.expanduser(folder)
+            if folder
+            else await asyncio.to_thread(_default_folder)
+        )
+        if not os.path.isdir(folder):
+            raise _flights.FlightError("bad_folder", 400, "no folder %s" % folder)
+        if not needs_session(f):
+            flight = await asyncio.to_thread(
+                _flights.attach,
+                flight_id,
+                "",
+                folder,
+                "",
+                False,
+                None,
+                None,
+                start_on,
+            )
+            _emit("flight.changed", flight)
+            wake()
+            return flight
+        title = ""
+        body = dict(body, repo_path=folder)
     seeded = False
     no_prompt = False
     if title:
@@ -2375,7 +2675,7 @@ async def attach(flight_id: str, body: dict) -> dict:
             raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
         if _flights.for_session(title) is not None:
             raise _flights.FlightError(
-                "in_flight", 409, "%s is already on a flight" % title
+                "in_flight", 409, "%s is already on a route" % title
             )
     else:
         plan = _flights.get_plan(f["plan_id"]) or {}
@@ -2437,12 +2737,15 @@ def step_op(flight_id: str, step_id: str, name: str, body: Optional[dict]) -> di
     ``unknown_op``."""
     before = _flights.get(flight_id)
     if before is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     step = next((s for s in before["steps"] if s["id"] == step_id), None)
     if step is None:
         raise _flights.FlightError("unknown_step", 404, "no such stop")
     plug = _kinds.get(step["kind"])
     op = plug.ops.get(name) if plug is not None else None
+    if op is None and name == "fix":
+        # The built-in "Let the agent fix it" on any halted stop.
+        return {"flight": fix(flight_id, step_id)}
     if op is None:
         raise _flights.FlightError(
             "unknown_op", 404, "%s has no operation %r" % (step["kind"], name)
@@ -2460,10 +2763,10 @@ def remove(flight_id: str) -> None:
     only — a running, waiting or paused one must be cancelled first."""
     f = _flights.get(flight_id)
     if f is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     if f["state"] in _flights.HOLDING and f["state"] != _flights.READY:
         # A ready chain has not started anything: it goes at once.
-        raise _flights.FlightError("in_flight", 409, "cancel the flight first")
+        raise _flights.FlightError("in_flight", 409, "stop the route first")
     try:
         # A checkpoint stop pins work under refs/mindflock/flights/<fid>/…
         from backend.web.core.flight_kinds import checkpoint as _checkpoint
@@ -2490,11 +2793,29 @@ def list_dto(all_: bool = False) -> List[dict]:
     """``GET /api/flights``: unfinished + the last 20 finished (all with
     ``all_``)."""
     flights = _flights.list_flights()
-    if all_:
-        return flights
-    live = [f for f in flights if f["state"] not in _flights.FINAL]
-    landed = sorted(
-        (f for f in flights if f["state"] in _flights.FINAL),
-        key=lambda f: -(f["finished"] or f["updated"]),
-    )[:20]
-    return live + landed
+    if not all_:
+        live = [f for f in flights if f["state"] not in _flights.FINAL]
+        landed = sorted(
+            (f for f in flights if f["state"] in _flights.FINAL),
+            key=lambda f: -(f["finished"] or f["updated"]),
+        )[:20]
+        flights = live + landed
+    notes = lane_notes()
+    return [_flights.with_returns(f, notes) for f in flights]
+
+
+def flight_dto(flight: dict) -> dict:
+    """One flight as the API sends it: plus ``returns`` (which stops can go
+    back to the agent, and why — ``flights.returns_of``)."""
+    return _flights.with_returns(flight, lane_notes())
+
+
+def lane_notes() -> bool:
+    """Whether a lane hands its failures back to the agent at all
+    (``repository.fasttrack_failure_notes``; unreadable settings: yes)."""
+    try:
+        from backend.config import settings as _settings
+
+        return bool(_settings.load_settings().repository.fasttrack_failure_notes)
+    except Exception:  # noqa: BLE001 — the default
+        return True

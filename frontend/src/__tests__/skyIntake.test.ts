@@ -71,6 +71,10 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
     ]);
   });
 
+  it("names each block without the kind its badge says (the label keeps it for tooltips)", () => {
+    expect(blocks.map((b) => b.name)).toEqual(["Shortcut · quickpay", "Jira", "acme/app", "acme/site", "acme/app"]);
+  });
+
   it("counts the eligible items without a session, oldest first, into their own block", () => {
     const sc = blocks[0];
     expect(sc.waiting.map((w) => w.item.reference)).toEqual(["sc-2", "sc-1"]);
@@ -82,17 +86,25 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
   });
 
   it("resolves the default flyway: the source's own, else the kind's built-in", () => {
-    expect(blocks[0].flyway).toEqual({ id: "p_mine", name: "Mine", own: true });
-    expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false });
-    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false });
-    expect(blocks[3].flyway).toEqual({ id: "p_mine", name: "Mine", own: true });
+    expect(blocks[0].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
+    expect(blocks[1].flyway).toEqual({ id: "builtin:ticket", name: "Ticket to merge", own: false, words: "Agent only" });
+    expect(blocks[2].flyway).toEqual({ id: "builtin:pr", name: "Review a PR", own: false, words: "Agent only" });
+    expect(blocks[3].flyway).toEqual({ id: "p_mine", name: "Mine", own: true, words: "Mine" });
     // No builtin:issue on this server: an issue is worked like a ticket.
     expect(blocks[4].flyway.id).toBe("builtin:ticket");
   });
 
-  it("a flyway the list no longer has keeps its id as its name", () => {
-    const b = sourceBlocks({ ticketing: { sources: [{ id: "sc", plan: "p_gone" }] } }, [], [], { plans: PLANS });
-    expect(b[0].flyway).toEqual({ id: "p_gone", name: "p_gone", own: true });
+  it("a flyway the list no longer has: the server goes by the depth, and so do the words", () => {
+    const b = sourceBlocks({ ticketing: { sources: [{ id: "sc", plan: "p_gone", depth: "push" }] } }, [], [], { plans: PLANS });
+    expect(b[0].flyway).toMatchObject({ id: "builtin:ticket", own: false, words: "Push" });
+    // Plans not loaded yet: a named one is trusted, by its id.
+    const early = sourceBlocks({ ticketing: { sources: [{ id: "sc", plan: "p_gone" }] } }, [], [], { plans: null });
+    expect(early[0].flyway).toEqual({ id: "p_gone", name: "p_gone", own: true, words: "p_gone" });
+  });
+
+  it("names where a source goes in the card's words: its depth's rung", () => {
+    const b = sourceBlocks({ ticketing: { sources: [{ id: "sc", depth: "pr" }] }, github: { repos: ["acme/app"], repo_settings: { "acme/app": { depth: "commit" } } } }, [], [], { plans: PLANS });
+    expect(b.map((x) => x.flyway.words)).toEqual(["Open PR", "Commit"]);
   });
 
   it("an item from a source settings doesn't name still gets a block", () => {
@@ -103,6 +115,19 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
       ["issues:acme/app", true],
     ]);
     expect(b[0].waiting).toHaveLength(2);
+    // Its name is the repo alone, as a configured block's: a stray issues
+    // block for another repo reads as that repo, not as a second copy.
+    expect(b.map((x) => x.name)).toEqual(["sc", "acme/app", "acme/app"]);
+  });
+
+  it("an issue repo settings names is one block, however its items spell it", () => {
+    const b = sourceBlocks(
+      { github: { issue_repos: ["Acme/App", "acme/app"] } },
+      waiting({ issues: { issues: [{ repo: "acme/app", number: 4, title: "Crash", eligible: true }] } }),
+      [],
+      { plans: PLANS }
+    );
+    expect(b.map((x) => [x.key, x.waiting.length, !!x.stray])).toEqual([["issues:Acme/App", 1, false]]);
   });
 });
 

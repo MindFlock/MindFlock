@@ -4,9 +4,13 @@
 flock's one-shot headless CLI (the plumbing of :mod:`core.commit_message`:
 :func:`pick_argv`, :func:`_run`, :func:`neutral_cwd`) for blocks, with a prompt
 that lists :data:`flights.STEP_KINDS` and demands one ``<flight>`` JSON block.
-The answer goes through :func:`flights.normalize_steps` — the SAME validator a
+The prompt carries the stop cookbook (:mod:`core.flight_cookbook`: when each
+kind fits, the order, the common routes) — the SAME one the MCP's
+``describe_flight`` hands an agent, so the Sky's box and an agent agree. The
+answer goes through :func:`flights.normalize_steps` — the SAME validator a
 POSTed plan meets — so a bad answer is a refusal, never a stored step nobody
-asked for.
+asked for; the cookbook's lint and read-back sentence ride along
+(``sentence``, ``warnings``) for the person to check.
 
 Never raises into the route: :class:`DescribeError` carries the status and the
 machine word (``no_model`` 409, ``could_not_describe`` 422).
@@ -19,6 +23,7 @@ import re
 from typing import List, Tuple
 
 from backend.web.core import commit_message as _commit_message
+from backend.web.core import flight_cookbook as _cookbook
 from backend.web.core import flights as _flights
 
 __all__ = ["DescribeError", "build_prompt", "parse_answer", "describe", "TIMEOUT_S"]
@@ -68,10 +73,12 @@ def build_prompt(text: str, want: str = "step") -> str:
     )
     return "\n".join(
         [
-            "You design steps for MindFlock flights. A flight carries one coding "
-            "session from its first prompt to a merged pull request as a row of "
-            "blocks. These are the block kinds:",
+            "You design MindFlock routes. A route carries one coding session "
+            "from its first prompt to a merged pull request as a row of stops "
+            "(blocks). These are the block kinds and their config:",
             _kinds_text(),
+            "",
+            _cookbook.prompt_text(),
             "",
             'Every block is a JSON object: {"kind": <one of the kinds>, '
             '"title": <a short label, 2-5 words>, "config": {<only that '
@@ -81,7 +88,8 @@ def build_prompt(text: str, want: str = "step") -> str:
             "retry), skip (move on), you (ask the person).",
             'Use a ship block with lane "merge" for merging, "pr" for opening '
             "a pull request. Use a you block for anything only a person can do "
-            "or decide. Never invent a kind.",
+            "or decide. Never invent a kind, a URL or a command. Add only the "
+            "stops the request asks for or clearly implies.",
             "",
             ask,
             "Answer with exactly one <flight> block holding a JSON array of "
@@ -150,7 +158,19 @@ def describe(text: str, want: str = "step", program: str = "") -> dict:
     except _commit_message.CommitMessageError as err:
         raise DescribeError("could_not_describe", 422, str(err))
     steps = parse_answer(_commit_message._ANSI_RE.sub("", raw))
-    return {"steps": steps, "model": _model_name(argv)}
+    out = {
+        "steps": steps,
+        "model": _model_name(argv),
+        "sentence": _cookbook.sentence(steps, _labels()),
+    }
+    issues = _cookbook.lint(steps, known=_flights.STEP_KINDS)
+    if issues:
+        out["warnings"] = [_cookbook.issue_line(x) for x in issues]
+    return out
+
+
+def _labels() -> dict:
+    return {k: str(v.get("label") or k) for k, v in _flights.STEP_KINDS.items()}
 
 
 def _model_name(argv) -> str:

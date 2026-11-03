@@ -1,7 +1,7 @@
 /** Notification center bell (port of section 7): the ONE place anything
  * waits on you, plus what happened while you were away.
  *
- * "Needs attention" merges the sidebar's attention items (an agent asking, a
+ * "Needs you" merges the sidebar's attention items (an agent asking, a
  * broken session, failing checks, ready for a PR) with the server's waiting
  * rows (`GET /api/outbox`: an ask-first approval with its commit-message preview, a stuck group
  * line, a spent budget, a lead's plan or PR) — `needsAttention`, one row per
@@ -42,10 +42,11 @@ import { PEER_SCREEN, peerEventNote } from "../lib/peer";
 import { peerRowKey, peerSessionName, peerSessionNote, type PeerSessionEventData } from "../lib/peerSessions";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import { jobPastExpectedRow } from "../lib/jobExpectation";
+import { openBehaviors } from "../lib/behaviorsFocus";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
-/** Rows of "Needs attention" shown before "+N more". */
+/** Rows of "Needs you" shown before "+N more". */
 const NEEDS_SHOWN = 6;
 
 /** Monochrome bell (fill=currentColor), never the 🔔 emoji. The emoji paints
@@ -84,7 +85,7 @@ interface Notif {
   approve?: { id: string; via: string; code: string; host: string } | null;
   /** An update.available row: named "Updates", opens this Settings screen. */
   settings?: SettingsScreen;
-  /** A Verify row: the checklist (plan id) a click opens in Verify. */
+  /** A Verify row: the behaviors (plan id) a click opens in the Sky. */
   verify?: string;
   /** The row's name when it isn't a session's (a checklist's title). */
   name?: string;
@@ -232,37 +233,38 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       const what = String((d as { what?: string }).what || "guard");
       return { text: "red-zone guard tampered (" + what + ")", cls: "n-warn" };
     }
-    // Verify: the three moments a checklist needs you — it came due (the work
-    // shipped), it couldn't be written, or an agent's check found a failure.
-    // Each is gated by its own notify rule, and a click opens the checklist.
+    // Verify: the three moments a session's behaviors need you — they came due
+    // (the work shipped), they couldn't be written, or a check found a
+    // failure. Each is gated by its own notify rule, and a click flies the Sky
+    // to those behaviors on the route (openBehaviors, docs/behaviors.md §4).
     case "session.test_plan_due": {
       const p = planOf(env, d);
       return { text: "ready to check", cls: "n-info", rule: "verify_plan_due", dedupe: "plan-due:" + p.verify, ...p };
     }
     case "session.test_plan_failed":
-      return { text: "couldn't write the checklist", cls: "n-warn", rule: "verify_plan_failed", ...planOf(env, d) };
+      return { text: "couldn't write the behaviors", cls: "n-warn", rule: "verify_plan_failed", ...planOf(env, d) };
     case "session.test_plan_checked": {
       // Only a run that FOUND a failure is news here (the emitter stamps
       // new = "failed"); a clean run is the opt-in toast's, not the bell's.
       if (env.new !== "failed") return null;
       const n = Number((d as { failed?: number }).failed) || 0;
       return {
-        text: "checklist failed" + (n ? " — " + n + " step" + (n === 1 ? "" : "s") : ""),
+        text: "behaviors failed" + (n ? " — " + n + " behavior" + (n === 1 ? "" : "s") : ""),
         cls: "n-warn",
         rule: "verify_run_failed",
         ...planOf(env, d),
       };
     }
-    // A PERSON's Fail turned the checklist red (the agent's runs arrive as
-    // test_plan_checked above). Same rule, same row: a click opens Verify on
-    // that checklist.
+    // A PERSON's Fail turned the behaviors red (the agent's runs arrive as
+    // test_plan_checked above). Same rule, same row: a click flies the Sky to
+    // those behaviors.
     case "session.test_plan_step_failed": {
       const step = Number((d as { step?: number }).step) || 0;
       const text = String((d as { text?: string }).text || "");
       return {
         text:
-          "checklist failed" +
-          (step ? " — step " + step + (text ? " " + (text.length > 60 ? text.slice(0, 59) + "…" : text) : "") : ""),
+          "behavior failed" +
+          (text ? " — " + (text.length > 60 ? text.slice(0, 59) + "…" : text) : step ? " — behavior " + step : ""),
         cls: "n-warn",
         rule: "verify_run_failed",
         ...planOf(env, d),
@@ -711,9 +713,9 @@ export function NotificationsBell() {
                         setOpen(false);
                         openSettings(n.settings);
                       } else if (n.verify) {
-                        // The checklist itself, in Verify.
+                        // The behaviors themselves, on the route in the Sky.
                         setOpen(false);
-                        useUi.getState().openDialogFor("verify", n.verify);
+                        openBehaviors({ planId: n.verify });
                       } else if (n.template && !n.session) {
                         setOpen(false);
                         useUi.getState().openDialogFor("schedule");
@@ -739,7 +741,7 @@ export function NotificationsBell() {
                         : n.run && !n.session
                         ? runLookups.name(n.run) || "Team run"
                         : n.verify
-                        ? "Verify · " + (n.name || windowName(n.session))
+                        ? "Behaviors · " + (n.name || windowName(n.session))
                         : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") +
                           (n.session ? windowName(n.session) : "—")}
                     </span>

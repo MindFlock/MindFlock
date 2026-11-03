@@ -295,7 +295,7 @@ class TestShippableGuard:
         )
         with pytest.raises(ToolError) as err:
             box.ship_session({"title": "w1", "depth": "push"}, _ctx(clock))
-        assert "Fast-track armed" in err.value.message
+        assert "Goes as far as armed" in err.value.message
         assert 'depth="off"' in err.value.message
         assert sim.posts == []
         # A finished or halted run no longer drives anything.

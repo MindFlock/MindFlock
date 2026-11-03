@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
+from backend.web.core import auth as _web_auth
 from backend.web.core import flight_describe as _describe
 from backend.web.core import flight_driver as _driver
+from backend.web.core import flight_intake_default as _intake_default
 from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flight_triggers as _triggers
 from backend.web.core import flight_when as _when
@@ -143,7 +145,7 @@ async def _start_intake(body: dict, subject: dict) -> JSONResponse:
 
     plan_id = str(body.get("plan_id") or "")
     if _flights.get_plan(plan_id) is None:
-        return _err(_flights.FlightError("unknown_plan", 404, "no such plan"))
+        return _err(_flights.FlightError("unknown_plan", 404, "no such saved route"))
     if not srv.git_available():
         return srv._no_git_response()
     kind = str(subject.get("kind") or "").strip().lower()
@@ -179,19 +181,62 @@ async def _start_intake(body: dict, subject: dict) -> JSONResponse:
 
 def _bad_step(err: _flights.PlanError) -> JSONResponse:
     return JSONResponse(
-        {"error": "bad_step", "detail": err.message, "field": err.field},
+        {
+            "error": getattr(err, "code", "") or "bad_step",
+            "detail": err.message,
+            "field": err.field,
+        },
         status_code=400,
     )
 
 
+async def _ground_editor(body: dict, ref: dict) -> dict:
+    """:func:`flight_driver.ground` for a chain that edits ``ref``'s default
+    stops: the same grounding, with ``edits_default`` stored on it."""
+    plan = None
+    plan_id = str(body.get("plan_id") or "")
+    if plan_id:
+        plan = _flights.get_plan(plan_id)
+        if plan is None:
+            raise _flights.FlightError("unknown_plan", 404, "no such saved route")
+    flight = await asyncio.to_thread(
+        _flights.ground,
+        plan,
+        body.get("steps"),
+        str(body.get("name") or ""),
+        str(body.get("by") or "user"),
+        None,
+        ref,
+    )
+    _driver._emit("flight.changed", flight)
+    return flight
+
+
 async def _start_grounded(body: dict) -> JSONResponse:
-    """``{grounded: true, plan_id? | steps?, name?}`` → 202 ``{"flight"}``: a
-    row of stops with no session (state ``grounded``) that nothing drives
-    until ``POST /api/flights/{id}/attach``."""
+    """``{grounded: true, plan_id? | steps?, name?, edits_default?}`` → 202
+    ``{"flight"}``: a row of stops with no session (state ``grounded``) that
+    nothing drives until ``POST /api/flights/{id}/attach``. With
+    ``edits_default`` (``{kind: tickets|prs|issues, target}``; 400
+    ``bad_edits_default`` when malformed) it EDITS that source's default
+    stops and is never attached (409 ``edits_default``)."""
     if "steps" in body and not isinstance(body["steps"], list):
         return _bad_step(_flights.PlanError("steps is a list", "steps"))
+    ref = None
+    if body.get("edits_default") is not None:
+        ref = _flights.normalize_edits_default(body.get("edits_default"))
+        if ref is None:
+            return _err(
+                _flights.FlightError(
+                    "bad_edits_default",
+                    400,
+                    "edits_default is {kind: tickets|prs|issues, target}",
+                )
+            )
     try:
-        flight = await _driver.ground(body)
+        if ref is not None:
+            flight = await _ground_editor(body, ref)
+        else:
+            flight = await _driver.ground(body)
     except _flights.PlanError as err:
         return _bad_step(err)
     except _flights.FlightError as err:
@@ -231,12 +276,78 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     return JSONResponse({"flight": flight, "absorbed": absorbed}, status_code=202)
 
 
+@router.get("/api/flights/default-place")
+def flights_default_place() -> JSONResponse:
+    """The default folder (``{folder}``, ``~`` folded): where a chain runs
+    when no session is picked — for the place picker."""
+    import os
+
+    from backend.config.settings import load_settings
+
+    try:
+        folder = str(load_settings().general.default_folder or "").strip()
+    except Exception:  # noqa: BLE001
+        folder = ""
+    shown = folder or _driver.DEFAULT_PLACE
+    home = os.path.expanduser("~")
+    if shown.startswith(home):
+        shown = "~" + shown[len(home) :]
+    return JSONResponse({"folder": shown})
+
+
+# --- An intake source's default stops (docs/flights.md "A source's default
+# stops, edited in the Sky (2026-11-02)"); the logic is core.flight_intake_default.
+
+
+@router.get("/api/flights/intake-default")
+def flights_intake_default(kind: str = "", target: str = "") -> JSONResponse:
+    """``?kind=tickets|prs|issues&target=<source id | owner/repo>`` →
+    ``{kind, target, label, plan_id, name, own, steps}``: what a new item
+    from that source flies now. 400 ``bad_kind``, 404 ``unknown_source``."""
+    try:
+        return JSONResponse(_intake_default.resolve(kind, target))
+    except _flights.FlightError as err:
+        return _err(err)
+
+
+@router.put("/api/flights/intake-default")
+def flights_intake_default_put(
+    payload: Optional[dict] = None,
+    allowed: bool = Depends(_web_auth.configure_allowed),
+) -> JSONResponse:
+    """Set a source's default stops: ``{kind, target, steps, name?}`` (saved
+    as its own saved stop), ``{kind, target, plan_id}`` (``""`` = our
+    built-in) or ``{from_flight}`` → the GET shape plus ``previous_plan_id``.
+    400 ``bad_step`` with the field; 404 ``unknown_source`` /
+    ``unknown_plan`` / ``unknown_flight`` / ``no_source``. Owner only, like
+    the Intake dialog's saves (a source decides what its tickets run)."""
+    if not allowed:
+        return _web_auth.configure_refused()
+    try:
+        return JSONResponse(_intake_default.put(payload or {}))
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+
+
+@router.get("/api/flights/intake-default/for-flight/{flight_id}")
+def flights_intake_default_for_flight(flight_id: str) -> JSONResponse:
+    """The GET shape for the source ``flight_id`` came from (its subject, or
+    the source an editor chain edits); 404 ``unknown_flight`` /
+    ``no_source``."""
+    try:
+        return JSONResponse(_intake_default.for_flight(flight_id))
+    except _flights.FlightError as err:
+        return _err(err)
+
+
 @router.get("/api/flights/{flight_id}")
 def flights_get(flight_id: str) -> JSONResponse:
     f = _flights.get(flight_id)
     if f is None:
         return JSONResponse({"error": "unknown_flight"}, status_code=404)
-    return JSONResponse({"flight": f})
+    return JSONResponse({"flight": _driver.flight_dto(f)})
 
 
 @router.delete("/api/flights/{flight_id}")
@@ -277,7 +388,10 @@ def flights_step_add(flight_id: str, payload: Optional[dict] = None) -> JSONResp
     unless the flight is running, waiting on you, paused or grounded.
     ``{"plan_id", "at"?}`` adds that saved stop's steps as one new group (404
     ``unknown_plan``); ``{"steps": [Step], "at"?, "group"?: {name}}`` adds
-    several, one new group when ``group`` is given."""
+    several, one new group when ``group`` is given. ``{"step", "parallel_with":
+    sid, "at"?}`` (round 20) puts the step in ``sid``'s parallel group (one
+    is made when ``sid`` has none): after its last member, or at ``at``
+    within it; 400 ``not_parallel_safe`` names a kind that can't."""
     body = payload or {}
     if body.get("plan_id"):
         return _change(
@@ -295,6 +409,14 @@ def flights_step_add(flight_id: str, payload: Optional[dict] = None) -> JSONResp
         )
     if not isinstance(body.get("step"), dict):
         return _bad_step(_flights.PlanError("step is an object", "step"))
+    if body.get("parallel_with"):
+        return _change(
+            flight_id,
+            "add_parallel",
+            str(body["parallel_with"]),
+            raw=body["step"],
+            at=body.get("at"),
+        )
     return _change(flight_id, "add", raw=body["step"], at=body.get("at"))
 
 
@@ -305,7 +427,10 @@ def flights_step_edit(
     """``{title?, config?, on_fail?, halt?, when?, group?}`` on a step still ahead →
     ``{"flight"}``; ``{halt}`` alone may also mark / clear the current step;
     ``group: {name}`` renames the step's group, ``null`` takes the step out.
-    ``{pos: {x, y} | null}`` is layout only: allowed on ANY step."""
+    ``{pos: {x, y} | null}`` is layout only: allowed on ANY step.
+    ``{parallel: null}`` takes the step out of its parallel group (it flies
+    right after it); ``{parallel_with: sid}`` moves it into ``sid``'s group
+    (making one) — round 20, steps still ahead only."""
     return _change(flight_id, "edit", step_id, raw=payload or {})
 
 

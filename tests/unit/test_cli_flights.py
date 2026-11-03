@@ -164,7 +164,15 @@ class TestList:
         assert cli.main(["flights"]) == 0
         assert srv.sent("GET") == [("/api/flights", None)]
         out = capsys.readouterr().out.splitlines()
-        assert out[0].split() == ["ID", "FLYWAY", "SUBJECT", "SESSION", "STATE", "STOP"]
+        assert out[0].split() == [
+            "ID",
+            "SAVED",
+            "ROUTE",
+            "SUBJECT",
+            "SESSION",
+            "STATE",
+            "STOP",
+        ]
         row = out[1]
         for cell in (
             "f_1a2b3c",
@@ -172,7 +180,7 @@ class TestList:
             "ticket 42 Fix it",
             "sc-42",
             "waiting_you",
-            "2/3 You: approve the merge (perched on you)",
+            "2/3 You: approve the merge (needs you)",
         ):
             assert cell in row
 
@@ -225,14 +233,14 @@ class TestPlans:
             "STOPS",
             "SCHEDULE",
         ]
-        assert "Ticket to merge *" in out and "Flyways tab" in out
+        assert "Ticket to merge *" in out and "saved routes shelf" in out
 
 
 class TestStart:
     def test_by_name_any_case_with_the_plans_own_repo(self, srv, capsys):
         assert cli.main(["flight", "start", "nightly TIDY"]) == 0
         assert srv.sent("POST") == [("/api/flights/start", {"plan_id": "p_7f3a2c"})]
-        assert "took off on Ticket to merge" in capsys.readouterr().out
+        assert "started Ticket to merge" in capsys.readouterr().out
 
     def test_repo_defaults_to_here_when_the_plan_has_none(
         self, srv, monkeypatch, tmp_path
@@ -254,19 +262,21 @@ class TestStart:
     def test_an_ambiguous_or_unknown_plan(self, srv, capsys):
         assert cli.main(["flight", "start", "nightly"]) == 1
         err = capsys.readouterr().err
-        assert "matches 2 flyways" in err and "p_7f3a2c" in err and "p_7f9999" in err
+        assert (
+            "matches 2 saved routes" in err and "p_7f3a2c" in err and "p_7f9999" in err
+        )
         assert cli.main(["flight", "start", "nope"]) == 1
-        assert "mindflock flight flyways" in capsys.readouterr().err
+        assert "mindflock flight plans" in capsys.readouterr().err
         assert srv.sent("POST") == []
 
     def test_a_refusal_reads_as_its_detail(self, srv, capsys):
         srv.posts["/api/flights/start"] = client.ApiError(
             409,
             "in_flight",
-            {"error": "in_flight", "detail": "sc-42 is already on a flight"},
+            {"error": "in_flight", "detail": "sc-42 is already on a route"},
         )
         assert cli.main(["flight", "start", "p_7f3a2c", "--title", "sc-42"]) == 1
-        assert capsys.readouterr().err.strip() == "error: sc-42 is already on a flight"
+        assert capsys.readouterr().err.strip() == "error: sc-42 is already on a route"
 
 
 # --------------------------------------------------------------------------- #

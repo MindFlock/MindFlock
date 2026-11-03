@@ -36,7 +36,7 @@ def test_parse_answer_shapes(raw):
             "id": "s1",
             "kind": "wait",
             "title": "Wait 5 min",
-            "config": {"minutes": 5, "until": ""},
+            "config": {"seconds": 300, "minutes": 5, "until": ""},
             "on_fail": "halt",
         }
     ]

@@ -80,8 +80,8 @@ export function thenText(step: string | undefined, laneTarget: string | undefine
   const to = LADDER.indexOf(lane);
   if (from < 0 || to <= from) {
     return s === "commit"
-      ? "stays local — its fast-track ends at commit"
-      : "its fast-track ends at " + (STEP_WORD[s] || s);
+      ? "stays local — it goes as far as commit"
+      : "it goes as far as " + (STEP_WORD[s] || s);
   }
   return "then " + LADDER.slice(from + 1, to + 1).map((x) => STEP_WORD[x]).join(", ");
 }
@@ -90,10 +90,10 @@ export function thenText(step: string | undefined, laneTarget: string | undefine
  * an escalation's reason — the chip on a Waiting row. */
 export function waitingChip(w: OutboxWaiting): { text: string; cls: string } {
   if (w.kind === "prompt") return { text: w.reason || "its agent is asking", cls: "warn" };
-  if (w.kind === "plan") return { text: w.reason || "the lead proposed the pieces — approve them", cls: "warn" };
+  if (w.kind === "plan") return { text: w.reason || "the lead proposed the workers — approve them", cls: "warn" };
   if (w.kind === "release") return { text: w.reason || "one PR is ready to open", cls: "" };
   if (w.kind === "check_failed") return { text: w.reason || "the check failed on the merged branch", cls: "bad" };
-  if (w.kind === "stray") return { text: w.reason || "changes no piece owns in the lead's folder", cls: "warn" };
+  if (w.kind === "stray") return { text: w.reason || "changes no worker owns in the lead's folder", cls: "warn" };
   if (w.kind === "approve")
     return {
       text: "ready to " + shipVerb(w.step).toLowerCase().replace("open pr", "open the PR") + " — you asked to see it first",
@@ -167,9 +167,9 @@ export function waitingActions(
         key: "approve",
         label: n ? "Start " + n + (n === 1 ? " worker" : " workers") : "Approve the plan",
         primary: true,
-        title: "MindFlock starts one worker per piece, each fenced to its paths",
+        title: "MindFlock starts one worker per task, each fenced to its paths",
       });
-    open("Read the plan in the lead's Thread tab — edit a piece there");
+    open("Read the plan in the lead's Thread tab — edit a worker's task there");
     return out;
   }
   if (w.kind === "release") {

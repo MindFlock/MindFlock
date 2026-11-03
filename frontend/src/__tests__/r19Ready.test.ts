@@ -8,7 +8,8 @@ import type { Instance } from "../api/types";
 import type { Flight, FlightStep } from "../lib/flights";
 import { isLive, isShown } from "../lib/flights";
 import { sessionDiagram } from "../lib/flightDiagram";
-import { ReadyHead, startWord } from "../components/flights/ReadyHead";
+import { code, css } from "./sourceText";
+import { ReadyHead, startTitle, startWord } from "../components/flights/ReadyHead";
 
 const step = (id: string, kind = "agent"): FlightStep => ({ id, kind, title: id, config: {}, on_fail: "halt" });
 const ready = (start_on: "prompt" | "run" = "prompt"): Flight =>
@@ -36,8 +37,36 @@ describe("a ready flight", () => {
     const html = renderToStaticMarkup(createElement(ReadyHead, { flight: ready() }));
     expect(html).toContain(">Ready<");
     expect(html).toContain("▶ Run");
-    expect(html).toContain("runs on your next prompt");
-    expect(startWord({ start_on: "run" })).toBe("runs when you press ▶ Run");
+    expect(html).toContain("starts on next prompt");
+    expect(startWord({ start_on: "run" })).toBe("starts on ▶ Run");
+    expect(startTitle({ start_on: "run" })).toMatch(/Click to start it on this session's next prompt/);
+    expect(startTitle({ start_on: "prompt" })).toMatch(/Click to start it only on ▶ Run/);
+  });
+  it("one row [Ready] [▶ Run], then one quiet start-on line; the button is not the free chain's .sky-run", () => {
+    const html = renderToStaticMarkup(createElement(ReadyHead, { flight: ready("run") }));
+    // `.sky-chain .sky-run` is the free chain's hover-only ▶ circle (opacity 0
+    // at rest): the head's button must never carry that class.
+    expect(html).not.toMatch(/class="[^"]*\bsky-run\b/);
+    expect(html).toMatch(/<span class="sky-ready-row"><span class="sky-head-chip tone-ready"[^>]*>Ready<\/span><button type="button" class="sky-ready-run"/);
+    // The toggle is a quiet button, not a link (`.sky button.linklike` is accent + underlined).
+    expect(html).toMatch(/<button type="button" class="sky-start-on" title="Starts only when you press ▶ Run\.[^"]*">starts on ▶ Run<\/button>/);
+    expect(html).not.toContain("linklike");
+    const sheet = css("components/flights/SkyChain.css");
+    expect(sheet).toMatch(/\.sky-ready-run \{[^}]*border-radius: 999px;[^}]*\}/);
+    expect(sheet).toMatch(/\.sky-start-on \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;[^}]*\}/);
+    expect(sheet).not.toMatch(/\.sky-start-on \{[^}]*text-decoration: underline/);
+    // The session tile's sub: one line, and nothing under the tile shrinks under the next.
+    expect(sheet).toMatch(/\.sky-head:has\(\.sky-ready\) > \.sky-node-sub \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis;/);
+    expect(sheet).toMatch(/\.sky-head > \.sky-head-extra \{\s*flex-shrink: 0;/);
+  });
+  it("while ready, the tile's sub-line does not repeat it (Sky and the Flight tab)", () => {
+    for (const f of ["SkyLine.tsx", "FlightChain.tsx"]) {
+      const src = code("components/flights/" + f);
+      const headSub = src.split("\n").find((l) => l.includes("const headSub ="));
+      expect(headSub, f).toBeTruthy();
+      expect(headSub, f).not.toContain("ready ·");
+      expect(headSub, f).not.toContain("startWord");
+    }
   });
 });
 

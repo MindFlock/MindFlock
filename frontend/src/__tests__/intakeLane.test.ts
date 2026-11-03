@@ -84,12 +84,16 @@ describe("the intake lane", () => {
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-tickets">Ticket<');
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-prs">PR<');
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-issues">Issue<');
-    expect(html).toContain(">Shortcut · quickpay<");
-    expect(html).toContain(">PRs · acme/app<");
+    // The title drops the kind its badge says; a repo path may break at "/".
+    expect(html).toContain('class="sky-lane-block-name" title="Shortcut · quickpay">Shortcut · quickpay<');
+    expect(html).toContain('class="sky-lane-block-name" title="PRs · acme/app">acme/<wbr/>app<');
     expect(html).toContain('class="sky-lane-auto on">auto-start on · every 20 s<');
     expect(html).toContain('class="sky-lane-auto">manual<');
     expect(html).toMatch(/class="sky-lane-flyway own"[^>]*>Mine</);
-    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
+    // A built-in default says where it goes in Intake's words (no depth: the
+    // agent alone), not the plan's name (that echoed the badge).
+    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Agent only</);
+    expect(html).not.toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
     expect(html).not.toContain("<select");
   });
 
@@ -99,7 +103,7 @@ describe("the intake lane", () => {
     expect(sc).toContain('data-waiting="tickets:sc:1"');
     expect(sc).toContain(">sc-1<");
     expect(sc).toContain(">Fix the login<");
-    expect(sc).toMatch(/class="btn-primary fl-btn sky-lane-fly"[^>]*>Fly</);
+    expect(sc).toMatch(/class="btn-primary fl-btn sky-lane-fly"[^>]*>Run</);
     expect(sc).toContain('data-lane-target="sc-3"');
     expect(sc).not.toContain('data-waiting="tickets:sc:3"');
     const prs = html.slice(html.indexOf('data-lane-source="prs:acme/app"'));
@@ -194,21 +198,21 @@ describe("the new-session block", () => {
   const card = (prime: (c: InstanceType<typeof QueryClient>) => void = () => {}) =>
     withClient(createElement(NewSessionBlock, { x: 120, y: 80, plans: PLANS, onCreated: () => {}, onCancel: () => {} }), prime);
 
-  it("sits at (x, y): repository field with Browse…, the prompt box, stop chips with No stops first, Fly and Cancel", () => {
+  it("sits at (x, y): repository field with Browse…, the prompt box, Then run chips with Nothing more first, Run and Cancel", () => {
     const html = card();
     expect(html).toContain('style="left:120px;top:80px"');
     expect(html).toContain("Browse…");
     expect(html).toContain('class="fl-prompt sky-new-prompt"');
     const flyway = html.slice(html.indexOf('class="fl-chiprow sky-new-stops"'));
     const chips = [...flyway.matchAll(/data-value="([^"]*)">([^<]+)</g)].map((m) => m[2]);
-    expect(chips.slice(0, 4)).toEqual(["No stops", "Ticket to merge", "Review a PR", "Mine"]);
-    expect(flyway).toMatch(/aria-checked="true" class="fl-pick on fl-pick-default"[^>]*>No stops</);
+    expect(chips.slice(0, 4)).toEqual(["Nothing more", "Ticket to merge", "Review a PR", "Mine"]);
+    expect(flyway).toMatch(/aria-checked="true" class="fl-pick on fl-pick-default"[^>]*>Nothing more</);
     expect(html).toContain(">Cancel</button>");
     expect(html).not.toContain("<select");
   });
 
-  it("Fly is disabled without a repository", () => {
-    expect(card()).toMatch(/<button[^>]*disabled=""[^>]*>Fly<\/button>/);
+  it("Run is disabled without a repository", () => {
+    expect(card()).toMatch(/<button[^>]*disabled=""[^>]*>Run<\/button>/);
     expect(flyBlocked("")).toBe("Pick a repository first");
     expect(flyBlocked("myrepo")).toMatch(/full path/);
     expect(flyBlocked("~/code/app")).toBe("");

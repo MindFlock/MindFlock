@@ -1168,7 +1168,9 @@ export function WorkItemRow({
   const uses = [
     where,
     agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
-    "Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
+    // The source's own "Goes as far as" says the default; a row names only
+    // a pick made for this one item.
+    depth ? "Just this one: " + laneLabel(depth) : "",
     !effortUsable
       ? ""
       : effort
@@ -1391,8 +1393,8 @@ export function WorkItemRow({
                   showPicks
                     ? "Hide the per-start options"
                     : canPickRepo
-                      ? "Pick a different repo, CLI, Fast-track or effort for just this start"
-                      : "Pick a different CLI, Fast-track or effort for just this start"
+                      ? "Pick a different repo, CLI, how far it goes or effort for just this start"
+                      : "Pick a different CLI, how far it goes or effort for just this start"
                 }
                 onClick={() => setOptsOpen(!optsOpen)}
               >
@@ -1439,17 +1441,17 @@ export function WorkItemRow({
               </label>
             )}
             <label className="ik-item-pick">
-            <span className="ik-item-pick-label">Fast-track</span>
+            <span className="ik-item-pick-label">Just this one</span>
             <select
               className="ik-item-depth"
               value={depth}
               data-picked={depth || undefined}
               disabled={state !== "idle"}
               title={
-                "Fast-track this one to — just this start, not the whole queue" +
+                "How far this one goes — just this start, not the whole queue" +
                 " (default: " + defaultDepth + ")"
               }
-              aria-label={"Fast-track " + reference + " to"}
+              aria-label={"How far " + reference + " goes"}
               onChange={(e) => setDepth(e.target.value)}
             >
               {/* Always NAME what the empty choice resolves to. A bare

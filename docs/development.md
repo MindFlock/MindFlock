@@ -198,6 +198,7 @@ and a release commit is not an exception to that:
 git switch -c release/<version>
 python3 scripts/bump-version.py <version>   # manifests + CHANGELOG
 $EDITOR CHANGELOG.md                        # fill in the new section
+$EDITOR frontend/src/whatsNew/releases.ts   # the What's new entry (below)
 git commit -sam "Release <version>"         # -s: every commit needs a DCO sign-off
 git push -u origin release/<version>
 gh pr create --base main --title "Release <version>"
@@ -206,6 +207,15 @@ git switch main && git pull --ff-only
 git tag -a v<version> -m "Release <version>"
 git push origin v<version>
 ```
+
+**What's new.** Add a `frontend/src/whatsNew/releases.ts` entry for the tag
+(newest first): a headline and 4–6 features, each one or two plain sentences
+in the words of `docs/vocabulary.md`, with an optional "Show me" action.
+`big: true` pops it for everyone who updates; `big: false` only lists it under
+"Also in this release". `tests/unit/test_whats_new.py` fails a minor or major
+release whose version is newer than the newest entry (patch releases may skip
+one); an entry may be written ahead of the release — it shows only once the
+running version reaches it. See `docs/vision/whats-new.md`.
 
 `gh` is the convenience path, not a requirement — every step above is either
 plain git or a button on github.com. Without `gh`, open the PR in the browser

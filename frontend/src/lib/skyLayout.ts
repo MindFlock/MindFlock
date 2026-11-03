@@ -19,7 +19,7 @@
  * never get one. */
 
 import type { Instance } from "../api/types";
-import { rowWaitsOnYou, type FlightRow } from "./flights";
+import { isShown, rowWaitsOnYou, type Flight, type FlightRow, type StepKindDef } from "./flights";
 import { deriveSessionState } from "./sessionState";
 
 // --- Geometry ------------------------------------------------------------------
@@ -121,9 +121,12 @@ export function catalogFrame(view: Rect, screen: { w: number; h: number }, z: nu
   return { x: Math.round(x), y: Math.round(y), w, h };
 }
 
-/** The landing strip (LandingStrip, layout key "landing", docs/flights.md "As
- * built: round 15 objects"): placed right of every line, dragged by its head,
- * sized by its corner in this range; its size before it measured itself. */
+/** The Finished strip (LandingStrip, layout key "landing", docs/flights.md
+ * "As built: round 15 objects"): hidden unless the Sky's ⋯ turns it on (the
+ * view then leaves it out of the objects, so it is never placed and the
+ * right column keeps no room for it); shown, it is placed right of every
+ * line, dragged by its title bar, sized by its corner in this range; its
+ * size before it measured itself. */
 export const LANDING_KEY = "landing";
 export const LANDING_W = 300;
 export const LANDING_H = 240;
@@ -139,17 +142,18 @@ export const NOTE_MIN = { w: 120, h: 70 };
 export const NOTE_MAX = { w: 800, h: 800 };
 export const noteFrame = (stored: StoredLine | undefined) => objectFrame(stored, NOTE_MIN, NOTE_MAX);
 
-/** A people / device block's size (PeopleBlocks, DeviceBlocks). */
+/** A people block's size (PeopleBlocks; the registry's device entry keeps
+ * it too, though devices now show only as drop targets during a drag). */
 export const BLOCK_W = 200;
 export const BLOCK_H = 64;
 
-/** Where the objects placed RIGHT of every line go (the landing strip, then
- * the device and people blocks): one column just right of everything already
+/** Where the objects placed RIGHT of every line go (the Finished strip when
+ * it is shown, then the people blocks): one column just right of everything already
  * placed (`placed`: every line and object with a spot, at its size), `gap`
  * clear of it, stacked from `top` with half a gap between. With nothing
  * placed, the column starts where the first line would. The column's x is
- * read once per newcomer — its spot is kept like a line's, so a line that
- * grows or comes later never shoves it. */
+ * read once per newcomer — its spot is kept like a line's; only a line that
+ * grows INTO it moves it (`clearRightColumn`). */
 export function rightColumn(placed: readonly Rect[], items: readonly LineBox[], top = SKY_MARGIN, gap = SKY_GAP): Record<string, Pos> {
   const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
   const x = placed.length ? right + gap : LINES_LEFT;
@@ -160,6 +164,21 @@ export function rightColumn(placed: readonly Rect[], items: readonly LineBox[], 
     y += it.h + gap / 2;
   }
   return out;
+}
+
+/** The right column kept clear of the lines: a line that GREW into an object
+ * the sky placed right of every line (the Finished strip, the people blocks
+ * — `column`: only the auto-placed ones, never one the owner
+ * dragged) pushes the column right of everything again (`lines`: every line,
+ * the lane and the palette at their sizes now), each keeping its height. The
+ * objects make way, never the lines — a chain with a few stops on it used to
+ * run under the landing strip (round-consolidate judge). A line closer than
+ * half a gap counts as in the way. Nothing in the way: {}. */
+export function clearRightColumn(column: readonly PlacedLine[], lines: readonly Rect[], gap = SKY_GAP): Record<string, Pos> {
+  if (!column.length || !lines.length) return {};
+  if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
+  const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
+  return Object.fromEntries(column.map((c) => [c.id, { x, y: c.y }]));
 }
 
 /** Where a block of `size` lands when the palette places it (docs/flights.md
@@ -196,6 +215,19 @@ export function spotNear(want: Pos, taken: readonly Rect[], size: { w: number; h
   return (within && search(true)) || search(false) || { x: Math.round(want.x), y: Math.round(want.y) };
 }
 
+/** What a sky object that GREW where it sits now covers: the placed lines
+ * `movable` (the caller passes only lines it may move — auto-placed, never
+ * pinned) that overlap it at its new size and did not at its old one. The
+ * lane grows when a source or items arrive or the owner expands it (▸ / ▾);
+ * those lines make way (they are placed again, clear of it). Moved (a drag,
+ * a drop) or not grown: nothing — the sky never shoves a line for a move. */
+export function grownOver(was: Rect | null, now: Rect | null, movable: readonly PlacedLine[]): string[] {
+  if (!was || !now || was.x !== now.x || was.y !== now.y || (now.w <= was.w && now.h <= was.h)) return [];
+  return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
+}
+
+/** The lane's room: the frame the owner gave it, else its measure (at full
+ * detail — `FULL_DETAIL_LODS`), else a guess. */
 export function intakeSize(stored: StoredLine | undefined, measured?: { w: number; h: number }): { w: number; h: number } {
   const frame = intakeFrame(stored);
   if (frame) return frame;
@@ -275,6 +307,79 @@ export function assignSpots(existing: readonly PlacedLine[], newcomers: readonly
   if (!fresh.length) return {};
   const all = placeLines([...existing, ...fresh], saved, area);
   return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
+}
+
+/** What `fillWidth` counts besides the lines: `flat` ids count for their
+ * width and top only (the intake lane: its height is its own scroll's, as in
+ * the toolbar's Fit), and `right` is the column placed right of every line
+ * afterwards (the strip, the people) — its widest box plus a gap is added to
+ * the width, wherever those objects sit now. `maxZ` is the fit's cap. */
+export interface FillOpts {
+  flat?: readonly string[];
+  right?: readonly LineBox[];
+  maxZ?: number;
+}
+
+/** How much larger a wider layout must show things than the minimum's to
+ * be worth it: a portrait window gains a few percent from a second column
+ * under the lane, and keeps its tall column instead. */
+export const FILL_GAIN = 1.1;
+
+/** The wrap width that best fills a vw × vh window: `assignSpots` is run at
+ * a set of widths from `area.width` (the minimum) up to every newcomer on one
+ * row — about two dozen geometric steps, plus each width at which one more
+ * newcomer fits on the first row. The width whose layout a fit shows
+ * largest wins, if it shows them at least `FILL_GAIN` larger than the
+ * minimum does. A tie (everything already fits at `maxZ`) goes to the
+ * narrowest, so a few lines or a tall monitor are placed exactly as at the
+ * minimum; a wide monitor gets rows that fill it. Never less than the
+ * minimum; with no newcomer (nothing to place) or no window, the minimum.
+ * The zoom is scored unclamped, so two layouts both past the zoom floor
+ * still compare. */
+export function fillWidth(existing: readonly PlacedLine[], newcomers: readonly LineBox[], area: PlaceArea, vw: number, vh: number, opts: FillOpts = {}): number {
+  const min = area.width;
+  const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
+  if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
+  const pad = FIT_PAD;
+  const maxZ = opts.maxZ ?? 1;
+  const flat = new Set(opts.flat || []);
+  const aside = new Set((opts.right || []).map((r) => r.id));
+  const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
+  const x0 = area.left ?? SKY_MARGIN;
+  // Breakpoints: the first row holding one more newcomer each time.
+  const stops: number[] = [];
+  let run = x0;
+  for (const n of fresh) {
+    run += n.w;
+    stops.push(run);
+    run += SKY_GAP;
+  }
+  const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
+  const steps = 24;
+  const k = max > min ? (max / Math.max(1, min)) ** (1 / (steps - 1)) : 1;
+  const widths = new Set<number>([min]);
+  if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
+  for (const s of stops) if (s > min && s <= max) widths.add(s);
+  const counted = existing.filter((e) => !aside.has(e.id));
+  let best = min;
+  let bestZ = -Infinity;
+  let minZ = -Infinity;
+  for (const width of [...widths].sort((a, b) => a - b)) {
+    const spots = assignSpots(existing, fresh, { ...area, width });
+    const rects: Rect[] = [...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({ id: n.id, ...spots[n.id], w: n.w, h: n.h }))].map(
+      (r) => ({ x: r.x, y: r.y, w: r.w, h: flat.has(r.id) ? 1 : r.h })
+    );
+    const b = boundsOf(rects);
+    if (!b) continue;
+    const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
+    const z = Math.min(maxZ, (vw - 2 * pad) / w, (vh - 2 * pad) / Math.max(1, b.h));
+    if (width === min) minZ = z;
+    if (z > bestZ + 1e-3) {
+      bestZ = z;
+      best = width;
+    }
+  }
+  return bestZ >= minZ * FILL_GAIN ? best : min;
 }
 
 /** The smallest rectangle holding them all, or null for none. */
@@ -391,6 +496,21 @@ export const LOD_MID = 0.62;
 export const LOD_NEAR = 1.15;
 
 export const lodFor = (z: number): Lod => (!(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near");
+
+/** The intake lane's room, once measured, is its measure (unless the owner
+ * sized its frame) — and that measure must be its FULL-detail size, whatever
+ * the zoom draws now: the lane's level of detail (`.sky-intake[data-lod]`,
+ * IntakeLane.css) hides its badges, chips and waiting items at far and grows
+ * its type at mid, so the Fit lane is a fraction of the 100 % one. Lines are
+ * placed once (`assignSpots`), so a lane measured compact would let lines
+ * settle where the full lane later draws over them. The view measures the
+ * lane at each of these (a hidden copy of its drawn lane, same width) and
+ * keeps the tallest, with what it draws now: mid at the zoom its type grows
+ * most, and plain near. */
+export const FULL_DETAIL_LODS: ReadonlyArray<{ lod: Lod; z: number }> = [
+  { lod: "mid", z: LOD_MID },
+  { lod: "near", z: 1 },
+];
 
 /** The lines of a near box's longer texts (its summary, its detail): more the
  * closer the camera — the plane type shrinks as the zoom grows, so the box's
@@ -625,6 +745,25 @@ export function tidySkyLayout(all: Readonly<SkyLayoutMap>, title?: string, store
   return saveSkyLayout(next, store);
 }
 
+/** Tidy's other half: every open session window on the sky minimised back to
+ * its box — every line's, or just `titles`'. The pane's size is kept, so the
+ * window opens again as it was; the intake lane is a drawer, not a window,
+ * and stays as it is. */
+export function closeSkyWindows(all: Readonly<SkyLayoutMap>, titles?: readonly string[], store: Store | null = local()): SkyLayoutMap {
+  const next: SkyLayoutMap = {};
+  let changed = false;
+  for (const [k, v] of Object.entries(all)) {
+    if (!v.open || k === INTAKE_KEY || (titles && !titles.includes(k))) {
+      next[k] = v;
+      continue;
+    }
+    changed = true;
+    const { open: _o, ...rest } = v;
+    if (Object.keys(rest).length) next[k] = rest;
+  }
+  return changed ? saveSkyLayout(next, store) : (all as SkyLayoutMap);
+}
+
 /** The positions placeLines keeps: the pinned lines'. */
 export function pinnedPositions(all: Readonly<SkyLayoutMap>): Record<string, Pos> {
   const out: Record<string, Pos> = {};
@@ -679,10 +818,10 @@ export function estimateLine(base: { w: number; h: number }, stored: StoredLine 
 export type SkyMode = "all" | "mine" | "perched" | "one";
 
 export const SKY_MODES: ReadonlyArray<{ id: SkyMode; label: string; title: string }> = [
-  { id: "all", label: "All", title: "Every session — a worker inside its lead's line" },
-  { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their line" },
-  { id: "perched", label: "Perched on you", title: "Only the lines waiting on you" },
-  { id: "one", label: "This session", title: "One line, filling the sky" },
+  { id: "all", label: "All", title: "Every session — a worker inside its lead's route" },
+  { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their route" },
+  { id: "perched", label: "Needs you", title: "Only the routes that need you" },
+  { id: "one", label: "This session", title: "One route, filling the sky" },
 ];
 
 /** Drawn in the sky at all: not a hidden helper (a verify run). */
@@ -722,4 +861,50 @@ export function skyLineTitles(rows: readonly Instance[], mode: SkyMode, opts: { 
     return out;
   };
   return pick.filter((r) => lineOf(r, new Set())).map((r) => r.title).reverse();
+}
+
+// --- Rows the sky draws ----------------------------------------------------------
+
+/** The rows as the sky draws them: each row's own `flight` field, or — when
+ * a row has none yet but `/api/flights` already holds a flight its line draws
+ * (`isShown`: in the air, or built and ready) for that session — one read off
+ * that flight, the newest. GET /api/instances serves the last tick's snapshot
+ * (~4 s), so a chain just built on a session (its first stop from the + or
+ * the shelf) is in the flights list before its row says so; without this its
+ * tiles stayed missing until a later tick or a reload (round-consolidate
+ * judge). Nothing to add: the same array back, so nothing redraws. */
+export function withLiveFlights<R extends Pick<Instance, "title" | "flight">>(rows: R[], flights: readonly Flight[] | null | undefined, kinds?: readonly Pick<StepKindDef, "kind" | "actor">[]): R[] {
+  if (!flights?.length) return rows;
+  const newest = new Map<string, Flight>();
+  for (const f of flights) {
+    if (!f.session || f.free || !isShown(f)) continue;
+    const had = newest.get(f.session);
+    if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
+  }
+  if (!newest.size) return rows;
+  let out: R[] | null = null;
+  rows.forEach((r, i) => {
+    const f = newest.get(r.title);
+    if (!f || r.flight?.id) return;
+    const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
+    const row = {
+      ...r.flight,
+      id: f.id,
+      plan_name: f.plan_name,
+      cursor: f.cursor,
+      total: f.steps.length,
+      state: f.state,
+      step: step
+        ? {
+            id: step.id,
+            kind: step.kind,
+            title: step.title,
+            state: f.step_states?.[step.id]?.state || "pending",
+            actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot"),
+          }
+        : null,
+    } as FlightRow;
+    (out ??= rows.slice())[i] = { ...r, flight: row };
+  });
+  return out ?? rows;
 }

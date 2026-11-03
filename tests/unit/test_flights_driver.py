@@ -349,7 +349,7 @@ def test_on_fail_agent_sends_the_failure_note(srv, row, monkeypatch):
     run(D.step_flight(f["id"]))  # pending → run
     run(D.step_flight(f["id"]))  # failed → handed to the agent
     assert sent == [
-        "[MindFlock flight] CI failed: failing checks: lint\nFix it; the flight retries the step once you are done."
+        "[MindFlock route] CI failed: failing checks: lint\nFix it; the route retries the stop once you are done."
     ]
     got = F.get(f["id"])
     assert (
@@ -398,7 +398,7 @@ def test_finished_is_announced_once(srv, row, emitted, monkeypatch):
     run(D.step_flight(f["id"]))
     assert [e["event"] for e in emitted].count("flight.finished") == 1
     fin = next(e for e in emitted if e["event"] == "flight.finished")
-    assert fin["data"]["state"] == "done" and fin["data"]["detail"] == "P landed"
+    assert fin["data"]["state"] == "done" and fin["data"]["detail"] == "P finished"
 
 
 def test_another_servers_lease_is_respected(srv, row, monkeypatch):
@@ -512,14 +512,12 @@ def test_start_attach_and_create(srv, monkeypatch):
     assert err.value.error == "no_repo"
 
 
-def test_operate_done_on_verify_records_human_passes(srv, monkeypatch):
+def test_operate_done_on_verify_is_refused_no_blanket_done(srv, monkeypatch):
+    """docs/behaviors.md §5: a Verify stop waiting on you moves on when its
+    behaviors are answered, or on Skip — Done no longer passes them unseen."""
     from backend.web.core import test_plans as tp
 
     recorded = []
-    monkeypatch.setattr(tp, "get", lambda pid: {"id": pid, "steps": [], "runs": []})
-    monkeypatch.setattr(
-        tp, "open_human_steps", lambda plan: [{"id": "s2"}, {"id": "s3"}]
-    )
     monkeypatch.setattr(
         tp,
         "record_result",
@@ -532,9 +530,65 @@ def test_operate_done_on_verify_records_human_passes(srv, monkeypatch):
             x, {"action": "you", "detail": {"plan": "s", "items": ["a"]}}, NOW
         ),
     )
-    got = D.operate(f["id"], "done", "s1", "")
-    assert recorded == [("s", "s2", "pass", "human"), ("s", "s3", "pass", "human")]
-    assert got["state"] == "done"
+    with pytest.raises(F.FlightError) as err:
+        D.operate(f["id"], "done", "s1", "")
+    assert (err.value.status, err.value.error) == (409, "answer_behaviors")
+    assert "Skip" in err.value.detail
+    assert recorded == []
+    assert F.get(f["id"])["state"] == "waiting_you"
+    # Skip still moves it on.
+    assert D.operate(f["id"], "skip", "s1")["state"] == "done"
+
+
+def test_operate_done_on_a_verify_failure_handed_to_you_still_works(srv):
+    f = fly({"kind": "verify", "config": {"who": "both"}, "on_fail": "you"})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(
+            x, {"action": "fail", "reason": "Failed · 1: a", "then": "you"}, NOW
+        ),
+    )
+    assert D.operate(f["id"], "done", "s1", "")["state"] == "done"
+
+
+def test_let_the_agent_fix_it_on_a_halted_verify_stop(srv, row, monkeypatch):
+    """The halted Verify stop's "Let the agent fix it": the failure goes to the
+    agent, the stop waits in the fix phase, one fix round is counted."""
+    sent = []
+    monkeypatch.setattr(D, "_deliver", lambda t, x: sent.append((t, x)))
+    f = fly({"kind": "verify", "title": "Verify", "config": {"who": "both"}})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(x, {"action": "fail", "reason": "Failed · 2: a; b"}, NOW),
+    )
+    assert F.get(f["id"])["state"] == "halted"
+    got = D.step_op(f["id"], "s1", "fix", {})["flight"]
+    ss = got["step_states"]["s1"]
+    assert got["state"] == "running" and ss["detail"]["phase"] == "fix"
+    assert ss["rounds"] == 1 and ss["detail"]["reason"] == "Failed · 2: a; b"
+    assert sent and sent[0][1].startswith("[MindFlock route] Verify failed: Failed · 2")
+    # Not failed any more: a second press is refused.
+    with pytest.raises(F.FlightError) as err:
+        D.step_op(f["id"], "s1", "fix", {})
+    assert err.value.error == "not_failed"
+
+
+def test_let_the_agent_fix_it_halts_again_when_the_agent_cannot_be_asked(
+    srv, row, monkeypatch
+):
+    def gone(t, x):
+        raise D._StepFailed("the session is gone")
+
+    monkeypatch.setattr(D, "_deliver", gone)
+    f = fly({"kind": "verify", "title": "Verify", "config": {}})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(x, {"action": "fail", "reason": "Failed · 1: a"}, NOW),
+    )
+    got = D.step_op(f["id"], "s1", "fix", {})["flight"]
+    assert got["state"] == "halted"
+    assert "the session is gone" in got["reason"]
+    assert got["step_states"]["s1"]["state"] == "failed"
 
 
 def test_operate_errors_and_remove(srv):
@@ -740,7 +794,7 @@ def test_start_announces_the_halted_flight_it_replaces(srv, emitted):
     run(D.start({"plan_id": plan["id"], "title": "s", "start_at": "s1"}))
     fin = [e for e in emitted if e["event"] == "flight.finished"]
     assert [e["data"]["id"] for e in fin] == [old["id"]]
-    assert fin[0]["data"]["reason"] == "replaced by a new flight"
+    assert fin[0]["data"]["reason"] == "replaced by a new route"
     assert any(k.startswith("finished:") for k in F.get(old["id"])["announced"])
 
 
@@ -774,7 +828,7 @@ def test_an_effect_that_fails_with_on_fail_agent_tells_the_agent(srv, row, monke
     )
     f = fly({"kind": "verify", "title": "Verify", "config": {}, "on_fail": "agent"})
     run(D.step_flight(f["id"]))
-    assert sent and sent[0].startswith("[MindFlock flight] Verify failed: no checklist")
+    assert sent and sent[0].startswith("[MindFlock route] Verify failed: no checklist")
     assert F.get(f["id"])["step_states"]["s1"]["detail"]["phase"] == "fix"
 
 
@@ -832,7 +886,7 @@ def test_a_halted_run_is_absorbed_with_its_reason(srv):
     srv._session_stage = lambda inst: {"stage": "agent"}
     _own_run(state="halted", reason="pre-commit failed")
     f = run(D.start({"title": "s", "steps": [{"kind": "notify"}]}))
-    assert f["plan_id"] == "adhoc" and f["plan_name"] == "Flight on s"
+    assert f["plan_id"] == "adhoc" and f["plan_name"] == "Route on s"
     assert [(s["id"], s["kind"], s["config"].get("lane")) for s in f["steps"]] == [
         ("s2", "ship", "commit"),
         ("s3", "ship", "push"),
@@ -893,7 +947,7 @@ def test_adhoc_start_needs_a_session_or_a_folder(srv, monkeypatch):
     assert created == [{"repo_path": "/r", "prompt": "go"}]
     assert (f["session"], f["plan_name"], f["plan_id"]) == (
         "new-1",
-        "Flight on new-1",
+        "Route on new-1",
         "adhoc",
     )
     assert f["step_states"]["s1"]["detail"] == {"seeded": True}

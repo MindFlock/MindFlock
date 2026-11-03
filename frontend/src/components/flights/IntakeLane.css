@@ -1,56 +1,107 @@
 /* The Sky's intake lane (IntakeLane.tsx): a column of source blocks pinned to
  * the sky's left edge; the Sky positions it (INTAKE_W, 240 plane px), this
- * styles what is inside. An item is a card: its ticket id (bold) and a real
- * Fly button on one row, the headline wrapping to two lines under them, in
- * 13px type that the mid band grows a little under 80% (like a line's). */
+ * styles what is inside.
+ *
+ * It wears the session frame's calm look (SkyLine.css `.skl-frame-box` /
+ * `.skl-frame-bar`; the one Sky-object style, ux-lab SKY_OBJECT_STYLE.md):
+ * one hairline round a 14px-radius frame, a 30px title bar ("Intake", a muted
+ * count, quiet fold / expand icons), and inside it quiet rows, not filled
+ * cards — a source is a section under a hairline (a small outlined kind tag,
+ * its name 13px/600, two quiet chips), its waiting items one inset list
+ * (the id 13px/600 and Run on a row, the headline muted 11.5px under them).
+ * The Finished strip (LandingStrip.css) shares this chrome: .sky-lane, its
+ * head, its rail, its corner. */
 
 .sky-lane {
+  --lane-line: color-mix(in srgb, var(--muted) 30%, transparent);
+  --lane-hair: color-mix(in srgb, var(--muted) 20%, transparent);
   position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  gap: 6px;
+  padding: 0 8px 8px;
   max-height: 100%;
   overflow-y: auto;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border-right: 1px solid var(--border);
+  border: 1px solid var(--lane-line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--muted) 4%, var(--panel));
+  color: var(--text);
 }
 
+/* The title bar: the frame bar's strip — a faint tint, a bottom hairline,
+   the title in normal case. Sticky, so a long lane scrolls under it. */
 .sky-lane-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
+  flex: none;
   align-items: center;
   gap: 6px;
+  box-sizing: border-box;
+  height: 30px;
+  margin: 0 -8px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--lane-hair);
+  border-radius: 13px 13px 0 0;
+  background: color-mix(in srgb, var(--muted) 10%, var(--panel));
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
 }
 
 .sky-lane-title {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The count: muted words beside the title, not a pill. */
+.sky-lane-head .fl-count {
+  flex: none;
+  margin: 0 auto 0 0;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.sky-lane-head .sky-lane-title:last-of-type {
+  margin-right: auto;
 }
 
 .sky-lane-toggle,
 .sky-lane-more {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 22px;
+  height: 22px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--fl-ink-muted, var(--muted));
   border-radius: var(--fl-btn-radius, 6px);
-  padding: 2px 7px;
+  padding: 0 5px;
   font-family: inherit;
-  font-size: 14px;
-  line-height: 1.2;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1;
   cursor: pointer;
 }
 
 .sky-lane-toggle:hover,
 .sky-lane-more:hover {
   color: var(--text);
-  border-color: var(--border);
-  background: var(--panel-2);
+  border-color: var(--lane-line, var(--border));
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
 }
 
 .sky-lane-toggle:focus-visible,
@@ -60,81 +111,224 @@
   outline-offset: 1px;
 }
 
-/* --- A source block -------------------------------------------------------- */
+/* --- A source block: a quiet section, a hairline between two -------------- */
 
 .sky-lane-block {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
+  gap: 7px;
+  padding: 4px 4px 2px;
+  background: transparent;
+  border: 0 solid var(--lane-hair);
   border-radius: 8px;
 }
 
+.sky-lane-block + .sky-lane-block {
+  padding-top: 10px;
+  border-top-width: 1px;
+  border-radius: 0;
+}
+
+/* The tag and ⋯ sit on the title's first line; a long title wraps to a
+   second (a repo path at its "/", the view's <wbr>) and clamps there, the
+   full label in its tooltip. Normal case: the tag already says the kind. */
 .sky-lane-block-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   min-width: 0;
 }
 
-.sky-lane-block-head .fl-kind-badge {
-  margin-top: 0;
+/* The kind tag: small, muted, outlined — the kind's colour only on its edge
+   (Flights.css's filled `.fl-kind-badge` stays the Board's). */
+.sky-lane .fl-kind-badge {
+  --lane-kind: var(--muted);
+  flex: none;
+  box-sizing: border-box;
+  margin: 1px 0 0;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--lane-kind) 45%, transparent);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+
+.sky-lane .fl-kind-badge-tickets {
+  --lane-kind: var(--accent);
+}
+
+.sky-lane .fl-kind-badge-prs {
+  --lane-kind: var(--green);
+}
+
+.sky-lane .fl-kind-badge-issues {
+  --lane-kind: var(--tone-waiting);
+}
+
+.sky-lane-block-head .sky-lane-more {
+  margin-top: -2px;
 }
 
 .sky-lane-block-name {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  padding-top: 1px;
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 600;
+  line-height: 1.3;
   color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+/* A source the settings don't name (items arrived from it all the same): a
+   dashed edge says it is not one of yours; the tooltip says why it's here. */
+.sky-lane-block-stray {
+  padding: 8px;
+  border-width: 1px;
+  border-style: dashed;
+  border-radius: 8px;
+}
+
+.sky-lane-block + .sky-lane-block-stray {
+  border-radius: 8px;
 }
 
 .sky-lane-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 4px;
 }
 
 .sky-lane-auto,
-.sky-lane-flyway {
-  font-size: 12px;
-  line-height: 1;
-  padding: 4px 7px;
+.sky-lane-stops {
+  box-sizing: border-box;
+  font-size: 11.5px;
+  line-height: 1.25;
+  padding: 1px 7px;
   border-radius: 999px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--lane-hair, var(--border));
   color: var(--muted);
+  background: transparent;
   white-space: nowrap;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.sky-lane-auto.on {
-  color: var(--green);
-  border-color: color-mix(in srgb, var(--green) 45%, transparent);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
+/* Auto-start on: the green is a dot, the words stay muted. */
+.sky-lane-auto.on::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 5px 1px 0;
+  border-radius: 50%;
+  background: var(--green);
+  vertical-align: middle;
 }
 
-.sky-lane-flyway.own {
+/* The stops chip: "Chain  built-in ✎" / "Chain  Payments stops ✎" — the
+   source's default chain, and a button that edits it on the board. The
+   button is bare; the pill inside is the chip. It reads as pressable at rest
+   (the muted key, the pencil) and lights its edge on hover / focus. While the
+   source's editor chain is on the board it stays lit and says "editing…". */
+.sky-lane-chips .sky-lane-flyway-btn {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sky-lane-chips .sky-lane-flyway-btn:hover:not(:disabled) {
+  background: transparent;
+}
+
+.sky-lane-stops {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sky-lane-stops-key {
+  flex: none;
+  color: var(--muted);
+}
+
+.sky-lane-flyway {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sky-lane-stops-edit {
+  flex: none;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-stops,
+.sky-lane-flyway-btn:focus-visible .sky-lane-stops {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-stops-edit,
+.sky-lane-flyway-btn:focus-visible .sky-lane-stops-edit {
   color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.45);
+  opacity: 1;
+}
+
+.sky-lane-chips .sky-lane-flyway-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-lane-stops.own .sky-lane-flyway {
+  color: var(--accent);
+}
+
+.sky-lane-stops.editing {
+  border-color: rgba(var(--accent-rgb), 0.55);
   background: rgba(var(--accent-rgb), 0.1);
 }
 
-.sky-lane-empty {
-  font-size: 13px;
-  margin: 0;
+.sky-lane-stops.editing .sky-lane-stops-edit {
+  color: var(--accent);
+  opacity: 1;
+  font-style: italic;
 }
 
-/* --- Waiting items --------------------------------------------------------- */
+.sky-lane-empty {
+  font-size: 11.5px;
+  line-height: 1.35;
+  margin: 0;
+  padding: 0 2px 2px;
+  color: var(--muted);
+}
+
+/* "No sources yet." straight under the bar. */
+.sky-lane-head + .sky-lane-empty {
+  padding: 6px 4px 2px;
+}
+
+/* --- Waiting items: one inset list, a hairline between rows --------------- */
 
 .sky-lane-items,
 .sky-lane-stubs {
@@ -143,20 +337,31 @@
   padding: 0;
   display: flex;
   flex-direction: column;
+}
+
+.sky-lane-items {
+  border: 1px solid var(--lane-hair, var(--border));
+  border-radius: 8px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.sky-lane-items > li + li {
+  border-top: 1px solid var(--lane-hair, var(--border));
+}
+
+.sky-lane-stubs {
   gap: 4px;
 }
 
-/* The card: the id and Fly on the first row, the headline under them (the
-   words span wraps onto its own row). */
+/* A row: the id and Run on the first line, the headline under them (the
+   words span wraps onto its own line). */
 .sky-lane-item-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
-  padding: 7px 7px 8px 10px;
-  border-radius: 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  gap: 2px 8px;
+  padding: 6px 6px 7px 9px;
 }
 
 .sky-lane-item-words {
@@ -170,7 +375,7 @@
   order: 0;
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -181,9 +386,9 @@
   order: 2;
   flex: 1 0 100%;
   min-width: 0;
-  font-size: 13px;
+  font-size: 11.5px;
   line-height: 1.35;
-  color: var(--fl-ink-muted, var(--muted));
+  color: var(--muted);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -197,22 +402,32 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 52px;
-  height: 28px;
+  min-width: 44px;
+  height: 24px;
   box-sizing: border-box;
-  padding: 0 12px;
-  font-size: 13px;
+  padding: 0 10px;
+  font-size: 12px;
   font-weight: 600;
 }
 
+/* Run is the primary act, but a lane of them must not shout: a soft accent
+   tint at rest, the solid primary under the pointer or the keyboard. */
+.sky-lane .sky-lane-fly.btn-primary:not(:hover):not(:focus-visible):not(:disabled) {
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+}
+
 .sky-lane-error {
-  font-size: 12.5px;
-  margin: 3px 0 0;
+  font-size: 11.5px;
+  margin: 0;
+  padding: 0 9px 7px;
 }
 
 .sky-lane-n-more {
-  font-size: 12.5px;
-  padding-left: 7px;
+  font-size: 11.5px;
+  padding: 5px 9px;
+  color: var(--muted);
 }
 
 /* --- Started sessions: a stub out of the block's right edge ---------------- */
@@ -221,9 +436,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-right: -10px;
-  font-size: 12.5px;
-  color: var(--fl-ink-muted, var(--muted));
+  margin-right: -12px;
+  font-size: 11.5px;
+  color: var(--muted);
   min-width: 0;
 }
 
@@ -241,7 +456,7 @@
   flex: none;
   width: 22px;
   height: 0;
-  border-top: 1.5px solid rgba(var(--accent-rgb), 0.7);
+  border-top: 1.5px solid rgba(var(--accent-rgb), 0.6);
   position: relative;
 }
 
@@ -251,26 +466,38 @@
   right: -1px;
   top: -4.5px;
   border: 4px solid transparent;
-  border-left: 6px solid rgba(var(--accent-rgb), 0.7);
+  border-left: 6px solid rgba(var(--accent-rgb), 0.6);
   border-right: 0;
 }
 
-/* --- Folded: one icon per source with its count ---------------------------- */
+/* --- Folded: one quiet tag per source with its count ---------------------- */
 
 .sky-lane-rail {
   width: 44px;
   align-items: center;
-  padding: 8px 4px;
+  padding: 6px 4px 8px;
   gap: 8px;
+  border-radius: 12px;
+}
+
+.sky-lane-rail > .sky-lane-toggle {
+  margin-bottom: 2px;
 }
 
 .sky-lane-rail-icon.fl-kind-badge {
   position: relative;
   margin: 0;
-  min-width: 28px;
-  padding: 6px 4px;
+  min-width: 30px;
+  padding: 5px 4px;
+  font-size: 11px;
+  font-weight: 600;
   cursor: pointer;
   text-align: center;
+}
+
+.sky-lane-rail-icon.fl-kind-badge:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
 }
 
 .sky-lane-rail-count {
@@ -280,54 +507,32 @@
   min-width: 15px;
   padding: 2px 3px;
   border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   font-size: 9.5px;
+  font-weight: 600;
   line-height: 1;
-  color: var(--bg);
-  background: var(--accent);
+  color: var(--accent);
+  background: var(--panel);
   box-sizing: border-box;
 }
 
-/* --- Far (the sky zoomed out under 62%, lib/skyLayout lodFor) ---------------
-   The lane keeps its width; it shows its sources' names and counts in type
-   counter-scaled to stay readable, and leaves the item rows for nearer. */
-.sky-intake[data-lod="far"] {
-  --sky-far: clamp(1, calc(0.84 / var(--sky-z, 1)), 2.1);
-}
-
-.sky-intake[data-lod="far"] .sky-lane-head {
-  font-size: calc(13px * var(--sky-far));
-}
-
-.sky-intake[data-lod="far"] .sky-lane-block-name {
-  font-size: calc(13px * var(--sky-far));
-  font-weight: 700;
-}
-
-.sky-intake[data-lod="far"] .sky-lane-head .fl-count {
-  zoom: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
-}
-
-/* The name gets the block's width: its badge, menu and items wait for mid. */
-.sky-intake[data-lod="far"] :is(.sky-lane-block-head .fl-kind-badge, .sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
+/* --- Level of detail (lib/skyLayout lodFor) -------------------------------
+   The lane's type scale is the session frames' at the same zoom: the title
+   bar and the sources' names grow a little under 80% as a frame's name does
+   (mid, at most 1.3×); nothing else grows, and from far (under 62%) nothing
+   grows at all — the frame bar's type there is fixed too. Far keeps the
+   frame's silhouette: the bar, the tags and the names; the chips, the items
+   and the stubs wait for nearer. */
+.sky-intake[data-lod="far"] :is(.sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more, .sky-lane-block > .sky-lane-empty) {
   display: none;
 }
 
-/* --- Mid: under 80% the lane's words grow a little, as a line's do, so the
-   first picture (62%) reads; its width stays the plane's. */
 .sky-intake[data-lod="mid"] {
   --sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
 }
 
-.sky-intake[data-lod="mid"] :is(.sky-lane-head, .sky-lane-block-name, .sky-lane-item-ref, .sky-lane-item-headline, .sky-lane-empty) {
+.sky-intake[data-lod="mid"] :is(.sky-lane-title, .sky-lane-block-name) {
   font-size: calc(13px * var(--sky-mid));
-}
-
-.sky-intake[data-lod="mid"] :is(.sky-lane-auto, .sky-lane-flyway, .sky-lane-stub, .sky-lane-n-more) {
-  font-size: calc(12px * var(--sky-mid));
-}
-
-.sky-intake[data-lod="mid"] .sky-lane-fly.fl-btn {
-  zoom: var(--sky-mid);
 }
 
 /* --- A sky object (round 12): the head is its handle ------------------------

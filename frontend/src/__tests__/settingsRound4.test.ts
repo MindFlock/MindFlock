@@ -199,9 +199,11 @@ describe("Workspace: where worktrees live", () => {
     expect(w()).toContain("pathsUrl(typed === stored ? undefined : typed)");
     expect(w()).toContain('id="workspace-dir-check"');
   });
-  it("holds the worktree/clone control (moved off Engine & updates)", () => {
-    expect(w()).toMatch(/group="engine"\s+field="mode"/);
-    expect(code("components/settings/screens/Advanced.tsx")).not.toContain('data-field="mode"');
+  it("points at Intake for worktree/clone (moved there with the rest of ticket setup)", () => {
+    expect(w()).not.toMatch(/group="engine"\s+field="mode"/);
+    expect(w()).toMatch(/<SetInIntake\s+id="workspace-copy-mode"[\s\S]{0,200}selector="#ik-copy-mode"/);
+    expect(code("components/settings/screens/Advanced.tsx")).not.toContain('field="mode"');
+    expect(code("components/intake/AutoStartSwitches.tsx")).toMatch(/group="engine"\s+field="mode"/);
   });
   it("no internal hook id as an example", () => {
     expect(w()).not.toContain("gitnexus-index");

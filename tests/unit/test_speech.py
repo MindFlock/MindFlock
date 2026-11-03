@@ -404,6 +404,19 @@ class TestLocalSTT:
         assert whisper.loads[2][0] == "small"
         assert whisper.calls[2][1]["beam_size"] == 5
 
+    def test_the_wake_check_pass_has_no_prompt(self, whisper):
+        stt = speech.LocalSTT()
+        assert stt.wake_verify_transcribe(b"RIFF", "audio/wav", "en-US") == (
+            "Hello there."
+        )
+        assert whisper.loads[0][0] == "base.en"  # the same fast model
+        assert whisper.calls[0][1] == {
+            "language": "en",
+            "beam_size": 1,
+            "vad_filter": False,
+        }
+        assert not os.path.exists(whisper.seen_paths[0][0])
+
     def test_the_base_wake_path_is_transcribe(self):
         seen: list = []
 
@@ -414,6 +427,9 @@ class TestLocalSTT:
 
         assert _B().wake_transcribe(b"a", "audio/wav", "en", "MindFlock") == "ok"
         assert seen == [(b"a", "audio/wav", "en", "MindFlock")]
+        # No un-hinted check pass: the wake stands on the first.
+        assert _B().wake_verify_transcribe(b"a", "audio/wav", "en") is None
+        assert len(seen) == 1
 
     def test_configured_model_size(self, whisper):
         _set(stt_model="medium")

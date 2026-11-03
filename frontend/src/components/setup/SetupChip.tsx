@@ -1,15 +1,17 @@
 /** The compact "Setup 3/5" chip: shows once the empty-grid card has gone
  * (a required step done, or a session exists) and until every step is done
  * or skipped. Clicking it opens the Setup modal, which renders the same
- * checklist.
+ * checklist. Once an agent is seen at work (setupModel agentWorked) the
+ * required steps count as done and the checklist is re-read with a fresh
+ * doctor run, so "Setup 2 of 3" never sits beside a running agent.
  *
  * Mounted in the sidebar's footer, beside the doctor's "setup issues" chip
  * (which opens the same modal). */
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
-import { chipLabel, showSetupChip } from "./setupModel";
+import { agentWorked, chipLabel, showSetupChip } from "./setupModel";
 import { refreshSetup, useSetup } from "./useSetup";
 
 export function SetupChip() {
@@ -27,8 +29,19 @@ export function SetupChip() {
     if (haveSessions) void refreshSetup();
   }, [haveSessions]);
 
+  // The first time an agent is seen working: sticky for this page, and one
+  // re-read with a doctor re-probe (the sign-in may have happened in the
+  // session's own terminal, which only a doctor run notices).
+  const workingNow = agentWorked(instances);
+  const [worked, setWorked] = useState(false);
+  useEffect(() => {
+    if (!workingNow || worked) return;
+    setWorked(true);
+    void refreshSetup(true);
+  }, [workingNow, worked]);
+
   if (sessions < 0) return null;
-  if (!showSetupChip({ sessions, status, onboarded: config?.onboarded })) return null;
+  if (!showSetupChip({ sessions, status, onboarded: config?.onboarded, worked: worked || workingNow })) return null;
   return (
     <button
       type="button"
@@ -37,7 +50,7 @@ export function SetupChip() {
       title="Finish setting up MindFlock — click for the checklist"
       onClick={() => useUi.getState().openDialogFor("setup")}
     >
-      {chipLabel(status)}
+      {chipLabel(status, worked || workingNow)}
     </button>
   );
 }

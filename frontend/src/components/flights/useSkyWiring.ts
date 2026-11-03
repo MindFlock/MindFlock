@@ -17,8 +17,8 @@
 
 import { loadNodePos, saveNodePos } from "../../lib/skyNodePos";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
-import { firstStepOf, loopSlotAfter, loopStepTo, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
-import { moveStop, queueStopPos, saveStopPositions, splitOffChain, tackOn, tackOnNew } from "../../lib/flightsApi";
+import { LOOP_AGENT, firstStepOf, loopSlotAfter, loopStepTo, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { joinParallel, moveStop, queueStopPos, saveStopPositions, splitOffChain, tackOn, tackOnNew } from "../../lib/flightsApi";
 import type { Flight, StepKindDef } from "../../lib/flights";
 import { HANDOFF_KIND, groundedKey, handoffStepFor, sessionWord } from "../../lib/groundedLines";
 import { GRID_SNAP, NODE_W, TILE, inPortOf, outPortOf, wireIntent, type ChainGraph, type GraphNode, type WireEnd, type WireIntent } from "../../lib/skyGraph";
@@ -37,6 +37,13 @@ export interface ChainEntry {
   /** Open the chain's palette for a stop right after `after` (null: the
    * first slot), the new stop drawn at `pos` (chain-local). */
   paletteAfter(after: DiagramNode | null, pos: Pos | null): void;
+  /** Round 20 (optional — a chain that has it can take parallel stops): open
+   * the chain's palette for a stop that flies side by side with `withNode`
+   * — the picked stop is tacked on with `tackOnParallel(flight, step,
+   * firstStepOf(withNode).id)` — the new tile drawn at `pos` (chain-local).
+   * Without it a wire to empty sky past a stop that has a next opens the
+   * plain palette after that stop (`paletteAfter`), as before. */
+  paletteParallel?(withNode: DiagramNode, pos: Pos | null): void;
 }
 
 /** A chain on the plane: its entry and its slot's spot. */
@@ -62,11 +69,11 @@ export const portOnPlane = (c: Pick<PlacedChain, "origin" | "dx" | "dy">, n: Gra
 
 /** Every node a wire from `src` could land on, by chain key (the contract's
  * Wiring table, asked of `wireIntent` node by node). */
-export function wireTargetsOf(src: WireEnd, chains: Iterable<Pick<PlacedChain, "graph">>, shift = false): Map<string, Set<string>> {
+export function wireTargetsOf(src: WireEnd, chains: Iterable<Pick<PlacedChain, "graph">>, shift = false, kinds?: readonly StepKindDef[] | null): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const c of chains)
     for (const n of chainNodes(c.graph)) {
-      if (wireIntent(src, { chain: c.graph, node: n, side: "in" }, { shift }).op === "none") continue;
+      if (wireIntent(src, { chain: c.graph, node: n, side: "in" }, { shift, kinds }).op === "none") continue;
       let s = out.get(c.graph.key);
       if (!s) out.set(c.graph.key, (s = new Set()));
       s.add(n.id);
@@ -131,6 +138,57 @@ export interface WireBand {
   side: "in" | "out";
   /** The drop under the pointer means something. */
   over: boolean;
+  /** A short hint by the pointer: what letting go here does, else where a
+   * wire can go (`wireHint`). */
+  hint?: string;
+}
+
+// --- The drag's hint (docs/flights-loop-agent-sky.md) --------------------------------
+
+const q = (t: string) => "“" + t + "”";
+
+/** What a drop does, in a few words (the hint by the pointer while it is
+ * over a target), "" for none. */
+export function intentHint(intent: WireIntent): string {
+  switch (intent.op) {
+    case "loop":
+      return intent.agent ? "↺ Loop back to the agent" : "↺ Loop back to " + q(intent.to.title);
+    case "move":
+      return "Move " + q(intent.step.title) + " here";
+    case "merge":
+      return "Join that route on here";
+    case "attach":
+      return "Run that route on this session";
+    case "handoff":
+      return "Start that route from here";
+    case "parallel":
+      return intent.step ? "Run " + q(intent.step.title) + " beside " + q(intent.with.title) : "Add a stop beside " + q(intent.with.title);
+    case "palette":
+      return "Add a stop here";
+    case "split":
+      return "Split off a route here";
+    default:
+      return "";
+  }
+}
+
+/** The hint by the pointer before it is over anything: where a wire from
+ * `src` can go — a stop's out port on a chain that can loop says so ("Drop on
+ * an earlier stop or the agent to loop"). `targets` are the drag's lit nodes
+ * (`wireTargetsOf`). */
+export function dragHint(src: WireEnd, targets: ReadonlyMap<string, ReadonlySet<string>>): string {
+  if ("sky" in src) return "";
+  if (src.side === "in") return "Drop on empty sky to split it off";
+  const own = targets.get(src.chain.key);
+  const g = src.chain;
+  const agent = !!own?.has(HEAD) && src.node.id !== HEAD && g.head.kind === "session";
+  // An earlier stop (or this one) lit: a drop there is a Loop.
+  const at = src.node.node.index;
+  const earlier = at !== undefined && g.nodes.some((n) => own?.has(n.id) && n.node.index !== undefined && n.node.index <= at && n.node.kind !== "child" && n.node.kind !== "branch");
+  if (agent && earlier) return "Drop on an earlier stop or the agent to loop";
+  if (agent) return "Drop on the agent to loop";
+  if (earlier) return "Drop on an earlier stop to loop";
+  return "Drop on empty sky to add a stop";
 }
 
 export interface SkyWiringOpts {
@@ -141,6 +199,10 @@ export interface SkyWiringOpts {
   ground(el: Element | null): boolean;
   /** The drop's intent, and where it was let go (plane px). */
   onIntent(intent: WireIntent, ctx: { src: WireEnd; at: Pos }): void;
+  /** Round 20 (optional): the kinds list, so a drop knows which stops may
+   * run in parallel (`parallel_safe`); without it lib/flights
+   * `PARALLEL_UNSAFE` decides. */
+  kinds?(): readonly StepKindDef[] | null | undefined;
 }
 
 /** The host's wire drag. `startWire` from a chain's `onPortDown`. */
@@ -164,8 +226,11 @@ export function useSkyWiring(opts: SkyWiringOpts) {
     const r = el instanceof Element ? el.getBoundingClientRect() : null;
     const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
     let shift = e.shiftKey;
-    setTargets(wireTargetsOf(src, chains.values(), shift));
-    setBand({ from, to: from, side, over: false });
+    const kindsNow = () => optsRef.current.kinds?.() || null;
+    let lit = wireTargetsOf(src, chains.values(), shift, kindsNow());
+    let base = dragHint(src, lit);
+    setTargets(lit);
+    setBand({ from, to: from, side, over: false, hint: base });
     setOver(null);
     const pid = e.pointerId;
     const sx = e.clientX;
@@ -182,13 +247,16 @@ export function useSkyWiring(opts: SkyWiringOpts) {
       const to = now.planeAt(ev.clientX, ev.clientY);
       if (ev.shiftKey !== shift) {
         shift = ev.shiftKey;
-        setTargets(wireTargetsOf(src, now.chains().values(), shift));
+        lit = wireTargetsOf(src, now.chains().values(), shift, kindsNow());
+        base = dragHint(src, lit);
+        setTargets(lit);
       }
       const h = hit(ev).node;
       const hc = h ? now.chains().get(h.key) : null;
-      const ok = !!h && !!hc && wireIntent(src, { chain: hc.graph, node: h.node, side: "in" }, { shift }).op !== "none";
+      const it: WireIntent = h && hc ? wireIntent(src, { chain: hc.graph, node: h.node, side: "in" }, { shift, kinds: kindsNow() }) : { op: "none" };
+      const ok = it.op !== "none";
       setOver((cur) => (ok ? (cur?.key === h!.key && cur.node === h!.node.id ? cur : { key: h!.key, node: h!.node.id }) : null));
-      setBand({ from, to, side, over: ok });
+      setBand({ from, to, side, over: ok, hint: (ok && intentHint(it)) || base });
     };
     const end = (commit: boolean, ev?: PointerEvent) => {
       window.removeEventListener("pointermove", move);
@@ -214,7 +282,7 @@ export function useSkyWiring(opts: SkyWiringOpts) {
       const h = hit(ev);
       const placed = h.node ? now.chains().get(h.node.key) : null;
       const dst: WireEnd | null = h.node && placed ? { chain: placed.graph, node: h.node.node, side: "in" } : now.ground(h.el) ? { sky: at } : null;
-      const intent: WireIntent = dst ? wireIntent(src, dst, { shift: ev.shiftKey }) : { op: "none" };
+      const intent: WireIntent = dst ? wireIntent(src, dst, { shift: ev.shiftKey, kinds: kindsNow() }) : { op: "none" };
       now.onIntent(intent, { src, at });
     };
     const up = (ev: PointerEvent) => {
@@ -259,7 +327,13 @@ export interface WireRunDeps {
 }
 
 /** A stops-only chain's name (GroundedLine's `groundedName`). */
-const groundedName = (f: Pick<Flight, "plan_name">) => f.plan_name || "Stops";
+// The same naming as GroundedLine's (a placeholder "Stops" is no name).
+const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly { title: string }[] }) => {
+  const given = (f.plan_name || "").trim();
+  if (given && given !== "Stops") return given;
+  const steps = f.steps || [];
+  return steps.length ? steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "") : "Stops";
+};
 
 /** A flight index as the routes take it: past the end = appended. */
 const atOrEnd = (f: Pick<Flight, "steps">, at: number | undefined) => (at !== undefined && at < f.steps.length ? at : undefined);
@@ -287,14 +361,34 @@ export async function runWireIntent(intent: WireIntent, ctx: { src: WireEnd; at:
     c.paletteAfter(intent.after, { x: snap(p.x - NODE_W / 2), y: snap(p.y - TILE / 2) });
     return;
   }
+  if (intent.op === "parallel" && !intent.step) {
+    // A NEW stop beside X's next: the chain's palette for it (its own hook),
+    // else the plain palette after X (an older chain).
+    const c = d.chain(intent.chain);
+    if (!c) return;
+    const p = inChain(c, intent.at ?? ctx.at);
+    const snap = (v: number) => Math.round(v / GRID_SNAP) * GRID_SNAP;
+    const pos = { x: snap(p.x - NODE_W / 2), y: snap(p.y - TILE / 2) };
+    if (c.paletteParallel) c.paletteParallel(intent.with, pos);
+    else c.paletteAfter(intent.after, pos);
+    return;
+  }
   const f = d.flightOf(intent.chain);
+  if (intent.op === "parallel") {
+    // Shift-drop: that stop joins X's next's group.
+    const step = intent.step ? firstStepOf(intent.step) : undefined;
+    const withStep = firstStepOf(intent.with);
+    if (!f || !step || !withStep) return;
+    if (await joinParallel(f.id, step.id, withStep.id)) toast("“" + step.title + "” runs beside “" + withStep.title + "”");
+    return;
+  }
   if (intent.op === "handoff") {
     const def = d.kinds.find((k) => k.kind === HANDOFF_KIND);
-    if (!def) return void toast("This server has no “Start a chain” stop yet");
+    if (!def) return void toast("This server has no “Start a route” stop yet");
     const target = d.flights.find((x) => groundedKey(x.id) === intent.target);
     const step = handoffStepFor(def, f ? f.steps.map((st) => st.id) : [], intent.target);
     const ok = f ? await tackOn(f.id, step, atOrEnd(f, loopSlotAfter(intent.from))) : !!(await tackOnNew(intent.chain, [step]));
-    if (ok) toast("“" + intent.from.title + "” starts “" + (target ? groundedName(target) : "that chain") + "” on " + sessionWord("new"));
+    if (ok) toast("“" + intent.from.title + "” starts “" + (target ? groundedName(target) : "that route") + "” on " + sessionWord("new"));
     return;
   }
   if (!f) return;
@@ -306,10 +400,12 @@ export async function runWireIntent(intent: WireIntent, ctx: { src: WireEnd; at:
   }
   if (intent.op === "loop") {
     const def = d.kinds.find((k) => k.kind === "loop");
-    const target = firstStepOf(intent.to);
+    // Its own agent tile: `back_to: "agent"` — the agent runs again.
+    const target = intent.agent ? LOOP_AGENT : firstStepOf(intent.to);
     const at = loopSlotAfter(intent.from);
-    if (!def || !target || at === undefined) return void toast("This server has no Loop stop");
-    if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast("Loops back to “" + target.title + "”");
+    if (!def) return void toast("This server has no Loop stop");
+    if (!target || at === undefined) return;
+    if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast(target === LOOP_AGENT ? "Loops back to the agent — it runs again after “" + intent.from.title + "”" : "Loops back to “" + target.title + "”");
     return;
   }
   if (intent.op === "split") {
@@ -412,21 +508,27 @@ export function useChainEntry(
   register: ((e: ChainEntry | null) => void) | undefined,
   graph: ChainGraph,
   wrap: RefObject<HTMLElement | null>,
-  paletteAfter: ChainEntry["paletteAfter"]
+  paletteAfter: ChainEntry["paletteAfter"],
+  /** Round 20 (optional): the chain's palette for a stop in parallel. */
+  paletteParallel?: ChainEntry["paletteParallel"]
 ) {
   const palRef = useRef(paletteAfter);
   palRef.current = paletteAfter;
   const pal = useCallback<ChainEntry["paletteAfter"]>((a, p) => palRef.current(a, p), []);
-  const last = useRef<{ graph: ChainGraph; dx: number; dy: number } | null>(null);
+  const parRef = useRef(paletteParallel);
+  parRef.current = paletteParallel;
+  const hasPar = !!paletteParallel;
+  const par = useCallback<NonNullable<ChainEntry["paletteParallel"]>>((w, p) => parRef.current?.(w, p), []);
+  const last = useRef<{ graph: ChainGraph; dx: number; dy: number; par: boolean } | null>(null);
   useLayoutEffect(() => {
     if (!register) return;
     const el = wrap.current;
     const dx = el ? el.offsetLeft : 0;
     const dy = el ? el.offsetTop : 0;
     const l = last.current;
-    if (l && l.graph === graph && l.dx === dx && l.dy === dy) return;
-    last.current = { graph, dx, dy };
-    register({ graph, dx, dy, paletteAfter: pal });
+    if (l && l.graph === graph && l.dx === dx && l.dy === dy && l.par === hasPar) return;
+    last.current = { graph, dx, dy, par: hasPar };
+    register({ graph, dx, dy, paletteAfter: pal, ...(hasPar ? { paletteParallel: par } : {}) });
   });
   useEffect(() => {
     if (!register) return;

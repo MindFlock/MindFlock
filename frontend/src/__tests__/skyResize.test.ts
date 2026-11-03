@@ -116,7 +116,7 @@ describe("the corner's drag", () => {
     expect(dragBox(start, -5000, 0)).toEqual({ w: 140, h: Math.max(60, Math.round(64 * (140 / 150))) });
   });
 
-  it("round 18: a chain line draws no corner (the math stays for the classic row)", () => {
+  it("round 18: a route line draws no corner (the math stays for the classic row)", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).not.toContain('className="skl-box-resize"');
     expect(src).toContain("export function dragBox(");
@@ -137,7 +137,7 @@ const FLIGHT = {
   session: "me",
   state: "running",
   cursor: 2,
-  steps: [step("s1", "agent", "Work it", "done"), step("s2", "ship", "Commit", "done"), step("s3", "ship", "Push", "running"), step("s4", "ship", "Merge")],
+  steps: [step("s1", "agent", "Work it", "done"), step("s2", "ship", "Commit", "done"), step("s3", "ship", "Push", "running"), step("s4", "ship", "Merge when green")],
   history: [],
 } as unknown as Flight;
 const PLANS: FlightPlan[] = [];
@@ -180,7 +180,7 @@ const line = (layout: Record<string, unknown> = {}, zoom = 1) =>
     })
   );
 
-describe("round 18: a chain line is never scaled", () => {
+describe("round 18: a route line is never scaled", () => {
   it("no sizer, no scale, no corner — the tiles have one size at any boxW", () => {
     const html = line({ boxW: 300, boxH: 109 }, 0.5);
     expect(html).not.toContain("skl-scale");
@@ -190,11 +190,11 @@ describe("round 18: a chain line is never scaled", () => {
     expect(html).toMatch(/class="skl skl-chainline[^"]*"[^>]*style="--sky-z:0.5;/);
   });
 
-  it("the CSS: no card around a chain, no row behind it", () => {
+  it("the CSS: no card around a route, no row behind it", () => {
     expect(css("components/flights/SkyLine.css")).toMatch(/\.skl\.skl-chainline \{[^}]*border: none;[^}]*background: transparent;[^}]*box-shadow: none;/);
   });
 
-  it("an open card is drawn at its own size, under the chain", () => {
+  it("an open card is drawn at its own size, under the route", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('{cards.length > 0 && <div className="skl-cards">{cards}</div>}');
     expect(src).not.toContain("const cw = s.w / k;");
@@ -208,7 +208,7 @@ describe("flown stops and the ⋯'s words", () => {
     const html = line();
     expect(html).toContain('data-node="stop:s1"');
     expect(html).not.toContain('data-node="flown"');
-    expect(menu(html)).toContain("Fold flown stops");
+    expect(menu(html)).toContain("Fold finished stops");
   });
 
   it("draws the hook's diagram (the fold and the open groups are its), and asks it what a fold would hide", () => {
@@ -224,7 +224,7 @@ describe("flown stops and the ⋯'s words", () => {
     const items = menu(line());
     expect(items).toContain("Add a stop…");
     expect(items.some((l) => /flyway/i.test(l))).toBe(false);
-    expect(line()).toContain('title="A stop or a saved stop, at the end of the chain"');
+    expect(line()).toContain('title="A stop or a saved route, at the end of the route"');
   });
 });
 
@@ -233,7 +233,7 @@ describe("names", () => {
     useUi.setState({ aliases: { me: "Login fix" } });
     const html = line();
     expect(html).toContain('<span class="skl-name">Login fix</span>');
-    expect(html).toContain('aria-label="Login fix&#x27;s chain"');
+    expect(html).toContain('aria-label="Login fix&#x27;s route"');
     expect(html).toContain('aria-label="Actions for Login fix"');
     // Still keyed by the raw title.
     expect(html).toContain('data-line="me"');
@@ -242,7 +242,7 @@ describe("names", () => {
   it("the open card's name and labels too", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('<span className="skl-card-name">{windowName(inst.title)}</span>');
-    expect(src).toContain('aria-label={"Fold " + windowName(inst.title) + " back into a box"}');
+    expect(src).toContain('aria-label={"Fold " + windowName(inst.title) + " back into the route"}');
     expect(src).toContain(`aria-label={"Resize " + windowName(inst.title) + "'s card"}`);
     // Shown text and labels: never the raw title (keys and data-line may).
     expect(src).not.toMatch(/>\{(p|inst)\.title\}<|(label|title)=\{[^}]*[^(\w.](p|inst)\.title\b/);

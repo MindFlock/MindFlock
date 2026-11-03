@@ -4,12 +4,9 @@
 
 import { LANE_CHOICES, LANE_LABEL, type Lane } from "./autopilot";
 
-/** What Verify is for. */
-export const VERIFY_BLURB = "check that pushed changes work";
-
-/** Fast-track's rungs, in order, with the one label each wears on every
+/** Goes as far as's rungs, in order, with the one label each wears on every
  * screen that offers them (the New form, the ⏩ popover, the Schedule form):
- * "Off / Commit / Push / Open PR / Merge when green". Built from the ladder's
+ * "Agent only / Commit / Push / Open PR / Merge when green". Built from the ladder's
  * own label table so the two can never drift. */
 export const FAST_TRACK_LEVELS: ReadonlyArray<{ lane: Lane; label: string }> = LANE_CHOICES.map(
   (lane) => ({ lane, label: LANE_LABEL[lane] })

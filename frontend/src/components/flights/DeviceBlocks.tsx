@@ -1,30 +1,43 @@
-/** Device blocks (docs/flights.md "Round 15" → `objects`): one sky object
- * per device of yours but this one (layout key `device:<name>`, from `GET
- * /api/devices` minus `self`). Dropping a session's line on one asks inline
- * — never a window dialog (the desktop app has none) — and then calls the
- * existing move route, `POST /api/instances/{title}/move {device, force}`
- * (api/skyApi `moveSessionToDevice`): the agent pauses while the session
- * moves. A refusal shows the route's own sentence (lib/sessionActions
- * `moveErrorText`); a server that only moves folders on this machine
- * answers `bad_dest`, which the block names plainly.
+/** Device drop targets (docs/flights.md "Round 15" → `objects`, reworked in
+ * round-consolidate): nothing device-related stands on the board. While a
+ * session's chain is dragged by its frame bar, the sky shows each device of
+ * yours but this one (`GET /api/devices` minus `self`) as a labelled target
+ * along the view's top edge — "Move to Ethan's Mac mini · 4 sessions there"
+ * (`DeviceDock`, drawn by SkyView over the viewport, in screen px). Dropping
+ * the chain on one asks inline — never a window dialog (the desktop app has
+ * none) — and then calls the existing move route, `POST
+ * /api/instances/{title}/move {device, force}` (api/skyApi
+ * `moveSessionToDevice`): the agent pauses while the session moves. A refusal
+ * shows the route's own sentence (lib/sessionActions `moveErrorText`); a
+ * server that only moves folders on this machine answers `bad_dest`, which
+ * the target names plainly.
  *
- * The host (SkyView) hands the block the dropped title (`dropped`) and
- * hears `onDone` when the question is answered either way. */
+ * The host (SkyView) hands the dock the devices, the target under the
+ * pointer (`over`, a `device:<name>` key), the dropped title per key
+ * (`dropped`) and hears `onDone(key)` when a question is answered either
+ * way. The look is SKY_OBJECT_STYLE's (DeviceBlocks.css): a calm frame, one
+ * hairline, a 13px / 600 primary line and a muted 11.5px second one. */
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useState } from "react";
 import { moveSessionToDevice } from "../../api/skyApi";
 import type { Device } from "../../api/types";
 import { moveErrorText, moveRefusal } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { windowName } from "../../lib/windowName";
-import "./SkyObjects.css";
+import "./DeviceBlocks.css";
 
 export interface DeviceBlockProps {
   device: Device;
+  /** The session title dropped on it ("" while nothing is asked). */
   dropped?: string;
   onDone?(): void;
+  /** A dragged chain is over it: it lights. */
   target?: boolean;
-  onHeadDown?(e: ReactPointerEvent): void;
+  /** Its element, for the host's hit test (screen px). */
+  targetRef?(el: HTMLElement | null): void;
+  /** Older hosts (the registry's device entry) pass these; the target is
+   * never dragged or measured — it is not a board object any more. */
+  onHeadDown?(e: unknown): void;
   draggable?: boolean;
   onMeasure?(w: number, h: number): void;
 }
@@ -46,41 +59,35 @@ export function deviceBlockReason(d: Pick<Device, "connected" | "reachable">): s
   return "";
 }
 
-const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, label, summary, [data-no-drag]");
+/** A device's name as people read it. */
+export const deviceName = (d: Pick<Device, "host" | "device">) => d.host || d.device;
 
-export function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown, draggable = true, onMeasure }: DeviceBlockProps) {
-  const rootRef = useRef<HTMLDivElement>(null);
+/** The target's second line: "4 sessions there · macOS", or why it can't. */
+export function deviceTargetWords(d: Pick<Device, "sessions" | "os" | "connected">): string {
+  if (!d.connected) return "Not connected";
+  const n = typeof d.sessions === "number" ? (d.sessions === 0 ? "No sessions there" : d.sessions + (d.sessions === 1 ? " session there" : " sessions there")) : "";
+  return [n, d.os || ""].filter(Boolean).join(" · ") || "Drop to move the session here";
+}
+
+/** One device as a drop target — and, once a chain was dropped on it, the
+ * inline question. */
+export function DeviceBlock({ device, dropped = "", onDone, target = false, targetRef }: DeviceBlockProps) {
   const [force, setForce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const measureRef = useRef(onMeasure);
-  measureRef.current = onMeasure;
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const read = () => {
-      if (el.offsetWidth > 0 && el.offsetHeight > 0) measureRef.current?.(el.offsetWidth, el.offsetHeight);
-    };
-    read();
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
   useEffect(() => {
     setErr("");
     setForce(false);
   }, [dropped]);
-  const headDown = (e: ReactPointerEvent) => {
-    if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
-  };
   const reason = dropped ? deviceBlockReason(device) : "";
+  const name = deviceName(device);
   const move = async () => {
     if (!dropped || reason || busy) return;
     setBusy(true);
     setErr("");
     try {
       await moveSessionToDevice(dropped, device.device, force);
-      toast(`Moving “${windowName(dropped)}” to ${device.host || device.device}…`);
+      toast(`Moving “${windowName(dropped)}” to ${name}…`);
       onDone?.();
     } catch (e) {
       setErr(deviceMoveError(e));
@@ -89,25 +96,25 @@ export function DeviceBlock({ device, dropped = "", onDone, target = false, onHe
     }
   };
   const state = device.connected ? "on" : "off";
-  const name = device.host || device.device;
   return (
-    <div ref={rootRef} className={"sky-block sky-device" + (target ? " is-merge-target" : "")} data-device={device.device} data-state={state} role="group" aria-label={name + " — drop a line here to move its session there"}>
-      <div className="sky-block-head" data-sky-head title={draggable && onHeadDown ? "Drag to move" : undefined} onPointerDown={headDown}>
-        <span className="sky-block-glyph" aria-hidden="true">
-          ▣
+    <div
+      ref={targetRef}
+      className={"sky-device" + (target ? " is-over" : "") + (dropped ? " is-asking" : "")}
+      data-device={device.device}
+      data-state={state}
+      role="group"
+      aria-label={"Move to " + name + " — drop the route here"}
+    >
+      <div className="sky-device-bar">
+        <span className={"sky-device-dot is-" + state} title={device.connected ? "connected" : "not connected"} />
+        <span className="sky-device-title" title={device.device}>
+          Move to {name}
         </span>
-        <strong className="sky-block-name" title={device.device}>
-          {name}
-        </strong>
-        <span className={"sky-block-dot is-" + state} title={device.connected ? "connected" : "not connected"} />
       </div>
-      <div className="sky-block-body muted">
-        {device.os ? device.os + " · " : ""}
-        {typeof device.sessions === "number" ? device.sessions + (device.sessions === 1 ? " session" : " sessions") : "Drop a line to move it here"}
-      </div>
+      <div className="sky-device-sub">{deviceTargetWords(device)}</div>
       {dropped && (
         <form
-          className="sky-block-ask fl-form"
+          className="sky-device-ask fl-form"
           data-no-drag
           onSubmit={(e) => {
             e.preventDefault();
@@ -118,16 +125,16 @@ export function DeviceBlock({ device, dropped = "", onDone, target = false, onHe
             Move <strong>{windowName(dropped)}</strong> to {name}? Its agent pauses while it moves.
           </p>
           {reason ? (
-            <p className="sky-block-err">{reason}</p>
+            <p className="sky-device-err">{reason}</p>
           ) : (
             <>
-              <label className="sky-block-choice">
+              <label className="sky-device-choice">
                 <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} /> Even if it is mid-turn
               </label>
-              {err && <p className="sky-block-err">{err}</p>}
+              {err && <p className="sky-device-err">{err}</p>}
             </>
           )}
-          <div className="sky-block-btns">
+          <div className="sky-device-btns">
             {!reason && (
               <button type="submit" className="fl-btn btn-primary" disabled={busy}>
                 {busy ? "Moving…" : "Move"}
@@ -139,6 +146,39 @@ export function DeviceBlock({ device, dropped = "", onDone, target = false, onHe
           </div>
         </form>
       )}
+    </div>
+  );
+}
+
+export interface DeviceDockProps {
+  devices: Device[];
+  /** A session's chain is in the hand: every device shows as a target. */
+  dragging: boolean;
+  /** The target under the pointer (`device:<name>`), "" for none. */
+  over: string;
+  /** What was dropped where (`device:<name>` → title); the dock keeps only
+   * the asked device while its question is open. */
+  dropped: Record<string, string>;
+  keyOf(device: string): string;
+  onDone(key: string): void;
+  targetRef(key: string, el: HTMLElement | null): void;
+}
+
+/** The devices as drop targets along the sky's top edge: shown only while a
+ * session's chain is dragged, or while a drop's question is open. */
+export function DeviceDock({ devices, dragging, over, dropped, keyOf, onDone, targetRef }: DeviceDockProps) {
+  const asked = devices.filter((d) => dropped[keyOf(d.device)]);
+  const shown = dragging ? devices : asked;
+  if (!shown.length) return null;
+  return (
+    <div className={"sky-device-dock" + (dragging ? " is-dragging" : "")} role="region" aria-label="Move the session to another device" data-no-drag>
+      {dragging && <span className="sky-device-dock-hint">Drop the route on a device to move the session there</span>}
+      <div className="sky-device-dock-row">
+        {shown.map((d) => {
+          const key = keyOf(d.device);
+          return <DeviceBlock key={key} device={d} dropped={dropped[key] || ""} target={over === key} onDone={() => onDone(key)} targetRef={(el) => targetRef(key, el)} />;
+        })}
+      </div>
     </div>
   );
 }

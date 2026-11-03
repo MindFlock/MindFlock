@@ -28,11 +28,11 @@ Installed via ``[project.scripts]``::
     mindflock msg TITLE "text…"   # message a session's agent (typed in when idle)
     mindflock inbox TITLE [--all] # read a session's messages (doesn't mark them read)
 
-    mindflock flights             # flights in the air (plan, subject, session, step)
-    mindflock flights --all       # …and every landed one
-    mindflock flight plans        # the flight plans (scheduled ones say when next)
-    mindflock flight start PLAN [--repo PATH] [--title SESSION]   # take off (id or name)
-    mindflock flight done FLIGHT  # tick off the step it waits on you for (skip / cancel too)
+    mindflock flights             # routes running (saved route, subject, session, stop)
+    mindflock flights --all       # …and every finished one
+    mindflock flight plans        # the saved routes (scheduled ones say when next)
+    mindflock flight start ROUTE [--repo PATH] [--title SESSION]  # run one (id or name)
+    mindflock flight done ROUTE   # tick off the stop it waits on you at (skip / cancel too)
 
     mindflock peer status         # peer links: pair-code with another MindFlock user
     mindflock peer invite         # …make a one-time invite link + code (you listen)
@@ -500,10 +500,10 @@ def _build_parser() -> argparse.ArgumentParser:
     flights = sub.add_parser(
         "flights",
         parents=[server_opts],
-        help="list flights: flyway, subject, session, state and the stop each is at",
+        help="list routes: saved route, subject, session, state and the stop each is at",
     )
     flights.add_argument(
-        "--all", action="store_true", help="include every landed flight"
+        "--all", action="store_true", help="include every finished route"
     )
     flights.add_argument(
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
@@ -512,11 +512,11 @@ def _build_parser() -> argparse.ArgumentParser:
     flight = sub.add_parser(
         "flight",
         parents=[server_opts],
-        help="take off on a flyway, or tick off / skip / cancel a flight's stop",
+        help="run a saved route, or tick off / skip / stop a route's stop",
         description=(
-            "A flight is one run of a flyway (the route: a line of stops) bound "
-            "to one session; a perch is a stop that waits on you — see "
-            "docs/flights.md. Needs a running server."
+            "A route is the row of stops one session's work goes through; a "
+            "saved route is one kept to reuse, and a Wait for me stop waits "
+            "on you — see docs/flights.md. Needs a running server."
         ),
     )
     fl_sub = flight.add_subparsers(dest="flight_command")
@@ -525,7 +525,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "plans",
         aliases=["flyways"],
         parents=[server_opts_nested],
-        help="list the flyways",
+        help="list the saved routes",
     )
     fl_plans.add_argument(
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
@@ -533,29 +533,31 @@ def _build_parser() -> argparse.ArgumentParser:
     fl_start = fl_sub.add_parser(
         "start",
         parents=[server_opts_nested],
-        help="take off: a new session flies the flyway, or attach it to --title",
+        help="run it: a new session runs the saved route, or attach it to --title",
     )
-    fl_start.add_argument("plan", metavar="FLYWAY", help="flyway id or name (any case)")
+    fl_start.add_argument(
+        "plan", metavar="ROUTE", help="saved route id or name (any case)"
+    )
     fl_start.add_argument(
         "--repo",
         default=None,
         metavar="PATH",
-        help="folder for the new session (default: the flyway's, else here)",
+        help="folder for the new session (default: the saved route's, else here)",
     )
     fl_start.add_argument(
         "--title",
         default=None,
         metavar="SESSION",
-        help="fly an existing session instead (unambiguous prefix ok)",
+        help="run it on an existing session instead (unambiguous prefix ok)",
     )
     for verb, text in (
-        ("done", "tick off the perch the flight waits on you at"),
-        ("skip", "skip the flight's current stop"),
-        ("cancel", "cancel the flight (its session stays)"),
+        ("done", "tick off the Wait for me stop the route waits on you at"),
+        ("skip", "skip the route's current stop"),
+        ("cancel", "Stop the route (its session stays)"),
     ):
         p_verb = fl_sub.add_parser(verb, parents=[server_opts_nested], help=text)
         p_verb.add_argument(
-            "flight", metavar="FLIGHT", help="flight id (prefix ok) or its session"
+            "flight", metavar="ROUTE", help="route id (prefix ok) or its session"
         )
         if verb == "done":
             p_verb.add_argument("--note", default="", help="a note for the history")
@@ -1927,7 +1929,7 @@ def _cmd_flights(args: argparse.Namespace) -> int:
         return 0
     items = [f for f in data.get("flights") or [] if isinstance(f, dict)]
     if not items:
-        print("no flights — start one with `mindflock flight start FLYWAY`")
+        print("no routes — start one with `mindflock flight start ROUTE`")
         return 0
     rows = []
     for f in items:
@@ -1951,7 +1953,7 @@ def _cmd_flights(args: argparse.Namespace) -> int:
                 step.get("title") or step.get("kind") or "",
             )
             if state == "waiting_you":
-                where += " (perched on you)"
+                where += " (needs you)"
         state = str(f.get("state") or "")
         if f.get("reason") and state not in ("running", "waiting_you"):
             state += ": " + str(f["reason"])
@@ -1965,7 +1967,11 @@ def _cmd_flights(args: argparse.Namespace) -> int:
                 where,
             ]
         )
-    print(_render_table(rows, ["ID", "FLYWAY", "SUBJECT", "SESSION", "STATE", "STOP"]))
+    print(
+        _render_table(
+            rows, ["ID", "SAVED ROUTE", "SUBJECT", "SESSION", "STATE", "STOP"]
+        )
+    )
     return 0
 
 
@@ -1991,10 +1997,10 @@ def _resolve_plan(plans: List[dict], needle: str) -> dict:
         return hits[0]
     if not hits:
         raise client.ClientError(
-            "no flyway %r (run `mindflock flight flyways`)" % needle
+            "no saved route %r (run `mindflock flight plans`)" % needle
         )
     raise client.ClientError(
-        "%r matches %d flyways — say which: %s"
+        "%r matches %d saved routes — say which: %s"
         % (needle, len(hits), ", ".join(str(p.get("id")) for p in hits))
     )
 
@@ -2014,9 +2020,9 @@ def _resolve_flight(flights: List[dict], needle: str) -> dict:
     if len(hits) == 1:
         return hits[0]
     if not hits:
-        raise client.ClientError("no flight %r (run `mindflock flights`)" % needle)
+        raise client.ClientError("no route %r (run `mindflock flights`)" % needle)
     raise client.ClientError(
-        "%r matches %d flights — say which: %s"
+        "%r matches %d routes — say which: %s"
         % (needle, len(hits), ", ".join(str(f.get("id")) for f in hits))
     )
 
@@ -2065,7 +2071,7 @@ def _cmd_flight(args: argparse.Namespace) -> int:
                 ]
             )
         print(_render_table(rows, ["ID", "NAME", "TRIGGER", "STOPS", "SCHEDULE"]))
-        print("* built-in (editable; reset from the Flyways tab)")
+        print("* built-in (editable; reset it from the saved routes shelf)")
         return 0
     if cmd == "start":
         plans = (client.get(base, "/api/flights/plans") or {}).get("plans") or []
@@ -2087,9 +2093,9 @@ def _cmd_flight(args: argparse.Namespace) -> int:
         f = (made or {}).get("flight") or {}
         step = _flight_step(f)
         print(
-            "%s took off on %s — %s, at %s"
+            "%s started %s — %s, at %s"
             % (
-                f.get("id") or "a flight",
+                f.get("id") or "a route",
                 f.get("plan_name") or plan.get("name"),
                 f.get("session") or "a new session",
                 step.get("title") or "the end",
@@ -2103,7 +2109,10 @@ def _cmd_flight(args: argparse.Namespace) -> int:
         _flight_api(
             lambda: client.post(base, "/api/flights/%s/cancel" % _quote_title(fid), {})
         )
-        print("cancelled %s (%s stays open)" % (fid, f.get("session") or "its session"))
+        print(
+            "stopped the route %s (%s stays open)"
+            % (fid, f.get("session") or "its session")
+        )
         return 0
     step = _flight_step(f)
     if not step:

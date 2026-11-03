@@ -58,11 +58,11 @@ const text = (parts: S.SubPart[]) => parts.map((p) => p.text).join("");
 describe("the lead's sub-line", () => {
   it("planning, then the plan waiting for you", () => {
     expect(text(S.leadSubline(run({ state: "planning", plan: null, tasks: [] }), "lead"))).toMatch(
-      /^Waiting for lead to propose the pieces/
+      /^Waiting for lead to propose the workers/
     );
     const pr = S.leadSubline(run({ state: "plan_ready", plan: { state: "proposed", pieces: run().plan!.pieces }, tasks: [] }), "lead");
-    expect(text(pr)).toBe("lead proposed 3 pieces with separate paths — approve them and MindFlock starts the workers.");
-    expect(pr.find((p) => p.b)?.text).toBe("3 pieces with separate paths");
+    expect(text(pr)).toBe("lead proposed 3 workers with separate paths — approve them and MindFlock starts them.");
+    expect(pr.find((p) => p.b)?.text).toBe("3 workers with separate paths");
   });
 
   it("the mockup's sentence once everything merged back and the check passed", () => {
@@ -72,7 +72,7 @@ describe("the lead's sub-line", () => {
       check: { state: "ok", tests: 212 },
     });
     expect(text(S.leadSubline(r, "lead"))).toBe(
-      "Split into 3 pieces with separate paths · all 3 merged back into run/auth-cleanup · 212 tests pass after the last merge"
+      "Split into 3 workers with separate paths · all 3 merged back into run/auth-cleanup · 212 tests pass after the last merge"
     );
   });
 
@@ -135,13 +135,13 @@ describe("the ship card", () => {
     expect(c.title).toBe("Auth cleanup: rotate refresh tokens, one session store, one scope decorator");
     expect(c.into).toBe("main ← run/auth-cleanup");
     expect(c.stat).toBe("14 files +412 −188");
-    expect(c.commits).toBe("one per piece, kept as written + 1 conflict fix by the lead");
-    expect(c.body).toBe("a section per piece: what changed, the tests it ran");
+    expect(c.commits).toBe("one per worker, kept as written + 1 conflict fix by the lead");
+    expect(c.body).toBe("a section per worker: what changed, the tests it ran");
   });
 
   it("the fast-track note at the right", () => {
-    expect(S.laneNote({ target: "pr", ask_first: true })).toBe("fast-track: → PR, asks first");
-    expect(S.laneNote({ target: "leave", ask_first: false })).toBe("fast-track: off");
+    expect(S.laneNote({ target: "pr", ask_first: true })).toBe("goes as far as: → PR, asks first");
+    expect(S.laneNote({ target: "leave", ask_first: false })).toBe("goes as far as: agent only");
     expect(S.laneNote(null)).toBe("");
   });
 
@@ -153,7 +153,7 @@ describe("the ship card", () => {
     const ho = S.releaseOutcome(run({ state: "done", release: { state: "handoff", compare_url: "https://x/compare/main...b" } }))!;
     expect(ho.link).toBe("Open the compare page ↗");
     const local = S.releaseOutcome(run({ state: "done", policy: { lane: "commit", ask_first: false, grouping: "together" } }))!;
-    expect(local.text).toMatch(/nothing pushed \(this team run is fast-tracked to Commit\)/);
+    expect(local.text).toMatch(/nothing pushed \(this team run goes as far as Commit\)/);
   });
 
   it("a lead whose origin is a folder on this machine: push only, and the outcome never claims a PR", () => {
@@ -246,7 +246,7 @@ describe("the rail", () => {
   it("the lead's line says how the group is going", () => {
     const all = run({ tasks: [piece("a", "integrated"), piece("b", "integrated"), piece("c", "integrated")] });
     expect(S.leadLine(all)).toEqual({ text: "3 of 3 merged back", cls: "ok" });
-    expect(S.leadLine(run({ state: "planning", tasks: [] }))!.text).toBe("proposing the pieces…");
+    expect(S.leadLine(run({ state: "planning", tasks: [] }))!.text).toBe("proposing the workers…");
     // An auto-split may not split at all: it is still deciding.
     expect(S.leadLine(run({ state: "planning", optional: true, tasks: [] }))!.text).toBe(
       "deciding whether to split…"
@@ -354,7 +354,7 @@ describe("the bell's group-level waiting rows", () => {
 describe("the bell", () => {
   it("plan and release rows open the lead's Thread; a failed check points at its group", () => {
     const plan = runNote("run.needs_you", { run: "r_ac", name: "Auth cleanup", title: "auth-cleanup-lead", reason: "plan", round: 1 })!;
-    expect(plan.text).toBe("Auth cleanup: the lead proposed the pieces — approve them");
+    expect(plan.text).toBe("Auth cleanup: the lead proposed the workers — approve them");
     expect(plan.lead).toBe("auth-cleanup-lead");
     expect(plan.rule).toBe("run_needs_you");
     const rel = runNote("run.needs_you", { run: "r_ac", name: "Auth cleanup", title: "auth-cleanup-lead", reason: "release", text: "one PR is ready to open" })!;
@@ -417,8 +417,8 @@ describe("where the pieces run (the plan card's mode choice)", () => {
     expect(c.map((x) => x.mode)).toEqual(["worktrees", "same_folder"]);
     expect(c[0].label).toBe("In separate worktrees (merge back) — default");
     expect(c[1].label).toBe("In this folder (no merge)");
-    expect(c[0].hint).toBe("Each piece in its own worktree, merged back into run/auth-cleanup; conflicts go to auth-lead.");
-    expect(c[1].hint).toMatch(/runs in auth-lead's folder; MindFlock commits each piece's paths .* no per-piece undo\.$/);
+    expect(c[0].hint).toBe("Each worker in its own worktree, merged back into run/auth-cleanup; conflicts go to auth-lead.");
+    expect(c[1].hint).toMatch(/runs in auth-lead's folder; MindFlock commits each worker's paths .* no per-worker undo\.$/);
     expect(c.every((x) => x.blocked === "")).toBe(true);
     // One vocabulary: no "lane" / "ship" words on the card.
     for (const x of c) expect(x.label + x.hint).not.toMatch(/\blane|\bship/i);
@@ -427,11 +427,11 @@ describe("where the pieces run (the plan card's mode choice)", () => {
   it("an in-place or trunk lead: worktrees get a new lead, this folder needs a branch first", () => {
     const inPlace = S.modeChoices(run({ lead: { title: "mine", branch: "feat", in_place: true } }), "mine");
     expect(inPlace[0].hint).toBe(
-      "MindFlock starts mine-split from mine's last commit and merges the pieces there — mine itself is left as it is.",
+      "MindFlock starts mine-split from mine's last commit and merges the workers there — mine itself is left as it is.",
     );
     expect(inPlace[1].blocked).toBe("");
     const trunk = S.modeChoices(run({ lead: { title: "mine", branch: "main", in_place: true, trunk: true } }), "mine");
-    expect(trunk[1].blocked).toBe("mine is on main — the pieces would commit onto it");
+    expect(trunk[1].blocked).toBe("mine is on main — the workers would commit onto it");
     expect(trunk[0].blocked).toBe("");
   });
 
@@ -442,11 +442,11 @@ describe("where the pieces run (the plan card's mode choice)", () => {
     expect(S.pieceStatus(sf.tasks[0], "lead").word).toBe("merged back ✓");
     expect(S.leadLine(sf)).toEqual({ text: "1 of 3 committed", cls: "" });
     expect(text(S.leadSubline(sf, "lead"))).toBe(
-      "Split into 3 pieces with separate paths in lead's folder · 1 of 3 committed on run/auth-cleanup",
+      "Split into 3 workers with separate paths in lead's folder · 1 of 3 committed on run/auth-cleanup",
     );
-    expect(S.releaseCard(sf).commits).toBe("one per piece, committed by MindFlock with only its paths");
+    expect(S.releaseCard(sf).commits).toBe("one per worker, committed by MindFlock with only its paths");
     expect(S.checkLine({ check: { state: "pending" }, mode: "same_folder" } as never)).toBe(
-      "runs once every piece is committed",
+      "runs once every worker is committed",
     );
     expect(S.startedText(2, "same_folder", "lead")).toBe("Starting 2 workers in lead's folder — each fenced to its paths");
   });

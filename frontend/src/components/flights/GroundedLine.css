@@ -92,3 +92,121 @@
   opacity: 0.72;
   border-color: var(--accent);
 }
+
+/* --- A source's default stops, edited on the board (the intake lane's
+   stops chip). An editor is a pending edit, so it reads as a DRAFT at rest
+   and at any zoom: a dashed accent outline and a faint accent tint round the
+   whole chain (screen-sized lines), its bar always shown — the source's name,
+   a small "Default · <kind>" tag, Save as default (the one primary), Reset (a
+   quiet secondary) and a quiet × to discard — and a one-line caption under
+   it saying what it means. It never runs: no ▶ on its first stop. */
+.skl.skl-chainline.is-default-editor {
+  isolation: isolate;
+}
+
+.skl.skl-chainline.is-default-editor::before {
+  content: "";
+  position: absolute;
+  inset: -12px -14px 0 -14px;
+  z-index: -1;
+  border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 16px;
+  background: rgba(var(--accent-rgb), 0.045);
+  pointer-events: none;
+}
+
+.skl.skl-chainline.is-default-editor:is(.is-focused, :focus-within)::before {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.skl-chainline.skl-grounded.is-default-editor > .skl-bar.skl-label {
+  max-width: 640px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--panel);
+  opacity: 1;
+}
+
+.skl-grounded .skl-default-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-default-tag {
+  flex: none;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The caption: what an editor means, under its bar — never truncated. */
+.skl-grounded .skl-default-hint {
+  margin: -4px 0 8px 10px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.skl-grounded[data-lod="far"] .skl-default-hint {
+  visibility: hidden;
+}
+
+.skl-grounded .skl-default-acts {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  cursor: default;
+}
+
+.skl-grounded .skl-default-acts > button {
+  height: 20px;
+  min-height: 0;
+  padding: 0 8px;
+  font-size: 11.5px;
+  line-height: 1;
+}
+
+/* Unchanged: "No changes", greyed — not an accent button you can't press. */
+.skl-grounded .skl-default-acts > .skl-default-save:disabled {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted);
+  opacity: 1;
+  font-weight: 500;
+}
+
+/* Reset: a quiet secondary — no fill until hovered. */
+.skl-grounded .skl-default-acts > .skl-default-reset {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.skl-grounded .skl-default-acts > .skl-default-reset:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.skl-grounded .skl-default-acts > .skl-default-discard {
+  width: 20px;
+  padding: 0;
+  font-size: 15px;
+}
+
+/* A Session chip dragged over a free chain: its socket takes the drop, so it
+   shows and the ▶ that sits on it steps aside (SkyChain.css `.has-run`). */
+.skl-grounded.is-session-over .sky-chain.has-run .sky-socket {
+  opacity: 1;
+}
+.skl-grounded.is-session-over .sky-chain.has-run .sky-run:not(.is-running) {
+  opacity: 0;
+  pointer-events: none;
+}
