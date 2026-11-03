@@ -1,0 +1,319 @@
+/* The Behaviors card (docs/behaviors.md §2) — opened in place on the Sky (a
+   tile's slot, a Verify stop, a board row) and in a plain panel. On the
+   zoomed canvas its type grows a little when zoomed out, as a session
+   frame's names do (--bh-s: at most 1.3×; 1 off the canvas, where --sky-z
+   is unset). Text is always var(--text)/var(--muted) on var(--panel); tone
+   colours are carried by edges, borders and glyphs only, so contrast stays
+   what the theme's own text pair gives in both themes. */
+
+.bh-card {
+  --bh-s: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+  --bh-tone: var(--border);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: calc(8px * var(--bh-s));
+  min-width: 0;
+  max-height: 100%;
+  padding: calc(10px * var(--bh-s)) calc(12px * var(--bh-s));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: calc(12.5px * var(--bh-s));
+  line-height: 1.4;
+  text-align: left;
+  box-shadow: inset 0 3px 0 var(--bh-tone);
+}
+
+.bh-card.is-bad {
+  --bh-tone: var(--red);
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+.bh-card.is-you {
+  --bh-tone: var(--accent);
+}
+.bh-card.is-ok {
+  --bh-tone: var(--green);
+}
+.bh-card.is-busy {
+  --bh-tone: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.bh-card.is-compact {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+/* --- head ------------------------------------------------------------------ */
+.bh-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bh-head-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.bh-shield {
+  flex: none;
+  width: calc(14px * var(--bh-s));
+  height: calc(14px * var(--bh-s));
+  color: var(--bh-tone);
+}
+.bh-card.is-quiet .bh-shield {
+  color: var(--muted);
+}
+.bh-title {
+  font-weight: 600;
+  font-size: calc(13.5px * var(--bh-s));
+}
+.bh-status {
+  padding: 0 6px;
+  border: 1px solid var(--bh-tone);
+  border-radius: 999px;
+  font-size: calc(11.5px * var(--bh-s));
+  white-space: nowrap;
+  color: var(--text);
+}
+.bh-card.is-quiet .bh-status {
+  border-color: var(--border);
+  color: var(--muted);
+}
+.bh-count {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--bh-s));
+  white-space: nowrap;
+}
+.bh-head-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.bh-sentence {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.bh-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* --- rows ------------------------------------------------------------------ */
+.bh-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.bh-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: start;
+  padding: 6px 4px 6px 6px;
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+  outline: none;
+}
+.bh-row + .bh-row {
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.bh-row:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.bh-row.is-yours {
+  border-left-color: var(--accent);
+}
+.bh-row.is-fail {
+  border-left-color: var(--red);
+}
+.bh-card.is-compact .bh-row {
+  grid-template-columns: 1fr;
+  gap: 4px;
+}
+
+.bh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: calc(11px * var(--bh-s));
+  white-space: nowrap;
+  color: var(--text);
+}
+.bh-chip > span {
+  font-weight: 700;
+}
+.bh-chip[data-check="pass"] {
+  border-color: var(--green);
+}
+.bh-chip[data-check="pass"] > span {
+  color: var(--green);
+}
+.bh-chip[data-check="fail"] {
+  border-color: var(--red);
+}
+.bh-chip[data-check="fail"] > span {
+  color: var(--red);
+}
+.bh-chip[data-check="yours"] {
+  border-color: var(--accent);
+}
+.bh-chip[data-check="yours"] > span {
+  color: var(--accent);
+}
+.bh-chip[data-check="cant"] {
+  border-color: color-mix(in srgb, var(--gold) 60%, var(--border));
+}
+.bh-chip[data-check="cant"] > span {
+  color: var(--gold);
+}
+.bh-chip[data-check="pending"] {
+  color: var(--muted);
+}
+
+.bh-row-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.bh-text {
+  overflow-wrap: anywhere;
+}
+.bh-expect,
+.bh-evidence,
+.bh-receipt,
+.bh-hint {
+  color: var(--muted);
+  font-size: calc(11.5px * var(--bh-s));
+  overflow-wrap: anywhere;
+}
+.bh-evidence-by {
+  color: var(--text);
+  font-weight: 600;
+}
+.bh-hint {
+  margin: 0;
+}
+
+.bh-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.bh-answers {
+  display: inline-flex;
+  gap: 4px;
+}
+.bh-answer {
+  padding: 1px 8px;
+  font-size: calc(11.5px * var(--bh-s));
+}
+.bh-answer-pass[data-on] {
+  border-color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green);
+}
+.bh-answer-fail[data-on] {
+  border-color: var(--red);
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+.bh-answer-blocked[data-on] {
+  border-color: var(--gold);
+  box-shadow: inset 0 0 0 1px var(--gold);
+}
+
+/* Who checks it: a toggle, both lanes labelled. */
+.bh-who {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(11px * var(--bh-s));
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bh-who.is-you {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+.bh-who:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.bh-who:hover:not(:disabled),
+.bh-who:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.bh-quiet {
+  font-size: calc(11.5px * var(--bh-s));
+}
+.bh-confirm {
+  font-size: calc(11.5px * var(--bh-s));
+}
+.bh-danger {
+  border-color: var(--red);
+}
+
+.bh-note-row,
+.bh-edit,
+.bh-addform,
+.bh-rewrite {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.bh-edit,
+.bh-addform,
+.bh-rewrite {
+  flex-direction: column;
+  align-items: stretch;
+}
+.bh-note-row .bh-note {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.bh-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.bh-rewrite {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.bh-rewrite-title {
+  font-weight: 600;
+}
+.bh-card :is(.fl-input, input, textarea) {
+  font-size: calc(12px * var(--bh-s));
+}
+
+/* --- foot ------------------------------------------------------------------ */
+.bh-foot {
+  display: flex;
+  flex-direction: column;
+}
+.bh-add {
+  align-self: flex-start;
+}
