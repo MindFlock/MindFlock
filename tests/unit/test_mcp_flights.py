@@ -212,16 +212,16 @@ class TestDescribe:
         assert out["lines"][0] == 's1 agent "Fix it" · prompt=fix the bug'
         assert "on_fail agent" in out["lines"][1]
         assert "when diff lines > 0" in out["lines"][2]
-        # The kinds list: kind · label · summary · config field names.
-        loop = next(k for k in out["kinds"] if k.startswith("loop "))
-        assert loop.startswith("loop · Loop · Send the flight back")
-        assert (
-            "fields: back_to, times, every_minutes, wait_limits, fresh, until" in loop
-        )
-        assert any("[irreversible]" in k for k in out["kinds"])
-        assert any(
-            k.startswith("you ") and "waits on a person" in k for k in out["kinds"]
-        )
+        # The read-back sentence, and the cookbook for the kinds served.
+        assert out["sentence"].startswith("Agent: fix the bug → Open PR")
+        agent = next(k for k in out["stops"] if k.startswith("agent "))
+        assert "use: the coding work itself" in agent and "not: " in agent
+        # A kind the cookbook doesn't know yet: the server's own line.
+        assert not any(k.startswith("loop ") and "use:" not in k for k in out["stops"])
+        assert any(k.startswith("land") and "[irreversible]" in k for k in out["stops"])
+        assert any(k.startswith("you (Wait for me)") for k in out["stops"])
+        assert out["rules"] and "recipes" in out
+        assert "kinds" not in out
         assert out["on_fail"] == ["halt", "agent", "skip", "you"]
 
     def test_want_step_and_kinds_off(self):
@@ -231,7 +231,7 @@ class TestDescribe:
             {"text": "x", "want": "step", "kinds": False}, _ctx(clock)
         )
         assert api.calls[0][2] == {"text": "x", "want": "step"}
-        assert "kinds" not in out
+        assert "stops" not in out and "recipes" not in out
         assert ("GET", "/api/flights/kinds", None) not in api.calls
 
     def test_no_model_is_a_clear_answer_with_the_kinds(self):
@@ -242,7 +242,7 @@ class TestDescribe:
         out = box.describe_flight({"text": "x", "kinds": False}, _ctx(clock))
         assert out["error"] == "no_model" and out["steps"] == []
         assert "write the steps yourself" in out["hint"]
-        assert out["kinds"]  # brought along even with kinds=false
+        assert out["stops"] and out["rules"]  # brought along even with kinds=false
 
     def test_could_not_describe_carries_the_detail(self):
         box, api, clock = _box()
@@ -414,10 +414,24 @@ class TestStart:
         api.errors[("POST", "/api/flights/start")] = client.ApiError(
             400,
             "bad_step",
-            {"error": "bad_step", "detail": "unknown kind", "field": "steps[0].kind"},
+            {
+                "error": "bad_step",
+                "detail": "until is a time like 18:00",
+                "field": "steps[0].config.until",
+            },
         )
-        with pytest.raises(ToolError, match=r"unknown kind \(field steps\[0\]\.kind\)"):
-            box.start_flight({"steps": [{"kind": "nope"}]}, _ctx(clock))
+        with pytest.raises(ToolError) as err:
+            box.start_flight({"steps": [{"kind": "agent"}]}, _ctx(clock))
+        msg = str(err.value)
+        assert "until is a time like 18:00 (field steps[0].config.until)" in msg
+        assert "judge is" in msg  # the server's refusal, taught
+
+    def test_an_unknown_kind_is_refused_with_what_it_meant(self):
+        box, api, clock = _box()
+        with pytest.raises(ToolError) as err:
+            box.start_flight({"steps": [{"kind": "approve"}]}, _ctx(clock))
+        assert "no stop kind 'approve' — use you" in str(err.value)
+        assert not [c for c in api.calls if c[0] == "POST"]
 
 
 # --------------------------------------------------------------------------- #
@@ -678,6 +692,7 @@ class TestSavePlan:
             "plan_id": "p_7",
             "name": "Morning",
             "steps": ['s1 agent "Work"'],
+            "sentence": "Agent",
             "trigger": trig,
         }
 
@@ -706,3 +721,274 @@ def test_api_patch_sends_json_with_the_patch_method(monkeypatch):
     assert sent == [
         ("http://127.0.0.1:8765/api/flights/f_1", {"plan_name": "n"}, "PATCH")
     ]
+
+
+# --------------------------------------------------------------------------- #
+# The cookbook, the dry run and the teaching refusals (docs/vision/mcp-routes.md)
+# --------------------------------------------------------------------------- #
+def _real_box(**kw):
+    from backend.web.core import flights as F
+
+    box, api, clock = _box(**kw)
+    api.top_routes[("GET", "/api/flights/kinds")] = F.kinds_dto()
+    return box, api, clock
+
+
+class TestCookbookAndDryRun:
+    def test_describe_flight_with_every_real_kind_stays_under_its_budget(self):
+        from backend.web.core import flight_cookbook as C
+
+        box, api, clock = _real_box()
+        steps = [
+            _step(
+                "s%d" % (i + 1), r["kind"], r.get("title"), config=r.get("config", {})
+            )
+            for i, r in enumerate(C.RECIPES[1]["steps"])
+        ]
+        api.top_routes[("POST", "/api/flights/describe")] = {"steps": steps}
+        out = box.describe_flight({"text": "ticket to merge after my OK"}, _ctx(clock))
+        size = len(json.dumps(out, ensure_ascii=False))
+        assert size <= mcp_flights.DESCRIBE_BUDGET + 2500, size
+        assert len(out["stops"]) == len(C.STOPS)
+        assert len(out["recipes"]) == len(C.RECIPES)
+        assert all("use:" in line for line in out["stops"])
+        assert out["sentence"].endswith("Merge when green → Ticket: move to Done")
+        view = mcp_flights.cookbook_view(api.top_routes[("GET", "/api/flights/kinds")])
+        assert len(json.dumps(view, ensure_ascii=False)) <= mcp_flights.DESCRIBE_BUDGET
+
+    def test_a_kind_newer_than_the_cookbook_shows_the_servers_line(self):
+        dto = {"kinds": [{"kind": "teleport", "label": "Teleport", "summary": "Go."}]}
+        view = mcp_flights.cookbook_view(dto)
+        assert view["stops"] == ["teleport · Teleport · Go. · fields: none"]
+        assert view["recipes"] == []  # no recipe uses kinds this server lacks
+
+    def test_the_budget_shrinks_lines_rather_than_dropping_kinds(self):
+        from backend.web.core import flights as F
+
+        view = mcp_flights.cookbook_view(F.kinds_dto(), budget=6000)
+        assert len(view["stops"]) == len(F.STEP_KINDS)
+        assert len(json.dumps(view, ensure_ascii=False)) < 9000
+
+    def test_dry_run_reads_back_and_starts_nothing(self):
+        box, api, clock = _real_box()
+        steps = [
+            {"kind": "test", "on_fail": "agent"},
+            {"kind": "ship", "config": {"lane": "pr"}},
+            {"kind": "you", "config": {"text": "approve"}},
+            {"kind": "ship", "config": {"lane": "merge"}},
+        ]
+        out = box.start_flight({"steps": steps, "dry_run": True}, _ctx(clock))
+        assert out["dry_run"] is True and out["session"] == "orch"
+        assert out["sentence"] == (
+            "Test (agent fixes failures ×2) → Open PR → waits for you: approve → "
+            "Merge when green"
+        )
+        assert out["needs_confirm_merge"] == ["ship"]
+        assert "read the sentence back" in out["next"]
+        assert not [c for c in api.calls if c[0] == "POST"]
+
+    def test_dry_run_shows_the_problems(self):
+        box, api, clock = _real_box()
+        out = box.start_flight(
+            {"steps": [{"kind": "join", "config": {"of": "spawned"}}], "dry_run": True},
+            _ctx(clock),
+        )
+        assert out["problems"] and "add a split stop" in out["problems"][0]
+        assert out["next"] == "fix the problems first"
+
+    @pytest.mark.parametrize(
+        "steps, fix",
+        [
+            (
+                [{"kind": "agent"}, {"kind": "join", "config": {"of": "spawned"}}],
+                "add a split stop before it",
+            ),
+            (
+                [
+                    {"kind": "ship", "config": {"lane": "merge"}},
+                    {"kind": "ship", "config": {"lane": "pr"}},
+                ],
+                "goes backwards",
+            ),
+            (
+                [{"kind": "agent"}, {"kind": "loop", "config": {"back_to": "s9"}}],
+                "stops are numbered",
+            ),
+            ([{"kind": "land"}, {"kind": "agent"}], "move it to the end"),
+        ],
+    )
+    def test_a_route_that_cannot_work_is_refused_with_the_fix(self, steps, fix):
+        box, api, clock = _real_box()
+        with pytest.raises(ToolError) as err:
+            box.start_flight({"steps": steps, "confirm_merge": True}, _ctx(clock))
+        assert fix in str(err.value) and "dry_run=true" in str(err.value)
+        assert not [c for c in api.calls if c[0] == "POST"]
+
+    def test_warnings_ride_along_with_a_started_route(self):
+        box, api, clock = _real_box()
+        captured = []
+        _start_echo(api, captured)
+        out = box.start_flight(
+            {"steps": [{"kind": "agent"}, {"kind": "you"}]}, _ctx(clock)
+        )
+        assert captured and out["sentence"]
+        assert any("config.text" in w for w in out["warnings"])
+
+    @pytest.mark.parametrize("start_on", ["prompt", "run"])
+    def test_start_on_builds_a_ready_route(self, start_on):
+        box, api, clock = _real_box()
+        captured = []
+
+        def start(payload, q):
+            captured.append(payload)
+            f = _flight(session=payload.get("title"), cursor=0, state="ready")
+            f["start_on"] = payload.get("start_on")
+            return {"flight": f, "absorbed": []}
+
+        api.top_routes[("POST", "/api/flights/start")] = start
+        out = box.start_flight(
+            {"steps": [{"kind": "agent"}], "start_on": start_on}, _ctx(clock)
+        )
+        assert captured[0]["start_on"] == start_on
+        assert out["state"] == "ready" and out["note"].startswith("ready:")
+
+    def test_start_on_now_sends_nothing_extra(self):
+        box, api, clock = _real_box()
+        captured = []
+        _start_echo(api, captured)
+        box.start_flight({"steps": [{"kind": "agent"}], "start_on": "now"}, _ctx(clock))
+        assert "start_on" not in captured[0]
+
+    def test_edit_refuses_a_new_problem_but_not_an_old_one(self):
+        box, api, clock = _real_box(flights=[_flight(n=3)])
+        with pytest.raises(ToolError, match="add a split stop before it"):
+            box.edit_flight(
+                {"id": "f_1", "add": [{"kind": "join", "config": {"of": "spawned"}}]},
+                _ctx(clock),
+            )
+        hit = []
+        _ok(api, "POST", "/api/flights/f_1/steps", hit)
+        box.edit_flight({"id": "f_1", "add": [{"kind": "notify"}]}, _ctx(clock))
+        assert hit
+
+    def test_save_dry_run_and_refusal(self):
+        box, api, clock = _real_box()
+        trig = {"kind": "schedule", "schedule": {"at": "01:00", "days": "weekdays"}}
+        out = box.save_flight_plan(
+            {
+                "name": "Nightly",
+                "steps": [{"kind": "agent"}, {"kind": "test", "on_fail": "agent"}],
+                "trigger": trig,
+                "dry_run": True,
+            },
+            _ctx(clock),
+        )
+        assert out["dry_run"] and out["trigger"] == trig
+        assert out["sentence"] == "Agent → Test (agent fixes failures ×2)"
+        with pytest.raises(ToolError, match="goes backwards"):
+            box.save_flight_plan(
+                {
+                    "name": "x",
+                    "steps": [
+                        {"kind": "ship", "config": {"lane": "pr"}},
+                        {"kind": "ship", "config": {"lane": "commit"}},
+                    ],
+                },
+                _ctx(clock),
+            )
+        assert not [c for c in api.calls if c[0] == "POST"]
+
+    def test_a_pr_saved_route_does_not_warn_about_its_pr(self):
+        box, api, clock = _real_box()
+        out = box.save_flight_plan(
+            {
+                "name": "Bots",
+                "steps": [
+                    {"kind": "checks"},
+                    {"kind": "ship", "config": {"lane": "merge"}},
+                ],
+                "trigger": {"kind": "pr"},
+                "dry_run": True,
+            },
+            _ctx(clock),
+        )
+        assert "warnings" not in out and "problems" not in out
+
+
+class TestSavedRoutesAndSelfMerge:
+    PLANS = [
+        {
+            "id": "builtin:ticket",
+            "name": "Ticket to merge",
+            "trigger": {"kind": "ticket"},
+            "steps": [_step("s1"), _step("s2", "ship", config={"lane": "merge"})],
+        },
+        {
+            "id": "p_9",
+            "name": "Nightly chores",
+            "trigger": {
+                "kind": "schedule",
+                "schedule": {"at": "02:00", "days": "daily"},
+            },
+            "steps": [
+                _step("s1", config={"prompt": "bump"}),
+                _step("s2", "ship", config={"lane": "pr"}),
+            ],
+        },
+    ]
+
+    def test_describe_lists_the_saved_routes(self):
+        box, api, clock = _real_box()
+        api.top_routes[("GET", "/api/flights/plans")] = {"plans": self.PLANS}
+        api.top_routes[("POST", "/api/flights/describe")] = {"steps": [_step("s1")]}
+        out = box.describe_flight({"text": "like last time"}, _ctx(clock))
+        assert out["saved"][1].startswith(
+            "p_9 · Nightly chores · starts: schedule 02:00 daily"
+        )
+        assert 'ship(lane="pr")' in out["saved"][1]
+
+    def test_plan_id_takes_a_name(self):
+        assert mcp_flights.find_plan(self.PLANS, "nightly chores")["id"] == "p_9"
+        assert mcp_flights.find_plan(self.PLANS, "Night")["id"] == "p_9"
+        assert mcp_flights.find_plan(self.PLANS, "p_9")["id"] == "p_9"
+        assert mcp_flights.find_plan(self.PLANS, "nope") is None
+        box, api, clock = _real_box()
+        api.top_routes[("GET", "/api/flights/plans")] = {"plans": self.PLANS}
+        captured = []
+        _start_echo(api, captured)
+        out = box.start_flight(
+            {"plan_id": "Nightly chores", "steps": [{"kind": "notify"}]}, _ctx(clock)
+        )
+        assert captured[0]["plan_id"] == "p_9"
+        assert "Notify you" in out["sentence"] or captured
+
+    def test_an_unknown_saved_route_lists_the_shelf(self):
+        box, api, clock = _real_box()
+        api.top_routes[("GET", "/api/flights/plans")] = {"plans": self.PLANS}
+        with pytest.raises(
+            ToolError, match=r"no saved route 'Weekly' .*Nightly chores \(p_9\)"
+        ):
+            box.start_flight({"plan_id": "Weekly"}, _ctx(clock))
+
+    def test_dry_run_says_up_front_when_you_may_not_merge_yourself(self):
+        box, api, clock = _real_box()
+        out = box.start_flight(
+            {"steps": [{"kind": "ship", "config": {"lane": "merge"}}], "dry_run": True},
+            _ctx(clock),
+        )
+        assert (
+            "scope all" in out["merge_blocked"]
+            and "grounded=true" in out["merge_blocked"]
+        )
+        assert "grounded=true" in out["next"]
+
+    def test_the_self_merge_refusal_says_do_it_grounded_without_asking(self):
+        box, api, clock = _real_box()
+        with pytest.raises(ToolError, match="no need to ask again"):
+            box.start_flight(
+                {
+                    "steps": [{"kind": "ship", "config": {"lane": "merge"}}],
+                    "confirm_merge": True,
+                },
+                _ctx(clock),
+            )

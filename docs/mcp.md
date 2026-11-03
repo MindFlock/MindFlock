@@ -1125,44 +1125,105 @@ writes to the shelf.
 
 ### `describe_flight`
 
-`{text, want?: "plan"|"step", kinds?: true}` → `{steps, lines, model?, kinds,
-on_fail}`. Sends `POST /api/flights/describe {text, want}`, where the server's
-one-shot model (≤ 60 s) turns the sentence into steps. The steps come back
-normalised through the same validator as a saved plan, as
-`{id, kind, title, config, on_fail, when?}`. `lines` adds one line per step,
-such as `s2 ship "Open PR" · lane=pr · on_fail agent`. `kinds` is the compact
-kinds list, one line per kind: `kind · label · summary · fields: a, b, c`, plus
-`waits on a person` for a Wait-for-me-like kind and `[remote, irreversible]` risk
-tags. With it, an agent can write or fix steps by hand. Pass `kinds: false` to
-skip it. When no model CLI is installed (409 `no_model`), or the model's
-answer was not a route (422 `could_not_describe`), the tool does not fail.
-It returns `{steps: [], error, hint, kinds}`, with the kinds list included
-even when `kinds: false` was passed, so the agent can write the stops itself.
-Nothing starts.
+`{text, want?: "plan"|"step", kinds?: true}` → `{steps, lines, model?,
+sentence, problems?, warnings?, stops, recipes, rules, saved?, on_fail}`. Sends
+`POST /api/flights/describe {text, want}`, where the server's one-shot model
+(≤ 60 s) turns the sentence into steps. The steps come back normalised
+through the same validator as a saved plan, as `{id, kind, title, config,
+on_fail, when?}`. `lines` adds one line per step, such as
+`s2 ship "Open PR" · lane=pr · on_fail agent`; `sentence` reads the whole
+route back in one line (`Agent: fix the login bug → Test (agent fixes
+failures ×2) → Open PR → waits for you: approve the merge → Merge when
+green`), and `problems` / `warnings` are the cookbook's lint (below).
+
+The rest is the **stop cookbook** ([`core/flight_cookbook.py`](../backend/web/core/flight_cookbook.py)),
+for the kinds this server serves — the same cookbook the server's one-shot
+prompt reads, so the Sky's "describe it in a sentence" box and an agent
+agree:
+
+- `stops`: one line per kind, `kind (Label) · use: … · not: … · <typical
+  fields> · waits: … [· on_fail=agent ok] [· RARE] [· [irreversible]]`. RARE
+  kinds (screenshot, listen, call, budget, checkpoint, handoff, someone,
+  preview) say plainly when *not* to use them. A kind newer than the cookbook
+  gets the server's own line (`kind · label · summary · fields: …`).
+- `recipes`: ten common routes in a terse exact notation an agent can copy —
+  `ticket_merge_after_ok — a ticket all the way to merged, but only after my
+  OK: agent(prompt="{ticket}") → test!agent → ship(lane="pr") → checks!agent →
+  you(text="…") → ship(lane="merge") → ticket(state="Done")` (`!x` is
+  `on_fail: x`, `?cond` a `when`).
+- `rules`: the order of a route, one ship stop per rising rung, where
+  `on_fail: agent` helps, "after my OK" = a `you` stop, and when to ask the
+  user instead of guessing.
+- `saved`: the user's saved routes (`GET /api/flights/plans`, at most 15),
+  one line each — `p_9 · Nightly chores · starts: schedule 02:00 daily ·
+  agent(prompt="bump") → ship(lane="pr")` — so "like last time, but also…"
+  can find the route to start from. `start_flight`'s `plan_id` takes the id
+  or the name.
+
+The whole answer stays under about 12 000 characters (`DESCRIBE_BUDGET`:
+lines shrink, kinds never drop). `kinds: false` skips the cookbook (no kinds
+fetch). When no model CLI is installed (409 `no_model`), or the model's
+answer was not a route (422 `could_not_describe`), the tool does not fail:
+it returns `{steps: [], error, hint}` with the cookbook included even when
+`kinds: false` was passed, so the agent writes the stops itself. Nothing
+starts.
 
 ### `start_flight`
 
-`{steps? | plan_id?, title?, grounded?, name?, at?, confirm_merge?}` →
-`{id, state, session, name, cursor, steps, absorbed?, note?}`. Sends
-`POST /api/flights/start`.
+`{steps? | plan_id?, title?, grounded?, name?, at?, start_on?, confirm_merge?,
+dry_run?}` → `{id, state, session, name, cursor, steps, sentence, warnings?,
+absorbed?, note?}`. Sends `POST /api/flights/start`.
 
 - `steps`: an ad-hoc route. With `plan_id` as well, the saved route's steps
-  come first.
+  come first ("the saved one, but also …"). `plan_id` is a saved route's id,
+  or its name (any case, or a unique prefix); an unknown one is refused with
+  the shelf's names.
 - `title`: the session that runs the route. It defaults to the caller.
 - `at`: the server's `start_at`. On an existing session, the server starts at
   the first non-`agent` stop, because the work so far counts as the agent
-  stop. Pass `at: "s1"` to run a leading agent stop as well: its prompt is
-  queued into the session for when the current turn ends.
+  stop — and the route runs on at once. That is right when the work is
+  **done**. When it is still ahead, pass `at: "s1"` to run the leading agent
+  stop as well: its prompt is queued into the session for when the current
+  turn ends.
+- `start_on`: `now` (default) | `prompt` | `run` — the server's round-19
+  ready routes: `prompt` takes off with the session's next prompt (and flies
+  after that turn), `run` waits for ▶ Run (`control_flight op=run`). The
+  answer's `note` says which.
 - `grounded: true`: sends `{grounded, steps|plan_id, name}`. This makes a row
   of stops with no session (state `grounded`) that the user attaches later.
 - `name`: names the route. On a grounded route, the start sends it. On any
   other route, a `PATCH /api/flights/{id} {plan_name}` sets it after the start.
 - When the session was shipping by itself (Goes as far as), the server converts that into
   the route's leading ship stops and lists them in `absorbed`.
+- `dry_run: true` starts nothing and sends nothing: `{dry_run, session,
+  sentence, lines, problems?, warnings?, needs_confirm_merge?,
+  merge_blocked?, next}` — the route read back in one sentence for the agent
+  to say to its user before starting it for real. `merge_blocked` says up
+  front that this session may not run the merge itself (under `children`
+  scope a session never merges ITSELF) and that the way is the same steps
+  with `grounded: true`: they wait on the user's Sky until the user attaches
+  the session, and that attach is the user's OK. The real start's refusal
+  says the same, so an agent does it without asking twice.
+
+**Teaching refusals.** Before anything is sent, the steps (a saved route's
+included) go through the cookbook's `lint`. A route that can't work is
+refused with what to do instead, and nothing is posted: a Join of `spawned`
+with no Split before it ("add a split stop before it"), ship rungs going
+backwards ("Open PR after Merge when green goes backwards — Merge when green
+already did it"), a Loop back to a later or unknown stop, a Loop first, a
+Finish that is not last, a Split with no prompts, a Command / Preview / Call
+with no command or URL ("ask the person for it, never invent one"), a `when`
+or `until` reading a Judge that never ran, an unknown kind ("no stop kind
+'approve' — use you"). Odd-but-possible routes start and carry `warnings`: a
+Join with no Split, Reviews settle / CI checks with no PR before them, a
+Wait for me with no text, a Loop that never ends, `on_fail: agent` on a stop
+the agent can't fix, a Split nothing waits for, a Screenshot of `{preview}`
+with no Preview.
 
 One route per session: a 409 `in_flight` says to use `flight_status`, and to
 cancel or edit the route that is already running. A 400 `bad_step` names
-its `field`, for example `steps[0].kind`.
+its `field`, for example `steps[0].kind`, and adds the cookbook's hint for
+it (the `when` grammar for a condition, the closest kind for an unknown one).
 
 ### `flight_status`
 
@@ -1221,11 +1282,15 @@ route, compacted, plus `changed`. The tool applies the changes in this order:
 3. `rename` sends `PATCH /api/flights/{id} {plan_name}`.
 
 This is enough to fix a line an agent drew. Moving, grouping and editing a
-stop's config stay on the Sky.
+stop's config stay on the Sky. Added stops are linted with the route they
+join: a problem the route did not have before (a Join of `spawned` with no
+Split…) is refused as `start_flight` refuses it.
 
 ### `save_flight_plan`
 
-`{name, steps, description?, trigger?}` → `{plan_id, name, steps, trigger?}`.
+`{name, steps, description?, trigger?, dry_run?}` → `{plan_id, name, steps,
+sentence, warnings?, trigger?}`. Linted like `start_flight` (a `pr` trigger
+counts as having the PR); `dry_run: true` saves nothing and reads it back.
 Sends `POST /api/flights/plans` (a saved route, which the store calls a plan),
 so a described route stays on the user's shelf. `trigger` is
 `{kind: manual|ticket|pr|issue|schedule, schedule?, paused?}`: a `schedule`
