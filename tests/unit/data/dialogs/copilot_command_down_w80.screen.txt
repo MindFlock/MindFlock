@@ -1,0 +1,24 @@
+#! real capture 2026-11-03: GitHub Copilot CLI 1.0.105 (npm @github/copilot) in a MindFlock sandbox session launched without --yolo, tmux capture-pane -p -e -J; the same approval after one Down (cursor on option 2)
+ [1m[97m[44m[Current][0m  Sessions  [2m Issues [0m [2m Pull requests [0m  Gists
+
+   "print(42)"                                                                 ┃
+                                                                               ┃
+ [33m$[39m [1mShell [0mRun the requested shell command                                    5s ┃
+   touch build.stamp && python3 -c "print(42)"                                 ┃
+                                                                               [37m┃
+[90m╭──────────────────────────────────────────────────────────────────────────────╮
+│[39m [1mRun the requested shell command[0m                                              [90m│
+│[39m [90m────────────────────────────────────────────────────────────────────────────[39m [90m│
+│[39m [90m╭──────────────────────────────────────────────────────────────────────────╮[39m [90m│
+│[39m [90m│[39m touch build.stamp && python3 -c "print(42)"                              [90m│[39m [90m│
+│[39m [90m╰──────────────────────────────────────────────────────────────────────────╯[39m [90m│
+│[39m                                                                              [90m│
+│[39m Do you want to run this command?                                             [90m│
+│[39m                                                                              [90m│
+│[39m   1. Yes                                                                     [90m│
+│[39m [97m[44m❯[39m [97m2. Yes, and don't ask again for `touch` and `python3` in this repo [39m       [49m [90m│
+│[39m [44m  [97m(/tmp/claude-1000/.../repo)[39m                                               [49m [90m│
+│[39m   3. No, and tell Copilot what to do differently (Esc to stop)               [90m│
+│[39m                                                                              [90m│
+│[39m [1m↑/↓[0m to navigate · [1menter[0m to select · [1mesc[0m to cancel                            [90m│
+╰──────────────────────────────────────────────────────────────────────────────╯

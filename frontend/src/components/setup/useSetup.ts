@@ -45,3 +45,11 @@ export async function skipSetupStep(step: string, undo = false): Promise<void> {
     old ? { ...old, steps: r.steps, summary: r.summary } : old
   );
 }
+
+/** Step ①'s agent picker: make `provider` the default agent — installed or
+ * not, as long as MindFlock can install it — and take the fresh checklist the
+ * server answers with (step ① then names that agent). Throws on a refusal. */
+export async function chooseSetupAgent(provider: string): Promise<void> {
+  const d = await api<SetupStatus>("/api/setup/agent", { json: { provider } });
+  queryClient.setQueryData(SETUP_KEY, d);
+}

@@ -107,6 +107,7 @@ __all__ = [
     "parse_cline",
     "parse_goose",
     "parse_antigravity",
+    "parse_copilot",
     "LAYOUTS",
 ]
 
@@ -2023,6 +2024,240 @@ def _antigravity_free_text(lines: List[str]) -> Optional[dict]:
     }
 
 
+# --- GitHub Copilot CLI ---------------------------------------------------- #
+#: Copilot CLI's selection cursor (1.0.105).
+COPILOT_CURSORS = "❯"
+#: The key-hint footer under a tool-approval menu ("Do you want to run this
+#: command?", "Do you want to create <path>?") — the menu's last line, inside
+#: its rounded box (captured live from 1.0.105, 2026-11-03).
+_COPILOT_PERMISSION_FOOTER = re.compile(
+    r"↑/↓ to navigate · enter to select · esc to cancel"
+)
+#: The footer under its question form (the ask-user tool): "↑/↓ select ·
+#: enter accept · ctrl+d decline · esc cancel".
+_COPILOT_ASK_FOOTER = re.compile(r"↑/↓ select · enter accept")
+#: The question form's first line.
+_COPILOT_ASK_OPENER = "Copilot needs information."
+_COPILOT_OPTION = re.compile(
+    r"^(?P<indent>\s*)(?P<cursor>❯\s*)?(?P<num>[1-9])\.\s+(?P<label>\S.*?)\s*$"
+)
+#: The hint on Copilot's "No, and tell Copilot what to do differently" option.
+_COPILOT_STOP_HINT = re.compile(r"\s*\(Esc to stop\)\s*$", re.IGNORECASE)
+#: A file approval's stat line ("notes.txt +2 -0").
+_COPILOT_FILE_STAT = re.compile(r"^\S.*\s\+\d+ -\d+$")
+#: A plain rule (no corners): the line under a tool approval's title.
+_COPILOT_TITLE_RULE = re.compile(r"^\s*─{3,}\s*$")
+
+
+def _copilot_footer(lines: Sequence[str], footer: "re.Pattern") -> Optional[int]:
+    """The index of ``footer`` when it is the last text on screen (only
+    blank lines and rules — the box's bottom edge — under it), else None."""
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].strip() or _ANY_RULE.match(lines[i]):
+            continue
+        return i if footer.search(lines[i]) else None
+    return None
+
+
+def _copilot_join(rows: Sequence[str], width: int) -> str:
+    """Wrapped lines back into one: a line that fills ``width`` was cut
+    mid-token (a long path) and joins with nothing; any other with a space."""
+    out = ""
+    for k, text in enumerate(rows):
+        if k == 0:
+            out = text.strip()
+            continue
+        prev = rows[k - 1].rstrip()
+        out += ("" if width and len(prev) >= width - 1 else " ") + text.strip()
+    return out
+
+
+def _copilot_permission(lines: List[str]) -> Optional[dict]:
+    """A tool approval: the numbered menu over the navigate footer, the
+    question above it, the command box (a shell command) or the file stat
+    line (a file operation) above that, and the title over its rule."""
+    f = _copilot_footer(lines, _COPILOT_PERMISSION_FOOTER)
+    if f is None:
+        return None
+    i = f - 1
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    rows: List[dict] = []
+    pending: List[str] = []
+    while i >= 0 and lines[i].strip():
+        m = _COPILOT_OPTION.match(lines[i])
+        if m:
+            label = " ".join([m.group("label")] + list(reversed(pending)))
+            rows.append(
+                {
+                    "num": m.group("num"),
+                    "label": label,
+                    "cursor": bool(m.group("cursor")),
+                    "at": i,
+                }
+            )
+            pending = []
+            if m.group("num") == "1":
+                break
+        else:
+            # A label wrapped onto the next line (Copilot indents it under
+            # the number, not the label).
+            pending.append(lines[i].strip())
+        i -= 1
+    if pending or len(rows) < 2:
+        return None
+    rows.reverse()
+    if [int(r["num"]) for r in rows] != list(range(1, len(rows) + 1)):
+        return None
+    if sum(1 for r in rows if r["cursor"]) != 1:
+        return None
+    first = rows[0]["at"]
+    # The box's inner width, from its bottom edge ("╰──…──╯" less the two
+    # corners and the padding): what a line cut mid-path fills.
+    edge = next((ln.strip() for ln in lines[f + 1 :] if ln.strip().startswith("╰")), "")
+    width = len(edge) - 4 if edge else 0
+    # The question: the paragraph right above the menu, ending in "?".
+    j = first - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    q_end = j
+    while j >= 0 and lines[j].strip() and not _ANY_RULE.match(lines[j]):
+        j -= 1
+    q_rows = lines[j + 1 : q_end + 1]
+    question = _copilot_join(q_rows, width)
+    if not q_rows or not question.endswith("?"):
+        return None
+    # Above it: the command box (a shell command) …
+    k = j
+    while k >= 0 and not lines[k].strip():
+        k -= 1
+    command = None
+    cmd_rows: List[str] = []
+    if k >= 0 and lines[k].lstrip().startswith("╰"):
+        k -= 1
+        while k >= 0 and not lines[k].lstrip().startswith("╭"):
+            cmd_rows.append(
+                _BORDER_RIGHT.sub("", _BORDER_LEFT.sub("", lines[k])).rstrip()
+            )
+            k -= 1
+        if k < 0:
+            return None
+        cmd_rows.reverse()
+        command = "\n".join(r.strip() for r in cmd_rows if r.strip()) or None
+        k -= 1
+    # … and the title over its rule, the file stat line under it.
+    heading = detail = None
+    stop = max(-1, k - _REGION_LINES)
+    r = k
+    while r > stop:
+        text = lines[r]
+        if text.lstrip().startswith("╭"):
+            break  # the box's top edge
+        if detail is None and _COPILOT_FILE_STAT.match(text.strip()):
+            detail = text.strip()
+        if _COPILOT_TITLE_RULE.match(text):
+            above = lines[r - 1].strip() if r > 0 else ""
+            if above and not above.startswith("╭"):
+                heading = above
+            break
+        r -= 1
+    raw = [{"num": x["num"], "label": x["label"]} for x in rows]
+    cursor = next(n for n, x in enumerate(rows) if x["cursor"])
+    options = []
+    for n, x in enumerate(rows):
+        label = clean_label(_COPILOT_STOP_HINT.sub("", x["label"]))
+        options.append(
+            _option(
+                x["num"], label, option_kind(label), _move_keys(cursor, n, "Up", "Down")
+            )
+        )
+    body = ([heading, ""] if heading else []) + cmd_rows + [""] + list(q_rows)
+    return {
+        "heading": heading,
+        "question": _cap(_squash(question), MAX_QUESTION_CHARS),
+        "command": _cap(command, MAX_COMMAND_CHARS),
+        "detail": _cap(detail, MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": _id_key(body, raw),
+    }
+
+
+def _copilot_ask(lines: List[str]) -> Optional[dict]:
+    """The question form: "Copilot needs information.", the question, a
+    field label ("Greeting:"), its choices — one under the ❯ cursor, the
+    rest indented — over the select footer."""
+    f = _copilot_footer(lines, _COPILOT_ASK_FOOTER)
+    if f is None:
+        return None
+    i = f - 1
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    choices: List[Tuple[str, bool]] = []
+    while i >= 0 and lines[i].strip():
+        text = lines[i]
+        stripped = text.strip()
+        if stripped.startswith(COPILOT_CURSORS):
+            choices.append((stripped[1:].strip(), True))
+        elif _indent(text) >= 3:
+            choices.append((stripped, False))
+        else:
+            break
+        i -= 1
+    choices.reverse()
+    if len(choices) < 2 or sum(1 for _, c in choices if c) != 1:
+        return None
+    field = lines[i].strip() if i >= 0 else ""
+    if not field.endswith(":"):
+        return None
+    j = i - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    q_end = j
+    while j >= 0 and lines[j].strip() and not _ANY_RULE.match(lines[j]):
+        j -= 1
+    para = [ln.strip() for ln in lines[j + 1 : q_end + 1]]
+    if not para or para[0] != _COPILOT_ASK_OPENER or len(para) < 2:
+        return None
+    question = _first_question(" ".join(para[1:]))
+    cursor = next(n for n, (_, c) in enumerate(choices) if c)
+    raw = [{"num": str(n + 1), "label": label} for n, (label, _) in enumerate(choices)]
+    options = []
+    for n, (label, _) in enumerate(choices):
+        label = clean_label(label)
+        options.append(
+            _option(
+                str(n + 1),
+                label,
+                option_kind(label),
+                _move_keys(cursor, n, "Up", "Down"),
+            )
+        )
+    return {
+        "heading": None,
+        "question": _cap(_squash(question), MAX_QUESTION_CHARS),
+        "command": None,
+        "detail": _cap(field[:-1].strip(), MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": _id_key(para + [""] + [field], raw),
+    }
+
+
+def parse_copilot(screen: str) -> Optional[dict]:
+    """A GitHub Copilot CLI dialog → the parsed dict, or None.
+
+    Two layouts, both pinned against live 1.0.105 captures: a tool approval
+    (a rounded box: title, the command in its own box or a file's diff, "Do
+    you want to …?", a numbered menu with the ❯ cursor, the "↑/↓ to navigate"
+    footer) and the ask-user question form ("Copilot needs information.",
+    the question, a field label and its ❯ choices over the "↑/↓ select ·
+    enter accept" footer). Either footer must be the last thing on screen.
+    ``keys`` move from the cursor with Up/Down, then Enter."""
+    lines = normalize_lines(screen)
+    return _copilot_permission(lines) or _copilot_ask(lines)
+
+
 #: ``ProviderConfig.dialog_layout`` → its parser (what
 #: :class:`GenericProvider <backend.providers.generic.GenericProvider>`
 #: dispatches on).
@@ -2032,6 +2267,7 @@ LAYOUTS = {
     "cline": parse_cline,
     "goose": parse_goose,
     "antigravity": parse_antigravity,
+    "copilot": parse_copilot,
 }
 
 

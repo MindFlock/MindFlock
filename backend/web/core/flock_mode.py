@@ -66,8 +66,24 @@ def request_text() -> str:
         model = gen.workers_model or model
     except Exception:  # noqa: BLE001 — the defaults still ask for workers
         pass
+    if model == _settings.DEFAULT_WORKERS_MODEL and not _claude_default():
+        # The default model is a Claude one: on a machine whose default agent
+        # is another CLI (GitHub Copilot, Codex…) the workers it spawns run
+        # that CLI, which may not know the name. Leave the model to it.
+        template = template.replace(" (model {model})", "")
     # A plain replace, not str.format: a brace the person typed is just text.
     return template.replace("{model}", model).strip()
+
+
+def _claude_default() -> bool:
+    """Whether the default agent is Claude Code (unknowable reads as yes:
+    the request then reads as it always did)."""
+    try:
+        from backend.config.program import default_provider_name
+
+        return default_provider_name() == "claude"
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def set_on(session_name: str, on: bool, text: str = "") -> bool:

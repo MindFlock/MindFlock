@@ -62,6 +62,18 @@ displayed/preselected one can differ — see [web-api.md](web-api.md).
 
 ## The default: `claude`
 
+**Which agent is the default.** `coding_cli.default_provider` when someone
+chose one (Settings → Agents, or the **Your agent** picker in Setup step ①,
+`POST /api/setup/agent`, which — unlike Settings — accepts an agent that is
+not installed yet as long as MindFlock can install it). Otherwise `claude` —
+unless `claude` is not installed and another agent is, in which case the
+first installed agent in registration order (a GitHub Copilot-only computer
+runs Copilot, not a missing `claude`). `config/program.py`
+(`default_provider_name`, `installed_fallback`) is the one place every
+surface asks: the doctor, Setup, Settings → Agents, Connections and the
+launch path (`resolve_default_program`, where config.json's seeded `claude`
+yields the same way; any other program written there stays).
+
 The Claude provider launches plain `claude` (Claude Code). It:
 
 - resumes a crashed session with `--resume <thread-id>` when this session's
@@ -557,6 +569,14 @@ auto-attach. Two providers override it:
   both in the single-token form, since a spaced value would swallow the seed
   prompt.
 - **`codex`** returns `-c mcp_servers.mindflock={…}`, one TOML inline table.
+- **`copilot`** returns `--additional-mcp-config <json>` (the shape `copilot
+  mcp add` writes, every MindFlock tool allowed) plus
+  `--allow-all-mcp-server-instructions`. Copilot finds MCP tools through its
+  own server-side tool search and keeps a non-allowlisted server's
+  instructions out of the prompt; without MindFlock's instructions (its tool
+  map) in the prompt the agent missed `start_flight`, `flight_status` and
+  `list_sessions` in 3 of 5 runs, with them 0 of 4 (2026-11-03,
+  [vision/copilot-only.md](vision/copilot-only.md)).
 
 The launch sites prepend these tokens to the effective launch args. They
 never go into `build_launch_command` or `write_launcher` themselves, so the
@@ -693,6 +713,30 @@ for the button ("1", "Y", "y"):
   the UI offers a text field. These goldens are reconstructed from the
   live-captured snippets in `config.py`, not a fresh capture (running agy
   writes into the user's conversation store).
+
+- **`copilot`** (GitHub Copilot CLI 1.0.105, live captures) reads two
+  layouts. The **tool approval** is a rounded box: its title over a rule
+  (`Run the requested shell command`, `Create file` → `heading`), the shell
+  command in a box of its own (→ `command`) or a file's stat line
+  (`notes.txt +2 -0` → `detail`) and diff, the question (`Do you want to run
+  this command?` / `Do you want to create <path>?`, a path cut at the box's
+  edge joined back whole), a `❯ 1.` numbered menu whose wrapped labels are
+  indented under the number (not the label, so the shared option block can't
+  read it), and the `↑/↓ to navigate · enter to select · esc to cancel`
+  footer as the box's last line. `Yes, and don't ask again …` is `always`;
+  `No, and tell Copilot what to do differently (Esc to stop)` is `no`, its
+  hint cut. The same layout covers the folder-trust gate (`Do you trust the
+  files in this folder?`). The **question form** (the ask-user tool):
+  `Copilot needs information.`, the question, a field label (`Greeting:` →
+  `detail`), unnumbered choices with `❯` on the selected one, and the
+  `↑/↓ select · enter accept` footer; keys are Up/Down from the cursor then
+  Enter, and its `Other (type your answer)` choice opens Copilot's text box.
+  Neither dialog stays in the scrollback once answered. A session launches
+  without `--yolo` unless skip-permissions is on, so these come up on every
+  shell command and file write — before this layout they read **idle**
+  (a seconds timer above the box kept the pane from ever being "stable", so
+  the waiting patterns alone never fired) and an automated typer could have
+  answered them.
 
 A TOML provider whose CLI draws one of these layouts (a wrapper around
 goose, a fork of opencode) sets `dialog_layout` under `[classify]`; an
@@ -842,6 +886,17 @@ test, since it types the user's own text: anything but a bare shell in the
 foreground.
 
 ## Connection: install detection and sign-in
+
+**GitHub Copilot's sign-in** is read from the account `copilot login`
+records — `loggedInUsers` / `lastLoggedInUser` in `$COPILOT_HOME/config.json`
+(default `~/.copilot`; the token itself is in the system keychain, or under
+`authTokens` there when there is none) — or a token in
+`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`
+(`CopilotProvider.auth_evidence`). Not the file's existence: Copilot writes
+`config.json` (`{"firstLaunchAt": …}`) on its very first run, signed in or
+not. Sign in runs `copilot login` in the in-app terminal (its browser flow
+with a loopback callback on this machine; a keychain-less Linux asks to
+store the token in plain text).
 
 Settings → **Custom agents** (key `providers`) shows one row per registered
 provider (built-in and custom), from `GET /api/providers/status`: its **agent

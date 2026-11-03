@@ -1,0 +1,24 @@
+#! real capture 2026-11-03: GitHub Copilot CLI 1.0.105 (npm @github/copilot) in a MindFlock sandbox session launched without --yolo, tmux capture-pane -p -e; the ask-user question form
+ [1m[97m[44m[Current][0m  Sessions  [2m Issues [0m [2m Pull requests [0m  Gists
+
+ ❯ Ask me a multiple-choice question with your ask_user tool: should the 17:36 ┃
+   greeting be "hello" or "hi"? Wait for my answer, then change                ┃
+   nothing.                                                                    ┃
+                                                                               ┃
+ [34m●[39m Copilot Fusion selected GPT-6 Luna because it was the best choice out of    ┃
+   the models available in your plan.                                          ┃
+                                                                               ┃
+ ○ [1mAsking user [0mWaiting for response                                        28s [37m┃
+[39m                                                                               [37m┃
+[39m────────────────────────────────────────────────────────────────────────────────
+ [1mCopilot needs information.[0m
+ Which greeting should it be? I’ll wait for your answer and won’t change any
+ files.
+
+ [1mGreeting:[0m
+ [1m[36m❯ hello[0m
+   hi
+   Other (type your answer)
+
+ [1m↑/↓[0m select · [1menter[0m accept · [1mctrl+d[0m decline · [1mesc[0m cancel
+────────────────────────────────────────────────────────────────────────────────

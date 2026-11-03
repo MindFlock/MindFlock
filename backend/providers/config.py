@@ -878,7 +878,9 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # `--reasoning-effort <none|minimal|low|medium|high|xhigh|max>`.
         effort_args=("--reasoning-effort", "{level}"),
         effort_levels=("low", "medium", "high", "xhigh", "max"),
-        idle_pattern="",  # its tool-approval dialog was not captured: never auto-confirm
+        # Never auto-confirm: a session launched without --yolo (the default)
+        # asks before each command / file write, and those are the human's.
+        idle_pattern="",
         # The per-folder trust gate: "Do you trust the files in this folder?"
         # with "1. Yes" preselected, so a bare Enter accepts it.
         trust_patterns=("Do you trust the files in this folder?",),
@@ -886,11 +888,28 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         # A live turn shows "○ Working · esc esc edit prompt" on the footer
         # (idle shows "/ commands · ? help" there instead).
         working_patterns=(r"(?i)\bWorking\b.{0,6}\besc\b",),
+        # Paused for the human, captured live from 1.0.105 (2026-11-03,
+        # tests/unit/data/dialogs/copilot_*): the tool approval ("Do you want
+        # to run this command?" / "Do you want to create <path>?", a ❯ 1. Yes
+        # menu, its "No, and tell Copilot what to do differently" option and
+        # navigate footer) and the ask-user form ("Copilot needs information.",
+        # its select footer). Neither is left in the scrollback once answered.
+        waiting_patterns=(
+            r"↑/↓ to navigate · enter to select · esc to cancel",
+            r"No, and tell Copilot what to do differently",
+            r"Copilot needs information\.",
+            r"↑/↓ select · enter accept",
+        ),
+        # Its dialogs as data (providers/dialogs.py parse_copilot): the
+        # approval menu's options and the question form's choices.
+        dialog_layout="copilot",
         usage_window_kind="",
         usage_window_note="Copilot plan premium requests (AIC); no MindFlock-managed window.",
-        # Auth: `copilot login` (device flow); a token in COPILOT_GITHUB_TOKEN,
-        # GH_TOKEN or GITHUB_TOKEN takes precedence (`copilot help environment`).
-        auth_files=("~/.copilot/config.json",),
+        # Auth: `copilot login` (browser / device flow); a token in
+        # COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN takes precedence
+        # (`copilot help environment`). No auth_files: ~/.copilot/config.json
+        # exists after ANY first run, signed in or not — CopilotProvider.
+        # auth_evidence reads the account `copilot login` records in it.
         auth_env=("COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"),
         login_command="copilot login",
         install_hint="npm install -g --prefix ~/.local @github/copilot",

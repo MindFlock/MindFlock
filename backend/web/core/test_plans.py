@@ -3778,7 +3778,28 @@ def parse_answer(raw: str) -> tuple:
         summary, steps = _steps_from_block(block)
         if steps:
             return summary, steps
+    if any(_wrote_no_steps(block) for block in blocks):
+        # A deliberate "steps": [] (GitHub Copilot on a change with nothing to
+        # try in real use, e.g. a bare helper function, 2026-11-03) is the
+        # agent's judgment, not a broken answer: say that, and what to do.
+        raise TestPlanError(
+            "the agent wrote no behaviors: it found nothing in this change a "
+            "person could try in real use. Add one yourself, or rewrite with a focus"
+        )
     raise TestPlanError("the CLI's <testplan> block held no usable steps")
+
+
+def _wrote_no_steps(block: str) -> bool:
+    """Whether a ``<testplan>`` body is an object whose ``steps`` is an
+    EMPTY list (on purpose), as opposed to junk or steps that didn't parse."""
+    body = (block or "").strip()
+    fenced = _commit_message._FENCE_RE.match(body)
+    if fenced:
+        body = fenced.group(1).strip()
+    for parsed in _loads_candidates(body):
+        if isinstance(parsed, dict) and parsed.get("steps") == []:
+            return True
+    return False
 
 
 def parse_plan(raw: str) -> List[dict]:

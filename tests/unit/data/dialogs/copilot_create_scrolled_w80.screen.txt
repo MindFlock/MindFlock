@@ -1,0 +1,24 @@
+#! real capture 2026-11-03: GitHub Copilot CLI 1.0.105 (npm @github/copilot) in a MindFlock sandbox session launched without --yolo, tmux capture-pane -p -e; a file-create approval whose box top (its title) scrolled off an 80x23 pane
+ [1m[97m[44m[Current][0m  Sessions  [2m Issues [0m [2m Pull requests [0m  Gists
+
+[90m│[39m hello.py [32m+2[39m [31m-0[39m                                                               [90m│
+│[39m /tmp/claude-1000/-home-emandel2630--mindflock-worktrees-emandel2630-vz-copil [90m│
+│[39m ot-only-18e4a9002a8fef74/526ecab3-45f9-4fb6-a782-8c267e227162/scratchpad/lab [90m│
+│[39m 2/home/.mindflock/worktrees/emandel2630/create-file-hello-py-prints_18e4a9a7 [90m│
+│[39m b1220053                                                                     [90m│
+│[39m                                                                              [90m│
+│[39m [32m1 + [39m  [35mprint[39m([34m"hello from copilot"[39m)                                            [90m│
+│[39m [32m2 + [39m                                                                         [90m│
+│[39m                                                                              [90m│
+│[39m Do you want to create /tmp/claude-1000/-home-emandel2630--mindflock-worktree [90m│
+│[39m s-emandel2630-vz-copilot-only-18e4a9002a8fef74/526ecab3-45f9-4fb6-a782-8c267 [90m│
+│[39m e227162/scratchpad/lab2/home/.mindflock/worktrees/emandel2630/create-file-he [90m│
+│[39m llo-py-prints_18e4a9a7b1220053/hello.py?                                     [90m│
+│[39m                                                                              [90m│
+│[39m [97m[44m❯[39m [97m1. Yes[39m                                                                    [49m [90m│
+│[39m   2. Yes, and don't ask again for file operations when in this repo          [90m│
+│[39m   (/tmp/claude-1000/.../repo)                                                [90m│
+│[39m   3. No, and tell Copilot what to do differently (Esc to stop)               [90m│
+│[39m                                                                              [90m│
+│[39m [1m↑/↓[0m to navigate · [1menter[0m to select · [1mesc[0m to cancel                            [90m│
+╰──────────────────────────────────────────────────────────────────────────────╯

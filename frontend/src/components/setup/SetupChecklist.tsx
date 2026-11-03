@@ -46,7 +46,7 @@ import { requestApiKeyForm } from "./accountsIntent";
 import { DoctorList } from "./DoctorList";
 import { openConnectGitHub } from "../../lib/githubConnect";
 import { useInstallWindow } from "../dialogs/InstallTerminal";
-import { refreshSetup, skipSetupStep, useSetup } from "./useSetup";
+import { chooseSetupAgent, refreshSetup, skipSetupStep, useSetup } from "./useSetup";
 import { STATUS_GLYPH, nextStepId, setupCount, orderedSteps, stepNumber } from "./setupModel";
 import type { Instance, SetupStatus, SetupStep } from "../../api/types";
 import "./setup.css";
@@ -77,6 +77,58 @@ function StepHead({ step }: { step: SetupStep }) {
         </span>
       )}
     </h3>
+  );
+}
+
+/** Step ①'s "Your agent" picker: which coding agent this computer runs. The
+ * server names step ① after it ("Install GitHub Copilot"), so someone with a
+ * Copilot account and no Claude picks Copilot here, before anything is
+ * installed. Hidden when there is nothing to choose between. */
+export function AgentPicker({
+  status,
+  onPicked,
+}: {
+  status: SetupStatus | null | undefined;
+  /** After the default changed: re-probe the checks (their Install button
+   * names the agent from the doctor's own cached run). */
+  onPicked?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const agents = status?.agents || [];
+  if (agents.length < 2) return null;
+  const current = status?.default_provider || "";
+  const pick = async (name: string) => {
+    if (!name || name === current) return;
+    setBusy(true);
+    try {
+      await chooseSetupAgent(name);
+      onPicked?.();
+    } catch (e) {
+      toast((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <label className="setup-agent-pick" onClick={(e) => e.stopPropagation()}>
+      <span className="setup-agent-pick-label">Your agent</span>
+      <select
+        id="setup-agent-select"
+        value={current}
+        disabled={busy}
+        onChange={(e) => void pick(e.target.value)}
+      >
+        {!agents.some((a) => a.name === current) && current && (
+          <option value={current}>{agentName(current)}</option>
+        )}
+        {agents.map((a) => (
+          <option key={a.name} value={a.name}>
+            {a.label + (a.installed ? " — installed" : "")}
+          </option>
+        ))}
+      </select>
+      <span className="muted setup-hint">The coding agent your sessions run — pick the one you have an account for.</span>
+    </label>
   );
 }
 
@@ -251,7 +303,8 @@ export function SetupChecklist() {
           {startDone && <span className="setup-group-note st-done"> ✓ done</span>}
         </h4>
 
-        {/* ① Install Claude Code (the server names the default agent) */}
+        {/* ① Install <the default agent> (the server names it; the picker
+            above the checks changes which agent that is) */}
         <Step
           step={tools}
           next={next}
@@ -265,6 +318,7 @@ export function SetupChecklist() {
             </details>
           }
         >
+          <AgentPicker status={status} onPicked={() => setReprobeKey((k) => k + 1)} />
           <div className="setup-doctor">
             <DoctorList
               essential

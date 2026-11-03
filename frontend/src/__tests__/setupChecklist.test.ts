@@ -24,6 +24,7 @@ vi.mock("../components/setup/useSetup", () => ({
   useSetup: () => ({ data: setupData.current, error: setupData.error }),
   refreshSetup: vi.fn(),
   skipSetupStep: vi.fn(),
+  chooseSetupAgent: vi.fn(),
 }));
 
 import { SetupChecklist, progressLine } from "../components/setup/SetupChecklist";
@@ -338,4 +339,38 @@ describe("SetupChecklist", () => {
     setupData.error = new Error("/api/setup -> 500");
     expect(render()).toContain("setup status failed");
   });
+
+  it("step ① lets a Copilot-only computer pick its agent before anything is installed", () => {
+    const agents = [
+      { name: "claude", label: "Claude Code", installed: false, installable: true },
+      { name: "copilot", label: "GitHub Copilot", installed: false, installable: true },
+    ];
+    setupData.current = status({}, { agents, default_provider: "copilot" });
+    setupData.current.steps[0].title = "Install GitHub Copilot";
+    const html = render();
+    expect(html).toContain("Your agent");
+    expect(html).toContain('id="setup-agent-select"');
+    expect(html).toMatch(/<option value="copilot" selected="">GitHub Copilot<\/option>/);
+    expect(html).toContain("Install GitHub Copilot");
+    // Step ② waits on ① by the chosen agent's name, never Claude's.
+    expect(html).toContain("Install GitHub Copilot first");
+    expect(html).not.toContain("Claude Code first");
+  });
+
+  it("says which agents are already installed, and hides with nothing to choose", () => {
+    setupData.current = status(
+      {},
+      {
+        agents: [
+          { name: "claude", label: "Claude Code", installed: false, installable: true },
+          { name: "copilot", label: "GitHub Copilot", installed: true, installable: true },
+        ],
+        default_provider: "copilot",
+      }
+    );
+    expect(render()).toContain("GitHub Copilot — installed");
+    setupData.current = status({}, { agents: [] });
+    expect(render()).not.toContain("Your agent");
+  });
 });
+
