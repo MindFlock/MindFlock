@@ -70,7 +70,7 @@ import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
 import { pillAimer, useChainMenu } from "./useChainMenu";
-import { ReadyHead, startWord } from "./ReadyHead";
+import { ReadyHead } from "./ReadyHead";
 import { SkyChain } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
@@ -394,7 +394,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const where = row ? lineWhere(line.diagram) : "";
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  // While ready, ReadyHead says so (and how it starts); the sub stays the
+  // session's own line, never a third copy of it.
+  const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
     [name, headSub, p.title, sessionNode]

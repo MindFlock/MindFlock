@@ -206,6 +206,21 @@
   overflow-wrap: break-word;
 }
 
+/* The session tile (the chain's head): its sub is ONE line with an ellipsis,
+   and nothing under the tile shrinks — `.sky-node-sub`'s overflow:hidden let
+   it shrink in the fixed-height box, so the next line drew over its own. */
+.sky-head > .sky-node-sub {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: unset;
+}
+.sky-head > .sky-node-title,
+.sky-head > .sky-node-sub,
+.sky-head > .sky-head-extra {
+  flex-shrink: 0;
+}
+
 .sky-node-extra,
 .sky-head-extra {
   margin-top: 4px;
@@ -635,35 +650,91 @@
   opacity: 0.75;
 }
 
-/* Round 19: a ready chain's session tile — Ready, ▶ Run, how it starts. */
+/* Round 19: a ready chain's session tile — under its name, one row
+   "[Ready] [▶ Run]", then one small muted line saying how it starts. The head
+   box is NODE_W × NODE_H (132 × 140, lib/skyGraph): tile 64 + name 24 + sub
+   15 + this 4 + 18 + 1 + 13 = 139, so every line here is one line, never a
+   wrap. The ▶ is `.sky-ready-run`, never `.sky-run`: `.sky-chain .sky-run`
+   is the free chain's hover-only trigger circle, and this sits in .sky-chain. */
 .sky-ready {
-  display: inline-flex;
-  flex-wrap: wrap;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-width: 100%;
+  min-width: 0;
+}
+.sky-ready-row {
+  display: flex;
   justify-content: center;
   align-items: center;
-  gap: 4px;
-  max-width: 180px;
+  gap: 5px;
 }
 .sky-head-chip.tone-ready {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
   color: var(--fl-ink-accent, var(--accent));
 }
-.sky-run {
-  padding: 2px 8px;
+.sky-ready-run {
+  box-sizing: border-box;
+  height: 18px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid var(--tone-working);
   color: var(--fl-ink-working, var(--tone-working));
   background: var(--panel);
+  font-family: inherit;
   font-size: 11px;
   font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
   cursor: pointer;
 }
-.sky-run:hover {
+.sky-ready-run:hover:not(:disabled) {
   background: color-mix(in srgb, var(--tone-working) 14%, var(--panel));
 }
+.sky-ready-run:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sky-ready-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+/* A button, but quiet: no link colour or underline at rest (not .linklike,
+   which `.sky button.linklike` paints accent). */
 .sky-start-on {
-  font-size: 10.5px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 13px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.sky-start-on:hover,
+.sky-start-on:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+.sky-start-on:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+/* A ready head's name stays one line, so the head fits its box. */
+.sky-head:has(.sky-ready) > .sky-node-title {
+  -webkit-line-clamp: 1;
+}
+/* The free chain's ▶ trigger (`.sky-chain .sky-run`, the rest of its look)
+   kept the weight this block used to give every `.sky-run`. */
+.sky-run {
+  font-weight: 600;
 }
 
 /* A working / asking sub-session's own bird, perched on its tile. */
