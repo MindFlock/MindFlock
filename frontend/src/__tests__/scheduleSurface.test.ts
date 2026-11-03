@@ -107,7 +107,7 @@ describe("the old name still lands", () => {
   it("the palette has Schedule… (on the short menu); \"templates\" finds it — one name, no second row", () => {
     expect(PALETTE).toContain('label: "Schedule…"');
     expect(PALETTE).toContain("top: TOP.schedule");
-    expect(PALETTE).toContain('keywords: "templates template cron recurring nightly timer daily weekly scheduled stops"');
+    expect(PALETTE).toContain('keywords: "templates template cron recurring nightly timer daily weekly scheduled chains stops"');
     expect(PALETTE).not.toContain('label: "Templates…"');
     expect(PALETTE).not.toContain('openDialogFor("templates"');
   });

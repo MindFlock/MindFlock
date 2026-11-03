@@ -21,7 +21,7 @@ const find = (keys: string[]) => SKY_SHORTCUT_GROUPS.flatMap((g) => g.items).fin
 
 describe("the sky's shortcut list", () => {
   it("has the six groups, in order, none empty", () => {
-    expect(titles(SKY_SHORTCUT_GROUPS)).toEqual(["Move around", "Select", "Edit stops", "Lines and objects", "The palette", "Help"]);
+    expect(titles(SKY_SHORTCUT_GROUPS)).toEqual(["Move around", "Select", "Edit stops", "Chains and objects", "The palette", "Help"]);
     for (const g of SKY_SHORTCUT_GROUPS) expect(g.items.length).toBeGreaterThan(0);
   });
 
@@ -117,7 +117,7 @@ describe("the filter", () => {
   it("matches by keys: 'ctrl z', 'ctrl+z', 'shift 1', '?', '+', and ⌘ answers to ctrl", () => {
     expect(whats("ctrl z")).toEqual(["Undo the last removal", "Redo"]);
     expect(whats("ctrl+shift+z")).toEqual(["Redo"]);
-    expect(whats("shift 1")).toContain("Fit all the lines");
+    expect(whats("shift 1")).toContain("Fit all the chains");
     expect(whats("?")).toEqual(["These shortcuts"]);
     expect(whats("+")).toContain("Zoom in");
     expect(filterShortcuts(withPlatform(SKY_SHORTCUT_GROUPS, true), "ctrl z").flatMap((g) => g.items.map((i) => i.what))).toEqual(["Undo the last removal", "Redo"]);
@@ -203,7 +203,7 @@ describe("the sheet is wired (round-consolidate defect 1)", () => {
 
   it("double-click on empty sky is listed as the new-session block, as the guide and the shelf say", () => {
     const rows = SKY_SHORTCUT_GROUPS.flatMap((g) => g.items).filter((i) => i.keys.join("+") === "double-click");
-    expect(rows.map((r) => r.what)).toContain("On empty sky: a new session block there");
+    expect(rows.map((r) => r.what)).toContain("On empty sky: a new session there");
     expect(rows.map((r) => r.what).join(" ")).not.toMatch(/palette/);
   });
 });

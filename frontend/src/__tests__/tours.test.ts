@@ -172,9 +172,9 @@ describe("the tours registry", () => {
     expect(steps.some((s) => /flights-tab|flights-plans/.test(s.target))).toBe(false);
     // what a chain is, add a stop from the shelf, wire it, run / answer, help
     const words = steps.map((s) => s.title + " " + s.body).join(" ");
-    for (const w of ["chain", "agent", "shelf", "Loop", "port", "▶ Run", "Perch", "Done", "bird", "guide", "shortcuts"]) expect(words, w).toContain(w);
+    for (const w of ["chain", "agent", "shelf", "Loop", "port", "▶ Run", "Wait for me", "saved chain", "Needs you", "Done", "bird", "guide", "shortcuts"]) expect(words, w).toContain(w);
     // the nouns the guide keeps out of the on-ramp
-    for (const w of ["frame", "socket", "stops-only", "Group into a stop", "intake", "Drag or Click"]) expect(words, w).not.toContain(w);
+    for (const w of ["Perch", "frame", "socket", "stops-only", "Group into a stop", "intake", "Drag or Click"]) expect(words, w).not.toContain(w);
   });
 });
 

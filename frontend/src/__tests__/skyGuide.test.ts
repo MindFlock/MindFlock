@@ -33,11 +33,11 @@ describe("the guide's sections", () => {
     expect(SKY_GUIDE_SECTIONS.map((s) => s.title)).toEqual([
       "Start here",
       "What the sky is",
-      "Chains, tiles and wires",
-      "Stops and saved stops",
+      "Chains, stops and wires",
+      "Stops and saved chains",
       "The bird",
       "Halt points and Remove",
-      "Stops on their own, and handoffs",
+      "Chains on their own, and handoffs",
       "Selection",
       "Tools and the keyboard",
       "The intake lane",
@@ -82,8 +82,12 @@ describe("the guide's sections", () => {
 
   it("says the things a newcomer needs, in the house words", () => {
     const words = SKY_GUIDE_SECTIONS.map((s) => render(s.id)).join(" ");
-    for (const w of ["same sessions as the grid", "saved stop", "Halt now", "Halt here", "pauses the flight right before the next stop", "out port here to run it", "Start a chain", "in port", "out port", "Group into a stop", "Save to the shelf", "Fly", "synced", "this browser"])
+    for (const w of ["same sessions as the grid", "saved chain", "<b>Wait for me</b>", "<b>Needs you</b>", "<b>group</b>", "Halt now", "Halt here", "pauses the chain right before the next stop", "out port here to run it", "Start a chain", "in port", "out port", "Group into a stop", "Save to the shelf", "<b>Run</b>", "synced", "this browser"])
       expect(words, w).toContain(w);
+    // the vocabulary pass (round-consolidate VOCAB.md): no retired word is taught
+    // (the sketches' <line> elements are markup, not copy)
+    const copy = words.replace(/<\/?line\b[^>]*>/g, "");
+    for (const w of ["saved stop", "Perch", "perched", "Multi-step", "sub-step", "tile", "block", "flight", "Fly", "line"]) expect(copy, w).not.toMatch(new RegExp("\\b" + w + "\\b"));
     // the guide's own copy never says flyway (round 11 retired the word)
     expect(words.toLowerCase()).not.toContain("flyway");
   });

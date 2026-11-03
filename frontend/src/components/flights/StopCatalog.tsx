@@ -295,7 +295,7 @@ export function StopCatalogBody({
     );
   };
 
-  const how = onAdd ? (place ? "Drag onto a line or the sky, or click to put it on the board" : "Drag onto a line or the sky, or click to add it to the focused line") : "Drag onto a line or the sky";
+  const how = onAdd ? (place ? "Drag onto a chain or the sky, or click to put it on the board" : "Drag onto a chain or the sky, or click to add it to the focused chain") : "Drag onto a chain or the sky";
 
   const card = (c: CatalogCard<StepKindDef, FlightPlan>, n: number) => {
     const plan = c.section === "multi" ? c.plan : null;
@@ -305,7 +305,7 @@ export function StopCatalogBody({
     const on = n === at;
     const cd = clicker(c.key, c.drop);
     const mine = (e: MouseEvent) => !!onAdd && !naming && !asking && !inner(e.target);
-    const about = plan ? (c.section === "multi" && c.path ? c.path : "No steps yet") : def?.summary;
+    const about = plan ? (c.section === "multi" && c.path ? c.path : "No stops yet") : def?.summary;
     return (
       <div
         key={c.key}
@@ -395,8 +395,8 @@ export function StopCatalogBody({
       ref={filterRef}
       className="fl-input sky-catalog-filter"
       type="text"
-      placeholder="Filter blocks…"
-      aria-label="Filter blocks"
+      placeholder="Filter stops…"
+      aria-label="Filter stops"
       aria-controls={listId}
       aria-activedescendant={at >= 0 ? rowId(at) : undefined}
       autoComplete="off"
@@ -410,7 +410,7 @@ export function StopCatalogBody({
     />
   );
 
-  const what = place ? "puts it on the board" : "adds it to the focused line";
+  const what = place ? "puts it on the board" : "adds it to the focused chain";
   let i = -1;
   return (
     <>
@@ -419,11 +419,11 @@ export function StopCatalogBody({
         className={"sky-catalog-list sky-own-scroll" + (compact ? " compact" : "") + (cards.grouped ? " grouped" : "") + (listClass ? " " + listClass : "")}
         id={listId}
         role="listbox"
-        aria-label="All blocks"
+        aria-label="All stops"
         ref={listRef}
       >
         {groups.length > 0 && (
-          <section className="sky-catalog-section" data-section="blocks" role="group" aria-label="Blocks">
+          <section className="sky-catalog-section" data-section="blocks" role="group" aria-label="Stops">
             {cards.grouped ? (
               groups.map((g) => (
                 <div key={g.family} className="sky-catalog-family" data-family={g.family}>
@@ -436,7 +436,7 @@ export function StopCatalogBody({
               ))
             ) : (
               <>
-                <h3 className="sky-catalog-label">Blocks</h3>
+                <h3 className="sky-catalog-label">Stops</h3>
                 <div className="sky-catalog-grid">
                   {leadEl}
                   {groups[0].items.map((c) => card(c, ++i))}
@@ -446,14 +446,14 @@ export function StopCatalogBody({
           </section>
         )}
         {cards.multi.length > 0 && (
-          <section className="sky-catalog-section" data-section="multi" role="group" aria-label="Multi-step">
-            <h3 className="sky-catalog-label">Multi-step</h3>
+          <section className="sky-catalog-section" data-section="multi" role="group" aria-label="Saved chains">
+            <h3 className="sky-catalog-label">Saved chains</h3>
             <div className="sky-catalog-grid">{cards.multi.map((c) => card(c, ++i))}</div>
           </section>
         )}
-        {rows.length + leads === 0 && <p className="sky-catalog-empty muted">{query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."}</p>}
+        {rows.length + leads === 0 && <p className="sky-catalog-empty muted">{query.trim() ? "Nothing matches “" + query.trim() + "”." : "No stops yet — this server may be too old for the Sky."}</p>}
         <p className="sky-catalog-hint muted">
-          {onAdd ? "Drag a block onto a line or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a block onto a line or the sky"}
+          {onAdd ? "Drag a stop onto a chain or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a stop onto a chain or the sky"}
         </p>
       </div>
       {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
@@ -498,7 +498,7 @@ export function StopCatalog({ onClose, portal = true, ...body }: StopCatalogProp
           }}
           head={(filter) => (
             <div className="sky-catalog-head">
-              <h2 id="sky-catalog-title">All blocks</h2>
+              <h2 id="sky-catalog-title">All stops</h2>
               {filter}
               <button type="button" className="fl-icon-btn sky-catalog-close" aria-label="Close" title="Close (Esc)" onClick={onClose}>
                 ×

@@ -22,7 +22,7 @@ vi.mock("react-dom", async (orig) => ({ ...(await orig<typeof import("react-dom"
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { FLYWAY_MIME } = await import("../lib/skyLayout");
 const { StopShelf, savedMenuItems } = await import("../components/flights/StopShelf");
-const { savedDragData } = await import("../lib/stopCatalog");
+const { savedChainLabel, savedDragData } = await import("../lib/stopCatalog");
 const { TakeoffDialog, triggerCron } = await import("../components/flights/TakeoffDialog");
 const { NAME_MAX, checkRename, planDots, savedStopOrder } = await import("../lib/groundedLines");
 
@@ -71,12 +71,15 @@ describe("the saved stops on the shelf", () => {
   it("the Multi-step region: after the kinds and a divider, built-ins first, each draggable with its id, then All blocks…", () => {
     const ids = [...html.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1]);
     expect(ids).toEqual(["builtin:ticket", "p_mine"]);
-    expect(html).toContain('<span class="sky-stops-divider" aria-hidden="true"></span><div class="sky-stops-region" data-region="multi" role="list" aria-label="Multi-step"><span class="sky-stops-label" aria-hidden="true">Multi-step</span>');
+    expect(html).toContain('<span class="sky-stops-divider" aria-hidden="true"></span><div class="sky-stops-region" data-region="multi" role="list" aria-label="Saved chains"><span class="sky-stops-label" aria-hidden="true">Saved chains</span>');
     expect(html.indexOf('data-region="multi"')).toBeGreaterThan(html.indexOf('data-kind="ship"'));
     expect(html.indexOf('data-plan="builtin:ticket"')).toBeGreaterThan(html.indexOf('data-region="multi"'));
     expect(html.indexOf("sky-catalog-chip")).toBeGreaterThan(html.indexOf('data-plan="p_mine"'));
     expect(html).toMatch(/<span class="sky-stop-chip sky-saved-chip builtin drag-only" data-plan="builtin:ticket" draggable="true"/);
     expect(html).toContain('<span class="sky-stop-name">Mine</span>');
+    // what it is, in the house words: "Saved chain · N stops", then its stops
+    expect(html).toMatch(/data-plan="p_mine" draggable="true" title="Saved chain · 3 stops: [^"\n]+ → [^"\n]+\n/);
+    expect(savedChainLabel(1)).toBe("Saved chain · 1 stop");
   });
 
   it("a dot per step, a perch's gold, +N past ten", () => {
@@ -97,18 +100,18 @@ describe("the saved stops on the shelf", () => {
     ]);
   });
 
-  it("a click adds it to the focused line when the host takes it", () => {
+  it("a click adds it to the focused chain when the host takes it", () => {
     const tap = render(createElement(StopShelf, { onTackPlan() {} }));
     expect(tap).toMatch(/<button type="button" class="sky-stop-chip sky-saved-chip" data-plan="p_mine"/);
-    expect(tap).toContain('aria-label="Add “Mine” to the focused line"');
+    expect(tap).toContain('aria-label="Add “Mine” to the focused chain"');
   });
 
   it("round 13 — with onPlace a click puts it on the board instead", () => {
     const tap = render(createElement(StopShelf, { onPlace() {}, onTackPlan() {} }));
     expect(tap).toMatch(/<button type="button" class="sky-stop-chip sky-saved-chip" data-plan="p_mine"/);
     expect(tap).toContain('aria-label="Put “Mine” on the board"');
-    expect(tap).toContain("Click to put it on the board, or drag it onto a line or the sky — right-click for more");
-    expect(tap).not.toContain("to the focused line");
+    expect(tap).toContain("Click to put it on the board, or drag it onto a chain or the sky — right-click for more");
+    expect(tap).not.toContain("to the focused chain");
   });
 
   it("no saved stops (or not loaded yet): no Multi-step region, one divider before All blocks…", () => {
@@ -122,9 +125,9 @@ describe("the saved stops on the shelf", () => {
 });
 
 describe("a saved stop's menu", () => {
-  it("Rename and Takes off… on every one; Reset on a built-in, Delete on yours", () => {
-    expect(savedMenuItems(TICKET).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Take off the shelf", "Reset to default"]);
-    expect(savedMenuItems(MINE).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Take off the shelf", "Delete"]);
+  it("Rename and What starts it… on every one; Reset on a built-in, Delete on yours", () => {
+    expect(savedMenuItems(TICKET).map((i) => i.label)).toEqual(["Rename", "What starts it…", "Take off the shelf", "Reset to default"]);
+    expect(savedMenuItems(MINE).map((i) => i.label)).toEqual(["Rename", "What starts it…", "Take off the shelf", "Delete"]);
     expect(savedMenuItems(MINE)[3].danger).toBe(true);
   });
 

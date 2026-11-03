@@ -19,11 +19,11 @@ import "./SkyGuide.css";
 export const SKY_GUIDE_SECTIONS = [
   { id: "start", title: "Start here" },
   { id: "what", title: "What the sky is" },
-  { id: "lines", title: "Chains, tiles and wires" },
-  { id: "stops", title: "Stops and saved stops" },
+  { id: "lines", title: "Chains, stops and wires" },
+  { id: "stops", title: "Stops and saved chains" },
   { id: "bird", title: "The bird" },
   { id: "halt", title: "Halt points and Remove" },
-  { id: "grounded", title: "Stops on their own, and handoffs" },
+  { id: "grounded", title: "Chains on their own, and handoffs" },
   { id: "select", title: "Selection" },
   { id: "keys", title: "Tools and the keyboard" },
   { id: "intake", title: "The intake lane" },
@@ -54,20 +54,20 @@ export const closeSkyGuide = () => useSkyGuide.getState().close();
 
 /** The keyboard table (Tools and the keyboard), exported for the test. */
 export const SKY_GUIDE_KEYS: readonly (readonly [string, string])[] = [
-  ["V", "Drag tool: lines move by their bars, a drag on empty sky selects"],
+  ["V", "Drag tool: chains move by their bars, a drag on empty sky selects"],
   ["H", "Click tool: any drag pans the sky, a click selects"],
   ["Space (held)", "Pan with the mouse, in either tool"],
-  ["0", "Fit every line, titles still readable"],
-  ["1", "Fit the focused line to the window"],
+  ["0", "Fit every chain, titles still readable"],
+  ["1", "Fit the focused chain to the window"],
   ["+ / −", "Zoom in / out (Ctrl+wheel too)"],
-  ["T", "Tidy: every line back in its place, every window minimised"],
+  ["T", "Tidy: every chain back in its place, every window minimised"],
   ["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
-  ["Delete", "Remove the selected box"],
+  ["Delete", "Remove the selected stop"],
   ["Esc", "Clear the selection, fold an open session, cancel a pick"],
-  ["Ctrl+A", "Select every line"],
-  ["Enter", "Open the focused line's session; on a stop, its dialog"],
+  ["Ctrl+A", "Select every chain"],
+  ["Enter", "Open the focused chain's session; on a stop, its dialog"],
   ["Ctrl+Y", "Switch between the grid and the sky"],
-  ["Ctrl/Alt+N", "A new-session block (double-click empty sky does too)"],
+  ["Ctrl/Alt+N", "A new session on the sky (double-click empty sky does too)"],
 ];
 
 // --- The sketches ----------------------------------------------------------
@@ -122,7 +122,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   what: (
-    <Sketch label="Panes on the left, the same sessions as lines on the right">
+    <Sketch label="Panes on the left, the same sessions as chains on the right">
       <rect className="sg-pane" x={8} y={14} width={60} height={38} rx={4} />
       <rect className="sg-pane" x={74} y={14} width={60} height={38} rx={4} />
       <rect className="sg-pane" x={8} y={58} width={126} height={38} rx={4} />
@@ -132,7 +132,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   lines: (
-    <Sketch label="A session's frame: its bar on top, the agent tile first inside, then its stop tiles joined by wires, and a + to add one">
+    <Sketch label="A session's frame: its bar on top, the agent first inside, then its stops joined by wires, and a + to add one">
       <rect className="sg-box" x={4} y={8} width={260} height={96} rx={10} />
       <Line x={12} y={30} n={4} />
       <text className="sg-text" x={12} y={22}>name · branch · state · ⋯</text>
@@ -143,7 +143,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   stops: (
-    <Sketch label="A saved stop: one box holding three sub-steps, and its chip on the shelf with a dot per step">
+    <Sketch label="A saved chain on the sky: one group holding three stops, and its chip on the shelf with a dot per stop">
       <Box x={12} y={24} w={150} h={56} cls="sg-group" />
       <text className="sg-text" x={20} y={38}>Ticket to merge · 2 of 3</text>
       <Box x={20} y={46} w={40} h={24} cls="sg-done" />
@@ -157,7 +157,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   bird: (
-    <Sketch label="A line of boxes with the bird on the third; a dashed arrow drags it back to the second">
+    <Sketch label="A chain of stops with the bird on the third; a dashed arrow drags it back to the second">
       <Line x={20} y={40} n={5} cls={["", "sg-done", "sg-here"]} />
       <BirdMark x={150} y={46} />
       <path className="sg-arrow sg-dash" d="M146 36 Q120 14 96 36 M98 28 L96 36 L104 36" />
@@ -174,7 +174,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   grounded: (
-    <Sketch label="A chain with no session: an empty socket on its first tile, its stops, and the Session chip dropped on it">
+    <Sketch label="A chain with no session: an empty socket on its first stop, its stops, and the Session chip dropped on it">
       <Bar x={20} y={30} w={206} />
       <rect className="sg-box sg-dash" x={20} y={44} width={64} height={26} rx={5} />
       <text className="sg-text" x={26} y={61}>socket</text>
@@ -186,7 +186,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   select: (
-    <Sketch label="A dashed marquee drawn over the boxes of two lines">
+    <Sketch label="A dashed marquee drawn over the stops of two chains">
       <Line x={20} y={10} n={4} />
       <Line x={20} y={58} n={4} />
       <rect className="sg-marquee" x={64} y={18} width={118} height={84} rx={2} />
@@ -203,7 +203,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   intake: (
-    <Sketch label="The intake lane folded to a row of source blocks, and expanded to show each waiting item with Fly">
+    <Sketch label="The intake lane folded to a row of sources, and expanded to show each waiting item with Run">
       <Bar x={12} y={12} w={120} />
       <Box x={12} y={26} w={56} cls="sg-group" />
       <Box x={76} y={26} w={56} cls="sg-group" />
@@ -218,14 +218,14 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   saved: (
-    <Sketch label="Three places: this browser for the layout, every device for saved stops, this machine for flights">
+    <Sketch label="Three places: this browser for the layout, every device for saved chains, this machine for running chains">
       <rect className="sg-pane" x={16} y={24} width={70} height={46} rx={4} />
       <text className="sg-text" x={22} y={88}>layout: here</text>
       <path className="sg-cloud" d="M136 64 a14 14 0 0 1 4 -27 a18 18 0 0 1 34 -2 a13 13 0 0 1 6 29 Z" />
-      <text className="sg-text" x={118} y={88}>saved stops: synced</text>
+      <text className="sg-text" x={118} y={88}>saved chains: synced</text>
       <rect className="sg-pane" x={238} y={30} width={60} height={34} rx={4} />
       <line className="sg-link" x1={238} y1={52} x2={298} y2={52} />
-      <text className="sg-text" x={226} y={88}>flights: this machine</text>
+      <text className="sg-text" x={226} y={88}>running: this machine</text>
     </Sketch>
   ),
 };
@@ -258,81 +258,81 @@ function Keys() {
 const WORDS: Record<SkyGuideSection, ReactNode> = {
   start: (
     <>
-      <p>Five things are enough to start; the sections after this one go deeper.</p>
+      <p>Five words are enough to start: a <b>stop</b> is one box on the sky, a <b>chain</b> is a row of stops, a <b>saved chain</b> is one you keep on the shelf, <b>Wait for me</b> is the stop that waits for you, and <b>Needs you</b> is where everything waiting on you shows. The sections after this one go deeper.</p>
       <ol className="sky-guide-start">
         <li><b>Each session is a chain.</b> Its agent comes first; the stops after it run left to right, along the wires, once the agent's turn ends.</li>
-        <li><b>Add a stop from the shelf.</b> Drag <b>Agent</b>, <b>Perch</b>, <b>Ship</b>, <b>Verify</b>, <b>Wait</b> or <b>Loop</b> onto a chain, or click the <b>+</b> after its last stop. Double-click empty sky for a new session.</li>
+        <li><b>Add a stop from the shelf.</b> Drag <b>Agent</b>, <b>Wait for me</b>, <b>Ship</b>, <b>Verify</b>, <b>Wait</b> or <b>Loop</b> onto a chain, or click the <b>+</b> after its last stop. Double-click empty sky for a new session.</li>
         <li><b>Wire it.</b> Drag from a stop's round port onto another stop to move it there. Double-click a stop to edit it.</li>
-        <li><b>Run it, and answer it.</b> <b>▶ Run</b> (or your next prompt) sets the chain going; the bird shows where it is. A <b>Perch</b> waits for you: press <b>Done</b> and it carries on.</li>
+        <li><b>Run it, and answer it.</b> <b>▶ Run</b> (or your next prompt) sets the chain going; the bird shows where it is. A <b>Wait for me</b> stop holds the chain and shows under <b>Needs you</b> on the bell: press <b>Done</b> and it carries on.</li>
         <li><b>Help.</b> The sky's <b>?</b> replays the tour or opens this guide; the <kbd>?</kbd> key lists every shortcut.</li>
       </ol>
     </>
   ),
   what: (
     <>
-      <p>The sky is the main area's second view. Every session is a line — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes.</p>
-      <p>Switch with <b>Grid · Sky</b> on the top bar, or <kbd>Ctrl+Y</kbd>. The chips on the sky's toolbar choose which lines show, and <b>Find a line…</b> jumps to one by name.</p>
+      <p>The sky is the main area's second view. Every session is a chain — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes.</p>
+      <p>Switch with <b>Grid · Sky</b> on the top bar, or <kbd>Ctrl+Y</kbd>. The chips on the sky's toolbar choose which chains show, and the find field jumps to one by name.</p>
     </>
   ),
   lines: (
     <>
-      <p>Each session draws as a <b>frame</b> — a soft box in the session's own colour — round its <b>chain</b>. The frame's <b>bar</b> carries the session's name, its branch, its state and a <b>⋯</b> menu (open it here, open it in the grid, show only this chain, add a stop, close the session); a double-click on the bar renames it.</p>
-      <p>Inside, the first tile is the session's <b>agent</b> ("Claude", "Codex"…): what it is doing now, its state and the bird. A click opens its real terminal in the tile's place (a double-click on the card's top folds it back); a right-click offers <b>Open terminal</b>, <b>Send a prompt…</b> and <b>Stop</b>, then the session's own menu. Its out port starts the chain: its stops follow as free-floating <b>tiles</b> joined by <b>wires</b>. A <b>sub-session</b> is a small frame of its own under its parent's agent — its own agent, its state, and its own chain when it flies one; click its agent to open it in place.</p>
-      <p>Drag a session by its frame's bar (or its agent tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place and minimises every open window back to its box; the ⋯'s <b>Tidy this line</b> does one.</p>
-      <p>Every tile has an <b>in port</b> (the square on its left) and an <b>out port</b> (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The <b>+</b> after the last tile does the same — or just click it. Grab a wire by a tile's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own.</p>
+      <p>Each session draws as a <b>frame</b> — a soft outline in the session's own colour — round its <b>chain</b>. The frame's <b>bar</b> carries the session's name, its branch, its state and a <b>⋯</b> menu (open it here, open it in the grid, show only this chain, add a stop, close the session); a double-click on the bar renames it.</p>
+      <p>Inside, the first stop is the session's <b>agent</b> ("Claude", "Codex"…): what it is doing now, its state and the bird. A click opens its real terminal in its place (a double-click on the card's top folds it back); a right-click offers <b>Open terminal</b>, <b>Send a prompt…</b> and <b>Stop</b>, then the session's own menu. Its out port starts the chain: its <b>stops</b> follow, free-floating, joined by <b>wires</b>. A <b>worker</b> — a session this session started — is a small frame of its own under its parent's agent: its own agent, its state, and its own chain when it runs one; click its agent to open it in place.</p>
+      <p>Drag a session by its frame's bar (or its agent) to put it anywhere — it stays there. Drag a single stop to move just that stop: order is the wires, never where a stop sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place and minimises every open window; the ⋯'s <b>Tidy</b> does one.</p>
+      <p>Every stop has an <b>in port</b> (the square on its left) and an <b>out port</b> (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The <b>+</b> after the last stop does the same — or just click it. Grab a wire by a stop's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own.</p>
     </>
   ),
   stops: (
     <>
-      <p>A <b>stop</b> is one block of work: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Perch</b> waits until you press Done, <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> works through the branch's checklist, <b>Wait</b> waits some minutes or until a time, <b>Loop</b> sends the chain back to an earlier stop, a number of times, every so often. <b>All blocks…</b> on the shelf lists the rest, each with what it does.</p>
-      <p>A <b>saved stop</b> is a named series of stops — <i>Ticket to merge</i>, say — that you drag on as one box. It flies its sub-steps one by one and reads <i>2 of 3</i> while it does. Double-click it to see and change each sub-step.</p>
-      <p>To change a saved stop, drag it onto the sky, edit its boxes there, then <b>Save to the shelf</b>. Right-click its chip on the shelf to rename, reset or delete it.</p>
+      <p>A <b>stop</b> is one piece of work: <b>Agent</b> gives the session's agent a prompt and waits for its turn to settle, <b>Wait for me</b> holds the chain until you press Done (it shows under <b>Needs you</b> meanwhile), <b>Ship</b> commits, pushes, opens or merges the PR, <b>Verify</b> works through the branch's checklist, <b>Wait</b> waits some minutes or until a time, <b>Loop</b> sends the chain back to an earlier stop, a number of times, every so often. <b>All stops…</b> on the shelf lists the rest, each with what it does.</p>
+      <p>A <b>saved chain</b> is a named chain kept on the shelf — <i>Ticket to merge</i>, say — that you drag on whole. On the sky it arrives as a <b>group</b>: one stop with its stops inside, run one by one, reading <i>2 of 3</i> while it does. Double-click it to see and change each of its stops.</p>
+      <p>To change a saved chain, drag it onto the sky, edit its stops there, then <b>Save to the shelf</b>. Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it.</p>
     </>
   ),
   bird: (
     <>
-      <p>The bird stands on the stop the flight is at: bobbing while the session works, gold when it is perched on you.</p>
-      <p><b>Click</b> the bird to halt the flight where it is; click it again on a paused flight to carry on.</p>
-      <p><b>Drag</b> the bird onto another stop of the same flight to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on.</p>
+      <p>The bird stands on the stop the chain is at: bobbing while the session works, gold when the chain needs you (the bell lists it under <b>Needs you</b>).</p>
+      <p><b>Click</b> the bird to halt the chain where it is; click it again on a paused chain to carry on.</p>
+      <p><b>Drag</b> the bird onto another stop of the same chain to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on.</p>
     </>
   ),
   halt: (
     <>
-      <p><b>⏹ Halt now</b> (on the current stop, or a click on the bird) pauses the flight where it is. <b>⏸ Halt here</b> on a stop ahead makes it a halt point: the flight pauses when it reaches that stop, before doing it, and the stop wears a pause badge. <b>▶ Carry on</b> goes on.</p>
-      <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop that is flying stops its work and pauses the flight right before the next stop; Carry on goes into it.</p>
+      <p><b>⏹ Halt now</b> (on the current stop, or a click on the bird) pauses the chain where it is. <b>⏸ Halt here</b> on a stop ahead makes it a halt point: the chain pauses when it reaches that stop, before doing it, and the stop wears a pause badge. <b>▶ Carry on</b> goes on.</p>
+      <p><b>Remove</b> (🗑, the menu, or <kbd>Delete</kbd>) takes a stop off at once, with <b>Undo</b> in the toast. Removing the stop the chain is on stops its work and pauses the chain right before the next stop; Carry on goes into it.</p>
     </>
   ),
   grounded: (
     <>
-      <p>Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with <b>no session</b>: no frame and no agent, just free tiles and an empty socket on the first one — <i>wire a session's out port here to run it</i>. Nothing runs until it has a session.</p>
-      <p>Give it one by wiring an agent tile's out port (or its +) to that socket, by dragging the chain into a session's frame, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops take off), or with its ⋯ → <b>Fly on a session…</b>. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
-      <p>One chain can <b>start another</b>: hold <kbd>Shift</kbd> while you drop a wire from a stop onto a stops-only chain, and a <b>Start a chain</b> stop goes in there. The other chain then shows a trigger tile — <i>When &lt;chain&gt; reaches &lt;stop&gt;</i> — and a dashed wire in the first session's colour; when the flight gets there, that chain takes off on a new session (or the one its dialog names), and the wire follows it there.</p>
+      <p>Drop a stop or a saved chain on empty sky and it waits there as a chain of its own, with <b>no session</b>: no frame and no agent, just its stops and an empty socket on the first one — <i>wire a session's out port here to run it</i>. Nothing runs until it has a session.</p>
+      <p>Give it one by wiring an agent's out port (or its +) to that socket, by dragging the chain into a session's frame, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops run there), or with its ⋯ → <b>Run on a session…</b>. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
+      <p>One chain can <b>start another</b>: hold <kbd>Shift</kbd> while you drop a wire from a stop onto a chain with no session, and a <b>Start a chain</b> stop goes in there. The other chain then shows a trigger stop — <i>When &lt;chain&gt; reaches &lt;stop&gt;</i> — and a dashed wire in the first session's colour; when the first chain gets there, the other one takes off on a new session (or the one its dialog names), and the wire follows it there.</p>
     </>
   ),
   select: (
     <>
-      <p>Drag across empty sky to draw a box — everything it touches is selected, lines and stop boxes both (in the Click tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every line; <kbd>Esc</kbd> clears.</p>
-      <p>The selection bar then offers: drag any selected line's bar and they all move; <b>Remove…</b> (it asks first: a session line closes its session, a grounded line goes); and for stops of one line, <b>Group into a stop</b> and <b>Save to the shelf</b>.</p>
+      <p>Drag across empty sky to draw a marquee — everything it touches is selected, chains and stops both (in the Click tool, Shift+drag). <kbd>Ctrl+A</kbd> selects every chain; <kbd>Esc</kbd> clears.</p>
+      <p>The selection bar then offers: drag any selected chain's bar and they all move; <b>Remove…</b> (it asks first: a session's chain closes its session, a chain with no session goes); and for stops of one chain, <b>Group into a stop</b> and <b>Save to the shelf</b>.</p>
     </>
   ),
   keys: (
     <>
-      <p>The toolbar's toggle picks how a drag behaves. <b>✥ Drag</b> (<kbd>V</kbd>): lines move by their bars and a drag on empty sky selects. <b>☝ Click</b> (<kbd>H</kbd>): nothing moves by dragging — any drag pans, a click focuses a line or selects a box. Hold <kbd>Space</kbd> to pan in either; the wheel and the middle button pan too.</p>
+      <p>The toolbar's toggle picks how a drag behaves. <b>✥ Drag</b> (<kbd>V</kbd>): chains move by their bars and a drag on empty sky selects. <b>☝ Click</b> (<kbd>H</kbd>): nothing moves by dragging — any drag pans, a click focuses a chain or selects a stop. Hold <kbd>Space</kbd> to pan in either; the wheel and the middle button pan too.</p>
       <Keys />
     </>
   ),
   intake: (
     <>
-      <p>The intake lane, top left, holds what is waiting to fly: one block per source — tickets, pull requests, issues — with the items in it.</p>
-      <p>Folded it is a row of blocks; expand it (▸ on its head, or double-click the head) to see every item with its <b>Fly</b> button. Fly starts a session on that item, and its line appears in the sky.</p>
-      <p>Drag the lane by its head like a line; Tidy puts it back.</p>
+      <p>The intake lane, top left, holds what is waiting to start: one card per source — tickets, pull requests, issues — with the items in it.</p>
+      <p>Folded it is a row of sources; expand it (▸ on its head, or double-click the head) to see every item with its <b>Run</b> button. Run starts a session on that item, and its chain appears in the sky.</p>
+      <p>Drag the lane by its head like a chain; Tidy puts it back.</p>
     </>
   ),
   saved: (
     <>
-      <p><b>The layout</b> — where each line sits, its box sizes, the intake lane's spot, the tool — is kept per device, in this browser.</p>
-      <p><b>Saved stops</b> live on the server and are synced across your devices, like templates.</p>
-      <p><b>Flights</b> — the stops a session is flying and where the bird is — stay on the machine that runs them, never synced.</p>
+      <p><b>The layout</b> — where each chain sits, its sizes, the intake lane's spot, the tool — is kept per device, in this browser.</p>
+      <p><b>Saved chains</b> live on the server and are synced across your devices, like templates.</p>
+      <p><b>Running chains</b> — the stops a session is running and where the bird is — stay on the machine that runs them, never synced.</p>
     </>
   ),
 };

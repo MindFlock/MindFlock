@@ -49,6 +49,12 @@ export function filterPlans<P extends Pick<FlightPlan, "name" | "description"> &
   return plans.filter((p) => catalogMatch(query, p.name, p.description, ...(p.steps || []).map((s) => s.title)));
 }
 
+/** What a saved chain is, by its size: "Saved chain · 3 stops" (the shelf
+ * chip's title, the right-click search's hint). */
+export function savedChainLabel(stops: number): string {
+  return "Saved chain · " + stops + (stops === 1 ? " stop" : " stops");
+}
+
 /** A saved stop's sub-steps as one line: "a → b → c". */
 export function planPath(plan: Pick<FlightPlan, "steps">): string {
   return plan.steps.map((s) => s.title).join(" → ");
@@ -269,7 +275,7 @@ export type CardMenuKey = "rename" | "takeoff" | "shelf" | "reset" | "delete";
 export function cardMenu(plan: Pick<FlightPlan, "id" | "builtin">, shelved: boolean): Array<{ key: CardMenuKey; label: string; danger?: boolean }> {
   return [
     ...(renamable(plan) ? [{ key: "rename" as const, label: "Rename" }] : []),
-    { key: "takeoff", label: "Takes off…" },
+    { key: "takeoff", label: "What starts it…" },
     { key: "shelf", label: (shelved ? "★" : "☆") + " On the shelf" },
     plan.builtin ? { key: "reset", label: "Reset to default" } : { key: "delete", label: "Delete", danger: true },
   ];

@@ -1,6 +1,6 @@
 /** The Sky tour: the five things a newcomer needs before the sky is useful —
  * what a chain is, adding a stop from the shelf, wiring it, running it (and
- * answering a Perch), and where the help is. Everything else (the bird's
+ * answering a Wait for me), and where the help is. Everything else (the bird's
  * drags, selection, the tools, the intake lane, the zoom, every key) lives in
  * the long-form guide behind the same ? (components/flights/SkyGuide.tsx),
  * which leads with a matching "Start here".
@@ -21,12 +21,12 @@ export const SKY_TOUR: TourDef = {
     {
       target: '[data-tour="sky-session-box"], .sky-head',
       title: "Each session is a chain",
-      body: "Its agent comes first, then the stops that run after its turn, left to right; Ctrl+Y goes back to the grid.",
+      body: "A chain is a row of stops: its agent comes first, then the stops that run after its turn; Ctrl+Y goes back to the grid.",
     },
     {
       target: '[data-tour="sky-shelf"]',
       title: "Add a stop from the shelf",
-      body: "Drag Agent, Perch, Ship, Verify, Wait or Loop onto a chain, or click the + after its last stop.",
+      body: "Drag Agent, Wait for me, Ship, Verify, Wait or Loop onto a chain, or click the + after its last stop; saved chains drag on whole.",
     },
     {
       target: '.sky-port-out:not(.sky-port-off), [data-tour="sky-stop"]',
@@ -36,7 +36,7 @@ export const SKY_TOUR: TourDef = {
     {
       target: '[data-tour="flights-bird"]',
       title: "Run it, and answer it",
-      body: "▶ Run (or your next prompt) sets the chain going and the bird shows where it is; a Perch waits for your Done.",
+      body: "▶ Run (or your next prompt) starts the chain and the bird shows where; Wait for me holds it in Needs you until you press Done.",
     },
     {
       target: '[data-tour="sky-guide"], .sky-toolbar .tour-btn',

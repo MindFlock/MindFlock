@@ -78,27 +78,27 @@ describe("SkyPalette", () => {
   });
 
   it("a panel at the frame the host keeps", () => {
-    expect(html).toMatch(/^<section class="sky-palette" data-tour="sky-palette" aria-label="Blocks palette" style="width:400px;height:380px">/);
+    expect(html).toMatch(/^<section class="sky-palette" data-tour="sky-palette" aria-label="Stops palette" style="width:400px;height:380px">/);
     expect(render(createElement(SkyPalette, {}))).toContain('style="width:360px;height:420px"');
   });
 
-  it("the head: Blocks, a count of every block, the filter, a ⋯ with Dock at the bottom, a × back to the shelf; it moves the palette when the host lets it", () => {
+  it("the head: Stops, a count of every stop and saved chain, the filter, a ⋯ with Dock at the bottom, a × back to the shelf; it moves the palette when the host lets it", () => {
     const head = html.slice(html.indexOf('class="sky-palette-head'), html.indexOf("sky-catalog-list"));
-    expect(head).toContain('class="sky-palette-head movable" data-sky-head="true" title="Drag to move the blocks"');
-    expect(head).toContain('<strong class="sky-palette-title">Blocks</strong>');
+    expect(head).toContain('class="sky-palette-head movable" data-sky-head="true" title="Drag to move the stops palette"');
+    expect(head).toContain('<strong class="sky-palette-title">Stops</strong>');
     // Every kind (6) and every saved stop (2) — not just the pick's.
     expect(head).toMatch(/<span class="sky-palette-count"[^>]*>8<\/span>/);
-    expect(head).toContain('<input class="fl-input sky-catalog-filter" type="text" placeholder="Filter blocks…" aria-label="Filter blocks" aria-controls="sky-palette-list"');
-    expect(head).toContain('<summary aria-label="The blocks palette — more"');
+    expect(head).toContain('<input class="fl-input sky-catalog-filter" type="text" placeholder="Filter stops…" aria-label="Filter stops" aria-controls="sky-palette-list"');
+    expect(head).toContain('<summary aria-label="The stops palette — more"');
     expect(head).toContain(">Dock at the bottom</button>");
-    expect(head).toContain('<button type="button" class="fl-icon-btn sky-palette-close" aria-label="Close the blocks palette" title="Close — back to the shelf">×</button>');
+    expect(head).toContain('<button type="button" class="fl-icon-btn sky-palette-close" aria-label="Close the stops palette" title="Close — back to the shelf">×</button>');
     expect(head.indexOf("vf-menu")).toBeLessThan(head.indexOf("sky-palette-close"));
     // All blocks… is gone from the palette: it IS all the blocks.
     expect(html).not.toContain("sky-palette-all");
     // No onDock: no ⋯; no onClose: no ×; no onHeadDown (or click mode): no move hint.
     const still = render(createElement(SkyPalette, { onHeadDown() {}, draggable: false }));
     expect(still).toContain('class="sky-palette-head" data-sky-head="true"');
-    expect(still).not.toContain("The blocks palette — more");
+    expect(still).not.toContain("The stops palette — more");
     expect(still).not.toContain("sky-palette-close");
     const src = code("components/flights/SkyPalette.tsx");
     expect(src).toContain("if (draggable && onHeadDown && headPress(e)) onHeadDown(e);");
@@ -115,9 +115,9 @@ describe("SkyPalette", () => {
   });
 
   it("the body is the catalog's, compact: the Session card first, EVERY kind, EVERY saved stop — whatever the pick", () => {
-    expect(html).toContain('<div class="sky-catalog-list sky-own-scroll compact sky-palette-body" id="sky-palette-list" role="listbox" aria-label="All blocks">');
+    expect(html).toContain('<div class="sky-catalog-list sky-own-scroll compact sky-palette-body" id="sky-palette-list" role="listbox" aria-label="All stops">');
     const sections = [...html.matchAll(/data-section="([^"]+)" role="group" aria-label="([^"]+)"/g)].map((m) => m[1] + ":" + m[2]);
-    expect(sections).toEqual(["blocks:Blocks", "multi:Multi-step"]);
+    expect(sections).toEqual(["blocks:Stops", "multi:Saved chains"]);
     const kinds = [...html.matchAll(/data-kind="([^"]+)"/g)].map((m) => m[1]);
     expect(kinds).toEqual(["agent", "you", "ship", "verify", "wait", "notify"]);
     expect(html.indexOf("sky-catalog-session")).toBeLessThan(html.indexOf('data-kind="agent"'));
@@ -141,17 +141,17 @@ describe("SkyPalette", () => {
     expect(src).toContain("onShelfToggle={(d: CatalogDrop) => changeShelf((p) => toggleShelf(p, d))}");
   });
 
-  it("a saved stop's ⋯: Rename, Takes off…, On the shelf, Reset / Delete", () => {
+  it("a saved chain's ⋯: Rename, What starts it…, On the shelf, Reset / Delete", () => {
     const mine = html.slice(html.indexOf('data-plan="p_mine"'));
     expect(mine).toContain('<summary aria-label="“Mine” — rename, delete, shelf"');
-    expect(mine).toMatch(/>Rename<\/button><button type="button" class="vf-menu-item">Takes off…<\/button><button type="button" class="vf-menu-item">☆ On the shelf<\/button><button type="button" class="vf-menu-item vf-menu-danger">Delete<\/button>/);
+    expect(mine).toMatch(/>Rename<\/button><button type="button" class="vf-menu-item">What starts it…<\/button><button type="button" class="vf-menu-item">☆ On the shelf<\/button><button type="button" class="vf-menu-item vf-menu-danger">Delete<\/button>/);
   });
 
   it("every card drags with its chip's MIME; a click or a double-click places it, once", () => {
     // Session + 6 kinds + 2 saved stops.
     expect(html.match(/draggable="true"/g)).toHaveLength(9);
-    expect(html).toMatch(/class="sky-catalog-card" data-kind="ship" draggable="true" title="Ship does its thing\nDrag onto a line or the sky, or click to put it on the board"/);
-    expect(html).not.toContain("focused line");
+    expect(html).toMatch(/class="sky-catalog-card" data-kind="ship" draggable="true" title="Ship does its thing\nDrag onto a chain or the sky, or click to put it on the board"/);
+    expect(html).not.toContain("focused chain");
     const src = code("components/flights/SkyPalette.tsx");
     // The Session card: the new-session type, a click-or-double opens the block.
     expect(src).toContain("const cd = useClickOrDouble(onSession);");
@@ -160,7 +160,7 @@ describe("SkyPalette", () => {
     expect(html).toMatch(/<div role="option" aria-selected="false" class="sky-catalog-card sky-catalog-session" data-tour="flights-newblock" draggable="true"/);
     // Without onPlace the cards only drag.
     const drag = render(createElement(SkyPalette, {}));
-    expect(drag).toMatch(/class="sky-catalog-card active" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky"/);
+    expect(drag).toMatch(/class="sky-catalog-card active" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a chain or the sky"/);
     expect(drag).toContain("sky-catalog-session drag-only");
   });
 
@@ -170,7 +170,7 @@ describe("SkyPalette", () => {
   });
 
   it("the corner handle: the intake lane's — pointer capture, the delta over the zoom, onResize on release; arrows too", () => {
-    expect(html).toContain('<span class="sky-palette-resize" role="separator" tabindex="0" data-no-drag="true" aria-label="Resize the blocks palette"');
+    expect(html).toContain('<span class="sky-palette-resize" role="separator" tabindex="0" data-no-drag="true" aria-label="Resize the stops palette"');
     expect(render(createElement(SkyPalette, {}))).not.toContain("sky-palette-resize");
     const src = code("components/flights/SkyPalette.tsx");
     expect(src).toContain("e.currentTarget.setPointerCapture(e.pointerId);");

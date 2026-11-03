@@ -167,7 +167,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       top: TOP.schedule,
       // "Templates…" was a second row for the same dialog; it is one name
       // now, and the word people learned still finds it (the keywords).
-      keywords: "templates template cron recurring nightly timer daily weekly scheduled stops",
+      keywords: "templates template cron recurring nightly timer daily weekly scheduled chains stops",
       run: () => ui.openDialogFor("schedule"),
     });
     // The main area's other view (lib/viewMode): the same sessions as panes
@@ -176,12 +176,12 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push(
       ui.view === "sky"
         ? { label: "Switch to the grid", hint: "Ctrl+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
-        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
+        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas chains lines bird board flock map flights", run: () => setView("sky") }
     );
     acts.push({
-      label: "Stops…",
+      label: "Saved chains…",
       hint: "on the Sky's shelf",
-      keywords: "flights saved stops plan perch canvas shelf new",
+      keywords: "saved chains chain stops shelf canvas new flights saved stops plan",
       run: () => ui.showFlyways(),
     });
     // The Sky's long-form guide (flights/SkyGuide): the sky shows it, so show
@@ -189,7 +189,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({
       label: "Learn the Sky",
       hint: "the guide",
-      keywords: "help how guide tutorial sky lines stops bird keys",
+      keywords: "help how guide tutorial sky chains stops saved chains wait for me needs you bird keys",
       run: () => {
         setView("sky");
         openSkyGuide();

@@ -186,9 +186,9 @@ describe("the arrows over the grids (gridMove)", () => {
 });
 
 describe("a saved-stop card's ⋯ (cardMenu)", () => {
-  it("Rename, Takes off…, On the shelf (★ / ☆), then Reset to default (built-in) or Delete (yours)", () => {
-    expect(cardMenu(TICKET, false).map((i) => i.label)).toEqual(["Rename", "Takes off…", "☆ On the shelf", "Reset to default"]);
-    expect(cardMenu(MINE, true).map((i) => i.label)).toEqual(["Rename", "Takes off…", "★ On the shelf", "Delete"]);
+  it("Rename, What starts it…, On the shelf (★ / ☆), then Reset to default (built-in) or Delete (yours)", () => {
+    expect(cardMenu(TICKET, false).map((i) => i.label)).toEqual(["Rename", "What starts it…", "☆ On the shelf", "Reset to default"]);
+    expect(cardMenu(MINE, true).map((i) => i.label)).toEqual(["Rename", "What starts it…", "★ On the shelf", "Delete"]);
     expect(cardMenu(MINE, true)[3].danger).toBe(true);
   });
   it("a built-in may be renamed (the server keeps it a built-in); a depth cut is virtual, so it can't", () => {
@@ -201,11 +201,11 @@ describe("a saved-stop card's ⋯ (cardMenu)", () => {
 describe("StopCatalog", () => {
   const html = render({ onAdd() {} });
 
-  it("a Modal dialog titled All blocks, its filter focused, a Close", () => {
+  it("a Modal dialog titled All stops, its filter focused, a Close", () => {
     expect(html).toMatch(/^<div id="sky-catalog" role="dialog" aria-modal="true" aria-labelledby="sky-catalog-title" tabindex="-1" class="modal sky-catalog-modal">/);
-    expect(html).toContain('<h2 id="sky-catalog-title">All blocks</h2>');
+    expect(html).toContain('<h2 id="sky-catalog-title">All stops</h2>');
     expect(html).toContain('<button type="button" class="fl-icon-btn sky-catalog-close" aria-label="Close" title="Close (Esc)">×</button>');
-    expect(html).toMatch(/<input class="fl-input sky-catalog-filter" type="text" placeholder="Filter blocks…" aria-label="Filter blocks" aria-controls="sky-catalog-list" aria-activedescendant="sky-catalog-row-0"/);
+    expect(html).toMatch(/<input class="fl-input sky-catalog-filter" type="text" placeholder="Filter stops…" aria-label="Filter stops" aria-controls="sky-catalog-list" aria-activedescendant="sky-catalog-row-0"/);
     // The focus, without scrolling anything (the palette floats in the sky).
     const src = code("components/flights/StopCatalog.tsx");
     expect(src).toContain("if (autoFocus) filterRef.current?.focus({ preventScroll: true });");
@@ -222,9 +222,9 @@ describe("StopCatalog", () => {
     expect(html).toContain('class="sky-catalog-list sky-own-scroll" id="sky-catalog-list" role="listbox"');
   });
 
-  it("Blocks: a card per kind — icon, name, robot / you badge, its summary — the defaults first", () => {
+  it("Stops: a card per kind — icon, name, robot / you badge, its summary — the defaults first", () => {
     const blocks = html.slice(html.indexOf('data-section="blocks"'), html.indexOf('data-section="multi"'));
-    expect(blocks).toContain('<h3 class="sky-catalog-label">Blocks</h3>');
+    expect(blocks).toContain('<h3 class="sky-catalog-label">Stops</h3>');
     expect([...blocks.matchAll(/data-kind="([^"]+)"/g)].map((m) => m[1])).toEqual(["agent", "you", "ship", "verify", "wait", "split", "notify"]);
     expect(blocks).toContain(
       '<span class="sky-catalog-name"><span class="sky-catalog-title">Agent</span><span class="sky-catalog-badge actor-robot">robot</span></span></div><span class="sky-catalog-summary">Give the session&#x27;s agent a prompt</span>'
@@ -237,9 +237,9 @@ describe("StopCatalog", () => {
     expect(blocks).not.toContain("vf-menu");
   });
 
-  it("Multi-step: a card per saved stop — the name, built-in, its step boxes, its path, a ⋯", () => {
+  it("Saved chains: a card per saved chain — the name, built-in, its step boxes, its path, a ⋯", () => {
     const multi = html.slice(html.indexOf('data-section="multi"'));
-    expect(multi).toContain('<h3 class="sky-catalog-label">Multi-step</h3>');
+    expect(multi).toContain('<h3 class="sky-catalog-label">Saved chains</h3>');
     expect([...multi.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1])).toEqual(["builtin:ticket", "p_mine"]);
     expect(multi).toContain('<span class="sky-catalog-boxes" aria-hidden="true"><i class=""></i><i class=""></i><i class="perch"></i></span><span class="sky-catalog-summary">Work the ticket → Push → Approve</span>');
     expect(multi).toContain('<span class="sky-catalog-name"><span class="sky-catalog-title">Ticket to merge</span><span class="sky-catalog-badge builtin">built-in</span></span>');
@@ -247,7 +247,7 @@ describe("StopCatalog", () => {
     // The ⋯: the house OverflowMenu (built-in: Reset; yours: Delete).
     expect(multi).toContain('<summary aria-label="“Ticket to merge” — rename, delete, shelf"');
     const ticket = multi.slice(0, multi.indexOf('data-plan="p_mine"'));
-    expect(ticket).toContain('<button type="button" class="vf-menu-item">Rename</button><button type="button" class="vf-menu-item">Takes off…</button><button type="button" class="vf-menu-item">Reset to default</button>');
+    expect(ticket).toContain('<button type="button" class="vf-menu-item">Rename</button><button type="button" class="vf-menu-item">What starts it…</button><button type="button" class="vf-menu-item">Reset to default</button>');
     expect(multi.slice(multi.indexOf('data-plan="p_mine"'))).toContain('<button type="button" class="vf-menu-item vf-menu-danger">Delete</button>');
   });
 
@@ -272,22 +272,22 @@ describe("StopCatalog", () => {
 
   it("place: the words say a click puts it on the board", () => {
     const placing = render({ onAdd() {}, place: true });
-    expect(placing).toContain('title="Drag onto a line or the sky, or click to put it on the board"');
+    expect(placing).toContain('title="Drag onto a chain or the sky, or click to put it on the board"');
     expect(placing).toContain("a click or a double-click puts it on the board · the arrows pick, Enter puts it on the board");
-    expect(placing).not.toContain("focused line");
-    expect(html).toContain("a click or a double-click adds it to the focused line");
+    expect(placing).not.toContain("focused chain");
+    expect(html).toContain("a click or a double-click adds it to the focused chain");
   });
 
   it("without onAdd the cards only drag", () => {
     const drag = render();
     expect(drag).not.toContain("sky-catalog-add");
-    expect(drag).toContain('title="Drag onto a line or the sky"');
-    expect(drag).toContain('<p class="sky-catalog-hint muted">Drag a block onto a line or the sky</p>');
+    expect(drag).toContain('title="Drag onto a chain or the sky"');
+    expect(drag).toContain('<p class="sky-catalog-hint muted">Drag a stop onto a chain or the sky</p>');
   });
 
   it("nothing at all: says so", () => {
     const none = render({ kinds: [], plans: [] });
-    expect(none).toContain('<p class="sky-catalog-empty muted">No blocks yet — this server may not know Flights.</p>');
+    expect(none).toContain('<p class="sky-catalog-empty muted">No stops yet — this server may be too old for the Sky.</p>');
     expect(none).not.toContain("data-section");
   });
 
@@ -357,7 +357,7 @@ describe("StopCatalogBody (round 14: the palette's body)", () => {
     const html = body({ onAdd() {}, place: true });
     expect(html).toMatch(/^<header class="h"><input class="fl-input sky-catalog-filter"/);
     expect(html).not.toContain("modal");
-    expect(html).toContain('</header><div class="sky-catalog-list sky-own-scroll" id="sky-catalog-list" role="listbox" aria-label="All blocks">');
+    expect(html).toContain('</header><div class="sky-catalog-list sky-own-scroll" id="sky-catalog-list" role="listbox" aria-label="All stops">');
   });
 
   it("compact: its own ids and list class; icon + name + one line; no badges and no Add (a click places)", () => {
@@ -369,7 +369,7 @@ describe("StopCatalogBody (round 14: the palette's body)", () => {
     expect(html).not.toContain("sky-catalog-add");
     // A kind: its summary; a saved stop: its boxes (its path in the title).
     expect(html).toContain('<span class="sky-catalog-summary">Commit, push, open the PR</span>');
-    expect(html).toMatch(/data-plan="builtin:ticket" draggable="true" title="Work the ticket → Push → Approve\nDrag onto a line or the sky, or click to put it on the board"/);
+    expect(html).toMatch(/data-plan="builtin:ticket" draggable="true" title="Work the ticket → Push → Approve\nDrag onto a chain or the sky, or click to put it on the board"/);
     expect(html).not.toContain('<span class="sky-catalog-summary">Work the ticket → Push → Approve</span>');
     expect(html).toContain('<span class="sky-catalog-boxes" aria-hidden="true"><i class=""></i><i class=""></i><i class="perch"></i></span>');
     // Every kind and every saved stop.

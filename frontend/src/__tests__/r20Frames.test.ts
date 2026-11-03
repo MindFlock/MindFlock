@@ -298,14 +298,15 @@ describe("the tour and the guide say frame and agent", () => {
     const steps = TOURS.sky.steps;
     const agent = steps.find((s) => s.target.startsWith('[data-tour="sky-session-box"]'))!;
     expect(agent.title).toBe("Each session is a chain");
-    expect(agent.body).toContain("Its agent comes first");
+    expect(agent.body).toContain("A chain is a row of stops: its agent comes first");
   });
 
   it("the guide", () => {
     const g = code("components/flights/SkyGuide.tsx");
     expect(g).toContain("Each session draws as a <b>frame</b>");
     expect(g).toContain("<b>Open terminal</b>, <b>Send a prompt…</b> and <b>Stop</b>");
-    expect(g).toContain("A <b>sub-session</b> is a small frame of its own");
+    expect(g).toContain("A <b>worker</b> — a session this session started — is a small frame of its own");
+    expect(g).not.toContain("sub-session");
     expect(g).not.toContain("session tile");
   });
 });

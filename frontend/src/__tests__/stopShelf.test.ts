@@ -51,10 +51,10 @@ function render(el: ReactElement, kinds: StepKindDef[] | null | undefined = KIND
 const kindsIn = (html: string) => [...html.matchAll(/data-kind="([^"]+)"/g)].map((m) => m[1]);
 
 describe("the stops row", () => {
-  it("Blocks: Session, then the default kinds in their order, the perch gold and named Perch", () => {
+  it("Stops: Session, then the default kinds in their order, the perch gold and named Perch", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain('aria-label="Stops"');
-    expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto the sky or a line</span>');
+    expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto the sky or a chain</span>');
     expect(kindsIn(html)).toEqual(["agent", "you", "ship", "verify", "wait"]);
     // The five kinds and the Session chip (All blocks… opens a list, it doesn't drag).
     expect(html.match(/draggable="true"/g)).toHaveLength(6);
@@ -65,11 +65,11 @@ describe("the stops row", () => {
     expect(html).not.toContain(">You<");
     // One region, its tiny label first, the Session chip, then the kinds.
     const blocks = html.slice(html.indexOf('data-region="blocks"'));
-    expect(html).toContain('<div class="sky-stops-region" data-region="blocks" role="list" aria-label="Blocks"><span class="sky-stops-label" aria-hidden="true">Blocks</span>');
+    expect(html).toContain('<div class="sky-stops-region" data-region="blocks" role="list" aria-label="Stops"><span class="sky-stops-label" aria-hidden="true">Stops</span>');
     expect(blocks.indexOf("sky-session-chip")).toBeLessThan(blocks.indexOf('data-kind="agent"'));
     expect(html.indexOf('data-kind="wait"')).toBeLessThan(html.indexOf("sky-catalog-chip"));
     // Tooltip: the kind's summary.
-    expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused line, or drag it onto a line or the sky — right-click for more"');
+    expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused chain, or drag it onto a chain or the sky — right-click for more"');
     expect(html).not.toMatch(/\b(node|plane)\b/i);
   });
 
@@ -87,10 +87,10 @@ describe("the stops row", () => {
     expect(kindsIn(render(createElement(StopShelf, {}), NO_VERIFY))).toEqual(["agent", "you", "ship", "wait"]);
   });
 
-  it("then the All blocks… chip: the secondary chip, a ⊞, opens the catalog (no saved stops: no Multi-step region)", () => {
+  it("then the All stops… chip: the secondary chip, a ⊞, opens the catalog (no saved stops: no Saved chains region)", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain(
-      '<button type="button" class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog" aria-haspopup="dialog" aria-expanded="false" title="Every block and every multi-step block, in a list you can filter"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All blocks…</span></button>'
+      '<button type="button" class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog" aria-haspopup="dialog" aria-expanded="false" title="Every stop and every saved chain, in a list you can filter"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All stops…</span></button>'
     );
     expect(html).not.toContain('data-region="multi"');
     // A thin divider between Blocks and the chip; the catalog isn't open.
@@ -111,20 +111,20 @@ describe("the stops row", () => {
   it("with onTack a chip is a button; without, it only drags and says so", () => {
     const tack = render(createElement(StopShelf, { onTack() {} }));
     expect(tack).toMatch(/<button type="button" class="sky-stop-chip" data-kind="agent" draggable="true"/);
-    expect(tack).toContain('aria-label="Tack “Ship” onto the focused line"');
+    expect(tack).toContain('aria-label="Tack “Ship” onto the focused chain"');
     const drag = render(createElement(StopShelf, {}));
     // Only All blocks… is still a button: it opens the catalog, it doesn't tack.
     expect(drag.match(/<button type="button" class="sky-stop-chip[^"]*"/g)).toEqual(['<button type="button" class="sky-stop-chip sky-catalog-chip"']);
-    expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky — right-click for more"/);
+    expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a chain or the sky — right-click for more"/);
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toContain("const cd = useClickOrDouble(onClick && (() => onClick(def.kind)));");
     expect(src).toContain("const clickKind = onPlace ? (kind: string) => onPlace({ kind }) : onTack;");
   });
 
-  it("round 14 — All blocks… with onCatalog: the host floats the palette (no dialog of its own)", () => {
+  it("round 14 — All stops… with onCatalog: the host floats the palette (no dialog of its own)", () => {
     const html = render(createElement(StopShelf, { onPlace() {}, onCatalog() {} }));
     expect(html).toContain(
-      '<button type="button" class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog" title="Every block, in a palette on the board you can filter and drag from"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All blocks…</span></button>'
+      '<button type="button" class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog" title="Every stop and saved chain, in a palette on the board you can filter and drag from"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All stops…</span></button>'
     );
     expect(html).not.toContain("aria-haspopup");
     const src = code("components/flights/StopShelf.tsx");
@@ -149,8 +149,8 @@ describe("the stops row", () => {
     const html = render(createElement(StopShelf, { onPlace() {}, onTack() {}, onTackPlan() {} }));
     expect(html).toMatch(/<button type="button" class="sky-stop-chip" data-kind="agent" draggable="true"/);
     expect(html).toContain('aria-label="Put “Ship” on the board"');
-    expect(html).not.toContain("onto the focused line");
-    expect(html).toContain('title="Ship does its thing\nClick to put it on the board, or drag it onto a line or the sky — right-click for more"');
+    expect(html).not.toContain("onto the focused chain");
+    expect(html).toContain('title="Ship does its thing\nClick to put it on the board, or drag it onto a chain or the sky — right-click for more"');
     const src = code("components/flights/StopShelf.tsx");
     // The catalog's Add (and Enter) place too; onTack / onTackPlan stay for the host's drops.
     expect(src).toMatch(/const add = \(d: CatalogDrop\) => \{\s*setCatalog\(false\);\s*if \(onPlace\) return onPlace\(d\);/);
@@ -159,10 +159,10 @@ describe("the stops row", () => {
     expect(src).toContain("place={place}");
   });
 
-  it("the fold handle's row: ⤢ Float the blocks (quiet, a tab) when the host can float them", () => {
+  it("the fold handle's row: ⤢ Float the stops (quiet, a tab) when the host can float them", () => {
     const html = render(createElement(StopShelf, { onPlace() {}, onFloat() {} }));
     expect(html).toContain(
-      '<span class="sky-shelf-tabs"><button type="button" class="sky-shelf-fold" aria-expanded="true" title="Fold the stops away">Stops ▾</button><button type="button" class="sky-shelf-fold sky-shelf-float" aria-label="Float the blocks"'
+      '<span class="sky-shelf-tabs"><button type="button" class="sky-shelf-fold" aria-expanded="true" title="Fold the stops away">Stops ▾</button><button type="button" class="sky-shelf-fold sky-shelf-float" aria-label="Float the stops"'
     );
     expect(render(createElement(StopShelf, { folded: true, onFloat() {} }))).toContain("sky-shelf-float");
     expect(render(createElement(StopShelf, {}))).not.toContain("sky-shelf-float");
