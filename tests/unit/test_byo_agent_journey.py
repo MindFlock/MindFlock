@@ -259,3 +259,33 @@ def test_goose_attaches_the_mindflock_mcp_per_launch():
     )
     assert cmd.startswith("goose session --with-extension 'env ")
     assert providers.resolve("aider").mcp_launch_args(spec) == ()
+
+
+# --------------------------------------------------------------------------- #
+# Sign-in evidence where each CLI really keeps it                              #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "name, rel",
+    [
+        ("aider", ".aider.conf.yml"),
+        ("opencode", ".config/opencode/opencode.json"),
+        ("cline", ".cline/data/settings/providers.json"),
+        ("goose", ".config/goose/config.yaml"),
+    ],
+)
+def test_a_cli_set_up_in_its_own_config_reads_as_signed_in(
+    name, rel, monkeypatch, tmp_path
+):
+    for var in providers.resolve(name).cfg.auth_env:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert providers.resolve(name).auth_evidence() == ""
+    f = tmp_path / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x")
+    assert providers.resolve(name).auth_evidence() == "credentials found at %s" % f
+
+
+def test_cline_and_goose_offer_their_own_sign_in():
+    assert providers.resolve("cline").login_command() == "cline auth"
+    assert providers.resolve("goose").login_command() == "goose configure"

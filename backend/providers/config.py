@@ -713,7 +713,12 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "OPENAI_API_KEY",
             "GEMINI_API_KEY",
             "DEEPSEEK_API_KEY",
+            "OPENROUTER_API_KEY",
         ),
+        # ...or from its own config file: ~/.aider.conf.yml takes model,
+        # api-key / openai-api-key and the API base (the keyless rig runs on
+        # exactly that, and read as "not signed in").
+        auth_files=("~/.aider.conf.yml",),
         # No oneshot_args on purpose: aider's non-interactive `--message` is an
         # EDITING run (it applies changes and auto-commits by default), so asking
         # it to write a commit message risks it writing the commit instead.
@@ -756,7 +761,20 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         oneshot_args=("run", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Bring-your-own provider keys/plans; no MindFlock-managed window.",
-        auth_files=("~/.local/share/opencode/auth.json",),
+        # `opencode auth login` writes auth.json; a provider set up in its own
+        # config (apiKey/baseURL, e.g. a local server) or a key in the env
+        # works without it — both read as "not signed in" before.
+        auth_files=(
+            "~/.local/share/opencode/auth.json",
+            "~/.config/opencode/opencode.json",
+            "~/.config/opencode/opencode.jsonc",
+        ),
+        auth_env=(
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "OPENROUTER_API_KEY",
+        ),
         login_command="opencode auth login",
         # The official installer is bash (arrays, [[ ]]), so `| bash`; it puts
         # the binary in ~/.opencode/bin, which pathenv knows about.
@@ -829,6 +847,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         oneshot_args=("--auto-approve", "false", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Cline account or bring-your-own key; no MindFlock-managed window.",
+        # `cline auth` (3.0.74) opens its sign-in: a Cline account, ClinePass or
+        # a provider key; it writes the provider login to providers.json.
+        auth_files=("~/.cline/data/settings/providers.json",),
+        login_command="cline auth",
         # npm is the only channel Cline publishes. A user prefix (no sudo, no
         # EACCES against a distro Node's root-owned one) whose bin dir is
         # ~/.local/bin; the doctor adds Node.js to the install plan first when
@@ -889,8 +911,12 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         oneshot_args=("run", "-q", "-t", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Bring-your-own provider keys; no MindFlock-managed window.",
-        # `goose configure` sets up the provider + key interactively.
+        # `goose configure` sets up the provider + key interactively; it writes
+        # GOOSE_PROVIDER into config.yaml (the key goes to the keyring). Env
+        # alone works too (GOOSE_PROVIDER + the provider's key).
         login_command="goose configure",
+        auth_files=("~/.config/goose/config.yaml",),
+        auth_env=("GOOSE_PROVIDER",),
         # Block's installer is bash; CONFIGURE=false skips its interactive
         # `goose configure` (that is the login step, offered on its own).
         install_hint=(
