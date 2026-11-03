@@ -591,6 +591,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             # not idle (captured live from agy 1.1.10 with no login).
             "You are currently not signed in",
             "Select login method:",
+            # 1.4's file-access prompt ("File access" / "Read:" / the path /
+            # "Allow access to this file?" over Yes/No), captured live — its
+            # footer keeps "esc to cancel", so without this it read working.
+            r"Allow access to .+\?",
         ),
         # Its dialogs as data: the ">" numbered permission / question menus.
         dialog_layout="antigravity",

@@ -1,0 +1,24 @@
+#! LIVE capture: Antigravity CLI 1.4.12 (agy) driven by MindFlock in a throwaway worktree, pane width 80; the long option labels wrap FLUSH-LEFT (column 0)
+────────────────────────────────────────────────────────────
+> Create a file named hello.txt containing the single word hi. Do nothing else
+  and do not ask questions.
+
+○ Thought for 6.2s (Initial hypothesis: The instruction to create a file sh...)
+● Ran (pwd) (ctrl+o to expand)
+
+Command
+────────────────────────────────────────────────────────────────────────────────
+
+Requesting permission for:
+   pwd
+
+Run this command?
+> 1. Yes, run command
+  2. Yes, and always allow in this conversation for commands that start with
+'pwd'
+  3. Yes, and always allow for commands that start with 'pwd' (Persist to
+settings.json)
+  4. No, cancel
+
+  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command
+esc to cancel                             accept-edits · Gemini 3.8 Flash · high

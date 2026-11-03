@@ -131,7 +131,9 @@ _ANY_RULE = re.compile(r"^\s*[╭┌╔╰└╚]?[─━═╌┄┈╍┅┉-]
 _TEXT_RULE = re.compile(r"^\s*[╭┌╔]?[─━═]{8,}|[─━═]{8,}[╮┐╗]?\s*$")
 # A key-hint footer under a dialog's options ("Esc to cancel · Tab to amend",
 # "Press enter to confirm or esc to cancel", "ctrl-g to edit in Vim").
-_FOOTER = re.compile(r"\b(?:esc|enter|tab|ctrl|shift|return)\b", re.IGNORECASE)
+# A key-hint footer: names a key, or draws the arrow-keys hint alone (agy
+# 1.4's file-access menu: "↑/↓ Navigate").
+_FOOTER = re.compile(r"\b(?:esc|enter|tab|ctrl|shift|return)\b|↑/↓|↑↓", re.IGNORECASE)
 _FOOTER_MAX_CHARS = 160
 # One numbered option: an optional selection cursor, the number, the label.
 _OPTION = re.compile(
@@ -353,7 +355,10 @@ def _drawn_widths(screen: str) -> List[int]:
 
 
 def option_block(
-    lines: Sequence[str], cursors: str, widths: Optional[Sequence[int]] = None
+    lines: Sequence[str],
+    cursors: str,
+    widths: Optional[Sequence[int]] = None,
+    flush_wraps: bool = False,
 ) -> Optional[Tuple[int, int, List[dict]]]:
     """The LAST numbered option list on the screen → ``(first_line,
     end_line, options)`` with ``options`` as ``[{"num", "label"}]``, or None.
@@ -371,7 +376,12 @@ def option_block(
     ``widths`` (each line's drawn width, :func:`_drawn_widths`): a label the
     CLI hard-wrapped mid-token (a long path) is joined back with nothing in
     between (:func:`_wrap_joint`); without it, wrapped lines join with a
-    space."""
+    space.
+
+    ``flush_wraps`` (a CLI that wraps a label back to column 0 — agy 1.4):
+    a non-blank line BETWEEN two option lines is the upper one's wrap too,
+    however it is indented (above option 1 nothing is absorbed, so the
+    question line stays out)."""
     last = None
     for i in range(len(lines) - 1, -1, -1):
         if _OPTION.match(lines[i]):
@@ -401,6 +411,11 @@ def option_block(
             pending.append(text.strip())
             i -= 1
             continue
+        if flush_wraps and text.strip() and rows and _option_above(lines, i):
+            # A flush-left wrap of the option above it (agy 1.4).
+            pending.append(text.strip())
+            i -= 1
+            continue
         break
     rows.reverse()
     if len(rows) < 2 or rows[0][1].group("num") != "1":
@@ -426,6 +441,23 @@ def option_block(
         cursor = bool(m.group("cursor") and m.group("cursor").strip() in cursors)
         options.append({"num": m.group("num"), "label": label, "cursor": cursor})
     return rows[0][0], last + 1, options
+
+
+#: How many wrapped lines one option label may run to (a flush-left wrap).
+_MAX_FLUSH_WRAP = 4
+
+
+def _option_above(lines: Sequence[str], i: int) -> bool:
+    """Whether an option line sits right above line ``i`` — over at most
+    :data:`_MAX_FLUSH_WRAP` non-blank, non-rule lines: ``i`` is then a wrap
+    of that option's label, not text above the list."""
+    for k in range(i - 1, max(-1, i - 1 - _MAX_FLUSH_WRAP), -1):
+        text = lines[k]
+        if _OPTION.match(text):
+            return True
+        if not text.strip() or _ANY_RULE.match(text):
+            return False
+    return False
 
 
 def _only_footer_below(below: Sequence[str], label_col: int) -> bool:
@@ -1933,11 +1965,17 @@ ANTIGRAVITY_CURSORS = ">"
 #: permission for:" over the command, "Do you want to proceed?"), a
 #: clarifying question ("Question 1/2: …", "↑/↓ Navigate · enter Select ·
 #: esc Skip" under its choices), the trust gate, and the signed-out login
-#: menu ("Select login method:" over Google OAuth / a Cloud project, 1.1.10).
+#: menu ("Select login method:" over Google OAuth / a Cloud project, 1.1.10),
+#: and 1.4's file-access prompt ("Allow access to this file?" under a
+#: "Read:" / "Write:" line and the path).
 _AGY_OPENERS = re.compile(
     r"^(?:Requesting permission for:|Question \d+/\d+:\s*\S.*|Do you want to .*\?"
-    r"|Do you trust the contents of this .*\?|Select login method:)"
+    r"|Do you trust the contents of this .*\?|Select login method:"
+    r"|Allow access to .+\?)"
 )
+_AGY_FILE_ACCESS = re.compile(r"^Allow access to .+\?$")
+#: The access line over the path a file-access prompt asks about.
+_AGY_ACCESS_KIND = re.compile(r"^[A-Z][A-Za-z ]{1,30}:$")
 _AGY_PERMISSION = "Requesting permission for:"
 _AGY_QUESTION = re.compile(r"^Question \d+/\d+:\s*(?P<q>\S.*)$")
 #: The hint under a question that takes a typed answer (no choices).
@@ -1956,7 +1994,7 @@ def parse_antigravity(screen: str) -> Optional[dict]:
     drawn (a typed answer) is returned without options — ``/dialog`` serves
     it unparsed, with its question."""
     lines = normalize_lines(screen)
-    block = option_block(lines, ANTIGRAVITY_CURSORS)
+    block = option_block(lines, ANTIGRAVITY_CURSORS, flush_wraps=True)
     if block is None:
         return _antigravity_free_text(lines)
     first, _end, raw = block
@@ -1986,6 +2024,24 @@ def parse_antigravity(screen: str) -> Optional[dict]:
         command = "\n".join(cmd) or None
         q_line = next((t for t in body[k:] if "?" in t), "")
         question = _first_question(q_line)
+    elif _AGY_FILE_ACCESS.match(body[0]):
+        # "Read:" (the access) over the path, which wraps flush-left at the
+        # pane edge mid-token — joined back with nothing in between.
+        heading = "File access"
+        question = body[0]
+        above = region[:start]
+        at = next(
+            (
+                k
+                for k in range(len(above) - 1, -1, -1)
+                if _AGY_ACCESS_KIND.match(above[k])
+            ),
+            None,
+        )
+        if at is not None:
+            path = "".join(t for t in above[at + 1 :] if t)
+            command = ("%s %s" % (above[at], path)).strip() if path else above[at]
+            body = region[at:]
     else:
         qm = _AGY_QUESTION.match(body[0])
         question = qm.group("q") if qm else _first_question(body[0])

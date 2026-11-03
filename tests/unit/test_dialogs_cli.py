@@ -323,6 +323,51 @@ GOLDEN = {
         },
         None,
     ),
+    # agy 1.4.12 (captured live at the default 80 columns): the question is
+    # "Run this command?" now, and long labels wrap back to column 0.
+    "antigravity_command14_w80": (
+        {
+            "heading": "Requesting permission",
+            "question": "Run this command?",
+            "command": "pwd",
+            "detail": None,
+            "options": [
+                _o("1", "Yes, run command", "yes", ["Enter"]),
+                _o(
+                    "2",
+                    "Yes, and always allow in this conversation for commands"
+                    " that start with 'pwd'",
+                    "always",
+                    ["Down", "Enter"],
+                ),
+                _o(
+                    "3",
+                    "Yes, and always allow for commands that start with 'pwd'"
+                    " (Persist to settings.json)",
+                    "always",
+                    ["Down", "Down", "Enter"],
+                ),
+                _o("4", "No, cancel", "no", ["Down", "Down", "Down", "Enter"]),
+            ],
+        },
+        "Requesting permission. Run this command?",
+    ),
+    # agy 1.4.12's file-access prompt (captured live): the access over the
+    # path, which wraps mid-token at the pane edge.
+    "antigravity_file_access14_w80": (
+        {
+            "heading": "File access",
+            "question": "Allow access to this file?",
+            "command": "Read: /home/dev/.mindflock/worktrees/dev/"
+            "search-limiter_18e4aa65a512ed17/services/search/README.md",
+            "detail": None,
+            "options": [
+                _o("1", "Yes, allow access", "yes", ["Enter"]),
+                _o("2", "No, deny access", "no", ["Down", "Enter"]),
+            ],
+        },
+        "File access. Allow access to this file?",
+    ),
     # agy 1.1.10 signed out (captured live): its login-method menu, held in
     # front of the seeded task.
     "antigravity_signin_w100": (

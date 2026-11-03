@@ -237,3 +237,20 @@ def test_antigravity_signed_out_is_waiting_not_idle():
     p = providers.resolve("antigravity")
     assert any(re.search(pat, screen) for pat in p.waiting_prompt_patterns())
     assert p.dialog_on_screen(screen)
+
+
+def test_antigravity_file_access_prompt_is_waiting_not_working():
+    # agy 1.4.12's file-access prompt (captured live): its footer keeps
+    # "esc to cancel" (a working pattern), so only a waiting pattern stops
+    # the pill reading "working" while it waits for a person.
+    from pathlib import Path
+
+    screen = (
+        Path(__file__).parent
+        / "data"
+        / "dialogs"
+        / "antigravity_file_access14_w80.screen.txt"
+    ).read_text(encoding="utf-8")
+    p = providers.resolve("antigravity")
+    assert any(re.search(pat, screen) for pat in p.working_pane_patterns())
+    assert any(re.search(pat, screen) for pat in p.waiting_prompt_patterns())
