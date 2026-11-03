@@ -181,10 +181,10 @@ describe("accessible names and live regions", () => {
 });
 
 describe("finishing says what happened", () => {
-  it("Run now in Intake closes Intake on the new session", () => {
-    expect(squash(code("components/intake/ScheduledTemplates.tsx"))).toContain(
-      "const title = await runTemplateNow(r.name); if (title) openSessionFromIntake(title);"
-    );
+  it("Intake keeps no second Run now: its line opens Schedule, where every run starts", () => {
+    const line = squash(code("components/intake/ScheduledTemplates.tsx"));
+    expect(line).not.toContain("runTemplateNow");
+    expect(line).toContain('onClick={() => useUi.getState().openDialogFor("schedule")}');
   });
 
   it("a scheduled save toasts its schedule line; Stop schedule offers Undo", () => {

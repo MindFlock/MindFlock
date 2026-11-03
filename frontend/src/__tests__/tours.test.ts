@@ -2,7 +2,7 @@
 /** Round 5's tours: the registry (lib/tours), the coach mark
  * (onboarding/CoachTour), when one opens by itself (onboarding/useAutoTour),
  * that every exit marks it seen, the welcome card that hands over to the
- * Welcome tour, and the top bar's calm first hour (lib/calm topBarShows). */
+ * Welcome tour, and the top bar's calm first hour (lib/calm topBarQuiet). */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -38,7 +38,7 @@ const { TOURS, TOUR_IDS, isTourId } = await import("../lib/tours");
 const { CoachTour, placeCard, findTarget, revealTarget } = await import("../components/onboarding/CoachTour");
 const { TourButton } = await import("../components/onboarding/TourButton");
 const { autoTourDue } = await import("../components/onboarding/useAutoTour");
-const { topBarShows } = await import("../lib/calm");
+const { topBarQuiet } = await import("../lib/calm");
 const { useUi } = await import("../state/store");
 
 describe("the tours registry", () => {
@@ -452,19 +452,20 @@ describe("the ? button and the replays", () => {
 });
 
 describe("the top bar in the calm first hour", () => {
-  it("hides Verify until a checklist exists and Schedule until a template does", () => {
-    expect(topBarShows({ calm: true, checklists: 0, templates: 0 })).toEqual({ verify: false, schedule: false });
-    expect(topBarShows({ calm: true, checklists: 1, templates: 0 })).toEqual({ verify: true, schedule: false });
-    expect(topBarShows({ calm: true, checklists: 0, templates: 2 })).toEqual({ verify: false, schedule: true });
+  it("Verify and Schedule are always on the bar; an empty one is only drawn quiet while calm", () => {
+    expect(topBarQuiet({ calm: true, checklists: 0, templates: 0 })).toEqual({ verify: true, schedule: true });
+    expect(topBarQuiet({ calm: true, checklists: 1, templates: 0 })).toEqual({ verify: false, schedule: true });
+    expect(topBarQuiet({ calm: true, checklists: 0, templates: 2 })).toEqual({ verify: true, schedule: false });
   });
 
-  it("shows both whenever the first hour is over", () => {
-    expect(topBarShows({ calm: false, checklists: 0, templates: 0 })).toEqual({ verify: true, schedule: true });
+  it("neither is ever quiet once the first hour is over", () => {
+    expect(topBarQuiet({ calm: false, checklists: 0, templates: 0 })).toEqual({ verify: false, schedule: false });
   });
 
-  it("wires the rule to the two buttons only (Alt+V / Alt+S and the palette don't depend on them)", () => {
-    expect(TOPBAR_SRC).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
-    expect(TOPBAR_SRC).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);
+  it("both buttons always render; the rule only adds tb-quiet (muted, still labelled)", () => {
+    expect(TOPBAR_SRC).not.toMatch(/\{shows\.(verify|schedule) &&/);
+    expect(TOPBAR_SRC).toContain('className={"tb-item" + (quiet.verify ? " tb-quiet" : "") + (isFolded("verify") ? " tb-folded" : "")}');
+    expect(TOPBAR_SRC).toContain('className={"tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(TOPBAR_SRC).toContain("calm: useCalm(),");
   });
 });

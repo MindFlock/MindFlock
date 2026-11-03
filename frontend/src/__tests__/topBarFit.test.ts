@@ -74,10 +74,12 @@ describe("TopBar wiring around the fold", () => {
       expect(TOPBAR, id).toContain(`id="${id}"`);
     // The Flights button is gone (Sky round 8: the bar is flat again).
     expect(TOPBAR).not.toContain('id="flights-btn"');
-    for (const key of ["verify", "schedule", "settings"]) {
-      expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("${key}") ? " tb-folded" : "")}`);
+    for (const key of ["verify", "schedule"]) {
+      expect(TOPBAR).toContain(`className={"tb-item" + (quiet.${key} ? " tb-quiet" : "") + (isFolded("${key}") ? " tb-folded" : "")}`);
       expect(TOPBAR).toContain(`data-fold="${key}"`);
     }
+    expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}`);
+    expect(TOPBAR).toContain(`data-fold="settings"`);
     // New, Intake and the palette never fold.
     for (const id of ["new-btn", "intake-btn", "palette-btn"]) {
       const at = TOPBAR.indexOf(`id="${id}"`);
@@ -109,11 +111,10 @@ describe("TopBar wiring around the fold", () => {
     expect(TOPBAR.slice(mic - 80, mic + 80)).not.toContain("tb-folded");
   });
 
-  it("the calm rule still decides what is on the bar; the fold only lays it out", () => {
-    expect(TOPBAR).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
-    expect(TOPBAR).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);
-    expect(TOPBAR).toMatch(/shows\.verify && \{\s*key: "verify"/);
-    expect(TOPBAR).toMatch(/shows\.schedule && \{\s*key: "schedule"/);
+  it("Verify and Schedule are always foldable items (the calm rule only draws them quiet); the fold lays them out", () => {
+    expect(TOPBAR).not.toMatch(/shows\.(verify|schedule) &&/);
+    expect(TOPBAR).toMatch(/\{\s*key: "verify",\s*label: "Verify"/);
+    expect(TOPBAR).toMatch(/\{\s*key: "schedule",\s*label: "Schedule"/);
   });
 
   it("⋯ carries the folded items' counts and opens a real menu", () => {

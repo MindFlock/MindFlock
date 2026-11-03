@@ -55,3 +55,13 @@
 .fl-hook-pending {
   font-style: italic;
 }
+
+/* The Schedule branch is THE schedule editor (TemplateEditor's ScheduleWhen,
+   the one Schedule's cards show): its row, the next-runs line and the note
+   stacked under the field caption. */
+.fl-takeoff .fl-schedule-when {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}

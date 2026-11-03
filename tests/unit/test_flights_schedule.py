@@ -226,3 +226,43 @@ def test_one_plans_crash_never_costs_the_rest_of_the_tick():
     assert runs[a["id"]]["last_error"] == "the engine fell over"
     assert runs[a["id"]]["history"][0]["error"] == "the engine fell over"
     assert runs[b["id"]]["last_flight"]
+
+
+def test_skip_next_on_a_plan_keeps_and_skips_that_slot():
+    """Schedule's Skip next on a plan card: ``trigger.schedule.skip_until``
+    survives the save route, the plans route names the skipped slot
+    (``skipping_at``) with ``next_at`` the one after it, and the tick lets
+    that slot pass without a take-off."""
+    p = _scheduled()
+    calls: list = []
+    start = _starter(calls)
+    _tick(_at(28, 8), start=start)  # armed
+    slot = _at(28, 9)
+    body = dict(F.get_plan(p["id"]))
+    body["trigger"] = dict(
+        body["trigger"],
+        schedule={"at": "09:00", "days": "daily", "skip_until": int(slot)},
+    )
+    r = client.post("/api/flights/plans", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["plan"]["trigger"]["schedule"]["skip_until"] == int(slot)
+    (row,) = [x for x in ts.flight_plan_rows(F.list_plans()) if x["name"] == p["id"]]
+    st = ts.status_for([row], now=_at(28, 8, 30), runs={})["runs"][p["id"]]
+    assert st["skipping_at"] == slot
+    assert st["next_at"] == _at(29, 9)
+    # The skipped slot passes; the next one takes off.
+    assert _tick(_at(28, 9, 1), start=start) == []
+    assert calls == []
+    assert _tick(_at(29, 9, 1), start=start) == [p["id"]]
+
+
+def test_pause_on_a_plan_card_is_the_triggers_paused():
+    """Pause / Resume on a plan card writes ``trigger.paused``: the row is
+    paused (no ``next_at``) and nothing fires until it is resumed."""
+    p = _scheduled()
+    body = dict(F.get_plan(p["id"]))
+    body["trigger"] = dict(body["trigger"], paused=True)
+    assert client.post("/api/flights/plans", json=body).status_code == 200
+    (row,) = [x for x in ts.flight_plan_rows(F.list_plans()) if x["name"] == p["id"]]
+    st = ts.status_for([row], now=_at(28, 8), runs={})["runs"][p["id"]]
+    assert st.get("paused") is True and st["next_at"] is None

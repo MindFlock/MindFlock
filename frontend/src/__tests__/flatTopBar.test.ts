@@ -26,7 +26,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { useUi } = await import("../state/store");
 const { KEYMAP } = await import("../lib/keymap");
 const { installSurfaceHash, hashFor, parseHash } = await import("../lib/surfaceHash");
-const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, scheduledFlyways, flywayNextLine } = await import(
+const { TEMPLATES_UI_INIT, TemplatesDialogView, formFromTemplate, scheduledFlyways, scheduleEntries, nextAcross, planWithSkip, planWithWhen, barePlan } = await import(
   "../components/dialogs/TemplatesDialog"
 );
 
@@ -260,41 +260,104 @@ describe("Schedule lists the scheduled stops", () => {
 
   it("only the flyways with a schedule trigger, soonest first, paused last", () => {
     expect(scheduledFlyways(FLYWAYS).map((p) => p.id)).toEqual(["p_soon", "p_late", "p_held"]);
-    expect(flywayNextLine(FLYWAYS[3], NOW)).toBe("Paused");
-    expect(flywayNextLine(FLYWAYS[1], NOW)).toBe("in 12h");
-    expect(flywayNextLine(plan({ runs: { runs_here: false, runs_on: "mac-mini" } }), NOW)).toBe("Starts on mac-mini");
   });
 
-  it("a section of rows with a template's anatomy: name, schedule line, next run, last result — Fly now, Edit in the Sky", () => {
+  it("ONE list: templates and saved stops on a schedule side by side, soonest first, paused last", () => {
+    const tpl = { name: "nightly", repo_path: "/home/me/app", prompt: "x", schedule: { at: "12:00", days: "daily" as const } };
+    const status = { runs: { nightly: { next_at: at(12) } }, runs_here: true, runs_on: "" };
+    const unset = plan({ id: "p_unset", name: "No time yet", trigger: { kind: "schedule", schedule: null, paused: false } });
+    const order = scheduleEntries([tpl], status, [...FLYWAYS, unset]).map((e) => (e.kind === "template" ? "t:" + e.t.name : e.f.id));
+    expect(order).toEqual(["p_soon", "t:nightly", "p_late", "p_held"]);
+    expect(nextAcross([tpl], status, FLYWAYS)).toEqual({ name: "Standup notes", at: at(11) });
+  });
+
+  it("each saved stop is a template card with a template card's verbs: Run now, Edit, Change schedule, Skip next, Pause", () => {
     const html = view(FLYWAYS);
-    const sec = html.slice(html.indexOf('id="schedule-flyways"'));
-    expect(sec).toContain(">Scheduled stops<");
+    const sec = html.slice(html.indexOf('id="schedule-scheduled"'));
+    expect(sec).not.toContain("Scheduled stops");
+    expect(html).not.toContain('id="schedule-flyways"');
     expect([...sec.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1])).toEqual(["p_soon", "p_late", "p_held"]);
     const late = sec.slice(sec.indexOf('data-plan="p_late"'), sec.indexOf('data-plan="p_held"'));
     expect(late).toContain("Nightly deps");
     expect(late).toContain("2 stops · app · claude");
-    expect(late).toContain('<span class="sch-cadence">Every day at 21:00</span>');
+    expect(late).toContain('<span class="sch-cadence">Every day at 21:00 · next today 21:00</span>');
     expect(late).toContain('<span class="sch-next">in 12h</span>');
     expect(late).toContain("Last run");
     expect(late).toContain("nightly-oct14");
-    expect(late).toContain(">Fly now</button>");
-    expect(late).toContain(">Edit in the Sky</button>");
+    expect(late).toContain(">▶ Run now</button>");
+    expect(late).toContain(">Edit</button>");
+    expect(late).toContain(">Change schedule</button>");
+    expect(late).toContain(">Skip next</button>");
+    expect(late).toContain(">Pause</button>");
+    expect(late).not.toContain("Fly now");
+    expect(late).not.toContain("Edit in the Sky");
     const soon = sec.slice(sec.indexOf('data-plan="p_soon"'), sec.indexOf('data-plan="p_late"'));
-    expect(sec).toContain('class="tpl-card is-scheduled sch-flyway is-failing" data-plan="p_soon"');
+    expect(sec).toContain('class="tpl-card sch-flyway is-scheduled is-failing" data-plan="p_soon"');
     expect(soon).toContain("Last run failed: repo moved");
     const held = sec.slice(sec.indexOf('data-plan="p_held"'));
-    expect(sec).toContain('class="tpl-card is-scheduled sch-flyway is-paused" data-plan="p_held"');
+    expect(sec).toContain('class="tpl-card sch-flyway is-scheduled is-paused" data-plan="p_held"');
     expect(held).toContain("Paused");
+    expect(held).toContain(">Resume</button>");
   });
 
-  it("nothing scheduled hides the section — no heading, no empty state", () => {
-    expect(view([FLYWAYS[0]])).not.toContain("schedule-flyways");
-    expect(view(null)).not.toContain("Scheduled stops");
+  it("a saved stop on a schedule with no time set is Not scheduled, with Schedule…", () => {
+    const unset = plan({ id: "p_unset", name: "No time yet", trigger: { kind: "schedule", schedule: null, paused: false } });
+    const html = view([FLYWAYS[0], unset]);
+    const saved = html.slice(html.indexOf('id="schedule-saved"'));
+    expect(saved).toContain('data-plan="p_unset"');
+    expect(saved).toContain(">Schedule…</button>");
+    expect(view([FLYWAYS[0]])).not.toContain("data-plan=");
   });
 
-  it("Fly now takes off on the flyway; Edit in the Sky closes Schedule and opens its card on the shelf", () => {
+  it("a saved stop with no repository says Run now needs a folder, and its folder row offers the picker", () => {
+    const bare = plan({ id: "p_bare", name: "Bare", session: { repo_path: "", program: "", model: "", in_place: false }, runs: { next_at: at(21) } });
+    const html = view([bare]);
+    expect(html).toContain("Run now and schedules need a folder.");
+    expect(html).toContain(">Pick one</button>");
+    const open = renderToStaticMarkup(
+      createElement(TemplatesDialogView, {
+        templates: [],
+        ui: TEMPLATES_UI_INIT,
+        form: formFromTemplate(null),
+        busy: false,
+        loaded: true,
+        onForm: () => {},
+        dispatch: () => {},
+        onSave: () => {},
+        onDelete: () => {},
+        onClose: () => {},
+        now: NOW,
+        flyways: [bare],
+        planFolder: { id: "p_bare", path: "/home/me/app", keep: true },
+      })
+    );
+    expect(open).toContain("Which folder should it start in?");
+    expect(open).toContain('value="/home/me/app"');
+    expect(open).toContain("Browse…");
+    expect(open).toContain("Keep it for its scheduled runs too");
+    expect(open).not.toContain("Run now and schedules need a folder.");
+  });
+
+  it("Skip next / Pause write the plan's own trigger; a changed cadence drops a skip", () => {
+    const p0 = plan({});
+    const future = Date.now() / 1000 + 3600;
+    expect((planWithSkip(p0, future).trigger.schedule as { skip_until?: number }).skip_until).toBe(future);
+    expect("skip_until" in (planWithSkip(planWithSkip(p0, future), 0).trigger.schedule as object)).toBe(false);
+    const skipped = planWithSkip(p0, future);
+    const same = planWithWhen(skipped, { days: "daily", at: "21:00", date: "", cron: "", seeded: "" })!;
+    expect((same.trigger.schedule as { skip_until?: number }).skip_until).toBe(future);
+    const moved = planWithWhen(skipped, { days: "weekdays", at: "21:00", date: "", cron: "", seeded: "" })!;
+    expect(moved.trigger.schedule).toEqual({ at: "21:00", days: "weekdays" });
+    expect(planWithWhen(p0, { days: "cron", at: "", date: "", cron: "  ", seeded: "" })).toBeNull();
+    expect("runs" in barePlan({ ...p0, runs: {} } as never)).toBe(false);
+  });
+
+  it("Run now takes off (a folder first when it has none); Edit opens its Takes off dialog over Schedule", () => {
     const src = code("components/dialogs/TemplatesDialog.tsx");
-    expect(src).toContain("void takeOff({ plan_id: f.id })");
-    expect(src).toContain("useUi.getState().showFlyways(f.id);");
+    expect(src).toContain("const flight = await takeOff(path ? { plan_id: f.id, repo_path: repo } : { plan_id: f.id });");
+    expect(src).toContain("setPlanFolder({ id: f.id, path: defaultFolder(folderSuggestions), keep: true });");
+    expect(src).toContain("{takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}");
+    expect(src).toContain("(b) => ({ ...b, trigger: { ...b.trigger, paused } })");
+    expect(src).not.toContain("showFlyways(");
   });
 });
