@@ -4472,8 +4472,8 @@ often it checks (*checks every 20 s* / *every minute*, from the source's
 `poll_interval_seconds` or `github.poll_interval_seconds` /
 `issue_poll_interval_seconds`, else the pipeline's defaults) or why it can't be
 on yet (*Add a repository first — on the GitHub PRs tab*; *Jira can't connect —
-press Fix on the Tickets tab*). There is no **Pause all** and no **Pause
-intake**: turning a source off is its own switch (an older build's
+press Fix on the Tickets tab*). There is no **Pause all**, and
+there is no **Pause intake** any more: turning a source off is its own switch (an older build's
 `general.intake_paused` is still never read). The toasts keep the switches'
 long names (*Auto-start tickets on*, *Auto-address review comments off*,
 *Auto-start new issues on*). Under the switches a folded **Ticket sessions**

@@ -234,5 +234,6 @@ def test_stage_chip_says_question():
 
 def test_thread_empty_state_points_at_split():
     tab = _read("components/grid/ThreadTab.tsx")
-    assert "use Split into parallel pieces… in the session's › menu" in tab
+    # Consolidation: one "Workers…" entry (split now / ask once / every prompt).
+    assert "No workers yet — Workers… lets the agent split this now" in tab
     assert "fork button" not in tab

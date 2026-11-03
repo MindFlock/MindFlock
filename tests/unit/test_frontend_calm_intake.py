@@ -65,12 +65,15 @@ def test_the_ladder_has_no_agent_rung_to_render():
 
 
 def test_source_and_repo_pickers_drop_the_agent_rung():
+    # Consolidation (2026-11-02): one "Goes as far as" control (PlanSelect)
+    # replaces Fast-track-to + the Stops chips on both cards.
     for name in ("TicketsTab.tsx", "RepoSources.tsx"):
         code = _code(_INTAKE / name)
-        assert "SOURCE_DEPTHS.map(" in code, name
-        # The empty choice is Off, in the ladder's own word.
-        assert '<option value="">{LANE_LABEL.leave}</option>' in code, name
+        assert "<PlanSelect" in code, name
         assert "Off — stop after the agent works" not in code, name
+    # Its rungs come from the one source ladder (no agent rung, no Merge).
+    flights = _read(_INTAKE.parent.parent / "lib" / "flights.ts")
+    assert "const rung = capSourceDepth(src.depth);" in flights
 
 
 def test_row_picker_offers_an_explicit_off_and_names_its_default():
@@ -94,8 +97,9 @@ def test_a_stored_agent_rung_reads_as_off():
     ladder = _read(_INTAKE.parent.parent / "lib" / "autopilot.ts")
     assert 'if (s === "agent" || s === "off" || s === "none") return "leave";' in ladder
     assert "laneLabel(configuredDepth)" in _code(_INTAKE / "kit.tsx")
-    assert 'source.depth === "agent" ? ""' in _code(_INTAKE / "TicketsTab.tsx")
-    assert 'o.depth === "agent" ? ""' in _code(_INTAKE / "RepoSources.tsx")
+    # A source's stored "agent" reads as Stop after the agent, through the
+    # same cap the server applies (capSourceDepth → normalizeLane).
+    assert "export function capSourceDepth(" in ladder
 
 
 def test_ticket_fast_track_hint_is_one_sentence_pair():
@@ -103,9 +107,11 @@ def test_ticket_fast_track_hint_is_one_sentence_pair():
     # Plain words (round 2): when it happens, and why Merge isn't offered here —
     # one line, because Fast-track now sits beside Agent in a two-column row
     # (edit in place), where a paragraph-length hint made the row ragged.
-    assert "After the agent finishes. Merge is per ticket only." in src
-    # The options themselves still say what it does (Commit / Push / Open PR).
-    assert "SOURCE_DEPTHS.map((d) =>" in src
+    # Consolidation: the card's one control is PlanSelect ("Goes as far as");
+    # Merge stays per item, and the control's rungs say what each does.
+    assert "<PlanSelect" in src
+    plan_select = _read(_INTAKE.parent / "flights" / "PlanSelect.tsx")
+    assert "Merge stays per item" in plan_select
 
 
 # --------------------------------------------------------------------------
@@ -124,7 +130,9 @@ def test_row_pickers_fold_behind_options():
     assert '"ik-item-uses"' in code
     # The collapsed line names Fast-track the way New's Options summary does:
     # a bare "Off" beside Start now read as "this item is off".
-    assert '"Fast-track: " + (depth ? laneLabel(depth) : defaultDepth)' in code
+    # Consolidation: the source's "Goes as far as" names the default, so the
+    # collapsed line names only a pick made for this one item.
+    assert 'depth ? "Just this one: " + laneLabel(depth) : ""' in code
     # The payload shapes the bundle pins rely on are untouched.
     for tab in ("PullRequestsTab.tsx", "IssuesTab.tsx", "TicketsTab.tsx"):
         assert "agent ? { agent } : {}" in _read(_INTAKE / tab), tab
