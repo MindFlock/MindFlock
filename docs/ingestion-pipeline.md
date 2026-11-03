@@ -549,19 +549,19 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    The assignment is never undone. Best-effort like the move: a refused write
    is a warning, never a failed launch.
 
-### Which flight a started item flies
+### Which route a started item takes
 
 Every start — the pipeline's auto-start (`SessionRunner.run` / `run_pr`) and
 the three Intake force-starts (`POST /api/tickets/start`,
 `/api/github/prs/review`, `/api/github/issues/start`) — decides, **before the
-session exists**, how far the item carries itself. That is a **flight plan**
-([flights.md](flights.md)) resolved in this order (`server._intake_plan`; the
+session exists**, how far the item carries itself. That is a **saved route** (a *plan*
+on the wire; [flights.md](flights.md)) resolved in this order (`server._intake_plan`; the
 pipeline's `SessionRunner._plan_for` is the same chain minus the per-start
 picks, which an auto-start never has):
 
-1. the start's explicit `plan` (a plan id; the Flights Board's Arrivals picker,
+1. the start's explicit `plan` (a plan id; the Sky's saved-route picker,
    or an API caller) — an unknown id is a **400**;
-2. a per-start `depth` (the row's fast-track pick, a team run's `"off"`, an
+2. a per-start `depth` (the row's Goes as far as pick, a team run's `"off"`, an
    agent's `spawn_ticket_session(autopilot=…)`): the built-in plan for that
    kind cut at that rung — a choice made for *this* start outranks the
    source's standing one;
@@ -572,20 +572,20 @@ picks, which an auto-start never has):
    pipeline log);
 4. the built-in plan cut at the source's `depth` (`flights.plan_for_depth`:
    `commit|push|pr` → `builtin:ticket@<lane>` / `builtin:pr@<lane>`; an issue
-   flies `builtin:ticket`);
+   runs `builtin:ticket`);
 5. none — a source with no `plan` and a depth of off/agent behaves exactly as
-   it did before Flights existed.
+   it did before routes existed.
 
-When a plan resolves, `flights.arm_pending` puts a `running` flight on the
+When a plan resolves, `flights.arm_pending` puts a `running` route on the
 item's **deterministic session title** (the same key autopilot.json uses — the
 pipeline is a separate process and writes the lock-guarded
 `~/.mindflock/flights/flights.json` exactly as it writes autopilot.json), with
 its first agent step recorded as already running: the intake prompt *is* that
 step, and the step's own `prompt` text (placeholders filled) is appended to it.
-The flight's ship steps arm their own lanes, so the autopilot depth is **not**
+The route's ship stops arm their own lanes, so the autopilot depth is **not**
 armed beside it — unless the plan has no ship steps, in which case the depth is
 armed as before. If the session can't be created (`session.create_failed`, a
-pipeline launch that raises or times out), the flight is cancelled with that
+pipeline launch that raises or times out), the route is stopped with that
 reason. The provisioning row in the sidebar carries the `flight` field from
 the first second. Settings are read fresh on every pipeline launch (the
 settings cache is per-process, so the pipeline drops it first).
@@ -723,8 +723,8 @@ provisioning.
 A PR is processed **once per head**; to re-run it, delete its entry from
 `state.json`'s `processed_prs`.
 
-The flight a PR session flies is resolved as in
-[Which flight a started item flies](#which-flight-a-started-item-flies), from
+The route a PR session takes is resolved as in
+[Which route a started item takes](#which-route-a-started-item-takes), from
 the repo's `github.repo_settings[repo].plan` and `depth` (`builtin:pr` cut at
 the depth when no plan is set). The forced start's body is
 `core.pr_review.launch`, which `POST /api/flights/start` with a `pr` subject
@@ -774,9 +774,9 @@ the running server's engine — bypassing the age / already-handled filters — 
 the session shows up in the grid without a reload. That start takes the row's
 own Agent CLI picker if one was used, then the repository's own, then
 `issue_agent`'s chain above. Its body is `core.issue_start.launch` (also run
-by `POST /api/flights/start` with an `issue` subject), and the flight it flies
+by `POST /api/flights/start` with an `issue` subject), and the route it takes
 is resolved as in
-[Which flight a started item flies](#which-flight-a-started-item-flies) from
+[Which route a started item takes](#which-route-a-started-item-takes) from
 `github.issue_repo_settings[repo].plan` (the pipeline reads the repo off the
 issue's URL) — an issue is worked like a ticket, so its built-in is
 `builtin:ticket`.

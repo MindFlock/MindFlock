@@ -1,41 +1,28 @@
-# Flights — one route from waiting to landed
+# Flights — one route from waiting to finished
 
-> How Flights work — for people using them (start at [Using Flights](#using-flights))
-> and for code. The sections marked *contract* are what the backend, the
-> frontend and the integration are built against; change them only by editing
-> this file first.
+> How routes work — for people using them (start at [Using Flights](#using-flights))
+> and for code. "Flights" is the feature's internal name (the `/api/flights/*`
+> routes, `flights.py`); on screen it is a **route**. The sections marked
+> *contract* are what the backend, the frontend and the integration are built
+> against; change them only by editing this file first.
 
-## Vocabulary (2026-11-02)
+## Vocabulary
 
-The owner settled the user-facing words in consolidation wave 2. Every label,
-tooltip, toast, hint, empty state, tour and doc a person reads uses the left
-column. Internal names stay as they are: types, ids, CSS classes, the
-`/api/flights/*` routes, `plans` and `steps` on the wire, store keys, the
-`#flyways` deep link and the hook URL `/api/hooks/flyway/`. The bird flavour
-stays where it explains itself (the Sky, the bird that moves along a chain,
-"takes off" as a verb), but no one has to learn a bird word as a noun.
+The words a person reads are decided in [vocabulary.md](vocabulary.md)
+(2026-11-03), which replaces the table that stood here (2026-11-02). Internal
+names stay as they are: types, ids, CSS classes, the `/api/flights/*` routes,
+`plans` and `steps` on the wire, store keys, the `#flyways` deep link and the
+hook URL `/api/hooks/flyway/`.
 
-| Use (UI copy) | Retire in copy |
-|---|---|
-| **stop**: one box on the Sky, every kind | block, box, tile, node, step (in copy) |
-| **group**: a stop with stops inside | Multi-step, sub-steps ("its stops") |
-| **chain**: a row of stops (a session's, or one on the board with no session) | line (in the Sky), flight (as a thing), flyway, plan, "stops-only line" |
-| **saved chain**: a chain kept on the shelf to reuse | saved stop, flyway, plan, Multi-step, "Stops" (as the shelf/chip name), New stops, Scheduled stops, preset |
-| **Wait for me**: the stop kind `you` | Perch, You (as the kind's name) |
-| **Needs you**: everything waiting on a person (the bell's word) | Perched on you, Waiting on you, perch/perched, Needs attention |
-| **Run** / **Run now**: start a chain or template now | Fly, Fly now, Fly these stops, Taking off… (as a button) |
-| **Starts:** By hand / Ticket / Schedule / …: what starts a saved chain | Takes off… (as the dialog/menu name; "takes off" may stay as a verb in a sentence) |
-| **CI checks**: the stop that waits for CI | Checks (as that stop's name) |
-| **Merge when green**: the top Fast-track rung | Merge (as the rung) |
-| **workers**: sessions a session starts | pieces, sub-sessions, children, Auto-split (→ "Let it split into up to N workers") |
-| **Chain**: the session pane tab that shows its chain | Flight (as the tab) |
-| **Stop the chain**: cancel a running chain | Cancel flight |
-| **Finished** / **Merged today**: the landing strip | Landing, Landed today (as headings) |
-
-So in the sections below, which keep the words of the round they record:
-*flyway* or *plan* means a **saved chain**, a *flight* is a **chain** running on
-a session, a *perch* is a **Wait for me** stop, and *Checks* is the **CI checks**
-stop.
+The sections after [Using Flights](#using-flights) record each round in the
+words of its day. Read them with this key: a *flyway*, *plan* or *saved chain*
+is a **saved route**; a *flight*, *line* or *chain* is a **route** (running on
+a session, or on the Sky with no session); a *block*, *tile* or *step* is a
+**stop**; a *perch* is a **Wait for me** stop and *perched on you* is **Needs
+you**; *Fly* / *Take off* is **Run**; *Fast-track* (the control) is **Goes as
+far as**; a *checklist* or *test plan* is the session's **behaviors**;
+*Checks* is the **CI checks** stop; *Land* is the **Finish** stop and the
+*landing strip* is **Finished**.
 
 ## The idea
 
@@ -44,7 +31,7 @@ three sides:
 
 - **Intake** — work *arrives* (tickets, pull requests, issues) and becomes a
   session.
-- **Verify** — a *human or agent checks* the work on a checklist.
+- **Verify** — a *human or agent checks* the work's behaviors.
 - **Schedule** — work *starts by itself* on a timer.
 
 Each of them was one step of the same journey, and the journey itself was
@@ -52,140 +39,139 @@ nowhere: once a ticket had become a session, nothing in the app knew whether
 it was meant to be tested in the sandbox, wait for reviewers, answer the
 CodeRabbit comments, or stop and ask before merging.
 
-A **flight** is that journey, drawn as a line of stops:
+A **route** is that journey, drawn as a row of stops:
 
 ```
-Ticket → Agent works → Commit → Push → Verify → Open PR → Reviews settle → Checks → Perch: approve → Merge → Ticket: Done
+Ticket → Agent works → Commit → Push → Verify → Open PR → Reviews settle → CI checks → Wait for me: approve → Merge when green → Ticket: Done
 ```
-
-The words are birds', never planes' — MindFlock is a flock:
 
 | Word | Is | On the wire |
 |---|---|---|
-| **flyway** | the route a flock follows: a line of stops (a template) | a *plan* (`plans`, `plan_id`, `FlightPlan`) |
-| **flight** | one run of a flyway — one ticket, one PR, one scheduled job, or something you started by hand | a *flight* |
-| **stop** | one box on the line: a *robot* stop the server carries out by itself | a *step* |
-| **perch** | a stop that waits on you: the flight perches, pings you, and flies on when you press **Done** | a step of kind `you` |
-| **sky** | the open space where every flight is drawn: the main area's second view beside the grid (the same sessions as lines), a pannable, zoomable plane | (UI only) |
-| **line** | one session's row of blocks in the sky: its session box, its workers, its stops or rungs, and the trailing + | (UI only) |
+| **route** | the row of stops one piece of work goes through — one ticket, one PR, one scheduled job, or something you started by hand | a *flight* |
+| **saved route** | a route kept on the shelf to reuse (Ticket to merge, Nightly chores, …) | a *plan* (`plans`, `plan_id`, `FlightPlan`) |
+| **stop** | one box on a route: a *robot* stop the server carries out by itself, or one that asks a person | a *step* |
+| **Wait for me** | a stop that waits on you: the route pings you and carries on when you press **Done** | a step of kind `you` |
+| **Needs you** | everything waiting on a person — the bell's word | step state `waiting_you` |
+| **Sky** | the open space where every route is drawn: the main area's second view beside the Grid (the same sessions), a pannable, zoomable plane | (UI only) |
 
-Glossary in one line: *flyway* = the route, *flight* = one run, *stop* = one
-box, *perch* = a stop that waits on you, *sky* = the open space where every
-flight is drawn, *line* = one session's row of blocks. "Take off", "In flight" and "Landed"
-are what they sound like. The glyph is a small bird, never ✈. Only the words
-changed: every field and route keeps its name (`plans`, `steps`,
-`/api/flights/...`).
+The bird flavour stays where it explains itself: the small bird that moves
+along a route to show where the work is (never ✈), the Sky, and "takes off"
+as a verb in a sentence. Only the words changed: every field and route keeps
+its name (`plans`, `steps`, `/api/flights/...`).
 
-Every flight has exactly one session (a worktree + an agent) and the Sky
-draws every session as a line, a bird on the stop each flight is at.
+Every route that is running has exactly one session (a worktree + an agent),
+and the Sky draws every session with its route, a bird on the stop it is at.
 
 ### What stays, what folds in
 
-Nothing is deleted, and nothing is nested: Intake, Verify and Schedule stay
-the flat top-bar dialogs they always were, their stores untouched, and each
-carries its side of the journey. Flights are drawn in the Sky.
+Nothing is deleted, and nothing is nested: Intake and Schedule stay the flat
+top-bar dialogs they always were, their stores untouched, and each carries its
+side of the journey. Routes are drawn in the Sky.
 
-| Surface | Its part in a flight | Store (unchanged) |
+| Surface | Its part in a route | Store (unchanged) |
 |---|---|---|
-| Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's Waiting to fly**: each eligible item is a flight that has not taken off, under its kind's heading with a kind badge, a **Fly** button and the flyway as chips | pipeline `state.json`, settings sources |
-| Intake source cards + Auto-start switches | the **Intake** dialog, each source card with its **Flyway** chips | settings |
-| Verify checklists | a **Verify** stop on a flyway; the checklists stay in the **Verify** dialog; open checklist items perch the flight (the Sky's drawer lists it) | `test_plans.json` |
-| Schedule (templates) | the **Schedule** dialog; a flyway may carry its own schedule trigger, and Schedule lists those under **Scheduled flyways** | `session_templates.json` |
-| Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
+| Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's waiting items**: each eligible item is a route that has not started, under its kind's heading with a kind badge, a **Run** button and the saved route as chips | pipeline `state.json`, settings sources |
+| Intake source cards + Auto-start switches | the **Intake** dialog, each source card saying which saved route its items take | settings |
+| Verify (behaviors) | a **Verify** stop on a route; behaviors still open for you make the route **Need you** (the Sky's drawer lists it) | `test_plans.json` |
+| Schedule (templates) | the **Schedule** dialog; a saved route may carry its own schedule trigger, and Schedule lists those beside the templates | `session_templates.json` |
+| Goes as far as (Agent only · Commit · Push · Open PR · Merge when green) | the **ship** stops of a route; a per-source setting still works and maps to the plain ladder at that rung (the agent, then Commit → … → that rung — nothing else); an armed session's rungs are drawn as stops on its route ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
-The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**
-(the Grid / Sky toggle only on a phone-narrow window; on desktop it sits on
-the sidebar's View row): `Alt+I` / `Alt+V` / `Alt+S` open the three dialogs,
-`Ctrl+Y` (⌘Y) switches to the sky (the main area's other view). The Sky half
-of the toggle counts the
-flights perched on you. Flyways are made, edited and flown from the Sky's
-**flyway shelf**. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
+The top bar is **New · Grid / Sky · Intake · Schedule · Settings** (the
+Grid / Sky toggle only on a phone-narrow window; on desktop it sits on the
+sidebar's View row): `Alt+I` / `Alt+S` open the dialogs, `Ctrl+Y` (⌘Y)
+switches to the Sky (the main area's other view). The Sky half of the toggle
+counts the routes that need you. Saved routes are made, edited and run from
+the Sky's shelf. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
 Flights button as tabs of a Flights dialog; round 8 retired it — see
 [Round 8: flat again](#round-8-flat-again).)
 
 ## Using Flights
 
-### How a ticket becomes a flight
+### How a ticket gets its route
 
 Every way work arrives ends in the same start path, and every one of them can
-put the new session on a flight:
+put the new session on a route:
 
-- **Intake / the Sky's Waiting to fly** (its intake lane and drawer) — **Fly** on a ticket, pull
-  request or issue (`POST /api/tickets/start`, `/api/github/prs/review`,
-  `/api/github/issues/start`, or `POST /api/flights/start` with a `subject`,
-  which runs the very same code). The flyway chips send `plan`; leaving them
-  on the default leaves the choice to the server.
+- **Intake / the Sky's waiting items** (its intake lane and drawer) — **Run**
+  on a ticket, pull request or issue (`POST /api/tickets/start`,
+  `/api/github/prs/review`, `/api/github/issues/start`, or
+  `POST /api/flights/start` with a `subject`, which runs the very same code).
+  The saved-route chips send `plan`; leaving them on the default leaves the
+  choice to the server.
 - **The pipeline** — a ticket, PR or issue it auto-starts.
 - **An agent** — `spawn_ticket_session` from another session.
 
-Which flyway (`plan`), in order:
+Which saved route (`plan`), in order:
 
 1. the start's own `plan`;
-2. a fast-track **depth picked for this start** (the row's ⏩ pick, a team
-   run's "off", an agent's `autopilot=`) — the built-in plan cut at that rung;
-3. the **source's plan** — Intake's source card (`TicketingSource.plan`) or the
-   repo card (`github.repo_settings[repo].plan` for PRs,
-   `github.issue_repo_settings[repo].plan` for issues), while that plan exists;
-4. the built-in plan for the kind **cut at the source's depth** — so a source
-   set to "carry it to a PR" flies *Agent works → Commit → Push → Verify → Open
-   PR*;
-5. **no flight** — a source with no plan and a depth of off/agent starts its
-   sessions exactly as it always did.
+2. a **Goes as far as picked for this start** (the row's pick, a team run's
+   "off", an agent's `autopilot=`) — the built-in saved route cut at that
+   rung;
+3. the **source's saved route** — Intake's source card
+   (`TicketingSource.plan`) or the repo card
+   (`github.repo_settings[repo].plan` for PRs,
+   `github.issue_repo_settings[repo].plan` for issues), while it exists;
+4. the built-in saved route for the kind **cut at the source's Goes as far
+   as** — so a source set to go as far as Open PR runs *Agent works → Commit →
+   Push → Verify → Open PR*;
+5. **no route** — a source with no saved route that goes no further than
+   Agent only starts its sessions exactly as it always did.
 
-The flight is armed on the session's title **before the session exists** (an
-intake title is deterministic), so the item is "in flight" in the Sky and in
-the sidebar's provisioning row from the first second, and survives a server
-restart mid-launch. Its first agent step is the session's first prompt — the
-ticket / PR / issue prompt Intake always built — with the step's own text (if
-any) appended. The flight's ship steps arm the fast-track lanes themselves, so
-the source's depth is not armed beside it (unless the plan has no ship steps).
-A start whose session can't be created cancels its flight with the reason.
+The route is armed on the session's title **before the session exists** (an
+intake title is deterministic), so the item shows on its route in the Sky and
+in the sidebar's provisioning row from the first second, and survives a server
+restart mid-launch. Its first agent stop is the session's first prompt — the
+ticket / PR / issue prompt Intake always built — with the stop's own text (if
+any) appended. The route's ship stops arm Goes as far as themselves, so the
+source's setting is not armed beside it (unless the route has no ship stops).
+A start whose session can't be created stops its route with the reason.
 
-### Scheduled plans
+### Scheduled saved routes
 
-A plan whose trigger is **Schedule** starts itself, like a template: daily or
-weekdays at a time, a cron expression, or once at a date and time — the same
+A saved route that **Starts: Schedule** starts itself, like a template: daily
+or weekdays at a time, a cron expression, or once at a date and time — the same
 editor (and the same `GET /api/templates/cron-preview` previews) as
 Schedule, and the same rules (`core/template_schedule.py`): a schedule
 counts from when it was set, after downtime only the most recent missed run
 fires, a paused trigger fires nothing, and in a group of devices only the
-automation device fires. Each run takes off like **Take off** — a new session
-from the plan's session defaults — recorded with `by: "schedule"`. Scheduled
-plans fire from the **templates addon's schedule loop** (`template_schedule.
-run_loop`, beside the templates' own schedules), so they stop with it: a server
-with that addon disabled fires neither.
+automation device fires. Each run starts like **Run** — a new session from the
+saved route's session defaults — recorded with `by: "schedule"`. Scheduled
+saved routes fire from the **templates addon's schedule loop**
+(`template_schedule.run_loop`, beside the templates' own schedules), so they
+stop with it: a server with that addon disabled fires neither.
 
-A run is **skipped** (and says so in the plan's history, with a refetch of the
-Sky) while the plan's previous flight is still in the air or its session is
+A run is **skipped** (and says so in the saved route's history, with a refetch
+of the Sky) while its previous route is still running or its session is
 working, asking a question or at a usage limit — a schedule never stacks
-flights. A run that can't take off (no folder set, the agent not installed) is
-a failed run with the reason. The plans list (`GET /api/flights/plans`) shows a
-scheduled plan's next run, last run and history under `runs`; the record is
-`~/.mindflock/flights/schedule_runs.json`, on this device only (the plans
-themselves sync). The Schedule dialog lists templates and, under **Scheduled
-flyways**, these plans — with that record (next run, last result, history),
-**Fly now** and **Edit in the Sky**.
+routes. A run that can't start (no folder set, the agent not installed) is a
+failed run with the reason. The saved-route list (`GET /api/flights/plans`)
+shows a scheduled one's next run, last run and history under `runs`; the
+record is `~/.mindflock/flights/schedule_runs.json`, on this device only (the
+saved routes themselves sync). The Schedule dialog lists templates and these
+saved routes — with that record (next run, last result, history), **Run now**
+and **Edit in the Sky**.
 
-### Verify steps
+### Verify stops
 
-A verify step asks for the session's checklist through Verify's own button
-path and parks the flight on you while human items are open. Ticking them off
-in the Verify dialog moves the flight on at once (`session.test_plan_settled`
-wakes the driver); **Done** on the step records them as passed. A checklist the
-push watcher makes for the same branch is the same checklist — Verify keys
-them by (repo, branch).
+A Verify stop asks for the session's behaviors through Verify's own button
+path and makes the route **Need you** while behaviors that are yours to check
+are open. Checking them moves the route on at once
+(`session.test_plan_settled` wakes the driver); **Done** on the stop records
+them as verified. The behaviors the push watcher writes for the same branch
+are the same behaviors — Verify keys them by (repo, branch).
 
 ### The CLI
 
 ```
-mindflock flights [--all]                 # what is in the air: flyway, subject, session, state, stop
-mindflock flight flyways                  # the flyways (scheduled ones say when next); `flight plans` = the same
-mindflock flight start FLYWAY [--repo PATH] [--title SESSION]
-mindflock flight done FLIGHT [--note …]   # the perch waiting on you; also skip / cancel
+mindflock flights [--all]                 # routes running: saved route, subject, session, state, stop
+mindflock flight plans                    # the saved routes (scheduled ones say when next); `flight flyways` = the same
+mindflock flight start ROUTE [--repo PATH] [--title SESSION]
+mindflock flight done ROUTE [--note …]    # the Wait for me stop that needs you; also skip / cancel (Stop the route)
 ```
 
-`FLYWAY` is an id or a name (a unique prefix is enough); `FLIGHT` is a flight
-id (prefix) or its session's title. See [cli.md](cli.md).
+For `start`, `ROUTE` is a saved route's id or name (a unique prefix is
+enough); for `done` / `skip` / `cancel` it is a route id (prefix) or its
+session's title. See [cli.md](cli.md).
 
 ## Contract: the data model
 
@@ -368,7 +354,7 @@ auto-start reads a per-source `plan` setting (`TicketingSource.plan`,
 the built-in plan for that kind cut at the source's `depth`, which keeps every
 existing setup behaving exactly as before). A per-start `depth` outranks the
 source's `plan` (a team run's `"off"` must stay off) — the full order is in
-[How a ticket becomes a flight](#how-a-ticket-becomes-a-flight). An unknown
+[How a ticket gets its route](#how-a-ticket-gets-its-route). An unknown
 `plan` is a 400.
 
 ## Contract: the UI
@@ -5485,7 +5471,7 @@ if I describe a flight it should be able to set it up and run it." The
 MindFlock MCP gains six tools in `backend/mcp/flights.py`, a `Toolbox` mixin
 like `runs.py`. That takes it from 28 to 34 tools; peer mode keeps its own 10
 and never sees these six. The full reference, with a worked example, is in
-[mcp.md](mcp.md#flights-from-a-sentence-to-a-running-flight).
+[mcp.md](mcp.md#routes-from-a-sentence-to-a-running-route).
 
 | Tool | Route(s) |
 |---|---|

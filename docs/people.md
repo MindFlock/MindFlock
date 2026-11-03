@@ -177,7 +177,7 @@ What the link holds, exactly (`backend/web/core/guests.py`):
   for a title the link reaches — the terminal and shell, prompts, answers,
   the queue, voice, find, the family thread, waking, the diff and history —
   with the owner's calls held back: close/delete, copy, commit, push, PR,
-  merge, fast-track, branch, fences, zones, owner/parent/order/profile answer
+  merge, Goes as far as, branch, fences, zones, owner/parent/order/profile answer
   403. A link **reaches its named sessions and their sub-sessions**: anything
   whose parent chain leads to a named title, spawned before the link or
   after it (`guests.reach`, per request). The picker lists root sessions
@@ -267,7 +267,7 @@ every message is `session.chat` on the bus.
 `git_email` are set, else `[]`, and every commit MindFlock makes on your
 behalf puts it in front of the git subcommand:
 
-- the Fast-track / ship commit (`git -c … commit -F …` typed into
+- the Goes as far as / ship commit (`git -c … commit -F …` typed into
   the session's shell — the same command otherwise),
 - a team run's integration merge and its same-folder piece commits
   (`backend/web/core/git_merge.py`),
