@@ -259,7 +259,7 @@ describe("no Outbox: the bell and the group header", () => {
     expect(has(fn("lib/laneActions.ts", "splitBlockReason"), "teamRunCaps(caps).split")).toBe(true);
     const all = allCode();
     expect(all).not.toContain("coming next");
-    expect(all).toContain("this MindFlock server can't split a line into pieces — update it");
+    expect(all).toContain("this MindFlock server can't split a session into workers — update it");
     expect(all).toContain("this MindFlock server can't make one PR for a team run — update it");
   });
 

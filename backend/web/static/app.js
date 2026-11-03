@@ -24178,6 +24178,99 @@ function firstLine$1(text) {
 	return "";
 }
 //#endregion
+//#region src/lib/autopilot.ts
+var LANE_ORDER = [
+	"leave",
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var LANE_CHOICES = LANE_ORDER;
+var SESSION_DEPTHS = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var SOURCE_DEPTHS = [
+	"commit",
+	"push",
+	"pr"
+];
+var SOURCE_OFF_LABEL = "Stop after the agent";
+var SOURCE_RUNGS = ["leave", ...SOURCE_DEPTHS];
+function capSourceDepth(v) {
+	if (!String(v || "").trim()) return "leave";
+	const lane = normalizeLane(v);
+	if (lane === "leave") return "leave";
+	return lane && SOURCE_DEPTHS.includes(lane) ? lane : "pr";
+}
+function sourceRungLabel(lane) {
+	return lane === "leave" ? SOURCE_OFF_LABEL : LANE_LABEL[lane];
+}
+var LANE_LABEL = {
+	leave: "Off",
+	commit: "Commit",
+	push: "Push",
+	pr: "Open PR",
+	merge: "Merge when green"
+};
+var LANE_SHORT = {
+	leave: "off",
+	commit: "Commit",
+	push: "Push",
+	pr: "PR",
+	merge: "Merge"
+};
+var LANE_DESC = {
+	leave: "MindFlock doesn't commit anything — you take it from there",
+	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
+	push: "Commit and push once the agent stops and your hooks pass",
+	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
+	merge: "Commit, push, open a PR and merge it once its checks pass"
+};
+var LANE_KEY = {
+	leave: "O",
+	commit: "C",
+	push: "U",
+	pr: "P",
+	merge: "M"
+};
+function normalizeLane(v) {
+	const s = String(v || "").trim().toLowerCase();
+	if (s === "agent" || s === "off" || s === "none") return "leave";
+	return LANE_ORDER.includes(s) ? s : "";
+}
+function laneDefault(setting) {
+	return normalizeLane(setting) || "leave";
+}
+function laneLabel(value) {
+	if (!String(value || "").trim()) return LANE_LABEL.leave;
+	const lane = normalizeLane(value);
+	return lane ? LANE_LABEL[lane] : String(value);
+}
+function autopilotChipTitle(run) {
+	const target = laneLabel(run.depth);
+	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
+	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
+	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
+	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
+	return "Fast-tracking to " + target + where + skipped;
+}
+function mergeBlockerLabel(ms) {
+	switch (ms.state) {
+		case "dirty": return "conflicts";
+		case "behind": return "behind base";
+		case "draft": return "draft PR";
+		case "blocked":
+			if (ms.checks === "failed") return "checks ✗";
+			if (ms.checks === "pending") return "checks…";
+			return "review needed";
+		default: return ms.mergeable === null ? "checking…" : "can't merge";
+	}
+}
+//#endregion
 //#region src/lib/flights.ts
 var MAIN_TRIGGERS = ["main_push", "main_red"];
 function parallelSpan(steps, i) {
@@ -24495,6 +24588,67 @@ function planChoices(plans, kind, value = "") {
 		label: value + " (not found)"
 	});
 	return out;
+}
+var SHIP_WORD = {
+	commit: "Commit",
+	push: "Push",
+	pr: "Open PR",
+	merge: "Merge"
+};
+function shipWord(lane) {
+	return SHIP_WORD[lane] || lane;
+}
+var LADDER$1 = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+function stopsSummaryWords(steps) {
+	return (steps || []).map((s) => s.kind === "agent" ? "Agent" : String(s.title || "").trim() || (s.kind === "ship" ? SHIP_WORD[String(s.config?.lane || "")] || "" : "") || s.kind);
+}
+var LADDER_BASE = {
+	tickets: "builtin:ticket",
+	issues: "builtin:ticket",
+	prs: "builtin:pr"
+};
+function sourceReach(kind, src, plans) {
+	const rung = capSourceDepth(src.depth);
+	const plan = String(src.plan || "").trim();
+	const found = plan && plans ? plans.find((p) => p.id === plan) : void 0;
+	if (plan && (found || !plans)) return {
+		choice: "plan:" + plan,
+		words: found?.name || plan,
+		own: true,
+		rung,
+		missing: "",
+		steps: found ? stopsSummaryWords(found.steps) : [],
+		planId: plan
+	};
+	const ship = rung === "leave" ? [] : LADDER$1.slice(0, LADDER$1.indexOf(rung) + 1);
+	return {
+		choice: rung,
+		words: sourceRungLabel(rung),
+		own: false,
+		rung,
+		missing: plan,
+		steps: ["Agent", ...ship.map((l) => SHIP_WORD[l])],
+		planId: rung === "leave" ? "" : LADDER_BASE[kind] + "@" + rung
+	};
+}
+function sourcePlanOptions(plans, kind) {
+	const triggers = {
+		tickets: ["ticket"],
+		prs: ["pr"],
+		issues: ["issue", "ticket"]
+	};
+	const mine = (plans || []).filter((p) => !p.builtin);
+	const ours = (plans || []).filter((p) => p.builtin && triggers[kind].includes(String(p.trigger?.kind || "")));
+	return [...mine, ...ours].map((p) => ({
+		value: p.id,
+		label: p.name,
+		builtin: !!p.builtin
+	}));
 }
 var PLAN_FIELD = "plan";
 function normalizeFlightRows(rows) {
@@ -30063,88 +30217,6 @@ function freshStage(title) {
 	return p;
 }
 //#endregion
-//#region src/lib/autopilot.ts
-var LANE_ORDER = [
-	"leave",
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var LANE_CHOICES = LANE_ORDER;
-var SESSION_DEPTHS = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var SOURCE_DEPTHS = [
-	"commit",
-	"push",
-	"pr"
-];
-var LANE_LABEL = {
-	leave: "Off",
-	commit: "Commit",
-	push: "Push",
-	pr: "Open PR",
-	merge: "Merge when green"
-};
-var LANE_SHORT = {
-	leave: "off",
-	commit: "Commit",
-	push: "Push",
-	pr: "PR",
-	merge: "Merge"
-};
-var LANE_DESC = {
-	leave: "MindFlock doesn't commit anything — you take it from there",
-	commit: "Commit with a message written from the diff once the agent stops and your hooks pass",
-	push: "Commit and push once the agent stops and your hooks pass",
-	pr: "Commit, push and open a PR once the agent stops and your hooks pass",
-	merge: "Commit, push, open a PR and merge it once its checks pass"
-};
-var LANE_KEY = {
-	leave: "O",
-	commit: "C",
-	push: "U",
-	pr: "P",
-	merge: "M"
-};
-function normalizeLane(v) {
-	const s = String(v || "").trim().toLowerCase();
-	if (s === "agent" || s === "off" || s === "none") return "leave";
-	return LANE_ORDER.includes(s) ? s : "";
-}
-function laneDefault(setting) {
-	return normalizeLane(setting) || "leave";
-}
-function laneLabel(value) {
-	if (!String(value || "").trim()) return LANE_LABEL.leave;
-	const lane = normalizeLane(value);
-	return lane ? LANE_LABEL[lane] : String(value);
-}
-function autopilotChipTitle(run) {
-	const target = laneLabel(run.depth);
-	if (run.state === "halted") return "Fast-track stopped: " + (run.reason || "unknown reason") + (run.note ? "\n" + run.note : "");
-	if (run.state === "done") return "Fast-track finished at " + target + " and switched itself off.";
-	const where = run.note ? " — " + run.note : run.step ? " (last step: " + run.step + ")" : " (waiting to start)";
-	const skipped = run.skipped?.length ? "\nSkipped hooks: " + run.skipped.join(", ") : "";
-	return "Fast-tracking to " + target + where + skipped;
-}
-function mergeBlockerLabel(ms) {
-	switch (ms.state) {
-		case "dirty": return "conflicts";
-		case "behind": return "behind base";
-		case "draft": return "draft PR";
-		case "blocked":
-			if (ms.checks === "failed") return "checks ✗";
-			if (ms.checks === "pending") return "checks…";
-			return "review needed";
-		default: return ms.mergeable === null ? "checking…" : "can't merge";
-	}
-}
-//#endregion
 //#region src/lib/runs.ts
 var RUN_DONE_STATES = /* @__PURE__ */ new Set([
 	"done",
@@ -30546,7 +30618,7 @@ function teamRunCaps(caps) {
 		maxPieces: Number.isFinite(max) && max >= 2 ? Math.floor(max) : 8
 	};
 }
-var SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
+var SERVER_NO_SPLIT = "this MindFlock server can't split a session into workers — update it";
 var SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a team run — update it";
 function askFirstApplies(lane) {
 	return lane !== "leave";
@@ -30607,6 +30679,25 @@ function fastTrackModel(inst) {
 			on: cur.askFirst && askFirstApplies(cur.lane),
 			why: lock || (askFirstApplies(cur.lane) ? "" : "Fast-track is off — pick how far it goes first")
 		}
+	};
+}
+function flightDecides(f) {
+	return !!f && !!f.id && f.state !== "halted" && f.state !== "done" && f.state !== "cancelled";
+}
+function flightReach(row, steps) {
+	const named = String(row.plan_name || "").trim();
+	const desc = (named ? "Its stops (“" + named + "”)" : "Its stops") + " decide, not Fast-track. To change how far it goes, edit them.";
+	if (!steps) return {
+		lane: "",
+		head: "This session's stops decide how far it goes",
+		desc
+	};
+	const ships = steps.filter((s) => s.kind === "ship");
+	const lane = String(ships[ships.length - 1]?.config?.lane || "");
+	return {
+		lane,
+		head: lane ? "This session's stops go as far as " + shipWord(lane) : "This session's stops don't commit anything",
+		desc
 	};
 }
 function fastTrackSaid(name, lane, askFirst) {
@@ -32553,17 +32644,17 @@ function flockAvailable(inst, config) {
 	if (inst.peer_share || isRemote(inst)) return false;
 	return !inst.remote_peer;
 }
-function flockChipLabel() {
-	return "Flock";
+function flockChipLabel(on = false) {
+	return on ? "Workers ✓" : "Workers";
 }
 function flockTooltip(on, keys = [FLOCK_KEYS, ASK_WORKERS_KEYS]) {
-	return `Workers on every prompt — the request is added to everything you send here (${keys[0]} to toggle; ${keys[1]} to add it once)` + (on ? "\nOn: click to turn it off" : "\nOff: click to turn it on");
+	return `Workers — let the agent split this now, ask for workers once, or on every prompt (${keys[1]} asks once; ${keys[0]} turns every prompt on or off)` + (on ? "\nWorkers on every prompt: on" : "");
 }
 function flockActionLabel(on) {
 	return on ? "Workers on every prompt: turn off" : "Workers on every prompt: turn on";
 }
 function flockToast(name, on) {
-	return on ? `${name}: Flock on — the workers request is added to every prompt` : `${name}: Flock off — prompts go as typed`;
+	return on ? `${name}: Workers on every prompt — on` : `${name}: Workers on every prompt — off`;
 }
 function insertWorkersRequest(title, config = cachedConfig()) {
 	const h = peekTerm(title, "agent");
@@ -32590,9 +32681,39 @@ async function toggleFlock(title, on) {
 		return now;
 	} catch (err) {
 		patchInstance(title, { flock: before });
-		toast(`${name}: Flock — ${errMsg(err)}`, { duration: 6e3 });
+		toast(`${name}: Workers on every prompt — ${errMsg(err)}`, { duration: 6e3 });
 		return null;
 	}
+}
+var workersMenuTitle = null;
+var workersMenuSubs = /* @__PURE__ */ new Set();
+function setWorkersMenu(title) {
+	if (workersMenuTitle === title) return;
+	workersMenuTitle = title;
+	workersMenuSubs.forEach((f) => f());
+}
+function useWorkersMenu(title) {
+	return (0, import_react.useSyncExternalStore)((f) => {
+		workersMenuSubs.add(f);
+		return () => workersMenuSubs.delete(f);
+	}, () => workersMenuTitle === title, () => false);
+}
+function openWorkersMenu(title, toggle = false) {
+	if (toggle && workersMenuTitle === title) {
+		setWorkersMenu(null);
+		return;
+	}
+	const inst = instances$2().find((r) => r.title === title);
+	if (!inst || inst.pending) {
+		toast("That session isn't ready yet");
+		return;
+	}
+	selectSession(title, { noKeyboard: true });
+	if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => setWorkersMenu(title));
+	else setWorkersMenu(title);
+}
+function closeWorkersMenu() {
+	setWorkersMenu(null);
 }
 //#endregion
 //#region src/lib/sessionActionTable.ts
@@ -32697,9 +32818,15 @@ var SESSION_ACTIONS = {
 		enabled: (c) => settled(c) && !c.shared && !!fastTrackStep(c.inst),
 		run: (t) => openFastTrackMenu(t)
 	},
+	workers: {
+		label: "Workers…",
+		note: (c) => c.inst?.flock ? "on every prompt" : "split now, ask once, or on every prompt",
+		enabled: (c) => flockAvailable(c.inst, cfg()),
+		run: (t) => openWorkersMenu(t)
+	},
 	split: {
-		label: "Split into parallel pieces…",
-		note: "starts a split",
+		label: "Workers: let the agent split this now",
+		note: "it proposes workers; you approve them",
 		enabled: (c) => settled(c) && !c.shared && !c.inst.device && !c.title.includes("::") && !splitBlockReason(c.caps, c.inst),
 		run: (t) => {
 			const inst = instances$2().find((r) => r.title === t);
@@ -32709,7 +32836,7 @@ var SESSION_ACTIONS = {
 		}
 	},
 	askWorkers: {
-		label: "Ask for workers",
+		label: "Ask for workers once",
 		keys: ASK_WORKERS_KEYS,
 		note: "types the workers request into its terminal",
 		enabled: (c) => flockAvailable(c.inst, cfg()) && c.inst.status !== "paused",
@@ -33737,6 +33864,13 @@ function voiceTalk(phase) {
 	window.dispatchEvent(new CustomEvent(VOICE_TALK_EVENT, { detail: { phase } }));
 }
 var _host = null;
+function skyOwnsSheet() {
+	if (typeof document === "undefined") return false;
+	const sky = document.getElementById("sky-view");
+	if (!sky || !sky.offsetParent) return false;
+	const el = document.activeElement;
+	return !el || el === document.body || sky.contains(el);
+}
 function isEditingTarget(el) {
 	if (!el) return false;
 	const tag = el.tagName;
@@ -34142,7 +34276,7 @@ var KEYMAP = [
 			"?",
 			"This shortcut sheet"
 		],
-		when: () => !isEditingTarget(document.activeElement),
+		when: () => !isEditingTarget(document.activeElement) && !skyOwnsSheet(),
 		run: () => _host?.toggleShortcuts()
 	},
 	{
@@ -46551,7 +46685,7 @@ var INTAKE_TOUR = {
 		{
 			target: "[data-tour=\"intake-autostart\"], #intake-panel:not(:has([data-tour=\"intake-autostart\"])) #intake-tab-autostart",
 			title: "Auto-start, when you trust it",
-			body: "Switches for tickets, PR review comments and new issues live here, with how often each checks and Pause all auto-start."
+			body: "One switch each for tickets, PR review comments and new issues — and, folded below them, how ticket sessions are set up."
 		}
 	]
 };
@@ -46598,79 +46732,29 @@ var TOURS = {
 		title: "Sky",
 		steps: [
 			{
-				target: "[data-tour=\"view-sky\"]",
-				title: "The same sessions, as chains",
-				body: "Grid · Sky (Ctrl+Y) switches the main area between panes and the sky — the sessions are the same, only the drawing changes."
-			},
-			{
-				target: "[data-tour=\"sky-line-bar\"], [data-tour=\"sky-line\"] .skl-bar",
-				title: "A session is a frame",
-				body: "Drag a session's frame by its bar to put it anywhere (double-click renames); its ⋯ shows only this chain or closes it."
-			},
-			{
 				target: "[data-tour=\"sky-session-box\"], .sky-head",
-				title: "The agent starts the chain",
-				body: "The first tile is the session's agent: click it for its terminal right here, right-click to send it a prompt or stop it."
+				title: "Each session is a chain",
+				body: "Its agent comes first, then the stops that run after its turn, left to right; Ctrl+Y goes back to the grid."
 			},
 			{
-				target: "[data-tour=\"flights-bird\"]",
-				title: "The bird is where the flight is",
-				body: "Click the bird to halt the flight (click again to carry on), or drag it onto another stop to jump there."
-			},
-			{
-				target: "[data-tour=\"sky-stop\"], .sky-node:not(.sky-head)",
-				title: "Tiles float free",
-				body: "Drag a tile anywhere (it never changes the order); right-click it to edit, duplicate, halt there or remove it."
+				target: "[data-tour=\"sky-shelf\"]",
+				title: "Add a stop from the shelf",
+				body: "Drag Agent, Perch, Ship, Verify, Wait or Loop onto a chain, or click the + after its last stop."
 			},
 			{
 				target: ".sky-port-out:not(.sky-port-off), [data-tour=\"sky-stop\"]",
 				title: "Wires set the order",
-				body: "Drag from a tile's round port: onto a later stop to move it, an earlier one to loop, empty sky to add a stop there."
+				body: "Drag from a stop's round port onto another stop to move it there; double-click a stop to edit it."
 			},
 			{
-				target: "[data-tour=\"sky-stop\"], .sky-node:not(.sky-head)",
-				title: "Every stop edits in a dialog",
-				body: "Double-click a tile or press Enter for its dialog; drag a Loop's ↻ pill onto a stop to loop from there."
-			},
-			{
-				target: "[data-tour=\"sky-shelf\"]",
-				title: "The shelf holds the blocks",
-				body: "First the default blocks, then your saved stops (several steps as one block), and All blocks… for the full list."
-			},
-			{
-				target: "[data-tour=\"sky-grounded\"], .sky-socket, [data-tour=\"sky-shelf\"]",
-				title: "Stops with no session yet",
-				body: "A block dropped on empty sky floats as a stops-only chain with no frame; wire an agent's port into its socket to run it."
-			},
-			{
-				target: "[data-tour=\"sky-selbar\"], .sky-selbar",
-				title: "Select an area",
-				body: "Drag across empty sky to select chains and tiles, then move them together, Group into a stop, or Save to the shelf."
-			},
-			{
-				target: "[data-tour=\"sky-tool\"]",
-				title: "Drag or Click",
-				body: "V is Drag (chains and tiles move, empty sky selects), H is Click (any drag pans the sky); hold Space to pan in either."
-			},
-			{
-				target: "",
-				title: "Delete removes a tile",
-				body: "Click any tile and press Delete: a stop comes off its chain (with Undo), a stops-only chain or a session asks first."
-			},
-			{
-				target: "[data-tour=\"sky-intake\"], .sky-intake",
-				title: "The intake lane",
-				body: "Tickets and PRs waiting to fly sit here — drag it by its head, and expand it to see every item with its Fly button."
-			},
-			{
-				target: "[data-tour=\"sky-zoom\"], .sky-toolbar .sky-zoom",
-				title: "Zoom and fit",
-				body: "+ and − zoom, 0 or Fit shows every chain legibly, 1 fills the window with the focused chain, and Ctrl+wheel zooms too."
+				target: "[data-tour=\"flights-bird\"]",
+				title: "Run it, and answer it",
+				body: "▶ Run (or your next prompt) sets the chain going and the bird shows where it is; a Perch waits for your Done."
 			},
 			{
 				target: "[data-tour=\"sky-guide\"], .sky-toolbar .tour-btn",
-				title: "The guide",
-				body: "This ? replays the tour or opens the guide — the long version, with every key; the palette's Learn the Sky opens it too."
+				title: "Help is here",
+				body: "This ? replays the tour or opens the guide, with every gesture; the ? key lists the shortcuts."
 			}
 		]
 	},
@@ -46872,10 +46956,10 @@ var CALM_HIDDEN_BARS = ["usage", "assistant"];
 function calmHidesBar(key) {
 	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
 }
-function topBarShows(o) {
+function topBarQuiet(o) {
 	return {
-		verify: !o.calm || o.checklists > 0,
-		schedule: !o.calm || o.templates > 0
+		verify: o.calm && o.checklists === 0,
+		schedule: o.calm && o.templates === 0
 	};
 }
 function firstLaunchTour(opts) {
@@ -49589,7 +49673,7 @@ function TopBar() {
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
 	const perch = perchBadge(useFlights().data || []);
-	const shows = topBarShows({
+	const quiet = topBarQuiet({
 		calm: useCalm(),
 		checklists: testPlans?.plans?.length ?? 0,
 		templates: sched.templates.length
@@ -49625,7 +49709,7 @@ function TopBar() {
 		return k.length ? " (" + k.join(" / ") + ")" : "";
 	};
 	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
-	const scheduleTitle = "Schedule — templates and scheduled stops; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
+	const scheduleTitle = "Schedule — everything that starts by itself on a timer: templates and scheduled stops" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
 	const barViews = ui.sidebarHidden || ui.narrow;
 	const otherView = ui.view === "sky" ? "grid" : "sky";
 	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
@@ -49638,7 +49722,7 @@ function TopBar() {
 			failing: perch.failing,
 			open: () => toggleView()
 		},
-		shows.verify && {
+		{
 			key: "verify",
 			label: "Verify",
 			title: verifyTitle,
@@ -49646,7 +49730,7 @@ function TopBar() {
 			failing: failing > 0,
 			open: () => ui.openDialogFor("verify")
 		},
-		shows.schedule && {
+		{
 			key: "schedule",
 			label: "Schedule",
 			title: scheduleTitle,
@@ -49880,9 +49964,9 @@ function TopBar() {
 							onClick: () => ui.openDialogFor("intake"),
 							children: "Intake"
 						}),
-						shows.verify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "verify-btn",
-							className: "tb-item" + (isFolded("verify") ? " tb-folded" : ""),
+							className: "tb-item" + (quiet.verify ? " tb-quiet" : "") + (isFolded("verify") ? " tb-folded" : ""),
 							"data-fold": "verify",
 							type: "button",
 							title: verifyTitle,
@@ -49892,9 +49976,9 @@ function TopBar() {
 								children: due
 							})]
 						}),
-						shows.schedule && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 							id: "schedule-btn",
-							className: "tb-item" + (isFolded("schedule") ? " tb-folded" : ""),
+							className: "tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : ""),
 							"data-fold": "schedule",
 							type: "button",
 							title: scheduleTitle,
@@ -51730,6 +51814,48 @@ function SettingField(props) {
 	})] });
 }
 //#endregion
+//#region src/components/settings/screens/SetInIntake.tsx
+function openIntakeAt(tab, selector) {
+	useUi.getState().openDialogFor("intake", tab);
+	if (!selector || typeof document === "undefined") return;
+	let tries = 0;
+	const look = () => {
+		const el = document.querySelector("#intake-panel " + selector);
+		if (!el) {
+			if (++tries < 30) setTimeout(look, 35);
+			return;
+		}
+		for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) d.open = true;
+		el.scrollIntoView?.({ block: "center" });
+	};
+	setTimeout(look, 0);
+}
+function SetInIntake({ id, label, hint, tab = "autostart", selector }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-in-intake",
+		id,
+		"data-moved-to": "intake",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "set-label",
+			children: label
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-hint",
+			children: [
+				hint,
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					"data-open-intake": tab,
+					title: "Ticket settings live in Intake, next to the auto-start switches",
+					onClick: () => openIntakeAt(tab, selector),
+					children: "Set in Intake ›"
+				})
+			]
+		})]
+	});
+}
+//#endregion
 //#region src/components/setup/AgentCard.tsx
 var SHARE_MS = 3e3;
 var shared = null;
@@ -52048,24 +52174,11 @@ function SessionsAtOnce({ gotoScreen }) {
 			className: "set-hint",
 			children: "Sessions you start yourself have no limit. Start as many as you like."
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-			className: "set-row",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-label",
-					children: "Ticket sessions at once"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-					group: "engine",
-					field: "max_sessions",
-					type: "number",
-					placeholder: "no limit"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "The most auto-started ticket sessions running together. Extra tickets wait their turn."
-				})
-			]
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetInIntake, {
+			id: "coding-ticket-sessions-at-once",
+			label: "Ticket sessions at once",
+			hint: "Auto-started ticket sessions have a limit of their own; extra tickets wait their turn.",
+			selector: "#ik-max-sessions-row"
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint",
@@ -52910,7 +53023,6 @@ function sessionMenu(inst, ctx, opts = {}) {
 		disabled: !!next.disabled,
 		run: () => void next.run()
 	}, ...ship] : ship;
-	const flockOn = !!inst.flock;
 	const moving = isMovingRow(inst);
 	const session = keep([
 		fromTable("rename"),
@@ -52923,14 +53035,11 @@ function sessionMenu(inst, ctx, opts = {}) {
 			run: () => openMoveSession(title)
 		},
 		fromTable("resume", { note: actionNote("resume", ctx) }),
-		fromTable("flock", {
-			label: (flockOn ? "✓ " : "") + "Workers on every prompt",
-			checked: flockOn,
-			note: flockOn ? "on — the workers request is added to everything you send" : actionNote("flock", ctx),
-			title: flockTooltip(flockOn)
+		fromTable("workers", {
+			note: inst.flock ? "on every prompt" : void 0,
+			title: "Sessions this one starts: let the agent split this now, ask for workers once, or on every prompt"
 		})
 	]);
-	const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
 	const group = remote ? null : detachableGroup(inst);
 	const folder = inst.folder || inst.path || "";
 	const more = keep([
@@ -52971,13 +53080,6 @@ function sessionMenu(inst, ctx, opts = {}) {
 			label: "Copy entire history",
 			title: "Copy the open terminal tab's whole history to the clipboard",
 			run: opts.onCopyHistory
-		},
-		!remote && !peer && !inst.pending && {
-			key: "split",
-			label: "Split into parallel pieces…",
-			disabled: !!splitWhy,
-			title: splitWhy || "The agent proposes pieces with separate paths; you approve them and pick where they run — separate worktrees merged back, or this folder",
-			run: () => call(name, () => splitSession(inst, name))
 		},
 		group && {
 			key: "detach",
@@ -53061,6 +53163,42 @@ function sessionMenu(inst, ctx, opts = {}) {
 		].filter((g) => g.items.length),
 		more
 	};
+}
+function workersModes(inst, ctx) {
+	const title = inst.title;
+	const name = displayName(title);
+	const on = !!inst.flock;
+	const splitWhy = isRemote(inst) ? "Split runs on the machine the session lives on" : splitBlockReason(ctx.caps, inst);
+	const paused = inst.status === "paused";
+	return [
+		{
+			key: "split",
+			label: "Let the agent split this now",
+			letter: "S",
+			note: "It proposes workers, each with its own paths; you approve them on its Thread tab",
+			why: splitWhy,
+			run: () => call(name, () => splitSession(inst, name))
+		},
+		{
+			key: "ask",
+			label: "Ask for workers once",
+			letter: "A",
+			keys: ASK_WORKERS_KEYS,
+			note: "Types the workers request into its terminal — add the task, press Enter",
+			why: paused ? "Its agent is paused — resume it first" : "",
+			run: () => void insertWorkersRequest(title)
+		},
+		{
+			key: "flock",
+			label: "Workers on every prompt",
+			letter: "E",
+			keys: FLOCK_KEYS,
+			checked: on,
+			note: on ? "On — everything you send asks for workers" : "Adds the workers request to everything you send here",
+			why: "",
+			run: () => void toggleFlock(title)
+		}
+	];
 }
 //#endregion
 //#region src/components/presence/Presence.tsx
@@ -57126,7 +57264,7 @@ function RunGroupHeader({ group, repoPath }) {
 				children: "usage"
 			}) : group.waitingMemory && !group.done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "dev-badge rg-usage",
-				title: "Memory is low — queued lines start once it recovers",
+				title: "Memory is low — queued tasks start once it recovers",
 				children: "memory"
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -57141,7 +57279,7 @@ function RunGroupHeader({ group, repoPath }) {
 				ref: more,
 				type: "button",
 				className: "rg-more",
-				title: "Pause, add lines, start the next one, cancel…",
+				title: "Pause, add tasks, start the next one, cancel…",
 				"aria-label": "Actions for " + group.name,
 				"aria-haspopup": "menu",
 				onClick: (e) => {
@@ -57208,7 +57346,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 			const items = (pv?.items || []).filter((i) => !i.error);
 			const bad = (pv?.items || []).filter((i) => i.error);
 			if (!items.length) {
-				errorPop("Nothing to add", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n") || "no lines");
+				errorPop("Nothing to add", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n") || "no tasks");
 				return;
 			}
 			await api(runPath(id, "/tasks"), { json: { items: items.map((i) => i.kind === "ticket" ? {
@@ -57219,11 +57357,11 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 				kind: "task",
 				text: i.text
 			}) } });
-			toast("Added " + items.length + (items.length === 1 ? " line" : " lines") + " to " + group.name);
-			if (bad.length) errorPop("Some lines weren't added", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n"));
+			toast("Added " + items.length + (items.length === 1 ? " task" : " tasks") + " to " + group.name);
+			if (bad.length) errorPop("Some tasks weren't added", bad.map((i) => String(i.ref || i.id || "") + ": " + String(i.error)).join("\n"));
 			onClose();
 		} catch (err) {
-			errorPop("Add lines failed", errMsg(err));
+			errorPop("Add tasks failed", errMsg(err));
 		} finally {
 			setBusy(false);
 			refreshRuns();
@@ -57288,7 +57426,7 @@ function RunGroupMenu({ group, at, repoPath, onClose }) {
 				role: "menuitem",
 				disabled: busy,
 				onClick: () => setMode("add"),
-				children: "Add lines…"
+				children: "Add tasks…"
 			})),
 			group.queued.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "rg-menu-sec",
@@ -62038,7 +62176,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 				run.mode === "same_folder" && !!(run.stray?.paths?.length || run.stray?.commits?.length) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "thread-sub th-bad rb-warn",
 					"data-stray": "",
-					children: [run.stray?.paths?.length ? "Changes no piece owns in " + myName + "'s folder: " + run.stray.paths.slice(0, 4).join(", ") + (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") + " — no piece's commit takes them; commit or discard them yourself." : "", run.stray?.commits?.length ? " A commit no piece made is on the team run's branch (" + run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") + ") — it ships with the PR unless you undo it." : ""]
+					children: [run.stray?.paths?.length ? "Changes no worker owns in " + myName + "'s folder: " + run.stray.paths.slice(0, 4).join(", ") + (run.stray.paths.length > 4 ? " (+" + (run.stray.paths.length - 4) + " more)" : "") + " — no worker's commit takes them; commit or discard them yourself." : "", run.stray?.commits?.length ? " A commit no worker made is on the team run's branch (" + run.stray.commits.slice(0, 3).map((c) => c.slice(0, 9)).join(", ") + ") — it ships with the PR unless you undo it." : ""]
 				}),
 				finished && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "thread-head-btns",
@@ -62056,7 +62194,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 				}),
 				noTools && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "thread-sub th-bad rb-warn",
-					children: "Restart the lead to give it the MindFlock tools — it proposes the pieces with them."
+					children: "Restart the lead to give it the MindFlock tools — it proposes the workers with them."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StagesDiagram, { stages: runStages(run) })
 			]
@@ -62076,7 +62214,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 						children: [
 							"proposed by ",
 							myName,
-							" · each piece may edit only its paths"
+							" · each worker may edit only its paths"
 						]
 					})
 				]
@@ -62160,7 +62298,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
 						className: "rb-modes",
 						disabled: !!busy || editing !== null,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "Where the pieces run" }), choices.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "Where the workers run" }), choices.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 							className: "rb-mode" + (mode === c.mode ? " on" : ""),
 							"data-mode": c.mode,
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -62384,11 +62522,7 @@ function RunLeadPanel({ title, me, run, rows }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "thread-label",
-						children: [
-							split ? "Pieces" : "Lines",
-							" · ",
-							tasks.length
-						]
+						children: ["Workers · ", tasks.length]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "th-sp" }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -62492,6 +62626,7 @@ function ThreadTab({ title, active }) {
 	const { data: rowsData } = useInstances();
 	const rows = (0, import_react.useMemo)(() => rowsData ?? [], [rowsData]);
 	const me = rows.find((r) => r.title === title && !r.device);
+	const { data: config } = useConfig();
 	const { parent, children } = (0, import_react.useMemo)(() => familyOf(title, rows), [title, rows]);
 	const leadOf = me?.run?.role === "lead" ? me.run : null;
 	const { data: leadRun } = useRun(leadOf?.id);
@@ -62744,7 +62879,7 @@ function ThreadTab({ title, active }) {
 								] }) : null,
 								". Its reports and messages are below; ",
 								nameOf(parent),
-								"'s Thread has the whole family."
+								"'s Thread has all its workers."
 							]
 						}),
 						me?.order?.state === "held" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
@@ -62786,18 +62921,29 @@ function ThreadTab({ title, active }) {
 								]
 							})
 						})
-					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						className: "thread-title",
-						children: myName
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-						className: "thread-sub",
-						children: [
-							"No workers yet — use Split into parallel pieces… in the session's › menu. Or write to",
-							" ",
-							myName,
-							" below; it is typed into its prompt as you."
-						]
-					})] })
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							className: "thread-title",
+							children: myName
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							className: "thread-sub",
+							children: [
+								"No workers yet — Workers… lets the agent split this now, or asks for workers once or on every prompt. Or write to ",
+								myName,
+								" below; it is typed into its prompt as you."
+							]
+						}),
+						flockAvailable(me, config) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "thread-head-btns",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "th-btn",
+								onClick: () => openWorkersMenu(title),
+								children: "Workers…"
+							})
+						})
+					] })
 				}),
 				!leadOf && orderWorthShowing(data?.order) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OrderDiagram, {
 					title,
@@ -80493,11 +80639,16 @@ function FastTrackMenu({ title, anchor, onClose }) {
 	const name = useUi((s) => s.aliases[title]) || title;
 	const inst = (rows || []).find((r) => r.title === title && !r.device) || (rows || []).find((r) => r.title === title);
 	const model = (0, import_react.useMemo)(() => fastTrackModel(inst || {}), [inst]);
-	const entries = (0, import_react.useMemo)(() => [...model.items.map((i) => ({
+	const flightRow = inst && flightDecides(inst.flight) ? inst.flight : null;
+	const { data: flights } = useFlights(!!flightRow);
+	const flightSteps = flightRow ? (flights || []).find((f) => f.id === flightRow.id)?.steps : void 0;
+	const reach = (0, import_react.useMemo)(() => flightRow ? flightReach(flightRow, flightSteps) : null, [flightRow, flightSteps]);
+	const entries = (0, import_react.useMemo)(() => reach ? [{ kind: "stops" }, { kind: "sky" }] : [...model.items.map((i) => ({
 		kind: "lane",
 		lane: i.lane
-	})), { kind: "ask" }], [model]);
-	const [sel, setSel] = (0, import_react.useState)(() => Math.max(0, model.items.findIndex((i) => i.current)));
+	})), { kind: "ask" }], [model, reach]);
+	const [selAt, setSel] = (0, import_react.useState)(() => flightRow ? 0 : Math.max(0, model.items.findIndex((i) => i.current)));
+	const sel = Math.min(selAt, entries.length - 1);
 	const menuRef = (0, import_react.useRef)(null);
 	const onCloseRef = (0, import_react.useRef)(onClose);
 	onCloseRef.current = onClose;
@@ -80554,13 +80705,20 @@ function FastTrackMenu({ title, anchor, onClose }) {
 		};
 	}, [anchor]);
 	const close = (refocus = false) => onCloseRef.current(refocus);
-	const whyOf = (e) => e.kind === "ask" ? model.ask.why : model.lock;
-	const keyOf = (e) => e.kind === "ask" ? "A" : model.items.find((i) => i.lane === e.lane)?.key || "";
+	const whyOf = (e) => e.kind === "ask" ? model.ask.why : e.kind === "lane" ? model.lock : "";
+	const keyOf = (e) => e.kind === "ask" ? "A" : e.kind === "stops" ? "E" : e.kind === "sky" ? "S" : model.items.find((i) => i.lane === e.lane)?.key || "";
 	const activate = (e) => {
 		if (!e) return;
 		const why = whyOf(e);
 		if (why) {
 			toast(why, { duration: 5e3 });
+			return;
+		}
+		if (e.kind === "stops" || e.kind === "sky") {
+			close();
+			const ui = useUi.getState();
+			if (e.kind === "stops") ui.setLastTab(title, "flight");
+			else ui.showSky(title);
 			return;
 		}
 		if (!inst) return;
@@ -80598,6 +80756,32 @@ function FastTrackMenu({ title, anchor, onClose }) {
 		}
 	};
 	const row = (e, i) => {
+		if (e.kind === "stops" || e.kind === "sky") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: itemId(i),
+			className: "pb-item" + (i === sel ? " sel" : ""),
+			role: "menuitem",
+			tabIndex: -1,
+			"data-ft": e.kind === "stops" ? "edit-stops" : "open-sky",
+			onMouseMove: () => setSel(i),
+			onClick: () => activate(e),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "pb-name",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ft-check",
+						"aria-hidden": "true"
+					}), e.kind === "stops" ? "Edit its stops" : "Open in the Sky"]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-key",
+					children: keyOf(e)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pb-desc",
+					children: e.kind === "stops" ? "Its Flight tab: add, remove or move its stops" : "Its line on the Sky's board"
+				})
+			]
+		}, e.kind);
 		const why = whyOf(e);
 		const it = e.kind === "lane" ? model.items.find((x) => x.lane === e.lane) : null;
 		const checked = it ? it.current : model.ask.on;
@@ -80648,14 +80832,30 @@ function FastTrackMenu({ title, anchor, onClose }) {
 		},
 		onKeyDown,
 		onMouseDown: (e) => e.stopPropagation(),
-		children: [
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pb-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩ Fast-track" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "muted",
+				children: ["→ ", name]
+			})]
+		}), reach ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "pb-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏩ Fast-track" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "muted",
-					children: ["→ ", name]
+				className: "ft-flight",
+				"data-ft-flight": reach.lane || "none",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ft-flight-head",
+					children: reach.head
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "ft-flight-desc",
+					children: reach.desc
 				})]
 			}),
+			entries.map((e, i) => row(e, i)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-foot",
+				children: "Fast-track is set aside while its stops are on. It comes back once they finish or halt."
+			})
+		] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "pb-sec",
 				children: "When the agent is done, go as far as"
@@ -80671,7 +80871,7 @@ function FastTrackMenu({ title, anchor, onClose }) {
 					". New sessions start at Settings → Workspace's default."
 				]
 			})
-		]
+		] })]
 	}), document.body);
 }
 //#endregion
@@ -82498,6 +82698,15 @@ function rightColumn(placed, items, top = SKY_MARGIN, gap = SKY_GAP) {
 	}
 	return out;
 }
+function clearRightColumn(column, lines, gap = SKY_GAP) {
+	if (!column.length || !lines.length) return {};
+	if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
+	const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
+	return Object.fromEntries(column.map((c) => [c.id, {
+		x,
+		y: c.y
+	}]));
+}
 function spotNear(want, taken, size, within) {
 	const step = PLACE_GAP;
 	const free = (x, y) => !taken.some((t) => hits({
@@ -82974,6 +83183,42 @@ function skyLineTitles(rows, mode, opts = {}) {
 		return out;
 	};
 	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
+}
+function withLiveFlights(rows, flights, kinds) {
+	if (!flights?.length) return rows;
+	const newest = /* @__PURE__ */ new Map();
+	for (const f of flights) {
+		if (!f.session || f.free || !isShown(f)) continue;
+		const had = newest.get(f.session);
+		if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
+	}
+	if (!newest.size) return rows;
+	let out = null;
+	rows.forEach((r, i) => {
+		const f = newest.get(r.title);
+		if (!f || r.flight?.id) return;
+		const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
+		const row = {
+			...r.flight,
+			id: f.id,
+			plan_name: f.plan_name,
+			cursor: f.cursor,
+			total: f.steps.length,
+			state: f.state,
+			step: step ? {
+				id: step.id,
+				kind: step.kind,
+				title: step.title,
+				state: f.step_states?.[step.id]?.state || "pending",
+				actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot")
+			} : null
+		};
+		(out ??= rows.slice())[i] = {
+			...r,
+			flight: row
+		};
+	});
+	return out ?? rows;
 }
 //#endregion
 //#region src/lib/stopEditing.ts
@@ -85761,27 +86006,27 @@ var FAMILY = {
 	join: "work",
 	command: "work",
 	test: "work",
-	sync: "work",
-	checkpoint: "work",
 	judge: "work",
-	screenshot: "work",
-	preview: "work",
+	review: "work",
+	loop: "work",
 	ship: "ship",
 	checks: "ship",
 	reviews: "ship",
 	land: "ship",
+	sync: "ship",
+	checkpoint: "ship",
 	wait: "outside",
 	notify: "outside",
 	ticket: "outside",
 	budget: "outside",
 	call: "outside",
 	listen: "outside",
+	preview: "outside",
+	screenshot: "outside",
 	you: "people",
 	perch: "people",
 	verify: "people",
-	review: "people",
 	someone: "people",
-	loop: "flow",
 	handoff: "flow"
 };
 var FAMILIES = /* @__PURE__ */ new Set([
@@ -90044,6 +90289,15 @@ function useSessionLine(title, src, opts) {
 }
 //#endregion
 //#region src/components/flights/SessionFlight.tsx
+var SAVED_SHOWN = 3;
+function featuredPlans(plans, all) {
+	const ranked = [...plans.filter((p) => !p.builtin).sort((a, b) => (b.updated || 0) - (a.updated || 0)), ...plans.filter((p) => p.builtin)];
+	const shown = all ? ranked : ranked.slice(0, SAVED_SHOWN);
+	return {
+		shown,
+		more: ranked.length - shown.length
+	};
+}
 function FlywayCard({ plan, kinds, onFly, busy }) {
 	const d = flywayDiagram(plan.steps, kinds);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -90091,12 +90345,14 @@ function SessionFlight({ inst, active = true }) {
 		plans: useFlightPlans(active).data || []
 	}, { onSession: (t) => selectSession(t) });
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [allSaved, setAllSaved] = (0, import_react.useState)(false);
 	const { row, flight, diagram, ordered, cancel } = line;
 	if (!row) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 		className: "fl-note muted",
 		children: "This session isn't listed right now."
 	});
 	const prog = flight ? flightProgress(flight) : null;
+	const saved = featuredPlans(ordered, allSaved);
 	const working = busy || line.busy;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-session",
@@ -90156,15 +90412,21 @@ function SessionFlight({ inst, active = true }) {
 						className: "fl-group-head",
 						children: "Saved stops"
 					}),
-					ordered.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					ordered.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 						className: "fl-flyway-grid",
-						children: ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCard, {
+						children: saved.shown.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCard, {
 							plan: p,
 							kinds,
 							busy: working,
 							onFly: () => void line.flyFlyway(p)
 						}, p.id))
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					}), (saved.more > 0 || allSaved) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn fl-flyway-more",
+						"aria-expanded": allSaved,
+						onClick: () => setAllSaved((v) => !v),
+						children: allSaved ? "Fewer" : "More… (" + saved.more + ")"
+					})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "fl-note muted",
 						children: "No saved stops on this server yet."
 					}),
@@ -90208,6 +90470,187 @@ function SessionFlight({ inst, active = true }) {
 			})
 		]
 	});
+}
+//#endregion
+//#region src/components/grid/WorkersMenu.tsx
+function WorkersMenu({ title, anchor, keys, onClose }) {
+	const { data: rows } = useInstances();
+	const name = useUi((s) => s.aliases[title]) || title;
+	const inst = (rows || []).find((r) => r.title === title && !r.device) || (rows || []).find((r) => r.title === title);
+	const modes = (0, import_react.useMemo)(() => {
+		if (!inst) return [];
+		const ms = workersModes(inst, actionCtx(title, { inst }));
+		return keys ? ms.map((m) => m.key === "ask" ? {
+			...m,
+			keys: keys[0]
+		} : m.key === "flock" ? {
+			...m,
+			keys: keys[1]
+		} : m) : ms;
+	}, [
+		inst,
+		title,
+		keys
+	]);
+	const [sel, setSel] = (0, import_react.useState)(() => Math.max(0, modes.findIndex((m) => !m.why)));
+	const menuRef = (0, import_react.useRef)(null);
+	const onCloseRef = (0, import_react.useRef)(onClose);
+	onCloseRef.current = onClose;
+	const uid = (0, import_react.useId)();
+	const itemId = (i) => uid + "-item-" + i;
+	(0, import_react.useEffect)(() => {
+		menuRef.current?.focus({ preventScroll: true });
+	}, []);
+	const placeRef = (0, import_react.useRef)(() => {});
+	placeRef.current = () => {
+		const m = menuRef.current;
+		if (!m) return;
+		const r = anchor.getBoundingClientRect();
+		m.style.maxHeight = "none";
+		const natural = m.scrollHeight;
+		const below = window.innerHeight - r.bottom - 18;
+		const above = r.top - 18;
+		if (natural > below && above > below) {
+			const h = Math.min(natural, above);
+			m.style.top = Math.max(8, Math.round(r.top - 6 - h)) + "px";
+			m.style.maxHeight = h + "px";
+		} else {
+			const top = Math.round(r.bottom + 6);
+			m.style.top = top + "px";
+			m.style.maxHeight = Math.max(160, window.innerHeight - top - 12) + "px";
+		}
+		let left = r.right - m.offsetWidth + 10;
+		left = Math.min(left, window.innerWidth - m.offsetWidth - 8);
+		m.style.left = Math.max(8, left) + "px";
+	};
+	(0, import_react.useLayoutEffect)(() => placeRef.current());
+	(0, import_react.useEffect)(() => {
+		const inside = (t) => t instanceof Node && (!!menuRef.current?.contains(t) || anchor.contains(t));
+		const onDown = (e) => {
+			if (!inside(e.target)) onCloseRef.current(false);
+		};
+		const onScroll = (e) => {
+			const t = e.target;
+			if (inside(t)) return;
+			if (t instanceof Node && t !== document && t.contains(anchor)) {
+				placeRef.current();
+				return;
+			}
+			onCloseRef.current(false);
+		};
+		const onResize = () => onCloseRef.current(false);
+		document.addEventListener("mousedown", onDown, true);
+		window.addEventListener("scroll", onScroll, true);
+		window.addEventListener("resize", onResize);
+		return () => {
+			document.removeEventListener("mousedown", onDown, true);
+			window.removeEventListener("scroll", onScroll, true);
+			window.removeEventListener("resize", onResize);
+		};
+	}, [anchor]);
+	const close = (refocus = false) => onCloseRef.current(refocus);
+	const activate = (i) => {
+		const m = modes[i];
+		if (!m) return;
+		if (m.why) {
+			toast(m.why, { duration: 5e3 });
+			return;
+		}
+		close();
+		m.run();
+	};
+	const onKeyDown = (e) => {
+		if (e.ctrlKey || e.metaKey || e.altKey) return;
+		const k = e.key;
+		const handled = () => {
+			e.preventDefault();
+			e.stopPropagation();
+		};
+		if (!modes.length) return;
+		if (k === "ArrowDown") {
+			handled();
+			setSel((i) => (i + 1) % modes.length);
+		} else if (k === "ArrowUp") {
+			handled();
+			setSel((i) => (i - 1 + modes.length) % modes.length);
+		} else if (k === "Enter" || k === " ") {
+			handled();
+			activate(sel);
+		} else if (k === "Escape") {
+			handled();
+			close(true);
+		} else if (k.length === 1 && /[a-z]/i.test(k)) {
+			const i = modes.findIndex((m) => m.letter === k.toUpperCase());
+			if (i >= 0) {
+				handled();
+				setSel(i);
+				activate(i);
+			}
+		}
+	};
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "workers-menu",
+		className: "pb-menu ft-menu wk-menu",
+		role: "menu",
+		"data-modal": "",
+		"aria-label": `Workers — ${name}`,
+		tabIndex: -1,
+		ref: menuRef,
+		"aria-activedescendant": modes.length ? itemId(sel) : void 0,
+		style: {
+			top: 0,
+			left: 0
+		},
+		onKeyDown,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pb-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Workers" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "muted",
+					children: ["→ ", name]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-sec",
+				children: "Sessions this one starts, each on its own branch"
+			}),
+			modes.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: itemId(i),
+				className: "pb-item" + (i === sel ? " sel" : "") + (m.why ? " off" : "") + (m.checked ? " on" : ""),
+				role: m.key === "flock" ? "menuitemcheckbox" : "menuitem",
+				"aria-checked": m.key === "flock" ? !!m.checked : void 0,
+				"aria-disabled": m.why ? true : void 0,
+				tabIndex: -1,
+				title: m.why || void 0,
+				"data-wk": m.key,
+				onMouseMove: () => setSel(i),
+				onClick: () => activate(i),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "pb-name",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ft-check",
+							"aria-hidden": "true",
+							children: m.checked ? "✓" : ""
+						}), m.label]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pb-key",
+						children: m.keys || m.letter
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pb-desc" + (m.why ? " pb-why" : ""),
+						children: m.why || m.note
+					})
+				]
+			}, m.key)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pb-foot",
+				children: "The words it asks with, and the model workers run on: Settings → Agent orchestration."
+			})
+		]
+	}), document.body);
 }
 //#endregion
 //#region src/components/grid/Pane.tsx
@@ -90294,6 +90737,8 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	].join(",") : "";
 	const ftMenu = useUi((s) => s.fastTrackMenu?.title === title ? s.fastTrackMenu : null);
 	const [ftEl, setFtEl] = (0, import_react.useState)(null);
+	const wkMenu = useWorkersMenu(title);
+	const [wkEl, setWkEl] = (0, import_react.useState)(null);
 	const caps = config?.caps ?? {
 		git: true,
 		tailscale: true,
@@ -90568,6 +91013,10 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	(0, import_react.useEffect)(() => {
 		if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
 	}, [ftMenu, ftGone]);
+	const wkGone = missing || loading || !flockAvailable(inst, config);
+	(0, import_react.useEffect)(() => {
+		if (wkMenu && wkGone) closeWorkersMenu();
+	}, [wkMenu, wkGone]);
 	const me = useMe();
 	const calm = useCalm();
 	const paneHeader = useUi((s) => s.paneHeader);
@@ -91149,19 +91598,21 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 								me
 							}),
 							flockShown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-								className: "nextstep nextstep-flock" + (flockOn ? " is-on" : ""),
+								ref: setWkEl,
+								className: "nextstep nextstep-flock" + (flockOn ? " is-on" : "") + (wkMenu ? " open" : ""),
 								type: "button",
-								"aria-pressed": flockOn,
-								"aria-label": "Workers on every prompt: " + (flockOn ? "on" : "off"),
+								"aria-haspopup": "menu",
+								"aria-expanded": wkMenu,
+								"aria-label": "Workers" + (flockOn ? " — on every prompt" : ""),
 								title: flockTooltip(flockOn, [shortcutLabels("flock")[0] || FLOCK_KEYS, shortcutLabels("workers")[0] || ASK_WORKERS_KEYS]),
 								onClick: (ev) => {
 									ev.stopPropagation();
-									toggleFlock(title);
+									openWorkersMenu(title, true);
 								},
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "flock-bird",
 									"aria-hidden": "true"
-								}), flockChipLabel()]
+								}), flockChipLabel(flockOn)]
 							}, "flock"),
 							items.buttons.map((id) => buttonEls[id])
 						]
@@ -91334,6 +91785,15 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 				onClose: (refocus) => {
 					const ui = useUi.getState();
 					if (ui.fastTrackMenu?.title === title) ui.setFastTrackMenu(null);
+					if (refocus) setTimeout(() => focusTerm(title), 0);
+				}
+			}),
+			wkMenu && flockShown && wkEl && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkersMenu, {
+				title,
+				anchor: wkEl,
+				keys: [shortcutLabels("workers")[0] || ASK_WORKERS_KEYS, shortcutLabels("flock")[0] || FLOCK_KEYS],
+				onClose: (refocus) => {
+					closeWorkersMenu();
 					if (refocus) setTimeout(() => focusTerm(title), 0);
 				}
 			})
@@ -92201,9 +92661,9 @@ var SETTINGS_SEARCH = [
 		anchor: "#general-tours"
 	},
 	{
-		key: "general",
-		label: "General → Workers request",
-		sub: "What Alt+G types, and Flock mode adds to every prompt",
+		key: "orchestration",
+		label: "Agent orchestration → Workers",
+		sub: "What Alt+G types, and Workers on every prompt adds",
 		terms: [
 			"workers",
 			"worker",
@@ -92214,7 +92674,7 @@ var SETTINGS_SEARCH = [
 			"workers model",
 			"every prompt"
 		],
-		anchor: "#general-workers"
+		anchor: "#orch-workers"
 	},
 	{
 		key: "general",
@@ -92344,7 +92804,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "coding",
 		label: "Agents → Sessions running at once",
-		sub: "How many ticket sessions run at the same time",
+		sub: "How many run together; the ticket-session limit is set in Intake",
 		terms: [
 			"parallel",
 			"concurrency",
@@ -92352,6 +92812,8 @@ var SETTINGS_SEARCH = [
 			"at once",
 			"simultaneous",
 			"max sessions",
+			"max ticket sessions",
+			"ticket sessions at once",
 			"how many",
 			"session limit",
 			"limit",
@@ -92407,6 +92869,7 @@ var SETTINGS_SEARCH = [
 			"orchestration",
 			"mcp",
 			"spawn",
+			"workers",
 			"sub-sessions",
 			"fan out",
 			"nesting",
@@ -92418,7 +92881,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "workspace",
 		label: "Workspace",
-		sub: "Where sessions' files live and how ticket sessions copy a repo",
+		sub: "Where sessions' files live, and the branches they start from",
 		terms: [
 			"workspace",
 			"worktree",
@@ -92431,6 +92894,20 @@ var SETTINGS_SEARCH = [
 			"base branch",
 			"pr base"
 		]
+	},
+	{
+		key: "workspace",
+		label: "Workspace → Default live branch",
+		sub: "The branch that means shipped, unless a repository sets its own",
+		terms: [
+			"live branch",
+			"default live branch",
+			"shipped",
+			"production branch",
+			"release branch"
+		],
+		anchor: "#workspace-advanced",
+		advanced: true
 	},
 	{
 		key: "workspace",
@@ -92449,12 +92926,13 @@ var SETTINGS_SEARCH = [
 	{
 		key: "workspace",
 		label: "Workspace → Worktree or clone",
-		sub: "A worktree shares your repo's history; a clone is fully separate",
+		sub: "How ticket sessions copy the repo — set in Intake",
 		terms: [
 			"worktree mode",
 			"clone",
 			"full clone",
 			"copy the repo",
+			"how ticket sessions copy the repo",
 			"ticket sessions"
 		],
 		anchor: "#workspace-copy-mode"
@@ -92471,6 +92949,19 @@ var SETTINGS_SEARCH = [
 			"vs code",
 			"open in editor"
 		]
+	},
+	{
+		key: "ide",
+		label: "IDE → Open IDE when a ticket starts",
+		sub: "Open each new ticket session in your editor — set in Intake",
+		terms: [
+			"open ide when a ticket starts",
+			"open ide",
+			"ide on ticket",
+			"open editor on ticket",
+			"ticket ide"
+		],
+		anchor: "#ide-ticket-row"
 	},
 	{
 		key: "security",
@@ -92534,6 +93025,19 @@ var SETTINGS_SEARCH = [
 			"reachable",
 			"remote"
 		]
+	},
+	{
+		key: "devices",
+		label: "Your devices → Which computer auto-starts work",
+		sub: "The one device that handles PR review comments and new issues",
+		terms: [
+			"which computer auto-starts work",
+			"pr review and issue handling",
+			"run here",
+			"automation device",
+			"runs on"
+		],
+		anchor: "#devices-run-here"
 	},
 	{
 		key: "mobile",
@@ -92663,6 +93167,19 @@ var SETTINGS_SEARCH = [
 			"restart server",
 			"uninstall"
 		]
+	},
+	{
+		key: "advanced",
+		label: "Engine & updates → Ticket sessions in MindFlock",
+		sub: "Tickets as MindFlock sessions or a bare tmux session — set in Intake",
+		terms: [
+			"ticket sessions in mindflock",
+			"tmux",
+			"terminal tab",
+			"engine enabled",
+			"bare tmux"
+		],
+		anchor: "#engine-ticket-sessions"
 	}
 ];
 function settingsMatchScore(entry, q) {
@@ -92718,6 +93235,10 @@ function settingsActions(query) {
 //#endregion
 //#region src/components/flights/SkyGuide.tsx
 var SKY_GUIDE_SECTIONS = [
+	{
+		id: "start",
+		title: "Start here"
+	},
 	{
 		id: "what",
 		title: "What the sky is"
@@ -92838,6 +93359,58 @@ function Sketch({ label, children, h = 110 }) {
 	});
 }
 var SKETCHES = {
+	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A chain: the agent first, two stops joined by wires and a + after them; a stop dragged up from the shelf onto it",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 12,
+				n: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box sg-dash",
+				x: 182,
+				y: 26,
+				width: 26,
+				height: 26,
+				rx: 5
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 190,
+				y: 44,
+				children: "+"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
+				x: 74,
+				y: 22
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-chip",
+				x: 196,
+				y: 82,
+				width: 70,
+				height: 20,
+				rx: 10
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 210,
+				y: 96,
+				children: "Verify"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M220 82 L200 58 M200 66 L200 58 L208 60"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 74,
+				children: "agent → stops"
+			})
+		]
+	}),
 	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
 		label: "Panes on the left, the same sessions as lines on the right",
 		children: [
@@ -93326,6 +93899,49 @@ function Keys() {
 	});
 }
 var WORDS = {
+	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Five things are enough to start; the sections after this one go deeper." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+		className: "sky-guide-start",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Each session is a chain." }), " Its agent comes first; the stops after it run left to right, along the wires, once the agent's turn ends."] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Add a stop from the shelf." }),
+				" Drag ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
+				", ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Perch" }),
+				", ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
+				", ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
+				", ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
+				" or ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
+				" onto a chain, or click the ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
+				" after its last stop. Double-click empty sky for a new session."
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wire it." }), " Drag from a stop's round port onto another stop to move it there. Double-click a stop to edit it."] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run it, and answer it." }),
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Run" }),
+				" (or your next prompt) sets the chain going; the bird shows where it is. A ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Perch" }),
+				" waits for you: press ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Done" }),
+				" and it carries on."
+			] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Help." }),
+				" The sky's ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
+				" replays the tour or opens this guide; the ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "?" }),
+				" key lists every shortcut."
+			] })
+		]
+	})] }),
 	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The sky is the main area's second view. Every session is a line — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 		"Switch with ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Grid · Sky" }),
@@ -93397,7 +94013,9 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
 			" works through the branch's checklist, ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
-			" waits some minutes or until a time. ",
+			" waits some minutes or until a time, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
+			" sends the chain back to an earlier stop, a number of times, every so often. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All blocks…" }),
 			" on the shelf lists the rest, each with what it does."
 		] }),
@@ -93778,7 +94396,7 @@ function CommandPalette({ host }) {
 			label: "Schedule…",
 			hint: "Alt+S",
 			top: TOP.schedule,
-			keywords: "templates cron recurring nightly timer daily weekly",
+			keywords: "templates template cron recurring nightly timer daily weekly scheduled stops",
 			run: () => ui.openDialogFor("schedule")
 		});
 		acts.push(ui.view === "sky" ? {
@@ -93821,11 +94439,6 @@ function CommandPalette({ host }) {
 			label: "Prompts…",
 			hint: "manage saved prompts",
 			run: () => ui.openDialogFor("prompts")
-		});
-		acts.push({
-			label: "Templates…",
-			hint: "your templates — in Schedule",
-			run: () => ui.openDialogFor("schedule")
 		});
 		acts.push({
 			label: "New scheduled template…",
@@ -94104,6 +94717,553 @@ function CommandPalette({ host }) {
 				})]
 			})]
 		})
+	});
+}
+//#endregion
+//#region src/lib/folderPicker.ts
+var current = null;
+var nextId = 1;
+var listeners = /* @__PURE__ */ new Set();
+var emit = () => listeners.forEach((l) => l());
+function getFolderPicker() {
+	return current;
+}
+function openFolderPicker(req) {
+	const prev = current;
+	const id = nextId++;
+	current = {
+		...req,
+		id
+	};
+	emit();
+	prev?.onCancel?.();
+	return id;
+}
+function closeFolderPicker(id, notify = true) {
+	if (!current || id !== void 0 && current.id !== id) return;
+	const r = current;
+	current = null;
+	emit();
+	if (notify) r.onCancel?.();
+}
+function pickFolder(path) {
+	if (!current) return;
+	const r = current;
+	current = null;
+	emit();
+	r.onPick(path);
+}
+function subscribe(l) {
+	listeners.add(l);
+	return () => {
+		listeners.delete(l);
+	};
+}
+function useFolderPicker() {
+	return (0, import_react.useSyncExternalStore)(subscribe, getFolderPicker, getFolderPicker);
+}
+function useFolderPickerWhile(open, req) {
+	const latest = (0, import_react.useRef)(req);
+	latest.current = req;
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const id = openFolderPicker({
+			...latest.current(),
+			onSelect: (p) => latest.current().onSelect?.(p),
+			onPick: (p) => latest.current().onPick(p),
+			onCancel: () => latest.current().onCancel?.()
+		});
+		return () => closeFolderPicker(id, false);
+	}, [open]);
+}
+function parentPath(p) {
+	const t = p.length > 1 ? p.replace(/[\\/]+$/, "") : p;
+	if (t === "/" || t === "~" || t === "." || t === "") return "";
+	const i = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\"));
+	if (i < 0) return "";
+	if (i === 0) return "/";
+	return t.slice(0, i);
+}
+function seedChain(value) {
+	const out = [];
+	let p = value.trim();
+	while (p && out.length < 32) {
+		out.push(p);
+		p = parentPath(p);
+	}
+	out.push("");
+	return out;
+}
+var PICKER_RECT_KEY = "mf_folder_picker_rect";
+var PICKER_MARGIN = 8;
+var PICKER_MIN = {
+	w: 280,
+	h: 240
+};
+var PICKER_DEFAULT = {
+	w: 440,
+	h: 440
+};
+function clampRect(r, vw, vh, m = PICKER_MARGIN) {
+	const maxW = Math.max(0, vw - 2 * m);
+	const maxH = Math.max(0, vh - 2 * m);
+	const w = Math.min(Math.max(r.w, PICKER_MIN.w), maxW);
+	const h = Math.min(Math.max(r.h, PICKER_MIN.h), maxH);
+	const x = Math.min(Math.max(r.x, m), vw - m - w);
+	const y = Math.min(Math.max(r.y, m), vh - m - h);
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		w: Math.round(w),
+		h: Math.round(h)
+	};
+}
+function dragRect(from, sx, sy, px, py, vw, vh) {
+	return clampRect({
+		...from,
+		x: from.x + (px - sx),
+		y: from.y + (py - sy)
+	}, vw, vh);
+}
+function defaultRect(anchor, vw, vh, size = PICKER_DEFAULT) {
+	const gap = 12;
+	const { w, h } = size;
+	const centred = {
+		x: (vw - w) / 2,
+		y: (vh - h) / 2,
+		w,
+		h
+	};
+	if (!anchor) return clampRect(centred, vw, vh);
+	const y = anchor.top - 60;
+	if (anchor.right + gap + w <= vw - PICKER_MARGIN) return clampRect({
+		x: anchor.right + gap,
+		y,
+		w,
+		h
+	}, vw, vh);
+	if (anchor.left - gap - w >= PICKER_MARGIN) return clampRect({
+		x: anchor.left - gap - w,
+		y,
+		w,
+		h
+	}, vw, vh);
+	return clampRect(centred, vw, vh);
+}
+function loadPickerRect() {
+	try {
+		const v = JSON.parse(localStorage.getItem(PICKER_RECT_KEY) || "null");
+		if (v && [
+			v.x,
+			v.y,
+			v.w,
+			v.h
+		].every((n) => typeof n === "number" && Number.isFinite(n))) return v;
+	} catch {}
+	return null;
+}
+function savePickerRect(r) {
+	try {
+		localStorage.setItem(PICKER_RECT_KEY, JSON.stringify(r));
+	} catch {}
+}
+//#endregion
+//#region src/lib/pathComplete.ts
+function splitForCompletion(text) {
+	if (text === "~") return {
+		dir: "~",
+		partial: "",
+		prefix: "~/"
+	};
+	const cut = text.lastIndexOf("/");
+	const partial = text.slice(cut + 1);
+	const head = cut >= 0 ? text.slice(0, cut + 1) : "";
+	if (text.startsWith("/")) return {
+		dir: head === "/" ? "/" : head.slice(0, -1),
+		partial,
+		prefix: head
+	};
+	if (text.startsWith("~")) {
+		if (cut < 0) return {
+			dir: "~",
+			partial: text.slice(1),
+			prefix: "~/"
+		};
+		return {
+			dir: head.slice(0, -1),
+			partial,
+			prefix: head
+		};
+	}
+	const rel = head.replace(/\/+$/, "");
+	return {
+		dir: rel ? "~/" + rel : "",
+		partial,
+		prefix: rel ? "~/" + rel + "/" : "~/"
+	};
+}
+function commonPrefix(names, fold = false) {
+	if (!names.length) return "";
+	const norm = (s) => fold ? s.toLowerCase() : s;
+	let n = names[0].length;
+	const first = norm(names[0]);
+	for (const name of names.slice(1)) {
+		const s = norm(name);
+		let i = 0;
+		while (i < n && i < s.length && s[i] === first[i]) i++;
+		n = i;
+	}
+	return names[0].slice(0, n);
+}
+function matchNames(partial, names) {
+	const pool = partial.startsWith(".") ? names : names.filter((n) => !n.startsWith("."));
+	const exact = pool.filter((n) => n.startsWith(partial));
+	if (exact.length) return exact;
+	const low = partial.toLowerCase();
+	return pool.filter((n) => n.toLowerCase().startsWith(low));
+}
+function completeFrom(text, names) {
+	const { partial, prefix } = splitForCompletion(text);
+	if (text === "~") return {
+		text: "~/",
+		matches: [],
+		prefix
+	};
+	const matches = matchNames(partial, names);
+	if (matches.length === 1) return {
+		text: prefix + matches[0] + "/",
+		matches,
+		prefix
+	};
+	if (!matches.length) return {
+		text,
+		matches,
+		prefix
+	};
+	const lcp = commonPrefix(matches, !matches.every((m) => m.startsWith(partial)));
+	const grown = lcp.length > partial.length ? lcp : null;
+	return {
+		text: grown ? prefix + grown : text,
+		matches,
+		prefix
+	};
+}
+function cycle(matches, current, prefix, step = 1) {
+	if (!matches.length) return current;
+	const at = matches.findIndex((m) => current === prefix + m + "/" || current === prefix + m);
+	const n = matches.length;
+	return prefix + matches[at < 0 ? step > 0 ? 0 : n - 1 : (at + step + n) % n] + "/";
+}
+async function tabComplete(text, list, cache) {
+	const { dir } = splitForCompletion(text);
+	let names;
+	if (cache.current?.dir === dir) names = cache.current.names;
+	else {
+		try {
+			names = await list(dir);
+		} catch {
+			return null;
+		}
+		cache.current = {
+			dir,
+			names
+		};
+	}
+	return completeFrom(text, names);
+}
+function completionHint(text, r) {
+	if (!r) return {
+		hint: "No folder at " + (splitForCompletion(text).dir || "~"),
+		miss: true
+	};
+	if (r.matches.length > 1) return {
+		hint: r.matches.length + " folders match",
+		miss: false
+	};
+	if (r.text !== text) return {
+		hint: "completed to " + r.text,
+		miss: false
+	};
+	return {
+		hint: "No folder matches",
+		miss: true
+	};
+}
+//#endregion
+//#region src/components/PathField.tsx
+function pathFieldRequest(opts) {
+	const start = opts.value.trim();
+	return {
+		title: opts.title,
+		device: opts.device || "",
+		start,
+		selected: start,
+		anchor: opts.anchor,
+		onPick: (p) => {
+			opts.onDone?.();
+			opts.onChange(p);
+			opts.onPicked?.(p);
+		},
+		onCancel: () => opts.onDone?.()
+	};
+}
+function browseNames(dir, hidden = true) {
+	return api("/api/browse?path=" + encodeURIComponent(dir) + (hidden ? "&hidden=1" : "")).then((r) => (r.entries || []).map((e) => e.name));
+}
+function remoteCompletionTitle(device) {
+	return `Tab completes folders on this computer only — on ${device}, type the path in full or use Browse…`;
+}
+function usePathCompletion({ value, onChange, device = "", list = browseNames, rowId }) {
+	const listing = (0, import_react.useRef)(null);
+	const latest = (0, import_react.useRef)(value);
+	latest.current = value;
+	const [row, setRow] = (0, import_react.useState)(null);
+	const [hint, setHint] = (0, import_react.useState)("");
+	const [missed, setMissed] = (0, import_react.useState)(false);
+	const complete = async (text) => {
+		const r = await tabComplete(text, list, listing);
+		if (latest.current !== text) return;
+		const { hint: said, miss } = completionHint(text, r);
+		setRow(r && r.matches.length > 1 ? {
+			prefix: r.prefix,
+			matches: r.matches,
+			sel: -1
+		} : null);
+		if (r && r.text !== text) onChange(r.text);
+		setHint(said);
+		if (miss) setMissed(true);
+	};
+	const take = (prefix, name) => {
+		onChange(prefix + name + "/");
+		setRow(null);
+		setHint("completed to " + prefix + name + "/");
+	};
+	const onKeyDown = (e) => {
+		if (e.nativeEvent.isComposing) return false;
+		if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+			if (row) {
+				e.preventDefault();
+				const next = cycle(row.matches, latest.current, row.prefix, e.shiftKey ? -1 : 1);
+				const sel = row.matches.findIndex((m) => next === row.prefix + m + "/");
+				setRow({
+					...row,
+					sel
+				});
+				onChange(next);
+				setHint("completed to " + next);
+				return true;
+			}
+			if (e.shiftKey || device) return false;
+			const el = e.currentTarget;
+			const text = el.value;
+			if (!text || el.selectionStart !== text.length || el.selectionEnd !== text.length) return false;
+			e.preventDefault();
+			complete(text);
+			return true;
+		}
+		if (!row) return false;
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			e.preventDefault();
+			const n = row.matches.length;
+			const step = e.key === "ArrowDown" ? 1 : -1;
+			const sel = row.sel < 0 ? step > 0 ? 0 : n - 1 : (row.sel + step + n) % n;
+			setRow({
+				...row,
+				sel
+			});
+			setHint(row.matches[sel]);
+			return true;
+		}
+		if (e.key === "Enter" && row.sel >= 0) {
+			e.preventDefault();
+			take(row.prefix, row.matches[row.sel]);
+			return true;
+		}
+		if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			setRow(null);
+			return true;
+		}
+		return false;
+	};
+	return {
+		onKeyDown,
+		onTyped: () => {
+			setRow(null);
+			setHint("");
+		},
+		onFocus: () => {
+			listing.current = null;
+		},
+		onBlur: () => setRow(null),
+		inputProps: {
+			title: device ? remoteCompletionTitle(device) : void 0,
+			"aria-controls": row ? rowId : void 0,
+			className: missed ? "path-miss" : void 0,
+			onAnimationEnd: () => setMissed(false)
+		},
+		aids: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathCandidates, {
+			id: rowId,
+			prefix: row.prefix,
+			matches: row.matches,
+			sel: row.sel,
+			onPick: (m) => take(row.prefix, m)
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "path-field-live",
+			role: "status",
+			"aria-live": "polite",
+			children: hint
+		})] })
+	};
+}
+function PathCandidates({ id, prefix, matches, sel, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		id,
+		className: "path-cands",
+		role: "group",
+		"aria-label": "Folders that match",
+		children: [matches.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			tabIndex: -1,
+			className: "path-cand" + (i === sel ? " active" : ""),
+			"aria-pressed": i === sel,
+			title: prefix + m + "/",
+			onMouseDown: (e) => e.preventDefault(),
+			onClick: (e) => {
+				e.preventDefault();
+				onPick(m);
+			},
+			children: [m, "/"]
+		}, m)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "path-cands-legend",
+			children: "Tab cycles · Enter takes · Esc closes"
+		})]
+	});
+}
+function PathField({ value, onChange, onPicked, device = "", pickerTitle, browseLabel = "Browse…", className, onKeyDown, onFocus, onBlur, ...input }) {
+	const btnRef = (0, import_react.useRef)(null);
+	const openId = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => () => {
+		if (openId.current !== null) closeFolderPicker(openId.current, false);
+	}, []);
+	const comp = usePathCompletion({
+		value,
+		onChange,
+		device,
+		rowId: input.id ? input.id + "-matches" : void 0
+	});
+	const browse = () => {
+		openId.current = openFolderPicker(pathFieldRequest({
+			value,
+			onChange,
+			onPicked,
+			device,
+			title: pickerTitle,
+			anchor: btnRef.current,
+			onDone: () => {
+				openId.current = null;
+			}
+		}));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "path-field" + (className ? " " + className : ""),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "text",
+				autoComplete: "off",
+				spellCheck: false,
+				title: comp.inputProps.title,
+				...input,
+				"aria-controls": comp.inputProps["aria-controls"] ?? input["aria-controls"],
+				className: comp.inputProps.className,
+				onAnimationEnd: comp.inputProps.onAnimationEnd,
+				value,
+				onChange: (e) => {
+					comp.onTyped();
+					onChange(e.target.value);
+				},
+				onKeyDown: (e) => {
+					if (!comp.onKeyDown(e)) onKeyDown?.(e);
+				},
+				onFocus: (e) => {
+					comp.onFocus();
+					onFocus?.(e);
+				},
+				onBlur: (e) => {
+					comp.onBlur();
+					onBlur?.(e);
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				ref: btnRef,
+				className: "path-field-browse",
+				id: input.id ? input.id + "-browse" : void 0,
+				title: "Pick a folder in a window you can move",
+				onClick: (e) => {
+					e.preventDefault();
+					browse();
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					"aria-hidden": "true",
+					children: "📁 "
+				}), browseLabel]
+			}),
+			comp.aids
+		]
+	});
+}
+//#endregion
+//#region src/components/settings/screens/AgentPicker.tsx
+function useAgentChoices() {
+	const [choices, setChoices] = (0, import_react.useState)({
+		names: [],
+		fallback: ""
+	});
+	(0, import_react.useEffect)(() => {
+		let alive = true;
+		(async () => {
+			try {
+				const p = await api("/api/providers");
+				if (!alive) return;
+				setChoices({
+					names: (p?.providers || []).map((x) => x.name).filter(Boolean),
+					fallback: p?.default || ""
+				});
+			} catch {}
+		})();
+		return () => {
+			alive = false;
+		};
+	}, []);
+	return choices;
+}
+function AgentPicker({ label, hint, value, choices, fallbackLabel, onChange }) {
+	const empty = fallbackLabel || (choices.fallback ? `App default (${choices.fallback})` : "App default");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: label
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				value: value || "",
+				onChange: (e) => onChange(e.target.value),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: "",
+					children: empty
+				}), choices.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: n,
+					children: n
+				}, n))]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: hint
+			})
+		]
 	});
 }
 //#endregion
@@ -94677,501 +95837,6 @@ function ModelRow({ selectedProfile, profileId, profileModel, setProfileModel, p
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", { id: "provider-list" })
 	] });
-}
-//#endregion
-//#region src/lib/folderPicker.ts
-var current = null;
-var nextId = 1;
-var listeners = /* @__PURE__ */ new Set();
-var emit = () => listeners.forEach((l) => l());
-function getFolderPicker() {
-	return current;
-}
-function openFolderPicker(req) {
-	const prev = current;
-	const id = nextId++;
-	current = {
-		...req,
-		id
-	};
-	emit();
-	prev?.onCancel?.();
-	return id;
-}
-function closeFolderPicker(id, notify = true) {
-	if (!current || id !== void 0 && current.id !== id) return;
-	const r = current;
-	current = null;
-	emit();
-	if (notify) r.onCancel?.();
-}
-function pickFolder(path) {
-	if (!current) return;
-	const r = current;
-	current = null;
-	emit();
-	r.onPick(path);
-}
-function subscribe(l) {
-	listeners.add(l);
-	return () => {
-		listeners.delete(l);
-	};
-}
-function useFolderPicker() {
-	return (0, import_react.useSyncExternalStore)(subscribe, getFolderPicker, getFolderPicker);
-}
-function useFolderPickerWhile(open, req) {
-	const latest = (0, import_react.useRef)(req);
-	latest.current = req;
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const id = openFolderPicker({
-			...latest.current(),
-			onSelect: (p) => latest.current().onSelect?.(p),
-			onPick: (p) => latest.current().onPick(p),
-			onCancel: () => latest.current().onCancel?.()
-		});
-		return () => closeFolderPicker(id, false);
-	}, [open]);
-}
-function parentPath(p) {
-	const t = p.length > 1 ? p.replace(/[\\/]+$/, "") : p;
-	if (t === "/" || t === "~" || t === "." || t === "") return "";
-	const i = Math.max(t.lastIndexOf("/"), t.lastIndexOf("\\"));
-	if (i < 0) return "";
-	if (i === 0) return "/";
-	return t.slice(0, i);
-}
-function seedChain(value) {
-	const out = [];
-	let p = value.trim();
-	while (p && out.length < 32) {
-		out.push(p);
-		p = parentPath(p);
-	}
-	out.push("");
-	return out;
-}
-var PICKER_RECT_KEY = "mf_folder_picker_rect";
-var PICKER_MARGIN = 8;
-var PICKER_MIN = {
-	w: 280,
-	h: 240
-};
-var PICKER_DEFAULT = {
-	w: 440,
-	h: 440
-};
-function clampRect(r, vw, vh, m = PICKER_MARGIN) {
-	const maxW = Math.max(0, vw - 2 * m);
-	const maxH = Math.max(0, vh - 2 * m);
-	const w = Math.min(Math.max(r.w, PICKER_MIN.w), maxW);
-	const h = Math.min(Math.max(r.h, PICKER_MIN.h), maxH);
-	const x = Math.min(Math.max(r.x, m), vw - m - w);
-	const y = Math.min(Math.max(r.y, m), vh - m - h);
-	return {
-		x: Math.round(x),
-		y: Math.round(y),
-		w: Math.round(w),
-		h: Math.round(h)
-	};
-}
-function dragRect(from, sx, sy, px, py, vw, vh) {
-	return clampRect({
-		...from,
-		x: from.x + (px - sx),
-		y: from.y + (py - sy)
-	}, vw, vh);
-}
-function defaultRect(anchor, vw, vh, size = PICKER_DEFAULT) {
-	const gap = 12;
-	const { w, h } = size;
-	const centred = {
-		x: (vw - w) / 2,
-		y: (vh - h) / 2,
-		w,
-		h
-	};
-	if (!anchor) return clampRect(centred, vw, vh);
-	const y = anchor.top - 60;
-	if (anchor.right + gap + w <= vw - PICKER_MARGIN) return clampRect({
-		x: anchor.right + gap,
-		y,
-		w,
-		h
-	}, vw, vh);
-	if (anchor.left - gap - w >= PICKER_MARGIN) return clampRect({
-		x: anchor.left - gap - w,
-		y,
-		w,
-		h
-	}, vw, vh);
-	return clampRect(centred, vw, vh);
-}
-function loadPickerRect() {
-	try {
-		const v = JSON.parse(localStorage.getItem(PICKER_RECT_KEY) || "null");
-		if (v && [
-			v.x,
-			v.y,
-			v.w,
-			v.h
-		].every((n) => typeof n === "number" && Number.isFinite(n))) return v;
-	} catch {}
-	return null;
-}
-function savePickerRect(r) {
-	try {
-		localStorage.setItem(PICKER_RECT_KEY, JSON.stringify(r));
-	} catch {}
-}
-//#endregion
-//#region src/lib/pathComplete.ts
-function splitForCompletion(text) {
-	if (text === "~") return {
-		dir: "~",
-		partial: "",
-		prefix: "~/"
-	};
-	const cut = text.lastIndexOf("/");
-	const partial = text.slice(cut + 1);
-	const head = cut >= 0 ? text.slice(0, cut + 1) : "";
-	if (text.startsWith("/")) return {
-		dir: head === "/" ? "/" : head.slice(0, -1),
-		partial,
-		prefix: head
-	};
-	if (text.startsWith("~")) {
-		if (cut < 0) return {
-			dir: "~",
-			partial: text.slice(1),
-			prefix: "~/"
-		};
-		return {
-			dir: head.slice(0, -1),
-			partial,
-			prefix: head
-		};
-	}
-	const rel = head.replace(/\/+$/, "");
-	return {
-		dir: rel ? "~/" + rel : "",
-		partial,
-		prefix: rel ? "~/" + rel + "/" : "~/"
-	};
-}
-function commonPrefix(names, fold = false) {
-	if (!names.length) return "";
-	const norm = (s) => fold ? s.toLowerCase() : s;
-	let n = names[0].length;
-	const first = norm(names[0]);
-	for (const name of names.slice(1)) {
-		const s = norm(name);
-		let i = 0;
-		while (i < n && i < s.length && s[i] === first[i]) i++;
-		n = i;
-	}
-	return names[0].slice(0, n);
-}
-function matchNames(partial, names) {
-	const pool = partial.startsWith(".") ? names : names.filter((n) => !n.startsWith("."));
-	const exact = pool.filter((n) => n.startsWith(partial));
-	if (exact.length) return exact;
-	const low = partial.toLowerCase();
-	return pool.filter((n) => n.toLowerCase().startsWith(low));
-}
-function completeFrom(text, names) {
-	const { partial, prefix } = splitForCompletion(text);
-	if (text === "~") return {
-		text: "~/",
-		matches: [],
-		prefix
-	};
-	const matches = matchNames(partial, names);
-	if (matches.length === 1) return {
-		text: prefix + matches[0] + "/",
-		matches,
-		prefix
-	};
-	if (!matches.length) return {
-		text,
-		matches,
-		prefix
-	};
-	const lcp = commonPrefix(matches, !matches.every((m) => m.startsWith(partial)));
-	const grown = lcp.length > partial.length ? lcp : null;
-	return {
-		text: grown ? prefix + grown : text,
-		matches,
-		prefix
-	};
-}
-function cycle(matches, current, prefix, step = 1) {
-	if (!matches.length) return current;
-	const at = matches.findIndex((m) => current === prefix + m + "/" || current === prefix + m);
-	const n = matches.length;
-	return prefix + matches[at < 0 ? step > 0 ? 0 : n - 1 : (at + step + n) % n] + "/";
-}
-async function tabComplete(text, list, cache) {
-	const { dir } = splitForCompletion(text);
-	let names;
-	if (cache.current?.dir === dir) names = cache.current.names;
-	else {
-		try {
-			names = await list(dir);
-		} catch {
-			return null;
-		}
-		cache.current = {
-			dir,
-			names
-		};
-	}
-	return completeFrom(text, names);
-}
-function completionHint(text, r) {
-	if (!r) return {
-		hint: "No folder at " + (splitForCompletion(text).dir || "~"),
-		miss: true
-	};
-	if (r.matches.length > 1) return {
-		hint: r.matches.length + " folders match",
-		miss: false
-	};
-	if (r.text !== text) return {
-		hint: "completed to " + r.text,
-		miss: false
-	};
-	return {
-		hint: "No folder matches",
-		miss: true
-	};
-}
-//#endregion
-//#region src/components/PathField.tsx
-function pathFieldRequest(opts) {
-	const start = opts.value.trim();
-	return {
-		title: opts.title,
-		device: opts.device || "",
-		start,
-		selected: start,
-		anchor: opts.anchor,
-		onPick: (p) => {
-			opts.onDone?.();
-			opts.onChange(p);
-			opts.onPicked?.(p);
-		},
-		onCancel: () => opts.onDone?.()
-	};
-}
-function browseNames(dir, hidden = true) {
-	return api("/api/browse?path=" + encodeURIComponent(dir) + (hidden ? "&hidden=1" : "")).then((r) => (r.entries || []).map((e) => e.name));
-}
-function remoteCompletionTitle(device) {
-	return `Tab completes folders on this computer only — on ${device}, type the path in full or use Browse…`;
-}
-function usePathCompletion({ value, onChange, device = "", list = browseNames, rowId }) {
-	const listing = (0, import_react.useRef)(null);
-	const latest = (0, import_react.useRef)(value);
-	latest.current = value;
-	const [row, setRow] = (0, import_react.useState)(null);
-	const [hint, setHint] = (0, import_react.useState)("");
-	const [missed, setMissed] = (0, import_react.useState)(false);
-	const complete = async (text) => {
-		const r = await tabComplete(text, list, listing);
-		if (latest.current !== text) return;
-		const { hint: said, miss } = completionHint(text, r);
-		setRow(r && r.matches.length > 1 ? {
-			prefix: r.prefix,
-			matches: r.matches,
-			sel: -1
-		} : null);
-		if (r && r.text !== text) onChange(r.text);
-		setHint(said);
-		if (miss) setMissed(true);
-	};
-	const take = (prefix, name) => {
-		onChange(prefix + name + "/");
-		setRow(null);
-		setHint("completed to " + prefix + name + "/");
-	};
-	const onKeyDown = (e) => {
-		if (e.nativeEvent.isComposing) return false;
-		if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-			if (row) {
-				e.preventDefault();
-				const next = cycle(row.matches, latest.current, row.prefix, e.shiftKey ? -1 : 1);
-				const sel = row.matches.findIndex((m) => next === row.prefix + m + "/");
-				setRow({
-					...row,
-					sel
-				});
-				onChange(next);
-				setHint("completed to " + next);
-				return true;
-			}
-			if (e.shiftKey || device) return false;
-			const el = e.currentTarget;
-			const text = el.value;
-			if (!text || el.selectionStart !== text.length || el.selectionEnd !== text.length) return false;
-			e.preventDefault();
-			complete(text);
-			return true;
-		}
-		if (!row) return false;
-		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-			e.preventDefault();
-			const n = row.matches.length;
-			const step = e.key === "ArrowDown" ? 1 : -1;
-			const sel = row.sel < 0 ? step > 0 ? 0 : n - 1 : (row.sel + step + n) % n;
-			setRow({
-				...row,
-				sel
-			});
-			setHint(row.matches[sel]);
-			return true;
-		}
-		if (e.key === "Enter" && row.sel >= 0) {
-			e.preventDefault();
-			take(row.prefix, row.matches[row.sel]);
-			return true;
-		}
-		if (e.key === "Escape") {
-			e.preventDefault();
-			e.stopPropagation();
-			setRow(null);
-			return true;
-		}
-		return false;
-	};
-	return {
-		onKeyDown,
-		onTyped: () => {
-			setRow(null);
-			setHint("");
-		},
-		onFocus: () => {
-			listing.current = null;
-		},
-		onBlur: () => setRow(null),
-		inputProps: {
-			title: device ? remoteCompletionTitle(device) : void 0,
-			"aria-controls": row ? rowId : void 0,
-			className: missed ? "path-miss" : void 0,
-			onAnimationEnd: () => setMissed(false)
-		},
-		aids: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathCandidates, {
-			id: rowId,
-			prefix: row.prefix,
-			matches: row.matches,
-			sel: row.sel,
-			onPick: (m) => take(row.prefix, m)
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "path-field-live",
-			role: "status",
-			"aria-live": "polite",
-			children: hint
-		})] })
-	};
-}
-function PathCandidates({ id, prefix, matches, sel, onPick }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		id,
-		className: "path-cands",
-		role: "group",
-		"aria-label": "Folders that match",
-		children: [matches.map((m, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			type: "button",
-			tabIndex: -1,
-			className: "path-cand" + (i === sel ? " active" : ""),
-			"aria-pressed": i === sel,
-			title: prefix + m + "/",
-			onMouseDown: (e) => e.preventDefault(),
-			onClick: (e) => {
-				e.preventDefault();
-				onPick(m);
-			},
-			children: [m, "/"]
-		}, m)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "path-cands-legend",
-			children: "Tab cycles · Enter takes · Esc closes"
-		})]
-	});
-}
-function PathField({ value, onChange, onPicked, device = "", pickerTitle, browseLabel = "Browse…", className, onKeyDown, onFocus, onBlur, ...input }) {
-	const btnRef = (0, import_react.useRef)(null);
-	const openId = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => () => {
-		if (openId.current !== null) closeFolderPicker(openId.current, false);
-	}, []);
-	const comp = usePathCompletion({
-		value,
-		onChange,
-		device,
-		rowId: input.id ? input.id + "-matches" : void 0
-	});
-	const browse = () => {
-		openId.current = openFolderPicker(pathFieldRequest({
-			value,
-			onChange,
-			onPicked,
-			device,
-			title: pickerTitle,
-			anchor: btnRef.current,
-			onDone: () => {
-				openId.current = null;
-			}
-		}));
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "path-field" + (className ? " " + className : ""),
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				autoComplete: "off",
-				spellCheck: false,
-				title: comp.inputProps.title,
-				...input,
-				"aria-controls": comp.inputProps["aria-controls"] ?? input["aria-controls"],
-				className: comp.inputProps.className,
-				onAnimationEnd: comp.inputProps.onAnimationEnd,
-				value,
-				onChange: (e) => {
-					comp.onTyped();
-					onChange(e.target.value);
-				},
-				onKeyDown: (e) => {
-					if (!comp.onKeyDown(e)) onKeyDown?.(e);
-				},
-				onFocus: (e) => {
-					comp.onFocus();
-					onFocus?.(e);
-				},
-				onBlur: (e) => {
-					comp.onBlur();
-					onBlur?.(e);
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				ref: btnRef,
-				className: "path-field-browse",
-				id: input.id ? input.id + "-browse" : void 0,
-				title: "Pick a folder in a window you can move",
-				onClick: (e) => {
-					e.preventDefault();
-					browse();
-				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					"aria-hidden": "true",
-					children: "📁 "
-				}), browseLabel]
-			}),
-			comp.aids
-		]
-	});
 }
 //#endregion
 //#region src/components/dialogs/newSession/FolderPicker.tsx
@@ -96780,6 +97445,304 @@ function TemplateEditor(p) {
 	});
 }
 //#endregion
+//#region src/components/flights/TakeoffDialog.tsx
+function whenCron(when) {
+	return (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim();
+}
+function useCronPreview(cron) {
+	const [preview, setPreview] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		if (!cron) {
+			setPreview(null);
+			return;
+		}
+		let live = true;
+		const t = setTimeout(() => {
+			cronPreview(cron).then((pv) => live && setPreview(pv)).catch(() => live && setPreview(null));
+		}, 300);
+		return () => {
+			live = false;
+			clearTimeout(t);
+		};
+	}, [cron]);
+	return preview;
+}
+function HookUrlRow({ plan }) {
+	const url = hookUrl(plan.trigger);
+	const [copied, setCopied] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!copied) return;
+		const t = setTimeout(() => setCopied(false), 1500);
+		return () => clearTimeout(t);
+	}, [copied]);
+	if (!url) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "fl-fld-hint fl-hook-pending",
+		children: "Save to get the address outside systems POST to."
+	});
+	const copy = () => {
+		(typeof navigator !== "undefined" && navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject(/* @__PURE__ */ new Error("no clipboard"))).then(() => {
+			setCopied(true);
+			toast("Copied the hook address");
+		}, () => toast("Couldn't copy — select the address and copy it"));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "fl-hook-url",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "text",
+			className: "fl-input fl-mono",
+			"aria-label": "Hook address",
+			value: url,
+			readOnly: true,
+			onFocus: (e) => e.currentTarget.select()
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn fl-hook-copy",
+			onClick: copy,
+			title: "Copy the address",
+			children: copied ? "Copied" : "Copy"
+		})]
+	});
+}
+function TakeoffFields({ plan, onChange }) {
+	const agents = useAgentChoices();
+	const [when, setWhen] = (0, import_react.useState)(() => whenFormOf(plan.trigger.schedule));
+	const preview = useCronPreview(plan.trigger.kind === "schedule" ? whenCron(when) : "");
+	const runs = plan.runs;
+	const needsSession = triggerMakesSession(plan.trigger.kind);
+	const watchesMain = MAIN_TRIGGERS.includes(plan.trigger.kind);
+	const isHook = plan.trigger.kind === "hook";
+	const quiet = plan.trigger.quiet_minutes ?? 60;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+		className: "fl-section fl-trigger",
+		"aria-label": "Where its flights come from",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-form",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Takes off",
+					wide: true,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+						label: "Takes off",
+						value: plan.trigger.kind,
+						options: Object.keys(TRIGGER_LABEL).map((k) => ({
+							v: k,
+							label: TRIGGER_LABEL[k]
+						})),
+						onChange: (kind) => onChange({ trigger: {
+							...plan.trigger,
+							kind,
+							schedule: kind === "schedule" ? plan.trigger.schedule || {
+								at: "21:00",
+								days: "daily"
+							} : null
+						} })
+					})
+				}),
+				plan.trigger.kind === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
+					label: "When",
+					wide: true,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "tpl-editor tpl-sched-editor fl-schedule-when",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleWhen, {
+							form: when,
+							cronPreview: preview,
+							tz: runs?.tz || "",
+							runs: runs && typeof runs.runs_here === "boolean" ? {
+								runs_here: runs.runs_here,
+								runs_on: runs.runs_on || ""
+							} : void 0,
+							onForm: (patch) => {
+								const w = {
+									...when,
+									...patch
+								};
+								setWhen(w);
+								onChange({ trigger: {
+									...plan.trigger,
+									schedule: scheduleOfWhen(w)
+								} });
+							}
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+						on: plan.trigger.paused,
+						onChange: (paused) => onChange({ trigger: {
+							...plan.trigger,
+							paused
+						} }),
+						label: "Paused",
+						title: "A paused schedule takes off nothing"
+					})]
+				}),
+				watchesMain && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Watches",
+					wide: true,
+					hint: plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip takes off." : "The checks of its default branch's tip, once per commit; red takes off.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+						id: "fl-trigger-repo",
+						value: plan.trigger.repo || "",
+						placeholder: "An absolute path to a git repository",
+						pickerTitle: "The repository whose main branch this watches",
+						onChange: (v) => onChange({ trigger: {
+							...plan.trigger,
+							repo: v
+						} })
+					})
+				}),
+				isHook && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Hook",
+					wide: true,
+					hint: "POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the flight.",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HookUrlRow, { plan })
+				}),
+				(watchesMain || isHook) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Quiet",
+					hint: "No second take-off inside this many minutes",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, {
+						label: "Quiet minutes",
+						unit: "min",
+						value: quiet,
+						onChange: (v) => onChange({ trigger: {
+							...plan.trigger,
+							quiet_minutes: v === "" ? 0 : v
+						} })
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Paused",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+						on: plan.trigger.paused,
+						onChange: (paused) => onChange({ trigger: {
+							...plan.trigger,
+							paused
+						} }),
+						label: "Paused",
+						title: "A paused trigger takes off nothing"
+					})
+				})] }),
+				needsSession && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+						label: "Repository",
+						wide: true,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+							id: "fl-plan-repo",
+							value: plan.session.repo_path,
+							placeholder: "Ask when it takes off",
+							pickerTitle: "The repository these stops' sessions start in",
+							onChange: (v) => onChange({ session: {
+								...plan.session,
+								repo_path: v
+							} })
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+						label: "Agent",
+						wide: true,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+							label: "Agent",
+							value: plan.session.program,
+							options: [{
+								value: "",
+								label: agents.fallback ? "Default · " + agents.fallback : "Default"
+							}, ...agents.names.map((n) => ({
+								value: n,
+								label: n
+							}))],
+							onChange: (program) => onChange({ session: {
+								...plan.session,
+								program
+							} })
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+						label: "Model",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+							label: "Model",
+							value: plan.session.model,
+							placeholder: "The agent's default",
+							onChange: (model) => onChange({ session: {
+								...plan.session,
+								model
+							} })
+						})
+					})
+				] })
+			]
+		})
+	});
+}
+function TakeoffDialog({ plan, onClose }) {
+	const [draft, setDraft] = (0, import_react.useState)(() => JSON.parse(JSON.stringify(plan)));
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const dirty = JSON.stringify({
+		...draft,
+		updated: 0
+	}) !== JSON.stringify({
+		...plan,
+		updated: 0
+	});
+	const save = async () => {
+		if (!dirty) return onClose();
+		setBusy(true);
+		setError("");
+		try {
+			toast("Saved “" + (await savePlan(draft)).name + "”");
+			onClose();
+		} catch (err) {
+			setError(errMsg(err));
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "takeoff-dialog",
+		portal: true,
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+			className: "fl-takeoff",
+			onSubmit: (e) => {
+				e.preventDefault();
+				save();
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: [
+					"“",
+					plan.name,
+					"” takes off"
+				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "muted fl-takeoff-lede",
+					children: "When it flies by itself, and the session it starts in."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffFields, {
+					plan: draft,
+					onChange: (p) => setDraft((d) => ({
+						...d,
+						...p
+					}))
+				}),
+				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "error fl-error",
+					role: "alert",
+					children: error
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "modal-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: onClose,
+						children: "Cancel"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						className: "btn-primary",
+						disabled: busy,
+						children: busy ? "Saving…" : "Save"
+					})]
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/onboarding/TourButton.tsx
 function TourButton({ tour }) {
 	const openCoachTour = useUi((s) => s.openCoachTour);
@@ -96994,11 +97957,91 @@ function scheduledFlyways(plans) {
 		r: rank(p)
 	})).sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1]).map((x) => x.p);
 }
-function flywayNextLine(p, now = /* @__PURE__ */ new Date()) {
-	const r = p.runs || {};
-	if (p.trigger.paused || r.paused) return "Paused";
-	if (r.runs_here === false && r.runs_on) return "Starts on " + r.runs_on;
-	return r.next_at ? inLabel(r.next_at, now) : "";
+function planAsTemplate(f) {
+	const r = f.runs || {};
+	const sched = f.trigger.schedule ? { ...f.trigger.schedule } : void 0;
+	if (sched && f.trigger.paused) sched.paused = true;
+	const info = { ...r };
+	return {
+		t: {
+			name: f.id,
+			repo_path: f.session?.repo_path || "",
+			schedule: sched
+		},
+		info,
+		status: {
+			runs: { [f.id.trim().toLowerCase()]: info },
+			runs_here: r.runs_here !== false,
+			runs_on: r.runs_on || "",
+			tz: r.tz || ""
+		}
+	};
+}
+function scheduleEntries(templates, status, plans) {
+	const rank = (paused, at) => paused ? [2, 0] : at ? [0, at] : [1, 0];
+	return [...scheduledOrder(templates, status).map((t) => ({
+		e: {
+			kind: "template",
+			t
+		},
+		r: rank(!!t.schedule?.paused, Number(status.runs[t.name.trim().toLowerCase()]?.next_at) || 0)
+	})), ...scheduledFlyways(plans).filter((f) => !!f.trigger.schedule).map((f) => ({
+		e: {
+			kind: "plan",
+			f
+		},
+		r: rank(!!(f.trigger.paused || f.runs?.paused), Number(f.runs?.next_at) || 0)
+	}))].map((x, i) => ({
+		...x,
+		i
+	})).sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.i - b.i).map((x) => x.e);
+}
+function nextAcross(templates, status, plans) {
+	let best = nextUp(templates, status);
+	for (const f of scheduledFlyways(plans)) {
+		if (!f.trigger.schedule || f.trigger.paused || f.runs?.paused || f.runs?.runs_here === false) continue;
+		const at = Number(f.runs?.next_at) || 0;
+		if (at && (!best || at < best.at)) best = {
+			name: f.name,
+			at
+		};
+	}
+	return best;
+}
+function planWithSkip(f, until, nowSec = Date.now() / 1e3) {
+	const sched = { ...f.trigger.schedule || {} };
+	if (until && until > nowSec) sched.skip_until = until;
+	else delete sched.skip_until;
+	return {
+		...f,
+		trigger: {
+			...f.trigger,
+			schedule: sched
+		}
+	};
+}
+function planWithWhen(f, when) {
+	const next = scheduleOfWhen({
+		...when,
+		seeded: when.seeded || ""
+	});
+	if (!next) return null;
+	const old = f.trigger.schedule;
+	const same = !!old && JSON.stringify(scheduleOfWhen(whenFormOf(old))) === JSON.stringify(next);
+	const sched = { ...next };
+	if (same && old?.skip_until) sched.skip_until = old.skip_until;
+	return {
+		...f,
+		trigger: {
+			...f.trigger,
+			schedule: sched
+		}
+	};
+}
+function barePlan(f) {
+	const out = { ...f };
+	delete out.runs;
+	return out;
 }
 function TemplatesDialogView(p) {
 	const { templates, ui, form, busy, loaded } = p;
@@ -97147,24 +98190,33 @@ function TemplatesDialogView(p) {
 			})
 		]
 	});
-	const strip = (t, info) => {
+	const templateActs = (t) => ({
+		flagging: p.flagging === t.name,
+		onChange: () => p.dispatch({
+			t: "schedule",
+			name: t.name
+		}),
+		onSkip: (until) => p.onSkip?.(t.name, until),
+		onPause: (paused) => p.onPause?.(t.name, paused)
+	});
+	const strip = (t, info, st = runs, acts = templateActs(t)) => {
 		const paused = !!(t.schedule?.paused || info.paused);
-		const next = nextLine(t, info, runs, now);
+		const next = nextLine(t, info, st, now);
 		const skipping = !paused && info.skipping_at ? info.skipping_at : 0;
-		const flagging = p.flagging === t.name;
+		const flagging = acts.flagging;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "sch-strip" + (paused ? " is-paused" : ""),
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "sch-when",
 				children: paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sch-cadence",
-					children: cadenceText(t, info, runs)
+					children: cadenceText(t, info, st)
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sch-next sch-paused-chip",
 					children: "Paused"
 				})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sch-cadence",
-					children: templateScheduleLine(t, runs, now)
+					children: templateScheduleLine(t, st, now)
 				}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sch-next",
 					children: next
@@ -97176,24 +98228,21 @@ function TemplatesDialogView(p) {
 						type: "button",
 						className: "sch-sw tpl-sched",
 						title: "Change when it runs, or stop its schedule — just the schedule",
-						onClick: () => p.dispatch({
-							t: "schedule",
-							name: t.name
-						}),
+						onClick: acts.onChange,
 						children: "Change schedule"
 					}),
 					!paused && (skipping ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sch-sw sch-skip",
 						disabled: flagging,
-						onClick: () => p.onSkip?.(t.name, 0),
+						onClick: () => acts.onSkip(0),
 						children: "Undo skip"
 					}) : info.next_at && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sch-sw sch-skip",
 						disabled: flagging,
 						title: "Let " + whenLabel(info.next_at, now) + " pass without a session — the one after runs as usual",
-						onClick: () => p.onSkip?.(t.name, Number(info.next_at)),
+						onClick: () => acts.onSkip(Number(info.next_at)),
 						children: "Skip next"
 					})),
 					(paused || !info.once_done) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -97201,7 +98250,7 @@ function TemplatesDialogView(p) {
 						className: "sch-sw sch-pause",
 						disabled: flagging,
 						title: paused ? "Start running on its schedule again" : "Keep the schedule, start nothing until you resume",
-						onClick: () => p.onPause?.(t.name, !paused),
+						onClick: () => acts.onPause(!paused),
 						children: paused ? "Resume" : "Pause"
 					})
 				]
@@ -97325,13 +98374,74 @@ function TemplatesDialogView(p) {
 			]
 		}, t.name);
 	};
-	const flywayCard = (f) => {
-		const info = f.runs || {};
-		const paused = !!(f.trigger.paused || info.paused);
-		const next = flywayNextLine(f, now);
+	const folderRow = (f) => {
+		const pf = p.planFolder;
+		if (!pf || pf.id !== f.id) return null;
+		const running = p.runningPlan === f.id;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "tpl-sched-row sch-plan-folder",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+				className: "tpl-editor tpl-sched-editor",
+				onSubmit: (e) => {
+					e.preventDefault();
+					if (pf.path.trim()) p.onRunPlanIn?.(f, pf.path.trim(), pf.keep);
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+						className: "sch-plan-folder-label",
+						htmlFor: "sch-plan-folder-" + f.id,
+						children: "Which folder should it start in?"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+						id: "sch-plan-folder-" + f.id,
+						value: pf.path,
+						placeholder: "A folder — usually a git repository",
+						pickerTitle: "The folder “" + f.name + "” starts its session in",
+						onChange: (v) => p.onPlanFolder?.({ path: v })
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "check sch-plan-keep",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							checked: pf.keep,
+							onChange: (e) => p.onPlanFolder?.({ keep: e.target.checked })
+						}), "Keep it for its scheduled runs too"]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-row-actions",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "error",
+								"aria-live": "polite"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "tpl-cancel",
+								onClick: () => p.onPlanFolder?.(null),
+								children: "Cancel"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "submit",
+								className: "tpl-save",
+								disabled: !pf.path.trim() || running,
+								children: running ? "Starting…" : "▶ Run now"
+							})
+						]
+					})
+				]
+			})
+		});
+	};
+	const planCard = (f) => {
+		const { t, info, status: st } = planAsTemplate(f);
+		const scheduled = hasSchedule(t);
+		const paused = scheduled && !!(t.schedule?.paused || info.paused);
 		const stops = f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+		const schedOpen = p.planSched?.id === f.id;
+		const folderOpen = p.planFolder?.id === f.id;
+		const noFolder = !(f.session?.repo_path || "").trim();
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "tpl-card is-scheduled sch-flyway" + (paused ? " is-paused" : "") + (!paused && lastRunFailed(info) ? " is-failing" : ""),
+			className: "tpl-card sch-flyway" + (scheduled ? " is-scheduled" : "") + (paused ? " is-paused" : "") + (!paused && lastRunFailed(info) ? " is-failing" : ""),
 			"data-plan": f.id,
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -97355,45 +98465,78 @@ function TemplatesDialogView(p) {
 						})]
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "tpl-actions",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tpl-btn tpl-run sch-flyway-fly",
-							disabled: !!p.flying,
-							title: "Fly now — a flight takes off on these stops in a new session",
-							onClick: () => p.onFlyFlyway?.(f),
-							children: p.flying === f.id ? "Taking off…" : "Fly now"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tpl-btn sch-flyway-edit",
-							title: "Open it on the Sky's Stops shelf — its stops and its schedule",
-							onClick: () => p.onEditFlyway?.(f),
-							children: "Edit in the Sky"
-						})]
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "tpl-btn tpl-run sch-plan-run",
+								disabled: !!p.runningPlan,
+								title: noFolder ? "Run now — pick the folder its new session starts in" : "Run now — starts a new session and runs these stops in it",
+								onClick: () => p.onRunPlan?.(f),
+								children: p.runningPlan === f.id ? "Starting…" : "▶ Run now"
+							}),
+							!scheduled && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "tpl-btn tpl-sched",
+								title: "Start it by itself — every day, weekdays, once or on a cron",
+								onClick: () => p.onPlanSchedule?.(f),
+								children: "Schedule…"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "tpl-btn sch-plan-edit",
+								title: "Edit — when it runs, and the repository, agent and model its sessions start in",
+								onClick: () => p.onEditPlan?.(f),
+								children: "Edit"
+							})
+						]
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "sch-strip" + (paused ? " is-paused" : ""),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "sch-when",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sch-cadence",
-							children: info.schedule_label || "No schedule set"
-						}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sch-next" + (paused ? " sch-paused-chip" : ""),
-							children: next
-						})]
+				schedOpen && p.planSched ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "tpl-sched-row",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleEditor, {
+						form: p.planSched.form,
+						onForm: (patch) => p.onPlanForm?.(patch),
+						error: p.planSched.error,
+						busy: p.planSched.busy,
+						onSave: () => p.onPlanSave?.(),
+						onCancel: () => p.onPlanSchedule?.(null),
+						onStop: scheduled ? p.onPlanStop : void 0,
+						tz: info.tz || st.tz || p.tz,
+						cronPreview: p.planPreview,
+						runs: st
 					})
+				}) : scheduled && strip(t, info, st, {
+					flagging: p.planFlagging === f.id,
+					onChange: () => p.onPlanSchedule?.(f),
+					onSkip: (until) => p.onSkipPlan?.(f, until),
+					onPause: (paused) => p.onPausePlan?.(f, paused)
 				}),
-				outcome(info)
+				folderRow(f),
+				outcome(info),
+				noFolder && !folderOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-needs",
+					children: [
+						"Run now and schedules need a folder.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => p.onRunPlan?.(f),
+							children: "Pick one"
+						})
+					]
+				})
 			]
-		}, f.id);
+		}, "plan:" + f.id);
 	};
-	const flywayList = scheduledFlyways(p.flyways);
-	const scheduledList = scheduledOrder(templates, runs);
+	const planList = scheduledFlyways(p.flyways);
+	const unscheduledPlans = planList.filter((f) => !f.trigger.schedule);
+	const entries = scheduleEntries(templates, runs, p.flyways);
 	const saved = templates.filter((t) => !hasSchedule(t));
-	const up = nextUp(templates, runs);
+	const up = nextAcross(templates, runs, p.flyways);
 	const elsewhere = !runs.runs_here && !!runs.runs_on;
 	const empty = loaded && templates.length === 0 && ui.editing !== "";
+	const entry = (e) => e.kind === "template" ? card(e.t) : planCard(e.f);
 	const onEscape = () => {
 		if (ui.discarding) {
 			p.dispatch({ t: "keep-editing" });
@@ -97442,9 +98585,9 @@ function TemplatesDialogView(p) {
 			!empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 				className: "tpl-intro muted",
 				children: [
-					"Templates start a ",
+					"Everything here starts a ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "new" }),
-					" session — when you run one, or by themselves on a schedule.",
+					" session by itself on a timer — or right now, with Run now.",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "tpl-intro-aside",
 						children: "To send text to a session that's already running, use Prompts."
@@ -97501,7 +98644,7 @@ function TemplatesDialogView(p) {
 							})
 						]
 					}),
-					templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					(templates.length > 0 || planList.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 						(up || elsewhere) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "sch-next-up",
 							id: "schedule-next",
@@ -97522,64 +98665,49 @@ function TemplatesDialogView(p) {
 								})
 							] })
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						(entries.length > 0 || templates.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 							className: "sch-section",
 							id: "schedule-scheduled",
 							"aria-labelledby": "schedule-scheduled-h",
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 								id: "schedule-scheduled-h",
-								children: ["Scheduled", scheduledList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								children: ["Scheduled", entries.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "sch-count",
-									children: scheduledList.length
+									children: entries.length
 								})]
-							}), scheduledList.length ? scheduledList.map(card) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+							}), entries.length ? entries.map(entry) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 								className: "sch-none muted",
 								children: [
 									"Nothing runs by itself yet — ",
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Schedule…" }),
-									" on a template below starts it every day, weekday, once or on any cron."
+									" on a card below starts it every day, weekday, once or on any cron."
 								]
 							})]
 						}),
-						saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						saved.length + unscheduledPlans.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 							className: "sch-section",
 							id: "schedule-saved",
 							"aria-labelledby": "schedule-saved-h",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-								id: "schedule-saved-h",
-								children: [
-									"Not scheduled",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "sch-count",
-										children: saved.length
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "sch-section-hint",
-										children: "run now or add a schedule"
-									})
-								]
-							}), saved.map(card)]
-						})
-					] }),
-					flywayList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-						className: "sch-section",
-						id: "schedule-flyways",
-						"aria-labelledby": "schedule-flyways-h",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-							id: "schedule-flyways-h",
 							children: [
-								"Scheduled stops",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "sch-count",
-									children: flywayList.length
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+									id: "schedule-saved-h",
+									children: [
+										"Not scheduled",
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sch-count",
+											children: saved.length + unscheduledPlans.length
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sch-section-hint",
+											children: "run now or add a schedule"
+										})
+									]
 								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "sch-section-hint",
-									children: "saved stops that take off by themselves"
-								})
+								saved.map(card),
+								unscheduledPlans.map(planCard)
 							]
-						}), flywayList.map(flywayCard)]
-					})
+						})
+					] })
 				]
 			})
 		]
@@ -97618,7 +98746,13 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	const [running, setRunning] = (0, import_react.useState)("");
 	const [flagging, setFlagging] = (0, import_react.useState)("");
 	const flyways = useFlightPlans(open).data;
-	const [flying, setFlying] = (0, import_react.useState)("");
+	const [runningPlan, setRunningPlan] = (0, import_react.useState)("");
+	const [planFlagging, setPlanFlagging] = (0, import_react.useState)("");
+	const [planSched, setPlanSched] = (0, import_react.useState)(null);
+	const [planPreview, setPlanPreview] = (0, import_react.useState)(null);
+	const [planFolder, setPlanFolder] = (0, import_react.useState)(null);
+	const planFolderSeeded = (0, import_react.useRef)(false);
+	const [takeoff, setTakeoff] = (0, import_react.useState)(null);
 	const [agents, setAgents] = (0, import_react.useState)([]);
 	const [installed, setInstalled] = (0, import_react.useState)(null);
 	const [otherDevices, setOtherDevices] = (0, import_react.useState)(false);
@@ -97633,7 +98767,7 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	const { data: instances } = useInstances();
 	const github = useGithubConnected(open && ui.editing !== null && fastTrackNeedsGitHub(form.autopilot));
 	const liveSessions = instances ? new Set(instances.map((i) => i.title)) : void 0;
-	const editorOpen = open && ui.editing !== null;
+	const editorOpen = open && (ui.editing !== null || !!planFolder);
 	(0, import_react.useEffect)(() => {
 		if (!open) suggestAsked.current = false;
 		if (!editorOpen || suggestAsked.current) return;
@@ -97659,6 +98793,34 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 			} : f);
 		}
 	}, [ui.editing, folderSuggestions]);
+	(0, import_react.useEffect)(() => {
+		if (!planFolder) {
+			planFolderSeeded.current = false;
+			return;
+		}
+		if (planFolderSeeded.current || !folderSuggestions.length) return;
+		planFolderSeeded.current = true;
+		const path = defaultFolder(folderSuggestions);
+		if (path) setPlanFolder((pf) => pf && !pf.path ? {
+			...pf,
+			path
+		} : pf);
+	}, [planFolder, folderSuggestions]);
+	const planCron = planSched ? (planSched.form.days === "cron" ? planSched.form.cron : planSched.form.days === "once" ? onceOf(planSched.form.date, planSched.form.at) : cronOf(planSched.form.at, planSched.form.days)).trim() : "";
+	(0, import_react.useEffect)(() => {
+		if (!open || !planCron) {
+			setPlanPreview(null);
+			return;
+		}
+		let live = true;
+		const timer = setTimeout(() => {
+			cronPreview(planCron).then((pv) => live && setPlanPreview(pv)).catch(() => live && setPlanPreview(null));
+		}, 300);
+		return () => {
+			live = false;
+			clearTimeout(timer);
+		};
+	}, [open, planCron]);
 	(0, import_react.useEffect)(() => {
 		if (!open || !ui.confirming || fleetAsked.current) return;
 		fleetAsked.current = true;
@@ -97687,6 +98849,9 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		dispatch({ t: "cancel" });
+		setPlanSched(null);
+		setPlanFolder(null);
+		setTakeoff(null);
 		const want = readTemplatesTarget(embedded ? embeddedTarget : useUi.getState().dialogTarget).schedule;
 		if (want !== null) {
 			setScheduleFocus(true);
@@ -97845,7 +99010,98 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 			setFlagging("");
 		}
 	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialogView, {
+	const putPlan = async (f, change, said) => {
+		try {
+			await savePlan(change(barePlan(f)));
+			if (said) toast(said);
+			return true;
+		} catch (err) {
+			toast("Couldn't change “" + f.name + "”: " + errMsg(err));
+			return false;
+		}
+	};
+	const flagPlan = async (f, change, said) => {
+		setPlanFlagging(f.id);
+		try {
+			await putPlan(f, change, said);
+		} finally {
+			setPlanFlagging("");
+		}
+	};
+	const runPlan = async (f, path = "", keep = false) => {
+		if (runningPlan) return;
+		const repo = (path || f.session?.repo_path || "").trim();
+		if (!repo) {
+			setPlanSched(null);
+			setPlanFolder({
+				id: f.id,
+				path: defaultFolder(folderSuggestions),
+				keep: true
+			});
+			return;
+		}
+		setRunningPlan(f.id);
+		try {
+			if (path && keep) await putPlan(f, (b) => ({
+				...b,
+				session: {
+					...b.session,
+					repo_path: repo
+				}
+			}), "");
+			if (await takeOff(path ? {
+				plan_id: f.id,
+				repo_path: repo
+			} : { plan_id: f.id })) {
+				setPlanFolder(null);
+				closeDialog();
+			}
+		} finally {
+			setRunningPlan("");
+		}
+	};
+	const savePlanSchedule = async (stop = false) => {
+		if (!planSched) return;
+		const f = (flyways || []).find((x) => x.id === planSched.id);
+		if (!f) return setPlanSched(null);
+		const next = stop ? {
+			...barePlan(f),
+			trigger: {
+				...f.trigger,
+				schedule: null
+			}
+		} : planWithWhen(barePlan(f), planSched.form);
+		if (!next) {
+			setPlanSched({
+				...planSched,
+				error: "Pick a time (24-hour, like 21:00), a date, or a cron expression"
+			});
+			return;
+		}
+		setPlanSched({
+			...planSched,
+			busy: true,
+			error: ""
+		});
+		try {
+			await savePlan(next);
+			setPlanSched(null);
+			if (stop) {
+				const before = barePlan(f);
+				toast(`Stopped the schedule of “${f.name}” — nothing starts on its own`, { action: {
+					label: "Undo",
+					onClick: () => void putPlan(f, () => before, `“${f.name}” runs on its schedule again`)
+				} });
+			} else toast(`Saved the schedule of “${f.name}”`);
+		} catch (err) {
+			setPlanSched((ps) => ps ? {
+				...ps,
+				busy: false,
+				error: errMsg(err)
+			} : ps);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialogView, {
 		templates,
 		flagging,
 		onPause: (name, paused) => void flag(name, { paused }, paused ? `Paused “${name}” — it starts nothing until you resume it` : `Resumed “${name}”`),
@@ -97872,6 +99128,10 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 				return;
 			}
 			if (a.t !== "keep-editing") setScheduleFocus(a.t === "schedule");
+			if (a.t === "new" || a.t === "edit" || a.t === "schedule") {
+				setPlanSched(null);
+				setPlanFolder(null);
+			}
 			dispatch(a);
 		},
 		dirty,
@@ -97911,20 +99171,55 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 		},
 		otherDevices,
 		flyways,
-		flying,
-		onFlyFlyway: (f) => {
-			if (flying) return;
-			setFlying(f.id);
-			takeOff({ plan_id: f.id }).then((flight) => {
-				setFlying("");
-				if (flight) closeDialog();
+		runningPlan,
+		onRunPlan: (f) => void runPlan(f),
+		onRunPlanIn: (f, path, keep) => void runPlan(f, path, keep),
+		planFolder,
+		onPlanFolder: (patch) => setPlanFolder((pf) => patch && pf ? {
+			...pf,
+			...patch
+		} : null),
+		onEditPlan: (f) => setTakeoff(f),
+		planFlagging,
+		onPausePlan: (f, paused) => void flagPlan(f, (b) => ({
+			...b,
+			trigger: {
+				...b.trigger,
+				paused
+			}
+		}), paused ? `Paused “${f.name}” — it starts nothing until you resume it` : `Resumed “${f.name}”`),
+		onSkipPlan: (f, until) => void flagPlan(f, (b) => planWithSkip(b, until), until ? `“${f.name}” will skip ${whenLabel(until)} — the run after it goes ahead` : `“${f.name}” runs next time as usual`),
+		planSched,
+		planPreview,
+		onPlanSchedule: (f) => {
+			if (!f) return setPlanSched(null);
+			if (!dirty) dispatch({ t: "cancel" });
+			setPlanFolder(null);
+			const when = whenFormOf(f.trigger.schedule);
+			setPlanSched({
+				id: f.id,
+				form: {
+					...when,
+					seeded: ""
+				},
+				error: "",
+				busy: false
 			});
 		},
-		onEditFlyway: (f) => {
-			closeDialog();
-			useUi.getState().showFlyways(f.id);
-		}
-	});
+		onPlanForm: (patch) => setPlanSched((ps) => ps ? {
+			...ps,
+			form: {
+				...ps.form,
+				...patch
+			},
+			error: ""
+		} : ps),
+		onPlanSave: () => void savePlanSchedule(),
+		onPlanStop: () => void savePlanSchedule(true)
+	}), takeoff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffDialog, {
+		plan: takeoff,
+		onClose: () => setTakeoff(null)
+	})] });
 }
 //#endregion
 //#region src/lib/fileDropTextarea.ts
@@ -98526,24 +99821,24 @@ function SplitCheck({ id, split, onSplit, gate, maxPieces, onMaxPieces, limit, t
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "check" + (ok ? "" : " disabled"),
 				htmlFor: id,
-				title: ok ? "Its agent reads the code first and decides. Not worth it: it just does the task. Worth it: it proposes the pieces, each with its own paths — you approve, MindFlock starts the workers and merges them back." : why,
+				title: ok ? "Its agent reads the code first and decides. Not worth it: it just does the task. Worth it: it proposes the workers, each with its own paths — you approve, MindFlock starts the workers and merges them back." : why,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
 					id,
 					checked: on,
 					disabled: !ok,
 					onChange: (e) => onSplit(e.target.checked)
-				}), "Auto-split into up to"]
+				}), "Let it split into up to"]
 			}),
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "rt-step nf-split-n",
 				role: "group",
-				"aria-label": "Most sessions",
+				"aria-label": "Most workers",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						"aria-label": "Fewer sessions",
+						"aria-label": "Fewer workers",
 						disabled: !ok || maxPieces <= SPLIT_MIN,
 						onClick: () => onMaxPieces(maxPieces - 1),
 						children: "−"
@@ -98555,7 +99850,7 @@ function SplitCheck({ id, split, onSplit, gate, maxPieces, onMaxPieces, limit, t
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						"aria-label": "More sessions",
+						"aria-label": "More workers",
 						disabled: !ok || maxPieces >= limit,
 						onClick: () => onMaxPieces(maxPieces + 1),
 						children: "+"
@@ -98565,11 +99860,11 @@ function SplitCheck({ id, split, onSplit, gate, maxPieces, onMaxPieces, limit, t
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: ok ? "" : "muted",
-				children: "sessions if it's worth it"
+				children: "workers if it's worth it"
 			}),
 			sug && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "nf-split-pill",
-				title: "Your sentence lists separate pieces. Nothing is ticked for you.",
+				title: "Your sentence lists separate tasks. Nothing is ticked for you.",
 				children: suggestionPill(sug)
 			}),
 			why && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
@@ -99223,7 +100518,7 @@ function FooterActions({ error, page, setPage, runMode, describing, describeSlow
 				"data-tour": "new-more",
 				title: "The full form — folder, agent, task, name and Fast-track — with what you typed as the task",
 				onClick: setUpMyself,
-				children: "More options"
+				children: "Set it up myself"
 			}),
 			!runMode && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
@@ -101302,28 +102597,808 @@ function countInBuckets(tickets, visible, mineOnly = false) {
 	return shownTickets(tickets, visible, mineOnly).length;
 }
 //#endregion
+//#region src/lib/skyIntake.ts
+var LANE_POLL_DEFAULT = {
+	tickets: 20,
+	prs: 60,
+	issues: 60
+};
+var LANE_WAITING_SHOWN = 6;
+var KIND_WORD$1 = {
+	tickets: "Tickets",
+	prs: "PRs",
+	issues: "Issues"
+};
+function everyWords(seconds) {
+	const s = Math.max(1, Math.round(seconds));
+	if (s < 60) return "every " + s + " s";
+	if (s === 60) return "every minute";
+	return "every " + Math.round(s / 60) + " min";
+}
+function positive(v) {
+	const n = Number(v);
+	return Number.isFinite(n) && n > 0 ? n : 0;
+}
+function repoSlugName(repo) {
+	return (repo.replace(/\/+$/, "").split("/").pop() || "").replace(/[^A-Za-z0-9._-]/g, "-");
+}
+function titlePrefix(kind, repo) {
+	return (kind === "prs" ? "pr-" : "issue-") + repoSlugName(repo) + "-";
+}
+function bareTitle(title) {
+	const cut = title.indexOf("::");
+	return cut < 0 ? title : title.slice(cut + 2);
+}
+function ticketSourceLabel(source, providers, panelLabel = "") {
+	const provider = String(source.provider || "");
+	const prov = providers?.find((p) => p.id === provider)?.label || panelLabel || provider || "Tickets";
+	const detail = String(source.label || "").trim();
+	if (!detail) return prov;
+	return [prov, provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length))) ? detail : prov + " · " + detail;
+}
+function flywayOf(kind, own, plans, depth = "") {
+	const reach = sourceReach(kind, {
+		plan: own,
+		depth
+	}, plans);
+	if (reach.own) return {
+		id: own,
+		name: reach.words,
+		own: true,
+		words: reach.words
+	};
+	const id = builtinPlanFor(kind, plans);
+	return {
+		id,
+		name: plans?.find((p) => p.id === id)?.name || "built-in stops",
+		own: false,
+		words: reach.words
+	};
+}
+var sameRepo = (a, b) => a.toLowerCase() === b.toLowerCase();
+function sourceBlocks(settings, waiting, rows, opts = {}) {
+	const s = settings || {};
+	const gh = s.github || {};
+	const status = opts.status || null;
+	const plans = opts.plans || null;
+	const labels = opts.panels?.tickets?.source_labels || {};
+	const blocks = [];
+	const make = (kind, id, label, every, own, stray = false, depth = "") => {
+		const auto = waitingAuto(kind, status);
+		return {
+			key: kind + ":" + id,
+			kind,
+			id,
+			label,
+			name: kind === "tickets" ? label : id,
+			target: kind + ":" + id,
+			auto,
+			every,
+			autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
+			flyway: flywayOf(kind, own, plans, depth),
+			waiting: [],
+			started: [],
+			...stray ? { stray: true } : {}
+		};
+	};
+	for (const src of s.ticketing?.sources || []) {
+		const id = String(src.id || "");
+		if (!id) continue;
+		blocks.push(make("tickets", id, ticketSourceLabel(src, opts.providers, labels[id]), positive(src.poll_interval_seconds) || LANE_POLL_DEFAULT.tickets, String(src.plan || ""), false, String(src.depth || "")));
+	}
+	const repoBlocks = (kind, repos, every, per) => {
+		for (const r of Array.isArray(repos) ? repos : []) {
+			const repo = String(r || "").trim();
+			if (!repo || blocks.some((b) => b.kind === kind && sameRepo(b.id, repo))) continue;
+			blocks.push(make(kind, repo, KIND_WORD$1[kind] + " · " + repo, every, per?.[repo]?.plan || "", false, per?.[repo]?.depth || ""));
+		}
+	};
+	repoBlocks("prs", gh.repos, positive(gh.poll_interval_seconds) || LANE_POLL_DEFAULT.prs, gh.repo_settings);
+	repoBlocks("issues", gh.issue_repos, positive(gh.issue_poll_interval_seconds) || LANE_POLL_DEFAULT.issues, gh.issue_repo_settings);
+	for (const w of waiting) {
+		const t = w.item.target;
+		const id = t.kind === "tickets" ? t.source : t.repo;
+		let block = blocks.find((b) => b.kind === t.kind && (t.kind === "tickets" ? b.id === id : sameRepo(b.id, id)));
+		if (!block) {
+			const kind = t.kind;
+			const every = kind === "tickets" ? LANE_POLL_DEFAULT.tickets : positive(kind === "prs" ? gh.poll_interval_seconds : gh.issue_poll_interval_seconds) || LANE_POLL_DEFAULT[kind];
+			block = make(kind, id, kind === "tickets" ? w.item.group : KIND_WORD$1[kind] + " · " + id, every, "", true);
+			blocks.push(block);
+		}
+		block.waiting.push({
+			item: w.item,
+			auto: w.auto
+		});
+	}
+	const live = rows.filter((r) => !r.hidden_by && !r.locked);
+	const byTitle = /* @__PURE__ */ new Map();
+	for (const r of live) {
+		byTitle.set(r.title, r);
+		if (!byTitle.has(bareTitle(r.title))) byTitle.set(bareTitle(r.title), r);
+	}
+	const claimed = /* @__PURE__ */ new Set();
+	const claim = (block, row, reference) => {
+		if (claimed.has(row.title)) return;
+		claimed.add(row.title);
+		block.started.push({
+			title: row.title,
+			reference
+		});
+	};
+	const blockFor = (kind, id) => blocks.find((b) => b.kind === kind && (kind === "tickets" ? b.id === id : sameRepo(b.id, id)));
+	for (const t of opts.panels?.tickets?.tickets || []) {
+		const row = t.session ? byTitle.get(t.session) : void 0;
+		const block = row && blockFor("tickets", t.source || "");
+		if (row && block) claim(block, row, t.slug || t.id || "");
+	}
+	for (const kind of ["prs", "issues"]) {
+		const list = kind === "prs" ? opts.panels?.prs?.prs : opts.panels?.issues?.issues;
+		for (const p of list || []) {
+			const row = p.session ? byTitle.get(p.session) : void 0;
+			const block = row && blockFor(kind, p.repo || "");
+			if (row && block) claim(block, row, (p.repo || "") + "#" + (p.number ?? "?"));
+		}
+	}
+	for (const row of live) {
+		if (claimed.has(row.title)) continue;
+		const title = bareTitle(row.title);
+		for (const b of blocks) {
+			if (b.kind === "tickets") {
+				if (row.branch && new RegExp("(^|/)" + escapeRe(b.id) + "-", "i").test(row.branch) && looksLikeTicket(title)) {
+					claim(b, row, "");
+					break;
+				}
+				continue;
+			}
+			const m = new RegExp("^" + escapeRe(titlePrefix(b.kind, b.id)) + "(\\d+)$").exec(title);
+			if (m) {
+				claim(b, row, b.id + "#" + m[1]);
+				break;
+			}
+		}
+	}
+	return blocks;
+}
+function escapeRe(s) {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function looksLikeTicket(title) {
+	return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(title);
+}
+function stopsWords(flyway) {
+	return flyway.own ? flyway.name : flyway.words || SOURCE_OFF_LABEL;
+}
+function stopsTip(block, editing = false) {
+	const words = stopsWords(block.flyway);
+	const now = block.flyway.own ? "its own: " + block.flyway.name : words === SOURCE_OFF_LABEL ? "stops after the agent" : "goes as far as " + words;
+	return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default stops for " + block.name + " (" + now + ")";
+}
+function nameParts(name) {
+	return name.split(/(?<=\/)/);
+}
+function laneCount(block) {
+	return block.waiting.length;
+}
+function shownWaiting(block, max = LANE_WAITING_SHOWN) {
+	return {
+		shown: block.waiting.slice(0, max),
+		more: Math.max(0, block.waiting.length - max)
+	};
+}
+//#endregion
+//#region src/components/intake/queue.ts
+function isQueued(item) {
+	return item.eligible === true && !item.has_session;
+}
+function oldestFirst(rows) {
+	return rows.slice().sort((a, b) => {
+		const ta = Date.parse(a.created_at || "");
+		const tb = Date.parse(b.created_at || "");
+		if (!isFinite(ta) && !isFinite(tb)) return 0;
+		if (!isFinite(ta)) return 1;
+		if (!isFinite(tb)) return -1;
+		return ta - tb;
+	});
+}
+function ref(repo, number) {
+	return (repo || "") + "#" + (number ?? "?");
+}
+function queuedOf(kind, payloads) {
+	if (kind === "tickets") {
+		const labels = payloads.tickets?.source_labels || {};
+		return oldestFirst((payloads.tickets?.tickets || []).filter(isQueued)).map((t) => ({
+			kind,
+			key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
+			reference: t.slug || String(t.id ?? ""),
+			title: t.name || "",
+			url: t.url,
+			group: labels[t.source || ""] || t.source || "Tickets",
+			created_at: t.created_at,
+			state: t.bucket,
+			assignee: t.mine === false ? t.assignee || "someone else" : void 0,
+			route: t.route,
+			target: {
+				kind: "tickets",
+				source: t.source || "",
+				id: String(t.id ?? "")
+			}
+		}));
+	}
+	return oldestFirst((kind === "prs" ? payloads.prs?.prs || [] : payloads.issues?.issues || []).filter(isQueued)).map((r) => ({
+		kind,
+		key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
+		reference: ref(r.repo, r.number),
+		title: r.title || "",
+		url: r.url,
+		group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
+		created_at: r.created_at,
+		target: {
+			kind,
+			repo: r.repo || "",
+			number: r.number ?? 0
+		}
+	}));
+}
+function collectQueued(payloads) {
+	return [
+		...queuedOf("tickets", payloads),
+		...queuedOf("prs", payloads),
+		...queuedOf("issues", payloads)
+	];
+}
+function runState(opts) {
+	if (!opts.engineAvailable || !opts.configured) return "unset";
+	if (opts.runsElsewhere) return "elsewhere";
+	if (!opts.switchOn) return "off-switch";
+	if (!opts.engineOn) return "off-engine";
+	return "on";
+}
+function runsOnText(device) {
+	return "Runs on " + (device || "another of your devices");
+}
+function byGroup(items) {
+	const out = [];
+	for (const item of items) {
+		const found = out.find((g) => g.group === item.group);
+		if (found) found.items.push(item);
+		else out.push({
+			group: item.group,
+			items: [item]
+		});
+	}
+	return out;
+}
+//#endregion
+//#region src/components/flights/useWaiting.ts
+function useWaiting(fetch = true) {
+	const tickets = usePanelQuery("tickets", { enabled: fetch });
+	const prs = usePanelQuery("github-prs", { enabled: fetch });
+	const issues = usePanelQuery("github-issues", { enabled: fetch });
+	const status = useMindflockStatus().data;
+	return {
+		waiting: collectQueued({
+			tickets: tickets.data ?? null,
+			prs: prs.data ?? null,
+			issues: issues.data ?? null
+		}).map((item) => ({
+			item,
+			auto: waitingAuto(item.kind, status)
+		})),
+		loaded: !!(tickets.data || prs.data || issues.data),
+		refresh: () => {
+			tickets.refresh();
+			prs.refresh();
+			issues.refresh();
+		}
+	};
+}
+//#endregion
+//#region src/components/flights/IntakeLane.tsx
+var COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
+function loadCollapsed() {
+	try {
+		return localStorage.getItem(COLLAPSED_LS_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+function saveCollapsed(v) {
+	try {
+		if (v) localStorage.setItem(COLLAPSED_LS_KEY, "1");
+		else localStorage.removeItem(COLLAPSED_LS_KEY);
+	} catch {}
+}
+var RAIL_GLYPH = {
+	tickets: "T",
+	prs: "PR",
+	issues: "I"
+};
+async function flyLaneItem(w, block) {
+	const t = w.item.target;
+	const req = flyRequest(t, block.flyway.own ? block.flyway.id : "");
+	try {
+		const r = await api(req.path, { json: req.body });
+		refreshFlights();
+		return r?.title || (t.kind === "tickets" ? w.item.reference : "");
+	} finally {
+		refreshInstances();
+	}
+}
+async function openDefaultEditor(ref, flights, on = {}) {
+	const have = editorFor(flights, ref);
+	if (have) {
+		on.existing?.(have);
+		return have;
+	}
+	const d = await getIntakeDefault(ref);
+	if (!d) return null;
+	const f = await startGrounded({
+		steps: d.steps,
+		name: defaultEditorName(d.label),
+		edits_default: {
+			kind: ref.kind,
+			target: ref.target
+		}
+	});
+	if (f) on.made?.(f, d);
+	return f;
+}
+function WaitingChip({ w, block, onFly }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const fly = async () => {
+		setBusy(true);
+		setError("");
+		try {
+			const title = await flyLaneItem(w, block);
+			if (title) onFly(title);
+		} catch (err) {
+			setError(errMsg(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "sky-lane-item",
+		"data-waiting": w.item.key,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-lane-item-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "sky-lane-item-words",
+				title: w.item.reference + " — " + w.item.title,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-item-ref",
+					children: w.item.reference
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-item-headline",
+					children: w.item.title
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary fl-btn sky-lane-fly",
+				disabled: busy,
+				title: "Take off on " + w.item.reference + " · " + block.flyway.name,
+				onClick: () => void fly(),
+				children: busy ? "…" : "Fly"
+			})]
+		}), error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "error fl-error sky-lane-error",
+			role: "alert",
+			children: error
+		})]
+	});
+}
+function Block({ block, onFly, open, editing, onEditDefault }) {
+	const { shown, more } = shownWaiting(block, open ? Infinity : void 0);
+	const parts = nameParts(block.name);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "sky-lane-block sky-lane-block-" + block.kind + (block.stray ? " sky-lane-block-stray" : ""),
+		"data-lane-source": block.key,
+		"aria-label": block.label,
+		title: block.stray ? "Not in your settings: items from " + block.id + " are listed all the same" : void 0,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "sky-lane-block-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-kind-badge fl-kind-badge-" + block.kind,
+						children: WAITING_KIND_BADGE[block.kind]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-block-name",
+						title: block.label,
+						children: parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [p, i < parts.length - 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("wbr", {})] }, i))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-lane-more",
+						"aria-label": "Open " + block.label + " in Intake",
+						title: "Open this source in Intake",
+						onClick: () => useUi.getState().openDialogFor("intake", block.target),
+						children: "⋯"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-lane-chips",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-auto" + (block.auto ? " on" : ""),
+					children: block.autoText
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "fl-icon-btn sky-lane-flyway-btn",
+					"aria-label": "Edit the default stops for " + block.label,
+					"data-editing": editing ? "" : void 0,
+					title: stopsTip(block, editing),
+					onClick: () => onEditDefault({
+						kind: block.kind,
+						target: block.id
+					}, block.label),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-lane-stops" + (block.flyway.own ? " own" : "") + (editing ? " editing" : ""),
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-lane-stops-key",
+								children: "Stops"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
+								children: stopsWords(block.flyway)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-lane-stops-edit",
+								"aria-hidden": "true",
+								children: editing ? "editing…" : "✎"
+							})
+						]
+					})
+				})]
+			}),
+			block.waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "sky-lane-empty muted",
+				children: "Nothing waiting"
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				className: "sky-lane-items",
+				children: [shown.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingChip, {
+					w,
+					block,
+					onFly
+				}, w.item.key)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "sky-lane-n-more muted",
+					children: [more, " more"]
+				})]
+			}),
+			block.started.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "sky-lane-stubs",
+				"aria-label": "Started sessions",
+				children: block.started.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "sky-lane-stub",
+					"data-lane-target": s.title,
+					title: s.reference ? s.reference + " → " + windowName(s.title) : windowName(s.title),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-stub-line",
+						"aria-hidden": "true"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-stub-name",
+						children: windowName(s.title)
+					})]
+				}, s.title))
+			})
+		]
+	});
+}
+var headPress$5 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
+	const flights = useFlights().data;
+	const editDefault = (ref, label) => {
+		if (onEditDefault) onEditDefault(ref, label);
+		else openDefaultEditor(ref, flights);
+	};
+	const [live, setLive] = (0, import_react.useState)(null);
+	const grab = (0, import_react.useRef)(null);
+	const frameNow = live || {
+		w: width,
+		h: height ?? 0
+	};
+	const resizeDown = (e) => {
+		if (e.button !== 0 || !onResize) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const el = rootRef.current;
+		grab.current = {
+			id: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			w: width,
+			h: height ?? (el ? el.offsetHeight : 320)
+		};
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+	};
+	const resizeMove = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		const z = zoom > 0 ? zoom : 1;
+		setLive({
+			w: Math.max(200, Math.round(g.w + (e.clientX - g.sx) / z)),
+			h: Math.max(160, Math.round(g.h + (e.clientY - g.sy) / z))
+		});
+	};
+	const resizeUp = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		grab.current = null;
+		if (live && onResize) onResize(live.w, live.h);
+		setLive(null);
+	};
+	const settings = useSettingsDoc(true).data;
+	const status = useMindflockStatus().data;
+	const providers = useTicketingCatalog(true).data;
+	const { waiting } = useWaiting(true);
+	const tickets = usePanelQuery("tickets").data;
+	const prs = usePanelQuery("github-prs").data;
+	const issues = usePanelQuery("github-issues").data;
+	const [collapsed, setCollapsed] = (0, import_react.useState)(loadCollapsed);
+	const rootRef = (0, import_react.useRef)(null);
+	const measureRef = (0, import_react.useRef)(onMeasure);
+	measureRef.current = onMeasure;
+	(0, import_react.useEffect)(() => {
+		const el = rootRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		let last = "";
+		const read = () => {
+			const w = el.offsetWidth;
+			const h = el.offsetHeight;
+			const k = w + "x" + h;
+			if (!w || !h || k === last) return;
+			last = k;
+			measureRef.current?.(w, h);
+		};
+		const ro = new ResizeObserver(read);
+		ro.observe(el);
+		read();
+		return () => ro.disconnect();
+	}, [!!settings, collapsed]);
+	if (!settings) return null;
+	const blocks = sourceBlocks(settings, waiting, rows, {
+		plans,
+		status,
+		providers,
+		panels: {
+			tickets: tickets ?? null,
+			prs: prs ?? null,
+			issues: issues ?? null
+		}
+	});
+	const fold = (v) => {
+		setCollapsed(v);
+		saveCollapsed(v);
+	};
+	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
+	const headDown = (e) => {
+		if (draggable && onHeadDown && headPress$5(e)) onHeadDown(e);
+	};
+	const moveHint = draggable && onHeadDown ? "Drag to move the intake lane" : "";
+	if (collapsed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		ref: rootRef,
+		className: "sky-lane sky-lane-rail",
+		"aria-label": "Intake",
+		"data-collapsed": "true",
+		title: moveHint || void 0,
+		onPointerDown: headDown,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "sky-lane-toggle",
+			"aria-expanded": false,
+			title: "Open the intake lane",
+			onClick: () => fold(false),
+			children: "›"
+		}), blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "sky-lane-rail-icon fl-kind-badge fl-kind-badge-" + b.kind,
+			"data-lane-source": b.key,
+			title: b.label + " — " + (b.waiting.length ? b.waiting.length + " waiting" : "nothing waiting"),
+			onClick: () => fold(false),
+			children: [RAIL_GLYPH[b.kind], laneCount(b) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-lane-rail-count",
+				children: laneCount(b)
+			})]
+		}, b.key))]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		ref: rootRef,
+		className: "sky-lane",
+		"aria-label": "Intake",
+		"data-open": open ? "" : void 0,
+		style: {
+			width: frameNow.w,
+			height: frameNow.h > 0 ? frameNow.h : void 0
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-lane-head",
+				"data-sky-head": true,
+				title: [moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || void 0,
+				onPointerDown: headDown,
+				onDoubleClick: (e) => {
+					if (!onToggleOpen || e.target.closest("button")) return;
+					e.stopPropagation();
+					onToggleOpen();
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-title",
+						children: "Intake"
+					}),
+					total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-count",
+						children: total
+					}),
+					onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-lane-toggle sky-lane-expand",
+						"aria-expanded": open,
+						"aria-label": open ? "Fold the intake lane's items" : "Expand the intake lane: every item, in full",
+						title: open ? "Fold: the first items of each source" : "Expand: every waiting item, in full",
+						onClick: onToggleOpen,
+						children: open ? "▾" : "▸"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-lane-toggle",
+						"aria-expanded": true,
+						title: "Fold the intake lane",
+						onClick: () => fold(true),
+						children: "‹"
+					})
+				]
+			}),
+			blocks.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "sky-lane-empty muted",
+				children: [
+					"No sources yet.",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => useUi.getState().openDialogFor("intake"),
+						children: "Intake ›"
+					})
+				]
+			}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
+				block: b,
+				onFly,
+				open,
+				editing: !!editorFor(flights, {
+					kind: b.kind,
+					target: b.id
+				}),
+				onEditDefault: editDefault
+			}, b.key)),
+			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-lane-resize skl-resize",
+				role: "separator",
+				tabIndex: 0,
+				"data-no-drag": true,
+				"aria-label": "Resize the intake lane",
+				title: "Drag to resize the intake lane",
+				onPointerDown: resizeDown,
+				onPointerMove: resizeMove,
+				onPointerUp: resizeUp,
+				onPointerCancel: resizeUp
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/flights/PlanSelect.tsx
-function PlanSelect({ kind, value, onChange, className, field }) {
+function reachSummary(r, serverSteps) {
+	const steps = serverSteps && serverSteps.length ? serverSteps : r.steps;
+	const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved stops “" + r.words + "”";
+	return r.missing ? "Its saved stops “" + r.missing + "” are gone, so: " + line : line;
+}
+function PlanSelect({ kind, target, depth, plan, onChange, className, field }) {
 	const plans = useFlightPlans().data;
-	if (!plans) return null;
+	const flights = useFlights().data;
+	const labelId = (0, import_react.useId)();
+	const reach = sourceReach(kind, {
+		plan,
+		depth
+	}, plans);
+	const saved = sourcePlanOptions(plans, kind);
+	const server = useQuery({
+		queryKey: [
+			"intake-default",
+			kind,
+			target,
+			reach.choice
+		],
+		queryFn: () => api("/api/flights/intake-default?kind=" + encodeURIComponent(kind) + "&target=" + encodeURIComponent(target)).catch(() => null),
+		enabled: !!target && plans !== null,
+		staleTime: 15e3,
+		retry: false
+	}).data;
+	const serverSteps = server && (server.plan_id || "") === reach.planId ? stopsSummaryWords(server.steps) : null;
+	const pickRung = (l) => onChange({
+		depth: l === "leave" ? "" : l,
+		plan: ""
+	});
+	const editInSky = async () => {
+		if (!target) return;
+		const f = await openDefaultEditor({
+			kind,
+			target
+		}, flights);
+		useUi.getState().showSky();
+		if (f) toast("“" + (f.plan_name || "Default stops") + "” is on the board. Save as default there to change where this source goes.", { duration: 6e3 });
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-row fl-source-plan",
+		className: "set-row fl-source-reach" + (className ? " " + className : ""),
+		"data-reach": reach.choice,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-label",
-				children: "Stops"
+				id: labelId,
+				children: "Goes as far as"
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
-				className,
-				label: "Stops",
-				field: { [field.attr]: "plan" },
-				value,
-				options: planChoices(plans, kind, value),
-				onChange
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-reach-line",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-chiprow fl-reach-row",
+					role: "radiogroup",
+					"aria-labelledby": labelId,
+					[field.attr]: "reach",
+					children: [
+						SOURCE_RUNGS.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							role: "radio",
+							"aria-checked": reach.choice === l,
+							className: "fl-pick" + (reach.choice === l ? " on" : ""),
+							"data-value": l,
+							onClick: () => pickRung(l),
+							children: sourceRungLabel(l)
+						}, l)),
+						saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-reach-sep",
+							"aria-hidden": "true"
+						}),
+						saved.map((p) => {
+							const on = reach.choice === "plan:" + p.value;
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								role: "radio",
+								"aria-checked": on,
+								className: "fl-pick fl-reach-plan" + (on ? " on" : ""),
+								title: p.builtin ? "Our built-in stops for these items" : "Your saved stops",
+								"data-value": "plan:" + p.value,
+								onClick: () => onChange({ plan: p.value }),
+								children: p.label
+							}, p.value);
+						}),
+						reach.own && !saved.some((p) => "plan:" + p.value === reach.choice) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							role: "radio",
+							"aria-checked": true,
+							className: "fl-pick fl-reach-plan on",
+							"data-value": reach.choice,
+							onClick: () => onChange({ plan }),
+							children: reach.words
+						})
+					]
+				}), plans !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike fl-reach-edit",
+					disabled: !target,
+					title: target ? "Edit this source's default stops with the blocks, in the Sky" : "Save the source first",
+					onClick: () => void editInSky(),
+					children: "Edit in the Sky…"
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "The stops its items fly. Fast-track sets how far the default ones go."
+				className: "set-hint fl-reach-summary",
+				"data-reach-summary": true,
+				children: reachSummary(reach, serverSteps)
 			})
 		]
 	});
@@ -102063,7 +104138,7 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, session
 	const uses = [
 		where,
 		agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
-		"Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
+		depth ? "Just this one: " + laneLabel(depth) : "",
 		!effortUsable ? "" : effort ? (EFFORT_LABELS[effort] || effort) + " effort" : effortDefault ? effortDefault + " effort" : ""
 	].filter(Boolean).join(" · ");
 	const routeInMeta = hasSession || !!elsewhere;
@@ -102262,7 +104337,7 @@ function WorkItemRow({ reference, url, title, meta, tooltip, hasSession, session
 								className: "ik-item-pick",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "ik-item-pick-label",
-									children: "Fast-track"
+									children: "Just this one"
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
 									className: "ik-item-depth",
 									value: depth,
@@ -103318,9 +105393,12 @@ function RepoFields({ use, repo, liveBranch }) {
 		if (JSON.stringify(blocksRef.current) !== savedKey) setBlocks(saved);
 	}, [savedKey]);
 	const o = blocks[repo] || {};
-	const save = (field, value) => {
+	const save = (field, value) => saveFields({ [field]: value });
+	const saveFields = (fields) => {
 		const before = blocksRef.current;
-		const { patch, blocks: next } = fieldPatch(before, use, repo, field, value);
+		let patch = {};
+		let next = before;
+		for (const [field, value] of Object.entries(fields)) ({patch, blocks: next} = fieldPatch(next, use, repo, field, value));
 		setBlocks(next);
 		s.saveGroups(patch, "Saved " + repo).then((ok) => {
 			if (!ok && blocksRef.current === next) setBlocks(before);
@@ -103400,80 +105478,56 @@ function RepoFields({ use, repo, liveBranch }) {
 		}, repo);
 	}
 	const agent = o.agent || "";
-	const depth = o.depth === "agent" ? "" : o.depth || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-fields",
 		"data-use": use,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ik-grid ik-grid-3",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "set-row",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-label",
-								children: "Agent"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-								"data-repo-field": "agent",
-								value: agent,
-								onChange: (e) => save("agent", e.target.value),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: "",
-									children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)"
-								}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: n,
-									children: n
-								}, n))]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-hint",
-								children: "Works this repository's sessions."
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "set-row",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-label",
-								children: "Fast-track to"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-								"data-repo-field": "depth",
-								value: depth,
-								onChange: (e) => save("depth", e.target.value),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: "",
-									children: LANE_LABEL.leave
-								}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: d,
-									children: LANE_LABEL[d]
-								}, d))]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-hint",
-								children: "After the agent finishes."
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-						label: use === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)",
-						field: "min_age_minutes",
-						type: "number",
-						value: text("min_age_minutes"),
-						placeholder: defaults.minAge || "15",
-						hint: "Blank uses " + (defaults.minAge || "15") + ".",
-						onSave: save
-					})
-				]
+				className: "ik-grid ik-grid-2",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Agent"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+							"data-repo-field": "agent",
+							value: agent,
+							onChange: (e) => save("agent", e.target.value),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: "",
+								children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)"
+							}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+								value: n,
+								children: n
+							}, n))]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Works this repository's sessions."
+						})
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+					label: use === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)",
+					field: "min_age_minutes",
+					type: "number",
+					value: text("min_age_minutes"),
+					placeholder: defaults.minAge || "15",
+					hint: "Blank uses " + (defaults.minAge || "15") + ".",
+					onSave: save
+				})]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanSelect, {
 				kind: use === "pr" ? "prs" : "issues",
 				field: { attr: "data-repo-field" },
-				value: o.plan || "",
-				onChange: (id) => save(PLAN_FIELD, id)
+				target: repo,
+				depth: o.depth || "",
+				plan: o.plan || "",
+				onChange: (patch) => saveFields("depth" in patch ? {
+					depth: patch.depth,
+					[PLAN_FIELD]: ""
+				} : { [PLAN_FIELD]: patch.plan })
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1"),
@@ -103986,25 +106040,6 @@ function AutoStartSwitches({ gotoTab }) {
 	};
 	const names = listNames(broken.map((b) => b.name));
 	const one = broken.length === 1;
-	const anyOn = ticketsChecked || m.prsOn || m.issuesOn;
-	const pauseAll = async () => {
-		if (busy) return;
-		setBusy(true);
-		try {
-			const patch = {};
-			if (m.prsOn) patch.enabled = false;
-			if (m.issuesOn) patch.issues_enabled = false;
-			if (Object.keys(patch).length && !await settings.saveGroup("github", patch)) return;
-			if (ticketsChecked) await flipTickets(false);
-			toast("All auto-start is off — nothing starts on its own");
-		} catch (err) {
-			errorPop("Couldn't turn every switch off", err.message || "the server gave no reason");
-		} finally {
-			setBusy(false);
-			refreshGithub();
-			m.refetchStatus();
-		}
-	};
 	const elsewhere = m.runsOn ? "runs on " + m.runsOn + ", not here" : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "ik-autostart-switches",
@@ -104012,20 +106047,12 @@ function AutoStartSwitches({ gotoTab }) {
 		"data-tour": "intake-autostart",
 		"aria-label": "Auto-start switches",
 		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ik-autostart-switches-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
 					children: "Starts sessions on its own"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					id: "ik-pause-all",
-					className: "ik-quiet-btn",
-					disabled: !anyOn || busy,
-					title: anyOn ? "Turn every switch below off at once" : "Nothing is on",
-					onClick: () => void pauseAll(),
-					children: "Pause all auto-start"
-				})]
+				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
 				label: "Tickets",
@@ -104104,28 +106131,122 @@ function AutoStartSwitches({ gotoTab }) {
 						children: "Set up new issues ›"
 					}) : null
 				]
-			}) : null
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TicketSessionOptions, {})
 		]
 	});
 }
-function AutoStartLink({ kind, gotoTab }) {
+function TicketSessionOptions() {
+	const s = useSettings();
+	const inMindflock = s.get("engine", "enabled") !== false;
+	const [openIde, setOpenIde] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/ide/open-on-ticket").then((r) => live && setOpenIde(!!r?.enabled)).catch(() => live && setOpenIde(false));
+		return () => {
+			live = false;
+		};
+	}, []);
+	const flipIde = async (want) => {
+		setOpenIde(want);
+		try {
+			const r = await api("/api/ide/open-on-ticket", { json: { enabled: want } });
+			setOpenIde(!!r?.enabled);
+			toast(r?.enabled ? "New tickets open in the IDE" : "New tickets no longer open an IDE window");
+		} catch {
+			setOpenIde(!want);
+			toast("IDE toggle failed");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "pr-advanced ik-ticket-sessions",
+		id: "ik-ticket-sessions",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Ticket sessions" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "pr-advanced-body",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
+					id: "ik-copy-mode",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "How ticket sessions copy the repo"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "engine",
+							field: "mode",
+							options: [{
+								value: "",
+								label: "Worktree — fast (default)"
+							}, {
+								value: "clone",
+								label: "Full clone — a standalone copy"
+							}]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "A worktree shares your repo's history; a clone is fully separate. Where they live is Settings › Workspace."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row set-switch-row",
+					id: "ik-ide-on-ticket-row",
+					title: "Open each new ticket, issue or PR workspace in your IDE as soon as it is provisioned",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Open IDE when a ticket starts"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "ca-switch",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "ik-ide-on-ticket",
+							checked: !!openIde,
+							disabled: openIde === null,
+							onChange: (e) => void flipIde(e.target.checked)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "set-row set-switch-row",
+					id: "ik-engine-sessions-row",
+					title: "On: each ingested ticket becomes a MindFlock session — worktree, branch, seeded agent, and the guided commit → push → PR bar. Off: a detached tmux session plus an OS terminal tab, with no session in the app.",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Ticket sessions in MindFlock"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "ca-switch",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "ik-engine-sessions",
+							checked: inMindflock,
+							onChange: (e) => s.saveField("engine", "enabled", e.target.checked)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					children: "Leave that on: tickets become MindFlock sessions you can watch, commit and open a PR from. Off sends them to a bare tmux session and a terminal tab instead. Takes effect the next time auto-start starts."
+				})
+			]
+		})]
+	});
+}
+function AutoStartLink({ kind }) {
 	const m = useAutoStartModel(useGithubSettings().data);
 	const broken = useBrokenTicketSources();
 	if (kind === "tickets" && (!m.status || !m.status.available)) return null;
 	if (!(kind === "tickets" ? m.ticketSources > 0 : kind === "prs" ? m.repos > 0 : m.issueRepos > 0)) return null;
 	const on = kind === "tickets" ? m.ticketsOn : kind === "prs" ? m.prsOn : m.issuesOn;
 	const state = kind === "tickets" && on && broken.length ? "on, but " + listNames(broken.map((b) => b.name)) + " can't connect" : kind !== "tickets" && m.runsOn && on ? "runs on " + m.runsOn : on ? "on — " + everyText(m.every[kind]) : "off";
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-autostart-link",
 		id: "ik-autostart-link-" + kind,
 		"data-on": on ? "1" : "0",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["Auto-start: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: state })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "linklike",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			title: "The switches for tickets, PR comments and new issues are on the Auto-start tab",
-			onClick: () => gotoTab("autostart"),
-			children: on ? "Change ›" : "Turn on ›"
-		})]
+			children: ["Auto-start: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: state })]
+		})
 	});
 }
 //#endregion
@@ -105771,9 +107892,9 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 						onSettled: () => onDirty("repos", false)
 					})
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "ik-grid ik-grid-2",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 						className: "set-row",
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -105798,39 +107919,16 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 								children: "Works the tickets from this source."
 							})
 						]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "set-row",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-label",
-								children: "Fast-track to"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-								className: "tk-depth",
-								"data-tk-field": "depth",
-								value: source.depth === "agent" ? "" : source.depth || "",
-								onChange: (e) => onChange({ depth: e.target.value }),
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: "",
-									children: LANE_LABEL.leave
-								}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-									value: d,
-									children: LANE_LABEL[d]
-								}, d))]
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "set-hint",
-								children: "After the agent finishes. Merge is per ticket only."
-							})
-						]
-					})]
+					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanSelect, {
 					kind: "tickets",
-					className: "tk-plan",
+					className: "tk-depth",
 					field: { attr: "data-tk-field" },
-					value: source.plan || "",
-					onChange: (plan) => onChange({ plan })
+					target: saved ? source.id : "",
+					depth: source.depth || "",
+					plan: source.plan || "",
+					onChange: (patch) => onChange(patch)
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "tk-advanced",
@@ -106028,58 +108126,6 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 				"data-tk-token-link": source.provider,
 				children: "Create a token ↗"
 			}) : null
-		]
-	});
-}
-//#endregion
-//#region src/components/settings/screens/AgentPicker.tsx
-function useAgentChoices() {
-	const [choices, setChoices] = (0, import_react.useState)({
-		names: [],
-		fallback: ""
-	});
-	(0, import_react.useEffect)(() => {
-		let alive = true;
-		(async () => {
-			try {
-				const p = await api("/api/providers");
-				if (!alive) return;
-				setChoices({
-					names: (p?.providers || []).map((x) => x.name).filter(Boolean),
-					fallback: p?.default || ""
-				});
-			} catch {}
-		})();
-		return () => {
-			alive = false;
-		};
-	}, []);
-	return choices;
-}
-function AgentPicker({ label, hint, value, choices, fallbackLabel, onChange }) {
-	const empty = fallbackLabel || (choices.fallback ? `App default (${choices.fallback})` : "App default");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: label
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-				value: value || "",
-				onChange: (e) => onChange(e.target.value),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: "",
-					children: empty
-				}), choices.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-					value: n,
-					children: n
-				}, n))]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: hint
-			})
 		]
 	});
 }
@@ -106688,26 +108734,6 @@ function skippedText(epochSec, now = /* @__PURE__ */ new Date()) {
 	if (!label) return "";
 	return label.split(" ")[0] + "'s run skipped";
 }
-function scheduleLine(row) {
-	return row.line;
-}
-function scheduledRows(templates, status, now = /* @__PURE__ */ new Date()) {
-	return templates.filter(hasSchedule).map((t) => {
-		const info = status.runs[t.name.trim().toLowerCase()] || {};
-		const next = t.schedule?.paused ? "paused" : !status.runs_here && status.runs_on ? "starts on " + status.runs_on : info.next_at ? "next " + whenLabel(info.next_at, now) : "";
-		const tz = info.tz;
-		const skipping = !t.schedule?.paused && !info.paused ? info.skipping_at : 0;
-		const row = {
-			name: t.name,
-			when: (info.schedule_label || scheduleLabel(t.schedule, now)) + (tz && (t.schedule?.at || t.schedule?.once) ? " " + tz : ""),
-			next,
-			problem: runProblem(t),
-			line: templateScheduleLine(t, status, now)
-		};
-		if (skipping) row.skipped = skippedText(skipping, now);
-		return row;
-	});
-}
 function nextScheduledText(templates, status, now = /* @__PURE__ */ new Date()) {
 	if (!status.runs_here && status.runs_on) return "";
 	let best = null;
@@ -106740,156 +108766,34 @@ function useScheduledTemplates() {
 		status
 	};
 }
+function scheduledCount(templates, plans) {
+	const stops = (plans || []).filter((p) => p.trigger?.kind === "schedule" && !!p.trigger.schedule).length;
+	return templates.filter(hasSchedule).length + stops;
+}
+function scheduledLineText(n) {
+	return n > 0 ? n + " scheduled" : "Nothing on a timer yet";
+}
 function ScheduledTemplates() {
-	const { templates, status } = useScheduledTemplates();
-	const [running, setRunning] = (0, import_react.useState)("");
-	const rows = scheduledRows(templates, status);
-	if (!rows.length) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "ik-queue-section",
+	const { templates } = useScheduledTemplates();
+	const plans = useFlightPlans().data;
+	const n = scheduledCount(templates, plans);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "ik-queue-section ik-queue-scheduled-line",
 		id: "ik-queue-scheduled",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ik-queue-head",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ik-queue-kind",
-					children: "Scheduled templates"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ik-tab-count",
-					children: rows.length
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn ik-queue-goto",
-					onClick: () => useUi.getState().openDialogFor("schedule"),
-					title: "Open Schedule to change, pause or skip a schedule",
-					children: "Open Schedule ›"
-				})
-			]
-		}), rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "pr-open-item",
-			title: r.name + " — " + scheduleLine(r),
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "pr-open-main",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "pr-open-title",
-						children: r.name
-					})
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "pr-open-meta",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ik-scheduled-when",
-						children: scheduleLine(r)
-					})
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "ik-item-start",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary pr-review-btn",
-						disabled: !!r.problem || running === r.name,
-						title: r.problem || "Run now — starts a new session from this template",
-						onClick: async () => {
-							setRunning(r.name);
-							try {
-								const title = await runTemplateNow(r.name);
-								if (title) openSessionFromIntake(title);
-							} finally {
-								setRunning("");
-							}
-						},
-						children: running === r.name ? "Starting…" : "Run now"
-					})
-				})
-			]
-		}, r.name))]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ik-queue-kind",
+				children: scheduledLineText(n)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn ik-queue-goto",
+				onClick: () => useUi.getState().openDialogFor("schedule"),
+				title: "Schedule — templates and saved stops that start by themselves: run, pause, skip or change them there",
+				children: "Open Schedule ›"
+			})]
+		})
 	});
-}
-//#endregion
-//#region src/components/intake/queue.ts
-function isQueued(item) {
-	return item.eligible === true && !item.has_session;
-}
-function oldestFirst(rows) {
-	return rows.slice().sort((a, b) => {
-		const ta = Date.parse(a.created_at || "");
-		const tb = Date.parse(b.created_at || "");
-		if (!isFinite(ta) && !isFinite(tb)) return 0;
-		if (!isFinite(ta)) return 1;
-		if (!isFinite(tb)) return -1;
-		return ta - tb;
-	});
-}
-function ref(repo, number) {
-	return (repo || "") + "#" + (number ?? "?");
-}
-function queuedOf(kind, payloads) {
-	if (kind === "tickets") {
-		const labels = payloads.tickets?.source_labels || {};
-		return oldestFirst((payloads.tickets?.tickets || []).filter(isQueued)).map((t) => ({
-			kind,
-			key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
-			reference: t.slug || String(t.id ?? ""),
-			title: t.name || "",
-			url: t.url,
-			group: labels[t.source || ""] || t.source || "Tickets",
-			created_at: t.created_at,
-			state: t.bucket,
-			assignee: t.mine === false ? t.assignee || "someone else" : void 0,
-			route: t.route,
-			target: {
-				kind: "tickets",
-				source: t.source || "",
-				id: String(t.id ?? "")
-			}
-		}));
-	}
-	return oldestFirst((kind === "prs" ? payloads.prs?.prs || [] : payloads.issues?.issues || []).filter(isQueued)).map((r) => ({
-		kind,
-		key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
-		reference: ref(r.repo, r.number),
-		title: r.title || "",
-		url: r.url,
-		group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
-		created_at: r.created_at,
-		target: {
-			kind,
-			repo: r.repo || "",
-			number: r.number ?? 0
-		}
-	}));
-}
-function collectQueued(payloads) {
-	return [
-		...queuedOf("tickets", payloads),
-		...queuedOf("prs", payloads),
-		...queuedOf("issues", payloads)
-	];
-}
-function runState(opts) {
-	if (!opts.engineAvailable || !opts.configured) return "unset";
-	if (opts.runsElsewhere) return "elsewhere";
-	if (!opts.switchOn) return "off-switch";
-	if (!opts.engineOn) return "off-engine";
-	return "on";
-}
-function runsOnText(device) {
-	return "Runs on " + (device || "another of your devices");
-}
-function byGroup(items) {
-	const out = [];
-	for (const item of items) {
-		const found = out.find((g) => g.group === item.group);
-		if (found) found.items.push(item);
-		else out.push({
-			group: item.group,
-			items: [item]
-		});
-	}
-	return out;
 }
 //#endregion
 //#region src/components/intake/QueueTab.tsx
@@ -107608,7 +109512,6 @@ function SettingsSearch({ onPick }) {
 function General(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkersRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 			id: "general-advanced",
 			summary: "Budgets, resume and sleep",
@@ -107659,69 +109562,6 @@ function General(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {})
 	] });
-}
-function WorkersRows() {
-	const s = useSettings();
-	const stored = s.get("general", "workers_request");
-	const display = typeof stored === "string" ? stored : "";
-	const [value, setValue] = (0, import_react.useState)(display);
-	(0, import_react.useEffect)(() => setValue(display), [display]);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		id: "general-workers",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Workers request"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				className: "workers-request",
-				"data-group": "general",
-				"data-field": "workers_request",
-				rows: 4,
-				style: {
-					resize: "vertical",
-					lineHeight: 1.45
-				},
-				spellCheck: false,
-				placeholder: DEFAULT_WORKERS_TEMPLATE,
-				value,
-				onChange: (e) => setValue(e.target.value),
-				onBlur: () => {
-					if (value !== display) s.saveField("general", "workers_request", value);
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "set-hint",
-				children: [
-					"Added to a prompt by the hotkey (",
-					ASK_WORKERS_KEYS,
-					"), or to every prompt while a session's Flock is on (",
-					FLOCK_KEYS,
-					"). ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "{model}" }),
-					" becomes the model below; empty uses the default."
-				]
-			})
-		]
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-		className: "set-row",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Workers model"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-				group: "general",
-				field: "workers_model",
-				placeholder: DEFAULT_WORKERS_MODEL
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-hint",
-				children: "The model the request asks workers to run on."
-			})
-		]
-	})] });
 }
 function ResumeOnUsageResetRow() {
 	const s = useSettings();
@@ -108975,7 +110815,7 @@ function PronounceBlock({ model, view }) {
 }
 //#endregion
 //#region src/components/settings/screens/Voice.tsx
-var KIND_WORD$1 = {
+var KIND_WORD = {
 	stt: "recognition",
 	tts: "voice"
 };
@@ -109028,7 +110868,7 @@ function readinessLine(kind, view, where, backend = "") {
 		ok: false,
 		text: ""
 	};
-	const word = KIND_WORD$1[kind];
+	const word = KIND_WORD[kind];
 	if (!view) return {
 		ok: false,
 		text: "Checking the server…"
@@ -114733,9 +116573,18 @@ function AgentOrchestration(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint orch-intro",
-			children: "Agents can see the other sessions, message them, and start and steer sub-sessions of their own through the MindFlock MCP."
+			children: "Agents can see the other sessions, message them, and start and steer workers of their own through the MindFlock MCP."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentMcpRows, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+			className: "set-section-title",
+			children: "Workers"
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "set-hint orch-intro",
+			children: "Sessions a session starts. Ask for them from a session's Workers… (its pane button or ⋯ menu): let the agent split it now, ask once, or on every prompt."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkersRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
 			children: "Spawn limits"
@@ -114747,23 +116596,86 @@ function AgentOrchestration(_) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CapRow, {
 			cap: "max_children",
 			field: "agent_max_children",
-			label: "Sub-sessions per orchestrator",
-			hint: "How many live sub-sessions one session may have at once. Also the most pieces a split can make."
+			label: "Workers per orchestrator",
+			hint: "How many live workers one session may have at once. Also the most workers a split can make."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CapRow, {
 			cap: "max_spawned",
 			field: "agent_max_spawned",
-			label: "Agent-spawned sessions in total",
-			hint: "Every agent-started session alive at once, across all orchestrators. Raise it with the per-orchestrator cap, or it stops you first."
+			label: "Workers in total",
+			hint: "Every worker alive at once, across all orchestrators. Raise it with the per-orchestrator cap, or it stops you first."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CapRow, {
 			cap: "max_spawn_depth",
 			field: "agent_max_spawn_depth",
 			label: "Nesting depth",
-			hint: "How deep spawns may nest: 1 = only your sessions spawn, 2 = their sub-sessions may spawn too, and so on."
+			hint: "How deep spawns may nest: 1 = only your sessions start workers, 2 = their workers may start workers too, and so on."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SharedMcpServers, {})
 	] });
+}
+function WorkersRows() {
+	const s = useSettings();
+	const stored = s.get("general", "workers_request");
+	const display = typeof stored === "string" ? stored : "";
+	const [value, setValue] = (0, import_react.useState)(display);
+	(0, import_react.useEffect)(() => setValue(display), [display]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "orch-workers",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Workers request"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				className: "workers-request",
+				"data-group": "general",
+				"data-field": "workers_request",
+				rows: 4,
+				style: {
+					resize: "vertical",
+					lineHeight: 1.45
+				},
+				spellCheck: false,
+				placeholder: DEFAULT_WORKERS_TEMPLATE,
+				value,
+				onChange: (e) => setValue(e.target.value),
+				onBlur: () => {
+					if (value !== display) s.saveField("general", "workers_request", value);
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"What \"Ask for workers once\" types (",
+					ASK_WORKERS_KEYS,
+					"), and what \"Workers on every prompt\" adds to everything you send (",
+					FLOCK_KEYS,
+					"). ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "{model}" }),
+					" becomes the model below; empty uses the default."
+				]
+			})
+		]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Workers model"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "workers_model",
+				placeholder: DEFAULT_WORKERS_MODEL
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The model the request asks workers to run on."
+			})
+		]
+	})] });
 }
 function CapRow({ cap, field, label, hint }) {
 	const { data: config } = useConfig();
@@ -114818,11 +116730,11 @@ function CapRow({ cap, field, label, hint }) {
 var AGENT_MCP_SCOPE_OPTIONS = [
 	{
 		value: "",
-		label: "Default (children)"
+		label: "Default (its workers)"
 	},
 	{
 		value: "children",
-		label: "Children — manage only sessions it spawned"
+		label: "Its workers — manage only sessions it started"
 	},
 	{
 		value: "readonly",
@@ -114876,7 +116788,7 @@ function AgentMcpRows() {
 		})]
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 		className: "set-row",
-		title: "How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Reading the flock and messaging are allowed in every scope except read-only.",
+		title: "How far an agent may MANAGE other sessions through the MCP (answer their prompts, kill them, re-parent them). Seeing the other sessions and messaging are allowed in every scope except read-only.",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-label",
@@ -115158,30 +117070,11 @@ function WorktreeHome() {
 					})
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "set-row",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetInIntake, {
 				id: "workspace-copy-mode",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
-						children: "How ticket sessions copy the repo"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
-						group: "engine",
-						field: "mode",
-						options: [{
-							value: "",
-							label: "Worktree — fast (default)"
-						}, {
-							value: "clone",
-							label: "Full clone — a standalone copy"
-						}]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "A worktree shares your repo's history; a clone is fully separate."
-					})
-				]
+				label: "How ticket sessions copy the repo",
+				hint: "Worktree or full clone, with the rest of ticket setup.",
+				selector: "#ik-copy-mode"
 			})
 		]
 	});
@@ -115269,7 +117162,7 @@ function Workspace({ gotoScreen }) {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
-							children: "Live branch"
+							children: "Default live branch"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 							group: "repository",
@@ -115281,7 +117174,7 @@ function Workspace({ gotoScreen }) {
 							children: [
 								"The branch that means ",
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "shipped" }),
-								". Verify asks you to check a change once it lands here. Blank = the PR base branch, then the default base branch."
+								". Verify asks you to check a change once it lands here. A repository can set its own in Intake. Blank = the PR base branch, then the default base branch."
 							]
 						})
 					]
@@ -115409,7 +117302,6 @@ function Ide(_) {
 	const [value, setValue] = (0, import_react.useState)(CUSTOM_IDE);
 	const [customVisible, setCustomVisible] = (0, import_react.useState)(false);
 	const [autoAdopt, setAutoAdopt] = (0, import_react.useState)(false);
-	const [openOnTicket, setOpenOnTicket] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
 		(async () => {
 			try {
@@ -115431,10 +117323,6 @@ function Ide(_) {
 			try {
 				const a = await api("/api/cursor/autoadopt");
 				setAutoAdopt(!!a?.enabled);
-			} catch {}
-			try {
-				const o = await api("/api/ide/open-on-ticket");
-				setOpenOnTicket(!!o?.enabled);
 			} catch {}
 		})();
 	}, []);
@@ -115527,33 +117415,11 @@ function Ide(_) {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 			})]
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetInIntake, {
 			id: "ide-ticket-row",
-			title: "Open each new ticket, issue or PR workspace in your IDE as soon as it is provisioned",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Open IDE when a ticket starts"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "ide-open-on-ticket",
-					checked: openOnTicket,
-					onChange: async (e) => {
-						const want = e.target.checked;
-						setOpenOnTicket(want);
-						try {
-							const r = await api("/api/ide/open-on-ticket", { json: { enabled: want } });
-							setOpenOnTicket(!!r?.enabled);
-							toast(r?.enabled ? "New tickets open in the IDE" : "New tickets no longer open an IDE window");
-						} catch {
-							setOpenOnTicket(!want);
-							toast("IDE toggle failed");
-						}
-					}
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-			})]
+			label: "Open IDE when a ticket starts",
+			hint: "Opens each new ticket, issue or PR session in your editor as soon as it is ready.",
+			selector: "#ik-ide-on-ticket-row"
 		})
 	] });
 }
@@ -117672,7 +119538,7 @@ function Devices(p) {
 				className: "devices-run-here-text",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-label",
-					children: "PR review and issue handling"
+					children: "Which computer auto-starts work"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint" + (auto.runner ? "" : " devices-hint-warn"),
 					id: "devices-run-here-hint",
@@ -118606,9 +120472,8 @@ function onWindows() {
 	if (typeof window === "undefined") return false;
 	return window.mfshell?.platform === "win32";
 }
-function Advanced({ gotoScreen }) {
+function Advanced(_) {
 	const s = useSettings();
-	const engineSessions = s.get("engine", "enabled") !== false;
 	const { restarting, timedOut, restart } = useServerRestart();
 	const showPlatform = onWindows() || !!String(s.get("platform", "wsl_distro") ?? "").trim() || !!String(s.get("platform", "wt_command") ?? "").trim();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -118616,39 +120481,11 @@ function Advanced({ gotoScreen }) {
 			className: "set-section-title",
 			children: "Engine"
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
-			title: "On: each ingested ticket becomes a MindFlock session — worktree, branch, seeded agent, and the guided commit → push → PR bar. Off: a detached tmux session plus an OS terminal tab, with no session in the app.",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "set-label",
-				children: "Ticket sessions in MindFlock"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					checked: engineSessions,
-					onChange: (e) => s.saveField("engine", "enabled", e.target.checked)
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
-			})]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			children: "Leave this on: tickets assigned to you become MindFlock sessions you can watch, commit and open a PR from. Off sends them to a bare tmux session and a terminal tab instead. Takes effect the next time auto-start starts."
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "set-hint",
-			children: [
-				"How ticket sessions copy the repo (worktree or clone) is on",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike",
-					"data-goto-screen": "workspace",
-					onClick: () => gotoScreen("workspace"),
-					children: "Workspace"
-				}),
-				"."
-			]
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetInIntake, {
+			id: "engine-ticket-sessions",
+			label: "Ticket sessions in MindFlock",
+			hint: "Whether tickets become MindFlock sessions, and how they copy the repo.",
+			selector: "#ik-engine-sessions-row"
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EngineUpdate, {}),
 		showPlatform && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -129045,7 +130882,7 @@ function deviceBlockReason(d) {
 	if (!d.connected) return "Not connected — pair or wake it in Settings › Your devices.";
 	return "";
 }
-var headPress$5 = (e) => e.button === 0 && !e.target.closest("button, a, input, label, summary, [data-no-drag]");
+var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, label, summary, [data-no-drag]");
 function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown, draggable = true, onMeasure }) {
 	const rootRef = (0, import_react.useRef)(null);
 	const [force, setForce] = (0, import_react.useState)(false);
@@ -129069,7 +130906,7 @@ function DeviceBlock({ device, dropped = "", onDone, target = false, onHeadDown,
 		setForce(false);
 	}, [dropped]);
 	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$5(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress$4(e)) onHeadDown(e);
 	};
 	const reason = dropped ? deviceBlockReason(device) : "";
 	const move = async () => {
@@ -129194,9 +131031,12 @@ function checksWords(tone) {
 		default: return "no checks";
 	}
 }
-function mergeWords(at, now) {
+function mergeWords(at, now, kind) {
 	if (!at) return "no merges yet";
-	return "merged " + relTime(at, { now });
+	const ago = relTime(at, { now });
+	if (kind === "merge") return "merged " + ago;
+	if (kind === "commit") return "last commit " + ago;
+	return "updated " + ago;
 }
 function shownLanded(repo, open) {
 	const all = [...repo.landed || []].sort((a, b) => b.at - a.at);
@@ -129207,7 +131047,7 @@ function shownLanded(repo, open) {
 	};
 }
 var landedCount = (data) => (data?.repos || []).reduce((n, r) => n + (r.landed || []).length, 0);
-var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+var headPress$3 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
 function LandingStrip({ data, error = "", width, height, zoom = 1, open = false, onToggleOpen, onHeadDown, draggable = true, onResize, onMeasure, now }) {
 	const [folded, setFolded] = (0, import_react.useState)(readFolded);
 	const rootRef = (0, import_react.useRef)(null);
@@ -129269,7 +131109,7 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 		writeFolded(v);
 	};
 	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$4(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress$3(e)) onHeadDown(e);
 	};
 	const moveHint = draggable && onHeadDown ? "Drag to move the landing strip" : "";
 	const total = landedCount(data);
@@ -129404,7 +131244,8 @@ function RepoRow({ repo, open, now }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "sky-landing-merge muted",
-				children: mergeWords(repo.last_merge_at, now)
+				title: "The default branch's last merge (or, with none yet, its last commit)",
+				children: mergeWords(repo.last_merge_at, now, repo.last_merge_kind ?? void 0)
 			}),
 			(repo.landed || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 				className: "sky-landing-landed",
@@ -129450,7 +131291,7 @@ function shareBlockReason(link, title, rows) {
 	if (!shareableSessions(rows).some((r) => r.title === title)) return "Only a session of this machine's, off the rail, can be shared.";
 	return "";
 }
-var headPress$3 = (e) => e.button === 0 && !e.target.closest("button, a, input, label, summary, [data-no-drag]");
+var headPress$2 = (e) => e.button === 0 && !e.target.closest("button, a, input, label, summary, [data-no-drag]");
 function PersonBlock({ link, rows, dropped = "", onDone, target = false, onHeadDown, draggable = true, onMeasure }) {
 	const rootRef = (0, import_react.useRef)(null);
 	const [shared, setShared] = (0, import_react.useState)([]);
@@ -129484,7 +131325,7 @@ function PersonBlock({ link, rows, dropped = "", onDone, target = false, onHeadD
 		setUnderstood(false);
 	}, [dropped]);
 	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$3(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress$2(e)) onHeadDown(e);
 	};
 	const reason = dropped ? shareBlockReason(link, dropped, rows) : "";
 	const ok = canShare({
@@ -129615,7 +131456,7 @@ function PersonBlock({ link, rows, dropped = "", onDone, target = false, onHeadD
 //#endregion
 //#region src/components/flights/StickyNote.tsx
 var NOTE_MAX_CHARS = 2e3;
-var headPress$2 = (e) => e.button === 0 && !e.target.closest("button, a, input, textarea, [data-no-drag]");
+var headPress$1 = (e) => e.button === 0 && !e.target.closest("button, a, input, textarea, [data-no-drag]");
 function StickyNote({ note, zoom = 1, editing = false, onEdit, onChange, onResize, onRemove, onHeadDown, draggable = true, onMeasure, attached = false }) {
 	const rootRef = (0, import_react.useRef)(null);
 	const areaRef = (0, import_react.useRef)(null);
@@ -129680,7 +131521,7 @@ function StickyNote({ note, zoom = 1, editing = false, onEdit, onChange, onResiz
 	};
 	const headDown = (e) => {
 		rootRef.current?.focus({ preventScroll: true });
-		if (draggable && onHeadDown && headPress$2(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress$1(e)) onHeadDown(e);
 	};
 	const onKey = (e) => {
 		if (e.target !== e.currentTarget) return;
@@ -130008,367 +131849,6 @@ function cardMenu(plan, shelved) {
 			danger: true
 		}
 	];
-}
-//#endregion
-//#region src/components/flights/TakeoffDialog.tsx
-var DAYS = [
-	{
-		v: "daily",
-		label: "Every day"
-	},
-	{
-		v: "weekdays",
-		label: "Weekdays"
-	},
-	{
-		v: "once",
-		label: "Once"
-	},
-	{
-		v: "cron",
-		label: "Custom"
-	}
-];
-function triggerCron(plan) {
-	if (plan.trigger.kind !== "schedule") return "";
-	const when = whenFormOf(plan.trigger.schedule);
-	return (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim();
-}
-function useCronPreview(cron) {
-	const [preview, setPreview] = (0, import_react.useState)(null);
-	(0, import_react.useEffect)(() => {
-		if (!cron) {
-			setPreview(null);
-			return;
-		}
-		let live = true;
-		const t = setTimeout(() => {
-			cronPreview(cron).then((pv) => live && setPreview(pv)).catch(() => live && setPreview(null));
-		}, 300);
-		return () => {
-			live = false;
-			clearTimeout(t);
-		};
-	}, [cron]);
-	return preview;
-}
-function ScheduleChips({ when, onWhen, preview }) {
-	const line = cronPreviewLine(preview, /* @__PURE__ */ new Date());
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-schedule",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-				label: "Which days",
-				value: when.days,
-				options: DAYS,
-				onChange: (days) => onWhen({
-					...when,
-					days
-				})
-			}),
-			when.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-				label: "Cron expression",
-				mono: true,
-				value: when.cron,
-				placeholder: "0 21 * * 1-5",
-				onChange: (cron) => onWhen({
-					...when,
-					cron
-				})
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "fl-schedule-at",
-				children: [
-					when.days === "once" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "date",
-						className: "fl-input fl-date",
-						"aria-label": "Date",
-						value: when.date,
-						onChange: (e) => onWhen({
-							...when,
-							date: e.target.value
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "at"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "time",
-						className: "fl-input fl-time",
-						"aria-label": "Time",
-						value: when.at,
-						onChange: (e) => onWhen({
-							...when,
-							at: e.target.value
-						})
-					})
-				]
-			}),
-			line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "fl-fld-hint",
-				children: line
-			})
-		]
-	});
-}
-function HookUrlRow({ plan }) {
-	const url = hookUrl(plan.trigger);
-	const [copied, setCopied] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => {
-		if (!copied) return;
-		const t = setTimeout(() => setCopied(false), 1500);
-		return () => clearTimeout(t);
-	}, [copied]);
-	if (!url) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "fl-fld-hint fl-hook-pending",
-		children: "Save to get the address outside systems POST to."
-	});
-	const copy = () => {
-		(typeof navigator !== "undefined" && navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject(/* @__PURE__ */ new Error("no clipboard"))).then(() => {
-			setCopied(true);
-			toast("Copied the hook address");
-		}, () => toast("Couldn't copy — select the address and copy it"));
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "fl-hook-url",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-			type: "text",
-			className: "fl-input fl-mono",
-			"aria-label": "Hook address",
-			value: url,
-			readOnly: true,
-			onFocus: (e) => e.currentTarget.select()
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "test-btn fl-hook-copy",
-			onClick: copy,
-			title: "Copy the address",
-			children: copied ? "Copied" : "Copy"
-		})]
-	});
-}
-function TakeoffFields({ plan, onChange }) {
-	const agents = useAgentChoices();
-	const preview = useCronPreview(triggerCron(plan));
-	const when = whenFormOf(plan.trigger.schedule);
-	const needsSession = triggerMakesSession(plan.trigger.kind);
-	const watchesMain = MAIN_TRIGGERS.includes(plan.trigger.kind);
-	const isHook = plan.trigger.kind === "hook";
-	const quiet = plan.trigger.quiet_minutes ?? 60;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-		className: "fl-section fl-trigger",
-		"aria-label": "Where its flights come from",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "fl-form",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Takes off",
-					wide: true,
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-						label: "Takes off",
-						value: plan.trigger.kind,
-						options: Object.keys(TRIGGER_LABEL).map((k) => ({
-							v: k,
-							label: TRIGGER_LABEL[k]
-						})),
-						onChange: (kind) => onChange({ trigger: {
-							...plan.trigger,
-							kind,
-							schedule: kind === "schedule" ? plan.trigger.schedule || {
-								at: "21:00",
-								days: "daily"
-							} : null
-						} })
-					})
-				}),
-				plan.trigger.kind === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
-					label: "When",
-					wide: true,
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleChips, {
-						when,
-						preview,
-						onWhen: (w) => onChange({ trigger: {
-							...plan.trigger,
-							schedule: scheduleOfWhen(w)
-						} })
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
-						on: plan.trigger.paused,
-						onChange: (paused) => onChange({ trigger: {
-							...plan.trigger,
-							paused
-						} }),
-						label: "Paused",
-						title: "A paused schedule takes off nothing"
-					})]
-				}),
-				watchesMain && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Watches",
-					wide: true,
-					hint: plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip takes off." : "The checks of its default branch's tip, once per commit; red takes off.",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-						id: "fl-trigger-repo",
-						value: plan.trigger.repo || "",
-						placeholder: "An absolute path to a git repository",
-						pickerTitle: "The repository whose main branch this watches",
-						onChange: (v) => onChange({ trigger: {
-							...plan.trigger,
-							repo: v
-						} })
-					})
-				}),
-				isHook && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Hook",
-					wide: true,
-					hint: "POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the flight.",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HookUrlRow, { plan })
-				}),
-				(watchesMain || isHook) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Quiet",
-					hint: "No second take-off inside this many minutes",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, {
-						label: "Quiet minutes",
-						unit: "min",
-						value: quiet,
-						onChange: (v) => onChange({ trigger: {
-							...plan.trigger,
-							quiet_minutes: v === "" ? 0 : v
-						} })
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Paused",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
-						on: plan.trigger.paused,
-						onChange: (paused) => onChange({ trigger: {
-							...plan.trigger,
-							paused
-						} }),
-						label: "Paused",
-						title: "A paused trigger takes off nothing"
-					})
-				})] }),
-				needsSession && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-						label: "Repository",
-						wide: true,
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-							id: "fl-plan-repo",
-							value: plan.session.repo_path,
-							placeholder: "Ask when it takes off",
-							pickerTitle: "The repository these stops' sessions start in",
-							onChange: (v) => onChange({ session: {
-								...plan.session,
-								repo_path: v
-							} })
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-						label: "Agent",
-						wide: true,
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
-							label: "Agent",
-							value: plan.session.program,
-							options: [{
-								value: "",
-								label: agents.fallback ? "Default · " + agents.fallback : "Default"
-							}, ...agents.names.map((n) => ({
-								value: n,
-								label: n
-							}))],
-							onChange: (program) => onChange({ session: {
-								...plan.session,
-								program
-							} })
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-						label: "Model",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-							label: "Model",
-							value: plan.session.model,
-							placeholder: "The agent's default",
-							onChange: (model) => onChange({ session: {
-								...plan.session,
-								model
-							} })
-						})
-					})
-				] })
-			]
-		})
-	});
-}
-function TakeoffDialog({ plan, onClose }) {
-	const [draft, setDraft] = (0, import_react.useState)(() => JSON.parse(JSON.stringify(plan)));
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [error, setError] = (0, import_react.useState)("");
-	const dirty = JSON.stringify({
-		...draft,
-		updated: 0
-	}) !== JSON.stringify({
-		...plan,
-		updated: 0
-	});
-	const save = async () => {
-		if (!dirty) return onClose();
-		setBusy(true);
-		setError("");
-		try {
-			toast("Saved “" + (await savePlan(draft)).name + "”");
-			onClose();
-		} catch (err) {
-			setError(errMsg(err));
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "takeoff-dialog",
-		portal: true,
-		onClose,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
-			className: "fl-takeoff",
-			onSubmit: (e) => {
-				e.preventDefault();
-				save();
-			},
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: [
-					"“",
-					plan.name,
-					"” takes off"
-				] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "muted fl-takeoff-lede",
-					children: "When it flies by itself, and the session it starts in."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffFields, {
-					plan: draft,
-					onChange: (p) => setDraft((d) => ({
-						...d,
-						...p
-					}))
-				}),
-				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "error fl-error",
-					role: "alert",
-					children: error
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "modal-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: onClose,
-						children: "Cancel"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "submit",
-						className: "btn-primary",
-						disabled: busy,
-						children: busy ? "Saving…" : "Save"
-					})]
-				})
-			]
-		})
-	});
 }
 //#endregion
 //#region src/components/flights/StopCatalog.tsx
@@ -131303,7 +132783,7 @@ function dragFrame(start, dx, dy, zoom) {
 	const z = zoom > 0 ? zoom : 1;
 	return paletteFrame(start.w + dx / z, start.h + dy / z);
 }
-var headPress$1 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+var headPress = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
 function SessionCard({ onSession }) {
 	const cd = useClickOrDouble(onSession);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -131411,7 +132891,7 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 		return () => ro.disconnect();
 	}, []);
 	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress$1(e)) onHeadDown(e);
+		if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
 	};
 	const moveHint = draggable && onHeadDown ? "Drag to move the blocks" : void 0;
 	const count = (kinds?.length || 0) + allSaved.length;
@@ -131817,611 +133297,6 @@ function snapBox(moving, others, threshold) {
 }
 var SNAP_SCREEN_PX = 8;
 var snapThreshold = (z) => SNAP_SCREEN_PX / (z > 0 ? z : 1);
-//#endregion
-//#region src/lib/skyIntake.ts
-var LANE_POLL_DEFAULT = {
-	tickets: 20,
-	prs: 60,
-	issues: 60
-};
-var LANE_WAITING_SHOWN = 6;
-var KIND_WORD = {
-	tickets: "Tickets",
-	prs: "PRs",
-	issues: "Issues"
-};
-function everyWords(seconds) {
-	const s = Math.max(1, Math.round(seconds));
-	if (s < 60) return "every " + s + " s";
-	if (s === 60) return "every minute";
-	return "every " + Math.round(s / 60) + " min";
-}
-function positive(v) {
-	const n = Number(v);
-	return Number.isFinite(n) && n > 0 ? n : 0;
-}
-function repoSlugName(repo) {
-	return (repo.replace(/\/+$/, "").split("/").pop() || "").replace(/[^A-Za-z0-9._-]/g, "-");
-}
-function titlePrefix(kind, repo) {
-	return (kind === "prs" ? "pr-" : "issue-") + repoSlugName(repo) + "-";
-}
-function bareTitle(title) {
-	const cut = title.indexOf("::");
-	return cut < 0 ? title : title.slice(cut + 2);
-}
-function ticketSourceLabel(source, providers, panelLabel = "") {
-	const provider = String(source.provider || "");
-	const prov = providers?.find((p) => p.id === provider)?.label || panelLabel || provider || "Tickets";
-	const detail = String(source.label || "").trim();
-	if (!detail) return prov;
-	return [prov, provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length))) ? detail : prov + " · " + detail;
-}
-function flywayOf(kind, own, plans) {
-	if (own) return {
-		id: own,
-		name: plans?.find((p) => p.id === own)?.name || own,
-		own: true
-	};
-	const id = builtinPlanFor(kind, plans);
-	return {
-		id,
-		name: plans?.find((p) => p.id === id)?.name || "built-in stops",
-		own: false
-	};
-}
-var sameRepo = (a, b) => a.toLowerCase() === b.toLowerCase();
-function sourceBlocks(settings, waiting, rows, opts = {}) {
-	const s = settings || {};
-	const gh = s.github || {};
-	const status = opts.status || null;
-	const plans = opts.plans || null;
-	const labels = opts.panels?.tickets?.source_labels || {};
-	const blocks = [];
-	const make = (kind, id, label, every, own, stray = false) => {
-		const auto = waitingAuto(kind, status);
-		return {
-			key: kind + ":" + id,
-			kind,
-			id,
-			label,
-			name: kind === "tickets" ? label : id,
-			target: kind + ":" + id,
-			auto,
-			every,
-			autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
-			flyway: flywayOf(kind, own, plans),
-			waiting: [],
-			started: [],
-			...stray ? { stray: true } : {}
-		};
-	};
-	for (const src of s.ticketing?.sources || []) {
-		const id = String(src.id || "");
-		if (!id) continue;
-		blocks.push(make("tickets", id, ticketSourceLabel(src, opts.providers, labels[id]), positive(src.poll_interval_seconds) || LANE_POLL_DEFAULT.tickets, String(src.plan || "")));
-	}
-	const repoBlocks = (kind, repos, every, per) => {
-		for (const r of Array.isArray(repos) ? repos : []) {
-			const repo = String(r || "").trim();
-			if (!repo || blocks.some((b) => b.kind === kind && sameRepo(b.id, repo))) continue;
-			blocks.push(make(kind, repo, KIND_WORD[kind] + " · " + repo, every, per?.[repo]?.plan || ""));
-		}
-	};
-	repoBlocks("prs", gh.repos, positive(gh.poll_interval_seconds) || LANE_POLL_DEFAULT.prs, gh.repo_settings);
-	repoBlocks("issues", gh.issue_repos, positive(gh.issue_poll_interval_seconds) || LANE_POLL_DEFAULT.issues, gh.issue_repo_settings);
-	for (const w of waiting) {
-		const t = w.item.target;
-		const id = t.kind === "tickets" ? t.source : t.repo;
-		let block = blocks.find((b) => b.kind === t.kind && (t.kind === "tickets" ? b.id === id : sameRepo(b.id, id)));
-		if (!block) {
-			const kind = t.kind;
-			const every = kind === "tickets" ? LANE_POLL_DEFAULT.tickets : positive(kind === "prs" ? gh.poll_interval_seconds : gh.issue_poll_interval_seconds) || LANE_POLL_DEFAULT[kind];
-			block = make(kind, id, kind === "tickets" ? w.item.group : KIND_WORD[kind] + " · " + id, every, "", true);
-			blocks.push(block);
-		}
-		block.waiting.push({
-			item: w.item,
-			auto: w.auto
-		});
-	}
-	const live = rows.filter((r) => !r.hidden_by && !r.locked);
-	const byTitle = /* @__PURE__ */ new Map();
-	for (const r of live) {
-		byTitle.set(r.title, r);
-		if (!byTitle.has(bareTitle(r.title))) byTitle.set(bareTitle(r.title), r);
-	}
-	const claimed = /* @__PURE__ */ new Set();
-	const claim = (block, row, reference) => {
-		if (claimed.has(row.title)) return;
-		claimed.add(row.title);
-		block.started.push({
-			title: row.title,
-			reference
-		});
-	};
-	const blockFor = (kind, id) => blocks.find((b) => b.kind === kind && (kind === "tickets" ? b.id === id : sameRepo(b.id, id)));
-	for (const t of opts.panels?.tickets?.tickets || []) {
-		const row = t.session ? byTitle.get(t.session) : void 0;
-		const block = row && blockFor("tickets", t.source || "");
-		if (row && block) claim(block, row, t.slug || t.id || "");
-	}
-	for (const kind of ["prs", "issues"]) {
-		const list = kind === "prs" ? opts.panels?.prs?.prs : opts.panels?.issues?.issues;
-		for (const p of list || []) {
-			const row = p.session ? byTitle.get(p.session) : void 0;
-			const block = row && blockFor(kind, p.repo || "");
-			if (row && block) claim(block, row, (p.repo || "") + "#" + (p.number ?? "?"));
-		}
-	}
-	for (const row of live) {
-		if (claimed.has(row.title)) continue;
-		const title = bareTitle(row.title);
-		for (const b of blocks) {
-			if (b.kind === "tickets") {
-				if (row.branch && new RegExp("(^|/)" + escapeRe(b.id) + "-", "i").test(row.branch) && looksLikeTicket(title)) {
-					claim(b, row, "");
-					break;
-				}
-				continue;
-			}
-			const m = new RegExp("^" + escapeRe(titlePrefix(b.kind, b.id)) + "(\\d+)$").exec(title);
-			if (m) {
-				claim(b, row, b.id + "#" + m[1]);
-				break;
-			}
-		}
-	}
-	return blocks;
-}
-function escapeRe(s) {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function looksLikeTicket(title) {
-	return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(title);
-}
-function stopsWords(flyway) {
-	return flyway.own ? flyway.name : "built-in";
-}
-function stopsTip(block, editing = false) {
-	const now = block.flyway.own ? "its own: " + block.flyway.name : "built-in: " + block.flyway.name;
-	return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default stops for " + block.name + " (" + now + ")";
-}
-function nameParts(name) {
-	return name.split(/(?<=\/)/);
-}
-function laneCount(block) {
-	return block.waiting.length;
-}
-function shownWaiting(block, max = LANE_WAITING_SHOWN) {
-	return {
-		shown: block.waiting.slice(0, max),
-		more: Math.max(0, block.waiting.length - max)
-	};
-}
-//#endregion
-//#region src/components/flights/useWaiting.ts
-function useWaiting(fetch = true) {
-	const tickets = usePanelQuery("tickets", { enabled: fetch });
-	const prs = usePanelQuery("github-prs", { enabled: fetch });
-	const issues = usePanelQuery("github-issues", { enabled: fetch });
-	const status = useMindflockStatus().data;
-	return {
-		waiting: collectQueued({
-			tickets: tickets.data ?? null,
-			prs: prs.data ?? null,
-			issues: issues.data ?? null
-		}).map((item) => ({
-			item,
-			auto: waitingAuto(item.kind, status)
-		})),
-		loaded: !!(tickets.data || prs.data || issues.data),
-		refresh: () => {
-			tickets.refresh();
-			prs.refresh();
-			issues.refresh();
-		}
-	};
-}
-//#endregion
-//#region src/components/flights/IntakeLane.tsx
-var COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
-function loadCollapsed() {
-	try {
-		return localStorage.getItem(COLLAPSED_LS_KEY) === "1";
-	} catch {
-		return false;
-	}
-}
-function saveCollapsed(v) {
-	try {
-		if (v) localStorage.setItem(COLLAPSED_LS_KEY, "1");
-		else localStorage.removeItem(COLLAPSED_LS_KEY);
-	} catch {}
-}
-var RAIL_GLYPH = {
-	tickets: "T",
-	prs: "PR",
-	issues: "I"
-};
-async function flyLaneItem(w, block) {
-	const t = w.item.target;
-	const req = flyRequest(t, block.flyway.own ? block.flyway.id : "");
-	try {
-		const r = await api(req.path, { json: req.body });
-		refreshFlights();
-		return r?.title || (t.kind === "tickets" ? w.item.reference : "");
-	} finally {
-		refreshInstances();
-	}
-}
-async function openDefaultEditor(ref, flights, on = {}) {
-	const have = editorFor(flights, ref);
-	if (have) {
-		on.existing?.(have);
-		return have;
-	}
-	const d = await getIntakeDefault(ref);
-	if (!d) return null;
-	const f = await startGrounded({
-		steps: d.steps,
-		name: defaultEditorName(d.label),
-		edits_default: {
-			kind: ref.kind,
-			target: ref.target
-		}
-	});
-	if (f) on.made?.(f, d);
-	return f;
-}
-function WaitingChip({ w, block, onFly }) {
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [error, setError] = (0, import_react.useState)("");
-	const fly = async () => {
-		setBusy(true);
-		setError("");
-		try {
-			const title = await flyLaneItem(w, block);
-			if (title) onFly(title);
-		} catch (err) {
-			setError(errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "sky-lane-item",
-		"data-waiting": w.item.key,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-lane-item-row",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "sky-lane-item-words",
-				title: w.item.reference + " — " + w.item.title,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-lane-item-ref",
-					children: w.item.reference
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-lane-item-headline",
-					children: w.item.title
-				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "btn-primary fl-btn sky-lane-fly",
-				disabled: busy,
-				title: "Take off on " + w.item.reference + " · " + block.flyway.name,
-				onClick: () => void fly(),
-				children: busy ? "…" : "Fly"
-			})]
-		}), error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "error fl-error sky-lane-error",
-			role: "alert",
-			children: error
-		})]
-	});
-}
-function Block({ block, onFly, open, editing, onEditDefault }) {
-	const { shown, more } = shownWaiting(block, open ? Infinity : void 0);
-	const parts = nameParts(block.name);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "sky-lane-block sky-lane-block-" + block.kind + (block.stray ? " sky-lane-block-stray" : ""),
-		"data-lane-source": block.key,
-		"aria-label": block.label,
-		title: block.stray ? "Not in your settings: items from " + block.id + " are listed all the same" : void 0,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-				className: "sky-lane-block-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-kind-badge fl-kind-badge-" + block.kind,
-						children: WAITING_KIND_BADGE[block.kind]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-lane-block-name",
-						title: block.label,
-						children: parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [p, i < parts.length - 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("wbr", {})] }, i))
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "sky-lane-more",
-						"aria-label": "Open " + block.label + " in Intake",
-						title: "Open this source in Intake",
-						onClick: () => useUi.getState().openDialogFor("intake", block.target),
-						children: "⋯"
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-lane-chips",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-lane-auto" + (block.auto ? " on" : ""),
-					children: block.autoText
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "fl-icon-btn sky-lane-flyway-btn",
-					"aria-label": "Edit the default stops for " + block.label,
-					"data-editing": editing ? "" : void 0,
-					title: stopsTip(block, editing),
-					onClick: () => onEditDefault({
-						kind: block.kind,
-						target: block.id
-					}, block.label),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "sky-lane-stops" + (block.flyway.own ? " own" : "") + (editing ? " editing" : ""),
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-lane-stops-key",
-								children: "Stops"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
-								children: stopsWords(block.flyway)
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-lane-stops-edit",
-								"aria-hidden": "true",
-								children: editing ? "editing…" : "✎"
-							})
-						]
-					})
-				})]
-			}),
-			block.waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "sky-lane-empty muted",
-				children: "Nothing waiting"
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
-				className: "sky-lane-items",
-				children: [shown.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingChip, {
-					w,
-					block,
-					onFly
-				}, w.item.key)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "sky-lane-n-more muted",
-					children: [more, " more"]
-				})]
-			}),
-			block.started.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "sky-lane-stubs",
-				"aria-label": "Started sessions",
-				children: block.started.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "sky-lane-stub",
-					"data-lane-target": s.title,
-					title: s.reference ? s.reference + " → " + windowName(s.title) : windowName(s.title),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-lane-stub-line",
-						"aria-hidden": "true"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-lane-stub-name",
-						children: windowName(s.title)
-					})]
-				}, s.title))
-			})
-		]
-	});
-}
-var headPress = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
-	const flights = useFlights().data;
-	const editDefault = (ref, label) => {
-		if (onEditDefault) onEditDefault(ref, label);
-		else openDefaultEditor(ref, flights);
-	};
-	const [live, setLive] = (0, import_react.useState)(null);
-	const grab = (0, import_react.useRef)(null);
-	const frameNow = live || {
-		w: width,
-		h: height ?? 0
-	};
-	const resizeDown = (e) => {
-		if (e.button !== 0 || !onResize) return;
-		e.preventDefault();
-		e.stopPropagation();
-		const el = rootRef.current;
-		grab.current = {
-			id: e.pointerId,
-			sx: e.clientX,
-			sy: e.clientY,
-			w: width,
-			h: height ?? (el ? el.offsetHeight : 320)
-		};
-		try {
-			e.currentTarget.setPointerCapture(e.pointerId);
-		} catch {}
-	};
-	const resizeMove = (e) => {
-		const g = grab.current;
-		if (!g || g.id !== e.pointerId) return;
-		const z = zoom > 0 ? zoom : 1;
-		setLive({
-			w: Math.max(200, Math.round(g.w + (e.clientX - g.sx) / z)),
-			h: Math.max(160, Math.round(g.h + (e.clientY - g.sy) / z))
-		});
-	};
-	const resizeUp = (e) => {
-		const g = grab.current;
-		if (!g || g.id !== e.pointerId) return;
-		grab.current = null;
-		if (live && onResize) onResize(live.w, live.h);
-		setLive(null);
-	};
-	const settings = useSettingsDoc(true).data;
-	const status = useMindflockStatus().data;
-	const providers = useTicketingCatalog(true).data;
-	const { waiting } = useWaiting(true);
-	const tickets = usePanelQuery("tickets").data;
-	const prs = usePanelQuery("github-prs").data;
-	const issues = usePanelQuery("github-issues").data;
-	const [collapsed, setCollapsed] = (0, import_react.useState)(loadCollapsed);
-	const rootRef = (0, import_react.useRef)(null);
-	const measureRef = (0, import_react.useRef)(onMeasure);
-	measureRef.current = onMeasure;
-	(0, import_react.useEffect)(() => {
-		const el = rootRef.current;
-		if (!el || typeof ResizeObserver === "undefined") return;
-		let last = "";
-		const read = () => {
-			const w = el.offsetWidth;
-			const h = el.offsetHeight;
-			const k = w + "x" + h;
-			if (!w || !h || k === last) return;
-			last = k;
-			measureRef.current?.(w, h);
-		};
-		const ro = new ResizeObserver(read);
-		ro.observe(el);
-		read();
-		return () => ro.disconnect();
-	}, [!!settings, collapsed]);
-	if (!settings) return null;
-	const blocks = sourceBlocks(settings, waiting, rows, {
-		plans,
-		status,
-		providers,
-		panels: {
-			tickets: tickets ?? null,
-			prs: prs ?? null,
-			issues: issues ?? null
-		}
-	});
-	const fold = (v) => {
-		setCollapsed(v);
-		saveCollapsed(v);
-	};
-	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
-	const headDown = (e) => {
-		if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
-	};
-	const moveHint = draggable && onHeadDown ? "Drag to move the intake lane" : "";
-	if (collapsed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-		ref: rootRef,
-		className: "sky-lane sky-lane-rail",
-		"aria-label": "Intake",
-		"data-collapsed": "true",
-		title: moveHint || void 0,
-		onPointerDown: headDown,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "sky-lane-toggle",
-			"aria-expanded": false,
-			title: "Open the intake lane",
-			onClick: () => fold(false),
-			children: "›"
-		}), blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			type: "button",
-			className: "sky-lane-rail-icon fl-kind-badge fl-kind-badge-" + b.kind,
-			"data-lane-source": b.key,
-			title: b.label + " — " + (b.waiting.length ? b.waiting.length + " waiting" : "nothing waiting"),
-			onClick: () => fold(false),
-			children: [RAIL_GLYPH[b.kind], laneCount(b) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-lane-rail-count",
-				children: laneCount(b)
-			})]
-		}, b.key))]
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
-		ref: rootRef,
-		className: "sky-lane",
-		"aria-label": "Intake",
-		"data-open": open ? "" : void 0,
-		style: {
-			width: frameNow.w,
-			height: frameNow.h > 0 ? frameNow.h : void 0
-		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-lane-head",
-				"data-sky-head": true,
-				title: [moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || void 0,
-				onPointerDown: headDown,
-				onDoubleClick: (e) => {
-					if (!onToggleOpen || e.target.closest("button")) return;
-					e.stopPropagation();
-					onToggleOpen();
-				},
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-lane-title",
-						children: "Intake"
-					}),
-					total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-count",
-						children: total
-					}),
-					onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "sky-lane-toggle sky-lane-expand",
-						"aria-expanded": open,
-						"aria-label": open ? "Fold the intake lane's items" : "Expand the intake lane: every item, in full",
-						title: open ? "Fold: the first items of each source" : "Expand: every waiting item, in full",
-						onClick: onToggleOpen,
-						children: open ? "▾" : "▸"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "sky-lane-toggle",
-						"aria-expanded": true,
-						title: "Fold the intake lane",
-						onClick: () => fold(true),
-						children: "‹"
-					})
-				]
-			}),
-			blocks.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "sky-lane-empty muted",
-				children: [
-					"No sources yet.",
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "linklike",
-						onClick: () => useUi.getState().openDialogFor("intake"),
-						children: "Intake ›"
-					})
-				]
-			}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
-				block: b,
-				onFly,
-				open,
-				editing: !!editorFor(flights, {
-					kind: b.kind,
-					target: b.id
-				}),
-				onEditDefault: editDefault
-			}, b.key)),
-			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-lane-resize skl-resize",
-				role: "separator",
-				tabIndex: 0,
-				"data-no-drag": true,
-				"aria-label": "Resize the intake lane",
-				title: "Drag to resize the intake lane",
-				onPointerDown: resizeDown,
-				onPointerMove: resizeMove,
-				onPointerUp: resizeUp,
-				onPointerCancel: resizeUp
-			})
-		]
-	});
-}
 //#endregion
 //#region src/lib/newBlock.ts
 var MORE_KEY = "mf_sky_new_more";
@@ -136615,6 +137490,195 @@ function ZoomMenu(p) {
 }
 //#endregion
 //#region src/lib/skyShortcuts.ts
+var SKY_SHORTCUT_GROUPS = [
+	{
+		title: "Move around",
+		items: [
+			{
+				keys: ["Space", "drag"],
+				what: "Pan from anywhere"
+			},
+			{
+				keys: ["Wheel"],
+				what: "Pan (two fingers on a trackpad)"
+			},
+			{
+				keys: ["Ctrl", "Wheel"],
+				what: "Zoom about the pointer (or pinch)"
+			},
+			{
+				keys: ["Arrows"],
+				what: "Pan a step (with Shift, a bigger one)"
+			},
+			{
+				keys: ["+"],
+				what: "Zoom in"
+			},
+			{
+				keys: ["−"],
+				what: "Zoom out"
+			},
+			{
+				keys: ["Shift", "1"],
+				what: "Fit all the lines"
+			},
+			{
+				keys: ["0"],
+				what: "Fit all the lines"
+			},
+			{
+				keys: ["Shift", "2"],
+				what: "Fit the selection"
+			},
+			{
+				keys: ["1"],
+				what: "Fit the focused line"
+			},
+			{
+				keys: ["Shift", "0"],
+				what: "Zoom to 100 %"
+			},
+			{
+				keys: ["H"],
+				what: "Click tool: a drag pans"
+			}
+		]
+	},
+	{
+		title: "Select",
+		items: [
+			{
+				keys: ["V"],
+				what: "Drag tool: a drag on empty sky selects"
+			},
+			{
+				keys: ["drag"],
+				what: "Select what the box touches (on empty sky)"
+			},
+			{
+				keys: ["Shift", "drag"],
+				what: "Add to the selection"
+			},
+			{
+				keys: ["Shift", "click"],
+				what: "Add or take out one line or box"
+			},
+			{
+				keys: ["Ctrl", "A"],
+				what: "Select every line"
+			},
+			{
+				keys: ["F"],
+				what: "Focus: dim everything but the selection"
+			},
+			{
+				keys: ["Esc"],
+				what: "Clear the selection, or leave nothing focused"
+			}
+		]
+	},
+	{
+		title: "Edit stops",
+		items: [
+			{
+				keys: ["double-click"],
+				what: "Edit a box (or ✎)"
+			},
+			{
+				keys: ["Enter"],
+				what: "Open the focused line's box"
+			},
+			{
+				keys: ["right-click"],
+				what: "A box's menu"
+			},
+			{
+				keys: ["Delete"],
+				what: "Remove the selection or the focused box"
+			},
+			{
+				keys: ["Backspace"],
+				what: "Remove, like Delete"
+			},
+			{
+				keys: ["Ctrl", "Z"],
+				what: "Undo the last removal"
+			},
+			{
+				keys: [
+					"Ctrl",
+					"Shift",
+					"Z"
+				],
+				what: "Redo"
+			},
+			{
+				keys: ["Esc"],
+				what: "Close the open box"
+			}
+		]
+	},
+	{
+		title: "Lines and objects",
+		items: [
+			{
+				keys: ["drag"],
+				what: "Move a line by its bar (the selected ones go together)"
+			},
+			{
+				keys: ["Alt", "drag"],
+				what: "Move without snapping to the others"
+			},
+			{
+				keys: ["T"],
+				what: "Tidy: every line back in its place, every window minimised"
+			},
+			{
+				keys: ["Ctrl", "N"],
+				what: "A new session block (Alt+N in a browser tab)"
+			},
+			{
+				keys: ["double-click"],
+				what: "On empty sky: a new session block there"
+			},
+			{
+				keys: ["Ctrl", "Y"],
+				what: "Switch between the grid and the sky"
+			}
+		]
+	},
+	{
+		title: "The palette",
+		items: [
+			{
+				keys: ["Tab"],
+				what: "Open the palette with its filter (again: dock it)"
+			},
+			{
+				keys: ["click"],
+				what: "Place a block on the sky"
+			},
+			{
+				keys: ["drag"],
+				what: "Drop a block onto a line to add it there"
+			},
+			{
+				keys: ["Esc"],
+				what: "Dock a floating palette"
+			}
+		]
+	},
+	{
+		title: "Help",
+		items: [{
+			keys: ["?"],
+			what: "These shortcuts"
+		}, {
+			keys: ["Esc"],
+			what: "Close a card, a menu or this sheet"
+		}]
+	}
+];
 var MAC_CAPS = {
 	Ctrl: "⌘",
 	Alt: "⌥"
@@ -137229,14 +138293,19 @@ function chainSize(d, head) {
 	};
 }
 var NO_KINDS = [];
+var NO_ROWS = [];
 var NO_PLANS = [];
 var memo = null;
 function SkyView() {
 	const instQ = useInstances();
-	const rows = (0, import_react.useMemo)(() => instQ.data || [], [instQ.data]);
 	const flightsQ = useFlights();
 	const flights = flightsQ.data;
 	const kinds = useFlightKinds().data || NO_KINDS;
+	const rows = (0, import_react.useMemo)(() => withLiveFlights(instQ.data || NO_ROWS, flights, kinds), [
+		instQ.data,
+		flights,
+		kinds
+	]);
 	const plansQ = useFlightPlans();
 	const plans = plansQ.data || NO_PLANS;
 	const focused = useUi((s) => s.focused);
@@ -137500,6 +138569,21 @@ function SkyView() {
 			x: e.x,
 			y: e.y
 		};
+		const column = rightItems.filter((r) => autoPos[r.id] && !layout[r.id]?.pinned && place[r.id]).map((r) => ({
+			id: r.id,
+			...place[r.id],
+			w: r.w,
+			h: r.h
+		}));
+		const lineRects = items.filter((l) => place[l.id]).map((l) => ({
+			...place[l.id],
+			w: l.w,
+			h: l.h
+		}));
+		for (const [id, at] of Object.entries(clearRightColumn(column, lineRects))) {
+			fresh[id] = at;
+			place[id] = at;
+		}
 		const placedRects = [...items, ...rightItems].filter((l) => place[l.id]).map((l) => ({
 			...place[l.id],
 			w: l.w,
@@ -138773,8 +139857,7 @@ function SkyView() {
 	};
 	const onDouble = (e) => {
 		if (!ground(e.target)) return;
-		if (narrow) return newAtScreen(e.clientX, e.clientY);
-		floatPaletteAt(planeAt(e.clientX, e.clientY));
+		newAtScreen(e.clientX, e.clientY);
 	};
 	const carriesNew = (e) => Array.from(e.dataTransfer?.types || []).includes(NEW_SESSION_MIME);
 	const onNewDragOver = (e) => {
@@ -139116,7 +140199,7 @@ function SkyView() {
 			window.removeEventListener("keyup", up, true);
 		};
 	}, [narrow]);
-	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a line to show it alone." : query ? "No line matches “" + query + "”." : mode === "perched" ? "Nothing is perched on you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere for the blocks, or press the Session chip in the shelf below, to start one.";
+	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a line to show it alone." : query ? "No line matches “" + query + "”." : mode === "perched" ? "Nothing is perched on you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -139602,7 +140685,7 @@ function SkyView() {
 						tabIndex: -1,
 						role: "application",
 						"aria-roledescription": "canvas",
-						"aria-label": "The sky: every session as a line — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click for the blocks, ? for every key",
+						"aria-label": "The sky: every session as a line — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the blocks, ? for every key",
 						style: {
 							backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`,
 							backgroundPosition: `${cam.x}px ${cam.y}px`
@@ -139718,7 +140801,7 @@ function SkyView() {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyShortcuts, {
 								open: shortcutsOpen,
 								onClose: () => setShortcutsOpen(false),
-								groups: []
+								groups: SKY_SHORTCUT_GROUPS
 							}),
 							empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "sky-empty muted",

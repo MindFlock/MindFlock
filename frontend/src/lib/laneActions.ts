@@ -86,7 +86,7 @@ export function teamRunCaps(caps: Partial<Caps> | undefined): {
 
 /** The reason shown on a control an OLDER server can't take (its caps don't
  * say it does — it would refuse the create). */
-export const SERVER_NO_SPLIT = "this MindFlock server can't split a line into pieces — update it";
+export const SERVER_NO_SPLIT = "this MindFlock server can't split a session into workers — update it";
 export const SERVER_NO_TOGETHER = "this MindFlock server can't make one PR for a team run — update it";
 
 /** "Ask me before it ships" means nothing while fast-track is off. */

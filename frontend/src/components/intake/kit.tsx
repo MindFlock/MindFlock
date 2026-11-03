@@ -1168,7 +1168,9 @@ export function WorkItemRow({
   const uses = [
     where,
     agent || configuredAgent || (agents && agents.length > 0 ? "app default" : ""),
-    "Fast-track: " + (depth ? laneLabel(depth) : defaultDepth),
+    // The source's own "Goes as far as" says the default; a row names only
+    // a pick made for this one item.
+    depth ? "Just this one: " + laneLabel(depth) : "",
     !effortUsable
       ? ""
       : effort
@@ -1439,7 +1441,7 @@ export function WorkItemRow({
               </label>
             )}
             <label className="ik-item-pick">
-            <span className="ik-item-pick-label">Fast-track</span>
+            <span className="ik-item-pick-label">Just this one</span>
             <select
               className="ik-item-depth"
               value={depth}

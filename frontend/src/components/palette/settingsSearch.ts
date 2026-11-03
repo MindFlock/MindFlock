@@ -56,11 +56,11 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     anchor: "#general-tours",
   },
   {
-    key: "general",
-    label: "General → Workers request",
-    sub: "What Alt+G types, and Flock mode adds to every prompt",
+    key: "orchestration",
+    label: "Agent orchestration → Workers",
+    sub: "What Alt+G types, and Workers on every prompt adds",
     terms: ["workers", "worker", "mindflock agents", "flock", "spawn", "orchestrate", "workers model", "every prompt"],
-    anchor: "#general-workers",
+    anchor: "#orch-workers",
   },
   {
     key: "general",
@@ -138,7 +138,7 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     key: "orchestration",
     label: "Agent orchestration",
     sub: "Let agents start and steer sessions of their own, and how far",
-    terms: ["orchestration", "mcp", "spawn", "sub-sessions", "fan out", "nesting", "parallel", "concurrency", "limits"],
+    terms: ["orchestration", "mcp", "spawn", "workers", "sub-sessions", "fan out", "nesting", "parallel", "concurrency", "limits"],
   },
   {
     key: "workspace",
