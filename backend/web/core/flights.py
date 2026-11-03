@@ -364,10 +364,10 @@ STEP_KINDS: Dict[str, dict] = {
         "label": "Ship",
         "risk": ["remote"],
         "actor": "robot",
-        "summary": "Commit, push, open the PR or merge it — Fast-track carries it out.",
+        "summary": "Commit, push, open the PR or merge it when green — as far as you pick.",
         "default_title": "Push",
         "fields": [
-            _f("lane", "select", "How far", default="push", options=SHIP_LANES),
+            _f("lane", "select", "Goes as far as", default="push", options=SHIP_LANES),
             _f(
                 "ask_first",
                 "bool",
@@ -380,7 +380,7 @@ STEP_KINDS: Dict[str, dict] = {
     "verify": {
         "label": "Verify",
         "actor": "robot",
-        "summary": "Write the branch's checklist and work through it; the chain waits for you on your items.",
+        "summary": "Write the branch's behaviors and check each one; the route waits for you on the ones that are yours.",
         "default_title": "Verify",
         "fields": [
             _f("who", "select", "Who checks", default="both", options=VERIFY_WHO),
@@ -390,7 +390,7 @@ STEP_KINDS: Dict[str, dict] = {
     "you": {
         "label": "Wait for me",
         "actor": "you",
-        "summary": "The chain waits until you are done: it asks you to do something and carries on when you press Done.",
+        "summary": "The route waits until you are done: it asks you to do something and carries on when you press Done.",
         "default_title": "Check it",
         "fields": [
             _f(
@@ -400,7 +400,7 @@ STEP_KINDS: Dict[str, dict] = {
                 default="",
                 placeholder="Look over the PR",
             ),
-            _f("items", "textarea", "Checklist (one per line)", default=""),
+            _f("items", "textarea", "Things to tick off (one per line)", default=""),
             _f("notify", "bool", "Notify me", default=True),
         ],
     },
@@ -446,7 +446,7 @@ STEP_KINDS: Dict[str, dict] = {
         "label": "Ticket",
         "risk": ["remote"],
         "actor": "robot",
-        "summary": "Move the chain's ticket and/or comment on it (skipped without a ticket).",
+        "summary": "Move the route's ticket and/or comment on it (skipped without a ticket).",
         "default_title": "Ticket: update",
         "fields": [
             _f(
@@ -992,9 +992,12 @@ def _normalize_when(raw, strict: bool, where: str) -> str:
 
 def _default_title(kind: str, config: dict) -> str:
     if kind == "ship":
-        return {"commit": "Commit", "push": "Push", "pr": "Open PR", "merge": "Merge"}[
-            config.get("lane") or "push"
-        ]
+        return {
+            "commit": "Commit",
+            "push": "Push",
+            "pr": "Open PR",
+            "merge": "Merge when green",
+        }[config.get("lane") or "push"]
     if kind == "wait":
         if config.get("until"):
             return "Wait until %s" % config["until"]
@@ -1016,9 +1019,9 @@ def normalize_steps(
             raise PlanError("steps is a list", "steps")
         return []
     if strict and not raw:
-        raise PlanError("a chain needs at least one stop", "steps")
+        raise PlanError("a route needs at least one stop", "steps")
     if strict and len(raw) > MAX_STEPS:
-        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
+        raise PlanError("a route has at most %d stops" % MAX_STEPS, "steps")
     taken: set = set()
     out = []
     for i, s in enumerate(raw[:MAX_STEPS]):
@@ -1028,7 +1031,7 @@ def normalize_steps(
         if step is not None:
             if strict and step["kind"] == "land" and i != len(raw) - 1:
                 # It closes the session: nothing can fly after it.
-                raise PlanError("a Land stop is the last stop", "steps[%d].kind" % i)
+                raise PlanError("a Finish stop is the last stop", "steps[%d].kind" % i)
             out.append(step)
     _tidy_parallel(out)
     return out
@@ -1080,13 +1083,13 @@ def normalize_plan(raw, strict: bool = True) -> dict:
     ``updated`` are the STORE's to assign — the caller sets them after."""
     if not isinstance(raw, dict):
         if strict:
-            raise PlanError("a saved chain is an object", "")
+            raise PlanError("a saved route is an object", "")
         raw = {}
     name = _text(raw.get("name"), 120)
     if not name:
         if strict:
-            raise PlanError("a saved chain needs a name", "name")
-        name = "Untitled chain"
+            raise PlanError("a saved route needs a name", "name")
+        name = "Untitled route"
     trig = raw.get("trigger") if isinstance(raw.get("trigger"), dict) else {}
     tkind = _text(trig.get("kind"), 16).lower() or "manual"
     if tkind not in TRIGGER_KINDS:
@@ -1279,7 +1282,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                     "Approve the merge",
                     text="Look over the pull request and press Done to merge it.",
                 ),
-                _s("s9", "ship", "Merge", lane="merge"),
+                _s("s9", "ship", "Merge when green", lane="merge"),
                 _s("s10", "ticket", "Ticket: comment", comment="Merged by MindFlock"),
             ],
         },
@@ -1308,7 +1311,7 @@ def _builtin_defaults() -> Dict[str, dict]:
         },
         "builtin:verify": {
             "name": "Verify on live",
-            "description": "Once the branch is live, the agent and you work through its checklist.",
+            "description": "Once the branch is live, the agent and you check its behaviors.",
             "trigger": {"kind": "manual"},
             "steps": [_s("s1", "verify", "Verify on live", who="both", wait_live=True)],
         },
@@ -1323,7 +1326,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s2", "test", "Test", on_fail="agent"),
                 _s("s3", "sync", "Sync with main", on_fail="agent"),
                 _s("s4", "checks", "CI checks", on_fail="agent"),
-                _s("s5", "ship", "Merge", lane="merge"),
+                _s("s5", "ship", "Merge when green", lane="merge"),
             ],
         },
         "builtin:redmain": {
@@ -1367,7 +1370,7 @@ def _builtin_defaults() -> Dict[str, dict]:
         },
         "builtin:release": {
             "name": "Release",
-            "description": "Write the release notes, ship them as a PR, merge on your go, tag and publish, land.",
+            "description": "Write the release notes, ship them as a PR, merge on your go, tag and publish, finish.",
             "trigger": {"kind": "manual"},
             "steps": [
                 _s("s1", "agent", "Agent writes the notes", prompt=_NOTES_PROMPT),
@@ -1381,14 +1384,14 @@ def _builtin_defaults() -> Dict[str, dict]:
                     "Approve the release",
                     text="Read the release notes in the pull request and press Done to merge and publish.",
                 ),
-                _s("s7", "ship", "Merge", lane="merge"),
+                _s("s7", "ship", "Merge when green", lane="merge"),
                 _s(
                     "s8",
                     "agent",
                     "Agent tags and publishes",
                     prompt=_PUBLISH_PROMPT,
                 ),
-                _s("s9", "land", "Land"),
+                _s("s9", "land", "Finish"),
             ],
         },
         "builtin:bugreport": {
@@ -1423,7 +1426,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                     "Approve the merge",
                     text="Look over the fix and its test and press Done to merge it.",
                 ),
-                _s("s12", "ship", "Merge", lane="merge"),
+                _s("s12", "ship", "Merge when green", lane="merge"),
                 _s("s13", "ticket", "Ticket: comment", comment="Fixed by MindFlock"),
             ],
         },
@@ -1590,8 +1593,8 @@ def _ladder_plan(pid: str, base: dict, depth: str) -> dict:
         )
     return {
         "id": pid,
-        "name": "Fast-track to %s" % _LANE_LABEL[depth],
-        "description": "The plain fast-track ladder: the agent, then %s."
+        "name": "Goes as far as %s" % _LANE_LABEL[depth],
+        "description": "The plain ladder: the agent, then %s."
         % " → ".join(_LANE_LABEL[l] for l in SHIP_LANES[: SHIP_LANES.index(depth) + 1]),
         "builtin": True,
         "trigger": copy.deepcopy(base["trigger"]),
@@ -1633,7 +1636,7 @@ def save_plan(raw, now: Optional[float] = None) -> dict:
             if _CUT_RE.match(pid):
                 raise PlanError("a depth cut of a built-in can't be edited", "id")
             if pid not in plans:
-                raise FlightError("unknown_plan", 404, "no such saved chain: %s" % pid)
+                raise FlightError("unknown_plan", 404, "no such saved route: %s" % pid)
         else:
             pid = _new_id("p_", plans)
         plan["id"] = pid
@@ -1760,7 +1763,7 @@ def _normalize_subject(raw) -> dict:
 #: The intake sources a default belongs to (``flight_intake_default.KINDS``).
 EDITS_DEFAULT_KINDS = ("tickets", "prs", "issues")
 EDITS_DEFAULT_REFUSED = (
-    "this chain edits a source's default stops; save it as the default instead"
+    "this route edits a source's default stops; save it as the default instead"
 )
 
 
@@ -1972,10 +1975,10 @@ def _put_new(flight: dict, replaced: Optional[list] = None) -> dict:
                 raise FlightError(
                     "in_flight",
                     409,
-                    "%s is already on a chain (%s)" % (title, f["plan_name"]),
+                    "%s is already on a route (%s)" % (title, f["plan_name"]),
                 )
             if f["state"] == "halted":
-                _finish(f, "cancelled", "replaced by a new flight", flight["started"])
+                _finish(f, "cancelled", "replaced by a new route", flight["started"])
                 if replaced is not None:
                     replaced.append(copy.deepcopy(f))
         flight["id"] = _new_id("f_", flights)
@@ -2053,7 +2056,7 @@ def start_cursor(plan: dict, start_at: str = "", attach: bool = False) -> int:
         ids = [s["id"] for s in steps]
         if start_at not in ids:
             raise FlightError(
-                "unknown_step", 400, "no stop %s in this chain" % start_at
+                "unknown_step", 400, "no stop %s on this route" % start_at
             )
         return ids.index(start_at)
     if attach:
@@ -2122,7 +2125,7 @@ def take_off(
         },
     )
     if flight is None:
-        raise FlightError("bad_plan", 400, "the chain has no stops")
+        raise FlightError("bad_plan", 400, "the route has no stops")
     if ready:
         return _put_new(flight, replaced)
     for i, s in enumerate(flight["steps"][:cursor]):
@@ -2165,7 +2168,7 @@ def arm_pending(
     404, ``in_flight`` 409)."""
     plan = get_plan(plan_id)
     if plan is None:
-        raise FlightError("unknown_plan", 404, "no such saved chain: %s" % plan_id)
+        raise FlightError("unknown_plan", 404, "no such saved route: %s" % plan_id)
     who = by if by in BY_KINDS or str(by).startswith("agent:") else "intake"
     return take_off(
         plan,
@@ -2195,13 +2198,13 @@ def adhoc_plan(raw_steps, base: Optional[dict] = None, name: str = "") -> dict:
     if base is None:
         return {
             "id": ADHOC_PLAN_ID,
-            "name": _text(name, 120) or "Ad-hoc chain",
+            "name": _text(name, 120) or "Ad-hoc route",
             "session": _blank_session(),
             "steps": given,
         }
     steps = copy.deepcopy(base["steps"])
     if len(steps) + len(given) > MAX_STEPS:
-        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
+        raise PlanError("a route has at most %d stops" % MAX_STEPS, "steps")
     _renumber_after(steps, given)
     return dict(copy.deepcopy(base), steps=steps + given)
 
@@ -2239,7 +2242,7 @@ def with_lead(
     cursor = start_cursor(plan, start_at, attach)
     steps = copy.deepcopy(plan["steps"])
     if len(steps) + len(lead) > MAX_STEPS:
-        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
+        raise PlanError("a route has at most %d stops" % MAX_STEPS, "steps")
     lead = copy.deepcopy(lead)
     _renumber_after(steps, lead)
     return (
@@ -2312,7 +2315,7 @@ def note_absorbed(
     titles = [s["title"] for s in flight["steps"] if s["id"] in lead_ids]
     if not titles:
         return flight
-    note = "taken over from Fast-track: %s" % " → ".join(titles)
+    note = "taken over from Goes as far as: %s" % " → ".join(titles)
     if halted:
         note += " (it had stopped: %s)" % halted
     _hist(flight, ts, lead_ids[0], "added", note)
@@ -2539,8 +2542,7 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
     if cur["kind"] == "verify":
         items = [str(i) for i in d.get("items") or []]
         return (
-            "Check %d item%s on the checklist"
-            % (len(items), "" if len(items) == 1 else "s"),
+            "Check %d behavior%s" % (len(items), "" if len(items) == 1 else "s"),
             items,
         )
     return cur["title"], []
@@ -3033,7 +3035,7 @@ def _ours(flight: dict, rec: dict, lane: str) -> bool:
     )
 
 
-_BUSY_NOTE = "Fast-track is busy with your own run"
+_BUSY_NOTE = "the session is already shipping by itself (Goes as far as)"
 
 
 def _judge_ship(flight, step, ss, obs, now) -> dict:
@@ -3042,20 +3044,21 @@ def _judge_ship(flight, step, ss, obs, now) -> dict:
     if not rec:
         return {
             "action": "fail",
-            "reason": "Fast-track was turned off before %s finished" % step["title"],
+            "reason": "Goes as far as was turned off before %s finished"
+            % step["title"],
         }
     if not _ours(flight, rec, lane):
         return _wait(_BUSY_NOTE)
     state = rec.get("state")
     if state == "done" and _awaiting_go(rec):
-        return _wait("waiting for your go — Fast-track asks before it ships")
+        return _wait("waiting for your go — it asks before it ships")
     if state == "done":
         return _receipt(
             {"action": "done", "note": rec.get("url") or ""},
             ship_receipt(lane, rec.get("url") or ""),
         )
     if state == "halted":
-        return {"action": "fail", "reason": rec.get("reason") or "Fast-track stopped"}
+        return {"action": "fail", "reason": rec.get("reason") or "shipping stopped"}
     return _wait(rec.get("note") or "shipping: %s" % (rec.get("step") or lane))
 
 
@@ -3083,17 +3086,17 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         if now - ss["since"] > VERIFY_WRITE_DEADLINE_S:
             return {
                 "action": "fail",
-                "reason": "no checklist was written for this branch",
+                "reason": "no behaviors were written for this branch",
             }
-        return _wait("writing the checklist")
+        return _wait("writing the behaviors")
     up = {"plan": v["plan"], "branch": v.get("branch") or flight.get("branch") or ""}
     state = v.get("state") or ""
     if state == "generating":
-        return _wait("writing the checklist", **up)
+        return _wait("writing the behaviors", **up)
     if state == "failed" and not v.get("steps"):
         return {
             "action": "fail",
-            "reason": "the checklist could not be written: %s"
+            "reason": "the behaviors could not be written: %s"
             % (v.get("error") or "no reason given"),
         }
     if step["config"]["wait_live"] and not v.get("live"):
@@ -3104,25 +3107,25 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         )
     failed = list(v.get("failed") or [])
     if failed:
-        return {"action": "fail", "reason": "checklist item failed: %s" % failed[0]}
+        return {"action": "fail", "reason": "behavior failed: %s" % failed[0]}
     open_agent = list(v.get("open_agent") or [])
     open_human = list(v.get("open_human") or [])
     if state == "running":
-        return _wait("the agent is working through the checklist", **up)
+        return _wait("the agent is checking the behaviors", **up)
     if who in ("agent", "both") and open_agent and not d.get("run_started"):
         return {
             "action": "run",
             "phase": "agent_run",
-            "note": "starting the agent on the checklist",
+            "note": "starting the agent on the behaviors",
             "detail": up,
         }
     if who == "agent":
         if v.get("settled") or not open_agent:
             return _receipt(
-                {"action": "done", "note": "the agent's checklist items are answered"},
+                {"action": "done", "note": "the agent's behaviors are checked"},
                 _verify_receipt(v),
             )
-        return _wait("the agent's checklist items are still open", **up)
+        return _wait("the agent's behaviors are not all checked yet", **up)
     if who == "you":
         open_human = open_human + open_agent
     elif open_agent and d.get("run_started"):
@@ -3130,12 +3133,12 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         open_human = open_human + open_agent
     if v.get("settled") or not open_human:
         return _receipt(
-            {"action": "done", "note": "every checklist item has an answer"},
+            {"action": "done", "note": "every behavior is checked"},
             _verify_receipt(v),
         )
     return {
         "action": "you",
-        "note": "%d checklist item%s for you"
+        "note": "%d behavior%s for you to check"
         % (len(open_human), "" if len(open_human) == 1 else "s"),
         "detail": dict(up, items=open_human[:40]),
     }
@@ -3186,7 +3189,7 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
         if not rec:
             return {
                 "action": "fail",
-                "reason": "Fast-track was turned off before the review fixes were pushed",
+                "reason": "Goes as far as was turned off before the review fixes were pushed",
             }
         if not _ours(flight, rec, "push"):
             return _wait(_BUSY_NOTE)
@@ -3455,7 +3458,7 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
             flight["subject"].get("kind") not in ("ticket", "issue")
             or not flight["subject"].get("id")
         ):
-            return {"action": "advance", "note": "no ticket on this chain"}
+            return {"action": "advance", "note": "no ticket on this route"}
         if step["kind"] == "you":
             text = step["config"].get("text") or step["title"]
             return {
@@ -3488,7 +3491,7 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
                     if out["action"] == "fail"
                     else out
                 )
-        return _wait("waiting on you")
+        return _wait("needs you")
     # running
     tripped = _guard_trip(flight, ss, obs, now, sess)
     if tripped is not None:
@@ -3525,7 +3528,11 @@ def _hist(flight: dict, now: float, sid: str, event: str, note: str = "") -> Non
 
 
 #: Why a free chain is really over (not just this run): it goes for good.
-_FREE_GONE = ("replaced by a new flight", "its last stop was removed")
+_FREE_GONE = (
+    "replaced by a new route",
+    "replaced by a new flight",  # the wording before 2026-11-03, on old records
+    "its last stop was removed",
+)
 
 
 def _finish(flight: dict, state: str, reason: str, now: float) -> None:
@@ -3768,7 +3775,7 @@ def _step_index(flight: dict, sid: str) -> int:
     for i, s in enumerate(flight["steps"]):
         if s["id"] == sid:
             return i
-    raise FlightError("unknown_step", 404, "no stop %s on this chain" % sid)
+    raise FlightError("unknown_step", 404, "no stop %s on this route" % sid)
 
 
 def _not_final(flight: dict) -> None:
@@ -3776,7 +3783,7 @@ def _not_final(flight: dict) -> None:
         raise FlightError(
             "finished",
             409,
-            "this chain has already %s"
+            "this route has already %s"
             % ("finished" if flight["state"] == "done" else "been stopped"),
         )
 
@@ -3787,11 +3794,11 @@ def _airborne(flight: dict) -> None:
     _not_final(flight)
     if flight["state"] == GROUNDED:
         raise FlightError(
-            "grounded", 409, "this chain has no session yet — run it on one first"
+            "grounded", 409, "this route has no session yet — run it on one first"
         )
     if flight["state"] == READY:
         raise FlightError(
-            "not_running", 409, "this chain has not started yet — press Run first"
+            "not_running", 409, "this route has not started yet — press Run first"
         )
 
 
@@ -3813,7 +3820,7 @@ def op_done(
     lo, hi = current_group(flight)
     if not lo <= i < hi or ss["state"] != "waiting_you":
         raise FlightError(
-            "not_waiting", 409, "%s is not waiting on you" % flight["steps"][i]["title"]
+            "not_waiting", 409, "%s does not need you now" % flight["steps"][i]["title"]
         )
     ss["state"] = "done"
     ss["note"] = str(note or "")[:1000]
@@ -3841,7 +3848,7 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     _airborne(flight)
     i = _step_index(flight, sid)
     if i < flight["cursor"]:
-        raise FlightError("behind", 409, "that stop is already behind the chain")
+        raise FlightError("behind", 409, "that stop is already behind the route")
     ss = flight["step_states"][sid]
     ss["state"] = "skipped"
     ss["note"] = "skipped by you"
@@ -3950,7 +3957,7 @@ def check_agent_loops(flight: dict) -> None:
     for i, s in enumerate(flight.get("steps") or []):
         if loops_to_agent(s):
             raise PlanError(
-                LOOP_AGENT_NO_SESSION + " — this chain runs in a folder",
+                LOOP_AGENT_NO_SESSION + " — this route runs in a folder",
                 "steps[%d].config.back_to" % i,
             )
 
@@ -4149,10 +4156,10 @@ def op_restore(
     state = str((snap or {}).get("state") or "")
     if flight["state"] != "cancelled" or flight.get("reason") != SESSION_REMOVED:
         raise FlightError(
-            "not_restorable", 409, "this chain did not end with its session"
+            "not_restorable", 409, "this route did not end with its session"
         )
     if state not in UNFINISHED:
-        raise FlightError("not_restorable", 409, "this chain had already ended")
+        raise FlightError("not_restorable", 409, "this route had already ended")
     flight["state"] = state
     flight["reason"] = str(snap.get("reason") or "")
     flight["finished"] = 0.0
@@ -4182,8 +4189,8 @@ def _editable(flight: dict) -> None:
         raise FlightError(
             "finished",
             409,
-            "this chain has %s — its stops can't change"
-            % {"done": "landed", "cancelled": "been cancelled"}.get(
+            "this route has %s — its stops can't change"
+            % {"done": "finished", "cancelled": "been cancelled"}.get(
                 flight["state"], "ended"
             ),
         )
@@ -4239,7 +4246,7 @@ def _insert_index(flight: dict, at, n: int = 1) -> int:
     steps = flight["steps"]
     if len(steps) + n > MAX_STEPS:
         raise FlightError(
-            "too_many_steps", 409, "a chain has at most %d stops" % MAX_STEPS
+            "too_many_steps", 409, "a route has at most %d stops" % MAX_STEPS
         )
     if at is None:
         return len(steps)
@@ -4724,7 +4731,7 @@ def op_ungroup(flight: dict, gid: str, now: Optional[float] = None) -> dict:
     _not_final(flight)
     mine = [s for s in flight["steps"] if s.get("group") and s["group"]["id"] == gid]
     if not mine:
-        raise FlightError("unknown_group", 404, "no stop %s on this chain" % gid)
+        raise FlightError("unknown_group", 404, "no stop %s on this route" % gid)
     for s in mine:
         name = s.pop("group")["name"]
     _hist(flight, ts, mine[0]["id"], "edited", "%s taken apart" % name)
@@ -4892,10 +4899,10 @@ def ground(
         steps += given
     if not steps:
         raise FlightError(
-            "needs_steps", 400, "a chain on the board needs plan_id or steps"
+            "needs_steps", 400, "a route on the Sky needs plan_id or steps"
         )
     if len(steps) > MAX_STEPS:
-        raise PlanError("a chain has at most %d stops" % MAX_STEPS, "steps")
+        raise PlanError("a route has at most %d stops" % MAX_STEPS, "steps")
     _renumber_after([], steps)
     flight = _normalize_flight(
         "pending",
@@ -4938,7 +4945,7 @@ def op_attach(
     ``edits_default`` on a chain editing a source's default stops."""
     ts = float(now if now is not None else time.time())
     if flight["state"] != GROUNDED:
-        raise FlightError("not_grounded", 409, "this chain already has a session")
+        raise FlightError("not_grounded", 409, "this route already has a session")
     _refuse_editor(flight)
     if not title:
         # Bound to a folder, no session: a Loop back to the agent has none.
@@ -5007,15 +5014,15 @@ def attach(
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
-            raise FlightError("unknown_flight", 404, "no such chain")
+            raise FlightError("unknown_flight", 404, "no such route")
         if f["state"] != GROUNDED:
-            raise FlightError("not_grounded", 409, "this chain already has a session")
+            raise FlightError("not_grounded", 409, "this route already has a session")
         for g in flights.values():
             if title and g["session"] == title and g["state"] in UNFINISHED:
                 raise FlightError(
                     "in_flight",
                     409,
-                    "%s is already on a chain (%s)" % (title, g["plan_name"]),
+                    "%s is already on a route (%s)" % (title, g["plan_name"]),
                 )
         op_attach(f, title, repo_root, branch, seeded, now, triggered_by, start_on)
         f = _normalize_flight(f["id"], f) or f
@@ -5049,7 +5056,7 @@ def op_split_off(flight: dict, sid: str, pos=None, now: Optional[float] = None) 
             )
     if i == 0:
         raise FlightError(
-            "whole_chain", 409, "that is the whole chain — move the chain instead"
+            "whole_chain", 409, "that is the whole route — move the route instead"
         )
     was = [s["id"] for s in moved]
     new = copy.deepcopy(moved)
@@ -5095,7 +5102,7 @@ def split_off(
         flights = _load_flights_locked()
         f = flights.get(str(flight_id or ""))
         if f is None:
-            raise FlightError("unknown_flight", 404, "no such chain")
+            raise FlightError("unknown_flight", 404, "no such route")
         f = copy.deepcopy(f)
         chain = op_split_off(f, sid, pos, now)
         f = _normalize_flight(f["id"], f) or f
@@ -5127,7 +5134,7 @@ def _not_ready(flight: dict) -> None:
         raise FlightError(
             "not_ready",
             409,
-            "this chain is not waiting to start (it is %s)" % flight["state"],
+            "this route is not waiting to start (it is %s)" % flight["state"],
         )
 
 

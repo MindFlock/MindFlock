@@ -1,12 +1,12 @@
-# Team runs and fast-track
+# Team runs and Goes as far as
 
 "Work on these tickets together, 3 at a time, PR each." A **team run** takes a few ticket IDs and task lines, starts one session
-per item, keeps at most N running with the rest queued, **fast-tracks** each
-one as far as you chose, and surfaces only what needs you. The server
+per item, keeps at most N running with the rest queued, ships each
+one **as far as** you chose, and surfaces only what needs you. The server
 does the plumbing — spawning, queueing, retries, nudges, restart safety —
 deterministically; an agent only does the work.
 
-- [Fast-track](#fast-track)
+- [Goes as far as](#goes-as-far-as)
 - [Starting a team run](#starting-a-team-run)
 - [What the server does on its own](#what-the-server-does-on-its-own)
 - [What needs you](#what-needs-you)
@@ -17,17 +17,18 @@ deterministically; an agent only does the work.
 - [Splitting one task](#splitting-one-task)
 - [Where it lives](#where-it-lives)
 
-## Fast-track
+## Goes as far as
 
-**Fast-track** is your answer to "when it's done, what then?" — the one name
-every screen uses (the ⏩ button, the New and Commit dialogs, Settings,
-Intake). The API calls a fast-track target a `lane` (`POST
-/api/instances/{t}/lane`, the row's `lane`, the MCP's `lane` parameters);
-this page says Fast-track and keeps `lane` only where it names a field.
+**Goes as far as** is your answer to "when it's done, what then?" — the one
+name every screen uses (the session's route, the New and Commit dialogs,
+Settings, Intake); it IS the last ship stop of the session's route. The API
+calls its target a `lane` (`POST /api/instances/{t}/lane`, the row's `lane`,
+the MCP's `lane` parameters); this page says Goes as far as and keeps `lane`
+only where it names a field.
 
 | On screen | `lane` | MindFlock, once the agent is done |
 |---|---|---|
-| Off | `leave` | Nothing. The work stays in the tree for you. |
+| Agent only | `leave` | Nothing. The work stays in the tree for you. |
 | Commit | `commit` | Commits it, with a message written from the diff. |
 | Push | `push` | Commits and pushes the branch. |
 | Open PR | `pr` | Commits, pushes and opens a pull request. |
@@ -40,7 +41,7 @@ Commit target that parks for approval has its message written from the diff
 right then: the card shows the exact message, and approving it unedited
 commits exactly that text. The card's size is what will be committed.
 
-Fast-track is **one engine** — the same record whichever
+Goes as far as is **one engine** — the same record whichever
 control set it, with its guards intact: the
 30 s idle dwell, proof the agent worked, the usage-limit freeze, the
 pre-commit retry allow-list, the push gate's check, CI before a merge. One
@@ -67,26 +68,26 @@ twice, and they halt.
 
 **Nothing ships beyond what you chose for that session or team run:**
 
-- A session with fast-track on gets its own worktree (the New dialog never
+- A session with Goes as far as past Agent only gets its own worktree (the New dialog never
   creates it in place — choosing "Work directly in this folder" there turns
-  fast-track Off), and a fast-track on an in-place session whose folder another
+  Goes as far as Agent only), and a Goes as far as on an in-place session whose folder another
   session shares is refused (409 `shared_with`): it would commit every
   sharer's work as one.
 - A copy session on the same branch shows the target of the session that
   drives it (`owner`) and is never armed: `/lane`, `/fast-track` and
   `/ship-now` answer **409** on it (naming the driver; Off — `leave` — is
   always allowed).
-- `POST /ship-now` (the bell's approval) ships the fast-track the session's own
-  record holds — never the Settings fast-track default: a session with no
-  fast-track of its own is refused (409).
+- `POST /ship-now` (the bell's approval) ships the Goes as far as the session's own
+  record holds — never the Settings Goes as far as default: a session with no
+  Goes as far as of its own is refused (409).
 - A team run's **lead** ships once, through the team run's release, and a
   **one-for-all member**'s work is the team run's one PR: neither takes a
-  fast-track of its own (409; the ⏩ picker says so). A **paused** team run's member cannot be
-  shipped now; a fast-track set on it while paused is recorded and armed on resume.
-- A fast-track (and "ask first") you set on a member of an each-their-own team run is
+  Goes as far as of its own (409; the ⏩ picker says so). A **paused** team run's member cannot be
+  shipped now; a Goes as far as set on it while paused is recorded and armed on resume.
+- A Goes as far as (and "ask first") you set on a member of an each-their-own team run is
   recorded on the task (`task.lane`, `task.ask_first`): every re-arm — a fix
   after a failed hook, a resume, a retry — keeps it.
-- An agent (MCP) never raises a fast-track you set, never lifts your "ask first",
+- An agent (MCP) never raises a Goes as far as you set, never lifts your "ask first",
   never ships a team run's member or lead, and never releases or resumes a
   team run you started (see [mcp.md](mcp.md)).
 
@@ -113,7 +114,7 @@ already have a session. A ticket that resolves nowhere is an error on its row
   skip, a create that kept failing, a team run whose lead could not be created
   or was removed. A ticket the pipeline (or another team run) is already
   starting is left out with a warning; one that is started elsewhere while
-  queued is skipped, never armed with the team run's fast-track. The pipeline's
+  queued is skipped, never armed with the team run's Goes as far as. The pipeline's
   startup reaper keeps a live team run's reservations and hands back a gone
   team run's.
 - **Task lines** start like the New dialog (`session_create.create`): a
@@ -123,7 +124,7 @@ already have a session. A ticket that resolves nowhere is an error on its row
 - A ticket or title **that already has a session is adopted**, not restarted.
 - Every prompt ends with a short server-owned brief: do only this task, stop
   when it is done and tested, don't push or open PRs yourself — MindFlock does
-  that per its fast-track.
+  that per its Goes as far as.
 
 The sessions are **MindFlock's**, not the calling agent's: no parent, not in
 its managed set, so an orchestrator cannot steer, close or delete what the run owns.
@@ -147,7 +148,7 @@ one for all: committed ─▶ integrating ─merged (ancestry)─▶ integrated
 The record keeps **facts and intent** — reserved titles, the incarnation
 (the session's `created_at` when the run started it), attempt and nudge
 counts, PR urls, terminal states — never a position in a chain. That is what
-makes first start and resume-after-restart one code path (Fast-track's
+makes first start and resume-after-restart one code path (the Goes as far as engine's
 rule).
 
 - **Concurrency.** Active = starting, working, needs you, shipping. A task
@@ -161,11 +162,11 @@ rule).
   each nudge actually delivered.
 - **A failed commit** (a hook, a check) is handed back to the agent once per
   attempt, twice: *"MindFlock's commit failed at `mypy`: …. Fix it, keep the
-  change scoped to this task, then stop."* — then its fast-track is re-armed. What
+  change scoped to this task, then stop."* — then its Goes as far as is re-armed. What
   only a person can fix (no origin, on the base branch, a red zone, no GitHub
   credentials, a rejected push) escalates at once. A commit that died on git's own
   `index.lock` (another git process held it for a moment) is not a hook
-  failure: Fast-track retries it, and only a lock that never clears
+  failure: Goes as far as retries it, and only a lock that never clears
   escalates. A message you edited on the approval card survives every re-arm
   (a fix, a resume, a retry); the task line is only a placeholder, replaced at
   commit time by a message written from the diff — and never previewed as the
@@ -180,7 +181,7 @@ rule).
 Everything that does lands in the bell's **Needs you** list — one
 badge, one list (the `waiting` group of `GET /api/outbox`, merged with the
 per-session attention rows): the sessions on a dialog (any session, grouped
-or not), ask-first fast-tracks waiting for your go (with the commit message and
+or not), ask-first sessions waiting for your go (with the commit message and
 diff stat, editable before you approve), and a team run's escalations — stuck
 after two nudges, hooks failed twice, a session gone after a restart, a
 create that failed after retries, the budget spent — each with its next
@@ -201,10 +202,10 @@ goes back to "ready to release"; agents keep working; resume re-arms exactly
 what it held, never a member already merging back), **Cancel** (stop starting
 and shipping; sessions and branches stay), **Retry** (only the task's own
 session — a title an unrelated session took is refused, use Retry fresh;
-fresh: a new `-2` title on a new branch, the old one kept and its fast-track
+fresh: a new `-2` title on a new branch, the old one kept and its Goes as far as
 disarmed so it ships nothing; a vanished one-for-all member's committed
 branch is merged back rather than forked around), **Start now**, **Skip** (a
-running task is detached: its session keeps running and keeps its fast-track),
+running task is detached: its session keeps running and keeps its Goes as far as),
 **Add lines** (to a one-for-all team run they fork off the lead; refused while
 its plan is pending or its release running; a checking or ready team run goes
 back to running so the release never ships without them), **Adopt** a live
@@ -218,7 +219,7 @@ after the restart) is said once, after the boot quiet window:
 
 | Stored | Observed | Result |
 |---|---|---|
-| starting / working / shipping | its row, same `created_at` | carries on (the Fast-track record carries on by itself) |
+| starting / working / shipping | its row, same `created_at` | carries on (the Goes as far as record carries on by itself) |
 | any | the title, a different `created_at` | needs you — "the title is used by another session"; never adopted silently |
 | starting | no row, a provisioning row | waits |
 | starting / working | no row, the branch exists | needs you — Re-create it on the existing branch (no double spawn) |
@@ -243,10 +244,10 @@ updates.
   the reading recovers. The run's own members are exempt from the spawn 409.
 - **Budget.** When the members' summed cost reaches `budget_usd` the team run
   pauses and asks once ("Raise to $N" = resume with a new budget).
-  Per-session budgets still hold Fast-track as before.
+  Per-session budgets still hold Goes as far as as before.
 - **Duplicate sessions** (`foo` + `foo-copy`) share one branch: ownership is
   keyed on `(repo, branch)`. Adopting a branch another team run owns is refused;
-  the copy shows the owner's fast-track and is never armed; `GET /api/outbox` and
+  the copy shows the owner's Goes as far as and is never armed; `GET /api/outbox` and
   the bell list the branch once.
 
 ## Notifications
@@ -281,15 +282,15 @@ worked on in parallel but ship as **one** branch and one PR:
    current commit (`base_ref`), its diff measured against the lead's branch —
    so the rail draws the team run as one family, and each worker's
    `report_result` lands in the lead's Thread.
-2. A member's fast-track is always **Commit**, whatever the team run's: its brief asks
+2. A member's Goes as far as is always **Commit**, whatever the team run's: its brief asks
    it to commit on its branch and report "done" with a `Tests:` line — but a
    member that committed and then sat idle for a minute on a clean tree is
    done whether or not it reported (its armed record mutes the turn-end
    event, so the server checks its commits beyond its base itself). So a
-   one-for-all team run's fast-track is never `leave` (refused: it would commit
+   one-for-all team run's Goes as far as is never `leave` (refused: it would commit
    unasked) and its "ask me first" is the team run's release, which asks. Done is
    a done report (or a turn that ended) on a clean tree with commits beyond
-   its base — or Fast-track finishing the commit for it.
+   its base — or Goes as far as finishing the commit for it.
 3. Done members join the **merge queue**: one at a time, oldest first, and
    only while the lead is idle (or its CLI exited — a merge is plain git),
    its tracked tree clean, no merge or rebase half-done, and on the team run's
@@ -322,13 +323,13 @@ worked on in parallel but ship as **one** branch and one PR:
 6. **Release** — the ONE outward step, and yours: the lead's Thread shows the
    ship card (title, base ← branch with the diff, "one commit per piece, kept
    as written + N conflict fixes by the lead", the body). Its buttons follow
-   the team run's fast-track: **Open the PR** never merges (only the explicit **merge
+   the team run's Goes as far as: **Open the PR** never merges (only the explicit **merge
    when checks pass** does — the primary on a merge team run, next to *Open the
    PR only*), and a push team run's button pushes the branch. The release ships
    exactly what the card and the check showed: it is refused while the lead
    is mid-turn, has uncommitted or half-merged work, sits on another branch,
    or the team run is paused; a HEAD that moved since the check sends the team run
-   back to checking. It arms the lead's fast-track,
+   back to checking. It arms the lead's Goes as far as,
    with a server-built title (the team run's name, then what each member did)
    and a body with a section per member — what changed (its report), its
    paths, its commits, the tests it ran — plus the conflict fixes and the
@@ -339,11 +340,11 @@ worked on in parallel but ship as **one** branch and one PR:
    provisioned workspace cloned from a checkout that has no forge remote of
    its own) can only push there: the card says so before the click, offers
    one button (*Push to the local folder*), the release arms `push` whatever
-   the fast-track, and it ends in a hand-off naming the folder — "pushed
+   the Goes as far as, and it ends in a hand-off naming the folder — "pushed
    `<branch>` to `<folder>`, a folder on this machine, not GitHub, so no PR
    was opened" — with Copy title / Copy body, never a PR it did not open
    (`release.local_origin`). The PR title is built from whole words — never a cut
-   name or a literal "…". A team run whose fast-track is `leave` or `commit`
+   name or a literal "…". A team run whose Goes as far as is `leave` or `commit`
    ends right after the check — the merged branch is the result, nothing is
    pushed. `policy.release: "auto"` (API only) releases without the click.
 
@@ -365,11 +366,11 @@ max_pieces: N`). Its lead is named for the work, not `-lead`, because it may
 stay the only session: its brief says to decide first, and
 `propose_run_plan(run_id, pieces=[], why)` means *no split*. The team run then
 **dissolves** — the run is removed, the lead is an ordinary session doing the
-task itself, armed with the team run's fast-track (asking before a push, PR or
+task itself, armed with the team run's Goes as far as (asking before a push, PR or
 merge, as the team run's release would have), and the UI toasts "*<session>*
-didn't split it — it's doing the task itself". A team run with fast-track `leave`
-arms nothing, a `commit` fast-track never asks first, an adopted lead (`lead:` over
-HTTP) keeps whatever fast-track it had, and if arming fails the session is
+didn't split it — it's doing the task itself". A team run with Goes as far as `leave`
+arms nothing, a `commit` Goes as far as never asks first, an adopted lead (`lead:` over
+HTTP) keeps whatever Goes as far as it had, and if arming fails the session is
 simply left unarmed. *Split into parallel pieces…* on a session is not
 optional: there, `pieces=[]` is refused like any plan with
 fewer than two pieces.
@@ -408,7 +409,7 @@ fewer than two pieces.
    so nothing it changed before is exempted (those are breaches); a piece
    none of whose paths could be fenced stops shipping and needs you.
    *Split into parallel pieces…* on a session turns that session's own
-   fast-track off: the team run ships it once, at the release (a session that
+   Goes as far as turned off: the team run ships it once, at the release (a session that
    only plans — in place, or on its trunk — keeps its own until you pick
    "in this folder"; split into separate worktrees, it is never touched).
 5. From there it is the one-for-all path above: committed, merged back one at
@@ -434,7 +435,7 @@ run:
   uncommitted files stay exactly as they were (`run.origin` records it).
   Its uncommitted tracked changes would not be in the split, so approval
   refuses them first: "commit them first" (409 `origin_dirty`). Its own
-  fast-track is left alone (it was never the team run's lead).
+  Goes as far as is left alone (it was never the team run's lead).
 - **In this folder.** The session itself is the lead and the pieces work in
   its folder. That folder must be on its **own** branch: on `main` (any
   trunk, or detached) the card offers **Start a branch here first** —
@@ -488,7 +489,7 @@ agent session **in the lead's own folder** (in place, like a copy session,
   already dirty at approval) are never put in a piece's commit: the team run
   says so once (a `stray` item in the bell). The release waits while the folder holds
   **any** change — tracked or untracked, stray or there since before the
-  split: the lead's fast-track commits everything in its folder before it pushes,
+  split: the lead's Goes as far as commits everything in its folder before it pushes,
   and a person's scratch never ships with the pieces. Commit it elsewhere,
   discard it or `.gitignore` it, then release.
 - **Release** = the lead's branch, one PR (one commit per piece), exactly as
@@ -517,7 +518,7 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 
 | What | Where |
 |---|---|
-| Fast-track | `backend/web/core/lanes.py`; routes `/lane`, `/ship-now`, `/fast-track` |
+| Goes as far as | `backend/web/core/lanes.py`; routes `/lane`, `/ship-now`, `/fast-track` |
 | Run record + planner (pure) | `backend/web/core/team_runs.py` |
 | Driver, reconcile, operations | `backend/web/core/team_run_driver.py` (loop registered in the lifespan, off under pytest) |
 | Waiting list (`GET /api/outbox`) | `backend/web/core/outbox.py` |
@@ -527,3 +528,4 @@ its Thread says "Restart the lead to give it the MindFlock tools".
 | MCP tools | `backend/mcp/runs.py` (incl. the lead's `propose_run_plan`, `report_integrated`) |
 | Store | `~/.mindflock/runs/` (`MINDFLOCK_RUNS_DIR`) |
 | Tests | `tests/unit/test_team_runs_*.py` (incl. `_split`), `test_team_run_driver.py`, `test_team_run_split_driver.py`, `test_team_run_split_modes.py`, `test_team_run_ticket_lead.py`, `test_team_run_events.py`, `test_git_merge.py`, `test_outbox.py`, `test_lanes.py`, `test_mcp_team_runs.py` |
+

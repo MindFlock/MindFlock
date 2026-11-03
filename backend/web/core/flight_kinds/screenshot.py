@@ -259,7 +259,7 @@ async def _run(flight, step, action, now) -> dict:
     urls = fill_urls(cfg.get("urls") or "", flight)
     if not urls:
         raise _kinds.StepFailed(
-            "no URL to shoot (is {preview} empty? a preview stop must fly first)"
+            "no URL to shoot (is {preview} empty? a preview stop must run first)"
         )
     browser = await asyncio.to_thread(find_browser)
     if not browser:

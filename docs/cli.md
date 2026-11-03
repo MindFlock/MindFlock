@@ -592,40 +592,41 @@ next, is the web UI's **Schedule** (top bar, `Alt+S`). `--json` prints `GET /api
 
 ### `mindflock flights [--all] [--json]`
 
-The flights in the air ([flights.md](flights.md)) — one row each: `ID`,
-`FLYWAY` (the route it flies), `SUBJECT` (*ticket 42 Fix it*, *pr #7 …*, a
-scheduled flyway's name), `SESSION`, `STATE` (`halted: <reason>` /
-`cancelled: <reason>` say why) and `STOP` (*2/3 Approve the merge (perched on
-you)* — the stop it is at, and whether it is perched on you). Unfinished
-flights plus the last 20 that landed; `--all` lists every stored one. `--json`
-prints `GET /api/flights` as is.
+The routes running ([flights.md](flights.md)) — one row each: `ID`,
+`SAVED ROUTE` (the saved route it follows), `SUBJECT` (*ticket 42 Fix it*,
+*pr #7 …*, a scheduled saved route's name), `SESSION`, `STATE`
+(`halted: <reason>` / `cancelled: <reason>` say why) and `STOP` (*2/3 Approve
+the merge (needs you)* — the stop it is at, and whether it needs you).
+Unfinished routes plus the last 20 that finished; `--all` lists every stored
+one. `--json` prints `GET /api/flights` as is.
 
-### `mindflock flight [flyways|start|done|skip|cancel]`
+### `mindflock flight [plans|start|done|skip|cancel]`
 
-The words are birds': a **flyway** is the route (a line of stops), a
-**flight** one run of it bound to one session, a **stop** one box on the line
-and a **perch** a stop that waits on you.
+A **route** is the row of stops one session's work goes through, a **saved
+route** is one kept on the shelf to reuse, a **stop** is one box on a route
+and a **Wait for me** stop waits on you. (The command names keep the
+feature's internal word, *flight*.)
 
-* `flight flyways [--json]` (the default; `flight plans` is the same command
-  under its old name) — the flyways: id, name (`*` = built-in), trigger,
-  number of stops, and for a scheduled flyway its schedule in words and next
-  run (or *paused*).
-* `flight start FLYWAY [--repo PATH] [--title SESSION]` — take off. `FLYWAY`
-  is a flyway id or name (any case; a unique prefix of either is enough, an
-  ambiguous one lists the matches). `--title` flies an open session (an
-  unambiguous title prefix is fine; the flight starts at the flyway's first
-  non-agent stop), otherwise a new session is created from the flyway in
-  `--repo`, else the flyway's own folder, else the current directory. Prints
-  the flight id, its session and the stop it starts at. `POST
+* `flight plans [--json]` (the default; `flight flyways` is the same command
+  under an older name) — the saved routes: id, name (`*` = built-in), trigger,
+  number of stops, and for a scheduled saved route its schedule in words and
+  next run (or *paused*).
+* `flight start ROUTE [--repo PATH] [--title SESSION]` — run a saved route.
+  `ROUTE` is a saved route's id or name (any case; a unique prefix of either is
+  enough, an ambiguous one lists the matches). `--title` runs it on an open
+  session (an unambiguous title prefix is fine; the route starts at its first
+  non-agent stop), otherwise a new session is created from the saved route in
+  `--repo`, else the saved route's own folder, else the current directory.
+  Prints the route id, its session and the stop it starts at. `POST
   /api/flights/start`.
-* `flight done FLIGHT [--note TEXT]` / `flight skip FLIGHT` — tick off (or
-  skip) the stop the flight is at, the Board's **Done** / **Skip**: a perch,
-  or a verify stop waiting on you (its open human checklist items are recorded
-  as passed). `flight cancel FLIGHT` cancels the flight; its session stays
-  open. `FLIGHT` is a flight id (a unique prefix is enough) or its session's
-  title.
+* `flight done ROUTE [--note TEXT]` / `flight skip ROUTE` — tick off (or
+  skip) the stop the route is at, the Sky's **Done** / **Skip**: a Wait for me
+  stop, or a Verify stop that needs you (its open behaviors that are yours are
+  recorded as verified). `flight cancel ROUTE` stops the route (**Stop the
+  route**); its session stays open. Here `ROUTE` is a route id (a unique
+  prefix is enough) or its session's title.
 
-A refusal prints the server's sentence (`error: sc-42 is already on a flight
+A refusal prints the server's sentence (`error: sc-42 is already on a route
 (Ticket to merge)`) and exits 1.
 
 ### `mindflock peer [status|invite|join|links|unlink|share|unshare|export|address]`

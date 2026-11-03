@@ -60,64 +60,66 @@ HISTORY_LINES = 10
 MAX_STEPS = 40
 
 D_DESCRIBE = (
-    "Turn a sentence into flight stops. A FLIGHT is a row of stops MindFlock's "
-    "driver flies one session through (an agent prompt, tests, a ship rung, a "
-    "wait, a perch for your user, a loop back…). text: the flight in plain "
-    "words ('run the tests, fix failures, open a PR, wait for checks'); want: "
-    "plan (several stops, default) or step (one). The server's one-shot model "
-    "answers with normalised steps {id, kind, title, config, on_fail, when?} "
-    "plus one line each. Also returns kinds (kind · label · summary · config "
-    "fields) so you can hand-write or fix steps; kinds=false skips them. "
-    "error no_model / could_not_describe: no steps — write them from kinds. "
-    "Nothing starts: pass the steps to start_flight (or save_flight_plan)."
+    "Turn a sentence into a route's stops. A ROUTE is a row of stops "
+    "MindFlock's driver carries one session through (an agent prompt, tests, "
+    "a ship stop, a wait, a Wait for me stop for your user, a loop back…). "
+    "text: the route in plain words ('run the tests, fix failures, open a "
+    "PR, wait for checks'); want: plan (several stops, default) or step "
+    "(one). The server's one-shot model answers with normalised steps {id, "
+    "kind, title, config, on_fail, when?} plus one line each. Also returns "
+    "kinds (kind · label · summary · config fields) so you can hand-write or "
+    "fix steps; kinds=false skips them. error no_model / could_not_describe: "
+    "no steps — write them from kinds. Nothing starts: pass the steps to "
+    "start_flight (or save_flight_plan)."
 )
 D_START = (
-    "Start a flight. steps: [{kind, title?, config?, on_fail?, when?, halt?}] "
+    "Start a route. steps: [{kind, title?, config?, on_fail?, when?, halt?}] "
     "(from describe_flight, or by hand from its kinds) and/or plan_id (a saved "
-    "stop; its steps come first). title: the session that flies it — default "
+    "route; its steps come first). title: the session that runs it — default "
     "yourself; else one of your descendants. On an existing session the "
-    "flight starts at the first non-agent stop (the work so far counts as the "
+    "route starts at the first non-agent stop (the work so far counts as the "
     "agent stop) unless at= names a stop id (s1…). grounded=true puts the "
-    "stops on your user's board with no session (they attach one). name: the "
-    "flight's name. A stop that can't be undone (ship lane merge, a kind whose "
-    "risk is irreversible) needs confirm_merge=true. One flight per session: "
+    "stops on your user's Sky with no session (they attach one). name: the "
+    "route's name. A stop that can't be undone (ship lane merge, a kind whose "
+    "risk is irreversible) needs confirm_merge=true. One route per session: "
     "409 in_flight means it has one (flight_status). A loop stop's "
     'config.back_to is an earlier stop id, or "agent": the session\'s own '
     "agent is sent config.prompt (empty = its last prompt), then the stops "
-    "fly again after that turn (needs a session). Returns {id, state, "
+    "run again after that turn (needs a session). Returns {id, state, "
     "steps, session}; then flight_status / control_flight."
 )
 D_STATUS = (
-    "A flight, compact: state (grounded|ready|running|waiting_you|paused|"
+    "A route, compact: state (grounded|ready|running|waiting_you|paused|"
     "halted|done|cancelled; ready = built on its session, not started), cursor (the current stop), reason, every stop as one "
     "line (id, state, kind, title, note, receipt, when) and the last 10 "
-    "history lines. id, or title (that session's live flight, else its "
-    "latest); neither = your own session's flight."
+    "history lines. id, or title (that session's live route, else its "
+    "latest); neither = your own session's route."
 )
 D_CONTROL = (
-    "Steer a flight on you or a descendant (or a grounded one). op: run (a "
-    "ready flight takes off now) | pause | resume | cancel (the session is "
-    "kept) | skip (a stop) | retry (a failed "
-    "stop) | jump (move the cursor to step) | done (a perch — a stop waiting on "
-    "a person — with an optional note). skip/retry/done default to the current "
-    "stop; jump needs step. id, or title for that session's live flight. "
-    "Never press done on a perch your user should judge unless they said so."
+    "Steer a route on you or a descendant (or a grounded one). op: run (a "
+    "ready route starts now) | pause | resume | cancel (Stop the route; the "
+    "session is kept) | skip (a stop) | retry (a failed "
+    "stop) | jump (move the cursor to step) | done (a Wait for me stop — one "
+    "that needs a person — with an optional note). skip/retry/done default to "
+    "the current stop; jump needs step. id, or title for that session's live "
+    "route. Never press done on a stop your user should judge unless they "
+    "said so."
 )
 D_EDIT = (
-    "Fix a flight's stops (the board does the rest): add [steps] (inserted at "
+    "Fix a route's stops (the Sky does the rest): add [steps] (inserted at "
     "index at, else appended; only after the current stop), remove [step ids] "
-    "(a stop ahead just goes; removing the flying stop pauses the flight "
-    "right before the next; the last stop stays), rename = the flight's name. "
-    "Same scope and confirm_merge rule as start_flight. Returns the flight as "
+    "(a stop ahead just goes; removing the running stop pauses the route "
+    "right before the next; the last stop stays), rename = the route's name. "
+    "Same scope and confirm_merge rule as start_flight. Returns the route as "
     "flight_status does."
 )
 D_SAVE_PLAN = (
-    "Keep a row of stops as a saved stop on your user's shelf (the store "
+    "Keep a row of stops as a saved route on your user's shelf (the store "
     "calls it a plan): name, steps (as start_flight takes them), description, "
     "trigger {kind: manual|ticket|pr|issue|schedule, schedule?: {at:'HH:MM', "
     "days:'daily'|'weekdays'} | {cron} | {once}, paused?} — a schedule "
-    "trigger flies by itself. Returns {plan_id, name, steps}; "
-    "start_flight(plan_id=…) flies it."
+    "trigger starts it by itself. Returns {plan_id, name, steps}; "
+    "start_flight(plan_id=…) runs it."
 )
 
 
@@ -180,7 +182,7 @@ S_START = _obj(
     {
         "steps": _STEPS,
         "plan_id": {"type": "string", "minLength": 1, "maxLength": 80},
-        "title": dict(_TITLE, description="session that flies it (default: you)"),
+        "title": dict(_TITLE, description="session that runs it (default: you)"),
         "grounded": {"type": "boolean", "default": False},
         "name": {"type": "string", "maxLength": 80},
         "at": dict(_STEP_ID, description="stop id to start at"),
@@ -431,7 +433,7 @@ class FlightTools:
             "Not Found" in err.message or err.status == 405
         ):
             return ToolError(
-                "this MindFlock server has no flights; upgrade it to use %s" % what
+                "this MindFlock server has no routes; upgrade it to use %s" % what
             )
         msg = "%s failed: %s" % (what, err.message)
         if body.get("detail"):
@@ -439,14 +441,14 @@ class FlightTools:
         if body.get("field"):
             msg += " (field %s)" % body["field"]
         hint = {
-            "in_flight": "that session already has a flight in the air: "
+            "in_flight": "that session already has a route running: "
             "flight_status(title=…) shows it; cancel it first or edit_flight it",
             "in_progress": "only stops after the current one can change",
             "needs_title": "name the session (title) or start it grounded=true",
-            "unknown_flight": "flight_status(title=…) finds a session's flight",
-            "last_step": "a flight keeps its last stop: cancel the flight instead",
-            "finished": "that flight is over",
-            "grounded": "a grounded flight does nothing until your user attaches "
+            "unknown_flight": "flight_status(title=…) finds a session's route",
+            "last_step": "a route keeps its last stop: cancel the route instead",
+            "finished": "that route is over",
+            "grounded": "a grounded route does nothing until your user attaches "
             "a session to it (only cancel works)",
         }.get(err.message)
         if hint:
@@ -471,7 +473,7 @@ class FlightTools:
         resp = self._fl_api("GET", self._flight_path(fid), what=what)
         f = resp.get("flight")
         if not isinstance(f, dict):
-            raise ToolError("%s: the server returned no flight" % what)
+            raise ToolError("%s: the server returned no route" % what)
         return f
 
     def _flight_of(self, title: str, what: str) -> Optional[dict]:
@@ -500,7 +502,7 @@ class FlightTools:
         f = self._flight_of(title, what)
         if f is None:
             raise ToolError(
-                "%s: %r has no flight (start_flight starts one)" % (what, title)
+                "%s: %r has no route (start_flight starts one)" % (what, title)
             )
         return f
 
@@ -575,7 +577,7 @@ class FlightTools:
                 out["error"] = "could_not_describe"
                 detail = (err.payload or {}).get("detail")
                 out["hint"] = (
-                    "the model's answer was not a flight%s: rephrase, or write "
+                    "the model's answer was not a route%s: rephrase, or write "
                     "the steps from kinds"
                     % (" (%s)" % _cut(detail, 200) if detail else "")
                 )
@@ -606,7 +608,7 @@ class FlightTools:
             title = str(args.get("title") or "").strip() or (flock.self_title or "")
             if not title:
                 raise ToolError(
-                    "start_flight needs title (the session that flies it): you are "
+                    "start_flight needs title (the session that runs it): you are "
                     "not inside a MindFlock session — or pass grounded=true"
                 )
         check = list(steps)
@@ -632,7 +634,7 @@ class FlightTools:
         )
         f = resp.get("flight")
         if not isinstance(f, dict):
-            raise ToolError("start_flight: the server returned no flight")
+            raise ToolError("start_flight: the server returned no route")
         if name and not grounded and f.get("id"):
             try:
                 r = self._fl_api(
@@ -656,12 +658,12 @@ class FlightTools:
         if resp.get("absorbed"):
             out["absorbed"] = resp["absorbed"]
             out["note"] = (
-                "the session's own fast-track run became the flight's leading "
+                "the session's own Goes as far as shipping became the route's leading "
                 "ship stops"
             )
         if grounded:
             out["note"] = (
-                "grounded: the stops sit on your user's board until they attach a "
+                "grounded: the stops sit on your user's Sky until they attach a "
                 "session"
             )
         return out
@@ -701,7 +703,7 @@ class FlightTools:
             if not step:
                 raise ToolError(
                     "%s needs step (a stop id from flight_status)%s"
-                    % (what, "" if op == "jump" else ": the flight has no current stop")
+                    % (what, "" if op == "jump" else ": the route has no current stop")
                 )
             if op == "jump":
                 path, payload = self._flight_path(fid, "/jump"), {"step": step}

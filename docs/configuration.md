@@ -37,9 +37,9 @@ copy_untracked = [".env", ".env.local"]
 # current HEAD. Output: .mindflock_check.log.
 check_command = "npm test"
 
-# Verify: opt this repo in to automatic checklists. The first push of each
-# branch in this repo gets a checklist written from its diff (one per branch,
-# even when several windows share it), which turns up in Verify (Alt+V) once
+# Verify: opt this repo in to automatic behaviors. The first push of each
+# branch in this repo gets its behaviors written from its diff (one set per
+# branch, even when several windows share it), which turn up to be checked once
 # that commit reaches the repo's live branch. See web-ui.md#verify.
 #
 # This is the team-wide, committed half of the opt-in, and the ONLY one
@@ -56,10 +56,10 @@ in `repository.verify_repo_settings["owner/name"]` and edited in Verify →
 
 | Key | What it decides |
 | --- | --- |
-| `live_branch` | Which branch counts as shipped for this repo. A checklist goes due when its commit lands on it. Resolves first-non-empty through this override → `repository.live_branch` → `pr_base_branch` → `base_branch` → `main`. The card's "merged into" chip is independent of this: it keeps following the work for a week after each landing, so it can name a branch beyond the live one (`main` in a repo whose live branch is `staging`). |
-| `deploy_delay_minutes` | How long after merging the change is actually running. A checklist waits this long before it turns up to be checked — merged is not deployed, and checking too early records a failure against code that is fine. `0` when merging *is* shipping. Blank inherits the flock-wide default (5). |
-| `target` | Where this repo's running product is — a URL, plus whatever is needed to reach it. **This is the key that decides what "it works" is checked against.** With it set, both the checklist and the agent that works it are aimed at that deployment. Blank is a real answer, not a missing one: a library or a CLI has no environment to point at, and its checklist is worked against a fresh checkout of the live branch on this machine. |
-| `prompt` | Standing instructions for this repo — where the app runs, what to always check, what to ignore. Folded into **both** the prompt that writes a checklist and the one the agent runs it with. Steers *what* gets tested; it can never change the format either model must answer in. |
+| `live_branch` | Which branch counts as shipped for this repo. A branch's behaviors come due when its commit lands on it. Resolves first-non-empty through this override → `repository.live_branch` → `pr_base_branch` → `base_branch` → `main`. The card's "merged into" chip is independent of this: it keeps following the work for a week after each landing, so it can name a branch beyond the live one (`main` in a repo whose live branch is `staging`). |
+| `deploy_delay_minutes` | How long after merging the change is actually running. Behaviors wait this long before they turn up to be checked — merged is not deployed, and checking too early records a failure against code that is fine. `0` when merging *is* shipping. Blank inherits the flock-wide default (5). |
+| `target` | Where this repo's running product is — a URL, plus whatever is needed to reach it. **This is the key that decides what "it works" is checked against.** With it set, both the behaviors and the agent that checks them are aimed at that deployment. Blank is a real answer, not a missing one: a library or a CLI has no environment to point at, and its behaviors are checked against a fresh checkout of the live branch on this machine. |
+| `prompt` | Standing instructions for this repo — where the app runs, what to always check, what to ignore. Folded into **both** the prompt that writes the behaviors and the one the agent checks them with. Steers *what* gets tested; it can never change the format either model must answer in. |
 
 Each session also gets a **port block** (O4): 10 consecutive ports starting
 at a deterministic base (persisted in `~/.mindflock/ports.json`), exported
@@ -477,16 +477,16 @@ Notes on individual keys:
   **Run ticket**.
 - `plan` (per ticket source in `settings.json`, and per repo in
   `github.repo_settings` / `github.issue_repo_settings`; optional) — the
-  **flight plan** an item started from there flies ([flights.md](flights.md)):
-  a plan id from `GET /api/flights/plans` (`builtin:ticket`, `p_7f3a2c`…).
-  Blank = the built-in plan for that kind (`builtin:ticket` for tickets and
-  issues, `builtin:pr` for PRs) cut at the source's `depth`, which is no flight
+  **saved route** an item started from there runs ([flights.md](flights.md)):
+  a saved route's plan id from `GET /api/flights/plans` (`builtin:ticket`, `p_7f3a2c`…).
+  Blank = the built-in saved route for that kind (`builtin:ticket` for tickets and
+  issues, `builtin:pr` for PRs) cut at the source's `depth` (its Goes as far as), which is no route
   at all while `depth` is blank/off/agent — so a source saved before the field
   existed behaves exactly as before. A plan id that no longer exists falls
-  back to the depth. A per-start `plan` or `depth` (the Intake row, the Flights
-  Board, an agent's `spawn_ticket_session`) outranks it; the full order is in
-  [ingestion-pipeline.md](ingestion-pipeline.md#which-flight-a-started-item-flies).
-  Synced with the rest of the source / repo block (the plans themselves sync
+  back to the depth. A per-start `plan` or `depth` (the Intake row, the Sky,
+  an agent's `spawn_ticket_session`) outranks it; the full order is in
+  [ingestion-pipeline.md](ingestion-pipeline.md#which-route-a-started-item-takes).
+  Synced with the rest of the source / repo block (the saved routes themselves sync
   as `store:flight_plans`). Changing it restarts the pipeline like any source
   field, and the pipeline also reads it fresh at every launch.
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
@@ -533,7 +533,7 @@ Notes on individual keys:
   session forks from: the repo's `base_branch` → `MINDFLOCK_BASE_BRANCH` →
   `repository.base_branch` → `github.base_branch` → `main` (ticket and
   provisioned sessions; a local-repo provisioned session otherwise uses the
-  checkout's current branch). Where **Open PR** / fast-track points: the
+  checkout's current branch). Where **Open PR** / Goes as far as points: the
   repo's `pr_base_branch` → the repo's `base_branch` → `repository.pr_base_branch`
   → the session's own fork base. A block's blank `pr_base_branch` means its own
   `base_branch`, never the flat PR base — a main-only repo must not inherit a
@@ -1123,16 +1123,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   adopted from another device by settings sync — re-writes every session's
   `.flock` flag so its next prompt carries the new words. `GET /api/config`
   serves the filled-in text as `flock.request`.
-- **Fast-track** (`repository.*`, synced; Settings → Workspace):
+- **Goes as far as** (`repository.*`, synced; Settings → Workspace):
   `fasttrack_depth` is the rung new batches start on (`commit` · `push` ·
   `pr` · `merge` · `off`; blank = the built-in default).
   `precommit_retry_hooks` is a comma-separated list of pre-commit hook **ids**
-  whose failure fast-track may retry, then skip with `SKIP=` (test and
+  whose failure Goes as far as may retry, then skip with `SKIP=` (test and
   secret-scanning hooks are always refused). `fasttrack_failure_notes`
-  (Advanced → **Tell the agent when fast-track stops**, default on) leaves
+  (Advanced → the switch that tells the agent when shipping stops, default on) leaves
   the agent a `[MindFlock note …]` saying what failed when a run stops on
   something it can fix — a failed pre-commit hook's own output included, and
-  the steps fast-track will still take by itself — typed at once when the
+  the steps it will still ship by itself — typed at once when the
   agent is idle, then waits for the fix and carries on from it (twice
   per run at most; see [team-runs.md](team-runs.md)). Off, such a stop halts
   the run (see [web-ui.md](web-ui.md)). Only `false` is

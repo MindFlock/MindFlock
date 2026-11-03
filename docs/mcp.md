@@ -401,10 +401,10 @@ skip-permissions**:
 - `start_team_run` starts sessions that MindFlock then commits, pushes and
   opens PRs for; `control_run` cancels, retries and releases a team run
   (`openWorldHint` true).
-- `start_flight`, `control_flight` and `edit_flight` fly stops that may push
+- `start_flight`, `control_flight` and `edit_flight` run stops that may push
   or merge (`openWorldHint` true); `save_flight_plan` writes the shelf. The
-  two flight reads, `describe_flight` and `flight_status`, are not on the
-  pre-approved list yet (see [Flights](#flights-from-a-sentence-to-a-running-flight)).
+  two route reads, `describe_flight` and `flight_status`, are not on the
+  pre-approved list yet (see [Routes](#routes-from-a-sentence-to-a-running-route)).
 
 So an orchestrator launched **without** skip-permissions stops on a
 permission dialog for each message, spawn, answer and close/delete. Run orchestrators
@@ -826,7 +826,7 @@ How it works:
   `note`. The server appends the same report-back footer `spawn_session` does,
   when there is a parent and the ticket's CLI gets the MindFlock tools, and
   says in `reason` when it didn't.
-- **The source's default fast-track rung is not applied.** `autopilot`
+- **The source's default Goes as far as rung is not applied.** `autopilot`
   defaults to `off`: the worker reports back and you decide what ships. Pass
   `autopilot` to arm one rung at creation (the per-start override the panel's
   rung picker sends).
@@ -927,7 +927,7 @@ pointer to `wait_for_session` or `set_autopilot`. Shipping **yourself** skips
 this check: you are mid-turn by definition, and you decide when your work is
 done.
 
-**It never races Fast-track.** A session whose Fast-track is armed and
+**It never races Goes as far as.** A session whose Goes as far as is armed and
 running (its row's `autopilot.state` is `running`) is refused, yourself
 included: two drivers typing into one shell would commit and push twice.
 Disarm it with `set_autopilot(depth="off")` first. A finished or halted run
@@ -944,9 +944,9 @@ doesn't count.
 | `confirm_merge` | false | required for `merge` |
 
 → `{title, autopilot: {depth, state, step, reason, note, url, …}, hint}`, or
-`{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own Fast-track
+`{title, autopilot: null, stopped}` for `off`. Arms MindFlock's own Goes as far as
 (`POST /api/instances/{title}/fast-track`, the alias of the `/lane` route the ⏩ picker calls; `DELETE` for
-`off`). Fast-track waits until the agent's turn has ended and stayed idle
+`off`). Goes as far as waits until the agent's turn has ended and stayed idle
 for 30 s with nothing queued (also before its first push or PR when git
 already reads committed, since an agent merging its base mid-turn looks
 exactly like that), then ships it up to `depth` through the same
@@ -961,7 +961,7 @@ on (push, PR) once the fix turn ends (see [team-runs.md](team-runs.md)). A
 `halted` record's `note` reads `MindFlock told the agent what failed and asked
 it to fix it.` when a failure note went into the session's inbox and the run
 was out of hand-offs (else `""`); its `reason` is unchanged. See [web-ui.md](web-ui.md) for
-Fast-track itself.
+Goes as far as itself.
 
 Use `ship_session` for a worker that has reported and is idle, and
 `set_autopilot` for one that is still working (or for yourself, to ship after
@@ -972,7 +972,7 @@ your current turn).
 "Work on PAY-412, PAY-415 and the webhook rate limit, 3 at a time, PR each"
 is one call. A **team run** is a server-driven set of sessions: one per item,
 at most `concurrency` at a time with the rest queued, each carried to its
-**Fast-track** depth by MindFlock. See [team-runs.md](team-runs.md) for what
+**Goes as far as** setting by MindFlock. See [team-runs.md](team-runs.md) for what
 the server does on its own (queueing, retries, nudges, restart safety) and what
 it surfaces to the user.
 
@@ -980,7 +980,7 @@ it surfaces to the user.
 |---|---|---|
 | `items` | required | ticket IDs or links (`PAY-412`, `sc-123`, a URL; a line of only IDs is that many tickets) and/or task lines, ≤50 |
 | `name` | suggested | the team run's name |
-| `lane` | the user's Fast-track setting — `leave` when they never set one (one-for-all: `commit`) | `leave` or `off` (no commit; stored as `leave`), `commit`, `push`, `pr` (a PR per item) or `merge` |
+| `lane` | the user's Goes as far as setting — `leave` when they never set one (one-for-all: `commit`) | `leave` or `off` (no commit; stored as `leave`), `commit`, `push`, `pr` (a PR per item) or `merge` |
 | `ask_first` | false | stop before each item's first commit / push and wait for the user's go (in MindFlock's bell) |
 | `grouping` | `each` | `together` (one PR for all) is not available yet |
 | `concurrency` | 3 | 1–8 at a time |
@@ -1000,7 +1000,7 @@ session is added to the team run, not restarted (a warning says so).
 your managed set, and don't report to you: you cannot answer, steer or close
 them, so an orchestrator cannot override what the run decided. The user sees
 them as an ordinary team run in the rail, with every row's status line leading
-with its Fast-track depth. Whatever the team run needs from them — an ask-first approval, a
+with its Goes as far as setting. Whatever the team run needs from them — an ask-first approval, a
 stuck line, a budget pause, the plan or the release — waits in MindFlock's
 bell; the team run's own controls (queued lines, Pause, Cancel, and a finished
 team run's **Copy summary**) are on its rail header's ⋯ menu, or on its lead's
@@ -1033,7 +1033,7 @@ budget in the same call), `cancel` (stop starting and shipping; sessions and
 branches stay; queued tickets go back to ingestion), and per task `retry`
 (`fresh: true` starts `<title>-2` on a new branch and keeps the old one),
 `start_now` (past the concurrency cap once) and `skip` (a queued task is
-removed; a running one is detached and keeps its session and Fast-track). `release`
+removed; a running one is detached and keeps its session and Goes as far as). `release`
 opens a one-for-all team run's one PR once it is `release_ready` (the user's
 click does the same; it opens the PR and never merges — a push team run pushes
 its branch). Only a team run
@@ -1053,7 +1053,7 @@ globs it may change. An **auto-split**'s lead (New's "Auto-split into up to N
 sessions if it's worth it"; the run's `optional`, and its brief says so) may
 instead pass `pieces: []` with `why`: no split. The team run dissolves and the
 answer is `{ok: true, split: false, note}` telling it to do the whole task
-itself in its own session; the note names the Fast-track depth MindFlock armed
+itself in its own session; the note names the Goes as far as setting MindFlock armed
 for when its turn ends, if any. The tool's schema allows `pieces: []` for
 every lead (`minItems: 0`) — the server is the gate: on any other split
 `pieces: []` is refused like a one-piece plan. The server checks
@@ -1084,14 +1084,14 @@ takes the word for it: `verified` is true only when the worker's branch head is
 in `head_sha` and `head_sha` is in the lead's HEAD; false leaves the piece in
 the merge queue (MindFlock also notices a finished merge on its own).
 
-## Flights: from a sentence to a running flight
+## Routes: from a sentence to a running route
 
-A [flight](flights.md) is a row of stops that MindFlock's flight driver flies
+A [route](flights.md) is a row of stops that MindFlock's route driver carries
 one session through: an agent prompt, a test run, a ship rung, a wait, a
-perch where a person presses Done, a Loop back to an earlier stop, and more.
+Wait for me stop where a person presses Done, a Loop back to an earlier stop, and more.
 Six tools let an agent set one up from a description and run it. They use the
-same `/api/flights*` routes as the Sky, so a flight an agent starts shows up
-on the board like any other.
+same `/api/flights*` routes as the Sky, so a route an agent starts shows up
+on the Sky like any other.
 
 The kinds of stop are plug-ins that the server serves at
 `GET /api/flights/kinds`. The tools never hard-code that list, so a kind the
@@ -1100,17 +1100,17 @@ server adds (round 16's `loop`, say) works at once. Each stop is
 fields, `on_fail` is `halt | agent | skip | you`, and `when` is a condition
 (round 15's grammar): when it is false, the stop is skipped.
 
-**Scope.** A session may start, steer and edit flights on **itself** or on
+**Scope.** A session may start, steer and edit routes on **itself** or on
 one of its descendants. This is `ship_session`'s rule
 (`Policy.require_ship`), and it carries two of that rule's refusals: a session
-in a team run is flown by its run, and a stop that can't be undone needs
+in a team run is driven by its run, and a stop that can't be undone needs
 `confirm_merge: true`. A stop can't be undone when it is a `ship` stop at lane
 `merge`, or when its kind's `risk` (from the kinds list) includes
 `irreversible`, as the `land` kind's does. Under `children` scope, a session
-may not fly such a stop on **itself**: `start_flight` refuses and suggests
-`grounded: true`, which puts the stops on the user's board, and the user
-attaches the session. A grounded flight has no session yet, so any caller
-with write scope may create, edit or cancel one. Starting a flight records
+may not run such a stop on **itself**: `start_flight` refuses and suggests
+`grounded: true`, which puts the stops on the user's Sky, and the user
+attaches the session. A grounded route has no session yet, so any caller
+with write scope may create, edit or cancel one. Starting a route records
 `by: "agent:<you>"` on it.
 
 **Local only.** A peer-mode server (a sandboxed shared-folder session) serves
@@ -1119,7 +1119,7 @@ these six are never offered to a peer.
 
 **Permission prompts.** None of the six is pre-approved yet: the list lives in
 `providers/mcp_attach.py`. `describe_flight` and `flight_status` are annotated
-read-only. `start_flight`, `control_flight` and `edit_flight` fly stops that
+read-only. `start_flight`, `control_flight` and `edit_flight` run stops that
 may push or merge, so they are `openWorldHint: true`. `save_flight_plan` only
 writes to the shelf.
 
@@ -1132,10 +1132,10 @@ normalised through the same validator as a saved plan, as
 `{id, kind, title, config, on_fail, when?}`. `lines` adds one line per step,
 such as `s2 ship "Open PR" · lane=pr · on_fail agent`. `kinds` is the compact
 kinds list, one line per kind: `kind · label · summary · fields: a, b, c`, plus
-`waits on a person` for a perch-like kind and `[remote, irreversible]` risk
+`waits on a person` for a Wait-for-me-like kind and `[remote, irreversible]` risk
 tags. With it, an agent can write or fix steps by hand. Pass `kinds: false` to
 skip it. When no model CLI is installed (409 `no_model`), or the model's
-answer was not a flight (422 `could_not_describe`), the tool does not fail.
+answer was not a route (422 `could_not_describe`), the tool does not fail.
 It returns `{steps: [], error, hint, kinds}`, with the kinds list included
 even when `kinds: false` was passed, so the agent can write the stops itself.
 Nothing starts.
@@ -1146,27 +1146,27 @@ Nothing starts.
 `{id, state, session, name, cursor, steps, absorbed?, note?}`. Sends
 `POST /api/flights/start`.
 
-- `steps`: an ad-hoc flight. With `plan_id` as well, the saved stop's steps
+- `steps`: an ad-hoc route. With `plan_id` as well, the saved route's steps
   come first.
-- `title`: the session that flies the flight. It defaults to the caller.
+- `title`: the session that runs the route. It defaults to the caller.
 - `at`: the server's `start_at`. On an existing session, the server starts at
   the first non-`agent` stop, because the work so far counts as the agent
-  stop. Pass `at: "s1"` to fly a leading agent stop as well: its prompt is
+  stop. Pass `at: "s1"` to run a leading agent stop as well: its prompt is
   queued into the session for when the current turn ends.
 - `grounded: true`: sends `{grounded, steps|plan_id, name}`. This makes a row
   of stops with no session (state `grounded`) that the user attaches later.
-- `name`: names the flight. On a grounded flight, the start sends it. On any
-  other flight, a `PATCH /api/flights/{id} {plan_name}` sets it after take-off.
-- When the session was in a Fast-track run, the server converts that run into
-  the flight's leading ship stops and lists them in `absorbed`.
+- `name`: names the route. On a grounded route, the start sends it. On any
+  other route, a `PATCH /api/flights/{id} {plan_name}` sets it after the start.
+- When the session was shipping by itself (Goes as far as), the server converts that into
+  the route's leading ship stops and lists them in `absorbed`.
 
-One flight per session: a 409 `in_flight` says to use `flight_status`, and to
-cancel or edit the flight that is already in the air. A 400 `bad_step` names
+One route per session: a 409 `in_flight` says to use `flight_status`, and to
+cancel or edit the route that is already running. A 400 `bad_step` names
 its `field`, for example `steps[0].kind`.
 
 ### `flight_status`
 
-`{id? | title?}` → a compact flight of about 2 KB at most:
+`{id? | title?}` → a compact route of about 2 KB at most:
 
 ```json
 {"id": "f_1a2b3c", "name": "Fix and PR", "session": "api-fix", "state": "running",
@@ -1179,58 +1179,58 @@ its `field`, for example `steps[0].kind`.
 ```
 
 With `title`, the tool reads `GET /api/flights` and picks that session's live
-flight (grounded, running, waiting on you, paused or halted), else its latest.
-With neither `id` nor `title`, it shows your own session's flight. Each stop is
+route (grounded, running, needing you, paused or halted), else its latest.
+With neither `id` nor `title`, it shows your own session's route. Each stop is
 one line: id, state, kind, title, `when`, halt point, group, note and receipt
 (`✓ PR #291`). `history` holds the last 10 lines (`-<age> <step> <event> —
-<note>`). For a big flight the output stays small: flown stops far behind the
+<note>`). For a big route the output stays small: finished stops far behind the
 cursor fold into a count (`s1–s29: 29 done`), then titles, notes and history
 shrink, then the stops far ahead fold too.
 
 ### `control_flight`
 
-`{id? | title?, op, step?, note?}` → the flight, compacted as in
+`{id? | title?, op, step?, note?}` → the route, compacted as in
 `flight_status`. Each op maps to one route:
 
 - `pause`, `resume`, `cancel` → `POST /api/flights/{id}/<op>`. Cancelling
   keeps the session.
 - `skip`, `retry`, `done` → `POST /api/flights/{id}/steps/{step}/<op>`.
-  `step` defaults to the current stop. `done` is for a perch (a `you` stop,
+  `step` defaults to the current stop. `done` is for a Wait for me stop (a `you` stop,
   or a verify stop waiting on a person) and takes an optional `note`.
 - `jump` → `POST /api/flights/{id}/jump {step}`, which needs `step`.
-- `run` → `POST /api/flights/{id}/run`: a **ready** flight (built on its
+- `run` → `POST /api/flights/{id}/run`: a **ready** route (built on its
   session, waiting for ▶ Run or the session's next prompt — round 19) takes
   off now; anything else is 409 `not_ready`.
 
-The scope rule above applies. A grounded flight answers 409 `grounded` to
+The scope rule above applies. A grounded route answers 409 `grounded` to
 everything but `cancel`. The tool says so: nothing happens until the user
 attaches a session.
 
 ### `edit_flight`
 
 `{id, add?: [step], at?, remove?: [step id], rename?, confirm_merge?}` → the
-flight, compacted, plus `changed`. The tool applies the changes in this order:
+route, compacted, plus `changed`. The tool applies the changes in this order:
 
 1. `remove` sends `DELETE /api/flights/{id}/steps/{sid}` once per id. A stop
-   ahead of the cursor is simply removed. Removing the stop that is flying
-   pauses the flight right before the next stop. The last stop can't be
-   removed (409 `last_step`: cancel the flight instead).
+   ahead of the cursor is simply removed. Removing the stop that is running
+   pauses the route right before the next stop. The last stop can't be
+   removed (409 `last_step`: cancel the route instead).
 2. `add` sends `POST /api/flights/{id}/steps {steps, at?}`. The new stops are
    appended, or inserted at index `at`, which must come after the current
    stop.
 3. `rename` sends `PATCH /api/flights/{id} {plan_name}`.
 
 This is enough to fix a line an agent drew. Moving, grouping and editing a
-stop's config stay on the board.
+stop's config stay on the Sky.
 
 ### `save_flight_plan`
 
 `{name, steps, description?, trigger?}` → `{plan_id, name, steps, trigger?}`.
-Sends `POST /api/flights/plans` (a saved stop, which the store calls a plan),
-so a described flight stays on the user's shelf. `trigger` is
+Sends `POST /api/flights/plans` (a saved route, which the store calls a plan),
+so a described route stays on the user's shelf. `trigger` is
 `{kind: manual|ticket|pr|issue|schedule, schedule?, paused?}`: a `schedule`
-trigger (`{at: "HH:MM", days}`, `{cron}` or `{once}`) flies the plan by
-itself. `start_flight(plan_id=…)` flies it now.
+trigger (`{at: "HH:MM", days}`, `{cron}` or `{once}`) runs the plan by
+itself. `start_flight(plan_id=…)` runs it now.
 
 ### Worked example: describe → start on myself → status → control
 
@@ -1240,8 +1240,8 @@ fix anything red, open a PR and wait for its checks"*.
 1. `describe_flight({text: "run the tests, fix anything red, open a PR and
    wait for its checks"})` returns four steps: `test` (with `on_fail: agent`,
    which hands failures back to the agent), `ship` `{lane: "pr"}`, `checks`,
-   and a `you` perch, "Look at the PR". It also returns the kinds list.
-2. The agent drops the perch, which the user didn't ask for, then calls
+   and a Wait for me (`you`) stop, "Look at the PR". It also returns the kinds list.
+2. The agent drops the Wait for me stop, which the user didn't ask for, then calls
    `start_flight({steps: [...three steps...], name: "Tests to PR"})`. The
    title defaults to the agent's own session. The result is
    `{id: "f_9c1d2e", state: "running", session: "api-fix", cursor: "1/3 s1"}`.
@@ -1249,10 +1249,10 @@ fix anything red, open a PR and wait for its checks"*.
    `s1 done test "Tests" · ✓ 212 passed`, `s2 done ship "Open PR" · ✓ PR #291`
    and `s3 running checks "Checks"`.
 4. The user says to hold it: `control_flight({op: "pause"})`, then
-   `control_flight({op: "resume"})`. A red check halts the flight, with
+   `control_flight({op: "resume"})`. A red check halts the route, with
    `reason` set to the check's name. After fixing it, the agent sends
    `control_flight({op: "retry"})`, which retries the current stop.
-5. To keep the flight for next time:
+5. To keep the route for next time:
    `save_flight_plan({name: "Tests to PR", steps: [...]})`.
 
 ## Messages
@@ -1322,7 +1322,7 @@ message per pass, oldest first, and only when every gate passes:
   queue **or** the lane.
 - **Your prompts first**: if your prompt queue would send at this idle, your
   queued prompt goes first and the message waits for the next settled idle. A
-  fast-track chain mid-flight also holds the lane.
+  route shipping by itself (Goes as far as) also holds the lane.
 - **Never boots an agent**: the agent's tmux session must be alive. An
   offline, paused or loading session keeps its messages until someone starts
   it. The one exception is a **sleeping** session: a message is what should
@@ -1390,7 +1390,7 @@ How the line varies:
   the hint is what invites the next hop.
 - **Results.** A `result` message reads `[MindFlock result <id> from worker
   "<from>" (status: done) — …] <summary>`.
-- **MindFlock notes.** When fast-track stops on something the agent can fix,
+- **MindFlock notes.** When Goes as far as stops on something the agent can fix,
   MindFlock leaves it a `kind: "note"` message (`from: ""`), which reads
   `[MindFlock note <id>] <what failed, where to look, fix and commit>`. It
   needs no reply. `send_message` and `report_result` can't produce one.
@@ -1593,7 +1593,7 @@ merge; in-place and provisioned workers are never moved.
 
 `wait_for_session` treats a held worker as not started: it never reads its
 idle agent as finished. Its row carries `order: {state, word, detail, after,
-fence}` (`state`: `held`, `running`, `done`, `stopped`); Fast-track
+fence}` (`state`: `held`, `running`, `done`, `stopped`); Goes as far as
 treats a held task as pending. The order is kept per orchestrator
 in `~/.mindflock/worker_order.json` (`MINDFLOCK_WORKER_ORDER_FILE`) and
 carried out by a loop every 3 s (`backend/web/core/worker_order_driver.py`);
@@ -1664,20 +1664,20 @@ Nothing on the failure path touches the existing branch. A background start
 that fails anyway leaves its reason in `GET /api/create_failures` for 10
 minutes.
 
-### Flights and workers
+### Routes and workers
 
-A session flying a [flight](flights.md) carries it on its rows: `list_sessions`,
+A session running a [route](flights.md) carries it on its rows: `list_sessions`,
 `get_session` and `whoami` include `flight` — `{id, plan_name, cursor, total,
 state, reason, step: {id, kind, title, state, actor}, join, branch}` — so an
 orchestrator sees which stop it is at. Workers it spawns are branches of that
 stop: each worker's row has `flight.branch: {parent, step}` (a branch-only
-`flight` with `id: ""` when the worker flies nothing itself), and while the
+`flight` with `id: ""` when the worker runs nothing itself), and while the
 stop waits for them the parent's `flight.join` is `{waiting, total}`. An
 `agent` stop waits for its workers by default (`join`, "Wait for its
 workers"): it is done when the agent has settled **and** every live child has
 finished — reported (`report_result` after the stop began), idle-settled by
 `wait_for_session`'s gates, offline ≥ 30 s, or closed / deleted. A worker
-asking a question holds it. A flyway can also fan out by itself with a
+asking a question holds it. A saved route can also fan out by itself with a
 `split` stop (it spawns the workers the way `spawn_session` does) and a `join`
 stop. `wait_for_session` is unchanged.
 
@@ -1685,7 +1685,7 @@ stop. `wait_for_session` is unchanged.
 
 The scope decides what an MCP server may **steer**. It never limits reading.
 
-| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) and fly (`start_flight`, `control_flight`, `edit_flight`) |
+| Scope | Read tools, `wait_*`, `check_inbox`, `list_tickets` | `send_message` (`auto`/`inbox`), `report_result`, `spawn_session`, `spawn_ticket_session` | Steer (`now`, `answer_prompt`, `kill_session`, `set_parent`, `fence_session`, `set_order`) | Ship (`ship_session`, `set_autopilot`) and run (`start_flight`, `control_flight`, `edit_flight`) |
 |---|---|---|---|---|
 | `readonly` | yes | no | no | no |
 | `children` (default) | yes | yes, to any local session | sessions it **manages** | itself and sessions it manages; `merge` only for sessions it manages |
@@ -1715,11 +1715,11 @@ user's call.
 **The user's choice wins, whatever the scope.** `ship_session` and
 `set_autopilot` refuse a session that belongs to a team run (a member or a
 lead — MindFlock ships it with the team run, and the user steers the team run); a
-session whose Fast-track the user set with "ask me before it ships" (only the user
+session whose Goes as far as the user set with "ask me before it ships" (only the user
 approves it, in the bell — `depth: "off"` is still allowed); and any depth
-past a Fast-track the user set (a Fast-track an agent set — the row's `lane.by` is
+past a Goes as far as the user set (a Goes as far as an agent set — the row's `lane.by` is
 `agent:<title>` — it may change). `set_autopilot` records `by: "agent:<you>"`
-on the Fast-track it arms.
+on the Goes as far as it arms.
 
 **Flights.** `start_flight`, `control_flight` and `edit_flight` follow the
 shipping rule: on the caller itself or a session it manages, never a team-run
@@ -1727,7 +1727,7 @@ member, and `confirm_merge: true` for a stop that can't be undone (a `ship`
 stop at lane `merge`, or a kind whose `risk` includes `irreversible`), whose
 target under `children` must be a descendant. A grounded flight (no session)
 needs only write scope; `save_flight_plan` too. See
-[Flights](#flights-from-a-sentence-to-a-running-flight).
+[Routes](#routes-from-a-sentence-to-a-running-route).
 
 An unknown scope value, or an auto-attached server that can't confirm its
 session, runs `readonly`.
@@ -2284,7 +2284,7 @@ saying a person decides it — see [peer-link.md](peer-link.md#joint-tasks--cont
 | Flights | `backend/web/core/flights.py` (store + planner), `flight_driver.py` (loop + operations), `flight_kinds/` (plug-in kinds), `flight_describe.py` (the one-shot); routes `/api/flights*` ([flights.md](flights.md)) |
 | Team runs | `backend/web/core/team_runs.py` (store + planner), `team_run_driver.py` (loop + operations), `outbox.py`, `lanes.py`; routes `/api/runs*`, `/api/outbox` ([team-runs.md](team-runs.md)) |
 | Ship status | `backend/web/core/ship_status.py`; route `GET /api/instances/{title}/ship-status` |
-| Fast-track | `backend/web/core/autopilot.py` (store + decision) and `autopilot_driver.py` (loop + effects); route `/api/instances/{title}/fast-track` |
+| Goes as far as (autopilot) | `backend/web/core/autopilot.py` (store + decision) and `autopilot_driver.py` (loop + effects); route `/api/instances/{title}/fast-track` |
 | Ticket starts | `backend/web/core/ticket_start.py`; route `POST /api/tickets/start` (`_intake_lineage`, `_intake_claim_error`, `_intake_prompt_tail` in `server.py`) |
 | Auto-attach | `backend/providers/mcp_attach.py`, `mcp_launch_args` in `providers/claude.py` and `providers/codex.py` |
 | Mailbox + delivery text | `backend/web/core/mailbox.py`; the lane is `_drain_mailboxes` in `backend/web/core/queue_driver.py` |

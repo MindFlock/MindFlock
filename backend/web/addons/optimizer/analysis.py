@@ -617,7 +617,7 @@ def advice(
                 "text": (
                     "It resets in %s and nothing is burning it. Queue a prompt on a session "
                     "(the Queue tab, or a looping self-improvement prompt) so the agent fills "
-                    "it, or launch a fast-track run."
+                    "it, or launch a team run."
                 )
                 % _h(live["remaining_s"]),
             }
@@ -632,7 +632,7 @@ def advice(
                 "title": "%s of unattended time sat idle in the last day" % _h(un_idle),
                 "text": (
                     "Overnight and after-hours windows reset whether or not anything ran. "
-                    "Leave a looping queue prompt or a fast-track ticket queue running so "
+                    "Leave a looping queue prompt or a ticket queue that ships by itself running so "
                     "that time fills them — a cheaper model is fine for work nobody is "
                     "waiting on."
                 ),

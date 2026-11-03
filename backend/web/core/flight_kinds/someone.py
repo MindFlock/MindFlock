@@ -158,7 +158,7 @@ register(
             "actor": "you",
             "family": "people",
             "summary": "Ask someone else (a peer, or a Slack webhook) to do or "
-            "check something; waits like a perch until they press Done.",
+            "check something; waits like Wait for me until they press Done.",
             "default_title": "Ask someone",
             "fields": [
                 _f(
@@ -168,7 +168,9 @@ register(
                     default="",
                 ),
                 _f("text", "textarea", "What to ask", default=""),
-                _f("items", "textarea", "Checklist (one per line)", default=""),
+                _f(
+                    "items", "textarea", "Things to tick off (one per line)", default=""
+                ),
                 _f(
                     "webhook",
                     "text",

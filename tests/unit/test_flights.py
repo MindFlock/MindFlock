@@ -148,7 +148,7 @@ def test_steps_get_ids_titles_and_defaults():
     ids = [s["id"] for s in p["steps"]]
     assert len(set(ids)) == 6 and ids[0] == "a"
     assert [s["title"] for s in p["steps"][:4]] == [
-        "Merge",
+        "Merge when green",
         "Push",
         "Wait 5 min",
         "Wait until 18:30",
@@ -280,7 +280,7 @@ def test_a_depth_is_the_ship_ladder_only():
         ("ship", "Open PR"),
     ]
     assert [s["id"] for s in cut["steps"]] == ["s1", "s2", "s3", "s4"]
-    assert cut["id"] == "builtin:ticket@pr" and cut["name"] == "Fast-track to Open PR"
+    assert cut["id"] == "builtin:ticket@pr" and cut["name"] == "Goes as far as Open PR"
     merge = F.get_plan("builtin:ticket@merge")
     assert [s["config"].get("lane") for s in merge["steps"][1:]] == [
         "commit",
@@ -496,7 +496,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     f = run_step(fly(step("verify", who="both")))
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW)["note"]
-        == "writing the checklist"
+        == "writing the behaviors"
     )
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW + 4000)["action"]
@@ -505,7 +505,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     gen = _vfacts(state="generating")
     assert (
         F.next_action(f, {"session": sess(), "verify": gen}, NOW)["note"]
-        == "writing the checklist"
+        == "writing the behaviors"
     )
     v = _vfacts(open_agent=["curl it"], open_human=["look at it"])
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
@@ -513,7 +513,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW)
     assert f["step_states"]["s1"]["state"] == "running"
     a = F.next_action(f, {"session": sess(), "verify": _vfacts(state="running")}, NOW)
-    assert a["note"] == "the agent is working through the checklist"
+    assert a["note"] == "the agent is checking the behaviors"
     a = F.next_action(
         f, {"session": sess(), "verify": _vfacts(open_human=["look at it"])}, NOW
     )
@@ -1032,7 +1032,10 @@ def test_ship_ignores_a_persons_own_fast_track_run():
         ap(f, "merge", state="halted", reason="x"),
     ):
         a = F.next_action(f, {"session": sess(), "autopilot": rec}, NOW)
-        assert a == {"action": "wait", "note": "Fast-track is busy with your own run"}
+        assert a == {
+            "action": "wait",
+            "note": "the session is already shipping by itself (Goes as far as)",
+        }
     assert (
         F.next_action(
             f, {"session": sess(), "autopilot": ap(f, "pr", state="done")}, NOW
@@ -1093,7 +1096,7 @@ def test_replaced_halted_flight_is_reported_to_the_caller():
     assert [r["id"] for r in replaced] == [f1["id"]]
     assert (
         replaced[0]["state"] == "cancelled"
-        and replaced[0]["reason"] == "replaced by a new flight"
+        and replaced[0]["reason"] == "replaced by a new route"
     )
 
 

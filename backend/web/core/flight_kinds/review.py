@@ -66,7 +66,7 @@ def _title(config: dict) -> str:
 def brief(parent: str, base: str, focus: str = "") -> str:
     """What the reviewer is asked to do."""
     text = (
-        "[MindFlock flight] You are a second-opinion reviewer for the session "
+        "[MindFlock route] You are a second-opinion reviewer for the session "
         '"%s". Review the change on this branch: run `git diff %s...HEAD` '
         "(and `git log %s..HEAD` for context) in this worktree and read the "
         "code around it.\n"

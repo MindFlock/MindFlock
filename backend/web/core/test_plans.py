@@ -2181,7 +2181,7 @@ def edit_step(
     plan = _mutate(plan_id, apply)
     if outcome["running"]:
         raise ValueError(
-            "an agent is working this checklist right now — cancel the run first"
+            "an agent is checking these behaviors right now — cancel the run first"
         )
     if plan is None or outcome["missing"]:
         return None
@@ -4561,7 +4561,9 @@ def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
     # one press away and a plan about somebody else's product is worse than no
     # plan, because it is believed.
     if steps and all(_norm_example(s.get("text")) in _EXAMPLE_TEXTS for s in steps):
-        raise TestPlanError("the CLI echoed the example instead of writing a checklist")
+        raise TestPlanError(
+            "the CLI echoed the example instead of writing the behaviors"
+        )
     # NOTHING SURVIVED THE VETTING. ``parse_answer`` already refuses a block with
     # no steps in it, so reaching here means the model DID write steps and every
     # one of them was thrown away — in practice a checklist of placeholders
@@ -4663,7 +4665,7 @@ def _generate_inner(
     except Exception as err:  # noqa: BLE001 — see the docstring: nowhere to raise
         if refresh:
             return _refresh_failed(plan_id, was)
-        return _fail(plan_id, "could not write a checklist: %s" % err, was)
+        return _fail(plan_id, "could not write the behaviors: %s" % err, was)
     now = time.time()
     outcome: dict = {"stale": False}
 
@@ -4834,7 +4836,7 @@ def _fail(plan_id: str, reason: str, was: Optional[tuple] = None) -> dict:
         if was is not None and (plan["branch"], plan["sha"]) != was:
             outcome["stale"] = True
             return
-        plan["error"] = _text(reason) or "test plan generation failed"
+        plan["error"] = _text(reason) or "writing the behaviors failed"
         plan["gen_attempts"] = 0
         if not plan["steps"]:
             plan["state"] = "failed"

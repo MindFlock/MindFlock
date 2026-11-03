@@ -525,12 +525,12 @@ async def hook_fire(
     if plan is None:
         return 404, {
             "error": "unknown_token",
-            "detail": "no saved chain answers that hook",
+            "detail": "no saved route answers that hook",
         }
     if (plan.get("trigger") or {}).get("paused"):
         return 409, {
             "error": "paused",
-            "detail": "that saved chain's trigger is paused",
+            "detail": "that saved route's trigger is paused",
         }
     pid = str(plan.get("id") or "")
     state = await asyncio.to_thread(load_state)

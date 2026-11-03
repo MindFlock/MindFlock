@@ -164,7 +164,7 @@ def test_a_peer_gets_the_ask_and_the_flight_perches(peers):
     # Parked: the planner waits on you from here on.
     assert F.next_action(f, {"session": {}}, NOW) == {
         "action": "wait",
-        "note": "waiting on you",
+        "note": "needs you",
     }
 
 

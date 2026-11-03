@@ -360,7 +360,7 @@ def _build_router():
     def _gone_page() -> HTMLResponse:
         return _page(
             "Nothing to do",
-            "<h1>Nothing to do</h1><p>This link was already used, or the flight "
+            "<h1>Nothing to do</h1><p>This link was already used, or the route "
             "it belonged to has moved on.</p>",
             404,
         )

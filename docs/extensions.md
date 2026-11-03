@@ -66,11 +66,11 @@ Core vocabulary (emitted by the server):
 | `session.red_zone_tampered` | The guard file, the hook config or the zone store was interfered with (`session` may be `""` for a store change) | `data: {what: guard·hooks·store, detail}` |
 | `run.changed` | A team run changed: a task moved, paused, lines added — for refetching. `state: "dissolved"` means an auto-split's lead declined to split and the run is gone (a lookup 404s); that event also carries who and why | `data: {run, state, counts}`; dissolved: `{run, state, counts: {}, lead, by, why}` (`why` ≤ 500 chars) |
 | `run.needs_you` | A team run escalation, once per (run, task, reason, incarnation): stuck after two nudges, ship halted twice, blocked, restart, budget. Never for a dialog (the `needs_input` rule covers it: `clarify` and `session.question`); `session` is the member, `""` for the budget | `new` = reason; `data: {run, task, title, reason, text, detail}` |
-| `run.task_shipped` | A team run member reached its Fast-track target | `data: {run, task, title, pr_url, detail}` |
+| `run.task_shipped` | A team run member reached its Goes as far as target | `data: {run, task, title, pr_url, detail}` |
 | `run.finished` | A team run's last task finished — once, across restarts | `data: {run, name, shipped, failed, cost_usd, duration_s, detail}` |
-| `flight.changed` | A flight (docs/flights.md) moved: its state, its cursor or its current step's state changed — for refetching; `session` is the flight's session | `data: {id, plan_name, session, state, cursor, step: {id, kind, title, state}, reason, detail}` |
-| `flight.needs_you` | A flight parked on you: a *you* step, a verify step with open checklist items for you, or a failure handed to you — once per step and round, across restarts. Also a bell row (outbox kind `flight_you`) | as `flight.changed` plus `text`, `items` |
-| `flight.finished` | A flight landed (`done`), halted or was cancelled — once per finish | as `flight.changed` |
+| `flight.changed` | A route (docs/flights.md; a *flight* on the wire) moved: its state, its cursor or its current stop's state changed — for refetching; `session` is the route's session | `data: {id, plan_name, session, state, cursor, step: {id, kind, title, state}, reason, detail}` |
+| `flight.needs_you` | A route needs you: a Wait for me (`you`) stop, a Verify stop with behaviors open for you, or a failure handed to you — once per stop and round, across restarts. Also a bell row (outbox kind `flight_you`) | as `flight.changed` plus `text`, `items` |
+| `flight.finished` | A route finished (`done`), halted or was stopped (`cancelled`) — once per finish | as `flight.changed` |
 | `device.join_requested` | Another computer asks to join "Your devices" and waits for approval on this one (`session` is `""`) | `data: {device, host, code, id, detail}` — the same 6-digit `code` shows on the asking computer. Every OTHER member holding a copy (so it can be approved there too) fires it with `via` (the asked device's key) and `via_host` added |
 | `device.joined` | A computer became one of your devices — by code, approval or one-click add (fires on both sides: on the joiner `device` is itself and `via` the device it joined through), or a device removed here was let back in on this one (`POST /api/fleet/members/{key}/allow`) | `data: {device, host, detail[, via]}` |
 | `device.removed` | A device left or was removed (`device` is this one's own key when it was this device). `by` is the device that made the removal (the leaver itself for a leave — `by == device` — which isn't a removal; `""` when unknown) — a removal by a device you didn't use is how a forged one shows. A removal's `detail` ends with the advice to also remove a lost or stolen device from the tailnet | `data: {device, host, by, detail}` |
@@ -1108,7 +1108,7 @@ reset and, from the recent burn rate, when the limit would land. **Advice**
 follows from those: draining hot *while attended* is a warning to move
 routine work to a cheaper model so the lockout does not fall in working
 hours; a window about to reset half-empty, or unattended hours that sat
-idle, are tips to queue work (the Queue tab, a looping prompt, a fast-track
+idle, are tips to queue work (the Queue tab, a looping prompt, a team
 run); a lockout that fell during attended time in the last day is called
 out. **Attended** means someone typed into a MindFlock window in the last
 10 minutes (`server._HUMAN_INPUT_AT`, the stamp every web keystroke, /send

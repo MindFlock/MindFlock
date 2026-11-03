@@ -243,12 +243,12 @@ def source_of_flight(flight: dict) -> Tuple[str, str]:
 def _flight_source(flight_id: str) -> Tuple[dict, _Source]:
     f = _flights.get(str(flight_id or ""))
     if f is None:
-        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
     kind, target = source_of_flight(f)
     src = _find(_settings(), kind, target) if kind else None
     if src is None:
         raise _flights.FlightError(
-            "no_source", 404, "this flight did not come from a configured source"
+            "no_source", 404, "this route did not come from a configured source"
         )
     return f, src
 
@@ -422,7 +422,7 @@ def set_plan(kind, target, plan_id) -> dict:
     src = _need(_settings(), kind, target)
     pid = str(plan_id or "").strip()
     if pid and _flights.get_plan(pid) is None:
-        raise _flights.FlightError("unknown_plan", 404, "no such plan: %s" % pid)
+        raise _flights.FlightError("unknown_plan", 404, "no such saved route: %s" % pid)
     previous = src.plan
     if pid != previous:
         _write_plan_field(src, pid)

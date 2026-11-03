@@ -54,7 +54,7 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
     back_to = F._text(c.get("back_to"), 32)
     if back_to and not F._ID_RE.match(back_to):
         if strict:
-            raise F.PlanError("back_to names a stop of this line", where + ".back_to")
+            raise F.PlanError("back_to names a stop of this route", where + ".back_to")
         back_to = ""
     times = F._int(c.get("times"), 3, -1, MAX_TIMES + 1)
     if strict and not 0 <= times <= MAX_TIMES:
@@ -462,7 +462,7 @@ KIND = _kinds.register(
         spec={
             "label": "Loop",
             "actor": "robot",
-            "summary": "Send the flight back to an earlier stop (or to the "
+            "summary": "Send the route back to an earlier stop (or to the "
             "session's agent), N times, every so often",
             "default_title": "Loop ×3",
             "family": "work",

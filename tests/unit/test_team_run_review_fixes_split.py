@@ -166,7 +166,7 @@ def test_an_adopted_lead_with_an_armed_lane_is_disarmed(env):
     lanes.arm_session("mine", "pr")  # the user's ⏩ on that session
     run = _split(env, repo_path="", lead="mine")
     assert ap.get("mine") is None
-    assert any("own fast-track was turned off" in e["text"] for e in run["events"])
+    assert any("own Goes as far as was turned off" in e["text"] for e in run["events"])
 
 
 # --------------------------------------------------------------------------- #

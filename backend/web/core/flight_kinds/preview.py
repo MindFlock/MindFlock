@@ -283,7 +283,7 @@ KIND = _kinds.register(
                 _flights._f(
                     "stop_command",
                     "textarea",
-                    "Take it down when the flight ends (optional)",
+                    "Take it down when the route ends (optional)",
                     default="",
                     placeholder="npx vercel rm $MINDFLOCK_PREVIEW_URL --yes",
                 ),

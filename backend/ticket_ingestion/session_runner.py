@@ -635,7 +635,7 @@ class SessionRunner:
             # only symptom was the fast-track toggle sitting off with no
             # explanation anywhere.
             logger.warning(
-                "Could not arm autopilot for %s — it will not fast-track itself",
+                "Could not arm autopilot for %s — it will not ship itself",
                 title,
                 exc_info=True,
             )

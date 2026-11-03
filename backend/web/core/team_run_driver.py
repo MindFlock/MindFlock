@@ -716,7 +716,7 @@ async def _start(run_id: str, task_id: str, now: float) -> None:
                         "skipped",
                         "",
                         "started elsewhere meanwhile (Intake or ticket ingestion) — "
-                        "left out of the team run; it keeps its own fast-track",
+                        "left out of the team run; it keeps its own Goes as far as",
                         finished_at=now,
                     ),
                     now,
@@ -2925,7 +2925,7 @@ async def _start_lead(run: dict, existing=None, fit: Optional[dict] = None) -> d
             "trunk": bool(fit.get("trunk")),
         }
         note = (
-            "%s's own fast-track was turned off — the team run ships it once, at the "
+            "%s's own Goes as far as was turned off — the team run ships it once, at the "
             "release" % title
             if disarmed
             else ""
@@ -3380,7 +3380,9 @@ def _retry_task(run: dict, t: dict, fresh: bool, now: float) -> None:
         try:
             _arm(run, t)
         except Exception as err:  # noqa: BLE001
-            raise RunError("could not re-arm its fast-track: %s" % err, 409) from None
+            raise RunError(
+                "could not re-arm its Goes as far as: %s" % err, 409
+            ) from None
         _runs.apply(run, _runs._to(t, "working"), now)
     else:
         if t["kind"] == "ticket" and not _reserve(run, t):
@@ -3519,7 +3521,7 @@ def user_lane(
     if _runs.is_together(run):
         raise RunError(
             "%s is part of team run %s — its work merges into the team run's one PR. "
-            "Move it out of the team run to give it a fast-track of its own"
+            "Move it out of the team run to give it a Goes as far as of its own"
             % (title, run["name"]),
             409,
         )
@@ -3548,7 +3550,7 @@ def user_lane(
                 now,
                 "note",
                 tk["id"],
-                "fast-track set to %s%s by you"
+                "Goes as far as set to %s%s by you"
                 % (lane, ", ask first" if ask_first else ""),
             )
         held = bool(r["paused"])

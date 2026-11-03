@@ -156,14 +156,14 @@ def test_the_note_quotes_the_output_as_an_indented_block():
     )
     rows = note.splitlines()
     assert rows[0] == (
-        "Fast-track paused: the pre-commit step mypy failed, so nothing was "
+        "Shipping paused: the pre-commit step mypy failed, so nothing was "
         'committed ("pre-commit run mypy" shows why). Its output:'
     )
     block = rows[1:-1]
     assert block[0] == "    │ - hook id: mypy"
     assert all(r.startswith("    │ ") for r in block) and len(block) == 5
     assert rows[-1].startswith(
-        "Fix it and commit. Fast-track will then push the branch and open the PR "
+        "Fix it and commit. MindFlock will then push the branch and open the PR "
         "by itself, so fixing and committing is all that is left for you."
     )
     assert "tell the user" in rows[-1]
@@ -181,7 +181,7 @@ def test_typed_it_is_still_one_line_with_the_gutter_between_output_lines():
 def test_an_empty_output_leaves_the_note_one_line():
     note = ap.failure_note(_detail(output=""), resumes=True, remaining=[])
     assert "\n" not in note and "Its output" not in note
-    assert "That commit is the last step of this Fast-track run." in note
+    assert "That commit is as far as this session goes by itself." in note
 
 
 def test_output_is_only_quoted_for_a_precommit_stop():
@@ -209,7 +209,7 @@ def test_the_note_says_when_the_same_failure_is_back():
 
 def test_without_remaining_steps_the_generic_resume_sentence_stays():
     note = ap.failure_note(_detail(output=""), resumes=True)
-    assert "Fast-track carries on from your commit (push, PR) by itself." in note
+    assert "MindFlock carries on from your commit (push, PR) by itself." in note
 
 
 # --- remaining_steps ---------------------------------------------------------- #
@@ -259,13 +259,13 @@ def test_the_steps_in_words():
         remaining=ap.remaining_steps({"depth": "merge"}, {"stage": "interrupt"}),
     )
     assert (
-        "Fast-track will then push the branch, open the PR and merge it once CI is "
+        "MindFlock will then push the branch, open the PR and merge it once CI is "
         "green by itself, so fixing and committing is all that is left for you."
     ) in note
     one = ap.failure_note(
         _detail(output=""), resumes=True, remaining=["push the branch"]
     )
-    assert "Fast-track will then push the branch by itself" in one
+    assert "MindFlock will then push the branch by itself" in one
 
 
 # --- the record ---------------------------------------------------------------- #
@@ -457,7 +457,7 @@ def test_the_same_hook_failing_after_the_fix_is_a_fresh_counted_note(
     ap.update("s1", commits=3)
     _step(monkeypatch, tmp_path, _snap(now=rec["fix_since"] + 300))
     third = _notes()[-1]
-    assert third["text"].startswith("Fast-track stopped:")
+    assert third["text"].startswith("Shipping stopped:")
     assert "failed again (third time)" in third["text"]
     rec = ap.get("s1")
     assert rec["state"] == "halted" and rec["note"] == driver._TOLD_AGENT
