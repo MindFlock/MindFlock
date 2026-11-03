@@ -21,6 +21,7 @@ import { flashSaved } from "../savedCue";
 import { TOURS, TOUR_IDS, type TourId } from "../../../lib/tours";
 import { replayTour } from "../../onboarding/replayTour";
 import { replayPeopleTour } from "./peer/replayPeopleTour";
+import { openWhatsNew } from "../../whatsNew/WhatsNew";
 import "./General.css";
 
 export function General(_: ScreenProps) {
@@ -169,6 +170,15 @@ function Tours() {
   return (
     <div className="onboarding-block general-help" id="general-tours" data-tour="settings-tours">
       <h3 className="set-section-title">Help</h3>
+      <div className="set-row onboarding-action" id="general-whats-new">
+        <div className="onboarding-action-text">
+          <span className="set-label">What's new</span>
+          <span className="set-hint">The new features in this release.</span>
+        </div>
+        <button type="button" className="test-btn" onClick={openWhatsNew}>
+          Show
+        </button>
+      </div>
       <h4 className="set-subtitle">Tours</h4>
       {TOUR_IDS.map((id) => (
         <div className="set-row onboarding-action" key={id} data-tour-row={id}>

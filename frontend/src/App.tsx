@@ -49,6 +49,7 @@ import { TodoDialog } from "./components/dialogs/TodoDialog";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
+import { WhatsNew } from "./components/whatsNew/WhatsNew";
 import { CoachTourHost } from "./components/onboarding/CoachTour";
 import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
@@ -349,6 +350,7 @@ export default function App() {
       <CommandPalette host={host} />
       <ShortcutsSheet />
       <WelcomeTour />
+      <WhatsNew />
       {/* The coach-mark tour on screen, if any (lib/tours): last, so its card
           and ring sit above whichever dialog it walks. */}
       <CoachTourHost />

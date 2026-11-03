@@ -38,6 +38,7 @@ import { failingSchedules } from "../lib/templates";
 import { useCalm } from "../lib/useCalm";
 import { topBarQuiet } from "../lib/calm";
 import { VIEWS, VIEW_BLURB, newSession, setView, toggleView, viewLabel } from "../lib/viewMode";
+import { openWhatsNew } from "./whatsNew/WhatsNew";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -594,7 +595,12 @@ export function TopBar() {
         {(window as unknown as { mfshell?: { dev?: boolean } }).mfshell?.dev && (
           <span style={{ color: "var(--red)", fontWeight: 700 }}>-DEV</span>
         )}
-        {version && <span className="tb-version">v{version}</span>}
+        {/* The version opens What's new: a button (no-drag) that takes the pointer back from .tb-brand. */}
+        {version && (
+          <button type="button" className="tb-version" title="What's new" onClick={openWhatsNew} style={{ pointerEvents: "auto", background: "none", border: 0, padding: 0, cursor: "pointer" }}>
+            v{version}
+          </button>
+        )}
       </span>
       <div className="tb-drag" />
       {/* macOS: the mirror of .tb-left. Ordered so the logo anchors the far

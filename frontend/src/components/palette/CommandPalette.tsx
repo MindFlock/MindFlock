@@ -35,6 +35,7 @@ import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
 import { openSkyGuide } from "../flights/SkyGuide";
 import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
+import { openWhatsNew } from "../whatsNew/WhatsNew";
 
 /** The focused session's entries, in palette order (the table holds what
  * each one says and when it applies). Pause and Resume never both apply;
@@ -271,6 +272,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         run: () => (id === "people" ? replayPeopleTour() : replayTour(id)),
       });
     }
+    acts.push({ label: "What's new", hint: "this release's new features", keywords: "release new features update version help", run: () => openWhatsNew() });
     acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
     acts.push({ label: "Keyboard shortcuts", hint: "?", top: TOP.shortcuts, run: () => host.toggleShortcuts() });
 
