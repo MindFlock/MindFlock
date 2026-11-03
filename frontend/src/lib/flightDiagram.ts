@@ -368,7 +368,9 @@ export function loopLine(step: Pick<FlightStep, "config">, rec?: Pick<StepRunSta
 /** The line's return wires: for every Loop stop of `line`, an edge from the
  * last stop before it (the end of what it repeats) back to the box drawn for
  * its `back_to` — `""` is the line's first stop, or its own group's first
- * sub-step when it is in one. The edge carries the Loop node (`via`). A Loop
+ * sub-step when it is in one; `"agent"` (`LOOP_AGENT`) is the session box
+ * (`head`: a wire from the end of what it repeats into the session tile).
+ * The edge carries the Loop node (`via`). A Loop
  * with nothing before it to repeat (or whose target is gone) draws no wire —
  * it stays a box. Folding (the flown pill, a collapsed group) re-aims the
  * wires at the box that holds their ends (`foldRun`). */
@@ -380,6 +382,15 @@ export function loopEdges(line: readonly DiagramNode[], head?: string): DiagramE
     if (s.kind !== "loop") return;
     const before = stops.slice(0, i).filter((b) => b.step!.kind !== "loop");
     const back = String(s.config?.back_to ?? "").trim();
+    // Back to the AGENT (`back_to: "agent"`): the session's agent is
+    // re-prompted, then the chain runs again — a wire from the end of what
+    // it repeats into the session tile. Only a session's chain has one.
+    if (back === LOOP_AGENT) {
+      if (!head) return;
+      const last = before[before.length - 1];
+      out.push({ from: last ? last.id : head, to: head, kind: "loop", loop: n.loop || loopMark(s), via: n });
+      return;
+    }
     const gid = s.group?.id;
     const target = back ? before.find((b) => b.step!.id === back) : gid ? before.find((b) => b.step!.group?.id === gid) : before[0];
     const end = before[before.length - 1];
@@ -426,10 +437,74 @@ export function loopSlotAfter(n: Pick<DiagramNode, "index" | "kind" | "group">):
   return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
 }
 
-/** A new Loop step of `def` that repeats from `target` (its `back_to`). */
-export function loopStepTo(def: StepKindDef, taken: readonly string[], target: FlightStep): FlightStep {
+/** A Loop's `back_to` that means the session's AGENT (the backend's
+ * contract): the agent is re-prompted (the Loop's `prompt`, else the prompt
+ * that started its turn), its turn runs, then the chain runs again from its
+ * first stop. Only on a chain that has a session. */
+export const LOOP_AGENT = "agent";
+
+/** A Loop step goes back to the agent. */
+export const loopsToAgent = (step: Pick<FlightStep, "kind" | "config"> | null | undefined): boolean =>
+  !!step && step.kind === "loop" && String(step.config?.back_to ?? "").trim() === LOOP_AGENT;
+
+/** A new Loop step of `def` that repeats from `target` (its `back_to`): a
+ * stop, or `LOOP_AGENT` — the session's agent. */
+export function loopStepTo(def: StepKindDef, taken: readonly string[], target: FlightStep | typeof LOOP_AGENT): FlightStep {
   const step = newStep(def, taken);
-  return { ...step, config: { ...step.config, back_to: target.id } };
+  return { ...step, config: { ...step.config, back_to: target === LOOP_AGENT ? LOOP_AGENT : target.id } };
+}
+
+/** The `back_to` a Loop re-aimed at `to` takes: the agent for a session
+ * box, else `to`'s first step's id ("" when it has none). */
+export function loopBackTo(to: Pick<DiagramNode, "kind" | "step" | "group">): string {
+  if (to.kind === "session") return LOOP_AGENT;
+  return firstStepOf(to)?.id || "";
+}
+
+/** One choice of a stop's "Loop back to…" (its ⋯ menu): the agent, or a stop
+ * at or before it. `to` is what the wire would land on. */
+export interface LoopChoice {
+  key: string;
+  label: string;
+  title: string;
+  agent: boolean;
+  /** What the Loop goes after (`n`, or the last of its parallel group) and
+   * what it goes back to — a line's `onLoopFrom(from, to)`. */
+  from: DiagramNode;
+  to: DiagramNode;
+}
+
+/** Where a Loop drawn out of `n` may go back to, for its ⋯ menu's "Loop
+ * back to…" — exactly what a wire dropped from `n`'s out port may land on:
+ * the session's agent (`session`: the line's session box, when it has
+ * one) first, then every stop / group box at or before `n` that can
+ * repeat (not a Loop). `nodes` is the line in flight order (its main row);
+ * `insertFrom` is the line's (a Loop may only go after an open slot).
+ * Empty when `n` can't have a Loop after it. */
+export function loopChoices(n: DiagramNode, nodes: readonly DiagramNode[], opts: { session?: DiagramNode | null; insertFrom?: number } = {}): LoopChoice[] {
+  const canRepeat = (m: DiagramNode) => (m.kind === "stop" ? !!m.step && m.step.kind !== "loop" : m.kind === "group") && m.index !== undefined && m.row === "main";
+  if (!canRepeat(n)) return [];
+  const from = loopFromOf(n, nodes);
+  const slot = loopSlotAfter(from);
+  if (slot === undefined || slot < (opts.insertFrom ?? 0)) return [];
+  const out: LoopChoice[] = [];
+  if (opts.session)
+    out.push({ key: "loop-to-agent", label: "The agent (run it again)", title: "After this stop the agent is prompted again, then the chain runs again", agent: true, from, to: opts.session });
+  for (const m of nodes) {
+    if (!canRepeat(m) || m.index! > n.index!) continue;
+    out.push({ key: "loop-to:" + m.id, label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”", title: "After this stop the chain goes back to “" + m.title + "”", agent: false, from, to: m });
+  }
+  return out;
+}
+
+/** "After `n`" for a Loop drawn out of it: `n`, or the last member of the
+ * parallel group it is in (a Loop goes after the whole group). */
+export function loopFromOf(n: DiagramNode, nodes: readonly DiagramNode[]): DiagramNode {
+  const pid = n.parallel?.id;
+  if (!pid) return n;
+  let last = n;
+  for (const m of nodes) if (m.parallel?.id === pid && m.index !== undefined && last.index !== undefined && m.index > last.index) last = m;
+  return last;
 }
 
 /** A node by id: the line's own, a sub-step of one of its group boxes, or

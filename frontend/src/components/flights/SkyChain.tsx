@@ -364,7 +364,12 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const live = side === "in" ? n.inPort : n.outPort;
     if (!live && !wired) return null;
     const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
-    const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : "Drag from here to wire it to a stop, another chain or empty sky";
+    const title =
+      side === "in"
+        ? "Drag from here to pull this stop and the ones after it off into a chain of their own"
+        : n.id === HEAD_ID
+          ? "Drag from here to wire it to a stop, another chain or empty sky"
+          : "Drag from here: drop on an earlier stop or the agent to loop, on empty sky to add a stop";
     return live ? (
       <span className={cls} data-port={side} data-node={n.id} title={title} onPointerDown={(e) => portDown(e, n, side)} />
     ) : (
@@ -409,6 +414,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       isSel(n) ? "is-selected" : "",
       p.highlighted?.has(n.id) || (isHead && headNodeId && p.highlighted?.has(headNodeId)) ? "is-highlighted" : "",
       p.targets?.has(n.id) ? "is-target" : "",
+      // The agent tile as a wire's drop (a Loop back to the agent).
+      isAgent && p.targets?.has(n.id) ? "is-agent-target" : "",
       p.over === n.id ? "is-over" : "",
       drag?.live && drag.id === n.id ? "is-dragging" : "",
       draggable(n) ? "is-draggable" : "",
@@ -546,7 +553,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
 
   return (
     <div
-      className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "")}
+      className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "") + (p.targets && p.targets.size ? " is-wiring" : "")}
       style={{ position: "relative", width: Math.max(0, b.x + b.w), height: Math.max(0, b.y + b.h), ["--sky-chain-color" as string]: head.color }}
       data-chain={g.key}
       data-flight={g.flightId || undefined}

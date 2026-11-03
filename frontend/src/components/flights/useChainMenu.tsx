@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import { createPortal } from "react-dom";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
-import type { DiagramNode } from "../../lib/flightDiagram";
+import { loopChoices, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
 import { pauseSession, resumeSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
@@ -26,6 +26,64 @@ export interface ChainMenuHandlers {
   onDuplicate?(n: DiagramNode): void;
   onToggleHalt?(n: DiagramNode): void;
   onOpen?(n: DiagramNode): void;
+  /** A Loop right after `from` back to `to` (a stop, or the session box:
+   * back to the agent) — the line's own, the wire's twin. */
+  onLoopFrom?(from: DiagramNode, to: DiagramNode): void;
+  /** The "Loop back to…" choices for a stop (lib/flightDiagram
+   * `loopChoices`) — a session's line lists its agent first. Without it the
+   * menu lists the earlier stops from the flight's steps (`stepLoopChoices`). */
+  loopChoicesOf?(n: DiagramNode): LoopChoice[];
+}
+
+/** A stop's "Loop back to…" choices from the flight's steps alone (a chain
+ * whose line does not list them: a stops-only chain — no agent there): only
+ * for a stop that can still change. */
+export function stepLoopChoices(n: DiagramNode, steps: readonly FlightStep[]): LoopChoice[] {
+  if (!n.editable) return [];
+  const nodes: DiagramNode[] = steps.map((st, i) => ({
+    id: "stop:" + st.id,
+    kind: "stop",
+    row: "main",
+    title: st.title,
+    sub: "",
+    state: "pending",
+    icon: st.kind,
+    step: st,
+    index: i,
+    ...(st.parallel ? { parallel: { id: st.parallel.id, index: 0, size: 0 } } : {}),
+  }));
+  const me = n.step ? nodes.find((m) => m.step!.id === n.step!.id) : undefined;
+  if (!me) return [];
+  return loopChoices({ ...me, title: n.title }, nodes);
+}
+
+/** The menu's "Loop back to…" line (it opens the list of where to). */
+export const LOOP_BACK_KEY = "loop-back";
+
+/** Round 21 (docs/flights-loop-agent-sky.md): the menu with "Loop back to…"
+ * put in above its danger line / notes, when there is somewhere to go. */
+export function withLoopItem(items: readonly SkyMenuItem[], choices: readonly LoopChoice[]): SkyMenuItem[] {
+  const out = [...items];
+  if (!choices.length) return out;
+  const agent = choices.some((c) => c.agent);
+  const item: SkyMenuItem = {
+    key: LOOP_BACK_KEY as SkyMenuItem["key"],
+    label: "Loop back to…",
+    title: agent ? "Repeat: after this stop, run the agent again — or go back to an earlier stop" : "Repeat: after this stop, go back to an earlier stop",
+  };
+  const cut = out.findIndex((i) => i.danger || i.note);
+  out.splice(cut < 0 ? out.length : cut, 0, item);
+  return out;
+}
+
+/** The "Loop back to…" submenu: a label line, one item per choice (the
+ * agent first), and ← Back. */
+export function loopMenuItems(choices: readonly LoopChoice[]): SkyMenuItem[] {
+  return [
+    { key: "loop-note" as SkyMenuItem["key"], label: "Loop back to…", title: "Where the chain goes back to after this stop", note: true },
+    ...choices.map((c) => ({ key: c.key as SkyMenuItem["key"], label: c.label, title: c.title })),
+    { key: "loop-cancel" as SkyMenuItem["key"], label: "← Back", title: "Back to the stop's menu" },
+  ];
 }
 
 const HERE: ReadonlySet<string> = new Set(["current", "perched", "halted", "paused"]);
@@ -37,7 +95,7 @@ export function useChainMenu(
    * the next stop" / "Run on its own". */
   ctx?: { steps?: readonly FlightStep[] | null; kinds?: readonly StepKindDef[] | null }
 ): { onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): void; menu: ReactNode } {
-  const [open, setOpen] = useState<{ n: DiagramNode; x: number; y: number } | null>(null);
+  const [open, setOpen] = useState<{ n: DiagramNode; x: number; y: number; sub?: "loop" } | null>(null);
   const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => setOpen({ n, x: at.clientX, y: at.clientY });
   if (!open || typeof document === "undefined") return { onMenu, menu: null };
   const n = open.n;
@@ -63,7 +121,11 @@ export function useChainMenu(
     const cut = items.findIndex((i) => i.danger || i.note);
     items.splice(cut < 0 ? items.length : cut, 0, ...par);
   }
-  if (!items.length) return { onMenu, menu: null };
+  // Round 21: "Loop back to…" — the agent and every earlier stop, the
+  // same Loop a wire dropped there draws.
+  const choices = h.onLoopFrom && (n.kind === "stop" || n.kind === "group") ? (h.loopChoicesOf ? h.loopChoicesOf(n) : stepLoopChoices(n, steps)) : [];
+  const shown = open.sub === "loop" ? loopMenuItems(choices) : withLoopItem(items, choices);
+  if (!shown.length) return { onMenu, menu: null };
   const step = n.step?.id || "";
   const pick = (key: string) => {
     if (key === "edit") (h.onEdit || h.onSelect)?.(n);
@@ -77,15 +139,23 @@ export function useChainMenu(
     else if (key === "open" || key === "tackon") h.onOpen?.(n);
     else if (key === "solo") void leaveParallel(flightId, step);
     else if (key === "parallel" && next) void joinParallel(flightId, step, next.id);
+    else {
+      const c = choices.find((x) => x.key === key);
+      if (c) h.onLoopFrom?.(c.from, c.to);
+    }
   };
   const menu = createPortal(
     <div className="sky-chain-menu" style={{ position: "fixed", left: 0, top: 0, width: 0, height: 0, zIndex: 80, ["--sky-z" as string]: 1 }}>
       <StopMenu
         x={open.x}
         y={open.y}
-        label={"“" + n.title + "” — what you can do"}
-        items={items}
+        key={open.sub || "menu"}
+        label={open.sub === "loop" ? "Loop “" + n.title + "” back to…" : "“" + n.title + "” — what you can do"}
+        items={shown}
         onPick={(key) => {
+          // The submenu opens in the menu's place (and ← Back leaves it).
+          const k: string = key;
+          if (k === LOOP_BACK_KEY || k === "loop-cancel") return setOpen({ ...open, sub: k === LOOP_BACK_KEY ? "loop" : undefined });
           pick(key);
           setOpen(null);
         }}
@@ -99,7 +169,8 @@ export function useChainMenu(
 
 /** Round 18: a Loop's pill dragged onto another stop of its chain re-aims it
  * (`onLoopTo`, the line's own handler in flight indexes): a stop at or before
- * where its wire starts that can repeat (`loopable`). The stop under the
+ * where its wire starts that can repeat (`loopable`), or (round 21) the
+ * chain's agent tile — `onLoopTo(via, <the session node>)`. The stop under the
  * pointer lights (`.sky-aim-over`); a press that never moves stays the pill's
  * click (its dialog); Esc cancels. */
 export function pillAimer(graph: ChainGraph, onLoopTo?: (loop: DiagramNode, to: DiagramNode) => void) {
@@ -108,6 +179,9 @@ export function pillAimer(graph: ChainGraph, onLoopTo?: (loop: DiagramNode, to: 
     const wire = graph.wires.find((w) => w.via?.id === via.id);
     const end = graph.nodes.find((n) => n.id === wire?.from);
     if (!end || end.node.index === undefined) return;
+    // Round 21: the AGENT tile is a target too (a session's chain): the
+    // Loop goes back to the agent (`back_to: "agent"`).
+    const agent = graph.head.kind === "session" ? graph.headNode : null;
     const sx = e.clientX;
     const sy = e.clientY;
     let moved = false;
@@ -115,6 +189,7 @@ export function pillAimer(graph: ChainGraph, onLoopTo?: (loop: DiagramNode, to: 
     const targetAt = (x: number, y: number) => {
       const el = document.elementFromPoint(x, y)?.closest("[data-node]");
       if (!el || el.closest("[data-chain]")?.getAttribute("data-chain") !== graph.key) return null;
+      if (agent && el.getAttribute("data-node") === agent.id) return wire?.to === agent.id ? null : { el, n: agent };
       const n = graph.nodes.find((g) => g.id === el.getAttribute("data-node"));
       return n && loopable(n.node) && n.node.index! <= end.node.index! ? { el, n } : null;
     };

@@ -311,7 +311,7 @@ function assemble(base: Pick<ChainGraph, "key" | "flightId" | "head" | "insertFr
         return i > lo && i < hi && !isBranchRow(n.node);
       });
       const lane = laneOf.get(s) ?? 0;
-      const r = loopWirePathG(a, b, between, lane);
+      const r = loopWirePathG(a, b, between, lane, all);
       wires.push({ id: "loop:" + (s.via?.id || s.from + ">" + s.to), from: a.id, to: b.id, kind: "loop", d: r.d, mid: r.mid, lane, ...extra });
       continue;
     }
@@ -482,19 +482,48 @@ export function wirePath(a: Pos, b: Pos): string {
  * included), runs to under `b` and hooks up into its in port. `lane` drops
  * a nested loop's run `LOOP_LANE` px lower per level. The pill sits in the
  * middle of the run (`mid`). */
-export function loopWirePathG(a: GraphNode, b: GraphNode, others: readonly GraphNode[], lane = 0): { d: string; mid: Pos } {
+export function loopWirePathG(a: GraphNode, b: GraphNode, others: readonly GraphNode[], lane = 0, obstacles: readonly GraphNode[] = []): { d: string; mid: Pos } {
   const o = outPortOf(a);
   const i = inPortOf(b);
   // The session tile's text runs taller than its box (its chip, the Ready
-  // controls): a loop round it (a Loop first on the chain) clears that too.
+  // controls): a loop round it (a Loop first on the chain, a Loop back to
+  // the agent) clears that too.
   const headRoom = a.id === HEAD_ID || b.id === HEAD_ID ? 60 : 0;
   const low = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom;
-  const y = low + LOOP_CLEAR + lane * LOOP_LANE;
   const k = LOOP_HOOK;
-  return {
+  const path = (y: number) => ({
     d: `M ${o.x} ${o.y} C ${o.x + k} ${o.y}, ${o.x + k} ${y}, ${o.x} ${y} L ${i.x} ${y} C ${i.x - k} ${y}, ${i.x - k} ${i.y}, ${i.x} ${i.y}`,
     mid: { x: (o.x + i.x) / 2, y },
-  };
+  });
+  const under = low + LOOP_CLEAR + lane * LOOP_LANE;
+  // Never through a tile: when something sits where the run under the line
+  // would go (sub-sessions hung under the agent, a tile dragged below the
+  // line), the wire goes OVER the tiles instead — over the top of every box
+  // in its reach. Same hooks, same pill.
+  // (When both ways cross something — a tile dragged into every lane — the
+  // one that crosses fewer.)
+  const rest = obstacles.filter((n) => n.id !== a.id && n.id !== b.id);
+  const hitsUnder = rest.length ? loopHits(o, i, under, rest) : 0;
+  if (!hitsUnder) return path(under);
+  const x0 = Math.min(i.x, o.x) - k;
+  const x1 = Math.max(i.x, o.x) + k;
+  const reach = rest.filter((n) => n.x < x1 && n.x + n.w > x0 && !isBranchRow(n.node));
+  const top = Math.min(a.y, b.y, ...others.map((n) => n.y), ...reach.map((n) => n.y));
+  const over = top - LOOP_CLEAR - lane * LOOP_LANE;
+  return loopHits(o, i, over, rest) < hitsUnder ? path(over) : path(under);
+}
+
+/** How many boxes of `boxes` a loop wire out of `o`, along `y`, back into
+ * `i` crosses. Its three legs as boxes: the hook down (or up) beside each
+ * port (the cubic bulges ¾ of its handle) and the run between them. */
+export function loopHits(o: Pos, i: Pos, y: number, boxes: readonly Pick<GraphNode, "x" | "y" | "w" | "h">[]): number {
+  const k = LOOP_HOOK * 0.75;
+  const legs = [
+    { x0: o.x, x1: o.x + k, y0: Math.min(o.y, y), y1: Math.max(o.y, y) },
+    { x0: i.x - k, x1: i.x, y0: Math.min(i.y, y), y1: Math.max(i.y, y) },
+    { x0: Math.min(i.x, o.x), x1: Math.max(i.x, o.x), y0: y - 2, y1: y + 2 },
+  ];
+  return boxes.filter((n) => legs.some((l) => n.x < l.x1 && n.x + n.w > l.x0 && n.y < l.y1 && n.y + n.h > l.y0)).length;
 }
 
 /** A session's colour: one of 8 hues, stable per title; neutral for "". */
@@ -549,7 +578,9 @@ export type WireEnd =
  * are named by the diagram node (flight indexes: `node.node.index`). */
 export type WireIntent =
   | { op: "move"; chain: string; step: DiagramNode; after: DiagramNode | null }
-  | { op: "loop"; chain: string; from: DiagramNode; to: DiagramNode }
+  /** A Loop after `from` back to `to`; `agent`: `to` is the session's agent
+   * tile (the Loop's `back_to: "agent"`). */
+  | { op: "loop"; chain: string; from: DiagramNode; to: DiagramNode; agent?: boolean }
   | { op: "merge"; chain: string; after: DiagramNode | null; from: string }
   | { op: "handoff"; chain: string; from: DiagramNode; target: string }
   | { op: "attach"; session: string; chain: string }
@@ -660,6 +691,12 @@ export function wireIntent(src: WireEnd, dst: WireEnd, ctx: WireIntentCtx = {}):
     if (Y.node.parallel && Y.node.parallel.id === N.node.parallel?.id) return NONE;
     if (!isParallelSafe(Y.node.step.kind, ctx.kinds)) return NONE;
     return { op: "parallel", chain: A.key, after: Xa, with: N.node, step: Y.node };
+  }
+  if (B.key === A.key && isHead(Y)) {
+    // Its own AGENT tile: a Loop after X back to the agent — it is prompted
+    // again, then the chain runs again (only a session's chain has one).
+    if (A.head.kind !== "session" || !A.headNode || !loopable(X.node)) return NONE;
+    return { op: "loop", chain: A.key, from: Xa, to: A.headNode.node, agent: true };
   }
   if (B.key === A.key) {
     if (isHead(Y) || Y.node.index === undefined || X.node.index === undefined || isBranchRow(Y.node)) return NONE;

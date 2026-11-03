@@ -19,11 +19,11 @@
  * prompt / alert anywhere: the desktop app has none. */
 
 import { useState, type ReactNode } from "react";
-import type { DiagramNode } from "../../lib/flightDiagram";
+import { LOOP_AGENT, loopsToAgent, type DiagramNode } from "../../lib/flightDiagram";
 import type { FlightStep, StepKindDef } from "../../lib/flights";
 import { Modal } from "../Modal";
 import { StopIcon } from "./Bird";
-import { FlField, TextField, Toggle } from "./controls";
+import { FlField, PromptBox, TextField, Toggle } from "./controls";
 import { StopForm, kindName } from "./StopParts";
 import "./StopDialog.css";
 
@@ -58,6 +58,9 @@ export interface StopDialogProps {
   /** The line's steps in flight order: a `dynamic: "stops_before"` field
    * (a Loop's "Repeat from") lists the stops before this one. */
   lineSteps?: readonly FlightStep[] | null;
+  /** Round 21: the line has a session — a Loop may go back to its AGENT
+   * (`back_to: "agent"`); the dialog offers it. */
+  loopAgent?: boolean;
   /** Render into document.body (the Sky zooms its lines with a transform,
    * which would carry a fixed backdrop with it). Default true. */
   portal?: boolean;
@@ -82,6 +85,22 @@ export interface StopDialogProps {
 }
 
 const copyStep = (s: FlightStep): FlightStep => ({ ...s, config: { ...s.config } });
+
+/** Round 21: the fields a Loop's form draws itself when it goes back to the
+ * agent — "Back to: the agent" in place of the stops list, and its prompt
+ * with its own hint (docs/flights-loop-agent-sky.md). */
+export const LOOP_AGENT_OWN_FIELDS: readonly string[] = ["back_to", "prompt"];
+
+/** The kind's fields for the form: a Loop back to the agent leaves its
+ * `back_to` and `prompt` to the dialog (`LOOP_AGENT_OWN_FIELDS`). */
+export function loopFormDef(def: StepKindDef | undefined, step: Pick<FlightStep, "kind" | "config">): StepKindDef | undefined {
+  if (!def || !loopsToAgent(step)) return def;
+  return { ...def, fields: def.fields.filter((f) => !LOOP_AGENT_OWN_FIELDS.includes(f.name)) };
+}
+
+/** What a Loop back to the agent sends it each run: its `prompt`, "" = the
+ * prompt that started the agent's turn again. */
+export const LOOP_PROMPT_HINT = "Empty = send the same prompt again";
 
 export function StopDialog(p: StopDialogProps) {
   return p.node.kind === "group" ? <GroupDialog {...p} /> : <StepDialog {...p} />;
@@ -139,8 +158,42 @@ function StepDialog(p: StopDialogProps) {
             {p.note && <span>{p.note}</span>}
           </p>
         )}
+        {draft && loopsToAgent(draft) && (
+          <>
+            <FlField label="Back to" wide hint="After this stop the agent is prompted again; once its turn is done the chain runs again from its first stop.">
+              <div className="fl-chiprow stop-dialog-loop-agent" data-loop-agent="">
+                <strong>the agent</strong>
+                {editable && (p.lineSteps?.length || 0) > 1 && (
+                  <button type="button" className="test-btn" onClick={() => setDraft((d) => (d ? { ...d, config: { ...d.config, back_to: "" } } : d))}>
+                    Go back to a stop instead
+                  </button>
+                )}
+              </div>
+            </FlField>
+            <FlField label="Prompt" wide hint={LOOP_PROMPT_HINT}>
+              {editable ? (
+                <PromptBox
+                  label="Prompt for the agent each run"
+                  rows={3}
+                  value={String(draft.config?.prompt ?? "")}
+                  placeholder="The prompt that started the agent's turn"
+                  onChange={(t) => setDraft((d) => (d ? { ...d, config: { ...d.config, prompt: t } } : d))}
+                />
+              ) : (
+                <span className="muted">{String(draft.config?.prompt ?? "").trim() || "the same prompt again"}</span>
+              )}
+            </FlField>
+          </>
+        )}
+        {draft && editable && p.loopAgent && draft.kind === "loop" && !loopsToAgent(draft) && (
+          <div className="fl-chiprow">
+            <button type="button" className="test-btn" title="The agent is prompted again after this stop, then the chain runs again" onClick={() => setDraft((d) => (d ? { ...d, config: { ...d.config, back_to: LOOP_AGENT } } : d))}>
+              ↺ Loop back to the agent instead
+            </button>
+          </div>
+        )}
         {draft ? (
-          <StopForm step={draft} def={p.def} lineSteps={p.lineSteps} readOnly={!editable} onChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))} />
+          <StopForm step={draft} def={loopFormDef(p.def, draft)} lineSteps={p.lineSteps} readOnly={!editable} onChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))} />
         ) : (
           <p className="fl-note muted">This stop's details haven't loaded yet.</p>
         )}
