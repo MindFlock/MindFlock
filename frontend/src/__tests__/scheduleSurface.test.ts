@@ -73,9 +73,10 @@ describe("the top-bar item", () => {
     const btn = TOPBAR.slice(sc, se);
     // The bar's item look, folded into ⋯ on a narrow window (TopBar's
     // fitTopBar); its tooltip is the one the ⋯ row wears too.
-    expect(btn).toContain('className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}');
+    // Always on the bar; the calm first hour only draws an empty one quiet.
+    expect(btn).toContain('className={"tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(btn).toContain("title={scheduleTitle}");
-    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates and scheduled stops; starts sessions on a timer" \+\s*keys\("schedule"\)/);
+    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — everything that starts by itself on a timer: templates and scheduled stops" \+\s*keys\("schedule"\)/);
     expect(btn).toContain('ui.openDialogFor("schedule")');
     // A count only for failures, in the failure red, nothing at zero.
     expect(btn).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');
@@ -103,10 +104,11 @@ describe("the old name still lands", () => {
     useUi.getState().closeDialog();
   });
 
-  it("the palette has Schedule… (on the short menu) and keeps Templates… as a way in", () => {
+  it("the palette has Schedule… (on the short menu); \"templates\" finds it — one name, no second row", () => {
     expect(PALETTE).toContain('label: "Schedule…"');
     expect(PALETTE).toContain("top: TOP.schedule");
-    expect(PALETTE).toMatch(/label: "Templates…", hint: "your templates — in Schedule", run: \(\) => ui\.openDialogFor\("schedule"\)/);
+    expect(PALETTE).toContain('keywords: "templates template cron recurring nightly timer daily weekly scheduled stops"');
+    expect(PALETTE).not.toContain('label: "Templates…"');
     expect(PALETTE).not.toContain('openDialogFor("templates"');
   });
 

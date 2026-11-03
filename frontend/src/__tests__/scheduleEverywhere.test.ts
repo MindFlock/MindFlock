@@ -3,7 +3,7 @@
 
 /// <reference types="vite/client" />
 import { describe, expect, it } from "vitest";
-import { scheduledRows } from "../components/intake/ScheduledTemplates";
+import { scheduledCount, scheduledLineText, scheduledRows } from "../components/intake/ScheduledTemplates";
 import PALETTE from "../components/palette/CommandPalette.tsx?raw";
 import TEMPLATES_DIALOG from "../components/dialogs/TemplatesDialog.tsx?raw";
 import QUEUE from "../components/intake/QueueTab.tsx?raw";
@@ -73,14 +73,31 @@ describe("scheduledRows", () => {
 });
 
 describe("wiring", () => {
-  it("Auto-start shows the section, with Run now", () => {
+  it("Auto-start ends on ONE line — \"N scheduled — Open Schedule ›\" — not a second list", () => {
     expect(QUEUE).toContain("{!filter.active && <ScheduledTemplates />}");
-    expect(SCHEDULED).toContain('<span className="ik-queue-kind">Scheduled templates</span>');
-    expect(SCHEDULED).toContain("await runTemplateNow(r.name);");
-    expect(SCHEDULED).toContain('"Run now"');
+    expect(SCHEDULED).toContain('<span className="ik-queue-kind">{scheduledLineText(n)}</span>');
+    expect(SCHEDULED).not.toContain("Scheduled templates</span>");
+    expect(SCHEDULED).not.toContain("runTemplateNow");
+    expect(SCHEDULED).not.toContain("rows.map(");
     // Its link goes to Schedule, the surface's name on the top bar.
     expect(SCHEDULED).toContain('openDialogFor("schedule")');
     expect(SCHEDULED).toContain("Open Schedule ›");
+  });
+
+  it("the count is everything Schedule lists on a timer: scheduled templates + saved stops with a time", () => {
+    const plans = [
+      { trigger: { kind: "schedule", schedule: { at: "03:00", days: "daily" }, paused: true } },
+      { trigger: { kind: "schedule", schedule: null, paused: false } },
+      { trigger: { kind: "manual", schedule: null, paused: false } },
+    ] as never;
+    const tpls = [
+      { name: "Nightly deps", repo_path: "/r", schedule: { at: "21:00", days: "daily" as const } },
+      { name: "One-off", repo_path: "/r", prompt: "x" },
+    ];
+    expect(scheduledCount(tpls, plans)).toBe(2);
+    expect(scheduledCount([], null)).toBe(0);
+    expect(scheduledLineText(0)).toBe("Nothing on a timer yet");
+    expect(scheduledLineText(3)).toBe("3 scheduled");
   });
 
   it("the palette's New scheduled template… opens a new template with its schedule on", () => {

@@ -36,7 +36,7 @@ import { VERIFY_BLURB } from "../lib/vocab";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
 import { useCalm } from "../lib/useCalm";
-import { topBarShows } from "../lib/calm";
+import { topBarQuiet } from "../lib/calm";
 import { VIEWS, VIEW_BLURB, newSession, setView, toggleView, viewLabel } from "../lib/viewMode";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
@@ -112,10 +112,10 @@ export function TopBar() {
   // The Sky toggle's badge: flights perched on you (lib/flights perchBadge) —
   // the sky is where they are drawn and its drawer lists them.
   const perch = perchBadge(useFlights().data || []);
-  // The calm first hour (lib/calm.ts topBarShows): Verify waits for its first
-  // checklist and Schedule for its first template. Their shortcuts, the
-  // palette and the #verify / #schedule links keep working meanwhile.
-  const shows = topBarShows({
+  // The calm first hour (lib/calm.ts topBarQuiet): Verify and Schedule are
+  // always on the bar; an empty one is only drawn quiet until its first
+  // checklist / scheduled template.
+  const quiet = topBarQuiet({
     calm: useCalm(),
     checklists: testPlans?.plans?.length ?? 0,
     templates: sched.templates.length,
@@ -168,7 +168,7 @@ export function TopBar() {
   // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
   const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
   const scheduleTitle =
-    "Schedule — templates and scheduled stops; starts sessions on a timer" +
+    "Schedule — everything that starts by itself on a timer: templates and scheduled stops" +
     keys("schedule") +
     (schedFailing > 0
       ? "\n" +
@@ -184,8 +184,8 @@ export function TopBar() {
   // breakpoints: the words' widths change with the font, the theme set, a
   // badge, a rebound shortcut's absence, the mac lights' gap.
   //
-  // The foldable items, in bar order; Verify / Schedule only once the calm
-  // rule above lets them on the bar at all (this never overrides it). The
+  // The foldable items, in bar order (Verify and Schedule always among them).
+  // The
   // Grid · Sky toggle folds last, only on a phone-narrow bar (its ⋯ row
   // switches to the other view, carrying the perch count; Ctrl+Y still does
   // too).
@@ -207,7 +207,7 @@ export function TopBar() {
       failing: perch.failing,
       open: () => toggleView(),
     },
-    shows.verify && {
+    {
       key: "verify",
       label: "Verify",
       title: verifyTitle,
@@ -215,7 +215,7 @@ export function TopBar() {
       failing: failing > 0,
       open: () => ui.openDialogFor("verify"),
     },
-    shows.schedule && {
+    {
       key: "schedule",
       label: "Schedule",
       title: scheduleTitle,
@@ -461,10 +461,9 @@ export function TopBar() {
               the "Not checked yet" group are one predicate) — deliberately not
               "things waiting on you personally", since one of them may be an
               agent mid-run. */}
-          {shows.verify && (
           <button
             id="verify-btn"
-            className={"tb-item" + (isFolded("verify") ? " tb-folded" : "")}
+            className={"tb-item" + (quiet.verify ? " tb-quiet" : "") + (isFolded("verify") ? " tb-folded" : "")}
             data-fold="verify"
             type="button"
             title={verifyTitle}
@@ -480,14 +479,12 @@ export function TopBar() {
                 out. */}
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
-          )}
           {/* Schedule: what starts by itself (templates, and saved stops with a
               schedule). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
-          {shows.schedule && (
           <button
             id="schedule-btn"
-            className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}
+            className={"tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : "")}
             data-fold="schedule"
             type="button"
             title={scheduleTitle}
@@ -498,7 +495,6 @@ export function TopBar() {
                 rule Verify's count keeps. */}
             {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
-          )}
           <button
             id="settings-btn"
             className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}

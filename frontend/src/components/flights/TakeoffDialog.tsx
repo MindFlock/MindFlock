@@ -1,17 +1,18 @@
-/** "Takes off…" on a saved stop (the shelf chip's right-click menu): where
- * its flights come from — by hand, from a ticket / PR / issue, on a
- * **Schedule** (days as chips, the time / date / cron as fields, the server's
- * preview of the next run, Paused), or, round 15, **when main moves** /
+/** "Takes off…" on a saved stop (the shelf chip's right-click menu, and a
+ * scheduled one's **Edit** in Schedule): where its flights come from — by
+ * hand, from a ticket / PR / issue, on a **Schedule** (THE schedule editor,
+ * TemplateEditor's ScheduleWhen — Every day / Weekdays / Once / Custom (cron),
+ * a 24-hour time, the server's preview of the next runs — the very fields a
+ * template's Schedule… shows, then Paused), or, round 15, **when main moves** /
  * **when main is red** (the repository watched, quiet minutes) / **when a
  * hook fires** (the address to POST to, with Copy, once saved) — and, for
  * the ones that create their own session (by hand, scheduled, the triggers),
  * the repository, agent and model it starts in. A dialog (`Modal`), saved with `savePlan`; a refusal stays in the
  * dialog (Electron has no alert). It was the flyway card's trigger section
- * (FlywayTrigger); a scheduled saved stop is edited here ("Edit in the Sky"
- * from Schedule). */
+ * (FlywayTrigger). */
 
 import { useEffect, useState, type JSX } from "react";
-import { cronOf, cronPreview, onceOf, type CronPreview } from "../../lib/templates";
+import { cronOf, cronPreview, onceOf, type CronPreview, type TemplateRunsStatus } from "../../lib/templates";
 import { MAIN_TRIGGERS, TRIGGER_LABEL, hookUrl, scheduleOfWhen, triggerMakesSession, whenFormOf, type FlightPlan, type TriggerKind, type WhenForm } from "../../lib/flights";
 import { savePlan } from "../../lib/flightsApi";
 import { errMsg } from "../../lib/format";
@@ -19,23 +20,20 @@ import { toast } from "../../lib/toast";
 import { Modal } from "../Modal";
 import { PathField } from "../PathField";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
-import { cronPreviewLine } from "../dialogs/TemplateEditor";
+import { ScheduleWhen } from "../dialogs/TemplateEditor";
 import { ChipRow, FlField, NumberField, Seg, TextField, Toggle } from "./controls";
 import "./StopParts.css";
 import "./TakeoffDialog.css";
 
-const DAYS: ReadonlyArray<{ v: WhenForm["days"]; label: string }> = [
-  { v: "daily", label: "Every day" },
-  { v: "weekdays", label: "Weekdays" },
-  { v: "once", label: "Once" },
-  { v: "cron", label: "Custom" },
-];
+/** The cron text the server previews for a schedule's fields. */
+function whenCron(when: WhenForm): string {
+  return (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim();
+}
 
 /** The cron text the server previews for a trigger ("" = not scheduled). */
 export function triggerCron(plan: Pick<FlightPlan, "trigger">): string {
   if (plan.trigger.kind !== "schedule") return "";
-  const when = whenFormOf(plan.trigger.schedule);
-  return (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim();
+  return whenCron(whenFormOf(plan.trigger.schedule));
 }
 
 /** The server's preview of a cron, fetched as it is typed (debounced). */
@@ -58,35 +56,6 @@ function useCronPreview(cron: string): CronPreview | null {
     };
   }, [cron]);
   return preview;
-}
-
-/** A schedule's when: days as chips, the time / date / cron as fields, and
- * the server's preview of the next run under them. */
-export function ScheduleChips({ when, onWhen, preview }: { when: WhenForm; onWhen(w: WhenForm): void; preview: CronPreview | null }): JSX.Element {
-  const line = cronPreviewLine(preview, new Date());
-  return (
-    <div className="fl-schedule">
-      <Seg label="Which days" value={when.days} options={DAYS} onChange={(days) => onWhen({ ...when, days })} />
-      {when.days === "cron" ? (
-        <TextField label="Cron expression" mono value={when.cron} placeholder="0 21 * * 1-5" onChange={(cron) => onWhen({ ...when, cron })} />
-      ) : (
-        <span className="fl-schedule-at">
-          {when.days === "once" && (
-            <input
-              type="date"
-              className="fl-input fl-date"
-              aria-label="Date"
-              value={when.date}
-              onChange={(e) => onWhen({ ...when, date: e.target.value })}
-            />
-          )}
-          <span className="muted">at</span>
-          <input type="time" className="fl-input fl-time" aria-label="Time" value={when.at} onChange={(e) => onWhen({ ...when, at: e.target.value })} />
-        </span>
-      )}
-      {line && <span className="fl-fld-hint">{line}</span>}
-    </div>
-  );
 }
 
 /** The hook's address, read-only, with Copy (once the plan is saved: the
@@ -125,8 +94,14 @@ export function HookUrlRow({ plan }: { plan: FlightPlan }): JSX.Element {
 /** Where a saved stop's flights come from, and what they fly in. */
 export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p: Partial<FlightPlan>): void }): JSX.Element {
   const agents = useAgentChoices();
-  const preview = useCronPreview(triggerCron(plan));
-  const when = whenFormOf(plan.trigger.schedule);
+  // The schedule's fields are the form's own (seeded once from the stored
+  // schedule): a half-typed cron or a cleared time is not a schedule yet,
+  // and re-deriving the fields from what it saves would flip the mode back.
+  const [when, setWhen] = useState<WhenForm>(() => whenFormOf(plan.trigger.schedule));
+  const preview = useCronPreview(plan.trigger.kind === "schedule" ? whenCron(when) : "");
+  // A scheduled saved stop's run record (GET /api/flights/plans `runs`):
+  // the zone its time is in, and where schedules fire.
+  const runs = (plan as FlightPlan & { runs?: { tz?: string } & Partial<Pick<TemplateRunsStatus, "runs_here" | "runs_on">> }).runs;
   const needsSession = triggerMakesSession(plan.trigger.kind);
   const watchesMain = MAIN_TRIGGERS.includes(plan.trigger.kind);
   const isHook = plan.trigger.kind === "hook";
@@ -152,7 +127,19 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
         </FlField>
         {plan.trigger.kind === "schedule" && (
           <FlField label="When" wide>
-            <ScheduleChips when={when} preview={preview} onWhen={(w) => onChange({ trigger: { ...plan.trigger, schedule: scheduleOfWhen(w) } })} />
+            <div className="tpl-editor tpl-sched-editor fl-schedule-when">
+              <ScheduleWhen
+                form={when}
+                cronPreview={preview}
+                tz={runs?.tz || ""}
+                runs={runs && typeof runs.runs_here === "boolean" ? { runs_here: runs.runs_here, runs_on: runs.runs_on || "" } : undefined}
+                onForm={(patch) => {
+                  const w = { ...when, ...patch };
+                  setWhen(w);
+                  onChange({ trigger: { ...plan.trigger, schedule: scheduleOfWhen(w) } });
+                }}
+              />
+            </div>
             <Toggle
               on={plan.trigger.paused}
               onChange={(paused) => onChange({ trigger: { ...plan.trigger, paused } })}
