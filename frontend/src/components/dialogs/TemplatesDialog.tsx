@@ -17,7 +17,7 @@
  * and a scheduled one **Skip next** / **Pause** (schedule.skip_until /
  * schedule.paused). An optional **Fast-track** level arms each run.
  *
- * Saved stops whose trigger is a schedule are cards in the SAME list, with
+ * Saved chains whose trigger is a schedule are cards in the SAME list, with
  * the same verbs: **Run now** (a flight takes off on it in a new session; one
  * with no repository asks for a folder in the card first, never a dead-end
  * error), **Schedule…** / **Change schedule** (the same compact row),
@@ -296,8 +296,8 @@ export function scheduledOrder(templates: Template[], status: Pick<TemplateRunsS
     .map((x) => x.t);
 }
 
-// --- Scheduled saved stops ------------------------------------------------------
-// A saved stop whose trigger is a schedule starts itself like a template does
+// --- Scheduled saved chains ------------------------------------------------------
+// A saved chain whose trigger is a schedule starts itself like a template does
 // (docs/flights.md "Scheduled plans"), so Schedule lists it IN THE SAME LIST
 // as the templates — one list of what starts by itself on a timer — with a
 // template card's anatomy (name, schedule line, next run, last result) and
@@ -340,13 +340,13 @@ export function planAsTemplate(f: ScheduledFlyway): { t: Template; info: Templat
   };
 }
 
-/** One card of Schedule's list: a template or a saved stop on a schedule. */
+/** One card of Schedule's list: a template or a saved chain on a schedule. */
 export type ScheduleEntry = { kind: "template"; t: Template } | { kind: "plan"; f: ScheduledFlyway };
 
 /** Schedule's ONE list of what starts by itself on a timer: the scheduled
- * templates and the scheduled saved stops together — soonest next run
+ * templates and the scheduled saved chains together — soonest next run
  * first, then any with no next run, then the paused ones; a tie keeps
- * templates first. A saved stop whose trigger is a schedule with no time
+ * templates first. A saved chain whose trigger is a schedule with no time
  * set yet is not on it (it is "Not scheduled"). */
 export function scheduleEntries(
   templates: Template[],
@@ -372,7 +372,7 @@ export function scheduleEntries(
     .map((x) => x.e);
 }
 
-/** What runs next across the whole list, templates and saved stops alike. */
+/** What runs next across the whole list, templates and saved chains alike. */
 export function nextAcross(
   templates: Template[],
   status: Pick<TemplateRunsStatus, "runs">,
@@ -854,7 +854,7 @@ export function TemplatesDialogView(p: ViewProps) {
     );
   };
 
-  /** A plan card's folder row: Run now on a saved stop with no repository
+  /** A plan card's folder row: Run now on a saved chain with no repository
    * asks where, in the card — the folder picker (Browse…), the most recent
    * repo already filled in, and "Keep it for its scheduled runs" (its
    * schedule can't start without one either). Never a dead-end error. */
@@ -899,13 +899,13 @@ export function TemplatesDialogView(p: ViewProps) {
     );
   };
 
-  /** A saved stop that starts on a timer, as a template card: what it is,
+  /** A saved chain that starts on a timer, as a template card: what it is,
    * when it runs, how its last run went — and a template card's verbs. */
   const planCard = (f: ScheduledFlyway) => {
     const { t, info, status: st } = planAsTemplate(f);
     const scheduled = hasSchedule(t);
     const paused = scheduled && !!(t.schedule?.paused || info.paused);
-    const stops = f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+    const stops = "Saved chain · " + f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
     const schedOpen = p.planSched?.id === f.id;
     const folderOpen = p.planFolder?.id === f.id;
     const noFolder = !(f.session?.repo_path || "").trim();
@@ -1008,7 +1008,7 @@ export function TemplatesDialogView(p: ViewProps) {
   const saved = templates.filter((t) => !hasSchedule(t));
   const up = nextAcross(templates, runs, p.flyways);
   const elsewhere = !runs.runs_here && !!runs.runs_on;
-  // No templates yet: the invitation to make one leads (saved stops on a
+  // No templates yet: the invitation to make one leads (saved chains on a
   // schedule, the built-ins among them, still list below it).
   const empty = loaded && templates.length === 0 && ui.editing !== "";
   const entry = (e: ScheduleEntry) => (e.kind === "template" ? card(e.t) : planCard(e.f));
@@ -1112,7 +1112,7 @@ export function TemplatesDialogView(p: ViewProps) {
                 </div>
               )}
               {/* ONE list of what starts by itself on a timer: templates and
-                  saved stops on a schedule, side by side, the same verbs. */}
+                  saved chains on a schedule, side by side, the same verbs. */}
               {(entries.length > 0 || templates.length > 0) && (
                 <section className="sch-section" id="schedule-scheduled" aria-labelledby="schedule-scheduled-h">
                   <h3 id="schedule-scheduled-h">
@@ -1188,7 +1188,7 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
   const [flagging, setFlagging] = useState("");
-  // Saved stops on a schedule (the plans with a schedule trigger) are cards
+  // Saved chains on a schedule (the plans with a schedule trigger) are cards
   // in the same list.
   const flyways = useFlightPlans(open).data as ScheduledFlyway[] | null | undefined;
   const [runningPlan, setRunningPlan] = useState("");
@@ -1524,7 +1524,7 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
     }
   };
 
-  // --- Saved stops on a schedule: a template card's verbs -------------------
+  // --- Saved chains on a schedule: a template card's verbs -------------------
 
   /** Save the plan as `change` makes it (the run record left off), and say
    * so; a refusal is the server's own sentence. */

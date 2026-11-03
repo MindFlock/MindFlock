@@ -2552,7 +2552,7 @@ function TicketSourceEditor({
           </div>
           {/* "Goes as far as": the ONE control for how far this source's
               tickets go (PlanSelect). A rung writes the depth and clears the
-              plan; a saved stop writes the plan. */}
+              plan; a saved chain writes the plan. */}
           <PlanSelect
             kind="tickets"
             className="tk-depth"

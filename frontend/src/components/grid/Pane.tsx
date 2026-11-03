@@ -188,10 +188,10 @@ export function Pane({
     threadOpened || lastTab === "thread"
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
-  // The Flight tab: shown once the session has a live diagram worth drawing
-  // (a flight, workers, a parent, an armed fast-track — lib/flightDiagram);
-  // ⋯ → "Fly a flyway…" opens it on any session. Its badge: perched on you,
-  // or halted.
+  // The Chain tab (key "flight"): shown once the session has a live diagram
+  // worth drawing (a chain, workers, a parent, an armed fast-track —
+  // lib/flightDiagram); ⋯ → "Chain…" opens it on any session. Its badge: the
+  // chain needs you, or halted.
   const flightNeeds = rowWaitsOnYou(inst.flight) || inst.flight?.state === "halted";
   const newestReport = newestReportTs(family.children);
   // The Map tab's badge: the rail row's zone chip (a breach, an unseen block,
@@ -825,7 +825,7 @@ export function Pane({
     calm,
     queueBusy: pending > 0 || holding,
     mapBusy: mapHasState(inst, rzChip),
-    // Every session's pane has its Flight tab (the owner: "I want all to show"):
+    // Every session's pane has its Chain tab (the owner: "I want all to show"):
     // building a chain starts there even before the session has one.
     flight: true,
     ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu),
@@ -990,13 +990,13 @@ export function Pane({
         aria-selected={tab === "flight"}
         className={"flight-tab" + (tab === "flight" ? " active" : "")}
         title={
-          "Flight — this session's live diagram: its workers, its fast-track or flight, and + to tack a stop on" +
-          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The flight halted — it needs you" : "The flight is perched on you") : "")
+          "Chain — this session's live diagram: its workers, its fast-track or chain, and + to add a stop" +
+          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The chain halted — it needs you" : "The chain needs you") : "")
         }
         onClick={(e) => { e.stopPropagation(); showTab("flight"); }}
       >
         <TabIcon name="flight" />
-        <span className="tab-label">Flight</span>
+        <span className="tab-label">Chain</span>
         {flightNeeds && (
           <span className="queue-tab-badge flight-badge needs" aria-hidden="true">
             !
@@ -1342,8 +1342,8 @@ export function Pane({
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
       {/* Its own row, not in .pane-head (which hides chips): the flight's
-          bird · flyway · ●●●○○ · stop (elapsed), with Done / Skip on a perch;
-          the line itself opens the Flight tab. */}
+          bird · chain · ●●●○○ · stop (elapsed), with Done / Skip on a Wait
+          for me stop; the line itself opens the Chain tab. */}
       {inst.flight && <PaneFlightStrip inst={inst} />}
       {strip && (
         <div

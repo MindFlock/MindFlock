@@ -1,7 +1,7 @@
 /** Intake → Auto-start's last line: how many things start by themselves on a
  * timer, and the way to them — "2 scheduled — Open Schedule ›". The rest of
  * the tab is what tickets, PRs and issues will start; a nightly template or
- * a scheduled saved stop is the same kind of answer to "what starts by
+ * a scheduled saved chain is the same kind of answer to "what starts by
  * itself?", but its home is Schedule (the top bar): it used to be a second,
  * read-only list here with its own Run now, which is one list too many.
  *
@@ -130,7 +130,7 @@ export function useScheduledTemplates(): { templates: Template[]; status: Templa
 }
 
 /** How many things Schedule lists as starting on a timer: the templates
- * with a schedule, and the saved stops whose trigger is a schedule that has
+ * with a schedule, and the saved chains whose trigger is a schedule that has
  * its time set. Pure, for tests. */
 export function scheduledCount(templates: Template[], plans: readonly FlightPlan[] | null | undefined): number {
   const stops = (plans || []).filter((p) => p.trigger?.kind === "schedule" && !!p.trigger.schedule).length;
@@ -154,7 +154,7 @@ export function ScheduledTemplates() {
           type="button"
           className="test-btn ik-queue-goto"
           onClick={() => useUi.getState().openDialogFor("schedule")}
-          title="Schedule — templates and saved stops that start by themselves: run, pause, skip or change them there"
+          title="Schedule — templates and saved chains that start by themselves: run, pause, skip or change them there"
         >
           Open Schedule ›
         </button>

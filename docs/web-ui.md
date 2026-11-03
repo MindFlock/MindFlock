@@ -20,11 +20,26 @@ keys, event names and MCP tool names keep their older names (`/api/instances`,
 |---|---|
 | An agent working on a worktree | **session** |
 | Assistant, log tail, Verify and extension rows on the rail | **window** |
-| The ladder that ships a session when its turn ends (off / Commit / Push / Open PR / Merge) | **Fast-track** |
+| The ladder that ships a session when its turn ends (Off / Commit / Push / Open PR / Merge when green) | **Fast-track** |
 | Several sessions started together and shipped by MindFlock | **team run** |
 | The git steps | **Commit**, **Push**, **Open PR**, **Merge** (an existing PR's link is **View PR ↗**) |
 | Leaving a session | **Close** (keeps the worktree), **Delete** (removes it) |
 | Waiting on the person | **Needs you**, with its reason: Question, Pre-commit failed, Checks failing, Setup failed |
+| One box on the Sky, every kind | **stop** (a stop with stops inside is a **group**) |
+| A row of stops, a session's or one on the board | **chain** (the pane tab that shows it is **Chain**; cancelling it is **Stop the chain**) |
+| A chain kept on the shelf to reuse | **saved chain** (what starts it: **Starts:** By hand / Ticket / Schedule / …) |
+| Start a chain or a template now | **Run** / **Run now** |
+| The stop kind that waits for you | **Wait for me** |
+| The stop that waits for CI | **CI checks** |
+| Sessions a session starts | **workers** ("Let it split into up to N workers") |
+| The landing strip's headings | **Finished** / **Merged today** |
+
+The Sky's words were settled on 2026-11-02 (the full table, with the words each
+one retires, is at the top of `docs/flights.md`). Older sections below may still
+say *flyway* or *plan* (a saved chain), *flight* (a chain running on a session),
+*perch* (a Wait for me stop) or *pieces* (workers); the UI copy no longer does.
+Internal names keep them: `/api/flights/*`, the `#flyways` deep link and the hook
+URL `/api/hooks/flyway/`.
 
 ## Layout
 
@@ -47,7 +62,7 @@ is the drag region that moves the desktop shell's window.
 For a while (Sky rounds 4–7) Intake, Verify and Schedule were tabs of one
 **Flights** dialog behind one top-bar button. The owner didn't love menus
 within menus, so round 8 put the three back on the bar exactly as they were;
-the Flights dialog is retired, flyways live on the [Sky](#flights-flyways-and-the-sky)'s
+the Flights dialog is retired, saved chains live on the [Sky](#chains-and-the-sky)'s
 shelf, and every old `#flights/…` link still lands (below).
 
 The bar never wraps and never clips (any width from 360 px up): it measures
@@ -3186,7 +3201,7 @@ and *To send text to a session that's already running, use Prompts.*, with
 - **Not scheduled (n)** *run now or add a schedule* — the templates without a
   schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
 - **Scheduled flyways (n)** *flyways that take off by themselves* — the
-  [flyways](#flights-flyways-and-the-sky) whose trigger is a schedule
+  [saved chains](#chains-and-the-sky) whose trigger is a schedule
   (`useFlightPlans`, the plans with `trigger.kind === "schedule"`; the server
   puts their run record on each as `runs`), soonest next run first, paused
   last, as cards with a template's anatomy: the bird and the name, *2 stops ·
@@ -3838,8 +3853,8 @@ toolbar and dialog, the shelf, a grounded line, selection, the Drag / Click
 tools, Delete, the intake lane, the zoom, the ? — each centring when its
 element isn't on screen; its **?** ends the Sky's toolbar as a two-item menu,
 *Replay the tour* · *Open the guide* (the long-form **Sky guide**), and it
-opens by itself the first time the Sky is shown; see [Flights, flyways and the
-Sky](#flights-flyways-and-the-sky)),
+opens by itself the first time the Sky is shown; see [Chains and the
+Sky](#chains-and-the-sky)),
 **Intake**, **Verify**, **Schedule** (six
 steps: the top-bar **Schedule** — or **Create a template** while that item is
 still hidden — then Create a template, Name + Folder, Task, Run on a schedule
@@ -4015,7 +4030,11 @@ count, so the number is checkable against what is on screen. When it finds
 nothing it says why: how many are in use, how many were used this week, how many
 are repositories it will never touch.
 
-## Flights, flyways and the Sky
+<a id="flights-flyways-and-the-sky"></a>
+
+## Chains and the Sky
+
+*Words: this section predates the 2026-11-02 vocabulary (see [Vocabulary](#vocabulary)). Read *flyway* as **saved chain**, *flight* as a **chain** running on a session, *perch* as a **Wait for me** stop and *Checks* as **CI checks**.*
 
 **One route from waiting to landed** (`docs/flights.md` is the design
 contract). The words are birds', never planes': a **flyway** is the route a

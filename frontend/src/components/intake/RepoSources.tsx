@@ -375,7 +375,7 @@ export function RepoFields({
       </div>
       {/* "Goes as far as": the ONE control for how far this repo's PRs /
           issues go (PlanSelect). A rung writes the depth and clears the plan
-          in one save; a saved stop writes the plan. */}
+          in one save; a saved chain writes the plan. */}
       <PlanSelect
         kind={use === "pr" ? "prs" : "issues"}
         field={{ attr: "data-repo-field" }}

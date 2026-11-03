@@ -242,7 +242,7 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       inst.check.state !== "running" &&
       !peer && {
         key: "run-checks",
-        label: "Run checks now",
+        label: "Run the check command",
         run: () =>
           instApi(title, "/check", { method: "POST" })
             .then(() => toast("Checks running…"))
@@ -310,14 +310,14 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     ctx.caps.git !== false &&
       !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => useUi.getState().openDiff(title) },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
-    // Flights: the session's Flight tab — its live diagram, with + to tack a
-    // stop on and the saved stops to add (docs/flights.md "The session diagram").
+    // Chains: the session's Chain tab — its live diagram, with + to tack a
+    // stop on and the saved chains to add (docs/flights.md "The session diagram").
     !remote &&
       !peer &&
       !inst.pending && {
         key: "flyway",
         label: "Add a stop…",
-        title: "Open this session's Flight tab: tack a stop, or a saved stop, onto its line",
+        title: "Open this session's Chain tab: add a stop, or a saved chain, to its chain",
         run: () => openTab(title, "flight"),
       },
     // The Sky on this one session: its line filling the sky, the bird where

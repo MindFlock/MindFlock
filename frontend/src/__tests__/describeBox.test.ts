@@ -179,7 +179,7 @@ describe("auto-split: stepper, planning copy and the dissolved toast", () => {
     const run = (optional: boolean) =>
       ({ id: "r", state: "planning", optional, tasks: [] }) as unknown as Parameters<typeof leadLine>[0];
     expect(leadLine(run(true))?.text).toBe("deciding whether to split…");
-    expect(leadLine(run(false))?.text).toBe("proposing the pieces…");
+    expect(leadLine(run(false))?.text).toBe("proposing the workers…");
   });
 });
 
