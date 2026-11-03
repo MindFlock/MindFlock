@@ -20,7 +20,7 @@ import { undoPayload } from "../../lib/stopEditing";
 import { groundedDiagram } from "../../lib/groundedLines";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { StopDialog } from "./StopDialog";
-import { StopPalette } from "./StopParts";
+import { StopPalette, type PaletteSaved } from "./StopParts";
 import { inspectorDef, orderedPlans, shelfPlanFor } from "./useSessionLine";
 
 /** What a chip dropped on a line carries (the canvas's `onDropStop`): a stop
@@ -189,18 +189,15 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   };
 
   const ordered = orderedPlans(plans);
-  const savedChips = (
-    <div className="fl-palette-flyways">
-      <div className="fl-palette-head">A saved chain — all of its stops</div>
-      <div className="fl-chiprow">
-        {ordered.map((p) => (
-          <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void tackPlan(p, paletteAt)}>
-            {p.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+  // The saved chains, as data: the palette's filter narrows them with the
+  // stop kinds ("A saved chain — all of its stops").
+  const savedChips: PaletteSaved[] = ordered.map((p) => ({
+    id: p.id,
+    name: p.name,
+    title: p.steps.map((s) => s.title).join(" → "),
+    disabled: busy,
+    onPick: () => void tackPlan(p, paletteAt),
+  }));
 
   const raw: Pick<
     FlywayCanvasProps,
@@ -270,7 +267,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
           setPaletteAt(null);
           setPaletteHang(null);
         }}
-        extra={ordered.length > 0 ? savedChips : undefined}
+        saved={savedChips}
       />
     ) : null;
 
