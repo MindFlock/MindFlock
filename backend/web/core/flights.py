@@ -139,7 +139,7 @@ GONE_GRACE_S = 1800.0
 LEASE_STALE_S = 45.0
 #: An agent step whose agent never showed any work gives up after this.
 AGENT_START_DEADLINE_S = 7200.0
-#: A verify step whose checklist never appears gives up after this.
+#: A verify step whose behaviors are never written gives up after this.
 VERIFY_WRITE_DEADLINE_S = 3600.0
 #: A reviews step with no pull request to watch gives up after this.
 NO_PR_DEADLINE_S = 1800.0
@@ -380,8 +380,13 @@ STEP_KINDS: Dict[str, dict] = {
     "verify": {
         "label": "Verify",
         "actor": "robot",
-        "summary": "Write the branch's checklist and work through it; the chain waits for you on your items.",
+        # The stop picker's blurb (docs/behaviors.md §5, docs/vision/verify.md):
+        # Verify is a stop on the route, not a place.
+        "summary": "Checks this work's behaviors; the agent checks what it can, the rest waits for you.",
         "default_title": "Verify",
+        # A failed behavior HALTS the route (the owner: "I kind of like the
+        # halt thing") — Retry · Skip · Let the agent fix it on its card.
+        "default_on_fail": "halt",
         "fields": [
             _f("who", "select", "Who checks", default="both", options=VERIFY_WHO),
             _f("wait_live", "bool", "Wait until it is live", default=False),
@@ -3076,6 +3081,17 @@ def _awaiting_go(rec: dict) -> bool:
 
 
 def _judge_verify(flight, step, ss, obs, now) -> dict:
+    """A Verify stop (docs/behaviors.md §5): the session's behaviors are
+    written (the face reads "Writing…"), the agent checks the ones it can, a
+    person answers the rest (the route is on **Needs you**), and a failed
+    behavior fails the stop — which HALTS the route by default (``on_fail``
+    halt: Retry · Skip · Let the agent fix it). There is no blanket Done: the
+    stop moves on when every behavior has an answer, or on Skip.
+
+    A failure answered BEFORE this attempt started (a Retry, the agent's fix)
+    is not this attempt's verdict: the agent checks its behaviors again first
+    (``recheck``), and a person's old Fail is theirs to answer again — so a
+    fixed behavior can pass, and a Fail given again halts again."""
     v = obs.get("verify") or {}
     d = ss["detail"]
     who = step["config"]["who"]
@@ -3083,17 +3099,17 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         if now - ss["since"] > VERIFY_WRITE_DEADLINE_S:
             return {
                 "action": "fail",
-                "reason": "no checklist was written for this branch",
+                "reason": "no behaviors were written for this branch",
             }
-        return _wait("writing the checklist")
+        return _wait("writing the behaviors")
     up = {"plan": v["plan"], "branch": v.get("branch") or flight.get("branch") or ""}
     state = v.get("state") or ""
     if state == "generating":
-        return _wait("writing the checklist", **up)
+        return _wait("writing the behaviors", **up)
     if state == "failed" and not v.get("steps"):
         return {
             "action": "fail",
-            "reason": "the checklist could not be written: %s"
+            "reason": "the behaviors could not be written: %s"
             % (v.get("error") or "no reason given"),
         }
     if step["config"]["wait_live"] and not v.get("live"):
@@ -3103,46 +3119,80 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
             **up,
         )
     failed = list(v.get("failed") or [])
-    if failed:
-        return {"action": "fail", "reason": "checklist item failed: %s" % failed[0]}
+    # Stale: every failure was answered before this attempt began.
+    failed_at = v.get("failed_at")
+    stale = (
+        bool(failed)
+        and isinstance(failed_at, (int, float))
+        and float(failed_at) < float(ss["since"] or 0.0)
+    )
+    if (
+        stale
+        and who in ("agent", "both")
+        and not d.get("run_started")
+        and state != "running"
+    ):
+        return {
+            "action": "run",
+            "phase": "agent_run",
+            "note": "checking the behaviors again",
+            "detail": dict(up, recheck=True),
+        }
+    if failed and not stale:
+        return {"action": "fail", "reason": _verify_failed_reason(failed)}
     open_agent = list(v.get("open_agent") or [])
     open_human = list(v.get("open_human") or [])
     if state == "running":
-        return _wait("the agent is working through the checklist", **up)
+        return _wait("the agent is checking the behaviors", **up)
     if who in ("agent", "both") and open_agent and not d.get("run_started"):
         return {
             "action": "run",
             "phase": "agent_run",
-            "note": "starting the agent on the checklist",
+            "note": "the agent is checking the behaviors",
             "detail": up,
         }
     if who == "agent":
+        if stale:
+            # Only a person's Fail is left, and this stop checks the agent's.
+            return {"action": "fail", "reason": _verify_failed_reason(failed)}
         if v.get("settled") or not open_agent:
             return _receipt(
-                {"action": "done", "note": "the agent's checklist items are answered"},
+                {"action": "done", "note": "the agent's behaviors are checked"},
                 _verify_receipt(v),
             )
-        return _wait("the agent's checklist items are still open", **up)
+        return _wait("the agent's behaviors are still open", **up)
     if who == "you":
         open_human = open_human + open_agent
     elif open_agent and d.get("run_started"):
-        # The agent's run ended with items it never answered: a person's now.
+        # The agent's run ended with behaviors it never answered: a person's now.
         open_human = open_human + open_agent
-    if v.get("settled") or not open_human:
+    if stale:
+        # A person's Fail from before the fix (the agent's own were checked
+        # again above): theirs to answer again — Fail once more halts.
+        open_human = open_human + [t for t in failed if t not in open_human]
+    if (v.get("settled") and not stale) or not open_human:
         return _receipt(
-            {"action": "done", "note": "every checklist item has an answer"},
+            {"action": "done", "note": "every behavior has an answer"},
             _verify_receipt(v),
         )
     return {
         "action": "you",
-        "note": "%d checklist item%s for you"
+        "note": "%d behavior%s for you"
         % (len(open_human), "" if len(open_human) == 1 else "s"),
         "detail": dict(up, items=open_human[:40]),
     }
 
 
+def _verify_failed_reason(failed: list) -> str:
+    """``"Failed · 2: login works; logout works"`` — the count leads (the
+    stop's face and the halted route say it), then which ones."""
+    shown = "; ".join(str(t) for t in failed[:3])
+    more = " …" if len(failed) > 3 else ""
+    return "Failed · %d: %s%s" % (len(failed), shown, more)
+
+
 def _verify_receipt(v: dict) -> str:
-    """``"k of n"``: the checklist's answered items of all of them."""
+    """``"k of n"``: the behaviors with an answer, of all of them."""
     n = len(v.get("steps") or [])
     k = v.get("answered")
     if not isinstance(k, int):
@@ -3888,6 +3938,62 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     _group_state(flight)
     flight["updated"] = ts
     _hist(flight, ts, sid, "resumed", "retry")
+    return flight
+
+
+def op_fix(flight: dict, sid: str, now: Optional[float] = None) -> dict:
+    """The "Let the agent fix it" op on a halted (failed) current stop: the stop
+    goes back to running in the ``fix`` phase — the agent's turn on the
+    failure, then the stop runs again (:func:`next_action`'s fix branch, what
+    ``on_fail: agent`` does by itself). Counts as one of the stop's fix rounds.
+    The driver hands the failure to the agent (``flight_driver.fix``)."""
+    ts = float(now if now is not None else time.time())
+    _airborne(flight)
+    i = _step_index(flight, sid)
+    ss = flight["step_states"][sid]
+    lo, hi = current_group(flight)
+    failed = ss["state"] == "failed" and not ss["detail"].get("moved_on")
+    handed = ss["state"] == "waiting_you" and ss["detail"].get("failed_reason")
+    if not lo <= i < hi or not (failed or handed):
+        raise FlightError(
+            "not_failed", 409, "%s has not failed" % flight["steps"][i]["title"]
+        )
+    reason = str(
+        ss["detail"].get("failed_reason") or ss["note"] or flight["reason"] or "failed"
+    )
+    ss["rounds"] = int(ss.get("rounds") or 0) + 1
+    ss["state"] = "running"
+    ss["since"] = ts
+    ss["note"] = "the agent is fixing: " + reason
+    ss["detail"] = {"phase": "fix", "reason": reason}
+    _hist(flight, ts, sid, "resumed", "handed to the agent: " + reason)
+    flight["state"] = "running"
+    flight["reason"] = ""
+    _group_state(flight)
+    flight["updated"] = ts
+    return flight
+
+
+def op_fix_failed(
+    flight: dict, sid: str, why: str, now: Optional[float] = None
+) -> dict:
+    """The agent could not be asked to fix it (the session is gone, asleep
+    for good): the stop halts again, saying why."""
+    ts = float(now if now is not None else time.time())
+    ss = flight["step_states"].get(sid)
+    if ss is None or ss["detail"].get("phase") != "fix":
+        return flight
+    reason = "%s (the agent could not be asked: %s)" % (
+        ss["detail"].get("reason") or "failed",
+        why,
+    )
+    ss["state"] = "failed"
+    ss["note"] = reason
+    ss["detail"] = {}
+    flight["state"] = "halted"
+    flight["reason"] = reason
+    _hist(flight, ts, sid, "halted", reason)
+    flight["updated"] = ts
     return flight
 
 

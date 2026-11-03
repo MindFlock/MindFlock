@@ -154,9 +154,7 @@ describe("the Learn more folds are InfoTips now", () => {
     }
   });
 
-  it("Verify's 'How Verify works' fold is the title's tip", () => {
-    const verify = src("components/dialogs/VerifyDialog.tsx");
-    expect(verify).not.toContain("<summary>How Verify works</summary>");
-    expect(verify).toContain('<InfoTip id="verify-how" label="How Verify works">');
+  it("the Verify dialog and its 'How Verify works' fold are gone (Verify is a stop on the route)", () => {
+    expect(() => src("components/dialogs/VerifyDialog.tsx")).toThrow();
   });
 });

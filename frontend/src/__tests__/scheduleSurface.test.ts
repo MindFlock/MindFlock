@@ -1,4 +1,4 @@
-/** Schedule on the top bar: the item (between Verify and Settings, Alt+S, a
+/** Schedule on the top bar: the item (between Intake and Settings, Alt+S, a
  * red count only for scheduled runs that FAILED), the old "templates" name
  * still landing on it, and the surface's sections — what runs next, the
  * scheduled templates with their strip (Change schedule / Skip next / Pause),
@@ -63,8 +63,8 @@ function view(over: Partial<Parameters<typeof TemplatesDialogView>[0]> = {}) {
 }
 
 describe("the top-bar item", () => {
-  it("sits between Verify and Settings, like Intake and Verify (back on the bar: the Flights dialog is retired)", () => {
-    const v = TOPBAR.indexOf('id="verify-btn"');
+  it("sits between Intake and Settings (the Flights dialog is retired; Verify is a stop on the route, no button)", () => {
+    const v = TOPBAR.indexOf('id="intake-btn"');
     const sc = TOPBAR.indexOf('id="schedule-btn"');
     const se = TOPBAR.indexOf('id="settings-btn"');
     expect(v).toBeGreaterThan(0);

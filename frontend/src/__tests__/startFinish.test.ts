@@ -100,12 +100,8 @@ describe("Verify keeps an edit or a retry when the server refused", () => {
   });
 
   it("the step editor closes, and the banner clears, only on success", () => {
-    expect(code("components/dialogs/VerifyStep.tsx")).toContain(
-      "if ((await onEdit(step, fields)) !== false) setEditing(false);"
-    );
-    expect(code("components/dialogs/VerifyDialog.tsx")).toContain(
-      'if (await writePlanFor(missingTarget.title)) setMissingBranch("");'
-    );
+    // The Behaviors card's row editor (the Verify dialog's step editor is gone).
+    expect(code("components/behaviors/BehaviorRow.tsx")).toContain("if (await onEdit(step, fields)) setEditing(false);");
   });
 });
 

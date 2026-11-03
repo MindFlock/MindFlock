@@ -496,7 +496,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     f = run_step(fly(step("verify", who="both")))
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW)["note"]
-        == "writing the checklist"
+        == "writing the behaviors"
     )
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW + 4000)["action"]
@@ -505,7 +505,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     gen = _vfacts(state="generating")
     assert (
         F.next_action(f, {"session": sess(), "verify": gen}, NOW)["note"]
-        == "writing the checklist"
+        == "writing the behaviors"
     )
     v = _vfacts(open_agent=["curl it"], open_human=["look at it"])
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
@@ -513,7 +513,7 @@ def test_verify_step_writes_runs_parks_and_settles():
     f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW)
     assert f["step_states"]["s1"]["state"] == "running"
     a = F.next_action(f, {"session": sess(), "verify": _vfacts(state="running")}, NOW)
-    assert a["note"] == "the agent is working through the checklist"
+    assert a["note"] == "the agent is checking the behaviors"
     a = F.next_action(
         f, {"session": sess(), "verify": _vfacts(open_human=["look at it"])}, NOW
     )
@@ -549,6 +549,105 @@ def test_verify_agent_only_and_failures_and_wait_live():
         "model down"
         in F.next_action(f, {"session": sess(), "verify": v}, NOW)["reason"]
     )
+
+
+def test_verify_kind_reads_as_a_stop_and_halts_by_default():
+    spec = F.STEP_KINDS["verify"]
+    assert spec["summary"] == (
+        "Checks this work's behaviors; the agent checks what it can, the rest waits for you."
+    )
+    assert spec["default_on_fail"] == "halt"
+    kinds = {k["kind"]: k for k in F.kinds_dto()["kinds"]}
+    assert kinds["verify"]["default_on_fail"] == "halt"
+    assert F.normalize_step({"kind": "verify"})["on_fail"] == "halt"
+
+
+def test_failed_behaviors_halt_the_route_with_the_count():
+    f = run_step(fly(step("verify", who="both"), step("notify")))
+    v = _vfacts(failed=["login works", "logout works"], failed_at=NOW + 1)
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 2)
+    assert a["action"] == "fail" and a["then"] == "halt"
+    assert a["reason"] == "Failed · 2: login works; logout works"
+    f = F.apply(f, a, NOW + 2)
+    assert f["state"] == "halted" and f["step_states"]["s1"]["state"] == "failed"
+    assert f["reason"].startswith("Failed · 2")
+
+
+def test_let_the_agent_fix_it_then_the_behaviors_are_checked_again():
+    """Halted → op_fix (the agent's turn) → the stop runs again → the old
+    failure is stale: the agent checks again → a pass carries the route on;
+    a fresh failure halts it again."""
+    f = run_step(fly(step("verify", who="both"), step("notify")))
+    old = _vfacts(failed=["login works"], failed_at=NOW)
+    f = F.apply(
+        f, F.next_action(f, {"session": sess(), "verify": old}, NOW + 1), NOW + 1
+    )
+    assert f["state"] == "halted"
+    f = F.op_fix(f, "s1", now=NOW + 10)
+    ss = f["step_states"]["s1"]
+    assert (
+        f["state"] == "running" and ss["detail"]["phase"] == "fix" and ss["rounds"] == 1
+    )
+    with pytest.raises(F.FlightError):
+        F.op_fix(copy.deepcopy(f), "s1", now=NOW + 11)
+    # The agent worked and went idle: the stop runs again.
+    worked = sess(activity="idle", turn_ended_at=NOW + 50)
+    a = F.next_action(f, {"session": worked}, NOW + 60)
+    f = F.apply(f, a, NOW + 60)
+    a = F.next_action(f, {"session": worked}, NOW + 60 + F.IDLE_SETTLE_S + 1)
+    assert a["action"] == "run" and a.get("retry"), a
+    f = F.apply(f, a, NOW + 100)
+    assert f["step_states"]["s1"]["since"] == NOW + 100
+    # The failure on record is from before this attempt: check again first.
+    a = F.next_action(f, {"session": sess(), "verify": old}, NOW + 101)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+    assert a["detail"]["recheck"] is True
+    f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW + 101)
+    running = _vfacts(state="running", failed=["login works"], failed_at=NOW)
+    assert (
+        F.next_action(f, {"session": sess(), "verify": running}, NOW + 102)["action"]
+        == "wait"
+    )
+    # Fixed: every behavior answered → the route carries on.
+    a = F.next_action(
+        f, {"session": sess(), "verify": _vfacts(settled=True)}, NOW + 200
+    )
+    assert a["action"] == "done"
+    # …or the fresh check failed again → halted again.
+    again = _vfacts(failed=["login works"], failed_at=NOW + 150)
+    a = F.next_action(f, {"session": sess(), "verify": again}, NOW + 200)
+    assert a["action"] == "fail" and a["then"] == "halt"
+
+
+def test_a_persons_old_fail_is_theirs_to_answer_again_after_a_retry():
+    f = run_step(fly(step("verify", who="both")), now=NOW + 100)
+    # The agent's recheck ran; a person's Fail from before the retry is left.
+    f["step_states"]["s1"]["detail"]["run_started"] = True
+    v = _vfacts(failed=["it looks right"], failed_at=NOW, settled=True)
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 101)
+    assert a["action"] == "you" and a["detail"]["items"] == ["it looks right"]
+    assert a["note"] == "1 behavior for you"
+
+
+def test_retry_on_a_halted_verify_checks_again():
+    f = run_step(fly(step("verify", who="agent")))
+    old = _vfacts(failed=["curl it"], failed_at=NOW)
+    f = F.apply(
+        f, F.next_action(f, {"session": sess(), "verify": old}, NOW + 1), NOW + 1
+    )
+    f = F.op_retry(f, "s1", now=NOW + 5)
+    f = run_step(f, now=NOW + 6)
+    a = F.next_action(f, {"session": sess(), "verify": old}, NOW + 7)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+
+
+def test_a_route_parked_on_verify_needs_you():
+    f = run_step(fly(step("verify", who="you")))
+    a = F.next_action(
+        f, {"session": sess(), "verify": _vfacts(open_human=["look"])}, NOW
+    )
+    f = F.apply(f, a, NOW)
+    assert f["state"] == "waiting_you"
 
 
 def test_verify_who_you_never_starts_the_agent():

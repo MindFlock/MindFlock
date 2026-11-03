@@ -512,14 +512,12 @@ def test_start_attach_and_create(srv, monkeypatch):
     assert err.value.error == "no_repo"
 
 
-def test_operate_done_on_verify_records_human_passes(srv, monkeypatch):
+def test_operate_done_on_verify_is_refused_no_blanket_done(srv, monkeypatch):
+    """docs/behaviors.md §5: a Verify stop waiting on you moves on when its
+    behaviors are answered, or on Skip — Done no longer passes them unseen."""
     from backend.web.core import test_plans as tp
 
     recorded = []
-    monkeypatch.setattr(tp, "get", lambda pid: {"id": pid, "steps": [], "runs": []})
-    monkeypatch.setattr(
-        tp, "open_human_steps", lambda plan: [{"id": "s2"}, {"id": "s3"}]
-    )
     monkeypatch.setattr(
         tp,
         "record_result",
@@ -532,9 +530,67 @@ def test_operate_done_on_verify_records_human_passes(srv, monkeypatch):
             x, {"action": "you", "detail": {"plan": "s", "items": ["a"]}}, NOW
         ),
     )
-    got = D.operate(f["id"], "done", "s1", "")
-    assert recorded == [("s", "s2", "pass", "human"), ("s", "s3", "pass", "human")]
-    assert got["state"] == "done"
+    with pytest.raises(F.FlightError) as err:
+        D.operate(f["id"], "done", "s1", "")
+    assert (err.value.status, err.value.error) == (409, "answer_behaviors")
+    assert "Skip" in err.value.detail
+    assert recorded == []
+    assert F.get(f["id"])["state"] == "waiting_you"
+    # Skip still moves it on.
+    assert D.operate(f["id"], "skip", "s1")["state"] == "done"
+
+
+def test_operate_done_on_a_verify_failure_handed_to_you_still_works(srv):
+    f = fly({"kind": "verify", "config": {"who": "both"}, "on_fail": "you"})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(
+            x, {"action": "fail", "reason": "Failed · 1: a", "then": "you"}, NOW
+        ),
+    )
+    assert D.operate(f["id"], "done", "s1", "")["state"] == "done"
+
+
+def test_let_the_agent_fix_it_on_a_halted_verify_stop(srv, row, monkeypatch):
+    """The halted Verify stop's "Let the agent fix it": the failure goes to the
+    agent, the stop waits in the fix phase, one fix round is counted."""
+    sent = []
+    monkeypatch.setattr(D, "_deliver", lambda t, x: sent.append((t, x)))
+    f = fly({"kind": "verify", "title": "Verify", "config": {"who": "both"}})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(x, {"action": "fail", "reason": "Failed · 2: a; b"}, NOW),
+    )
+    assert F.get(f["id"])["state"] == "halted"
+    got = D.step_op(f["id"], "s1", "fix", {})["flight"]
+    ss = got["step_states"]["s1"]
+    assert got["state"] == "running" and ss["detail"]["phase"] == "fix"
+    assert ss["rounds"] == 1 and ss["detail"]["reason"] == "Failed · 2: a; b"
+    assert sent and sent[0][1].startswith(
+        "[MindFlock flight] Verify failed: Failed · 2"
+    )
+    # Not failed any more: a second press is refused.
+    with pytest.raises(F.FlightError) as err:
+        D.step_op(f["id"], "s1", "fix", {})
+    assert err.value.error == "not_failed"
+
+
+def test_let_the_agent_fix_it_halts_again_when_the_agent_cannot_be_asked(
+    srv, row, monkeypatch
+):
+    def gone(t, x):
+        raise D._StepFailed("the session is gone")
+
+    monkeypatch.setattr(D, "_deliver", gone)
+    f = fly({"kind": "verify", "title": "Verify", "config": {}})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(x, {"action": "fail", "reason": "Failed · 1: a"}, NOW),
+    )
+    got = D.step_op(f["id"], "s1", "fix", {})["flight"]
+    assert got["state"] == "halted"
+    assert "the session is gone" in got["reason"]
+    assert got["step_states"]["s1"]["state"] == "failed"
 
 
 def test_operate_errors_and_remove(srv):

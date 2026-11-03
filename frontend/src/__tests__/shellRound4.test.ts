@@ -21,6 +21,7 @@ const { splitName } = await import("../lib/midName");
 const { sessionMenu, hasUncommitted } = await import("../lib/sessionMenu");
 const { actionCtx } = await import("../lib/sessionActionTable");
 const { hashFor, parseHash, installSurfaceHash } = await import("../lib/surfaceHash");
+const { useBehaviorsFocus, installVerifyRedirect } = await import("../lib/behaviorsFocus");
 const { shortcutLabels } = await import("../lib/keymap");
 const { browserReserved } = await import("../components/palette/ShortcutsSheet");
 const { firstLine } = await import("../lib/format");
@@ -157,11 +158,14 @@ describe("the pane header", () => {
 });
 
 describe("surfaces in the URL hash", () => {
-  it("names the five top-bar surfaces, and nothing else", () => {
+  it("names the four top-bar surfaces, and nothing else", () => {
     expect(hashFor("settings", "accounts")).toBe("#settings/accounts");
     expect(hashFor("intake", "tickets")).toBe("#intake/tickets");
     expect(hashFor("new-session", null)).toBe("#new");
-    expect(hashFor("verify", null)).toBe("#verify");
+    // Verify is a stop on the route, not a surface: an old #verify link is a
+    // behaviors link (below).
+    expect(hashFor("verify", null)).toBe("");
+    expect(parseHash("#verify")).toBeNull();
     expect(hashFor("schedule", "new")).toBe("#schedule");
     expect(hashFor("schedule", null)).toBe("#schedule");
     // Schedule was Templates: the old name and an old link both land on it.
@@ -213,10 +217,10 @@ describe("surfaces in the URL hash", () => {
     // Closing it in the app strips the hash.
     useUi.getState().closeDialog();
     expect(calls).toEqual(["replace /"]);
-    // Opening Settings pushes one entry; switching to Verify replaces it.
+    // Opening Settings pushes one entry; switching to Intake replaces it.
     useUi.getState().openDialogFor("settings", "accounts");
-    useUi.getState().openDialogFor("verify");
-    expect(calls.slice(1)).toEqual(["push /#settings/accounts", "replace /#verify"]);
+    useUi.getState().openDialogFor("intake", "tickets");
+    expect(calls.slice(1)).toEqual(["push /#settings/accounts", "replace /#intake/tickets"]);
     // Browser Back: the hash goes, the surface closes.
     loc.hash = "";
     listeners.forEach((f) => f());
@@ -242,6 +246,52 @@ describe("surfaces in the URL hash", () => {
 
   it("is installed by App", () => {
     expect(code("App.tsx")).toContain("useEffect(() => installSurfaceHash(), []);");
+  });
+
+  it("an old #verify link lands on the behaviors in the Sky, and reads #behaviors", () => {
+    for (const [hash, want] of [
+      ["#verify", { next: true }],
+      ["#verify/feature%2Fx", { branch: "feature/x" }],
+    ] as const) {
+      const loc: { pathname: string; search: string; hash: string } = { pathname: "/", search: "", hash };
+      const calls: string[] = [];
+      const win = {
+        location: loc,
+        history: {
+          pushState: () => {},
+          replaceState: (_d: unknown, _u: string, url: string) => {
+            calls.push(url);
+            loc.hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+          },
+          back: () => {},
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      } as unknown as Window;
+      useUi.getState().closeDialog();
+      useUi.getState().setView("grid");
+      const off = installSurfaceHash(win);
+      expect(useUi.getState().openDialog, hash).toBeNull();
+      expect(useUi.getState().view, hash).toBe("sky");
+      expect(useBehaviorsFocus.getState().request, hash).toMatchObject(want);
+      expect(loc.hash, hash).toBe("#behaviors");
+      off();
+    }
+  });
+
+  it("anything that still opens the Verify dialog lands in the Sky instead", () => {
+    useUi.getState().closeDialog();
+    useUi.getState().setView("grid");
+    const off = installVerifyRedirect();
+    useUi.getState().openDialogFor("verify", "feature/y");
+    expect(useUi.getState().openDialog).toBeNull();
+    expect(useUi.getState().view).toBe("sky");
+    expect(useBehaviorsFocus.getState().request).toMatchObject({ planId: "feature/y", title: "feature/y", branch: "feature/y" });
+    useUi.getState().openDialogFor("verify");
+    expect(useBehaviorsFocus.getState().request).toMatchObject({ next: true });
+    off();
+    expect(code("App.tsx")).toContain("useEffect(() => installVerifyRedirect(), []);");
+    expect(code("App.tsx")).not.toContain("VerifyDialog");
   });
 });
 
@@ -276,12 +326,10 @@ describe("a quieter main screen", () => {
     expect(code("components/sidebar/Sidebar.tsx")).toContain('"setup-chip-slot" + (setupReqDone ? " req-done" : "")');
   });
 
-  it("Verify is described one way", () => {
-    expect(code("components/TopBar.tsx")).toContain('"Verify — " + VERIFY_BLURB');
-    // The palette's row is "Verify…", the blurb in its keywords.
-    expect(code("components/palette/CommandPalette.tsx")).toContain("keywords: VERIFY_BLURB");
-    expect(code("lib/keymap.ts")).toContain('"Verify — " + VERIFY_BLURB');
-    // The welcome card no longer describes Verify; the Verify tour does.
+  it("Verify's ways in say Behaviors, one way", () => {
+    expect(code("components/TopBar.tsx")).not.toContain("VERIFY_BLURB");
+    expect(code("components/palette/CommandPalette.tsx")).toContain('label: "Behaviors — next that needs you"');
+    expect(code("lib/keymap.ts")).toContain('"Behaviors — the next that needs you"');
   });
 
   it('"Agent" is the coding agent only: the assistant\'s file is its Instructions', () => {

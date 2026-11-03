@@ -13,18 +13,18 @@ import { useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent } 
 import { createPortal } from "react-dom";
 import type { TestPlan, TestStep, TestStepActor, TestStepResult } from "../../api/types";
 import { behaviorSummary, behaviorsCount } from "../../lib/behaviors";
-import { stepSkip } from "../../lib/flightsApi";
+import { flightAction, flightPath, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { errorPop } from "../../lib/errorPop";
 import { errMsg } from "../../lib/format";
 import * as actions from "../../lib/verifyActions";
-import { refreshTestPlans, useInstances } from "../../state/queries";
+import { refreshTestPlans, useFlights, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { planForSession } from "../../lib/behaviors";
 import { rewriteBlockedReason, rewriteWarning } from "../dialogs/verify";
 import { StopMenu, type SkyMenuItem } from "../flights/StopMenu";
 import { InlineConfirm } from "../InlineConfirm";
 import { BehaviorRow } from "./BehaviorRow";
-import { cardMenuItems, primaryTarget, watchSessionOf, type CardMenuItem, type CardMenuKey } from "./cardModel";
+import { cardMenuItems, haltedLine, primaryTarget, verifyStopStand, watchSessionOf, type CardMenuItem, type CardMenuKey } from "./cardModel";
 import "./BehaviorsCard.css";
 
 export interface BehaviorsCardProps {
@@ -33,8 +33,9 @@ export interface BehaviorsCardProps {
   onClose?(): void;
   /** Narrow layout (a board row, a small tile slot). */
   compact?: boolean;
-  /** Set when the card is a Verify stop's: the chain it parks. Lets the card
-   * offer "Skip this stop" next to the behaviors. */
+  /** Set when the card is a Verify stop's: the route it parks. Lets the card
+   * offer "Skip this stop" next to the behaviors — and, when the stop's
+   * behaviors failed and HALTED the route, Retry · Skip · Let the agent fix it. */
   flightStep?: { flightId: string; stepId: string } | null;
 }
 
@@ -55,6 +56,11 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsC
   const steps = plan.steps || [];
   const running = plan.state === "running";
   const watch = watchSessionOf(plan);
+  // The Verify stop this card stands in for, if any: halted on a failure, or
+  // parked on you (docs/behaviors.md §5).
+  const { data: flights } = useFlights(!!flightStep);
+  const flight = flightStep ? (flights || []).find((f) => f.id === flightStep.flightId) || null : null;
+  const stand = flightStep ? verifyStopStand(flight, flightStep.stepId) : "";
 
   const [busy, setBusy] = useState("");
   const [rewriting, setRewriting] = useState(false);
@@ -145,6 +151,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsC
       className={"bh-card is-" + s.tone + (compact ? " is-compact" : "")}
       data-plan={plan.id}
       data-tone={s.tone}
+      data-tour="behaviors-card"
       data-no-drag
       aria-label={"Behaviors — " + s.status}
       onKeyDown={(e) => {
@@ -186,19 +193,57 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsC
             ) : null}
           </span>
         </div>
-        <p className="bh-sentence">{s.sentence}</p>
-        {s.action || flightStep ? (
+        <p className="bh-sentence">{stand === "halted" ? haltedLine(s.failed) : s.sentence}</p>
+        {stand === "halted" && flightStep ? (
+          // A failed behavior HALTS the route (the owner likes halt; no
+          // recovery ladder): Retry checks again, Skip moves on without them,
+          // "Let the agent fix it" hands the failure to the session's agent
+          // and checks again once its turn ends (POST …/op/fix).
+          <div className="bh-head-actions bh-halt-actions">
+            <button
+              type="button"
+              className="btn-primary bh-retry"
+              title="Check these behaviors again"
+              disabled={!!busy}
+              onClick={() => void withBusy("retry", () => stepRetry(flightStep.flightId, flightStep.stepId))}
+            >
+              {busy === "retry" ? "…" : "Retry"}
+            </button>
+            <button
+              type="button"
+              className="test-btn bh-skip"
+              title="The route moves on without these behaviors"
+              disabled={!!busy}
+              onClick={() => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId))}
+            >
+              {busy === "skip" ? "…" : "Skip"}
+            </button>
+            <button
+              type="button"
+              className="test-btn bh-fix-agent"
+              title="Hand what failed to this session's agent; the behaviors are checked again once it is done"
+              disabled={!!busy}
+              onClick={() =>
+                void withBusy("agentfix", () =>
+                  flightAction("Let the agent fix it", flightPath(flightStep.flightId, "/steps/" + encodeURIComponent(flightStep.stepId) + "/op/fix"), {}, "Handed to the agent — the behaviors are checked again after its fix")
+                )
+              }
+            >
+              {busy === "agentfix" ? "…" : "Let the agent fix it"}
+            </button>
+          </div>
+        ) : s.action || flightStep ? (
           <div className="bh-head-actions">
             {s.action ? (
               <button type="button" className="btn-primary bh-primary" data-action={s.action.key} disabled={!!busy} onClick={primary}>
                 {busy === "primary" ? "…" : s.action.label}
               </button>
             ) : null}
-            {flightStep ? (
+            {flightStep && stand !== "fixing" ? (
               <button
                 type="button"
                 className="test-btn bh-skip"
-                title="The chain moves on without these answers"
+                title="The route moves on without these answers"
                 disabled={!!busy}
                 onClick={() => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId))}
               >

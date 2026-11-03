@@ -1,5 +1,5 @@
 /** The movable sidebar sections. Each customizable bar (Usage, Tickets, Pull
- * requests, Issues, Verify, Assistant, Prompts) renders inside a <BarSlot> that carries
+ * requests, Issues, Assistant, Prompts) renders inside a <BarSlot> that carries
  * the drag affordance (a grip on the left, since the bars themselves are
  * wall-to-wall buttons/toggles that would otherwise swallow the drag gesture)
  * and the accent insertion cue. Reordering happens in Sidebar, which owns the shared
@@ -17,7 +17,6 @@ import { GitIssueBar } from "./GitIssueBar";
 import { PrReviewBar } from "./PrReviewBar";
 import { PromptsBar } from "./PromptsBar";
 import { useUi } from "../../state/store";
-import { VerifyBar } from "./VerifyBar";
 
 /** DataTransfer type that marks a drag as a section (bar) move. */
 export const SECTION_MIME = "application/x-mf-section";
@@ -44,8 +43,9 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
       return <PrReviewBar />;
     case "issue-handling":
       return <GitIssueBar />;
-    case "verify":
-      return <VerifyBar />;
+    // "verify" has no bar any more: Verify is a stop on the route, its
+    // behaviors live in the Sky (docs/behaviors.md §4) — a saved order that
+    // still names it renders an empty slot (`.bar-slot:empty`).
     case "assistant":
       // Chat, Todo, and Instructions: the assistant's standing instructions
       // (its agent file), editable in place. Not "Agent" — that word is the

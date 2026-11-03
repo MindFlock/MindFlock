@@ -1,5 +1,5 @@
-/** Top-bar surfaces in the URL: New, Intake, Verify, Schedule and Settings
- * each get a hash (#new, #intake/tickets, #verify, #schedule,
+/** Top-bar surfaces in the URL: New, Intake, Schedule and Settings
+ * each get a hash (#new, #intake/tickets, #schedule,
  * #settings/accounts), so browser Back closes the open one instead of leaving
  * the app, and a link opens it. The store's openDialog stays the one truth;
  * this only mirrors it into history and back.
@@ -29,7 +29,12 @@
  * `#behaviors` / `#behaviors/<plan id>` (docs/behaviors.md §4) is a Sky
  * link, not a surface: it switches to the Sky and asks for the board or
  * that plan's card (lib/behaviorsFocus `openBehaviors`), and stays the
- * address until the view moves. */
+ * address until the view moves.
+ *
+ * Verify is not a surface any more (it is a stop on the route): an old
+ * `#verify` link asks for the next behaviors that need you, `#verify/<branch>`
+ * for that branch's, and both are rewritten in place to `#behaviors` (the
+ * branch's plan id is not known until the plans load). */
 
 import { useUi, type DialogName, type MainView } from "../state/store";
 import { behaviorsHash, openBehaviors, parseBehaviorsHash, type BehaviorsTarget } from "./behaviorsFocus";
@@ -39,7 +44,6 @@ import type { SkyMode } from "./skyLayout";
 const BY_HASH: Record<string, DialogName> = {
   new: "new-session",
   intake: "intake",
-  verify: "verify",
   settings: "settings",
   schedule: "schedule",
   // Schedule's name before it moved to the top bar: an old link still lands.
@@ -113,10 +117,16 @@ export function parseViewHash(hash: string): { view: "sky"; focus: string } | nu
   return { view: "sky", focus };
 }
 
-/** A `#behaviors[/<plan id>]` link's target, or null when the hash is not
- * one (an old `#verify…` link is still the Verify surface's). */
+/** A `#behaviors[/<plan id>]` link's target — or an old `#verify[/<branch>]`
+ * one's — or null when the hash is neither. */
 export function parseBehaviorsLink(hash: string): BehaviorsTarget | null {
-  return /^#behaviors(?:\/|$)/.test(hash || "") ? parseBehaviorsHash(hash) : null;
+  return /^#(?:behaviors|verify)(?:\/|$)/.test(hash || "") ? parseBehaviorsHash(hash) : null;
+}
+
+/** The address a behaviors link reads once it has landed: a `#behaviors…`
+ * link keeps its own; an old `#verify…` one reads `#behaviors`. */
+export function behaviorsAddress(hash: string): string {
+  return /^#verify(?:\/|$)/.test(hash || "") ? behaviorsHash() : hash;
 }
 
 /** The address an old `#flights/<old>` link reads once it has landed: the
@@ -167,8 +177,13 @@ export function installSurfaceHash(win: Window = window): () => void {
   if (firstView) useUi.getState().showSky(firstView.focus);
   // The store routes the retired name (lib/flights legacyFlightsRoute).
   if (firstFlights !== null) useUi.getState().openDialogFor("flights", firstFlights);
-  // A behaviors link keeps its address (nothing below rewrites it).
-  if (firstBehaviors) openBehaviors(firstBehaviors);
+  // A behaviors link keeps its address (an old #verify one is rewritten to
+  // #behaviors).
+  if (firstBehaviors) {
+    openBehaviors(firstBehaviors);
+    const at = behaviorsAddress(loc.hash);
+    if (at !== loc.hash) replace(at);
+  }
   if (first || firstView || firstFlights !== null || !loc.hash) {
     if (first) useUi.getState().openDialogFor(first.name, first.target);
     const now = firstFlights !== null ? landedHash(firstFlights) : urlHash(useUi.getState());
@@ -249,7 +264,7 @@ export function installSurfaceHash(win: Window = window): () => void {
     if (behaviors) {
       // Back / Forward onto a behaviors link (or one pasted into this tab):
       // fly there, and keep saying it (switching to the Sky rewrote it).
-      const at = loc.hash;
+      const at = behaviorsAddress(loc.hash);
       pushed = false;
       openBehaviors(behaviors);
       if (loc.hash !== at) replace(at);

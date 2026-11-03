@@ -43,21 +43,22 @@ afterEach(() => {
 const open = () => [useUi.getState().openDialog, useUi.getState().dialogTarget];
 
 describe("the top bar is flat again", () => {
-  it("New · Grid / Sky · Intake · Verify · Schedule · Settings — and no Flights button", () => {
-    const at = ['id="new-btn"', 'data-fold="view"', 'id="intake-btn"', 'id="verify-btn"', 'id="schedule-btn"', 'id="settings-btn"', 'id="palette-btn"'].map(
+  it("New · Grid / Sky · Intake · Schedule · Settings — no Flights button, no Verify button", () => {
+    const at = ['id="new-btn"', 'data-fold="view"', 'id="intake-btn"', 'id="schedule-btn"', 'id="settings-btn"', 'id="palette-btn"'].map(
       (s) => TOPBAR.indexOf(s)
     );
     expect(at.every((x, i) => x > 0 && (i === 0 || x > at[i - 1])), at.join(",")).toBe(true);
     expect(TOPBAR).not.toContain('id="flights-btn"');
     expect(TOPBAR).not.toContain('openDialogFor("flights"');
-    for (const name of ["intake", "verify", "schedule"]) expect(TOPBAR).toContain(`ui.openDialogFor("${name}")`);
+    for (const name of ["intake", "schedule"]) expect(TOPBAR).toContain(`ui.openDialogFor("${name}")`);
+    // Verify is a stop on the route, not a place (docs/behaviors.md §4).
+    expect(TOPBAR).not.toContain('id="verify-btn"');
+    expect(TOPBAR).not.toContain('openDialogFor("verify")');
   });
 
   it("each button wears its own badge and tooltip again", () => {
-    expect(TOPBAR).toContain('{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}');
     expect(TOPBAR).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');
     expect(TOPBAR).toContain('"Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake")');
-    expect(TOPBAR).toContain('"Verify — " + VERIFY_BLURB + keys("verify")');
   });
 
   it("the Sky half of the toggle counts the chains that need you", () => {
@@ -69,10 +70,9 @@ describe("the top bar is flat again", () => {
 describe("the keys", () => {
   const run = (id: string) => KEYMAP.find((k) => k.id === id)!.run({} as KeyboardEvent);
 
-  it("Alt+I → Intake, Alt+V → Verify, Alt+S → Schedule, under their old ids (a rebind survives)", () => {
+  it("Alt+I → Intake, Alt+S → Schedule, under their old ids (a rebind survives)", () => {
     for (const [id, key, help] of [
       ["intake", "i", "Intake — tickets, PRs and issues"],
-      ["verify", "v", /^Verify — /],
       ["schedule", "s", "Schedule — templates that start sessions on their own"],
     ] as const) {
       const k = KEYMAP.find((e) => e.id === id)!;
@@ -83,13 +83,28 @@ describe("the keys", () => {
       expect(open(), id).toEqual([id, null]);
     }
   });
+
+  it("Alt+V (its old id) flies the Sky to the next behaviors that need you — no dialog", () => {
+    useUi.getState().closeDialog();
+    const k = KEYMAP.find((e) => e.id === "verify")!;
+    expect(k).toMatchObject({ key: "v", alt: true });
+    expect(k.help?.[2]).toBe("Behaviors — the next that needs you");
+    run("verify");
+    expect(open()).toEqual([null, null]);
+    expect(useUi.getState().view).toBe("sky");
+    expect(useBehaviorsFocus.getState().request).toMatchObject({ next: true });
+  });
 });
 
 describe("the palette", () => {
   const p = code("components/palette/CommandPalette.tsx");
-  it("Intake… / Verify… / Schedule… open the dialogs; Switch to the Sky / grid; Saved chains… is the shelf", () => {
+  it("Intake… / Schedule… open the dialogs; Behaviors fly the Sky; Switch to the Sky / grid; Saved chains… is the shelf", () => {
     expect(p).toContain('run: () => ui.openDialogFor("intake"),');
-    expect(p).toContain('label: "Verify…"');
+    expect(p).not.toContain('label: "Verify…"');
+    expect(p).toContain('label: "Behaviors — next that needs you",');
+    expect(p).toContain("run: () => openBehaviors({ next: true }),");
+    expect(p).toContain('label: "Show the Behaviors board",');
+    expect(p).toContain("run: () => openBehaviors({ board: true }),");
     expect(p).toContain('label: "Schedule…"');
     expect(p).toContain('label: "Switch to the Sky", hint: "Ctrl+Y"');
     expect(p).toContain('label: "Switch to the grid", hint: "Ctrl+Y"');
@@ -110,13 +125,14 @@ describe("the Flights dialog is retired", () => {
     expect(parseHash("#flights")).toBeNull();
   });
 
-  it("the three dialogs open standalone, on their own deep links", () => {
+  it("the two dialogs open standalone, on their own deep links; Verify is no dialog", () => {
     useUi.getState().openDialogFor("intake", "tickets:jira");
     expect(open()).toEqual(["intake", "tickets:jira"]);
     expect(hashFor("intake", "tickets:jira")).toBe("#intake/tickets%3Ajira");
-    useUi.getState().openDialogFor("verify", "feature/x");
-    expect(open()).toEqual(["verify", "feature/x"]);
-    expect(hashFor("verify", "feature/x")).toBe("#verify/feature%2Fx");
+    // A Verify dialog is no surface: no hash of its own (#verify links land
+    // on #behaviors — shellRound4.test.ts).
+    expect(hashFor("verify", "feature/x")).toBe("");
+    expect(parseHash("#verify")).toBeNull();
     useUi.getState().openDialogFor("templates", "new");
     expect(open()).toEqual(["schedule", "new"]);
     expect(hashFor("schedule", "new")).toBe("#schedule");

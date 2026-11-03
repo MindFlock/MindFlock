@@ -8,7 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useWsTerm } from "../../lib/wsTerm";
 import { useUi } from "../../state/store";
-import { useExtensions } from "../../state/queries";
+import { useExtensions, useTestPlans } from "../../state/queries";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { ExtPaneBody } from "../../extensions/ExtPaneBody";
 import { closeExtPaneByKey, parseTarget, runCommand } from "../../extensions/host";
 import { selectWindow } from "../../lib/sessionActions";
@@ -121,11 +122,15 @@ function CloseBtn({ desc }: { desc: Pick<SpecialPaneDesc, "kind" | "session" | "
  *
  * The same websocket an ordinary session pane uses, so what you see here is
  * exactly what the agent is doing, live. Closing this pane does NOT stop the
- * run: it keeps working and writes its results file, and the Verify dialog
- * reopens the window for as long as the session exists. */
+ * run: it keeps working and writes its results file, and the Behaviors card
+ * (its ⋯ "Open the checking run") reopens the window for as long as the
+ * session exists. */
 function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadDrag }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const session = desc.session || "";
+  // The behaviors this run is checking: the back button flies to their card.
+  const plans = useTestPlans().data?.plans;
+  const planId = (plans || []).find((p) => p.run_session === session)?.id || "";
   const state = useWsTerm(
     hostRef,
     "/api/instances/" + encodeURIComponent(session) + "/terminal",
@@ -139,21 +144,20 @@ function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadD
         <span className="branch">{session}</span>
         <span className="state">{state}</span>
         <div className="actions">
-          {/* The way back. Watch is a ONE-WAY trip without it: the Verify dialog
-              has to close to open this pane (it is a full-screen modal, so a
-              pane opened behind it is a press with no visible effect), which
-              leaves somebody who was triaging three checklists with no route
-              back to the other two except remembering Alt+V. (The head's ✕
-              closes the window; the run keeps going either way.) */}
+          {/* The way back. Watch is a ONE-WAY trip without it: the run is
+              opened from the Behaviors card in the Sky, and this pane lives in
+              the grid — so the button flies back to the card it came from
+              (openBehaviors, docs/behaviors.md §4). (The head's ✕ closes the
+              window; the run keeps going either way.) */}
           <button
             className="act verify-pane-back"
-            title="Back to Verify (Alt+V)"
+            title="Back to these behaviors on the route, in the Sky (Alt+V: the next that needs you)"
             onClick={(e) => {
               e.stopPropagation();
-              useUi.getState().openDialogFor("verify");
+              openBehaviors(planId ? { planId } : { next: true });
             }}
           >
-            Verify
+            Behaviors
           </button>
         </div>
         <CloseBtn desc={desc} />

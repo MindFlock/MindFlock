@@ -123,8 +123,18 @@ too; openBehaviors from the grid switches to the Sky.
 ## 5. The Verify stop
 
 - Parked on you: its card is the BehaviorsCard (per-behavior answers). The
-  blanket "Done" (`_verify_done` → "Done on the chain") is removed: the stop
-  moves on when the behaviors are answered, or the person presses **Skip**.
+  blanket "Done" (`_verify_done` → "Done on the chain") is removed — the
+  server refuses Done on it (409 `answer_behaviors`): the stop moves on when
+  the behaviors are answered, or the person presses **Skip**.
+- **Failed: the route HALTS** (`on_fail` halt is the default). The reason leads
+  with the count ("Failed · 2: login works; logout works"); the card says
+  "Failed · 2 — halted…" and offers **Retry · Skip · Let the agent fix it**
+  (`POST /api/flights/{id}/steps/{sid}/op/fix` — the agent gets the failure,
+  the stop runs again after its turn). A Retry or a fix checks again: a
+  failure answered before the attempt began is re-run by the agent, and a
+  person's old Fail is theirs to answer again. No recovery ladder.
+- No behaviors yet: running the stop writes them (the face reads "Writing…",
+  then the summary).
 - `who=you`: only behaviors checked by you park the chain on you; agent
   behaviors under `who=you` are run by the agent first (or, if the person
   chose "you" for all, they are shown as yours AND recorded when answered).
@@ -153,13 +163,22 @@ rows (`openBehaviors({ planId })`), the old `#flights/checklists[/<b>]` links
 id>]` link (load + Back/Forward → `openBehaviors`). Seen rendered against the
 demo mocks in light and dark.
 
-**Still to connect (§4, no worker owned it):** these still open the Verify
-dialog — the top-bar **Verify** button, Alt+V (`lib/keymap.ts`), the palette
-entry, `#verify` / `#verify/<branch>` (still a surface in
-`lib/surfaceHash.ts`), the session menu (`lib/stage.ts`), the verdict chip
-(`VerdictChip.tsx`, `lib/checklistLink.ts`), the bell's verify rows
-(`NotificationsBell.tsx`), the sidebar Verify bar (`VerifyBar.tsx`) and the
-watch pane's back button (`SpecialPane.tsx`); the Verify tour is not
-rewritten. Each is a one-line swap to `openBehaviors(...)` plus the source
-pins in `flatTopBar.test.ts`, `verify*.test.ts` and the top-bar tests that
-name them.
+**Connected (vz-verify, 2026-11-03 — docs/vision/verify.md):** every §4
+way in now flies the Sky — the top-bar Verify button is gone, Alt+V is
+`openBehaviors({ next: true })`, the palette has "Behaviors — next that needs
+you" + "Show the Behaviors board", `#verify` / `#verify/<branch>` land on the
+behaviors and read `#behaviors`, the session menu says "Behaviors", the verdict
+chip and the bell's rows open the behaviors, the sidebar Verify bar is
+deleted, the watch pane's back button returns to its behaviors, and the Verify
+tour is a 3-step Sky tour (stop, card, board). The Verify dialog
+(VerifyDialog/Plan/Step/Chrome) is deleted; any leftover
+`openDialogFor("verify")` lands in the Sky (`installVerifyRedirect`). §5 is
+built: a failed Verify stop halts the route ("Failed · 2: …"), its card offers
+Retry · Skip · Let the agent fix it (`…/steps/<id>/op/fix`), a Retry or fix
+checks the behaviors again, and the blanket Done is refused.
+
+**Still to connect (files vz-verify did not own — see docs/vision/verify.md
+"Wanted"):** the halted face suffix "— halted" (`verifyStopFace` in
+`withBehaviors`), "Let the agent fix it" in FlightStrip's halted actions,
+`ON_FAIL_LABEL` words, verifyActions' "in Verify" toasts, the `verify` bar in
+barDefs / SidebarBarsPicker, replayTour's `verify` surface.

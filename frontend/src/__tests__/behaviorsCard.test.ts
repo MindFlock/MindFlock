@@ -16,7 +16,13 @@ vi.mock("../lib/toast", () => ({ toast: (...a: unknown[]) => toast(...a) }));
 // The card looks up its open work session; the real hook polls (and reads
 // `document`), which node has none of.
 let instances: Instance[] = [];
-vi.mock("../state/queries", async (orig) => ({ ...((await orig()) as object), useInstances: () => ({ data: instances }) }));
+// The route a Verify stop's card belongs to (useFlights): halted, parked…
+let flights: unknown[] = [];
+vi.mock("../state/queries", async (orig) => ({
+  ...((await orig()) as object),
+  useInstances: () => ({ data: instances }),
+  useFlights: () => ({ data: flights }),
+}));
 
 const { BehaviorsCard, addBehavior } = await import("../components/behaviors/BehaviorsCard");
 const { cardMenuItems, primaryTarget, rowChip, rowKey, showsAnswers, whoOf } = await import("../components/behaviors/cardModel");
@@ -119,6 +125,29 @@ describe("BehaviorsCard renders", () => {
     expect(html).toContain(">+ Add a behavior</button>");
     expect(html).toContain(">Skip this stop</button>");
     expect(html).not.toMatch(/>Done</);
+  });
+
+  it("a Verify stop whose behaviors failed HALTS the route: Retry · Skip · Let the agent fix it", () => {
+    flights = [
+      {
+        id: "f1",
+        state: "halted",
+        cursor: 0,
+        steps: [{ id: "s3", kind: "verify", title: "Verify", config: {}, on_fail: "halt" }],
+        step_states: { s3: { state: "failed", since: 1, note: "Failed · 1: a", detail: {}, rounds: 0 } },
+      },
+    ];
+    try {
+      const html = render(FAILED, { flightStep: { flightId: "f1", stepId: "s3" } });
+      expect(visible(html)).toContain("Failed · 1 — halted. The route waits here until you Retry, Skip or let the agent fix it.");
+      expect(html).toMatch(/class="btn-primary bh-retry"[^>]*>Retry</);
+      expect(html).toMatch(/class="test-btn bh-skip"[^>]*>Skip</);
+      expect(html).toMatch(/class="test-btn bh-fix-agent"[^>]*>Let the agent fix it</);
+      expect(html).not.toContain("Skip this stop");
+      expect(html).not.toMatch(/>Done</);
+    } finally {
+      flights = [];
+    }
   });
 
   it("compact keeps everything, narrower", () => {

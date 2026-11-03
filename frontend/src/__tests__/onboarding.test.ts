@@ -293,7 +293,6 @@ describe("first-run state has exactly one authority", () => {
     expect(users).toEqual([
       ["components/dialogs/NewSessionDialog.tsx", "new"],
       ["components/dialogs/TemplatesDialog.tsx", "schedule"],
-      ["components/dialogs/VerifyDialog.tsx", "verify"],
       ["components/flights/SkyView.tsx", "sky"],
       ["components/intake/IntakeDialog.tsx", "intake"],
       ["components/settings/SettingsDialog.tsx", "settings"],
