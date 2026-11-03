@@ -585,6 +585,10 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         name="antigravity",
         program_aliases=("agy", "antigravity"),
         command="agy",
+        # Google's own bootstrapper (antigravity.google, verified 2026-11-03):
+        # downloads, checksum-verifies and installs the native build into
+        # ~/.local/bin/agy. Sign-in is agy's first interactive run.
+        install_hint="curl -fsSL https://antigravity.google/cli/install.sh | bash",
         # Verified live against Antigravity CLI (agy) 1.0.16 — Google's
         # successor to Gemini CLI. Flags from `agy --help`: the skip-all-
         # permission-prompts flag matches Claude's spelling, and resume is
