@@ -303,7 +303,7 @@ export function stopsWords(flyway: SourceBlock["flyway"]): string {
 export function stopsTip(block: Pick<SourceBlock, "name" | "flyway">, editing = false): string {
   const words = stopsWords(block.flyway);
   const now = block.flyway.own ? "its own: " + block.flyway.name : words === SOURCE_OFF_LABEL ? "stops after the agent" : "goes as far as " + words;
-  return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default chain for " + block.name + " (" + now + ")";
+  return editing ? "Editing on the Sky — go to the editor for " + block.name + " (" + now + ")" : "Edit the default route for " + block.name + " (" + now + ")";
 }
 
 /** A title split after each "/" so a repo path wraps at its owner, not mid

@@ -48,7 +48,7 @@ export interface LandingStripProps {
 }
 
 /** The line under its title: what the strip is for. */
-export const FINISHED_EXPLAIN = "Each repo's main branch: its CI and its last merge — and chains merged today";
+export const FINISHED_EXPLAIN = "Each repo's main branch: its CI and its last merge — and routes merged today";
 
 /** How many landed rows a folded strip shows per repo. */
 export const LANDED_FOLDED = 3;
@@ -181,8 +181,8 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
               type="button"
               className="fl-icon-btn sky-landing-expand"
               aria-expanded={open}
-              aria-label={open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain"}
-              title={open ? "Fold: the first rows of each repo" : "Expand: every finished chain"}
+              aria-label={open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished route"}
+              title={open ? "Fold: the first rows of each repo" : "Expand: every finished route"}
               onClick={onToggleOpen}
             >
               {open ? "▾" : "▸"}

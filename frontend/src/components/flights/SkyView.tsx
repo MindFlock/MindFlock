@@ -291,8 +291,8 @@ const MINIMAP_KEY = "mf_sky_minimap";
 const FINISHED_KEY = "mf_sky_finished";
 /** The toolbar's two tools, in words. */
 const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
-  drag: { label: "✥ Drag", title: "Drag mode (V): a chain moves by its bar, a drag on empty sky selects" },
-  click: { label: "☝ Click", title: "Click mode (H): a drag anywhere pans, a click focuses a chain or selects a stop — Shift+drag selects" },
+  drag: { label: "✥ Drag", title: "Drag mode (V): a route moves by its bar, a drag on empty sky selects" },
+  click: { label: "☝ Click", title: "Click mode (H): a drag anywhere pans, a click focuses a route or selects a stop — Shift+drag selects" },
 };
 /** What on the sky takes a press itself, whatever the tool: a control, a
  * field, an open card, a line's editor, a menu, the selection's bar, the
@@ -1386,7 +1386,7 @@ export function SkyView() {
     placing.current.set(groundedKey(f.id), near);
     // This session and Perched on you draw no grounded line: say where it went.
     const m = useUi.getState().skyMode;
-    if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+    if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
   };
   /** The intake lane's stops chip: that source's default stops as an editor
    * chain on the board (IntakeLane `openDefaultEditor`) — placed right of the
@@ -1397,7 +1397,7 @@ export function SkyView() {
       existing: (f) => {
         const key = groundedKey(f.id);
         if (rectOf(key)) jumpTo(key);
-        else toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+        else toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
       },
       made: (f) => {
         if (!alive.current) return;
@@ -1407,7 +1407,7 @@ export function SkyView() {
         placing.current.set(key, "lane");
         setGroundFocus(key);
         const m = useUi.getState().skyMode;
-        if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+        if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
       },
     });
   /** Pin a line at `at` — through the layout store even when the sky has
@@ -1447,7 +1447,7 @@ export function SkyView() {
       },
       redo: () => deleteFlight(cur),
     });
-    toast("Removed “" + shown + "”", { action: undoAction(entry, "Undo: put “" + shown + "” back on the board") });
+    toast("Removed “" + shown + "”", { action: undoAction(entry, "Undo: put “" + shown + "” back on the Sky") });
   };
   /** A grounded line dropped on a session's line: its stops go onto that
    * session — `attachGrounded` when it has no flight, else tacked on as one
@@ -1488,7 +1488,7 @@ export function SkyView() {
       },
       redo: async () => (cur ? deleteFlight(cur) : false),
     });
-    toast(msg, { action: undoAction(entry, "Undo: put “" + (name || "the stops") + "” back on the board") });
+    toast(msg, { action: undoAction(entry, "Undo: put “" + (name || "the stops") + "” back on the Sky") });
   };
   const onShelfDragEnd = () => {
     dragged.current = null;
@@ -2282,9 +2282,9 @@ export function SkyView() {
       : mode === "one"
         ? focused
           ? "“" + windowName(focused) + "” isn't in the sky right now."
-          : "Pick a chain to show it alone."
+          : "Pick a route to show it alone."
         : query
-          ? "No chain matches “" + query + "”."
+          ? "No route matches “" + query + "”."
           : mode === "perched"
             ? "Nothing needs you."
             : instQ.data === undefined
@@ -2295,7 +2295,7 @@ export function SkyView() {
     <div className="sky-toolbar" role="toolbar" aria-label="The sky">
       <ChipRow<SkyMode>
         className="sky-modes"
-        label="Which chains"
+        label="Which routes"
         value={mode}
         options={SKY_MODES.map((m) => ({ value: m.id, label: m.label, title: m.title }))}
         onChange={setMode}
@@ -2312,10 +2312,10 @@ export function SkyView() {
         />
       )}
       <span className="sky-search">
-        <TextField value={query} onChange={setQuery} label="Find a chain" placeholder="Find a chain…" onEnter={() => titles[0] && focusOn(titles[0])} />
+        <TextField value={query} onChange={setQuery} label="Find a route" placeholder="Find a route…" onEnter={() => titles[0] && focusOn(titles[0])} />
       </span>
       {!narrow && (
-        <button type="button" className="fl-btn sky-tidy" title="Put every chain back in its organized spot (T)" onClick={tidy}>
+        <button type="button" className="fl-btn sky-tidy" title="Put every route back in its organized spot (T)" onClick={tidy}>
           Tidy
         </button>
       )}
@@ -2341,13 +2341,13 @@ export function SkyView() {
           <button type="button" className="sky-zoom-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={cam.z >= ZOOM_MAX - 0.001} onClick={() => zoomBy(1.2)}>
             +
           </button>
-          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused chain — the grid's 1 (1)" disabled={!focusLine} onClick={() => fitFocused()}>
+          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused route — the grid's 1 (1)" disabled={!focusLine} onClick={() => fitFocused()}>
             1
           </button>
           <button
             type="button"
             className="sky-zoom-btn sky-fit"
-            title="See everything: every chain in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
+            title="See everything: every route in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
             onClick={() => fitAll(true)}
           >
             Fit
@@ -2366,14 +2366,14 @@ export function SkyView() {
             {
               key: "finished",
               label: (finishedOn ? "✓ " : "") + "Show the Finished strip",
-              title: "Each repo's main branch — its CI and its last merge — and the chains merged today, in a strip right of the chains",
+              title: "Each repo's main branch — its CI and its last merge — and the routes merged today, in a strip right of the routes",
               className: "sky-finished-toggle",
               onSelect: () => setFinishedOn(!finishedOn),
             },
             {
               key: "behaviors",
               label: (behaviors.on ? "✓ " : "") + "Show the Behaviors board",
-              title: "Behaviors with no session in the Sky — a closed session, another branch, a watched repo's push — in a board right of the chains",
+              title: "Behaviors with no session in the Sky — a closed session, another branch, a watched repo's push — in a board right of the routes",
               className: "sky-behaviors-toggle",
               onSelect: behaviors.toggle,
             },
@@ -2735,9 +2735,9 @@ export function SkyView() {
             data-tour="flights-sky"
             tabIndex={-1}
             role="application"
-            aria-roledescription="canvas"
+            aria-roledescription="sky"
             aria-label={
-              "The sky: every session as a chain — " +
+              "The sky: every session as a route — " +
               (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") +
               ", Ctrl+wheel or + / − to zoom, double-click for a new session, Tab for the stops, ? for every key"
             }

@@ -77,7 +77,7 @@ export function zoomMenuItems(p: ZoomMenuProps): ZoomMenuItem[] {
     },
     {
       id: "fit-focused",
-      label: "Fit the focused chain",
+      label: "Fit the focused route",
       keys: [["1"]],
       disabled: !p.canFitFocused,
       checked: false,

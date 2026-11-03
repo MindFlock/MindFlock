@@ -254,7 +254,7 @@ function RemoveTool({ n, here = false, onRemove }: { n: DiagramNode; here?: bool
   const t = removeTool(n, here);
   const said = n.kind === "stop" && t.label !== "Remove" ? "Remove “" + n.title + "”" + t.label.slice("Remove".length) : "Remove “" + n.title + "”";
   return (
-    <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={said} title={n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the chain (Delete)" : t.title} onClick={() => onRemove(n)}>
+    <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={said} title={n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the route (Delete)" : t.title} onClick={() => onRemove(n)}>
       🗑
     </button>
   );
@@ -726,7 +726,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     try {
       await api(flightPath(flight, "/steps/" + encodeURIComponent(sid) + "/op/rewind"), { json: {} });
       setRewind(null);
-      toast("Rewound to “" + rewindNode.title + "” — the chain goes on from the stop after it");
+      toast("Rewound to “" + rewindNode.title + "” — the route goes on from the stop after it");
       void refreshFlights();
       void refreshInstances();
     } catch (err) {
@@ -1297,7 +1297,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 </div>
               )}
               {waiting && !open && (
-                <span className="fl-join-pill" title={"The chain goes on once its workers are done: " + joinLabel(waiting)} aria-hidden="true">
+                <span className="fl-join-pill" title={"The route goes on once its workers are done: " + joinLabel(waiting)} aria-hidden="true">
                   {waiting.waiting + " of " + waiting.total}
                 </span>
               )}
@@ -1322,7 +1322,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                         className="fl-icon-btn fl-group-chev"
                         aria-label={"Show the stops in “" + n.title + "”"}
                         aria-expanded={false}
-                        title="Show its stops on the chain"
+                        title="Show its stops on the route"
                         data-no-drag
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1529,7 +1529,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               body={
                 "The worktree goes back to " +
                 (rewindNode.receipt ? "where it was " + rewindNode.receipt : "this checkpoint") +
-                " — work since then is lost unless it was committed somewhere else — and the chain goes on from the stop after it."
+                " — work since then is lost unless it was committed somewhere else — and the route goes on from the stop after it."
               }
               confirmLabel="Rewind"
               busy={rewind.busy}

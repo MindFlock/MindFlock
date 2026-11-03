@@ -64,7 +64,7 @@ describe("the palette's filter (pure)", () => {
     expect(said(paletteRows(KINDS, [], "s"))).toEqual(["ship", "agent", "wait", "loop", "verify", "someone", "you"]);
   });
 
-  it("the saved chains narrow by name and by their stops", () => {
+  it("the saved routes narrow by name and by their stops", () => {
     expect(said(paletteRows(KINDS, SAVED, "release"))).toEqual(["plan:p1"]);
     expect(said(paletteRows([], SAVED, "ship"))).toEqual(["plan:p1"]);
     expect(said(paletteRows([], SAVED, "tidy"))).toEqual(["plan:p2"]);
@@ -143,9 +143,9 @@ describe("StopPalette draws the filter", () => {
     expect(you).toContain(">Wait for me<");
   });
 
-  it("the saved chains are chips the filter narrows too, highlighted when they're the best", () => {
+  it("the saved routes are chips the filter narrows too, highlighted when they're the best", () => {
     const all = render({ saved: SAVED });
-    expect(all).toContain("A saved chain — all of its stops");
+    expect(all).toContain("A saved route — all of its stops");
     expect(all).toMatch(/class="fl-pick"[^>]*title="Verify → Ship"[^>]*>Release</);
     expect(all).toContain(">Nightly tidy<");
     const night = render({ saved: SAVED, initialQuery: "night" });
@@ -153,9 +153,9 @@ describe("StopPalette draws the filter", () => {
     expect(night).toMatch(/class="fl-pick is-hi"[^>]*>Nightly tidy</);
     expect(night).not.toContain("MindFlock does");
     // No saved chain matches: their heading goes with them.
-    expect(render({ saved: SAVED, initialQuery: "verify checks" })).not.toContain("A saved chain");
+    expect(render({ saved: SAVED, initialQuery: "verify checks" })).not.toContain("A saved route");
     // None at all: no heading.
-    expect(render()).not.toContain("A saved chain");
+    expect(render()).not.toContain("A saved route");
   });
 
   it("nothing left says so, quietly", () => {
@@ -193,7 +193,7 @@ describe("typed keys stay in the field", () => {
     }
   });
 
-  it("the Sky's chain passes its saved chains as data, not markup", () => {
+  it("the Sky's route passes its saved routes as data, not markup", () => {
     const hook = SRC["components/flights/useGroundedLine.tsx"];
     expect(hook).toContain("saved={savedChips}");
     expect(hook).not.toMatch(/<StopPalette[\s\S]*?extra=/);

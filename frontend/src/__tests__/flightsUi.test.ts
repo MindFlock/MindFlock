@@ -196,7 +196,7 @@ describe("a flight's card", () => {
     const pending = html.slice(html.indexOf('data-node="stop:s4"'));
     expect(pending).toContain('aria-label="Actions for Merge"');
     expect(pending).toContain(">Jump here</button>");
-    expect(html).toContain(">Stop the chain</button>");
+    expect(html).toContain(">Stop the route</button>");
   });
 
   it("a halted flight offers Retry, not Done", () => {
@@ -248,7 +248,7 @@ describe("the pane strip", () => {
       c.setQueryData(["flight-kinds"], KINDS);
     });
     expect(html).toContain('class="fl-strip-text">Ticket to merge · ●●●○ · Approve the merge (5m)<');
-    expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Chain tab — [^"]*"><svg class="fl-bird"/);
+    expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Route tab — [^"]*"><svg class="fl-bird"/);
     expect(html).toContain('class="fl-strip fl-state-waiting_you fl-needs"');
     expect(html).toContain(">Done</button>");
     expect(html).toContain(">Skip</button>");
@@ -401,7 +401,7 @@ describe("the sky", () => {
     expect(html.slice(html.indexOf('data-line="second"'))).toContain('data-chain="second"');
     expect(code("components/flights/SkyLine.tsx")).toContain("bird={birdPerch(moves.diagram)}");
     // The toolbar: the views, find, Tidy, the zoom (New session is the shelf's chip).
-    for (const w of [">All<", ">Mine<", ">Needs you<", ">This session<", ">Tidy<", ">Fit<", ">100%<", 'aria-label="Find a chain"'])
+    for (const w of [">All<", ">Mine<", ">Needs you<", ">This session<", ">Tidy<", ">Fit<", ">100%<", 'aria-label="Find a route"'])
       expect(html).toContain(w);
     expect(html).toContain('data-tour="flights-newblock"');
     expect(html).not.toContain("✈");
@@ -545,7 +545,7 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     // A saved stop that's gone: the server goes by the depth, and the card says so.
     const gone = sourceReach("tickets", { plan: "p_gone", depth: "commit" }, P);
     expect(gone).toMatchObject({ choice: "commit", own: false, missing: "p_gone" });
-    expect(reachSummary(gone)).toBe("Its saved chain “p_gone” is gone, so: Agent → Commit");
+    expect(reachSummary(gone)).toBe("Its saved route “p_gone” is gone, so: Agent → Commit");
     // Plans not known here: a named plan is trusted.
     expect(sourceReach("tickets", { plan: "p_x" }, undefined)).toMatchObject({ choice: "plan:p_x", own: true });
     expect(reachSummary(sourceReach("prs", {}, P))).toBe("Agent, then nothing more. You take it from there");

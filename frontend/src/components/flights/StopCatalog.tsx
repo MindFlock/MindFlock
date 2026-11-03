@@ -295,7 +295,7 @@ export function StopCatalogBody({
     );
   };
 
-  const how = onAdd ? (place ? "Drag onto a chain or the sky, or click to put it on the board" : "Drag onto a chain or the sky, or click to add it to the focused chain") : "Drag onto a chain or the sky";
+  const how = onAdd ? (place ? "Drag onto a route or the sky, or click to put it on the Sky" : "Drag onto a route or the sky, or click to add it to the focused route") : "Drag onto a route or the sky";
 
   const card = (c: CatalogCard<StepKindDef, FlightPlan>, n: number) => {
     const plan = c.section === "multi" ? c.plan : null;
@@ -332,7 +332,7 @@ export function StopCatalogBody({
           <span className="sky-catalog-name">
             {plan && naming ? <PlanNameField plan={plan} plans={plans} onDone={() => setRenaming("")} /> : <span className="sky-catalog-title">{c.name}</span>}
             {compact ? null : c.section === "blocks" ? (
-              <span className={"sky-catalog-badge actor-" + (c.perch ? "you" : "robot")}>{c.perch ? "you" : "robot"}</span>
+              <span className={"sky-catalog-badge actor-" + (c.perch ? "you" : "robot")}>{c.perch ? "you" : "MindFlock"}</span>
             ) : (
               c.builtin && <span className="sky-catalog-badge builtin">built-in</span>
             )}
@@ -370,7 +370,7 @@ export function StopCatalogBody({
         {asking && plan ? (
           <InlineConfirm
             title={"Delete “" + plan.name + "”?"}
-            body="It leaves the catalog and the shelf. Stops already on the board stay."
+            body="It leaves the catalog and the shelf. Stops already on the Sky stay."
             confirmLabel="Delete"
             busy={busy}
             onConfirm={() => void remove(plan)}
@@ -410,7 +410,7 @@ export function StopCatalogBody({
     />
   );
 
-  const what = place ? "puts it on the board" : "adds it to the focused chain";
+  const what = place ? "puts it on the Sky" : "adds it to the focused route";
   let i = -1;
   return (
     <>
@@ -446,14 +446,14 @@ export function StopCatalogBody({
           </section>
         )}
         {cards.multi.length > 0 && (
-          <section className="sky-catalog-section" data-section="multi" role="group" aria-label="Saved chains">
-            <h3 className="sky-catalog-label">Saved chains</h3>
+          <section className="sky-catalog-section" data-section="multi" role="group" aria-label="Saved routes">
+            <h3 className="sky-catalog-label">Saved routes</h3>
             <div className="sky-catalog-grid">{cards.multi.map((c) => card(c, ++i))}</div>
           </section>
         )}
         {rows.length + leads === 0 && <p className="sky-catalog-empty muted">{query.trim() ? "Nothing matches “" + query.trim() + "”." : "No stops yet — this server may be too old for the Sky."}</p>}
         <p className="sky-catalog-hint muted">
-          {onAdd ? "Drag a stop onto a chain or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a stop onto a chain or the sky"}
+          {onAdd ? "Drag a stop onto a route or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a stop onto a route or the sky"}
         </p>
       </div>
       {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}

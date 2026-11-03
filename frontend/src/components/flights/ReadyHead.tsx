@@ -30,7 +30,7 @@ export function ReadyHead({ flight }: { flight: Pick<Flight, "id" | "start_on" |
   const run = async () => {
     setBusy(true);
     try {
-      if (await runFlight(flight.id)) toast("Running “" + (flight.plan_name || "the chain") + "”");
+      if (await runFlight(flight.id)) toast("Running “" + (flight.plan_name || "the route") + "”");
     } finally {
       setBusy(false);
     }
@@ -42,7 +42,7 @@ export function ReadyHead({ flight }: { flight: Pick<Flight, "id" | "start_on" |
         <span className="sky-head-chip tone-ready" title="Built, not running yet">
           Ready
         </span>
-        <button type="button" className="sky-ready-run" disabled={busy} title="Run this chain now" aria-label="Run this chain now" onClick={() => void run()}>
+        <button type="button" className="sky-ready-run" disabled={busy} title="Run this route now" aria-label="Run this route now" onClick={() => void run()}>
           ▶ Run
         </button>
       </span>

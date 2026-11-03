@@ -299,7 +299,7 @@ describe("the group box on the canvas", () => {
     expect(g).toMatch(/aria-label="Move “Ticket to merge” earlier" title="A group doesn&#x27;t move yet" disabled=""/);
     expect(g).toMatch(/aria-label="Move “Ticket to merge” later"[^>]*disabled=""/);
     expect(g).toContain('aria-label="Halt here — “Ticket to merge”"');
-    expect(g).toMatch(/aria-label="Remove “Ticket to merge”" title="Remove this group and its 3 stops from the chain"/);
+    expect(g).toMatch(/aria-label="Remove “Ticket to merge”" title="Remove this group and its 3 stops from the route"/);
     // It never drags.
     expect(g).not.toContain("fl-draggable");
   });
@@ -333,7 +333,7 @@ describe("the group box on the canvas", () => {
       "Show its stops",
       "Halt here",
       "Remove",
-      "The chain is in this group — only what is still ahead can change",
+      "The route is in this group — only what is still ahead can change",
     ]);
     expect(removeTool(flying).danger).toBe(true);
   });

@@ -164,7 +164,7 @@ function StepDialog(p: StopDialogProps) {
         )}
         {draft && loopsToAgent(draft) && (
           <>
-            <FlField label="Back to" wide hint="After this stop the agent is prompted again; once its turn is done the chain runs again from its first stop.">
+            <FlField label="Back to" wide hint="After this stop the agent is prompted again; once its turn is done the route runs again from its first stop.">
               <div className="fl-chiprow stop-dialog-loop-agent" data-loop-agent="">
                 <strong>the agent</strong>
                 {editable && (p.lineSteps?.length || 0) > 1 && (
@@ -191,7 +191,7 @@ function StepDialog(p: StopDialogProps) {
         )}
         {draft && editable && p.loopAgent && draft.kind === "loop" && !loopsToAgent(draft) && (
           <div className="fl-chiprow">
-            <button type="button" className="test-btn" title="The agent is prompted again after this stop, then the chain runs again" onClick={() => setDraft((d) => (d ? { ...d, config: { ...d.config, back_to: LOOP_AGENT } } : d))}>
+            <button type="button" className="test-btn" title="The agent is prompted again after this stop, then the route runs again" onClick={() => setDraft((d) => (d ? { ...d, config: { ...d.config, back_to: LOOP_AGENT } } : d))}>
               ↺ Loop back to the agent instead
             </button>
           </div>
@@ -205,7 +205,7 @@ function StepDialog(p: StopDialogProps) {
           <div className="stop-dialog-halt">
             <Toggle
               on={!!(editable ? draft.halt : n.step?.halt)}
-              label="Halt point — the chain stops here, before doing this stop"
+              label="Halt point — the route stops here, before doing this stop"
               title="Like a breakpoint: Carry on goes on through it"
               onChange={(v) => (editable ? setDraft((d) => (d ? { ...d, halt: v || undefined } : d)) : p.onToggleHalt?.())}
             />
@@ -305,7 +305,7 @@ function GroupDialog(p: StopDialogProps) {
                   </button>
                 )}
                 {p.onRemoveSub && (
-                  <button type="button" className="fl-icon-btn stop-dialog-danger" aria-label={"Remove “" + s.title + "”"} title="Remove this stop from the chain" disabled={p.busy} onClick={() => p.onRemoveSub!(s)}>
+                  <button type="button" className="fl-icon-btn stop-dialog-danger" aria-label={"Remove “" + s.title + "”"} title="Remove this stop from the route" disabled={p.busy} onClick={() => p.onRemoveSub!(s)}>
                     🗑
                   </button>
                 )}
@@ -321,12 +321,12 @@ function GroupDialog(p: StopDialogProps) {
               </button>
             )}
             {p.onUngroup && (
-              <button type="button" className="test-btn" disabled={p.busy} title="Its stops go back on the chain one by one" onClick={p.onUngroup}>
+              <button type="button" className="test-btn" disabled={p.busy} title="Its stops go back on the route one by one" onClick={p.onUngroup}>
                 Ungroup
               </button>
             )}
             {p.onSaveShelf && (
-              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops on the shelf as a saved chain, to drag onto any chain" onClick={() => void p.onSaveShelf!(next)}>
+              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops on the shelf as a saved route, to drag onto any route" onClick={() => void p.onSaveShelf!(next)}>
                 Save to the shelf
               </button>
             )}

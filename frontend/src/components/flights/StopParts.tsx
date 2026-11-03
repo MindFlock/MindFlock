@@ -122,7 +122,7 @@ export function StopPalette({
   onClose,
   title = "Add a stop",
   saved = [],
-  savedHead = "A saved chain — all of its stops",
+  savedHead = "A saved route — all of its stops",
   extra,
   initialQuery = "",
 }: {
@@ -201,7 +201,7 @@ export function StopPalette({
         </button>
       </div>
       {kinds.length === 0 && saved.length === 0 ? (
-        <p className="fl-note muted">The stop list didn't load — this server may not know chains yet.</p>
+        <p className="fl-note muted">The stop list didn't load — this server may not know routes yet.</p>
       ) : (
         <input
           className="fl-input fl-palette-filter"
@@ -327,8 +327,8 @@ export const boardDynamic = (f: Pick<StepKindField, "dynamic">): BoardDynamic | 
  * copy). */
 export function chainChoices(flights: readonly Flight[] | null | undefined, plans: readonly FlightPlan[] | null | undefined): StopChoice[] {
   const out: StopChoice[] = [];
-  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Chain", group: "On the board" });
-  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved chains — a fresh copy each time" });
+  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Route", group: "On the Sky" });
+  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved routes — a fresh copy each time" });
   return out;
 }
 
@@ -445,7 +445,7 @@ export function StopsBeforeField({
   if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: "a stop no longer before this one" }] });
   const pick = (x: string) => !readOnly && onChange(x);
   return (
-    <FlField label={label} wide hint="The chain goes back to this stop for each new run.">
+    <FlField label={label} wide hint="The route goes back to this stop for each new run.">
       <div className="fl-stops-before" data-dynamic="stops_before">
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
@@ -453,7 +453,7 @@ export function StopsBeforeField({
             <ChipRow
               label={r.group ? label + " — " + r.group : label}
               value={value}
-              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the chain (or this group) starts" }))}
+              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the route (or this group) starts" }))}
               onChange={pick}
             />
           </div>
@@ -488,13 +488,13 @@ export function BoardChoiceField({
     if (last && last.group === g) last.items.push(c);
     else runs.push({ group: g, items: [c] });
   }
-  if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: kind === "chains" ? "a chain no longer on the board" : value }] });
+  if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: kind === "chains" ? "a route no longer on the Sky" : value }] });
   const pick = (x: string) => !readOnly && onChange(x);
-  const hint = kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved chain starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.";
+  const hint = kind === "chains" ? "A route on the Sky takes off (it leaves the Sky); a saved route starts a fresh copy each time." : "Where the route runs: a new session forks from this one.";
   return (
     <FlField label={label} wide hint={hint}>
       <div className="fl-stops-before fl-board-choice" data-dynamic={kind}>
-        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No chain on the board yet — drop some stops on empty sky first." : "No session yet."}</p>}
+        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No route on the Sky yet — drop some stops on empty sky first." : "No session yet."}</p>}
         {runs.map((r, i) => (
           <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
             {r.group && <span className="fl-stops-before-name">{r.group}</span>}

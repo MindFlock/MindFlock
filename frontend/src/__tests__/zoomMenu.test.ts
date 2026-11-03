@@ -59,7 +59,7 @@ describe("the open menu", () => {
     expect(html.indexOf('role="separator"')).toBeGreaterThan(html.indexOf('data-item="fit-focused"'));
     expect(html.indexOf('role="separator"')).toBeLessThan(html.indexOf('data-item="zoom-50"'));
     expect(ZOOM_PRESETS).toEqual([0.5, 1, 1.5, 2]);
-    for (const label of ["Fit all", "Fit selection", "Fit the focused chain", "50 %", "100 %", "150 %", "200 %"]) expect(html).toContain(">" + label + "<");
+    for (const label of ["Fit all", "Fit selection", "Fit the focused route", "50 %", "100 %", "150 %", "200 %"]) expect(html).toContain(">" + label + "<");
   });
 
   it("shows each row's keys as caps on the right", () => {

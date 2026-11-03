@@ -300,7 +300,7 @@ describe("lineWhere: the bar's 'at <stop>'", () => {
 
   it("a fast-track rung", () => {
     const d = sessionDiagram([rowOf("me", { stage: "committed", autopilot: { depth: "pr", state: "running", step: "", reason: "", note: "" } })], "me");
-    expect(lineWhere(d)).toBe("fast-track at Push");
+    expect(lineWhere(d)).toBe("goes as far as Push");
   });
 });
 
@@ -353,7 +353,7 @@ describe("a line in the sky", () => {
     expect(labels.map(([l]) => l)).toEqual([
       "Open session",
       "Open in the grid",
-      "Show only this chain",
+      "Show only this route",
       // Nothing folds by default; the line offers to fold what has flown.
       // (Round 18: a chain's tiles have one size — no box sizes.)
       "Fold finished stops",
@@ -370,11 +370,11 @@ describe("a line in the sky", () => {
 
   it("a pinned line offers Tidy instead of Pin; an open one folds back", () => {
     const html = line({ pinned: true, open: false });
-    expect(html).toContain(">Tidy this chain<");
+    expect(html).toContain(">Tidy this route<");
     expect(html).not.toContain(">Pin here<");
   });
 
-  it("round 18: no ◧ on a chain's label (its tiles have one size)", () => {
+  it("round 18: no ◧ on a route's label (its tiles have one size)", () => {
     const html = line({ size: "wide" });
     expect(html).not.toContain('class="skl-size"');
   });

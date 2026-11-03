@@ -122,7 +122,7 @@ describe("the first picture", () => {
     expect(sky).toContain("else fitAll(false, true);");
     expect(sky).toContain("onClick={() => fitAll(true)}");
     expect(sky).toMatch(/k === "0"\) \{\s*handled\(\);\s*fitAll\(\);/);
-    expect(sky).toMatch(/title="See everything: every chain in the window, however small/);
+    expect(sky).toMatch(/title="See everything: every route in the window, however small/);
   });
 });
 
@@ -236,7 +236,7 @@ describe("a line at three zooms", () => {
     expect(near).toContain("--sky-z:2.5;--sky-lines:5");
   });
 
-  it("never changes a chain's geometry with the zoom (round 18: the graph's, plane px)", () => {
+  it("never changes a route's geometry with the zoom (round 18: the graph's, plane px)", () => {
     const at = [0.4, 1, 2.5].map((z) => chainStyle(lineAt(z)));
     expect(at[0]).toBeTruthy();
     expect(at[0]).toMatch(/width:\d+px/);

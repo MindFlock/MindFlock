@@ -119,18 +119,18 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
         ) : diagram.mode === "ladder" ? (
           <>
             <strong>Fast-track</strong>
-            <span className="muted">tack a stop on and the chain takes over its rungs</span>
+            <span className="muted">tack a stop on and the route takes over its rungs</span>
           </>
         ) : (
           <>
-            <strong>No chain yet</strong>
-            <span className="muted">tack a stop onto the chain, or run a saved chain below</span>
+            <strong>No route yet</strong>
+            <span className="muted">tack a stop onto the route, or run a saved route below</span>
           </>
         )}
         <button
           type="button"
           className="linklike fl-open-sky"
-          title="Switch to the Sky on this session's chain, with the bird where it is"
+          title="Switch to the Sky on this session's route, with the bird where it is"
           onClick={() => showInSky(title)}
         >
           Open in the Sky
@@ -142,8 +142,8 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (
-        <section className="fl-flyway-cards" aria-label="Saved chains">
-          <h4 className="fl-group-head">Saved chains</h4>
+        <section className="fl-flyway-cards" aria-label="Saved routes">
+          <h4 className="fl-group-head">Saved routes</h4>
           {ordered.length ? (
             <>
               <div className="fl-flyway-grid">
@@ -158,7 +158,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
               )}
             </>
           ) : (
-            <p className="fl-note muted">No saved chains on this server yet.</p>
+            <p className="fl-note muted">No saved routes on this server yet.</p>
           )}
           <DescribeField
             want="plan"
@@ -171,7 +171,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
                 const words = steps.map((s) => s.title).join(" → ");
                 const plan = await savePlan({
                   id: "",
-                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described chain",
+                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described route",
                   description: "",
                   builtin: false,
                   trigger: { kind: "manual", schedule: null, paused: false },

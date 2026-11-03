@@ -237,7 +237,7 @@ export function FastTrackMenu({
           </span>
           <span className="pb-key">{keyOf(e)}</span>
           <span className="pb-desc">
-            {e.kind === "stops" ? "Its Chain tab: add, remove or move its stops" : "Its chain on the Sky"}
+            {e.kind === "stops" ? "Its Route tab: add, remove or move its stops" : "Its route on the Sky"}
           </span>
         </div>
       );
@@ -277,7 +277,7 @@ export function FastTrackMenu({
       id="fast-track-menu"
       className="pb-menu ft-menu"
       role="menu"
-      aria-label={`Fast-track — ${name}`}
+      aria-label={`Goes as far as — ${name}`}
       tabIndex={-1}
       ref={menuRef}
       aria-activedescendant={itemId(sel)}
@@ -286,7 +286,7 @@ export function FastTrackMenu({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div className="pb-head">
-        <b>⏩ Fast-track</b>
+        <b>⏩ Goes as far as</b>
         <span className="muted">→ {name}</span>
       </div>
       {reach ? (
@@ -298,17 +298,17 @@ export function FastTrackMenu({
           </div>
           {entries.map((e, i) => row(e, i))}
           <div className="pb-foot">
-            Fast-track is set aside while its stops are on. It comes back once they finish or halt.
+            Set aside while its stops are on: they decide how far it goes. It comes back once they finish or halt.
           </div>
         </>
       ) : (
         <>
-          <div className="pb-sec">When the agent is done, go as far as</div>
+          <div className="pb-sec">When the agent is done, it goes as far as</div>
           {entries.slice(0, -1).map((e, i) => row(e, i))}
           <div className="pb-sep" />
           {row(entries[entries.length - 1], entries.length - 1)}
           <div className="pb-foot">
-            Acts right away — nothing is typed into the agent. To do one step yourself, use the
+            Acts right away — nothing is typed into the agent. To do one of these yourself, use the
             button beside <b>⏩</b>. New sessions start at Settings → Workspace's default.
           </div>
         </>

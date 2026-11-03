@@ -147,8 +147,8 @@ export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPl
       </div>
       {plans.length > 0 && (
         <div className="fl-waiting-flyway">
-          <span className="fl-fld-label">Chain</span>
-          <ChipRow className="fl-plan-pick" label="Chain" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
+          <span className="fl-fld-label">Route</span>
+          <ChipRow className="fl-plan-pick" label="Route" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
         </div>
       )}
       {error && (
@@ -172,7 +172,7 @@ function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly
   const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
   return (
     <div className={"sky-perch" + (halted ? " is-halted" : "")} data-flight={flight.id}>
-      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s chain" : undefined} onClick={() => onFocus(flight.session)}>
+      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s route" : undefined} onClick={() => onFocus(flight.session)}>
         {head}
       </button>
       <div className="sky-perch-step muted">
@@ -224,7 +224,7 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
         <div className="sky-drawer-body">
           {flightsQ.data === null && (
             <p className="fl-note muted" role="status">
-              This server can't run chains yet — update MindFlock to run them. Waiting items and behaviors still work.
+              This server can't run routes yet — update MindFlock to run them. Waiting items and behaviors still work.
             </p>
           )}
           <section className="fl-group fl-group-needs" id="fl-group-needs" aria-labelledby="fl-group-needs-h">

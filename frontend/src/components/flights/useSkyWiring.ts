@@ -156,17 +156,17 @@ export function intentHint(intent: WireIntent): string {
     case "move":
       return "Move " + q(intent.step.title) + " here";
     case "merge":
-      return "Join that chain on here";
+      return "Join that route on here";
     case "attach":
-      return "Run that chain on this session";
+      return "Run that route on this session";
     case "handoff":
-      return "Start that chain from here";
+      return "Start that route from here";
     case "parallel":
       return intent.step ? "Run " + q(intent.step.title) + " beside " + q(intent.with.title) : "Add a stop beside " + q(intent.with.title);
     case "palette":
       return "Add a stop here";
     case "split":
-      return "Split off a chain here";
+      return "Split off a route here";
     default:
       return "";
   }
@@ -384,11 +384,11 @@ export async function runWireIntent(intent: WireIntent, ctx: { src: WireEnd; at:
   }
   if (intent.op === "handoff") {
     const def = d.kinds.find((k) => k.kind === HANDOFF_KIND);
-    if (!def) return void toast("This server has no “Start a chain” stop yet");
+    if (!def) return void toast("This server has no “Start a route” stop yet");
     const target = d.flights.find((x) => groundedKey(x.id) === intent.target);
     const step = handoffStepFor(def, f ? f.steps.map((st) => st.id) : [], intent.target);
     const ok = f ? await tackOn(f.id, step, atOrEnd(f, loopSlotAfter(intent.from))) : !!(await tackOnNew(intent.chain, [step]));
-    if (ok) toast("“" + intent.from.title + "” starts “" + (target ? groundedName(target) : "that chain") + "” on " + sessionWord("new"));
+    if (ok) toast("“" + intent.from.title + "” starts “" + (target ? groundedName(target) : "that route") + "” on " + sessionWord("new"));
     return;
   }
   if (!f) return;

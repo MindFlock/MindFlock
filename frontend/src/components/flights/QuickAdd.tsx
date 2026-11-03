@@ -22,7 +22,7 @@ interface Row {
 export function quickRows(kinds: readonly StepKindDef[], plans: readonly FlightPlan[], q: string): Row[] {
   const all: Array<Row & { words: string }> = [
     ...kinds.map((k) => ({ key: "k:" + k.kind, label: kindName(k), hint: k.summary || "", icon: k.kind, pick: { kind: k.kind } as QuickPick, words: [kindName(k), k.label, k.summary, k.kind, k.family].join(" ") })),
-    ...plans.map((p) => ({ key: "p:" + p.id, label: p.name, hint: savedChainLabel(p.steps.length), icon: "group", pick: { plan: p } as QuickPick, words: [p.name, "saved chain", p.steps.map((s) => s.title).join(" ")].join(" ") })),
+    ...plans.map((p) => ({ key: "p:" + p.id, label: p.name, hint: savedChainLabel(p.steps.length), icon: "group", pick: { plan: p } as QuickPick, words: [p.name, "saved route", p.steps.map((s) => s.title).join(" ")].join(" ") })),
   ];
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const hit = terms.length ? all.filter((r) => terms.every((t) => r.words.toLowerCase().includes(t))) : all;

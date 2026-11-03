@@ -577,7 +577,7 @@ export function planDirty(a: FlightPlan | null, b: FlightPlan | null): boolean {
 export function blankPlan(): FlightPlan {
   return {
     id: "",
-    name: "New chain",
+    name: "New route",
     description: "",
     builtin: false,
     trigger: { kind: "manual", schedule: null, paused: false },
@@ -598,7 +598,7 @@ export function planFromSteps(
   trigger?: FlightPlan["trigger"]
 ): Omit<FlightPlan, "id" | "updated"> {
   return {
-    name: name.trim() || "New chain",
+    name: name.trim() || "New route",
     description: "",
     builtin: false,
     trigger: trigger ? { ...trigger } : { kind: "manual", schedule: null, paused: false },
@@ -645,9 +645,9 @@ export function hookUrl(trigger: Pick<FlightTrigger, "token">, origin?: string):
 
 /** The `on_fail` chips' words. */
 export const ON_FAIL_LABEL: Record<OnFail, string> = {
-  halt: "Stop and tell me",
-  agent: "Hand it to the agent",
-  skip: "Skip it",
+  halt: "Halt",
+  agent: "Let the agent fix it",
+  skip: "Skip",
   you: "Ask me",
 };
 

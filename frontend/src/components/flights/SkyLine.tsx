@@ -320,9 +320,9 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
         onClose();
       }}
     >
-      <div className="skl-card-head" title="Double-click to fold it back into the chain">
+      <div className="skl-card-head" title="Double-click to fold it back into the route">
         <span className="skl-card-name">{windowName(inst.title)}</span>
-        <button type="button" className="skl-card-fold" aria-label={"Fold " + windowName(inst.title) + " back into the chain"} title="Back to the chain" onClick={onClose}>
+        <button type="button" className="skl-card-fold" aria-label={"Fold " + windowName(inst.title) + " back into the route"} title="Back to the route" onClick={onClose}>
           ▣
         </button>
       </div>
@@ -553,7 +553,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
     p.layout.open
-      ? { key: "open", label: "Fold the session back", title: "Back to its agent's stop on the chain", onSelect: () => p.onLayout({ open: false }) }
+      ? { key: "open", label: "Fold the session back", title: "Back to its agent's stop on the route", onSelect: () => p.onLayout({ open: false }) }
       : { key: "open", label: "Open session", title: "Its agent's terminal, here in place of the agent's stop", onSelect: () => p.onLayout({ open: true }) },
     {
       key: "grid",
@@ -564,14 +564,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         setView("grid");
       },
     },
-    { key: "only", label: "Show only this chain", title: "This session: one chain, filling the sky", onSelect: () => showInSky(p.title) },
+    { key: "only", label: "Show only this route", title: "This session: one route, filling the sky", onSelect: () => showInSky(p.title) },
     ...(folds
-      ? [{ key: "flown", label: foldFlown ? "Show finished stops" : "Fold finished stops", title: "The stops this chain has already run: each on its own, or one pill", className: "skl-mi-group", onSelect: () => setFoldFlown((x) => !x) }]
+      ? [{ key: "flown", label: foldFlown ? "Show finished stops" : "Fold finished stops", title: "The stops this route has already run: each on its own, or one pill", className: "skl-mi-group", onSelect: () => setFoldFlown((x) => !x) }]
       : []),
     p.layout.pinned
-      ? { key: "tidy", label: "Tidy this chain", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
-      : { key: "pin", label: "Pin here", title: "Keep this chain where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
-    { key: "flyway", label: "Add a stop…", title: "A stop or a saved chain, at the end of the chain", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
+      ? { key: "tidy", label: "Tidy this route", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
+      : { key: "pin", label: "Pin here", title: "Keep this route where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
+    { key: "flyway", label: "Add a stop…", title: "A stop or a saved route, at the end of the route", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
     // A ticket's line: its stops for every NEW item from its source (this one
     // keeps flying as it is) — the only way a line changes a source's default.
     ...(promote ? [{ key: "promote", label: promote.label, title: promote.title, className: "skl-mi-promote", onSelect: () => void promote.run() }] : []),
@@ -655,7 +655,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       role="group"
       tabIndex={-1}
       data-sky-box
-      aria-label={name + "'s chain"}
+      aria-label={name + "'s route"}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
       }}
@@ -715,7 +715,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         )}
         {behaviors.mark?.tone === "you" && ss.tone !== "attention" && (
           // The Needs-you mark: a behavior waits on you (docs/behaviors.md §1).
-          <span className="skl-chip fl-box-chip skl-state-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors tile to answer it">
+          <span className="skl-chip fl-box-chip skl-state-chip tone-attention skl-bh-needs" title="A behavior waits on you — open the Behaviors stop to answer it">
             Needs you
           </span>
         )}
@@ -730,7 +730,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           </span>
         )}
         {p.layout.pinned && (
-          <span className="skl-pin" title="Pinned: the sky's layout leaves this chain where you put it" aria-label="Pinned">
+          <span className="skl-pin" title="Pinned: the sky's layout leaves this route where you put it" aria-label="Pinned">
             📌
           </span>
         )}

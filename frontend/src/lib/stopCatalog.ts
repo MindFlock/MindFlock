@@ -52,7 +52,7 @@ export function filterPlans<P extends Pick<FlightPlan, "name" | "description"> &
 /** What a saved chain is, by its size: "Saved chain · 3 stops" (the shelf
  * chip's title, the right-click search's hint). */
 export function savedChainLabel(stops: number): string {
-  return "Saved chain · " + stops + (stops === 1 ? " stop" : " stops");
+  return "Saved route · " + stops + (stops === 1 ? " stop" : " stops");
 }
 
 /** A saved stop's sub-steps as one line: "a → b → c". */

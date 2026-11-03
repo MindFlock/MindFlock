@@ -223,13 +223,13 @@ function Block({
         <button
           type="button"
           className="fl-icon-btn sky-lane-flyway-btn"
-          aria-label={"Edit the default chain for " + block.label}
+          aria-label={"Edit the default route for " + block.label}
           data-editing={editing ? "" : undefined}
           title={stopsTip(block, editing)}
           onClick={() => onEditDefault({ kind: block.kind, target: block.id }, block.label)}
         >
           <span className={"sky-lane-stops" + (block.flyway.own ? " own" : "") + (editing ? " editing" : "")}>
-            <span className="sky-lane-stops-key">Chain</span>
+            <span className="sky-lane-stops-key">Route</span>
             <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{stopsWords(block.flyway)}</span>
             <span className="sky-lane-stops-edit" aria-hidden="true">
               {editing ? "editing…" : "✎"}

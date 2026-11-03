@@ -34,8 +34,8 @@ export type ReachPatch = { depth: string; plan: "" } | { plan: string };
 /** The summary line for a reach. */
 export function reachSummary(r: Pick<SourceReach, "steps" | "missing" | "words">, serverSteps?: string[] | null): string {
   const steps = serverSteps && serverSteps.length ? serverSteps : r.steps;
-  const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved chain “" + r.words + "”";
-  return r.missing ? "Its saved chain “" + r.missing + "” is gone, so: " + line : line;
+  const line = steps.length === 1 && steps[0] === "Agent" ? "Agent, then nothing more. You take it from there" : steps.length ? steps.join(" → ") : "Your saved route “" + r.words + "”";
+  return r.missing ? "Its saved route “" + r.missing + "” is gone, so: " + line : line;
 }
 
 export function PlanSelect({
@@ -80,7 +80,7 @@ export function PlanSelect({
     if (!target) return;
     const f = await openDefaultEditor({ kind, target }, flights);
     useUi.getState().showSky();
-    if (f) toast("“" + (f.plan_name || "Default stops") + "” is on the board. Save as default there to change where this source goes.", { duration: 6000 });
+    if (f) toast("“" + (f.plan_name || "Default stops") + "” is on the Sky. Save as default there to change where this source goes.", { duration: 6000 });
   };
 
   return (
@@ -113,7 +113,7 @@ export function PlanSelect({
                 role="radio"
                 aria-checked={on}
                 className={"fl-pick fl-reach-plan" + (on ? " on" : "")}
-                title={p.builtin ? "Our built-in chain for these items" : "Your saved chain"}
+                title={p.builtin ? "Our built-in route for these items" : "Your saved route"}
                 data-value={"plan:" + p.value}
                 onClick={() => onChange({ plan: p.value })}
               >

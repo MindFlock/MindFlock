@@ -503,10 +503,10 @@ export function loopChoices(n: DiagramNode, nodes: readonly DiagramNode[], opts:
   if (slot === undefined || slot < (opts.insertFrom ?? 0)) return [];
   const out: LoopChoice[] = [];
   if (opts.session)
-    out.push({ key: "loop-to-agent", label: "The agent (run it again)", title: "After this stop the agent is prompted again, then the chain runs again", agent: true, from, to: opts.session });
+    out.push({ key: "loop-to-agent", label: "The agent (run it again)", title: "After this stop the agent is prompted again, then the route runs again", agent: true, from, to: opts.session });
   for (const m of nodes) {
     if (!canRepeat(m) || m.index! > n.index!) continue;
-    out.push({ key: "loop-to:" + m.id, label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”", title: "After this stop the chain goes back to “" + m.title + "”", agent: false, from, to: m });
+    out.push({ key: "loop-to:" + m.id, label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”", title: "After this stop the route goes back to “" + m.title + "”", agent: false, from, to: m });
   }
   return out;
 }
@@ -1308,7 +1308,7 @@ export function lineWhere(d: Diagram): string {
     b = { nodeId: parked.id, tone: STOP_TONE[parked.state]! };
   }
   if (!b) return "";
-  const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+  const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
   const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
   // "needs you at" already says whose stop it is: no "Wait for me:" after it.
   const title = b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title;

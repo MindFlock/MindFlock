@@ -122,7 +122,7 @@ export const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly {
   const given = (f.plan_name || "").trim();
   if (given && given !== "Stops") return given;
   const steps = f.steps || [];
-  if (!steps.length) return "Chain";
+  if (!steps.length) return "Route";
   return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
 };
 
@@ -240,7 +240,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {
         const steps = flight.steps;
         const entry = pushUndo({ label: "Remove “" + name + "”", undo: () => startGrounded({ steps, ...(flight.plan_name ? { name: flight.plan_name } : {}) }) });
-        toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the board") });
+        toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the Sky") });
       }
     } finally {
       setBusy(false);
@@ -249,18 +249,18 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
 
   const updates = !!sourcePlanId(flight.steps, p.plans);
   const items: MenuItem[] = [
-    { key: "add", label: "Add a stop…", title: "One stop, or a saved chain, at the end of the chain", onSelect: () => line.togglePalette(true) },
+    { key: "add", label: "Add a stop…", title: "One stop, or a saved route, at the end of the route", onSelect: () => line.togglePalette(true) },
     ...(ed ? [] : [{ key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn }]),
     {
       key: "save",
       label: "Save to the shelf",
-      title: updates ? "Update the saved chain these came from" : "Keep these stops on the shelf as a saved chain",
+      title: updates ? "Update the saved route these came from" : "Keep these stops on the shelf as a saved route",
       className: "skl-mi-group",
       onSelect: () => void save(),
     },
     ed
-      ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the board — the default stops stay as they are", onSelect: () => void discard() }
-      : { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board (Ctrl+Z puts them back)", onSelect: () => void remove() },
+      ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the Sky — the default stops stay as they are", onSelect: () => void discard() }
+      : { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the Sky (Ctrl+Z puts them back)", onSelect: () => void remove() },
   ];
 
   // The edit ends once: Enter or Esc hands the focus back to the line, and
@@ -379,7 +379,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       role="group"
       tabIndex={0}
       data-sky-box
-      aria-label={name + (ed ? " — new items from this source run these" : head.kind === "trigger" ? " — " + head.title : " — a chain with no session yet")}
+      aria-label={name + (ed ? " — new items from this source run these" : head.kind === "trigger" ? " — " + head.title : " — a route with no session yet")}
       onKeyDown={onKey}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
@@ -390,7 +390,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       <div
         className="skl-bar skl-label"
         data-tour="sky-grounded"
-        title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's chain to give them to it"}
+        title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's route to give them to it"}
         onPointerDown={onBarDown}
       >
         <Bird size={14} />
@@ -433,7 +433,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             it waits for a session) — only a chain another chain starts says so. */}
         {head.kind === "trigger" && (
           <span className="fl-box-chip skl-chip tone-working" title={head.title + " — " + head.sub}>
-            Started by a chain
+            Started by a route
           </span>
         )}
         {/* No Run label up here: the chain's ▶ sits on the left of its first
@@ -470,7 +470,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
                 Reset to default
               </button>
             )}
-            <button type="button" className="fl-icon-btn skl-default-discard" disabled={busy} aria-label="Discard this edit" title="Discard — take this editor off the board; the default stops stay as they are" onClick={() => void discard()}>
+            <button type="button" className="fl-icon-btn skl-default-discard" disabled={busy} aria-label="Discard this edit" title="Discard — take this editor off the Sky; the default stops stay as they are" onClick={() => void discard()}>
               ×
             </button>
           </span>

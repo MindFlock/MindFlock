@@ -548,7 +548,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           type="button"
           className="btn-primary fl-btn sky-new-fly"
           disabled={busy || !!blocked}
-          title={blocked || (attach ? "Start the session and run “" + attach.name + "” on it" : plan ? "Start the session, then run the saved chain" : "Start the session")}
+          title={blocked || (attach ? "Start the session and run “" + attach.name + "” on it" : plan ? "Start the session, then run the saved route" : "Start the session")}
           onClick={() => void fly()}
         >
           {busy ? "Starting…" : made ? "Open session" : "Run"}
