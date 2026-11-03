@@ -221,3 +221,19 @@ def test_cost_panel_default_visibility():
     assert visible == ["claude", "codex", "antigravity", "aider"]
     for name in ("opencode", "cline", "goose"):
         assert not providers.resolve(name).usage_panel_visible()
+
+
+def test_antigravity_signed_out_is_waiting_not_idle():
+    # agy 1.1.10 with no login (captured live, scratch HOME) opens on its
+    # login-method menu and holds the seeded task behind it: Needs you.
+    from pathlib import Path
+
+    screen = (
+        Path(__file__).parent
+        / "data"
+        / "dialogs"
+        / "antigravity_signin_w100.screen.txt"
+    ).read_text(encoding="utf-8")
+    p = providers.resolve("antigravity")
+    assert any(re.search(pat, screen) for pat in p.waiting_prompt_patterns())
+    assert p.dialog_on_screen(screen)

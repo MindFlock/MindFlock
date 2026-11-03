@@ -585,6 +585,12 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "Yes, and always allow",
             r"Question \d+/\d+:",
             r"Navigate.+enter Select.+esc Skip",
+            # Signed out (a first run, or an expired login): agy opens on its
+            # login-method menu and holds the seeded task behind it — a
+            # person's move (a Google sign-in in the browser), so Needs you,
+            # not idle (captured live from agy 1.1.10 with no login).
+            "You are currently not signed in",
+            "Select login method:",
         ),
         # Its dialogs as data: the ">" numbered permission / question menus.
         dialog_layout="antigravity",

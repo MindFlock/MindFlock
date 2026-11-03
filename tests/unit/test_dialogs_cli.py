@@ -323,6 +323,21 @@ GOLDEN = {
         },
         None,
     ),
+    # agy 1.1.10 signed out (captured live): its login-method menu, held in
+    # front of the seeded task.
+    "antigravity_signin_w100": (
+        {
+            "heading": None,
+            "question": "Select login method:",
+            "command": None,
+            "detail": None,
+            "options": [
+                _o("1", "Google OAuth", "other", ["Enter"]),
+                _o("2", "Use a Google Cloud project", "other", ["Down", "Enter"]),
+            ],
+        },
+        None,
+    ),
     "antigravity_question_w100": (
         {
             "heading": None,

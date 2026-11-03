@@ -1932,10 +1932,11 @@ ANTIGRAVITY_CURSORS = ">"
 #: The lines that open an agy dialog: the permission prompt ("Requesting
 #: permission for:" over the command, "Do you want to proceed?"), a
 #: clarifying question ("Question 1/2: …", "↑/↓ Navigate · enter Select ·
-#: esc Skip" under its choices) and the trust gate.
+#: esc Skip" under its choices), the trust gate, and the signed-out login
+#: menu ("Select login method:" over Google OAuth / a Cloud project, 1.1.10).
 _AGY_OPENERS = re.compile(
     r"^(?:Requesting permission for:|Question \d+/\d+:\s*\S.*|Do you want to .*\?"
-    r"|Do you trust the contents of this .*\?)"
+    r"|Do you trust the contents of this .*\?|Select login method:)"
 )
 _AGY_PERMISSION = "Requesting permission for:"
 _AGY_QUESTION = re.compile(r"^Question \d+/\d+:\s*(?P<q>\S.*)$")
