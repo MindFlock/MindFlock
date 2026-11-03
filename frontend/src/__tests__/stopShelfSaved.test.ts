@@ -15,6 +15,9 @@ import type { FlightPlan, FlightStep, StepKindDef } from "../lib/flights";
 
 vi.mock("../api/client", () => ({ api: vi.fn(() => new Promise(() => {})), ApiError: class extends Error {} }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
+// The Takes off dialog is portaled to <body>; a string render has no DOM, so
+// the portal renders its children in place.
+vi.mock("react-dom", async (orig) => ({ ...(await orig<typeof import("react-dom")>()), createPortal: (node: unknown) => node }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { FLYWAY_MIME } = await import("../lib/skyLayout");
