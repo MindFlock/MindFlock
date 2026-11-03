@@ -6,6 +6,7 @@ import { SettingField, useSettings } from "../useSettings";
 import { useServerRestart } from "../useServerRestart";
 import { api } from "../../../api/client";
 import type { ScreenProps } from "../SettingsDialog";
+import { SetInIntake } from "./SetInIntake";
 import {
   autoUpdateHint,
   shellUpdateMode,
@@ -23,11 +24,8 @@ function onWindows(): boolean {
   return (window as unknown as { mfshell?: { platform?: string } }).mfshell?.platform === "win32";
 }
 
-export function Advanced({ gotoScreen }: ScreenProps) {
+export function Advanced(_: ScreenProps) {
   const s = useSettings();
-  // Tri-state on the wire: unset (never touched) means the backend default,
-  // which is ON — so only an explicit stored `false` unchecks this.
-  const engineSessions = s.get("engine", "enabled") !== false;
   const { restarting, timedOut, restart } = useServerRestart();
   // Platform's two fields only mean something on Windows. Shown there, or
   // anywhere they already hold a value (a config carried over from a Windows
@@ -40,34 +38,15 @@ export function Advanced({ gotoScreen }: ScreenProps) {
   return (
     <>
       <h3 className="set-section-title">Engine</h3>
-      <div
-        className="set-row set-switch-row"
-        title="On: each ingested ticket becomes a MindFlock session — worktree, branch, seeded agent, and the guided commit → push → PR bar. Off: a detached tmux session plus an OS terminal tab, with no session in the app."
-      >
-        <span className="set-label">Ticket sessions in MindFlock</span>
-        {/* label wraps only the switch, so clicking the row text no longer flips it */}
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            checked={engineSessions}
-            onChange={(e) => s.saveField("engine", "enabled", e.target.checked)}
-          />
-          <span className="ca-slider" />
-        </label>
-      </div>
-      <p className="set-hint">
-        Leave this on: tickets assigned to you become MindFlock sessions you can watch, commit
-        and open a PR from. Off sends them to a bare tmux session and a terminal tab instead.
-        Takes effect the next time auto-start starts.
-      </p>
-      {/* Worktree vs clone moved to Workspace, next to where the copies live. */}
-      <p className="set-hint">
-        How ticket sessions copy the repo (worktree or clone) is on{" "}
-        <button type="button" className="linklike" data-goto-screen="workspace" onClick={() => gotoScreen("workspace")}>
-          Workspace
-        </button>
-        .
-      </p>
+      {/* Ticket sessions in MindFlock (engine.enabled) and worktree vs clone
+          (engine.mode) moved to Intake › Auto-start's "Ticket sessions" fold,
+          with the rest of ticket setup. */}
+      <SetInIntake
+        id="engine-ticket-sessions"
+        label="Ticket sessions in MindFlock"
+        hint="Whether tickets become MindFlock sessions, and how they copy the repo."
+        selector="#ik-engine-sessions-row"
+      />
       <EngineUpdate />
       {showPlatform && (
         <>

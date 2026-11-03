@@ -1,7 +1,8 @@
-/** The New dialog's action row: page 1's ONE primary (Start ↵) with "More
- * options" and "Let the agent pick the folder…" beside it (or an Intake batch's
- * Start N), or the form's ← Back / Start, with the error line beside them.
- * "Save as template…" lives in the form's More options. */
+/** The New dialog's action row: page 1's ONE primary (Start ↵) with "Set it
+ * up myself" and "Let the agent pick the folder…" beside it (or an Intake
+ * batch's Start N), or the form's ← Back / Start, with the error line beside
+ * them. "Save as template…" lives in the form's More options fold — a name
+ * page 1's button gave up so the two never read as one thing. */
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from "react";
 import { startLabel } from "../../../lib/runStart";
@@ -80,7 +81,7 @@ export function FooterActions({
         <p id="new-error" className="error" role="alert">{error}</p>
         {page === 1 ? (
           <>
-            {/* ONE primary. "More options" (the full form, nothing read) is
+            {/* ONE primary. "Set it up myself" (the full form, nothing read) is
                 quiet and far left; "Let the agent pick the folder…" — a model
                 turn that reads the sentence and fills the form in for review —
                 is secondary, and named for the one choice it makes instead of
@@ -94,7 +95,7 @@ export function FooterActions({
               title="The full form — folder, agent, task, name and Fast-track — with what you typed as the task"
               onClick={setUpMyself}
             >
-              More options
+              Set it up myself
             </button>
             {/* For ONE session only: a list (or a split) starts from the rows
                 and choices above, so in run mode it is not drawn. */}

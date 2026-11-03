@@ -1,7 +1,10 @@
 /** Settings → Workspace (partial 108): where every session's copy of the
- * repo lives (the one answer to "where do my worktrees live?"), how ticket
- * sessions copy it, and the base branches. Fast-track tuning and the live
- * branch are advanced mode only.
+ * repo lives (the one answer to "where do my worktrees live?") and the base
+ * branches. Fast-track tuning and the default live branch are advanced mode
+ * only. How ticket sessions copy the repo (worktree or clone) moved to Intake
+ * › Auto-start's "Ticket sessions" fold with the rest of ticket setup; the
+ * row here is a "Set in Intake ›" pointer (SetInIntake.tsx). The ticket
+ * sessions' FOLDER stays: it is half of "where do my worktrees live?".
  *
  * The paths come from GET /api/settings/workspace-paths: absolute, for every
  * kind of session — the ones you start (always <config dir>/worktrees) and
@@ -18,6 +21,7 @@ import { InfoTip } from "../../InfoTip";
 import { AdvancedFold } from "../settingsMode";
 import { PathField } from "../../PathField";
 import { RepoBranches } from "./RepoBranches";
+import { SetInIntake } from "./SetInIntake";
 
 /** GET /api/settings/workspace-paths. */
 export interface WorkspacePaths {
@@ -135,18 +139,12 @@ function WorktreeHome() {
           {warn || "A full path like ~/mindflock/workspaces is clearest. Blank = ./workspaces."}
         </span>
       </label>
-      <label className="set-row" id="workspace-copy-mode">
-        <span className="set-label">How ticket sessions copy the repo</span>
-        <SettingField
-          group="engine"
-          field="mode"
-          options={[
-            { value: "", label: "Worktree — fast (default)" },
-            { value: "clone", label: "Full clone — a standalone copy" },
-          ]}
-        />
-        <span className="set-hint">A worktree shares your repo's history; a clone is fully separate.</span>
-      </label>
+      <SetInIntake
+        id="workspace-copy-mode"
+        label="How ticket sessions copy the repo"
+        hint="Worktree or full clone, with the rest of ticket setup."
+        selector="#ik-copy-mode"
+      />
     </section>
   );
 }
@@ -190,11 +188,12 @@ export function Workspace({ gotoScreen }: ScreenProps) {
           retries: tuning for a flow that already works — advanced mode only. */}
       <AdvancedFold id="workspace-advanced">
         <label className="set-row">
-          <span className="set-label">Live branch</span>
+          <span className="set-label">Default live branch</span>
           <SettingField group="repository" field="live_branch" placeholder="main" />
           <span className="set-hint">
             The branch that means <em>shipped</em>. Verify asks you to check a change once it
-            lands here. Blank = the PR base branch, then the default base branch.
+            lands here. A repository can set its own in Intake. Blank = the PR base branch,
+            then the default base branch.
           </span>
         </label>
         <label className="set-row">

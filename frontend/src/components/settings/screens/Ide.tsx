@@ -1,6 +1,8 @@
 /** Settings → IDE (partial 113 + section 21's D2 picker + the auto-adopt
- * switch from section 20): detected-IDE select, custom command fallback,
- * the IDE auto-adopt toggle, and whether new tickets open an IDE window. */
+ * switch from section 20): detected-IDE select, custom command fallback and
+ * the IDE auto-adopt toggle. Whether new tickets open an IDE window moved to
+ * Intake › Auto-start's "Ticket sessions" fold; a "Set in Intake ›" row
+ * (SetInIntake.tsx) stands where it was. */
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../../api/client";
@@ -8,6 +10,7 @@ import { refreshConfig } from "../../../state/queries";
 import { toast } from "../../../lib/toast";
 import { SettingField, useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
+import { SetInIntake } from "./SetInIntake";
 
 const CUSTOM_IDE = "__custom__";
 
@@ -23,7 +26,6 @@ export function Ide(_: ScreenProps) {
   const [value, setValue] = useState(CUSTOM_IDE);
   const [customVisible, setCustomVisible] = useState(false);
   const [autoAdopt, setAutoAdopt] = useState(false);
-  const [openOnTicket, setOpenOnTicket] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -47,12 +49,6 @@ export function Ide(_: ScreenProps) {
       try {
         const a = await api<{ enabled?: boolean }>("/api/cursor/autoadopt");
         setAutoAdopt(!!a?.enabled);
-      } catch {
-        /* leave as-is */
-      }
-      try {
-        const o = await api<{ enabled?: boolean }>("/api/ide/open-on-ticket");
-        setOpenOnTicket(!!o?.enabled);
       } catch {
         /* leave as-is */
       }
@@ -132,39 +128,12 @@ export function Ide(_: ScreenProps) {
           <span className="ca-slider" />
         </label>
       </div>
-      <div
-        className="set-row set-switch-row"
+      <SetInIntake
         id="ide-ticket-row"
-        title="Open each new ticket, issue or PR workspace in your IDE as soon as it is provisioned"
-      >
-        <span className="set-label">Open IDE when a ticket starts</span>
-        <label className="ca-switch">
-          <input
-            type="checkbox"
-            id="ide-open-on-ticket"
-            checked={openOnTicket}
-            onChange={async (e) => {
-              const want = e.target.checked;
-              setOpenOnTicket(want);
-              try {
-                const r = await api<{ enabled?: boolean }>("/api/ide/open-on-ticket", {
-                  json: { enabled: want },
-                });
-                setOpenOnTicket(!!r?.enabled);
-                toast(
-                  r?.enabled
-                    ? "New tickets open in the IDE"
-                    : "New tickets no longer open an IDE window"
-                );
-              } catch {
-                setOpenOnTicket(!want);
-                toast("IDE toggle failed");
-              }
-            }}
-          />
-          <span className="ca-slider" />
-        </label>
-      </div>
+        label="Open IDE when a ticket starts"
+        hint="Opens each new ticket, issue or PR session in your editor as soon as it is ready."
+        selector="#ik-ide-on-ticket-row"
+      />
     </>
   );
 }

@@ -9,6 +9,12 @@
  * people type for it, synonyms included; matching is plain substring/prefix,
  * no fuzz, so "parallel" never matches by scattered letters.
  *
+ * Ticket settings that moved to Intake (the ticket-session limit, worktree vs
+ * clone, Open IDE when a ticket starts, Ticket sessions in MindFlock) keep
+ * their entries under their old words: each lands on the "Set in Intake ›"
+ * row that stands where the control was (screens/SetInIntake.tsx), one click
+ * from the real control.
+ *
  * Pure apart from `run`: the palette merges `settingsActions(query)` into
  * its own results. An empty query offers nothing (the palette's empty view
  * is its menu). */
@@ -106,8 +112,8 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "coding",
     label: "Agents → Sessions running at once",
-    sub: "How many ticket sessions run at the same time",
-    terms: ["parallel", "concurrency", "concurrent", "at once", "simultaneous", "max sessions", "how many", "session limit", "limit", "queue"],
+    sub: "How many run together; the ticket-session limit is set in Intake",
+    terms: ["parallel", "concurrency", "concurrent", "at once", "simultaneous", "max sessions", "max ticket sessions", "ticket sessions at once", "how many", "session limit", "limit", "queue"],
     anchor: "#coding-sessions-at-once",
   },
   {
@@ -137,8 +143,16 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "workspace",
     label: "Workspace",
-    sub: "Where sessions' files live and how ticket sessions copy a repo",
+    sub: "Where sessions' files live, and the branches they start from",
     terms: ["workspace", "worktree", "worktrees", "folder", "directory", "dir", "checkout", "branch", "base branch", "pr base"],
+  },
+  {
+    key: "workspace",
+    label: "Workspace → Default live branch",
+    sub: "The branch that means shipped, unless a repository sets its own",
+    terms: ["live branch", "default live branch", "shipped", "production branch", "release branch"],
+    anchor: "#workspace-advanced",
+    advanced: true,
   },
   {
     key: "workspace",
@@ -150,8 +164,8 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   {
     key: "workspace",
     label: "Workspace → Worktree or clone",
-    sub: "A worktree shares your repo's history; a clone is fully separate",
-    terms: ["worktree mode", "clone", "full clone", "copy the repo", "ticket sessions"],
+    sub: "How ticket sessions copy the repo — set in Intake",
+    terms: ["worktree mode", "clone", "full clone", "copy the repo", "how ticket sessions copy the repo", "ticket sessions"],
     anchor: "#workspace-copy-mode",
   },
   {
@@ -159,6 +173,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     label: "IDE",
     sub: "Which editor “Open in editor” uses",
     terms: ["ide", "editor", "cursor", "vscode", "vs code", "open in editor"],
+  },
+  {
+    key: "ide",
+    label: "IDE → Open IDE when a ticket starts",
+    sub: "Open each new ticket session in your editor — set in Intake",
+    terms: ["open ide when a ticket starts", "open ide", "ide on ticket", "open editor on ticket", "ticket ide"],
+    anchor: "#ide-ticket-row",
   },
   {
     key: "security",
@@ -184,6 +205,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     label: "Your devices",
     sub: "Pair your other computers and share settings between them",
     terms: ["devices", "device", "computer", "pair", "pairing", "sync", "settings sync", "tailscale", "reachable", "remote"],
+  },
+  {
+    key: "devices",
+    label: "Your devices → Which computer auto-starts work",
+    sub: "The one device that handles PR review comments and new issues",
+    terms: ["which computer auto-starts work", "pr review and issue handling", "run here", "automation device", "runs on"],
+    anchor: "#devices-run-here",
   },
   {
     key: "mobile",
@@ -233,6 +261,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     label: "Engine & updates",
     sub: "Version and updates, restart, uninstall",
     terms: ["engine", "update", "updates", "upgrade", "version", "restart server", "uninstall"],
+  },
+  {
+    key: "advanced",
+    label: "Engine & updates → Ticket sessions in MindFlock",
+    sub: "Tickets as MindFlock sessions or a bare tmux session — set in Intake",
+    terms: ["ticket sessions in mindflock", "tmux", "terminal tab", "engine enabled", "bare tmux"],
+    anchor: "#engine-ticket-sessions",
   },
 ];
 

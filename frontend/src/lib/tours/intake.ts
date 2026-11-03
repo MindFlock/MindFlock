@@ -37,7 +37,7 @@ export const INTAKE_TOUR: TourDef = {
       target:
         '[data-tour="intake-autostart"], #intake-panel:not(:has([data-tour="intake-autostart"])) #intake-tab-autostart',
       title: "Auto-start, when you trust it",
-      body: "Switches for tickets, PR review comments and new issues live here, with how often each checks and Pause all auto-start.",
+      body: "One switch each for tickets, PR review comments and new issues — and, folded below them, how ticket sessions are set up.",
     },
   ],
 };

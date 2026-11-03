@@ -21,11 +21,9 @@ describe("a failed settings save is never followed by a success line", () => {
     expect(SETTINGS.match(/toast\("Save failed: [^\n]*\n[^\n]*\n\s*return false;/g)).toHaveLength(2);
   });
 
-  it("Pause all stops before 'All auto-start is off' when the save failed", () => {
-    const body = squash(AUTOSTART);
-    const guard = body.indexOf('!(await settings.saveGroup("github", patch))) return;');
-    expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(body.indexOf("All auto-start is off"));
+  it("no Pause all, so no 'All auto-start is off' line to claim after a failed save", () => {
+    expect(AUTOSTART).not.toContain("All auto-start is off");
+    expect(AUTOSTART).not.toContain("pauseAll");
   });
 
   it("adding a repository stays on the step and re-sweeps only on success", () => {

@@ -307,7 +307,8 @@
   white-space: nowrap;
 }
 
-/* "PR review and issue handling": label + which device runs them stacked,
+/* "Which computer auto-starts work" (PR review and issue handling): label +
+   which device runs them stacked,
    "Run here" at the right. */
 .devices-run-here-text {
   display: flex;

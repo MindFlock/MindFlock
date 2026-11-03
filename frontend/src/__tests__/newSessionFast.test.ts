@@ -147,18 +147,21 @@ describe("page 1 — the sentence card, as in v0.7", () => {
     expect(SRC).not.toContain("Describe it instead…");
   });
 
-  it("has ONE primary, Start ↵, with More options and Let the agent pick the folder… beside it", () => {
+  it("has ONE primary, Start ↵, with Set it up myself and Let the agent pick the folder… beside it", () => {
     const skip = FOOTER.indexOf('id="new-describe-skip"');
     const go = FOOTER.indexOf('id="new-describe-go"');
     const start = FOOTER.indexOf('id="new-describe-start"');
     expect(skip).toBeGreaterThan(-1);
     expect(skip).toBeLessThan(go);
     expect(go).toBeLessThan(start);
-    // More options → the form, with what was typed as its Task, no model turn.
+    // Set it up myself → the form, with what was typed as its Task, no model
+    // turn. Not "More options": that is the form's own fold on page 2, and one
+    // name for two things read as one (consolidation round, defect #4).
     const skipBtn = FOOTER.slice(skip, go);
     expect(skipBtn).toContain('className="nf-quiet"');
     expect(skipBtn).toContain("onClick={setUpMyself}");
-    expect(skipBtn).toContain("More options");
+    expect(skipBtn).toMatch(/>\s*Set it up myself\s*<\/button>/);
+    expect(skipBtn).not.toContain("More options");
     expect(FOOTER).not.toContain("Set it up myself instead");
     // Let the agent pick the folder… → the model fills the form in; a click, not Enter.
     const goBtn = FOOTER.slice(go, start);

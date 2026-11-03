@@ -775,7 +775,7 @@ export function Devices(p: ScreenProps) {
       {auto && (
         <div className="set-row set-switch-row" id="devices-run-here" data-runs-here={auto.here ? "1" : "0"}>
           <span className="devices-run-here-text">
-            <span className="set-label">PR review and issue handling</span>
+            <span className="set-label">Which computer auto-starts work</span>
             <span className={"set-hint" + (auto.runner ? "" : " devices-hint-warn")} id="devices-run-here-hint">
               {auto.text}
             </span>
