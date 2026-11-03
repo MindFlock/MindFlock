@@ -150,7 +150,7 @@ def _session_find_prompt(inst, prefix: str) -> Optional[str]:
 # * **layer-wide provenance**, written by :func:`_verdict` on EVERY return path
 #   of :func:`_agent_activity` — ``created`` / ``reported`` / ``state_since`` /
 #   ``worked_at`` / ``source`` (which layer produced the current reading —
-#   "marker" / "exit" / "proc" / "trust" / "screen" / "pane") / ``worked_evidence`` (what
+#   "marker" / "exit" / "proc" / "trust" / "screen" / "status" / "pane") / ``worked_evidence`` (what
 #   corroborated the armed work — "marker" / "status" / "cpu"). Before these existed only the pane path wrote anything, so a
 #   session reporting through its CLI's hooks (the common Claude case) left no
 #   trail at all: ``activity_since`` was dead for exactly those sessions, and
@@ -318,7 +318,9 @@ def _verdict(
     built on it), ``"exit"`` (the launch wrapper's exit marker), ``"proc"``
     (bare shell, no agent process), ``"trust"`` (the startup trust-gate
     auto-answer), ``"screen"`` (a dialog the provider parsed on the visible
-    screen — clarify only), ``"pane"`` (live-pane inspection). It is recorded with the
+    screen — clarify only), ``"status"`` (the CLI's live-turn status line at
+    the bottom of the screen outranking an idle marker — working only),
+    ``"pane"`` (live-pane inspection). It is recorded with the
     value so downstream consumers can weigh the reading by where it came from:
     the announce path's settle skip and the queue drain's fast tier both key on
     :func:`reading_is_authoritative`, and the turn-end dwell tiers key on
@@ -360,7 +362,9 @@ def _verdict(
             # the new label before the new stamp, which these two orderings
             # jointly rule out.
             rec["worked_evidence"] = (
-                "marker" if source == "marker" else (rec.get("proof") or "cpu")
+                source
+                if source in ("marker", "status")
+                else (rec.get("proof") or "cpu")
             )
             rec["worked_at"] = now
             rec["last_worked_at"] = now  # never spent: see last_worked_at()
@@ -1367,6 +1371,32 @@ def _marker_is_current(provider, name: str, created) -> bool:
         return True
 
 
+#: Non-blank lines at the bottom of the visible screen searched for the CLI's
+#: live-turn status line. Claude draws it right above its input box (box +
+#: footer below it), never higher — and the transcript above can quote the
+#: very phrase, so a whole-screen search would misread a conversation ABOUT
+#: "esc to interrupt" as a running turn.
+_LIVE_TURN_BOTTOM_LINES = 8
+
+
+def _turn_live_on_screen(provider, screen: str) -> bool:
+    """Whether ``screen``'s bottom lines carry the provider's live-turn status
+    line (``working_pane_patterns``: Claude's ``esc to interrupt``). False
+    for a provider without one, and on any error."""
+    try:
+        pats = provider.working_pane_patterns()
+    except Exception:  # noqa: BLE001 — no pattern, no evidence
+        return False
+    if not pats or not screen:
+        return False
+    lines = [ln for ln in screen.splitlines() if ln.strip()]
+    tail = "\n".join(lines[-_LIVE_TURN_BOTTOM_LINES:])
+    try:
+        return any(re.search(p, tail, re.IGNORECASE) for p in pats)
+    except re.error:
+        return False
+
+
 def _idle_or_limit(
     srv,
     title: str,
@@ -1848,6 +1878,25 @@ def _agent_activity(
             and _dialog_parsed(provider, screen)
         ):
             return _verdict(rec, "clarify", now, source="screen")
+        if (
+            marked == "idle"
+            and screen is not None
+            and not is_limit_screen(screen)
+            and _turn_live_on_screen(provider, screen)
+        ):
+            # The idle marker says a turn ended, but the CLI's own live-turn
+            # status line (Claude's spinner + "esc to interrupt") sits at the
+            # bottom of the visible screen: the turn is running. The marker
+            # file is keyed by tmux session, so ANY claude started inside the
+            # pane writes it — a pre-commit hook's ``claude -p`` (the
+            # documentarian) inherits $TMUX_PANE and the worktree's hooks
+            # file, and its Stop hook stamped "idle" over a session mid-way
+            # through a 4-minute `git commit`. The same reading covers a turn
+            # the CLI started on its own (a background task's notification),
+            # which fires no UserPromptSubmit hook. See
+            # docs/queue-waits-on-workers.md. Source "status" (the live-turn
+            # status line), never "screen": that one names a parsed dialog.
+            return _verdict(rec, "working", now, arms=True, source="status")
         if marked == "idle":
             # Stop hook fired -> the turn definitively ended; trust at any age
             # WITHIN THIS INCARNATION (see :func:`_marker_is_current`).

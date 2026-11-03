@@ -466,6 +466,259 @@ def _idle_settled(rec: dict, title: str, now: float, since: float = 0.0) -> bool
     return now - rec["idle_since"] >= settle
 
 
+# --- Waiting on workers ------------------------------------------------------ #
+# An orchestrator that spawned workers is not idle while they run, whatever its
+# own pane says. Its turn routinely ENDS while it waits: the MCP instructions
+# offer "wait_for_session … or end your turn (reports are typed in)", and Claude
+# Code moves a long-blocking MCP call (wait_for_session runs up to 25 min) to
+# the BACKGROUND after ~2 min and ends the turn — the Stop hook writes "idle"
+# and the drain used to type the next queued prompt into the middle of the
+# orchestration (observed 2026-11-03: wait moved to background 15:40:38, Stop
+# 15:40:40, queued prompt typed 15:40:46 with the worker still running). So the
+# queue HOLDS (see docs/queue-waits-on-workers.md) while:
+#
+# * a live child is unfinished — working; its task still waiting in its own
+#   queue (starting); held by its worker order while a sibling runs; or idle
+#   WITHOUT having reported, for at most _QUEUE_WORKER_IDLE_ESCAPE;
+# * a child reported less than _QUEUE_WORKER_GRACE ago (the orchestrator's
+#   reaction — a background wait's notification — goes first);
+# * a worker's report (a ``result``) or a child's message is still pending in
+#   its mailbox — the mailbox lane types it before the queue's next prompt
+#   (_queue_wants_turn yields while this hold stands);
+# * the session is long-polling its own inbox (wait_for_message).
+#
+# A child is FINISHED when it reported (done / blocked / failed) since the
+# orchestrator last messaged it, or it is gone, closed, paused, offline,
+# usage-limited, or on a dialog (clarify — a person or the orchestrator has to
+# act; holding the queue behind it helps no one). One hold episode is capped at
+# _QUEUE_WORKER_HOLD_MAX: past it the queue drains as before until the hold
+# clears and a new one begins. Every input is a cached read (the activity memo
+# the 4 s state tick keeps, the mailbox's cached file, the queue store) — no
+# probes, and a session with no children and no mail pays a dict scan.
+_QUEUE_WORKER_IDLE_ESCAPE = 300.0  # unreported child idle this long no longer holds
+_QUEUE_WORKER_GRACE = 30.0  # after a child's report, the orchestrator's turn first
+_QUEUE_WORKER_HOLD_MAX = 3 * 3600.0  # one hold episode, at most
+#: title -> {"since": epoch the current hold began, "key": what it waits on}
+_WORKER_HOLD: Dict[str, dict] = {}
+
+
+def _created_epoch(inst) -> float:
+    created = getattr(inst, "CreatedAt", None)
+    try:
+        return float(created.timestamp()) if created is not None else 0.0
+    except Exception:  # noqa: BLE001 — unknown reads as "long ago"
+        return 0.0
+
+
+def _last_dispatch(parent: str, child: str) -> float:
+    """Epoch of the newest message ``parent`` left in ``child``'s box (0.0 =
+    none): a report older than it answers an earlier ask."""
+    try:
+        got = _mailbox.fetch(child, unread_only=False, sender=parent, limit=1)
+        msgs = got.get("messages") or []
+        return float(msgs[-1].get("ts") or 0.0) if msgs else 0.0
+    except Exception:  # noqa: BLE001 — unreadable: no later ask is known
+        return 0.0
+
+
+def _child_out(srv, instances, parent: str, child: str, now: float):
+    """Why live ``child`` still holds ``parent``'s queue → ``(why, report_ts)``
+    with ``why`` one of ``working`` / ``starting`` / ``idle`` / ``queued``
+    (held by its worker order) or None when it is finished; ``report_ts`` is
+    its newest report to ``parent`` (0.0 = none)."""
+    from backend.web.core import thread as _thread
+
+    inst = instances.get(child)
+    if inst is None:
+        return None, 0.0
+    try:
+        if inst.Status == session.Paused:
+            return None, 0.0
+        started = bool(inst.Started())
+    except Exception:  # noqa: BLE001 — unreadable state: not ours to wait on
+        return None, 0.0
+    try:
+        rep = _thread.last_report(instances, child)
+    except Exception:  # noqa: BLE001
+        rep = None
+    rep_ts = float((rep or {}).get("ts") or 0.0)
+    reported = bool(rep) and rep_ts >= _last_dispatch(parent, child)
+    if reported:
+        return None, rep_ts
+    cq = _prompt_queue.get_state(child)
+    if cq.get("held"):
+        return "queued", rep_ts
+    try:
+        if srv._session_limited_until(child) > now:
+            return None, rep_ts
+    except Exception:  # noqa: BLE001
+        pass
+    memo = _agent_state._ACTIVITY_CACHE.get(child) or {}
+    reading = memo.get("reported")
+    if reading == "working":
+        return "working", rep_ts
+    if reading in ("clarify", "limit", "offline"):
+        return None, rep_ts
+    if cq.get("enabled") and cq.get("items"):
+        return "starting", rep_ts  # its task still waits to be typed in
+    created = _created_epoch(inst)
+    try:
+        since = float(memo.get("state_since") or 0.0)
+    except (TypeError, ValueError):
+        since = 0.0
+    if reading is None or not started:
+        base, why = created, "starting"
+    else:
+        base, why = max(since, created), "idle"
+    if now - base < _QUEUE_WORKER_IDLE_ESCAPE:
+        return why, rep_ts
+    return None, rep_ts  # stuck or abandoned: the escape
+
+
+def _pending_from_workers(title: str, children) -> int:
+    """Messages still to be TYPED into ``title`` that come from its workers:
+    any ``result`` (reports go to a parent by construction) or anything a
+    live child sent."""
+    try:
+        got = _mailbox.fetch(title, unread_only=True, limit=200)
+    except Exception:  # noqa: BLE001
+        return 0
+    kids = set(children)
+    return sum(
+        1
+        for m in got.get("messages") or []
+        if m.get("state") == "pending"
+        and (m.get("kind") == "result" or m.get("from") in kids)
+    )
+
+
+def _hold_reason(title: str, now: float) -> Optional[dict]:
+    """What ``title``'s queue is waiting on before it may send, uncapped:
+    ``{"workers": {child: why}, "mail": n, "inbox_wait": bool}``, or None."""
+    from backend.web.core import lineage as _lineage
+
+    srv = _server()
+    instances = dict(srv.ENGINE.instances)
+    children = _lineage.children_of(instances, title)
+    workers: Dict[str, str] = {}
+    queued: Dict[str, str] = {}
+    for child in children:
+        why, rep_ts = _child_out(srv, instances, title, child, now)
+        if why == "queued":
+            queued[child] = why
+        elif why:
+            workers[child] = why
+        elif rep_ts and now - rep_ts < _QUEUE_WORKER_GRACE:
+            workers[child] = "reported"
+    if workers:
+        # A worker held by its order runs once a sibling finishes — waiting on
+        # it only means something while one is still out. Held behind a
+        # STOPPED sibling it waits on a person, not on time.
+        workers.update(queued)
+    mail = _pending_from_workers(title, children)
+    inbox_wait = bool(_mailbox.waiter_active(title, now))
+    if not workers and not mail and not inbox_wait:
+        return None
+    return {"workers": workers, "mail": mail, "inbox_wait": inbox_wait}
+
+
+def queue_hold(title: str, now: Optional[float] = None) -> Optional[dict]:
+    """Why ``title``'s queue is holding for its workers right now, or None:
+    :func:`_hold_reason` plus ``since`` (when this hold began), with the
+    episode cap applied — past :data:`_QUEUE_WORKER_HOLD_MAX` it answers None
+    so the queue drains again. Read-only; never raises (API-ready: the queue
+    route can show "waiting on N workers" from it)."""
+    now = time.time() if now is None else now
+    try:
+        reason = _hold_reason(title, now)
+    except Exception:  # noqa: BLE001 — a broken read never stalls the queue
+        return None
+    if reason is None:
+        return None
+    since = float((_WORKER_HOLD.get(title) or {}).get("since") or now)
+    if now - since >= _QUEUE_WORKER_HOLD_MAX:
+        return None
+    reason["since"] = since
+    return reason
+
+
+def _hold_words(reason: Optional[dict]) -> str:
+    """One line for the log and the event: "waiting on 2 workers (a, b)"."""
+    if not reason:
+        return ""
+    parts = []
+    workers = reason.get("workers") or {}
+    if workers:
+        names = ", ".join(sorted(workers))
+        parts.append(
+            "waiting on %d worker%s (%s)"
+            % (len(workers), "" if len(workers) == 1 else "s", names)
+        )
+    if reason.get("mail"):
+        n = int(reason["mail"])
+        parts.append("%d worker message%s to type first" % (n, "" if n == 1 else "s"))
+    if reason.get("inbox_wait"):
+        parts.append("waiting on its inbox")
+    return "; ".join(parts)
+
+
+def _track_hold(title: str, now: float) -> Optional[dict]:
+    """The drain's view of the hold: start/extend/end the episode in
+    :data:`_WORKER_HOLD`, announce a change on ``session.queue_changed``
+    (``data.waiting_on`` — the UI's queue badge already listens), and return
+    the CAPPED hold (None = send as usual)."""
+    try:
+        raw = _hold_reason(title, now)
+    except Exception:  # noqa: BLE001
+        raw = None
+    prev = _WORKER_HOLD.get(title)
+    if raw is None:
+        if prev is not None:
+            _WORKER_HOLD.pop(title, None)
+            _announce_hold(title, None)
+        return None
+    key = (
+        tuple(sorted((raw.get("workers") or {}).items())),
+        bool(raw.get("mail")),
+        bool(raw.get("inbox_wait")),
+    )
+    if prev is None:
+        prev = _WORKER_HOLD[title] = {"since": now, "key": key}
+        _announce_hold(title, dict(raw, since=now))
+    elif prev.get("key") != key:
+        prev["key"] = key
+        _announce_hold(title, dict(raw, since=prev.get("since") or now))
+    since = float(prev.get("since") or now)
+    if now - since >= _QUEUE_WORKER_HOLD_MAX:
+        return None  # the cap: drain as usual until this hold clears
+    return dict(raw, since=since)
+
+
+def _announce_hold(title: str, reason: Optional[dict]) -> None:
+    """Emit the hold's start/change/end. Never raises."""
+    try:
+        st = _prompt_queue.get_state(title)
+        _events.BUS.emit(
+            "session.queue_changed",
+            session=title,
+            data={
+                "pending": len(st["items"]),
+                "enabled": st["enabled"],
+                "loop": st["loop"],
+                "waiting_on": sorted((reason or {}).get("workers") or {}),
+                "waiting": _hold_words(reason),
+            },
+        )
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf(
+                "[MONITORING] queue for %s %s",
+                title,
+                ("holds: " + _hold_words(reason)) if reason else "released",
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _send_consumed(inst, title: str, rec: dict) -> bool:
     """Evidence that the drain's last send into ``title`` (``rec["sent_at"]``,
     ``rec["sent_text"]``) was taken by the agent although the drain never read
@@ -602,6 +855,12 @@ def _drain_one_queue(title: str) -> None:
     # working marker, which otherwise let the drain fire a prompt prematurely.
     if now - rec.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:
         return  # we only just relaunched it; let the CLI draw its prompt
+    # An orchestrator waiting on its workers is not idle, whatever its pane
+    # says (see "Waiting on workers" above). The dwell restarts when the hold
+    # lifts, so the orchestrator's own turn on the reports settles first.
+    if _track_hold(title, now) is not None:
+        rec["idle_since"] = None
+        return
     # A mailbox delivery typed into this session restarts the dwell too.
     mail_sent = (_MAIL_STATE.get(title) or {}).get("sent_at", 0.0)
     if not _idle_settled(rec, title, now, since=mail_sent):
@@ -882,7 +1141,10 @@ def _queue_wants_turn(title: str, now: float) -> bool:
         last = st.get("last_sent") or 0.0
         if last and now - last < interval * 60:
             return False
-    return _server()._session_limited_until(title) <= now
+    if _server()._session_limited_until(title) > now:
+        return False
+    # Holding for its workers: their reports (and messages) go in first.
+    return queue_hold(title, now) is None
 
 
 def _pane_holds_agent(name: str, program: Optional[str] = None) -> bool:
@@ -1034,6 +1296,8 @@ def _drain_prompt_queues() -> None:
         _QUEUE_STATE.pop(gone, None)
     for gone in [t for t in _LIMIT_STATE if t not in srv.ENGINE.instances]:
         _LIMIT_STATE.pop(gone, None)
+    for gone in [t for t in _WORKER_HOLD if t not in srv.ENGINE.instances]:
+        _WORKER_HOLD.pop(gone, None)
     # Drop budget overrides for sessions that no longer exist (so a reused title
     # doesn't inherit an old raise).
     for gone in [t for t in srv._budget_overrides() if t not in srv.ENGINE.instances]:
