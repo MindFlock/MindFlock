@@ -963,7 +963,7 @@ def _dismiss_trust_prompt(inst, title: str, name: str, text: str) -> bool:
     is visible either way). Never raises."""
     try:
         spec = providers.resolve(getattr(inst, "Program", "") or "").trust_prompt()
-        if not spec or not any(p in text for p in spec.patterns):
+        if not spec or not spec.on_screen(text):
             return False
         now = time.time()
         if now - _TRUST_DISMISS_AT.get(title, 0.0) >= _TRUST_DISMISS_COOLDOWN:

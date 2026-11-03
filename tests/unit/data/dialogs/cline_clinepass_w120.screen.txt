@@ -1,0 +1,41 @@
+#! real capture 2026-11-03: cline 3.0.74 first launch (fresh ~/.cline, provider login only), tmux capture-pane -p -J; a GATE: the ClinePass promo, Enter opens a browser, any other key closes it
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                           @@                                                           
+                                                         @@@@@@                                                         
+                                                    @@@@@@@@@@@@@@@@                                                    
+                                                  @@@@@@@@@@@@@@@@@@@@                                                  
+                                                 @@@@@@@@@@@@@@@@@@@@@@                                                 
+                                                 @@@@@    @@@@    @@@@@                                                 
+                                               @@@@@@     *@@@     @@@@@@                                               
+                                               @@@@@@     *@@@     @@@@@@                                               
+                                                                                                                        
+                                Try ClinePass                                                                           
+                                                                                                                        
+                                ClinePass is a $9.99/month subscription plan to get                                     
+                                access to the latest open-weight coding models with                                     
+                                enough quota for day-to-day work, at a much lower cost                                  
+                                than paying API costs directly.                                                         
+                             U                                                            u                             
+                                https://app.cline.bot/dashboard/subscription?                                           
+                          ────                                                            ────                          
+                          ❯ Wh   Open ClinePass                                                                         
+                          ────                                                            ────                          
+                                Press Enter to open, any other key to close                                             
+                           moc                                                            ab)                           
+                           cline2 (master)                                                                              
+                           ▶▶ Auto-approve all enabled (Shift+Tab)                                                      
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        
+                                                                                                                        

@@ -54,6 +54,7 @@ KEYSTROKES: Dict[str, bytes] = {
     "enter": b"\r",
     "d_enter": b"\x44\x0d",  # 'D' then Enter (claude's "Open documentation url" path)
     "y_enter": b"\x79\x0d",  # 'y' then Enter
+    "esc": b"\x1b",  # Escape: closes a popup without typing anything into it
 }
 
 # Exit codes that mean a CLI quit cleanly (0 = normal exit, 130 = Ctrl-C / SIGINT).
@@ -71,6 +72,18 @@ class ProviderConfig:
     natural_codes: Tuple[int, ...] = DEFAULT_NATURAL_CODES
     trust_patterns: Tuple[str, ...] = ("Open documentation url for more info",)
     trust_keystroke: str = "d_enter"
+    #: Match ``trust_patterns`` only in the bottom N non-blank lines of the
+    #: screen (0 = anywhere on it). A CLI that prints its gates INTO the
+    #: scrollback (aider) leaves an answered gate's text on screen; matched
+    #: anywhere, the dismiss keystroke kept being typed into every later
+    #: prompt (aider got ``D`` as its task). A full-screen TUI gate keeps 0.
+    trust_tail_lines: int = 0
+    #: Paths this CLI writes into the work tree for itself (aider's
+    #: ``.aider*`` chat history, tags cache), added to the repository's
+    #: ``info/exclude`` before every launch: never committed by a ship
+    #: step, never a first-run "add it to .gitignore?" question, and the
+    #: project's own ``.gitignore`` is left alone.
+    git_excludes: Tuple[str, ...] = ()
     idle_pattern: str = ""
     #: Regexes visible in the pane while the CLI is RUNNING a turn (its in-flight
     #: status line, e.g. an "esc to interrupt" hint). Feeds
@@ -246,6 +259,12 @@ class ProviderConfig:
     #: ``{config_file}`` (the written file's path).
     peer_mcp_args: Tuple[str, ...] = ()
     peer_mcp_env: Tuple[Tuple[str, str], ...] = ()
+    #: The everyday MindFlock MCP auto-attach (``mcp_attach.attach_args``), as
+    #: argv templates with the same placeholders as ``peer_mcp_args``, for a
+    #: CLI that takes an extra MCP server on its command line for one launch
+    #: (goose's ``--with-extension``). Empty = no auto-attach. Unlike the peer
+    #: attach it ADDS the server: the user's own MCP servers stay loaded.
+    mcp_args: Tuple[str, ...] = ()
     peer_mcp_file: Tuple[str, str] = ("", "")
     #: ``(path under the sandbox HOME, content)`` — for a CLI that reads its
     #: MCP config only from its own home; written at launch.
@@ -267,13 +286,38 @@ class ProviderConfig:
 
         Precedence: settings/env override (:func:`binary_override`) → this
         config's ``binary_path`` → ``base_command()`` (``command``/``name`` off
-        PATH)."""
-        override = binary_override(self.name)
+        PATH).
+
+        An override replaces the EXECUTABLE only: a base command that carries
+        an interactive subcommand (``cline -i``, ``goose session``) keeps it, or
+        a custom binary path would launch the CLI's one-shot mode instead."""
+        override = binary_override(self.name) or self.binary_path
+        if override:
+            rest = self._command_rest()
+            return "%s %s" % (override, rest) if rest else override
+        return self.base_command()
+
+    def resolved_executable(self) -> str:
+        """The program itself — what ``PATH`` lookups, install checks and
+        ``--version`` probes need: :meth:`resolved_binary` without the
+        interactive subcommand (``goose session`` → ``goose``). An override is
+        a path to the executable, returned as is."""
+        override = binary_override(self.name) or self.binary_path
         if override:
             return override
-        if self.binary_path:
-            return self.binary_path
-        return self.base_command()
+        try:
+            parts = shlex.split(self.base_command())
+        except ValueError:
+            parts = self.base_command().split()
+        return parts[0] if parts else self.name
+
+    def _command_rest(self) -> str:
+        """``command`` after its first token (``-i`` of ``cline -i``), or ``""``."""
+        cmd = (self.command or "").strip()
+        if not cmd:
+            return ""
+        parts = cmd.split(None, 1)
+        return parts[1] if len(parts) > 1 else ""
 
     def launch_args_shell(self) -> str:
         return " ".join(shlex.quote(a) for a in self.launch_args)
@@ -332,9 +376,12 @@ def resolve_provider_binary(name: str, cfg: Optional["ProviderConfig"] = None) -
 
     Precedence: settings/env override → the config's ``binary_path`` /
     ``base_command`` (when a config is given) → the bare ``name``. Used by the
-    launch paths that don't already hold a :class:`ProviderConfig`."""
+    install checks (Settings → Providers, the default-agent guard, the doctor),
+    so it is the EXECUTABLE (:meth:`ProviderConfig.resolved_executable`), never
+    a command line: ``which("goose session")`` finds nothing, and cline and
+    goose read as not installed — refusing them as the default agent."""
     if cfg is not None:
-        return cfg.resolved_binary()
+        return cfg.resolved_executable()
     override = binary_override(name)
     return override or name
 
@@ -626,13 +673,32 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         idle_pattern="(Y)es/(N)o/(D)on't ask again",
         trust_patterns=("Open documentation url for more info",),
         trust_keystroke="d_enter",
-        # Verified against the aider 0.86.2 source: waiting.py shows a
-        # "Waiting for LLM" spinner for the whole model call (streaming after
-        # that keeps the pane changing, which the hash layer already sees).
-        working_patterns=("Waiting for LLM",),
+        # aider prints the gate into its scrollback: once answered, the line
+        # stays on screen above the banner. Only a gate on the live last lines
+        # is answered (a wrapped question takes two).
+        trust_tail_lines=3,
+        # Its chat/input history and tags cache land in the work tree; ignored
+        # through info/exclude, so aider's first-run "Add .aider* to
+        # .gitignore?" question (which held every new session's task) is
+        # never asked, and a Commit stop never commits them.
+        git_excludes=(".aider*",),
+        # aider 0.86.2 draws a WaitingSpinner for the whole model call:
+        # base_coder.py names the MODEL ("Waiting for openai/gpt-4o"), not the
+        # "Waiting for LLM" default in waiting.py, so the old literal never
+        # matched a real turn — a quick one never read as working and an Agent
+        # stop waited for it to start. The line is the 10-cell ░█ (or #=)
+        # frame, then the text; the frame keeps prose saying "Waiting for…"
+        # from reading as a live turn. Streaming after it keeps the pane
+        # changing, which the hash layer already sees.
+        working_patterns=(r"(?m)^[ ░█#=]{8,12} ?Waiting for \S",),
         # io.confirm_ask always renders " (Y)es/(N)o" (plus optional /(A)ll,
         # /(S)kip all, /(D)on't ask again suffixes) when paused on a question.
-        waiting_patterns=(r"\(Y\)es/\(N\)o",),
+        # Anchored to the END of the screen: aider prints its questions into
+        # the scrollback, so an ANSWERED one stays visible above the next ">"
+        # prompt, and matched anywhere it read as Needs you for good. Every
+        # confirm_ask ends "[Yes]: " / "[No]: " (aider 0.86.2 io.py); the
+        # \s* inside covers a wrap through the default ("[Y\nes]:", w50).
+        waiting_patterns=(r"\[\s*(?:Y\s*e\s*s|N\s*o)\s*\]:[ \t]*\S{0,6}\s*\Z",),
         # Its dialogs as data: the confirm_ask line, answered letter + Enter.
         dialog_layout="aider",
         # Uses YOUR provider API key — the upstream model API's rate limits
@@ -736,8 +802,13 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         resume_flag="",  # resume needs --id <session-id>; relaunch fresh
         resume_fallback=False,
         idle_pattern="",
-        trust_patterns=(),
-        trust_keystroke="enter",
+        # First launch (cline 3.0.74) opens a "Try ClinePass" promo over the
+        # input: "Press Enter to open, any other key to close". The typed task
+        # vanished into it (its first key closed the popup, the rest went
+        # nowhere) and Enter opens a browser — so it is a gate, closed with
+        # Escape. cline records it as shown and never asks again.
+        trust_patterns=("Press Enter to open, any other key to close",),
+        trust_keystroke="esc",
         # From the TUI source bundled in the 3.0.38 binary: the input hint
         # flips to "Esc cancels turn" while running, and the status line shows
         # "Thinking... (esc to cancel)".
@@ -811,8 +882,11 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
         dialog_layout="goose",
         # `goose run -t <text>` executes one instruction and exits. NOT `goose
         # session run` — one-shot args hang off the executable, which is why they
-        # are kept separate from `command`.
-        oneshot_args=("run", "-t", "{prompt}"),
+        # are kept separate from `command`. `-q` (quiet, goose 1.41.0: "printing
+        # only the model response to stdout"): without it stdout opens with the
+        # session banner ("__( O)> ● new session · …"), and a reply without the
+        # <commit> tags became a commit subject made of that banner.
+        oneshot_args=("run", "-q", "-t", "{prompt}"),
         usage_window_kind="",
         usage_window_note="Bring-your-own provider keys; no MindFlock-managed window.",
         # `goose configure` sets up the provider + key interactively.
@@ -844,6 +918,11 @@ BUILTIN_CONFIGS: List[ProviderConfig] = [
             "--with-extension",
             "{argv_env_shell}",
         ),
+        # Every session: the MindFlock MCP as one more stdio extension for this
+        # launch (goose 1.41: "--with-extension: Add stdio extensions from full
+        # commands with environment variables"), next to the user's own
+        # extensions; env(1) again, since goose filters PYTHONPATH.
+        mcp_args=("--with-extension", "{argv_env_shell}"),
     ),
     ProviderConfig(
         name="copilot",
@@ -964,6 +1043,8 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         natural_codes=tuple(exit_.get("natural_codes", DEFAULT_NATURAL_CODES)),
         trust_patterns=tuple(classify.get("trust_patterns", ())),
         trust_keystroke=classify.get("trust_keystroke", "enter"),
+        trust_tail_lines=max(0, int(classify.get("trust_tail_lines", 0) or 0)),
+        git_excludes=tuple(str(x) for x in (launch.get("git_excludes", ()) or ()) if x),
         idle_pattern=classify.get("idle_pattern", ""),
         working_patterns=tuple(classify.get("working_patterns", ()) or ()),
         waiting_patterns=tuple(classify.get("waiting_patterns", ()) or ()),
@@ -1025,6 +1106,7 @@ def _config_from_toml(raw: dict) -> ProviderConfig:
         ),
         sandbox_tmpdir_env=tuple(str(x) for x in (peer.get("tmpdir_env", ()) or ())),
         peer_mcp_args=tuple(str(x) for x in (peer.get("mcp_args", ()) or ())),
+        mcp_args=tuple(str(x) for x in (launch.get("mcp_args", ()) or ())),
         peer_mcp_env=tuple(
             (str(k), str(v)) for k, v in (peer.get("mcp_env", {}) or {}).items()
         ),

@@ -26,7 +26,8 @@ PANES = {
         "Do you want to proceed?\n> 1. Yes\n  2. Yes, and always allow in this conversation",
     ),
     "aider": (
-        "Waiting for LLM",
+        # base_coder.py's spinner names the model (captured live, 2026-11-03).
+        "> say hi\n        █░ Waiting for openai/mock",
         "Add file to the chat? (Y)es/(N)o/(D)on't ask again [Yes]:",
     ),
     "opencode": (

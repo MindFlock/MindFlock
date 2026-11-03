@@ -1,0 +1,24 @@
+#! real capture 2026-11-03: aider 0.86.2 in a MindFlock session, tmux capture-pane -p -J; NOT a gate: its 'Open documentation url' model warning answered (D), aider back at its input line
+Analytics have been permanently disabled.
+────────────────────────────────────────────────────────────────────────────────
+Warning for openai/mock: Unknown context window size and costs, using sane 
+defaults.
+Did you mean one of these?
+- openai/o1
+- openai/o3
+You can skip this check with --no-show-model-warnings
+
+https://aider.chat/docs/llms/warnings.html
+Open documentation url for more info? (Y)es/(N)o/(D)on't ask again [Yes]: D     
+
+Aider v0.86.2
+Model: openai/mock with whole edit format
+Git repo: ../../../../../repo/.git/worktrees/a2_18e4aac5a6bc25c5 with 1 files
+Repo-map: using 1024 tokens, auto refresh
+────────────────────────────────────────────────────────────────────────────────
+>  
+
+
+                                                                                
+
+                                                                                

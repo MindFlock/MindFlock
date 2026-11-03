@@ -366,6 +366,7 @@ args = ["--dangerously-skip-permissions"] # saved flags, appended on every start
 resume_flag = "--continue"       # omit if the CLI can't resume
 skip_perms_flag = "--yolo"       # appended when the session skips permissions
 resume_fallback = true           # emit "<cmd> --continue || <cmd>" (not after exit 137)
+git_excludes = [".mycli*"]        # its own work-tree files: put in info/exclude at launch
 effort_args = ["--brain", "{level}"]      # optional: reasoning-effort flag
 effort_levels = ["low", "high"]           # the level names it accepts, cheapest first
 effort_ultra_level = "galaxybrain"        # optional: flag value for the top rung
@@ -376,7 +377,8 @@ natural_codes = [0, 130]         # clean-quit codes (no auto-resume)
 
 [classify]
 trust_patterns = ["Do you trust"]  # pane substrings that mean a trust prompt
-trust_keystroke = "enter"          # enter | d_enter | y_enter
+trust_keystroke = "enter"          # enter | d_enter | y_enter | esc
+trust_tail_lines = 0               # >0: a gate counts only in the bottom N lines
 idle_pattern = "What next?"        # pane substring meaning "waiting, idle"
 working_patterns = ["(?i)esc to interrupt"]  # status line of a LIVE turn
 dialog_layout = "goose"            # optional: it draws a known CLI's dialogs
@@ -394,6 +396,18 @@ state = "working"
 red_zone_guard = false             # true = MindFlock manages a HARD block for this CLI
 tool_hook_events = { PreToolUse = "pre", PostToolUse = "post" }
 ```
+
+**A CLI that prints its gates into the scrollback needs `trust_tail_lines`.**
+Matched anywhere on the screen, an answered gate whose text is still visible
+reads as live, and its keystroke is typed into whatever prompt comes next
+(aider's `Open documentation url…` gate typed `D` + Enter as the session's
+task). With `trust_tail_lines = 3` the gate counts only while it sits on the
+last three non-blank lines. The same goes for `waiting_patterns`: anchor them to
+the end of the screen (`\s*\Z`) when the question stays in the scrollback once
+answered, or the session reads **Needs you** for good. `git_excludes` lists the
+files the CLI writes into the work tree for itself (aider's `.aider*`): they go
+into the repository's `info/exclude` before each launch, so a Commit stop never
+picks them up and the CLI never asks to edit the project's `.gitignore`.
 
 **Give your CLI a `working_patterns` regex if it shows an interrupt hint.** It
 is the one signal that proves a turn is live *from a single frame*, and that
@@ -550,13 +564,19 @@ the same name overrides the bundled config.
 MindFlock MCP server to a launch. `spec` is a
 `providers.mcp_attach.McpSpec`: interpreter, `-P -m backend.mcp`, the env with
 the session's title, the server port and the scope. The default is `()`, no
-auto-attach. Two providers override it:
+auto-attach. These providers attach:
 
 - **`claude`** writes a 0600 run file and returns
   `--mcp-config=<file>` and `--allowedTools=<the ten read, wait and report tools>`,
   both in the single-token form, since a spaced value would swallow the seed
   prompt.
 - **`codex`** returns `-c mcp_servers.mindflock={…}`, one TOML inline table.
+- **`copilot`** returns `--additional-mcp-config <json>`.
+- A config-driven CLI attaches through its config's **`mcp_args`** templates
+  (TOML `[launch] mcp_args`, the same placeholders as the peer `mcp_args`):
+  **`goose`** gets `--with-extension "env K=V … <python> -P -m backend.mcp"`,
+  one more stdio extension next to the user's own (`env(1)`, because goose
+  filters `PYTHONPATH` out of an extension's env). No templates, no attach.
 
 The launch sites prepend these tokens to the effective launch args. They
 never go into `build_launch_command` or `write_launcher` themselves, so the
@@ -564,8 +584,8 @@ golden launcher scripts don't change. They are raw argv elements: every
 launch path shell-quotes launch args itself. A provisioned launcher bakes them
 in when it is written, so a relaunch from the web UI compares the baked tokens
 with what `mcp_launch_args` returns now (`mcp_attach.launcher_attach_stale`)
-and rewrites the launcher first when they differ. A TOML-only provider has no
-hook and is not attached; its users register `mindflock mcp` with that CLI by
+and rewrites the launcher first when they differ. A TOML provider without
+`mcp_args` is not attached; its users register `mindflock mcp` with that CLI by
 hand. See [mcp.md](mcp.md#how-it-gets-attached).
 
 Each launch site also records whether that launch carried the tokens
