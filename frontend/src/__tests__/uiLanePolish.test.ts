@@ -33,7 +33,7 @@ const PLANS = [plan("p_pay", "Payments stops"), plan("builtin:ticket", "Ticket")
 
 const SETTINGS = {
   ticketing: { sources: [{ id: "jira-1", provider: "jira", label: "Jira — payments", plan: "p_pay" }] },
-  github: { repos: ["quickpay/quickpay"], issue_repos: ["quickpay/web"] },
+  github: { repos: ["quickpay/quickpay"], issue_repos: ["quickpay/web"], repo_settings: { "quickpay/quickpay": { depth: "pr" } } },
 };
 
 const editor = (kind: string, target: string, state = "grounded") =>
@@ -66,21 +66,24 @@ const block = (html: string, key: string) => {
 };
 
 describe("the stops chip", () => {
-  it("says Stops and the source's own by name, else built-in — never the built-in plan's name", () => {
+  it("says Stops and the words Intake's \"Goes as far as\" shows — its own by name, else its rung — never the built-in plan's name", () => {
     expect(stopsWords({ id: "p_pay", name: "Payments stops", own: true })).toBe("Payments stops");
-    expect(stopsWords({ id: "builtin:ticket", name: "Ticket", own: false })).toBe("built-in");
+    expect(stopsWords({ id: "builtin:ticket", name: "Ticket", own: false, words: "Open PR" })).toBe("Open PR");
+    expect(stopsWords({ id: "builtin:ticket", name: "Ticket", own: false })).toBe("Stop after the agent");
     const html = lane();
     const jira = block(html, "tickets:jira-1");
     expect(jira).toContain('<span class="sky-lane-stops own"><span class="sky-lane-stops-key">Stops</span><span class="sky-lane-flyway own">Payments stops</span>');
     const pr = block(html, "prs:quickpay/quickpay");
-    expect(pr).toContain('<span class="sky-lane-stops"><span class="sky-lane-stops-key">Stops</span><span class="sky-lane-flyway">built-in</span>');
+    expect(pr).toContain('<span class="sky-lane-stops"><span class="sky-lane-stops-key">Stops</span><span class="sky-lane-flyway">Open PR</span>');
+    // No depth: the agent alone, said the way the card says it.
+    expect(block(html, "issues:quickpay/web")).toContain('<span class="sky-lane-flyway">Stop after the agent</span>');
     expect(pr).not.toContain(">Review a PR<");
   });
 
   it("reads as editable: a pencil, a pointer, and a tooltip naming what it edits and what it is now", () => {
     const pr = block(lane(), "prs:quickpay/quickpay");
     expect(pr).toContain('<span class="sky-lane-stops-edit" aria-hidden="true">✎</span>');
-    expect(pr).toContain('title="Edit the default stops for quickpay/quickpay (built-in: Review a PR)"');
+    expect(pr).toContain('title="Edit the default stops for quickpay/quickpay (goes as far as Open PR)"');
     expect(stopsTip({ name: "Jira — payments", flyway: { id: "p", name: "Payments stops", own: true } })).toBe("Edit the default stops for Jira — payments (its own: Payments stops)");
     const sheet = css("components/flights/IntakeLane.css");
     expect(cssRule(sheet, ".sky-lane-chips .sky-lane-flyway-btn")).toContain("cursor: pointer");

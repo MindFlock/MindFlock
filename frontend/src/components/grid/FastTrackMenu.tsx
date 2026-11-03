@@ -16,23 +16,33 @@
  * is open can never end the session behind it.
  *
  * Doing ONE step by hand is not here: that is the Commit… / Push / Make PR
- * button beside ⏩, which stays the guided manual ladder. */
+ * button beside ⏩, which stays the guided manual ladder.
+ *
+ * While the session's STOPS decide (its flight is built, waiting to take off,
+ * or flying — laneActions `flightDecides`), the rungs are not offered: a
+ * chain that ends in Push will push whatever ⏩ says, so the picker says how
+ * far the stops go ("This session's stops go as far as Push", laneActions
+ * `flightReach`) and offers "Edit its stops" (its Flight tab) and "Open in the
+ * Sky" instead. */
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useInstances } from "../../state/queries";
+import { useFlights, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import {
   ASK_FIRST_DESC,
   ASK_FIRST_LABEL,
   fastTrackModel,
+  flightDecides,
+  flightReach,
   pickFastTrack,
   type Lane,
 } from "../../lib/laneActions";
 import { toast } from "../../lib/toast";
 
-/** One row of the picker: a rung, or the ask-first toggle. */
-type Entry = { kind: "lane"; lane: Lane } | { kind: "ask" };
+/** One row of the picker: a rung, or the ask-first toggle — or, while the
+ * session's stops decide, a door to them (its Flight tab, the Sky). */
+type Entry = { kind: "lane"; lane: Lane } | { kind: "ask" } | { kind: "stops" } | { kind: "sky" };
 
 export function FastTrackMenu({
   title,
@@ -49,17 +59,29 @@ export function FastTrackMenu({
   const inst = (rows || []).find((r) => r.title === title && !r.device) ||
     (rows || []).find((r) => r.title === title);
   const model = useMemo(() => fastTrackModel(inst || {}), [inst]);
+  // The session's stops decide while its flight is on (not the rungs).
+  const flightRow = inst && flightDecides(inst.flight) ? inst.flight : null;
+  const { data: flights } = useFlights(!!flightRow);
+  const flightSteps = flightRow ? (flights || []).find((f) => f.id === flightRow.id)?.steps : undefined;
+  const reach = useMemo(() => (flightRow ? flightReach(flightRow, flightSteps) : null), [flightRow, flightSteps]);
   const entries: Entry[] = useMemo(
-    () => [...model.items.map((i) => ({ kind: "lane" as const, lane: i.lane })), { kind: "ask" as const }],
-    [model]
+    () =>
+      reach
+        ? [{ kind: "stops" as const }, { kind: "sky" as const }]
+        : [...model.items.map((i) => ({ kind: "lane" as const, lane: i.lane })), { kind: "ask" as const }],
+    [model, reach]
   );
   // The highlight starts on the current target — what Enter would re-affirm.
-  const [sel, setSel] = useState(() =>
-    Math.max(
-      0,
-      model.items.findIndex((i) => i.current)
-    )
+  const [selAt, setSel] = useState(() =>
+    flightRow
+      ? 0
+      : Math.max(
+          0,
+          model.items.findIndex((i) => i.current)
+        )
   );
+  // The rows can change under an open picker (a flight lands or ends).
+  const sel = Math.min(selAt, entries.length - 1);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -134,15 +156,28 @@ export function FastTrackMenu({
 
   const close = (refocus = false) => onCloseRef.current(refocus);
 
-  const whyOf = (e: Entry): string => (e.kind === "ask" ? model.ask.why : model.lock);
+  const whyOf = (e: Entry): string => (e.kind === "ask" ? model.ask.why : e.kind === "lane" ? model.lock : "");
   const keyOf = (e: Entry): string =>
-    e.kind === "ask" ? "A" : model.items.find((i) => i.lane === e.lane)?.key || "";
+    e.kind === "ask"
+      ? "A"
+      : e.kind === "stops"
+        ? "E"
+        : e.kind === "sky"
+          ? "S"
+          : model.items.find((i) => i.lane === e.lane)?.key || "";
 
   const activate = (e: Entry | undefined) => {
     if (!e) return;
     const why = whyOf(e);
     if (why) {
       toast(why, { duration: 5000 });
+      return;
+    }
+    if (e.kind === "stops" || e.kind === "sky") {
+      close();
+      const ui = useUi.getState();
+      if (e.kind === "stops") ui.setLastTab(title, "flight");
+      else ui.showSky(title);
       return;
     }
     if (!inst) return;
@@ -184,6 +219,28 @@ export function FastTrackMenu({
   };
 
   const row = (e: Entry, i: number) => {
+    if (e.kind === "stops" || e.kind === "sky")
+      return (
+        <div
+          key={e.kind}
+          id={itemId(i)}
+          className={"pb-item" + (i === sel ? " sel" : "")}
+          role="menuitem"
+          tabIndex={-1}
+          data-ft={e.kind === "stops" ? "edit-stops" : "open-sky"}
+          onMouseMove={() => setSel(i)}
+          onClick={() => activate(e)}
+        >
+          <span className="pb-name">
+            <span className="ft-check" aria-hidden="true" />
+            {e.kind === "stops" ? "Edit its stops" : "Open in the Sky"}
+          </span>
+          <span className="pb-key">{keyOf(e)}</span>
+          <span className="pb-desc">
+            {e.kind === "stops" ? "Its Flight tab: add, remove or move its stops" : "Its line on the Sky's board"}
+          </span>
+        </div>
+      );
     const why = whyOf(e);
     const it = e.kind === "lane" ? model.items.find((x) => x.lane === e.lane) : null;
     const checked = it ? it.current : model.ask.on;
@@ -232,14 +289,30 @@ export function FastTrackMenu({
         <b>⏩ Fast-track</b>
         <span className="muted">→ {name}</span>
       </div>
-      <div className="pb-sec">When the agent is done, go as far as</div>
-      {entries.slice(0, -1).map((e, i) => row(e, i))}
-      <div className="pb-sep" />
-      {row(entries[entries.length - 1], entries.length - 1)}
-      <div className="pb-foot">
-        Acts right away — nothing is typed into the agent. To do one step yourself, use the
-        button beside <b>⏩</b>. New sessions start at Settings → Workspace's default.
-      </div>
+      {reach ? (
+        <>
+          {/* The truth, not "Off": the stops decide how far it goes. */}
+          <div className="ft-flight" data-ft-flight={reach.lane || "none"}>
+            <div className="ft-flight-head">{reach.head}</div>
+            <div className="ft-flight-desc">{reach.desc}</div>
+          </div>
+          {entries.map((e, i) => row(e, i))}
+          <div className="pb-foot">
+            Fast-track is set aside while its stops are on. It comes back once they finish or halt.
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="pb-sec">When the agent is done, go as far as</div>
+          {entries.slice(0, -1).map((e, i) => row(e, i))}
+          <div className="pb-sep" />
+          {row(entries[entries.length - 1], entries.length - 1)}
+          <div className="pb-foot">
+            Acts right away — nothing is typed into the agent. To do one step yourself, use the
+            button beside <b>⏩</b>. New sessions start at Settings → Workspace's default.
+          </div>
+        </>
+      )}
     </div>,
     document.body
   );

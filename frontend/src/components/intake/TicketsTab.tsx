@@ -112,7 +112,6 @@ import {
   saveShownBuckets,
   visibleBuckets,
 } from "./buckets";
-import { LANE_LABEL, SOURCE_DEPTHS } from "../../lib/autopilot";
 import {
   EFFORTS,
   effortOptionLabel,
@@ -2550,35 +2549,18 @@ function TicketSourceEditor({
               </select>
               <span className="set-hint">Works the tickets from this source.</span>
             </label>
-            <label className="set-row">
-              <span className="set-label">Fast-track to</span>
-              <select
-                className="tk-depth"
-                data-tk-field="depth"
-                value={source.depth === "agent" ? "" : source.depth || ""}
-                onChange={(e) => onChange({ depth: e.target.value })}
-              >
-                {/* One ladder, the same words as every other Fast-track control.
-                    A stored "agent" (stop once the agent stops) IS Off, so it
-                    reads as Off rather than as a sixth rung. */}
-                <option value="">{LANE_LABEL.leave}</option>
-                {SOURCE_DEPTHS.map((d) => (
-                  <option key={d} value={d}>
-                    {LANE_LABEL[d]}
-                  </option>
-                ))}
-              </select>
-              <span className="set-hint">After the agent finishes. Merge is per ticket only.</span>
-            </label>
           </div>
-          {/* The flyway this source's tickets fly (docs/flights.md):
-              "" = the built-in ticket flyway, cut at the Fast-track above. */}
+          {/* "Goes as far as": the ONE control for how far this source's
+              tickets go (PlanSelect). A rung writes the depth and clears the
+              plan; a saved stop writes the plan. */}
           <PlanSelect
             kind="tickets"
-            className="tk-plan"
+            className="tk-depth"
             field={{ attr: "data-tk-field" }}
-            value={source.plan || ""}
-            onChange={(plan) => onChange({ plan })}
+            target={saved ? source.id : ""}
+            depth={source.depth || ""}
+            plan={source.plan || ""}
+            onChange={(patch) => onChange(patch)}
           />
           {/* BASIC vs ADVANCED. Everything above is what a first setup needs to
               get tickets flowing; the per-queue tuning and the catalog's

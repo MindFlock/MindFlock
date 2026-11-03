@@ -26,6 +26,7 @@ import { errMsg } from "./format";
 import { instances, selectSession } from "./sessionActions";
 import { laneOf } from "./agentMessages";
 import { LANE_CHOICES, LANE_DESC, LANE_KEY, LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
+import { shipWord, type FlightRow, type FlightStep } from "./flights";
 import { taskPath } from "./runsApi";
 import { toast } from "./toast";
 
@@ -204,6 +205,45 @@ export function fastTrackModel(
       on: cur.askFirst && askFirstApplies(cur.lane),
       why: lock || (askFirstApplies(cur.lane) ? "" : "Fast-track is off — pick how far it goes first"),
     },
+  };
+}
+
+// --- When the session's stops decide -------------------------------------------
+
+/** The session's flight decides how far it goes: built and waiting to take
+ * off (on ▶ Run or its next prompt), or flying. While it does, the ⏩ picker
+ * must not claim Off — a chain ending in Push WILL push. Halted, done and
+ * cancelled hand it back to Fast-track (the pane shows its ⏩ again then). */
+export function flightDecides(f: Pick<FlightRow, "id" | "state"> | null | undefined): boolean {
+  return !!f && !!f.id && f.state !== "halted" && f.state !== "done" && f.state !== "cancelled";
+}
+
+export interface FlightReach {
+  /** The last ship stop's lane ("push"), "" when none ships (or the steps
+   * aren't known yet). */
+  lane: string;
+  /** "This session's stops go as far as Push". */
+  head: string;
+  /** Who decides, in one line. */
+  desc: string;
+}
+
+/** What the ⏩ picker says instead of the rungs while the session's stops
+ * decide: how far they go (the last ship stop), from its flight's steps
+ * (`/api/flights`; the row's own `flight` carries no steps). */
+export function flightReach(
+  row: Pick<FlightRow, "plan_name">,
+  steps?: readonly Pick<FlightStep, "kind" | "config">[] | null
+): FlightReach {
+  const named = String(row.plan_name || "").trim();
+  const desc = (named ? "Its stops (“" + named + "”)" : "Its stops") + " decide, not Fast-track. To change how far it goes, edit them.";
+  if (!steps) return { lane: "", head: "This session's stops decide how far it goes", desc };
+  const ships = steps.filter((s) => s.kind === "ship");
+  const lane = String(ships[ships.length - 1]?.config?.lane || "");
+  return {
+    lane,
+    head: lane ? "This session's stops go as far as " + shipWord(lane) : "This session's stops don't commit anything",
+    desc,
   };
 }
 

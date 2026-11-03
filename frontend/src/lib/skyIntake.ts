@@ -14,7 +14,8 @@
 
 import type { Instance, MindflockStatus } from "../api/types";
 import type { QueuedItem } from "../components/intake/queue";
-import { builtinPlanFor, waitingAuto, type FlightPlan, type WaitingKind } from "./flights";
+import { SOURCE_OFF_LABEL } from "./autopilot";
+import { builtinPlanFor, sourceReach, waitingAuto, type FlightPlan, type WaitingKind } from "./flights";
 
 /** The pipeline's poll defaults when nothing is set (backend/ticket_ingestion/
  * config.py; the same numbers the Auto-start tab shows): a ticket source every
@@ -59,8 +60,11 @@ export interface SourceBlock {
   every: number;
   /** "auto-start on · every 20 s" or "manual". */
   autoText: string;
-  /** The saved stop its items fly: the source's own, else the kind's built-in. */
-  flyway: { id: string; name: string; own: boolean };
+  /** The saved stop its items fly: the source's own, else the kind's built-in
+   * (cut at its depth). `words` is where its items go, in the words Intake's
+   * "Goes as far as" uses ("Open PR", "Payments stops", "Stop after the
+   * agent"), from lib/flights `sourceReach`. */
+  flyway: { id: string; name: string; own: boolean; words?: string };
   /** Eligible, no session yet — oldest first (the queue's order). */
   waiting: LaneWaiting[];
   started: LaneStarted[];
@@ -78,8 +82,8 @@ interface LaneSettings {
     issue_repos?: string[];
     poll_interval_seconds?: number;
     issue_poll_interval_seconds?: number;
-    repo_settings?: Record<string, { plan?: string }>;
-    issue_repo_settings?: Record<string, { plan?: string }>;
+    repo_settings?: Record<string, { plan?: string; depth?: string }>;
+    issue_repo_settings?: Record<string, { plan?: string; depth?: string }>;
   };
 }
 
@@ -147,10 +151,13 @@ export function ticketSourceLabel(source: Record<string, unknown>, providers?: S
   return named ? detail : prov + " · " + detail;
 }
 
-function flywayOf(kind: WaitingKind, own: string, plans: SourceBlockOpts["plans"]): SourceBlock["flyway"] {
-  if (own) return { id: own, name: plans?.find((p) => p.id === own)?.name || own, own: true };
+function flywayOf(kind: WaitingKind, own: string, plans: SourceBlockOpts["plans"], depth = ""): SourceBlock["flyway"] {
+  // The server's chain: its own saved stop while it exists, else the built-in
+  // cut at its depth — the same reading Intake's card shows.
+  const reach = sourceReach(kind, { plan: own, depth }, plans);
+  if (reach.own) return { id: own, name: reach.words, own: true, words: reach.words };
   const id = builtinPlanFor(kind, plans);
-  return { id, name: plans?.find((p) => p.id === id)?.name || "built-in stops", own: false };
+  return { id, name: plans?.find((p) => p.id === id)?.name || "built-in stops", own: false, words: reach.words };
 }
 
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -170,7 +177,7 @@ export function sourceBlocks(
   const labels = opts.panels?.tickets?.source_labels || {};
   const blocks: SourceBlock[] = [];
 
-  const make = (kind: WaitingKind, id: string, label: string, every: number, own: string, stray = false): SourceBlock => {
+  const make = (kind: WaitingKind, id: string, label: string, every: number, own: string, stray = false, depth = ""): SourceBlock => {
     const auto = waitingAuto(kind, status);
     return {
       key: kind + ":" + id,
@@ -182,7 +189,7 @@ export function sourceBlocks(
       auto,
       every,
       autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
-      flyway: flywayOf(kind, own, plans),
+      flyway: flywayOf(kind, own, plans, depth),
       waiting: [],
       started: [],
       ...(stray ? { stray: true } : {}),
@@ -193,14 +200,14 @@ export function sourceBlocks(
     const id = String(src.id || "");
     if (!id) continue;
     blocks.push(
-      make("tickets", id, ticketSourceLabel(src, opts.providers, labels[id]), positive(src.poll_interval_seconds) || LANE_POLL_DEFAULT.tickets, String(src.plan || ""))
+      make("tickets", id, ticketSourceLabel(src, opts.providers, labels[id]), positive(src.poll_interval_seconds) || LANE_POLL_DEFAULT.tickets, String(src.plan || ""), false, String(src.depth || ""))
     );
   }
-  const repoBlocks = (kind: "prs" | "issues", repos: unknown, every: number, per: Record<string, { plan?: string }> | undefined) => {
+  const repoBlocks = (kind: "prs" | "issues", repos: unknown, every: number, per: Record<string, { plan?: string; depth?: string }> | undefined) => {
     for (const r of Array.isArray(repos) ? repos : []) {
       const repo = String(r || "").trim();
       if (!repo || blocks.some((b) => b.kind === kind && sameRepo(b.id, repo))) continue;
-      blocks.push(make(kind, repo, KIND_WORD[kind] + " · " + repo, every, per?.[repo]?.plan || ""));
+      blocks.push(make(kind, repo, KIND_WORD[kind] + " · " + repo, every, per?.[repo]?.plan || "", false, per?.[repo]?.depth || ""));
     }
   };
   repoBlocks("prs", gh.repos, positive(gh.poll_interval_seconds) || LANE_POLL_DEFAULT.prs, gh.repo_settings);
@@ -283,17 +290,19 @@ function looksLikeTicket(title: string): boolean {
   return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(title);
 }
 
-/** The stops chip's words: the source's own saved stop by name, else
- * "built-in" (the built-in plan's name — "Ticket", "Review a PR" — only
- * repeated the kind badge beside it). */
+/** The stops chip's words — the same words Intake's "Goes as far as" shows
+ * for the source: its own saved stop by name ("Payments stops"), else the
+ * rung its depth goes to ("Open PR", "Stop after the agent"). Never the
+ * built-in plan's name, which only repeated the kind badge beside it. */
 export function stopsWords(flyway: SourceBlock["flyway"]): string {
-  return flyway.own ? flyway.name : "built-in";
+  return flyway.own ? flyway.name : flyway.words || SOURCE_OFF_LABEL;
 }
 
 /** The stops chip's tooltip: what pressing it does, what the source flies
  * now, and — while its editor chain is on the board — that it goes there. */
 export function stopsTip(block: Pick<SourceBlock, "name" | "flyway">, editing = false): string {
-  const now = block.flyway.own ? "its own: " + block.flyway.name : "built-in: " + block.flyway.name;
+  const words = stopsWords(block.flyway);
+  const now = block.flyway.own ? "its own: " + block.flyway.name : words === SOURCE_OFF_LABEL ? "stops after the agent" : "goes as far as " + words;
   return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default stops for " + block.name + " (" + now + ")";
 }
 

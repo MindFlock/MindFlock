@@ -30,7 +30,8 @@ describe("each field's help is one plain line", () => {
     // Hints handed to BlockInput as a string prop.
     const props = [...RAW.matchAll(/hint="([^"]+)"/g)].map((m) => m[1]);
     const hints = [...spans, ...props].map((h) => h.replace(/\s+/g, " ").trim());
-    expect(hints.length).toBeGreaterThan(5);
+    // (Fast-track's hint went with it: "Goes as far as" draws its own summary.)
+    expect(hints.length).toBeGreaterThan(4);
     for (const h of hints) expect(h.length, h).toBeLessThanOrEqual(90);
   });
 });
