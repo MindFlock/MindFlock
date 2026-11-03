@@ -121,9 +121,12 @@ export function catalogFrame(view: Rect, screen: { w: number; h: number }, z: nu
   return { x: Math.round(x), y: Math.round(y), w, h };
 }
 
-/** The landing strip (LandingStrip, layout key "landing", docs/flights.md "As
- * built: round 15 objects"): placed right of every line, dragged by its head,
- * sized by its corner in this range; its size before it measured itself. */
+/** The Finished strip (LandingStrip, layout key "landing", docs/flights.md
+ * "As built: round 15 objects"): hidden unless the Sky's ⋯ turns it on (the
+ * view then leaves it out of the objects, so it is never placed and the
+ * right column keeps no room for it); shown, it is placed right of every
+ * line, dragged by its title bar, sized by its corner in this range; its
+ * size before it measured itself. */
 export const LANDING_KEY = "landing";
 export const LANDING_W = 300;
 export const LANDING_H = 240;
@@ -139,12 +142,13 @@ export const NOTE_MIN = { w: 120, h: 70 };
 export const NOTE_MAX = { w: 800, h: 800 };
 export const noteFrame = (stored: StoredLine | undefined) => objectFrame(stored, NOTE_MIN, NOTE_MAX);
 
-/** A people / device block's size (PeopleBlocks, DeviceBlocks). */
+/** A people block's size (PeopleBlocks; the registry's device entry keeps
+ * it too, though devices now show only as drop targets during a drag). */
 export const BLOCK_W = 200;
 export const BLOCK_H = 64;
 
-/** Where the objects placed RIGHT of every line go (the landing strip, then
- * the device and people blocks): one column just right of everything already
+/** Where the objects placed RIGHT of every line go (the Finished strip when
+ * it is shown, then the people blocks): one column just right of everything already
  * placed (`placed`: every line and object with a spot, at its size), `gap`
  * clear of it, stacked from `top` with half a gap between. With nothing
  * placed, the column starts where the first line would. The column's x is
@@ -163,8 +167,8 @@ export function rightColumn(placed: readonly Rect[], items: readonly LineBox[], 
 }
 
 /** The right column kept clear of the lines: a line that GREW into an object
- * the sky placed right of every line (the landing strip, the device and
- * people blocks — `column`: only the auto-placed ones, never one the owner
+ * the sky placed right of every line (the Finished strip, the people blocks
+ * — `column`: only the auto-placed ones, never one the owner
  * dragged) pushes the column right of everything again (`lines`: every line,
  * the lane and the palette at their sizes now), each keeping its height. The
  * objects make way, never the lines — a chain with a few stops on it used to
