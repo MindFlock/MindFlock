@@ -45,7 +45,7 @@
  * fixed box sizes, so the markup (and a test of it) needs no DOM measuring. */
 
 import type { AutopilotRun, Instance } from "../api/types";
-import type { BehaviorTone } from "./behaviors";
+import { verifyStopFace, type BehaviorTone } from "./behaviors";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
@@ -1051,7 +1051,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
           kind: "rung",
           row: "main",
           title: LANE_LABEL[r.lane],
-          sub: "fast-track" + (r.state === "current" && row.autopilot?.note ? " · " + clip(row.autopilot.note, 24) : ""),
+          sub: "goes as far as" + (r.state === "current" && row.autopilot?.note ? " · " + clip(row.autopilot.note, 24) : ""),
           state: r.state,
           icon: "ship",
           reason: r.state === "halted" ? reason : "",
@@ -2150,7 +2150,8 @@ export function verifyStopOf(d: Pick<Diagram, "nodes">): DiagramNode | null {
 export function withBehaviors(d: Diagram, mark: BehaviorsMark | null | undefined): Diagram {
   if (!mark) return d;
   const verify = verifyStopOf(d);
-  if (verify) return { ...d, nodes: d.nodes.map((n) => (n.id === verify.id ? { ...n, behaviors: mark } : n)) };
+  // A halted Verify stop says so on its face ("Failed · 2 — halted").
+  if (verify) return { ...d, nodes: d.nodes.map((n) => (n.id === verify.id ? { ...n, behaviors: { ...mark, short: verifyStopFace(mark.short, n.state) } } : n)) };
   const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "add" && n.kind !== "parent");
   const session = main.find((n) => n.kind === "session");
   const line = main.filter((n) => n.kind !== "session");
