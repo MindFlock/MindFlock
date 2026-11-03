@@ -603,7 +603,7 @@ def test_the_bundle_shows_the_told_note_on_the_chip_and_the_toast():
         encoding="utf-8"
     )
     assert in_bundle(
-        '"Fast-track stopped: " + (run.reason || "unknown reason") '
+        '"Shipping halted: " + (run.reason || "unknown reason") '
         '+ (run.note ? "\\n" + run.note : "")',
         js,
     )
