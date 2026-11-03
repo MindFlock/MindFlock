@@ -1,7 +1,7 @@
 /** The sky objects registry (docs/flights.md "Round 15" → `objects`, "As
  * built: round 15 objects"): everything on the plane that is not a line —
- * the intake lane, the floating palette, the landing strip, the people and
- * device blocks, the sticky notes — described ONCE, so SkyView iterates one
+ * the intake lane, the floating palette, the Behaviors board, the landing
+ * strip, the people and device blocks, the sticky notes — described ONCE, so SkyView iterates one
  * list to place, draw, drag, size and measure them.
  *
  * `SKY_OBJECTS` holds one entry per KIND: its layout key (or key prefix for
@@ -23,8 +23,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { createElement, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import type { Device, Instance } from "../api/types";
+import type { Device, Instance, TestPlan } from "../api/types";
 import { fetchLanding, fetchSkyNotes, type LandingData, type SkyNote } from "../api/skyApi";
+import { BEHAVIORS_H, BEHAVIORS_KEY, BEHAVIORS_MAX, BEHAVIORS_MIN, BEHAVIORS_W, BehaviorsBoard } from "../components/flights/BehaviorsBoard";
 import { DeviceBlock } from "../components/flights/DeviceBlocks";
 import { LandingStrip } from "../components/flights/LandingStrip";
 import { PersonBlock } from "../components/flights/PeopleBlocks";
@@ -66,7 +67,7 @@ import {
 } from "./skyLayout";
 
 export type SkyPlace = "left" | "right" | "free";
-export type SkyObjectKindId = "intake" | "palette" | "landing" | "person" | "device" | "note";
+export type SkyObjectKindId = "intake" | "palette" | "behaviors" | "landing" | "person" | "device" | "note";
 export interface Size {
   w: number;
   h: number;
@@ -84,6 +85,7 @@ export const isDeviceKey = (key: string) => key.startsWith("device:");
 export function objectKind(key: string): SkyObjectKindId | "" {
   if (key === INTAKE_KEY) return "intake";
   if (key === PALETTE_KEY) return "palette";
+  if (key === BEHAVIORS_KEY) return "behaviors";
   if (key === LANDING_KEY) return "landing";
   if (isPersonKey(key)) return "person";
   if (isDeviceKey(key)) return "device";
@@ -103,6 +105,18 @@ export interface SkyObjectData {
   links: PeerLink[];
   devices: Device[];
   notes: SkyNote[];
+  /** The Behaviors board is shown (components/flights/BehaviorsBoard
+   * `useBehaviorsBoard().on`); hidden, it is not on the board at all. */
+  behaviorsOn?: boolean;
+}
+
+/** What the Behaviors board draws (`useBehaviorsBoard`): its rows, the row
+ * open into its card, and its ×. */
+export interface SkyBehaviorsView {
+  rows: TestPlan[];
+  expanded: string;
+  setExpanded(id: string): void;
+  hide(): void;
 }
 
 /** What the view gives every object when it is drawn: the data above and
@@ -132,6 +146,8 @@ export interface SkyObjectView extends SkyObjectData {
   setEditingNote(id: string): void;
   changeNote(id: string, patch: Partial<SkyNote>): void;
   removeNote(id: string): void;
+  /** The Behaviors board's data (absent: no board). */
+  behaviors?: SkyBehaviorsView;
 }
 
 /** What the sky gives one object when it draws it. */
@@ -235,6 +251,38 @@ const LANDING: SkyObjectDef = {
     }),
 };
 
+/** The Behaviors board (docs/behaviors.md §3): the behaviors with no session
+ * frame in the Sky, at the top of the right column. Not in This session or
+ * on a phone; else only while shown (`behaviorsOn`). */
+const BEHAVIORS: SkyObjectDef = {
+  key: BEHAVIORS_KEY,
+  kind: "behaviors",
+  place: "right",
+  min: BEHAVIORS_MIN,
+  max: BEHAVIORS_MAX,
+  className: "sky-object sky-object-behaviors",
+  frame: (stored) => objectFrame(stored, BEHAVIORS_MIN, BEHAVIORS_MAX),
+  size: (stored, measured) => objectFrame(stored, BEHAVIORS_MIN, BEHAVIORS_MAX) || (measured && measured.w > 0 ? measured : { w: BEHAVIORS_W, h: BEHAVIORS_H }),
+  on: (view) => (view.mode === "one" || view.narrow || !view.behaviorsOn ? [] : [{ key: BEHAVIORS_KEY }]),
+  render: (host) => {
+    const b = host.view.behaviors;
+    const frame = host.layoutEntry ? objectFrame(host.layoutEntry, BEHAVIORS_MIN, BEHAVIORS_MAX) : null;
+    return createElement(BehaviorsBoard, {
+      plans: b?.rows || [],
+      expanded: b?.expanded || "",
+      onExpand: (id: string) => b?.setExpanded(id),
+      onHide: b?.hide,
+      width: frame?.w,
+      height: frame?.h,
+      zoom: host.zoom,
+      onHeadDown: host.onHeadDown,
+      draggable: host.draggable,
+      onResize: host.onResize,
+      onMeasure: host.onMeasure,
+    });
+  },
+};
+
 const DEVICE: SkyObjectDef = {
   key: "device:",
   kind: "device",
@@ -312,8 +360,9 @@ const NOTE: SkyObjectDef = {
 
 /** The registry: every kind of sky object, in placement order — the left
  * ones first (the lane, then the palette), then the right column (the
- * strip, the devices, the people), then the free ones (notes). */
-export const SKY_OBJECTS: SkyObjectDef[] = [INTAKE, PALETTE, LANDING, DEVICE, PERSON, NOTE];
+ * Behaviors board, the strip, the devices, the people), then the free ones
+ * (notes). */
+export const SKY_OBJECTS: SkyObjectDef[] = [INTAKE, PALETTE, BEHAVIORS, LANDING, DEVICE, PERSON, NOTE];
 
 /** One object on the board: its kind's def, under its own key. */
 export interface SkyObjectItem {

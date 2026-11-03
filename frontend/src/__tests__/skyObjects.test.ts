@@ -39,10 +39,10 @@ const row = (title: string, over: Partial<Instance> = {}): Instance => ({ title,
 const data = (over: Partial<SkyObjectData> = {}): SkyObjectData => ({ mode: "all", narrow: false, intakeOn: true, paletteOn: false, links: [], devices: [], notes: [], ...over });
 
 describe("the registry", () => {
-  it("one entry per kind, in placement order: left (lane, palette), right (strip, devices, people), free (notes)", () => {
-    expect(O.SKY_OBJECTS.map((d) => d.kind)).toEqual(["intake", "palette", "landing", "device", "person", "note"]);
-    expect(O.SKY_OBJECTS.map((d) => d.place)).toEqual(["left", "left", "right", "right", "right", "free"]);
-    expect(O.SKY_OBJECTS.map((d) => d.key)).toEqual(["intake", "palette", "landing", "device:", "person:", "note:"]);
+  it("one entry per kind, in placement order: left (lane, palette), right (Behaviors board, strip, devices, people), free (notes)", () => {
+    expect(O.SKY_OBJECTS.map((d) => d.kind)).toEqual(["intake", "palette", "behaviors", "landing", "device", "person", "note"]);
+    expect(O.SKY_OBJECTS.map((d) => d.place)).toEqual(["left", "left", "right", "right", "right", "right", "free"]);
+    expect(O.SKY_OBJECTS.map((d) => d.key)).toEqual(["intake", "palette", "behaviors", "landing", "device:", "person:", "note:"]);
     expect(O.SKY_OBJECTS.filter((d) => d.accepts === "session").map((d) => d.kind)).toEqual(["device", "person"]);
     // Every def has what the host needs.
     for (const d of O.SKY_OBJECTS) {
@@ -56,7 +56,7 @@ describe("the registry", () => {
 
   it("the keys", () => {
     expect([O.personKey("L1"), O.deviceKey("mini"), O.noteKey("n1")]).toEqual(["person:L1", "device:mini", "note:n1"]);
-    expect(["intake", "palette", "landing", "person:L1", "device:mini", "note:n1", "fix-login", "flight:f1"].map(O.objectKind)).toEqual(["intake", "palette", "landing", "person", "device", "note", "", ""]);
+    expect(["intake", "palette", "behaviors", "landing", "person:L1", "device:mini", "note:n1", "fix-login", "flight:f1"].map(O.objectKind)).toEqual(["intake", "palette", "behaviors", "landing", "person", "device", "note", "", ""]);
     expect(O.isObjectKey("landing")).toBe(true);
     expect(O.isObjectKey("fix-login")).toBe(false);
     expect(O.noteIdOf("note:n1")).toBe("n1");
@@ -72,6 +72,10 @@ describe("the registry", () => {
     expect(O.skyObjects({ ...d, intakeOn: false, mode: "one" }).map((o) => o.key)).toEqual([]);
     expect(O.skyObjects({ ...d, narrow: true }).map((o) => o.key)).toEqual(["intake"]);
     expect(O.skyObjects({ ...d, mode: "perched" }).map((o) => o.key)).toContain("landing");
+    // The Behaviors board: at the top of the right column, only while shown.
+    expect(O.skyObjects({ ...d, behaviorsOn: true }).map((o) => o.key).slice(0, 3)).toEqual(["intake", "behaviors", "landing"]);
+    expect(O.skyObjects({ ...d, behaviorsOn: true, mode: "one" }).map((o) => o.key)).not.toContain("behaviors");
+    expect(O.skyObjects({ ...d, behaviorsOn: true, narrow: true }).map((o) => o.key)).toEqual(["intake"]);
     // The item carries its data.
     const items = O.skyObjects(d);
     expect((items.find((o) => o.key === "person:L1")!.data as PeerLink).peer_name).toBe("Bob");
@@ -79,7 +83,7 @@ describe("the registry", () => {
   });
 
   it("frames and sizes: the lane's and the palette's as before, the strip's range, a block's fixed width, a note's own numbers", () => {
-    const [intake, palette, landing, dev, , noteDef] = O.SKY_OBJECTS;
+    const [intake, palette, behaviors, landing, dev, , noteDef] = O.SKY_OBJECTS;
     expect(intake.size(undefined, undefined)).toEqual({ w: sky.INTAKE_W, h: 320 });
     expect(intake.size({ open: true }, undefined)).toEqual({ w: sky.INTAKE_OPEN_W, h: 520 });
     expect(intake.size(undefined, { w: 100, h: 900 })).toEqual({ w: sky.INTAKE_W, h: 900 });
@@ -90,6 +94,9 @@ describe("the registry", () => {
     expect(landing.size(undefined, { w: 320, h: 410 })).toEqual({ w: 320, h: 410 });
     expect(landing.frame({ w: 5000, h: 10 })).toEqual({ w: sky.LANDING_MAX.w, h: sky.LANDING_MIN.h });
     expect(sky.landingFrame(undefined)).toBeNull();
+    expect(behaviors.size(undefined, undefined)).toEqual({ w: 300, h: 200 });
+    expect(behaviors.size(undefined, { w: 320, h: 410 })).toEqual({ w: 320, h: 410 });
+    expect(behaviors.frame({ w: 10, h: 99999 })).toEqual({ w: behaviors.min.w, h: behaviors.max.h });
     expect(dev.size(undefined, undefined)).toEqual({ w: sky.BLOCK_W, h: sky.BLOCK_H });
     expect(dev.frame({ w: 1, h: 1 })).toBeNull();
     expect(noteDef.size({ w: 300, h: 90 }, undefined)).toEqual({ w: 300, h: 90 });
@@ -98,7 +105,8 @@ describe("the registry", () => {
   });
 
   it("the wrapper's class carries the drag, selection and drop-target states", () => {
-    const [, , landing] = O.SKY_OBJECTS;
+    const [, , behaviors, landing] = O.SKY_OBJECTS;
+    expect(O.objectClass(behaviors, {})).toBe("sky-object sky-object-behaviors");
     expect(O.objectClass(landing, {})).toBe("sky-object sky-object-landing");
     expect(O.objectClass(landing, { dragging: true, selected: true, target: true })).toBe("sky-object sky-object-landing is-dragging is-selected is-merge-target");
   });
