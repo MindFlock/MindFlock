@@ -531,7 +531,9 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   area)` at their measured size (`onMeasure`, else `estimateLine`) — rows,
   newest at the top, never overlapping. **Tidy** (toolbar, `T`) clears every
   pin and the lines glide back; a line's `onLayout({pinned: false})` is "Tidy
-  this line".
+  this line". (Superseded: rows now wrap at `fillWidth`'s width, not the
+  window's, and Tidy ends on a fit — see "As built: Tidy fills the screen
+  (2026-11-03)".)
 - **The bird** (`birdPerch(diagram) -> {nodeId, tone} | null`, the canvas's
   `bird` prop): on the flight's current stop, else the fast-track's current
   rung, else the session box while its agent works (or asks you); none when
@@ -1469,7 +1471,8 @@ focused or selected. A branch whose worker leaves takes its card with it.
   `INTAKE_W` 240 (was 300) with a 48px gap before the first line (`LINES_LEFT
   = SKY_MARGIN + INTAKE_W + 48`); a fit keeps `FIT_PAD` 56 (was 40) round
   what it shows. `placeLines` still flows rows newest first; **Tidy** (T)
-  forgets the pins and re-places at the new gap.
+  forgets the pins and re-places at the new gap. (Superseded for the wrap
+  width: see "As built: Tidy fills the screen (2026-11-03)".)
 - **Lines sit where they are placed**: each line's slot is translated to its
   `placeLines` spot (or where it was dropped). Before this, the slots sat in
   plain flow, one under the other, so the gap, Tidy and dragging never
@@ -1776,9 +1779,12 @@ owner moves it.**
   line is pinned where it was dropped. Its auto spot is dropped, so "Tidy this
   line" places it afresh.
 - **Tidy** (the button, `T`) forgets every auto spot and every pin. Every line
-  is placed again, in rows. It is **the only glide**: SkyView sets
-  `data-tidying` on `.sky-plane` for 350 ms (not under reduced motion), and
-  only `.sky-plane[data-tidying] .sky-line-slot` has a `transform` transition.
+  is placed again, in rows wrapped at `fillWidth`'s width (not a fixed window
+  width), and once every line has its spot the camera eases to the whole fit
+  (see "As built: Tidy fills the screen (2026-11-03)"). It is **the only
+  glide**: SkyView sets `data-tidying` on `.sky-plane` for 350 ms (not under
+  reduced motion), and only `.sky-plane[data-tidying] .sky-line-slot` has a
+  `transform` transition.
   No other rule eases a line's or a slot's transform. A dragged line follows
   the pointer live.
 - This session (one line) still sits at the plane's corner. It neither reads
@@ -1790,9 +1796,11 @@ The automatic fit (`firstFit`, or the focused line when the grid was on "1")
 runs once, on the sky's first show, after the lines have their spots (drawn
 and measured, or 0.9 s after the sessions load, whichever comes first). It
 runs again only when the view changes (All / Mine / Perched / This session,
-or This session's line). The effect's dependencies have no line sizes in
-them. A line growing, a new session arriving, or the window resizing never
-refits. A newcomer off screen is brought in by the rail's selection and the
+or This session's line), and once after a toolbar Tidy / `T` (armed for 2 s,
+fires once, `fitAll(true)`; Tidy these and the lane making way never fit). The
+effect's dependencies have no line sizes in them. A line growing, a new
+session arriving, or the window resizing never refits. A newcomer off screen
+is brought in by the rail's selection and the
 flash, as before. `Fit`, `0`, `1` and the zoom buttons work on demand. Back
 from the grid in the same view, the camera is where it was left.
 
@@ -7437,3 +7445,38 @@ is `PUT {from_flight: <its id>}`. A split-off piece is a plain chain.
   chains merged today. Hidden, it is never placed, keeps no room, and
   `/api/sky/landing` is not polled.
 - The board's off-screen pointers hide while any dialog or menu is open.
+
+## As built: Tidy fills the screen (2026-11-03)
+
+- **The rows are as wide as fills the window.** Every line with no spot yet
+  (all of them, after a Tidy, but also any session arriving later) is placed
+  by `assignSpots` at the wrap width `fillWidth` (lib/skyLayout) picks: it
+  tries about two dozen widths, from the old minimum (the window's width, at
+  least `LINES_LEFT + 900` plane px) up to every newcomer on one row, plus
+  each width at which one more fits on the
+  first row. It scores each layout by the zoom the toolbar's Fit would show it
+  at (the lines at full size; the intake lane, the palette and the right
+  column count for their width and top only, the column added right of
+  everything) and keeps
+  the largest. A wider width must show things at least 10% larger than the
+  minimum does (`FILL_GAIN`), and a tie goes to the narrowest: a few lines,
+  or a portrait monitor (which would gain a few percent from a second column
+  under the lane), are placed exactly as before; a landscape monitor gets
+  rows that fill it instead of a tall column with empty sides. The widest
+  candidate is also at least the placed lines' right edge, so a session
+  arriving on an already-wide sky can land in a row that wide. The placement
+  memo re-runs on window height too: a newcomer whose spot is not saved yet
+  can move when the window is resized vertically. Each recompute runs
+  `assignSpots` about 24 + N times (N newcomers).
+- **The score is close to Fit, not identical.** It counts the floating
+  palette for its width and top (Fit leaves it out), so with the palette open
+  the chosen width can differ slightly from what Fit would pick. (This
+  session's one line never reaches `fillWidth`: it sits at the corner.)
+- **Tidy ends on the whole fit.** The toolbar's Tidy and `T` arm a fit; once
+  every shown line (and the lane) has its new spot, the camera eases to the
+  whole fit (`fitAll(true)`, as Fit). Disarmed after 2 s regardless, so a line
+  never measured can't jump the camera later. Tidy these (the selection bar)
+  and the lane making way for lines it grew over leave the camera where it is.
+- **Tuning knobs:** `FILL_GAIN` (1.1) and the 24-step count live in
+  `fillWidth` in `frontend/src/lib/skyLayout.ts`; the 2 s Tidy-fit disarm is
+  `tidyFitTimer` in `frontend/src/components/flights/SkyView.tsx`.

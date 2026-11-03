@@ -331,7 +331,7 @@ describe("the layout store", () => {
     // Round 18: the estimate is a chain's (its tiles at the pitch, its label).
     expect(v).toContain("...(measured[t] || estimateLine(chainSize(diagram, true), layout[t]))");
     expect(v).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
-    expect(v).toContain("const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]),");
+    expect(v).toContain("const fresh = assignSpots(existing, newcomers, area);");
     expect(v).toMatch(/className="fl-btn sky-tidy"[^>]*onClick=\{tidy\}/);
     expect(v).toContain('} else if (k === "t" || k === "T") {');
   });
