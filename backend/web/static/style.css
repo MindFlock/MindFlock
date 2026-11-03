@@ -6264,6 +6264,38 @@ details.fl-group-waiting > summary {
   cursor: default;
 }
 
+/* The filter (round 21: "when i click the plus i should be able to just
+   start typing and it narrows down the list"): the house field, focused as
+   the palette opens. The row ↓ / ↑ walk to (Enter picks it) wears the
+   hover's accent edge on a faint accent fill — the keyboard's place while
+   the focus stays in the field. */
+.fl-palette-filter.fl-input {
+  font-size: 13px;
+  padding: 7px 10px;
+}
+
+.fl-palette-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-palette-item.is-hi,
+.fl-palette-item.fl-kind-you.is-hi {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+}
+
+.fl-palette-flyways .fl-pick.is-hi {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-palette-none {
+  margin: 0;
+}
+
 .fl-palette-groups {
   display: flex;
   flex-direction: column;

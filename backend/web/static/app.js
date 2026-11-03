@@ -26118,11 +26118,11 @@ function attentionItems(instances) {
 }
 //#endregion
 //#region src/lib/sessionLabel.ts
-function escapeRe$1(s) {
+function escapeRe$2(s) {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function featureBranchName(branch, slug) {
-	const m = new RegExp(`^feature/${escapeRe$1(slug)}/(.+)$`).exec(branch);
+	const m = new RegExp(`^feature/${escapeRe$2(slug)}/(.+)$`).exec(branch);
 	return m ? m[1] : "";
 }
 function branchTail(branch) {
@@ -88083,6 +88083,214 @@ function FlightChain({ title, line, kinds, label }) {
 	});
 }
 //#endregion
+//#region src/lib/stopCatalog.ts
+var DEFAULT_KINDS = [
+	"agent",
+	"you",
+	"ship",
+	"verify",
+	"wait",
+	"loop"
+];
+function defaultKinds(kinds) {
+	const out = [];
+	for (const k of DEFAULT_KINDS) {
+		const def = kinds.find((d) => d.kind === k);
+		if (def) out.push(def);
+	}
+	return out;
+}
+function catalogKinds(kinds) {
+	const first = defaultKinds(kinds);
+	return [...first, ...kinds.filter((k) => !first.includes(k))];
+}
+function catalogMatch(query, ...texts) {
+	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) return true;
+	const hay = texts.filter(Boolean).join("\n").toLowerCase();
+	return words.every((w) => hay.includes(w));
+}
+function filterKinds(kinds, query) {
+	return kinds.filter((k) => catalogMatch(query, kindName(k), k.label, k.kind, k.summary));
+}
+function filterPlans(plans, query) {
+	return plans.filter((p) => catalogMatch(query, p.name, p.description, ...(p.steps || []).map((s) => s.title)));
+}
+function savedChainLabel(stops) {
+	return "Saved chain · " + stops + (stops === 1 ? " stop" : " stops");
+}
+function planPath$1(plan) {
+	return plan.steps.map((s) => s.title).join(" → ");
+}
+function stopDragData(def) {
+	return [[STOP_MIME, def.kind], ["text/plain", kindName(def)]];
+}
+function savedDragData(plan) {
+	return [[FLYWAY_MIME, plan.id], ["text/plain", plan.name]];
+}
+var SHELF_KEY = "mf_sky_shelf";
+var defaultShelf = () => ({
+	kinds: [...DEFAULT_KINDS],
+	plans: []
+});
+function readShelf(raw) {
+	if (!raw) return defaultShelf();
+	try {
+		const v = JSON.parse(raw);
+		const list = (x) => Array.isArray(x) ? x.filter((k) => typeof k === "string") : null;
+		const kinds = list(v?.kinds);
+		const plans = list(v?.plans);
+		if (!kinds || !plans) return defaultShelf();
+		return {
+			kinds,
+			plans
+		};
+	} catch {
+		return defaultShelf();
+	}
+}
+var onShelf = (pick, d) => "kind" in d ? pick.kinds.includes(d.kind) : pick.plans.includes(d.planId);
+function toggleShelf(pick, d) {
+	if ("kind" in d) {
+		const on = pick.kinds.includes(d.kind);
+		return {
+			...pick,
+			kinds: on ? pick.kinds.filter((k) => k !== d.kind) : [...pick.kinds, d.kind]
+		};
+	}
+	const on = pick.plans.includes(d.planId);
+	return {
+		...pick,
+		plans: on ? pick.plans.filter((k) => k !== d.planId) : [...pick.plans, d.planId]
+	};
+}
+function shelfKinds(pick, kinds) {
+	const by = new Map(kinds.map((k) => [k.kind, k]));
+	return pick.kinds.map((k) => by.get(k)).filter((k) => !!k);
+}
+function shelfPlans(pick, plans) {
+	return plans.filter((p) => pick.plans.includes(p.id));
+}
+var familyOrder = [
+	"work",
+	"ship",
+	"outside",
+	"people"
+];
+function familyLabel(family) {
+	const f = (family || "").trim();
+	if (!f) return "Other";
+	return f.charAt(0).toUpperCase() + f.slice(1);
+}
+var hasFamilies = (kinds) => kinds.some((k) => !!k.family);
+function familyGroups(kinds, grouped = hasFamilies(kinds)) {
+	if (!grouped) return kinds.length ? [{
+		family: "",
+		label: "",
+		items: [...kinds]
+	}] : [];
+	const by = new Map(familyOrder.map((f) => [f, []]));
+	const other = [];
+	for (const k of kinds) {
+		const f = (k.family || "").trim();
+		if (!f || f === "other") other.push(k);
+		else by.set(f, [...by.get(f) || [], k]);
+	}
+	return [...[...by].map(([family, items]) => ({
+		family,
+		label: familyLabel(family),
+		items
+	})), {
+		family: "other",
+		label: "Other",
+		items: other
+	}].filter((g) => g.items.length);
+}
+function catalogCards(kinds, plans, query) {
+	const grouped = hasFamilies(kinds);
+	const groups = familyGroups(filterKinds(catalogKinds(kinds), query), grouped).map((g) => ({
+		...g,
+		items: g.items.map((def) => ({
+			section: "blocks",
+			key: "kind:" + def.kind,
+			drop: { kind: def.kind },
+			name: kindName(def),
+			perch: def.actor === "you",
+			def
+		}))
+	}));
+	const blocks = groups.flatMap((g) => g.items);
+	const multi = filterPlans(plans, query).map((plan) => ({
+		section: "multi",
+		key: "plan:" + plan.id,
+		drop: { planId: plan.id },
+		name: plan.name,
+		builtin: !!plan.builtin,
+		path: planPath$1(plan),
+		plan
+	}));
+	return {
+		blocks,
+		groups,
+		grouped,
+		multi,
+		all: [...blocks, ...multi]
+	};
+}
+function gridMove(at, key, sizes, cols) {
+	const n = sizes.reduce((a, b) => a + b, 0);
+	if (!n) return -1;
+	if (at < 0 || at >= n) return 0;
+	const c = Math.max(1, Math.floor(cols) || 1);
+	if (key === "ArrowRight") return Math.min(at + 1, n - 1);
+	if (key === "ArrowLeft") return Math.max(at - 1, 0);
+	if (key !== "ArrowDown" && key !== "ArrowUp") return at;
+	const starts = [];
+	sizes.reduce((s, size) => (starts.push(s), s + size), 0);
+	let s = 0;
+	while (at >= starts[s] + sizes[s]) s++;
+	const i = at - starts[s];
+	const col = i % c;
+	const row = Math.floor(i / c);
+	if (key === "ArrowDown") {
+		if (row < Math.floor((sizes[s] - 1) / c)) return starts[s] + Math.min(i + c, sizes[s] - 1);
+		for (let t = s + 1; t < sizes.length; t++) if (sizes[t]) return starts[t] + Math.min(col, sizes[t] - 1);
+		return at;
+	}
+	if (row > 0) return at - c;
+	for (let t = s - 1; t >= 0; t--) {
+		if (!sizes[t]) continue;
+		const last = Math.floor((sizes[t] - 1) / c) * c;
+		return starts[t] + Math.min(last + col, sizes[t] - 1);
+	}
+	return at;
+}
+var renamable = (plan) => !/^builtin:[a-z]+@/.test(plan.id);
+function cardMenu(plan, shelved) {
+	return [
+		...renamable(plan) ? [{
+			key: "rename",
+			label: "Rename"
+		}] : [],
+		{
+			key: "takeoff",
+			label: "What starts it…"
+		},
+		{
+			key: "shelf",
+			label: (shelved ? "★" : "☆") + " On the shelf"
+		},
+		plan.builtin ? {
+			key: "reset",
+			label: "Reset to default"
+		} : {
+			key: "delete",
+			label: "Delete",
+			danger: true
+		}
+	];
+}
+//#endregion
 //#region src/lib/whenHelp.ts
 var WHEN_GRAMMAR = [
 	{
@@ -88424,16 +88632,94 @@ function kindName(def, kind = "") {
 	if (k === "someone") return "Someone";
 	return def?.label || kind;
 }
-function StopPalette({ kinds, onPick, onClose, title = "Add a stop", extra }) {
-	const groups = [[
-		"robot",
-		"MindFlock does",
-		kinds.filter((k) => k.actor !== "you")
-	], [
-		"you",
-		"You do",
-		kinds.filter((k) => k.actor === "you")
-	]];
+var escapeRe$1 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function paletteRank(query, primary, ...rest) {
+	const q = query.trim().toLowerCase();
+	if (!q) return 0;
+	if (!catalogMatch(q, primary, ...rest)) return -1;
+	const atWord = new RegExp("(^|[^\\p{L}\\p{N}])" + escapeRe$1(q), "u");
+	const p = primary.toLowerCase();
+	if (p.startsWith(q)) return 0;
+	if (atWord.test(p)) return 1;
+	if (rest.some((t) => !!t && atWord.test(t.toLowerCase()))) return 2;
+	return 3;
+}
+function paletteRows(kinds, saved, query) {
+	const ranked = (list, rank) => list.map((t, i) => ({
+		t,
+		i,
+		r: rank(t)
+	})).filter((x) => x.r >= 0).sort((a, b) => a.r - b.r || a.i - b.i);
+	const kindRank = (k) => paletteRank(query, kindName(k), k.label, k.kind, k.summary);
+	return [
+		...ranked(kinds.filter((k) => k.actor !== "you"), kindRank).map((x) => ({
+			group: "robot",
+			kind: x.t,
+			rank: x.r
+		})),
+		...ranked(kinds.filter((k) => k.actor === "you"), kindRank).map((x) => ({
+			group: "you",
+			kind: x.t,
+			rank: x.r
+		})),
+		...ranked(saved, (p) => paletteRank(query, p.name, p.title)).map((x) => ({
+			group: "saved",
+			saved: x.t,
+			rank: x.r
+		}))
+	];
+}
+function bestRow(rows) {
+	let best = -1;
+	rows.forEach((r, i) => {
+		if (best < 0 || r.rank < rows[best].rank) best = i;
+	});
+	return best;
+}
+function paletteKey(key, query, hi, count) {
+	if (key === "ArrowDown") return count ? { hi: hi < 0 ? 0 : (hi + 1) % count } : {};
+	if (key === "ArrowUp") return count ? { hi: hi <= 0 ? count - 1 : hi - 1 } : {};
+	if (key === "Enter") return hi >= 0 && hi < count ? { pick: hi } : {};
+	if (key === "Escape") return query ? { query: "" } : { close: true };
+	return null;
+}
+function StopPalette({ kinds, onPick, onClose, title = "Add a stop", saved = [], savedHead = "A saved chain — all of its stops", extra, initialQuery = "" }) {
+	const [query, setQuery] = (0, import_react.useState)(initialQuery);
+	const [hiPick, setHi] = (0, import_react.useState)(null);
+	const listRef = (0, import_react.useRef)(null);
+	const rows = paletteRows(kinds, saved, query);
+	const hi = hiPick !== null && hiPick < rows.length ? hiPick : bestRow(rows);
+	(0, import_react.useEffect)(() => {
+		listRef.current?.querySelector(".is-hi")?.scrollIntoView?.({ block: "nearest" });
+	}, [hi, query]);
+	const pick = (r) => {
+		if (r.group !== "saved") onPick(r.kind);
+		else if (!r.saved.disabled) r.saved.onPick();
+	};
+	const typed = query.trim();
+	const uid = (0, import_react.useId)();
+	const listId = uid + "-list";
+	const rowId = (n) => uid + "-row-" + n;
+	const onFilterKey = (e) => {
+		e.stopPropagation();
+		if (e.nativeEvent.isComposing) return;
+		const out = paletteKey(e.key, query, hi, rows.length);
+		if (!out) return;
+		e.preventDefault();
+		if (out.hi !== void 0) setHi(out.hi);
+		if (out.query !== void 0) {
+			setQuery(out.query);
+			setHi(null);
+		}
+		if (out.pick !== void 0 && rows[out.pick]) pick(rows[out.pick]);
+		if (out.close) onClose();
+	};
+	const groups = [["robot", "MindFlock does"], ["you", "You do"]];
+	const numbered = rows.map((r, n) => ({
+		r,
+		n
+	}));
+	const chips = numbered.filter((x) => x.r.group === "saved");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-palette",
 		role: "dialog",
@@ -88457,37 +88743,98 @@ function StopPalette({ kinds, onPick, onClose, title = "Add a stop", extra }) {
 					children: "✕"
 				})]
 			}),
-			kinds.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			kinds.length === 0 && saved.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-note muted",
 				children: "The stop list didn't load — this server may not know chains yet."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				className: "fl-input fl-palette-filter",
+				type: "text",
+				placeholder: "Type to filter…",
+				"aria-label": "Filter stops",
+				role: "combobox",
+				"aria-expanded": "true",
+				"aria-autocomplete": "list",
+				"aria-controls": listId,
+				"aria-activedescendant": hi >= 0 ? rowId(hi) : void 0,
+				autoComplete: "off",
+				spellCheck: false,
+				autoFocus: true,
+				value: query,
+				onChange: (e) => {
+					setQuery(e.target.value);
+					setHi(null);
+				},
+				onKeyDown: onFilterKey
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "fl-palette-groups",
-				children: groups.map(([id, head, list]) => list.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "fl-palette-group fl-palette-" + id,
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "fl-palette-head",
-						children: head
-					}), list.map((k, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "fl-palette-item fl-kind-" + k.actor,
-						autoFocus: i === 0 && id === "robot",
-						onClick: () => onPick(k),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-palette-icon",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, { kind: k.actor === "you" ? "perch" : k.kind })
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "fl-palette-words",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "fl-palette-label",
-								children: kindName(k)
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "fl-palette-summary",
-								children: k.summary
-							})]
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-palette-list",
+				id: listId,
+				role: "listbox",
+				"aria-label": "Stops",
+				ref: listRef,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "fl-palette-groups",
+						children: groups.map(([id, head]) => {
+							const list = numbered.filter((x) => x.r.group === id);
+							return list.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "fl-palette-group fl-palette-" + id,
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "fl-palette-head",
+									children: head
+								}), list.map(({ r, n }) => r.group === "saved" ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									id: rowId(n),
+									type: "button",
+									role: "option",
+									"aria-selected": n === hi,
+									className: "fl-palette-item fl-kind-" + r.kind.actor + (n === hi ? " is-hi" : ""),
+									onClick: () => onPick(r.kind),
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-palette-icon",
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, { kind: r.kind.actor === "you" ? "perch" : r.kind.kind })
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "fl-palette-words",
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-palette-label",
+											children: kindName(r.kind)
+										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-palette-summary",
+											children: r.kind.summary
+										})]
+									})]
+								}, r.kind.kind))]
+							}, id) : null;
+						})
+					}),
+					chips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fl-palette-flyways",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "fl-palette-head",
+							children: savedHead
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "fl-chiprow",
+							children: chips.map(({ r, n }) => r.group === "saved" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								id: rowId(n),
+								type: "button",
+								role: "option",
+								"aria-selected": n === hi,
+								className: "fl-pick" + (n === hi ? " is-hi" : ""),
+								disabled: r.saved.disabled,
+								title: r.saved.title,
+								onClick: () => r.saved.onPick(),
+								children: r.saved.name
+							}, r.saved.id) : null)
 						})]
-					}, k.kind))]
-				}, id) : null)
+					}),
+					typed && rows.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "fl-note muted fl-palette-none",
+						children: [
+							"No stop matches “",
+							typed,
+							"”"
+						]
+					})
+				]
 			}),
 			extra
 		]
@@ -122356,7 +122703,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 }
 //#endregion
 //#region src/lib/verifyActions.ts
-function planPath$1(id) {
+function planPath(id) {
 	return "/api/test-plans/" + encodeURIComponent(id);
 }
 function patchPlan(id, apply) {
@@ -122367,13 +122714,13 @@ function patchPlan(id, apply) {
 	} : prev);
 }
 function requestPlanRun(planId, only) {
-	return api(planPath$1(planId) + "/run", {
+	return api(planPath(planId) + "/run", {
 		method: "POST",
 		json: only ? { steps: only } : {}
 	});
 }
 function requestPlanDelete(planId) {
-	return api(planPath$1(planId), { method: "DELETE" });
+	return api(planPath(planId), { method: "DELETE" });
 }
 async function startChecklistRun(plan, opts = {}) {
 	try {
@@ -122395,7 +122742,7 @@ async function startChecklistRun(plan, opts = {}) {
 }
 async function regeneratePlan(plan, focus = "") {
 	try {
-		await api(planPath$1(plan.id) + "/regenerate", {
+		await api(planPath(plan.id) + "/regenerate", {
 			method: "POST",
 			json: { focus: focus.trim() }
 		});
@@ -122415,7 +122762,7 @@ async function regeneratePlan(plan, focus = "") {
 }
 async function cancelChecklistRun(plan) {
 	try {
-		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
+		const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
 		await refreshInstances();
@@ -122428,7 +122775,7 @@ async function cancelChecklistRun(plan) {
 }
 async function fixPlanFailures(plan, only) {
 	try {
-		const r = await api(planPath$1(plan.id) + "/fix", {
+		const r = await api(planPath(plan.id) + "/fix", {
 			method: "POST",
 			json: only ? { steps: only } : {}
 		});
@@ -122440,7 +122787,7 @@ async function fixPlanFailures(plan, only) {
 }
 async function markPlanDeployed(plan) {
 	try {
-		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
+		const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		await refreshTestPlans();
 		toast(planName(plan) + " is ready to check");
@@ -122466,7 +122813,7 @@ async function removePlan(plan, opts = {}) {
 }
 async function recordStepAnswer(plan, step, result, note) {
 	const wasAsking = isWaitingOnYou(plan);
-	const next = (await api(planPath$1(plan.id) + "/result", { json: {
+	const next = (await api(planPath(plan.id) + "/result", { json: {
 		step_id: step.id,
 		result,
 		note
@@ -122480,7 +122827,7 @@ async function recordStepAnswer(plan, step, result, note) {
 }
 async function editPlanStep(plan, step, fields) {
 	try {
-		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), {
+		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), {
 			method: "PATCH",
 			json: fields
 		});
@@ -122494,7 +122841,7 @@ async function editPlanStep(plan, step, fields) {
 }
 async function removePlanStep(plan, step) {
 	try {
-		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
+		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		refreshTestPlans();
 	} catch (err) {
@@ -122502,7 +122849,7 @@ async function removePlanStep(plan, step) {
 	}
 }
 async function addPlanStep(plan, fields) {
-	return (await api(planPath$1(plan.id) + "/steps", {
+	return (await api(planPath(plan.id) + "/steps", {
 		method: "POST",
 		json: fields
 	}))?.plan;
@@ -131646,214 +131993,6 @@ function useClickOrDouble(place, opts) {
 	return cd.current;
 }
 //#endregion
-//#region src/lib/stopCatalog.ts
-var DEFAULT_KINDS = [
-	"agent",
-	"you",
-	"ship",
-	"verify",
-	"wait",
-	"loop"
-];
-function defaultKinds(kinds) {
-	const out = [];
-	for (const k of DEFAULT_KINDS) {
-		const def = kinds.find((d) => d.kind === k);
-		if (def) out.push(def);
-	}
-	return out;
-}
-function catalogKinds(kinds) {
-	const first = defaultKinds(kinds);
-	return [...first, ...kinds.filter((k) => !first.includes(k))];
-}
-function catalogMatch(query, ...texts) {
-	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-	if (!words.length) return true;
-	const hay = texts.filter(Boolean).join("\n").toLowerCase();
-	return words.every((w) => hay.includes(w));
-}
-function filterKinds(kinds, query) {
-	return kinds.filter((k) => catalogMatch(query, kindName(k), k.label, k.kind, k.summary));
-}
-function filterPlans(plans, query) {
-	return plans.filter((p) => catalogMatch(query, p.name, p.description, ...(p.steps || []).map((s) => s.title)));
-}
-function savedChainLabel(stops) {
-	return "Saved chain · " + stops + (stops === 1 ? " stop" : " stops");
-}
-function planPath(plan) {
-	return plan.steps.map((s) => s.title).join(" → ");
-}
-function stopDragData(def) {
-	return [[STOP_MIME, def.kind], ["text/plain", kindName(def)]];
-}
-function savedDragData(plan) {
-	return [[FLYWAY_MIME, plan.id], ["text/plain", plan.name]];
-}
-var SHELF_KEY = "mf_sky_shelf";
-var defaultShelf = () => ({
-	kinds: [...DEFAULT_KINDS],
-	plans: []
-});
-function readShelf(raw) {
-	if (!raw) return defaultShelf();
-	try {
-		const v = JSON.parse(raw);
-		const list = (x) => Array.isArray(x) ? x.filter((k) => typeof k === "string") : null;
-		const kinds = list(v?.kinds);
-		const plans = list(v?.plans);
-		if (!kinds || !plans) return defaultShelf();
-		return {
-			kinds,
-			plans
-		};
-	} catch {
-		return defaultShelf();
-	}
-}
-var onShelf = (pick, d) => "kind" in d ? pick.kinds.includes(d.kind) : pick.plans.includes(d.planId);
-function toggleShelf(pick, d) {
-	if ("kind" in d) {
-		const on = pick.kinds.includes(d.kind);
-		return {
-			...pick,
-			kinds: on ? pick.kinds.filter((k) => k !== d.kind) : [...pick.kinds, d.kind]
-		};
-	}
-	const on = pick.plans.includes(d.planId);
-	return {
-		...pick,
-		plans: on ? pick.plans.filter((k) => k !== d.planId) : [...pick.plans, d.planId]
-	};
-}
-function shelfKinds(pick, kinds) {
-	const by = new Map(kinds.map((k) => [k.kind, k]));
-	return pick.kinds.map((k) => by.get(k)).filter((k) => !!k);
-}
-function shelfPlans(pick, plans) {
-	return plans.filter((p) => pick.plans.includes(p.id));
-}
-var familyOrder = [
-	"work",
-	"ship",
-	"outside",
-	"people"
-];
-function familyLabel(family) {
-	const f = (family || "").trim();
-	if (!f) return "Other";
-	return f.charAt(0).toUpperCase() + f.slice(1);
-}
-var hasFamilies = (kinds) => kinds.some((k) => !!k.family);
-function familyGroups(kinds, grouped = hasFamilies(kinds)) {
-	if (!grouped) return kinds.length ? [{
-		family: "",
-		label: "",
-		items: [...kinds]
-	}] : [];
-	const by = new Map(familyOrder.map((f) => [f, []]));
-	const other = [];
-	for (const k of kinds) {
-		const f = (k.family || "").trim();
-		if (!f || f === "other") other.push(k);
-		else by.set(f, [...by.get(f) || [], k]);
-	}
-	return [...[...by].map(([family, items]) => ({
-		family,
-		label: familyLabel(family),
-		items
-	})), {
-		family: "other",
-		label: "Other",
-		items: other
-	}].filter((g) => g.items.length);
-}
-function catalogCards(kinds, plans, query) {
-	const grouped = hasFamilies(kinds);
-	const groups = familyGroups(filterKinds(catalogKinds(kinds), query), grouped).map((g) => ({
-		...g,
-		items: g.items.map((def) => ({
-			section: "blocks",
-			key: "kind:" + def.kind,
-			drop: { kind: def.kind },
-			name: kindName(def),
-			perch: def.actor === "you",
-			def
-		}))
-	}));
-	const blocks = groups.flatMap((g) => g.items);
-	const multi = filterPlans(plans, query).map((plan) => ({
-		section: "multi",
-		key: "plan:" + plan.id,
-		drop: { planId: plan.id },
-		name: plan.name,
-		builtin: !!plan.builtin,
-		path: planPath(plan),
-		plan
-	}));
-	return {
-		blocks,
-		groups,
-		grouped,
-		multi,
-		all: [...blocks, ...multi]
-	};
-}
-function gridMove(at, key, sizes, cols) {
-	const n = sizes.reduce((a, b) => a + b, 0);
-	if (!n) return -1;
-	if (at < 0 || at >= n) return 0;
-	const c = Math.max(1, Math.floor(cols) || 1);
-	if (key === "ArrowRight") return Math.min(at + 1, n - 1);
-	if (key === "ArrowLeft") return Math.max(at - 1, 0);
-	if (key !== "ArrowDown" && key !== "ArrowUp") return at;
-	const starts = [];
-	sizes.reduce((s, size) => (starts.push(s), s + size), 0);
-	let s = 0;
-	while (at >= starts[s] + sizes[s]) s++;
-	const i = at - starts[s];
-	const col = i % c;
-	const row = Math.floor(i / c);
-	if (key === "ArrowDown") {
-		if (row < Math.floor((sizes[s] - 1) / c)) return starts[s] + Math.min(i + c, sizes[s] - 1);
-		for (let t = s + 1; t < sizes.length; t++) if (sizes[t]) return starts[t] + Math.min(col, sizes[t] - 1);
-		return at;
-	}
-	if (row > 0) return at - c;
-	for (let t = s - 1; t >= 0; t--) {
-		if (!sizes[t]) continue;
-		const last = Math.floor((sizes[t] - 1) / c) * c;
-		return starts[t] + Math.min(last + col, sizes[t] - 1);
-	}
-	return at;
-}
-var renamable = (plan) => !/^builtin:[a-z]+@/.test(plan.id);
-function cardMenu(plan, shelved) {
-	return [
-		...renamable(plan) ? [{
-			key: "rename",
-			label: "Rename"
-		}] : [],
-		{
-			key: "takeoff",
-			label: "What starts it…"
-		},
-		{
-			key: "shelf",
-			label: (shelved ? "★" : "☆") + " On the shelf"
-		},
-		plan.builtin ? {
-			key: "reset",
-			label: "Reset to default"
-		} : {
-			key: "delete",
-			label: "Delete",
-			danger: true
-		}
-	];
-}
-//#endregion
 //#region src/components/flights/StopCatalog.tsx
 function PlanNameField({ plan, plans, onDone }) {
 	const [name, setName] = (0, import_react.useState)(plan.name);
@@ -136288,24 +136427,13 @@ function useGroundedLine(flight, src) {
 			withStep: first.id
 		});
 	};
-	const ordered = orderedPlans(plans);
-	const savedChips = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-palette-flyways",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fl-palette-head",
-			children: "A saved chain — all of its stops"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "fl-chiprow",
-			children: ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "fl-pick",
-				disabled: busy,
-				title: p.steps.map((s) => s.title).join(" → "),
-				onClick: () => void tackPlan(p, paletteAt),
-				children: p.name
-			}, p.id))
-		})]
-	});
+	const savedChips = orderedPlans(plans).map((p) => ({
+		id: p.id,
+		name: p.name,
+		title: p.steps.map((s) => s.title).join(" → "),
+		disabled: busy,
+		onPick: () => void tackPlan(p, paletteAt)
+	}));
 	const raw = {
 		selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
 		onSelect,
@@ -136368,7 +136496,7 @@ function useGroundedLine(flight, src) {
 			setPaletteAt(null);
 			setPaletteHang(null);
 		},
-		extra: ordered.length > 0 ? savedChips : void 0
+		saved: savedChips
 	}) : null;
 	const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
 	const act = async (f) => {
