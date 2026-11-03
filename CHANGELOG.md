@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-03
+
+### Added
+
+- **The Sky.** A second view beside the Grid (Ctrl+Y): every session's
+  **route** — the stops its work goes through until it is merged — drawn on a
+  pannable, zoomable canvas, with a bird on the stop where the work is now and
+  everything that **needs you** standing out. Intake, Verify and Schedule are
+  one journey here: tickets, PRs and issues arrive on the intake lane, finished
+  work lands on the Finished strip.
+- **Routes you build and save.** Add stops with **+** (or a right-click search),
+  drag them free, wire them in any order, group stops, run stops side by side,
+  start one route from another (*Start a route*), and keep a route on the shelf
+  as a **saved route** to run on a session, on its own (in a folder, no session
+  needed), from a ticket source, or on a schedule. A route starts at once or
+  when you press **Run** / send the next prompt. An Intake source's default
+  stops are edited right on the Sky.
+- **Loops** are a return wire, not a box: drag a stop back onto an earlier one
+  (or onto the session's agent) to repeat — ×N, every so often, or until a
+  condition holds.
+- **Return arrows explain themselves.** Every stop that can send work back to
+  the agent draws an arrow with its case on the line ("if pre-commit fails",
+  "if CI checks fail", "if reviewers ask for changes"); while the agent fixes,
+  the wire turns amber with the real reason and the round ("fixing 1/2").
+- **Done by the agent.** When the agent commits, pushes or opens the PR itself,
+  those stops tick done "by the agent" with a receipt, and the route moves on
+  instead of waiting.
+- **Behaviors on the route.** Verify is a stop on the route, not a dialog: a
+  session's behaviors (what the work should do in real use, each checked by
+  the agent or by you) are answered on the stop's card in the Sky; a Behaviors
+  board holds the ones with no session. Failed behaviors **halt** the route
+  (Retry · Skip · Let the agent fix it). Alt+V opens the next one that needs you.
+- **Halt.** A stop that fails halts the route and waits for you; *Halt here*
+  pauses before any stop.
+- **Agents build routes from a description.** The MindFlock MCP's route tools
+  share one stop cookbook (when to use each stop and when not to, plus
+  recipes) with the Sky's "describe it" box; `start_flight` has a dry run that
+  reads the route back as one sentence, refusals say what to do instead,
+  agents see your saved routes, and `start_on` lets a route wait for the
+  agent's work.
+- **What's new.** After an update to a release with big features, a window
+  explains them once (per person, synced across browser, desktop and phone);
+  reopen it from the palette, Settings → Help or the version label.
+- **First run says what MindFlock is**: a 3-step welcome with a picture
+  (session → route → Needs you), a short Sky tour, calm empty states for the
+  Sky and the Grid, and *How MindFlock works* in Settings → Help.
+- **GitHub Copilot CLI** is a bundled agent.
+- **Voice:** a server-side speech fallback chain, earlier final transcripts,
+  dictation gated at send time, capture off the main thread, never typing into
+  a dialog; the "MindFlock" wake word is stricter (fewer false wakes).
+
+### Changed
+
+- **One vocabulary** (`docs/vocabulary.md`): route, stop, saved route, Wait for
+  me, Needs you, behaviors, Halt, **Goes as far as** (was Fast-track), Run, and
+  Finished — in the UI, the CLI, notifications, voice and the MCP. API paths,
+  ids and settings keys are unchanged.
+- The top bar is Grid·Sky / Intake / Schedule / Settings; the Verify dialog and
+  the sidebar Verify bar are gone (old `#verify` links open the behaviors in
+  the Sky).
+- The prompt queue waits while an orchestrator waits on its MindFlock workers
+  instead of reading that wait as idle.
+- Intake's *+ Add source* grows the tab at its foot.
+
+### Fixed
+
+- "Setup 2 of 3" no longer stays on screen once a session is running.
+
 ## [0.10.6] - 2026-10-29
 
 ### Added
@@ -4646,7 +4714,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.11.0
 [0.10.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.6
 [0.10.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.5
 [0.10.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.4
