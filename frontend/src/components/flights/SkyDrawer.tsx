@@ -3,8 +3,10 @@
  *
  *  - Perched on you — every flight perched on you (its perch's checklist and
  *    Done / Skip, the same block the line's box holds) or halted (Retry /
- *    Skip), and Verify's due or failing checklists (a row that opens it in
- *    Verify). A press on a flight's name flies the sky to its line.
+ *    Skip), and behaviors that need you or failed (a row that flies the sky
+ *    to them: the session's Behaviors tile, else the Behaviors board —
+ *    lib/behaviorsFocus `openBehaviors`). A press on a flight's name flies
+ *    the sky to its line.
  *  - Waiting to fly — the tickets, pull requests and issues that are eligible
  *    and have no session, under their own sub-headings, a kind badge on every
  *    row, the saved stop as a chip row and one action: Fly. Folded: the intake
@@ -17,6 +19,7 @@ import { useFlightKinds, useFlightPlans, useFlights, useSettingsDoc, useTestPlan
 import { ageText } from "../intake/kit";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { windowName } from "../../lib/windowName";
 import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
 import { FlightCard, YouStepActions, flightHeadline } from "./FlightStrip";
@@ -55,15 +58,16 @@ export function sourcePlan(settings: Record<string, unknown> | undefined, t: Wai
   return per?.[t.repo]?.plan || "";
 }
 
-/** A due / failing checklist: one line that opens it in Verify. */
-export function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(branch: string): void }) {
+/** Behaviors that need you or failed: one line that flies the sky to them
+ * (`onOpen(plan id)` → `openBehaviors({ planId })`). */
+export function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(planId: string): void }) {
   const failing = isFailing(plan);
   return (
     <button
       type="button"
       className={"fl-check-row" + (failing ? " is-failing" : "")}
-      title="Open this checklist in Verify"
-      onClick={() => onOpen(plan.branch || plan.id)}
+      title={failing ? "Show the behaviors that failed" : "Show the behaviors that need you"}
+      onClick={() => onOpen(plan.id)}
     >
       <span className="fl-check-glyph" aria-hidden="true">{failing ? "✗" : "☐"}</span>
       <span className="fl-check-name">{planName(plan)}</span>
@@ -188,7 +192,7 @@ export interface SkyDrawerProps {
 }
 
 export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
-  // Its links open the flat dialogs: a checklist in Verify, sources in Intake.
+  // Its links: behaviors fly the sky (openBehaviors), sources open Intake.
   const openDialogFor = useUi((s) => s.openDialogFor);
   const flightsQ = useFlights();
   const plans = useFlightPlans().data || [];
@@ -220,7 +224,7 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
         <div className="sky-drawer-body">
           {flightsQ.data === null && (
             <p className="fl-note muted" role="status">
-              This server can't run chains yet — update MindFlock to run them. Waiting items and checklists still work.
+              This server can't run chains yet — update MindFlock to run them. Waiting items and behaviors still work.
             </p>
           )}
           <section className="fl-group fl-group-needs" id="fl-group-needs" aria-labelledby="fl-group-needs-h">
@@ -236,7 +240,7 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
                   <PerchRow key={f.id} flight={f} kinds={kinds} onFocus={onFocus} />
                 ))}
                 {dueChecklists.map((p) => (
-                  <ChecklistRow key={p.id} plan={p} onOpen={(b) => openDialogFor("verify", b)} />
+                  <ChecklistRow key={p.id} plan={p} onOpen={(planId) => openBehaviors({ planId })} />
                 ))}
               </>
             )}

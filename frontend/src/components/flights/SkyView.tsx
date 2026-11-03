@@ -248,6 +248,7 @@ import { liveBoxParts } from "./FlightStrip";
 import { IntakeLane, openDefaultEditor } from "./IntakeLane";
 import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
+import { useBehaviorsBoard, useBehaviorsRequest } from "./BehaviorsBoard";
 import { SkyFlock, WeatherWord } from "./SkyFlock";
 import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
@@ -597,6 +598,8 @@ export function SkyView() {
   // flights' — stops with no session yet — newest first. Not in This session
   // or Perched on you; Find matches their name.
   const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: focused || "" }), [rows, mode, query, focused]);
+  // The Behaviors board (docs/behaviors.md §3): the behaviors with no frame here.
+  const behaviors = useBehaviorsBoard({ rows, titles, allowed: !narrow && mode !== "one" });
   const grounded = useMemo(() => {
     if (mode === "one" || mode === "perched") return [];
     const q = query.trim().toLowerCase();
@@ -636,7 +639,11 @@ export function SkyView() {
   // measure, else its kind's guess (a note's is its own numbers).
   const links = useMemo(() => linksQ.data?.links || [], [linksQ.data]);
   const devices = useMemo(() => (devicesQ.data?.devices || []).filter((d) => d.device && d.device !== devicesQ.data?.self?.device), [devicesQ.data]);
-  const objData: SkyObjectData = useMemo(() => ({ mode, narrow, intakeOn, paletteOn, links, devices, notes }), [mode, narrow, intakeOn, paletteOn, links, devices, notes]);
+  const behaviorsOn = behaviors.on;
+  const objData: SkyObjectData = useMemo(
+    () => ({ mode, narrow, intakeOn, paletteOn, links, devices, notes, behaviorsOn }),
+    [mode, narrow, intakeOn, paletteOn, links, devices, notes, behaviorsOn]
+  );
   // Devices are drop targets shown during a session drag (the dock), never
   // board objects; the Finished strip is on the board only when turned on —
   // hidden, it is not placed and reserves no room in the right column.
@@ -930,6 +937,18 @@ export function SkyView() {
     setFlash(id);
     setTimeout(() => alive.current && setFlash((f) => (f === id ? "" : f)), 1400);
   }, []);
+  // An openBehaviors request (docs/behaviors.md §4, BehaviorsBoard
+  // `useBehaviorsRequest`): the camera glides to the session's frame (its
+  // tile opens the card) or to the Behaviors board (that row open).
+  const flyToBehaviors = (id: string) => {
+    if (narrow) return true;
+    const r = rectOf(id);
+    if (!r || !vp.w) return false;
+    goTo(centerOn(r, vp.w, vp.h, Math.max(camRef.current.z, 0.85)));
+    flashLine(id);
+    return true;
+  };
+  useBehaviorsRequest(behaviors, { ready: narrow || (!!vp.w && !!vp.h && instQ.data !== undefined && settled), fly: flyToBehaviors });
 
   // A view switch never picks a line: This session with nothing focused
   // says so ("Pick a line to show it alone").
@@ -2325,6 +2344,13 @@ export function SkyView() {
               className: "sky-finished-toggle",
               onSelect: () => setFinishedOn(!finishedOn),
             },
+            {
+              key: "behaviors",
+              label: (behaviors.on ? "✓ " : "") + "Show the Behaviors board",
+              title: "Behaviors with no session in the Sky — a closed session, another branch, a watched repo's push — in a board right of the chains",
+              className: "sky-behaviors-toggle",
+              onSelect: behaviors.toggle,
+            },
           ]}
         />
       )}
@@ -2610,6 +2636,7 @@ export function SkyView() {
     setEditingNote,
     changeNote,
     removeNote,
+    behaviors: { rows: behaviors.rows, expanded: behaviors.expanded, setExpanded: behaviors.setExpanded, hide: behaviors.hide },
   };
   const hostFor = (o: SkyObjectItem): SkyObjectHost => ({
     key: o.key,
