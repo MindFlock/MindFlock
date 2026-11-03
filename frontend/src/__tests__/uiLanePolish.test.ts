@@ -133,10 +133,36 @@ describe("a block's title", () => {
     expect(cssRule(css("components/flights/IntakeLane.css"), ".sky-lane-block-stray")).toContain("border-style: dashed");
   });
 
-  it("from far the badge stays (on its own row) so a repo's PR and issue blocks still tell apart", () => {
+  it("from far the kind tag stays (unscaled, beside the name) so a repo's PR and issue blocks still tell apart", () => {
     const sheet = css("components/flights/IntakeLane.css");
-    expect(cssRule(sheet, '.sky-intake[data-lod="far"] .sky-lane-block-head .fl-kind-badge')).toContain("zoom: var(--sky-far)");
-    expect(cssRule(sheet, '.sky-intake[data-lod="far"] .sky-lane-block-head')).toContain("flex-wrap: wrap");
     expect(sheet).not.toMatch(/\.sky-intake\[data-lod="far"\] :is\([^)]*\.fl-kind-badge/);
+    expect(sheet).not.toMatch(/\[data-lod="far"\][^{]*\.fl-kind-badge/);
+  });
+});
+
+describe("the lane wears the session frame's calm look (one Sky-object style)", () => {
+  // The owner: "I dont really like the style of these 3 blocks" — a huge
+  // all-caps INTAKE, blue-filled source cards, big bold titles, pill badges.
+  const sheet = css("components/flights/IntakeLane.css");
+
+  it("a 14px-radius frame with one muted hairline; a 30px title bar in normal case with a muted count", () => {
+    expect(cssRule(sheet, ".sky-lane")).toMatch(/border: 1px solid var\(--lane-line\);[\s\S]*border-radius: 14px;[\s\S]*background: color-mix\(in srgb, var\(--muted\) 4%, var\(--panel\)\)/);
+    expect(cssRule(sheet, ".sky-lane")).toContain("--lane-line: color-mix(in srgb, var(--muted) 30%, transparent)");
+    const head = cssRule(sheet, ".sky-lane-head");
+    expect(head).toMatch(/height: 30px;[\s\S]*border-bottom: 1px solid var\(--lane-hair\);[\s\S]*font-size: 13px;[\s\S]*font-weight: 600/);
+    expect(head).not.toContain("text-transform");
+    expect(head).not.toContain("letter-spacing");
+    const count = cssRule(sheet, ".sky-lane-head .fl-count");
+    expect(count).toMatch(/border: none;[\s\S]*background: none;[\s\S]*color: var\(--muted\)/);
+  });
+
+  it("a source is a quiet section (no fill, a hairline between two), its kind an outlined muted 11px tag", () => {
+    expect(cssRule(sheet, ".sky-lane-block")).toContain("background: transparent");
+    expect(cssRule(sheet, ".sky-lane-block + .sky-lane-block")).toContain("border-top-width: 1px");
+    const tag = cssRule(sheet, ".sky-lane .fl-kind-badge");
+    expect(tag).toMatch(/border: 1px solid color-mix\(in srgb, var\(--lane-kind\) 45%, transparent\);[\s\S]*background: transparent;[\s\S]*color: var\(--muted\);[\s\S]*font-size: 11px/);
+    // Waiting items: one inset list of hairline rows, the headline muted 11.5px.
+    expect(cssRule(sheet, ".sky-lane-items > li + li")).toContain("border-top: 1px solid");
+    expect(cssRule(sheet, ".sky-lane-item-headline")).toMatch(/font-size: 11.5px;[\s\S]*color: var\(--muted\)/);
   });
 });
