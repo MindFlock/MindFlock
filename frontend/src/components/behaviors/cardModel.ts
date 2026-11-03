@@ -19,6 +19,7 @@ import {
   type CheckState,
 } from "../dialogs/verify";
 import type { BehaviorSummary } from "../../lib/behaviors";
+import type { Flight } from "../../lib/flights";
 
 /** The ⋯ menu's keys (docs/behaviors.md §2), plus the old row's extras that
  * must stay reachable (run again, What could break, Open PR). A Verify
@@ -156,3 +157,31 @@ export function primaryTarget(plan: TestPlan, key: string): string {
  * (noteDraftAfter) without its stale-closure bug: Fail / Can't check open it
  * empty, a saved note closes it. */
 export { noteDraftAfter } from "../dialogs/verify";
+
+/** Where the Verify stop this card belongs to stands on its route
+ * (docs/behaviors.md §5): `halted` — its behaviors failed and the route waits
+ * at it (Retry · Skip · Let the agent fix it); `you` — behaviors wait on you
+ * (the route is on Needs you; it moves on once they are answered, or on
+ * Skip); `fixing` — the agent is on the failure; `""` otherwise. Pure, so the
+ * buttons it picks are pinned by a test. */
+export type VerifyStopStand = "halted" | "you" | "fixing" | "";
+
+export function verifyStopStand(
+  flight: Pick<Flight, "state" | "steps" | "cursor" | "step_states"> | null | undefined,
+  stepId: string,
+): VerifyStopStand {
+  if (!flight) return "";
+  const cur = flight.steps[flight.cursor];
+  const rec = flight.step_states?.[stepId];
+  if (!cur || cur.id !== stepId || !rec) return "";
+  if (flight.state === "halted" && rec.state === "failed") return "halted";
+  if (rec.state === "running" && (rec.detail as { phase?: string } | undefined)?.phase === "fix") return "fixing";
+  if (flight.state === "waiting_you" && rec.state === "waiting_you") return "you";
+  return "";
+}
+
+/** The halted Verify stop's line on its card: the failed count leads, as on
+ * its face ("Failed · 2 — halted"). */
+export function haltedLine(failed: number): string {
+  return (failed > 0 ? "Failed · " + failed + " — halted" : "Halted") + ". The route waits here until you Retry, Skip or let the agent fix it.";
+}

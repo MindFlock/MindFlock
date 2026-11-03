@@ -11,8 +11,9 @@ const ISSUES = code("components/intake/IssuesTab.tsx");
 const REPOS = code("components/intake/RepoSources.tsx");
 const KIT = code("components/intake/kit.tsx");
 const DIALOG = code("components/intake/IntakeDialog.tsx");
-const VERIFY = code("components/dialogs/VerifyDialog.tsx");
-const CHROME = code("components/dialogs/VerifyChrome.tsx");
+// Verify's watched repositories moved to the Behaviors board's ⋯ settings.
+const BEHAVIORS = code("components/behaviors/BehaviorsSettings.tsx");
+const WATCHED = code("components/behaviors/WatchedRepositories.tsx");
 const SETTINGS = code("components/settings/useSettings.tsx");
 
 describe("one door to add a source", () => {
@@ -29,13 +30,12 @@ describe("one door to add a source", () => {
       expect(src.indexOf("{addFlow}")).toBe(flow);
     }
     expect(has(KIT, 'el.scrollIntoView({ block: "nearest" })')).toBe(true);
-    // Verify's door adds a repository with Verify ticked and nothing else.
-    expect(has(VERIFY, 'id="vf-repo-add-btn"')).toBe(true);
-    expect(has(VERIFY, 'only="verify"')).toBe(true);
+    // The Behaviors board's door adds a repository with Verify ticked and nothing else.
+    expect(has(BEHAVIORS, 'only="verify"')).toBe(true);
   });
 
   it("no tab keeps a card list or its own + Add under the work", () => {
-    for (const src of [TICKETS, PRS, ISSUES, CHROME]) {
+    for (const src of [TICKETS, PRS, ISSUES, WATCHED]) {
       expect(src).not.toContain("RepoSourceList");
       expect(src).not.toContain("SourceCard");
     }

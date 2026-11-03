@@ -14,7 +14,6 @@ const MODAL_CSS = src("components/Modal.css");
 const DIALOGS: [string, string, string, string[]][] = [
   ["components/dialogs/NewSessionDialog.tsx", "new-dialog", "new-form", ["components/dialogs/NewSessionDialog.css"]],
   ["components/intake/IntakeDialog.tsx", "intake-dialog", "intake-panel", ["components/intake/IntakeDialog.css"]],
-  ["components/dialogs/VerifyDialog.tsx", "verify-dialog", "verify-panel", ["components/dialogs/VerifyDialog.css"]],
   [
     "components/dialogs/TemplatesDialog.tsx",
     "templates-dialog",

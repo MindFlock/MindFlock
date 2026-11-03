@@ -5,7 +5,7 @@
  * SEAM (pre-committed by the integrator). The props are frozen; the body is
  * vs-card's. The Behaviors board (vs-board) mounts it. It carries its own
  * settings model (SettingsCtx), so the reused Intake/Verify pieces —
- * VerifySources, AddRepoFlow, RepoEditor — work wherever it is shown. */
+ * WatchedRepositories, AddRepoFlow, RepoEditor — work wherever it is shown. */
 
 import { useEffect, useState, type JSX } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -15,7 +15,7 @@ import { openBehaviors } from "../../lib/behaviorsFocus";
 import { askBehaviorsForBranch, fetchVerifyRepos, startEmptyBehaviors, type VerifyRepo } from "../../lib/verifyActions";
 import { queryClient, useInstances, useTestPlans } from "../../state/queries";
 import { checklistTargets, type ChecklistTarget, type ClosedTarget } from "../dialogs/verify";
-import { VerifySources } from "../dialogs/VerifyChrome";
+import { WatchedRepositories } from "./WatchedRepositories";
 import { AutomationSwitch } from "../intake/kit";
 import { AddRepoFlow } from "../intake/RepoSources";
 import { SettingsCtx, useSettings, useSettingsModel } from "../settings/useSettings";
@@ -86,7 +86,7 @@ function SettingsBody({ onClose }: BehaviorsSettingsProps): JSX.Element {
         <h3 id="bh-set-repos" className="bh-set-head">
           Watched repositories
         </h3>
-        {watched.length ? <VerifySources liveBranch={liveBranch} /> : <p className="bh-hint">None yet — behaviors are written for your sessions' branches.</p>}
+        {watched.length ? <WatchedRepositories liveBranch={liveBranch} /> : <p className="bh-hint">None yet — behaviors are written for your sessions' branches.</p>}
         {adding ? (
           <AddRepoFlow title="Watch a GitHub repository" uses={["verify"]} only="verify" liveBranch={liveBranch} onCancel={() => setAdding(false)} onDone={() => setAdding(false)} />
         ) : (

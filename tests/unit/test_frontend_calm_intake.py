@@ -185,25 +185,20 @@ def test_github_tabs_have_no_repository_cards_under_the_work():
         assert idx == sorted(idx), (name, idx)
 
 
-def test_verify_puts_its_repositories_on_one_line_above_the_work():
+def test_watched_repositories_are_one_line_on_the_behaviors_board():
+    """The Verify dialog is retired; its watched-repositories line moved to the
+    Behaviors board's ⋯ settings (components/behaviors/WatchedRepositories.tsx)
+    — one quiet "Watching …" line, Edit repositories opens the Intake editor."""
     code = re.sub(
-        r"\s+", " ", _code(_SRC / "components" / "dialogs" / "VerifyDialog.tsx")
+        r"\s+",
+        " ",
+        _code(_SRC / "components" / "behaviors" / "WatchedRepositories.tsx"),
     )
-    assert "workFirst" not in code
-    # Round 5 (B2): the add flow lives in the bottom fold, "Watch a GitHub
-    # repository for every push", after New checklist — never above the work.
-    order = [
-        "<VerifySwitch",
-        "{sources}",
-        "{checklists}",
-        "<VerifyNewChecklist",
-        "Watch a GitHub repository for every push",
-        "{showAdd ? ( addFlow )",
-    ]
-    idx = [code.index(o) for o in order]
-    assert idx == sorted(idx), idx
-    assert '<WorkListPanel key="work"' in code
-    assert 'id="vf-repo-add-btn"' in code
+    assert '<span className="ik-watching-label">Watching</span>' in code
+    assert '<RepoEditor use="verify"' in code
+    assert not (_SRC / "components" / "dialogs" / "VerifyDialog.tsx").exists()
+    settings = _code(_SRC / "components" / "behaviors" / "BehaviorsSettings.tsx")
+    assert "<WatchedRepositories liveBranch={liveBranch} />" in settings
 
 
 def test_tickets_put_the_work_before_the_sources():

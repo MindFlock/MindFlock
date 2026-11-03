@@ -30,7 +30,7 @@ import { openSettings } from "../../lib/openSettings";
 import { TEMPLATES_CHANGED, ensureTemplates, runProblem, templatesNow } from "../../lib/templates";
 import { runTemplateNow } from "../../lib/templateRun";
 import { settingsActions } from "./settingsSearch";
-import { VERIFY_BLURB } from "../../lib/vocab";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
 import { openSkyGuide } from "../flights/SkyGuide";
@@ -155,12 +155,19 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     });
     // The other end of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.
+    // Verify lives on the route now (docs/behaviors.md §4): both rows fly the
+    // Sky; the words people learned still find them.
     acts.push({
-      label: "Verify…",
+      label: "Behaviors — next that needs you",
       hint: "Alt+V",
       top: TOP.verify,
-      keywords: VERIFY_BLURB + " checklists",
-      run: () => ui.openDialogFor("verify"),
+      keywords: "verify behaviors check checklist test plan pushed changes work",
+      run: () => openBehaviors({ next: true }),
+    });
+    acts.push({
+      label: "Show the Behaviors board",
+      keywords: "verify behaviors board closed sessions other branches watched repositories",
+      run: () => openBehaviors({ board: true }),
     });
     acts.push({
       label: "Schedule…",

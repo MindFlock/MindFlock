@@ -88,3 +88,30 @@ export function parseBehaviorsHash(hash: string): BehaviorsTarget | null {
   if (head === "verify") return tail ? { branch: tail } : { next: true };
   return null;
 }
+
+/** Where an old `openDialogFor("verify", target)` lands. The Verify dialog
+ * is retired (Verify is a stop on the route): its target was a branch (the
+ * verdict chip, the session menu) or a plan id (the bell), so it is tried as
+ * each — `findPlan` takes the first that matches; none = the next that needs
+ * you. */
+export function verifyDialogTarget(target: string | null | undefined): BehaviorsTarget {
+  const t = String(target || "").trim();
+  return t ? { planId: t, title: t, branch: t } : { next: true };
+}
+
+/** Catch every caller that still opens the retired Verify dialog (the replay
+ * of the Verify tour, Customize's bar link, an extension) and send it to the
+ * Sky instead. Returns the unhook. */
+export function installVerifyRedirect(): () => void {
+  const land = () => {
+    const s = useUi.getState();
+    if (s.openDialog !== "verify") return;
+    const target = s.dialogTarget;
+    s.closeDialog();
+    openBehaviors(verifyDialogTarget(target));
+  };
+  land();
+  return useUi.subscribe((s, prev) => {
+    if (s.openDialog === "verify" && prev.openDialog !== "verify") land();
+  });
+}

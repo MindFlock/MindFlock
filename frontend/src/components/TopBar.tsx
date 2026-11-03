@@ -1,6 +1,6 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
  * sidebar/theme cluster, notifications bell and mic, the main menu (New /
- * Grid · Sky / Intake / Verify / Schedule / Settings, then the command palette
+ * Grid · Sky / Intake / Schedule / Settings, then the command palette
  * as an icon), centered wordmark, and the Electron drag region.
  *
  * Only the daily loop is on the bar. Everything that waits on you is the
@@ -17,7 +17,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useUi } from "../state/store";
 import { useDoctor, useFlights, useTestPlans } from "../state/queries";
-import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
 import { perchBadge } from "../lib/flights";
 import { Bird } from "./flights/Bird";
 import { GridGlyph } from "./ViewGlyphs";
@@ -32,7 +31,6 @@ import { openSettings } from "../lib/openSettings";
 import { inShell } from "../lib/shell";
 import { keymapVersion, subscribeKeymap } from "../lib/keymap";
 import { usableShortcuts } from "./palette/ShortcutsSheet";
-import { VERIFY_BLURB } from "../lib/vocab";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
 import { useCalm } from "../lib/useCalm";
@@ -57,8 +55,7 @@ function engineVersion(raw: string | undefined): string {
 
 /** What a narrow bar gives up, in order: the wordmark first (it is a label,
  * not a control), then the foldable items from the RIGHT end (Settings, then
- * Schedule, then Verify — Verify's count is the reason it earns a slot, so it
- * goes late — and last the Grid · Sky toggle) into one ⋯ that sits where they
+ * then Schedule — and last the Grid · Sky toggle) into one ⋯ that sits where they
  * were. New, Intake and the palette never fold. Every argument is a measured
  * width in px, gaps included:
  * `room` the bar's content box, `fixed` everything that always shows,
@@ -100,10 +97,12 @@ export function TopBar() {
   // mounted for the life of the page, which is deliberately what keeps this
   // (cheap, local-file) poll running: the point of a badge is to tell you about
   // the thing you were not already looking at.
+  //
+  // Verify has no button here any more (docs/behaviors.md §4): it is a stop on
+  // the route, and behaviors that need you count in the Sky's Needs-you badge.
+  // The list is still read so the bar keeps its poll warm for the chips and
+  // the Sky.
   const { data: testPlans } = useTestPlans();
-  const due = dueCount(testPlans?.plans || []);
-  // Of those, the ones that FAILED: the badge turns red for them.
-  const failing = failingCount(testPlans?.plans || []);
   // Schedule's badge: the scheduled templates whose last run FAILED — the
   // cards that say "Last run failed", nothing else. A schedule that is merely
   // set, or a run skipped because the last one was still going, is the
@@ -113,9 +112,8 @@ export function TopBar() {
   // The Sky toggle's badge: the chains that need you (lib/flights perchBadge) —
   // the sky is where they are drawn and its drawer lists them.
   const perch = perchBadge(useFlights().data || []);
-  // The calm first hour (lib/calm.ts topBarQuiet): Verify and Schedule are
-  // always on the bar; an empty one is only drawn quiet until its first
-  // checklist / scheduled template.
+  // The calm first hour (lib/calm.ts topBarQuiet): Schedule is always on the
+  // bar; while empty it is only drawn quiet until its first scheduled template.
   const quiet = topBarQuiet({
     calm: useCalm(),
     checklists: testPlans?.plans?.length ?? 0,
@@ -167,7 +165,6 @@ export function TopBar() {
   };
 
   // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
-  const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
   const scheduleTitle =
     "Schedule — everything that starts by itself on a timer: templates and scheduled chains" +
     keys("schedule") +
@@ -185,7 +182,7 @@ export function TopBar() {
   // breakpoints: the words' widths change with the font, the theme set, a
   // badge, a rebound shortcut's absence, the mac lights' gap.
   //
-  // The foldable items, in bar order (Verify and Schedule always among them).
+  // The foldable items, in bar order (Schedule always among them).
   // The
   // Grid · Sky toggle folds last, only on a phone-narrow bar (its ⋯ row
   // switches to the other view, carrying the perch count; Ctrl+Y still does
@@ -208,14 +205,6 @@ export function TopBar() {
       count: perch.count,
       failing: perch.failing,
       open: () => toggleView(),
-    },
-    {
-      key: "verify",
-      label: "Verify",
-      title: verifyTitle,
-      count: due,
-      failing: failing > 0,
-      open: () => ui.openDialogFor("verify"),
     },
     {
       key: "schedule",
@@ -279,8 +268,7 @@ export function TopBar() {
       return next;
     });
   };
-  // Before paint, on every render: a count that appears, Verify arriving with
-  // its first checklist, the version landing beside the wordmark — each is
+  // Before paint, on every render: a count that appears, the version landing beside the wordmark — each is
   // folded in the same frame it is drawn, so the bar never shows itself
   // clipped (and never jumps on load).
   useLayoutEffect(() => measure.current());
@@ -456,33 +444,6 @@ export function TopBar() {
           >
             Intake
           </button>
-          {/* Verify closes the loop Intake opens: work came in there, and this is
-              where it comes back once it has actually shipped. The count is the
-              whole reason it earns a slot on the bar — work that ships while you
-              are elsewhere is exactly the thing nobody remembers to go and look
-              for. It counts SHIPPED CHANGES NOBODY HAS FINISHED CHECKING, which
-              is the same rule the dialog's first heading renders (`dueCount` and
-              the "Not checked yet" group are one predicate) — deliberately not
-              "things waiting on you personally", since one of them may be an
-              agent mid-run. */}
-          <button
-            id="verify-btn"
-            className={"tb-item" + (quiet.verify ? " tb-quiet" : "") + (isFolded("verify") ? " tb-folded" : "")}
-            data-fold="verify"
-            type="button"
-            title={verifyTitle}
-            /* No aria-label, for the same reason as Intake above: the visible
-               "Verify" IS the name, and a second wording would be the one a
-               screen reader announced. */
-            onClick={() => ui.openDialogFor("verify")}
-          >
-            Verify
-            {/* Nothing at all on zero, the way the Intake tab counts do it: a "0"
-                that becomes "3" a moment later reads as "nothing to do", which is
-                the one thing this badge must never say while it is still finding
-                out. */}
-            {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
-          </button>
           {/* Schedule: what starts by itself (templates, and saved chains with a
               schedule). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
@@ -496,7 +457,7 @@ export function TopBar() {
           >
             Schedule
             {/* Only a failure, in the failure red, and nothing at zero — the
-                rule Verify's count keeps. */}
+                rule the Intake counts keep. */}
             {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
           </button>
           <button

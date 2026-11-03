@@ -331,6 +331,7 @@ export function BehaviorsBoard({ plans, expanded, onExpand, onHide, width, heigh
     <section
       ref={rootRef}
       className="sky-bh"
+      data-tour="behaviors-board"
       aria-label="Behaviors"
       style={{ width: frameNow.w > 0 ? frameNow.w : undefined, height: frameNow.h > 0 ? frameNow.h : undefined }}
     >

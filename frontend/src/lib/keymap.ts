@@ -27,7 +27,7 @@ import { ASK_WORKERS_KEYS, FLOCK_KEYS } from "./workersRequest";
 import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
-import { VERIFY_BLURB } from "./vocab";
+import { openBehaviors } from "./behaviorsFocus";
 import { jumpToNeedsYou } from "./needsYou";
 import { newSession, toggleView } from "./viewMode";
 
@@ -576,10 +576,13 @@ export const KEYMAP: KeymapEntry[] = [
     // text field or a terminal.
     key: "v",
     alt: true,
+    // Verify is a stop on the route, not a place (docs/behaviors.md §4): Alt+V
+    // flies the Sky to the next behaviors that need you, else the next failed,
+    // else the Behaviors board.
     id: "verify",
-    help: ["Navigation", "Alt+V", "Verify — " + VERIFY_BLURB],
+    help: ["Navigation", "Alt+V", "Behaviors — the next that needs you"],
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("verify"),
+    run: () => openBehaviors({ next: true }),
   },
   {
     // The top bar's next word, on the same terms as Alt+I / Alt+V: Ctrl+S is

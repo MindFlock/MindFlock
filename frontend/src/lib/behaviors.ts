@@ -292,3 +292,12 @@ export function nextNeedingYou(plans: readonly TestPlan[] | null | undefined): T
   const list = plans || [];
   return list.find((p) => isWaitingOnYou(p) && !isFailing(p)) || list.find((p) => isFailing(p)) || null;
 }
+
+/** A Verify stop's face line (docs/behaviors.md §5): the behaviors' summary,
+ * and "— halted" when its failure halted the route ("Failed · 2 — halted").
+ * `stopState` is the diagram node's state (lib/flightDiagram). The face is
+ * drawn by lib/flightDiagram `withBehaviors` / SkyChain, which are not this
+ * module's: they call this (docs/vision/verify.md). */
+export function verifyStopFace(short: string, stopState: string): string {
+  return stopState === "halted" ? short + " — halted" : short;
+}

@@ -331,7 +331,7 @@ def _repo_root(title: str) -> str:
 
 
 def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
-    """Checklist facts for a verify step (blocking)."""
+    """The behaviors' facts for a verify step (blocking)."""
     from backend.web.core import test_plans as _tp
 
     title = flight["session"]
@@ -365,6 +365,16 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "open_human": [s["text"] for s in _tp.open_human_steps(plan)],
         "open_agent": open_agent,
         "failed": [f["step"]["text"] for f in _tp.failed_steps(plan)],
+        # When the newest of those failures was answered: older than the
+        # stop's attempt (a Retry, the agent's fix) = check again first.
+        "failed_at": max(
+            [
+                float((results.get(s["id"]) or {}).get("at") or 0.0)
+                for s in plan["steps"]
+                if (results.get(s["id"]) or {}).get("result") == "fail"
+            ]
+            or [0.0]
+        ),
         "live": plan.get("state") in ("due", "done") or bool(plan.get("live_at")),
         "live_branch": plan.get("live_branch") or "",
     }
@@ -1116,8 +1126,9 @@ def _arm(flight: dict, lane: str, ask_first: bool = False, message: str = "") ->
 
 
 def _ensure_checklist(flight: dict) -> dict:
-    """Ask for the session's checklist (Verify's own manual path: create +
-    generate on a daemon thread). The plan id is observed on later passes."""
+    """Ask for the session's behaviors (Verify's own manual path: create +
+    generate on a daemon thread — the stop's face reads "Writing…" until they
+    are written). The plan id is observed on later passes."""
     srv = _server()
     title = flight["session"]
     try:
@@ -2319,25 +2330,66 @@ def set_start_on(flight_id: str, value) -> dict:
     return _changed(flight_id, lambda f: _flights.op_start_on(f, value))
 
 
-def _verify_done(flight: dict, sid: str, note: str) -> None:
-    """Done on a verify step waiting on you: the open human checklist items
-    are recorded as passed (by a human), which is what settles the plan."""
-    from backend.web.core import test_plans as _tp
+def _no_blanket_done(flight: dict, sid: str) -> None:
+    """There is no blanket Done on a Verify stop waiting on you
+    (docs/behaviors.md §5): it moves on when its behaviors are answered, or on
+    Skip. (It used to pass every open behavior unseen — "Done on the chain".)
+    A Verify stop whose FAILURE was handed to you (``on_fail`` you) still takes
+    Done: that answers the failure, not the behaviors."""
+    cur = _flights._current(flight)
+    ss = flight["step_states"].get(sid) or {}
+    if (
+        cur is not None
+        and cur["id"] == sid
+        and cur["kind"] == "verify"
+        and ss.get("state") == "waiting_you"
+        and not (ss.get("detail") or {}).get("failed_reason")
+    ):
+        raise _flights.FlightError(
+            "answer_behaviors",
+            409,
+            "answer its behaviors (or Skip it) — %s moves on once every one has "
+            "an answer" % cur["title"],
+        )
 
-    i = next((k for k, s in enumerate(flight["steps"]) if s["id"] == sid), -1)
-    if i < 0 or flight["steps"][i]["kind"] != "verify":
-        return
-    pid = str(flight["step_states"][sid]["detail"].get("plan") or "")
-    plan = _tp.get(pid) if pid else None
-    if plan is None:
-        return
-    for step in _tp.open_human_steps(plan):
-        try:
-            _tp.record_result(
-                pid, step["id"], "pass", note=note or "Done on the route", by="human"
+
+def fix(flight_id: str, step_id: str) -> dict:
+    """The "Let the agent fix it" op on a halted stop (``POST
+    /api/flights/{id}/steps/{sid}/op/fix``): the failure goes to the session's
+    agent as a prompt, the stop waits for its turn to end, then runs again —
+    what ``on_fail: agent`` does by itself, asked for once by hand. A failed
+    Verify stop checks its behaviors again after the fix. 409 ``not_failed``
+    on a stop that has not failed; 409 ``no_session`` with no agent to ask."""
+    before = _flights.get(flight_id)
+    if before is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
+    if not before.get("session"):
+        raise _flights.FlightError(
+            "no_session", 409, "this route has no session whose agent could fix it"
+        )
+    after = _flights.mutate(flight_id, lambda f: _flights.op_fix(f, step_id))
+    if after is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such route")
+    step = next((x for x in after["steps"] if x["id"] == step_id), None)
+    reason = str(
+        (after["step_states"].get(step_id) or {}).get("detail", {}).get("reason") or ""
+    )
+    try:
+        _deliver(
+            after["session"], _fix_note(step or {"title": step_id}, {"reason": reason})
+        )
+    except Exception as err:  # noqa: BLE001 — _StepFailed, or the queue's own
+        # The agent can't be asked: the stop halts again, saying why.
+        said = str(err) or "the agent could not be asked"
+        after = (
+            _flights.mutate(
+                flight_id, lambda f: _flights.op_fix_failed(f, step_id, said)
             )
-        except Exception as err:  # noqa: BLE001
-            _log("flight %s: could not record %s: %v", flight["id"], step["id"], err)
+            or after
+        )
+    _announce(before, after)
+    wake()
+    return after
 
 
 def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
@@ -2347,16 +2399,8 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     if before is None:
         raise _flights.FlightError("unknown_flight", 404, "no such route")
     fn = _OPS[op]
-    if op == "done" and not before["step_states"].get(step, {}).get("detail", {}).get(
-        "failed_reason"
-    ):
-        cur = _flights._current(before)
-        if (
-            cur is not None
-            and cur["id"] == step
-            and before["step_states"][step]["state"] == "waiting_you"
-        ):
-            _verify_done(before, step, note)
+    if op == "done":
+        _no_blanket_done(before, step)
 
     def _do(f: dict) -> None:
         if op == "done":
@@ -2667,6 +2711,9 @@ def step_op(flight_id: str, step_id: str, name: str, body: Optional[dict]) -> di
         raise _flights.FlightError("unknown_step", 404, "no such stop")
     plug = _kinds.get(step["kind"])
     op = plug.ops.get(name) if plug is not None else None
+    if op is None and name == "fix":
+        # The built-in "Let the agent fix it" on any halted stop.
+        return {"flight": fix(flight_id, step_id)}
     if op is None:
         raise _flights.FlightError(
             "unknown_op", 404, "%s has no operation %r" % (step["kind"], name)

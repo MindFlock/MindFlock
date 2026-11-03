@@ -191,7 +191,9 @@ describe("the switch points", () => {
     expect(app).toContain("useEffect(() => installViewFlip(), []);");
     expect(app).toContain("<TopBar />");
     // The flat dialogs, each its own; no Flights dialog any more.
-    for (const d of ["<IntakeDialog />", "<VerifyDialog />"]) expect(app).toContain(d);
+    for (const d of ["<IntakeDialog />"]) expect(app).toContain(d);
+    // Verify is a stop on the route: no dialog (docs/behaviors.md §4).
+    expect(app).not.toContain("<VerifyDialog />");
     expect(app).not.toContain("FlightsDialog");
   });
 });

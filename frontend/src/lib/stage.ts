@@ -27,6 +27,7 @@ import {
 } from "./laneActions";
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
+import { openBehaviors } from "./behaviorsFocus";
 import { deriveSessionState, PAUSED_FLIGHT_LABEL, SLEEPING_LABEL, type SessionState } from "./sessionState";
 import type { TestPlan, TestPlansResponse } from "../api/types";
 import type { SessionMenuModel } from "./sessionMenu";
@@ -675,17 +676,17 @@ export function nextStep(inst: Partial<Instance>): NextStep | null {
 // rides on the Open PR item as its note, a failed checklist asks first, and the
 // menu's Verify item says the feature's name.
 
-/** "Checklist ✗ Failed" — the verdict as a menu note, or "" with no checklist. */
+/** "Behaviors ✗ Failed" — the verdict as a menu note, or "" with no behaviors. */
 export function verdictNote(plan: TestPlan | null | undefined): string {
   if (!plan) return "";
   const v = planVerdict(plan);
-  return "Checklist " + v.glyph + " " + v.short;
+  return "Behaviors " + v.glyph + " " + v.short;
 }
 
-/** The question Open PR asks first on a failed checklist, or "". */
+/** The question Open PR asks first when a behavior failed, or "". */
 export function prVerdictConfirm(plan: TestPlan | null | undefined): string {
   if (!plan || planVerdict(plan).key !== "failed") return "";
-  return "Checklist failed — open the PR anyway?";
+  return "A behavior failed — open the PR anyway?";
 }
 
 /** The checklist covering a session, from the list the top bar keeps warm —
@@ -701,7 +702,8 @@ export function cachedPlanFor(inst: Partial<Instance>): TestPlan | null {
 }
 
 /** The session menu with the verdict beside Open PR (and Merge PR), a confirm
- * on a failed checklist, and "Verify checklist…" as the Verify item's name. */
+ * when a behavior failed, and "Behaviors" as the item's name: it flies the
+ * Sky to the session's behaviors on its route (docs/behaviors.md §4). */
 export function withVerifyVerdict(
   menu: SessionMenuModel,
   inst: Partial<Instance>,
@@ -717,7 +719,13 @@ export function withVerifyVerdict(
         : {
             ...g,
             items: g.items.map((item) => {
-              if (item.key === "checklist") return { ...item, label: "Verify checklist…" };
+              if (item.key === "checklist")
+                return {
+                  ...item,
+                  label: "Behaviors",
+                  title: "What this work should do in real use — on its route in the Sky",
+                  run: () => openBehaviors({ planId: plan?.id, title: inst.title, branch: plan?.branch || inst.branch || "" }),
+                };
               if ((item.key === "pr" || item.key === "merge") && !item.disabled && note)
                 return {
                   ...item,
@@ -728,12 +736,11 @@ export function withVerifyVerdict(
                     ? () =>
                         confirmPop(
                           confirm,
-                          "A step on this branch's checklist failed — see which, or go ahead.",
+                          "A behavior on this branch failed — see which, or go ahead.",
                           [
                             {
-                              label: "Show the checklist",
-                              run: () =>
-                                useUi.getState().openDialogFor("verify", plan?.branch || inst.branch || ""),
+                              label: "Show the behaviors",
+                              run: () => openBehaviors({ planId: plan?.id, title: inst.title, branch: plan?.branch || inst.branch || "" }),
                             },
                             {
                               label: item.label.replace(/…$/, "") + " anyway",

@@ -116,12 +116,14 @@ describe("the rail: railOrder stays the numbering authority", () => {
 describe("no Outbox: the bell and the group header", () => {
   it("the top bar carries only the daily loop", () => {
     // The Outbox, Prompts and Recent buttons are gone (dropped, Customize, the
-    // session list), and so is the Flights button (Intake / Verify / Schedule
-    // are back on the bar); the palette is the last item, after Settings.
+    // session list), and so are the Flights and Verify buttons (Intake /
+    // Schedule are on the bar; Verify is a stop on the route); the palette is
+    // the last item, after Settings.
     const top = fn("components/TopBar.tsx", "TopBar");
     for (const gone of ['"outbox-btn"', '"prompts-btn"', '"recent-btn"', '"flights-btn"']) expect(top, gone).not.toContain(gone);
     const i = top.indexOf('id="intake-btn"');
-    const v = top.indexOf('id="verify-btn"');
+    const v = top.indexOf('id="schedule-btn"');
+    expect(top).not.toContain('id="verify-btn"');
     const s = top.indexOf('id="settings-btn"');
     const p = top.indexOf('id="palette-btn"');
     expect(i).toBeGreaterThanOrEqual(0);

@@ -128,13 +128,12 @@ describe("what could break: digestOf", () => {
     expect(digestOf(snap, null).ready).toBe(false);
   });
 
-  it("Make PR shows it under the base field; Verify's menu opens the risk layer", () => {
+  it("Make PR shows it under the base field; the Behaviors card's menu opens the risk layer", () => {
     const pr = src("components/dialogs/MakePrDialog.tsx");
     expect(pr).toContain("useMapDigest(target");
     expect(pr).toContain('openMap(target, { section: "risk" })');
-    const verify = src("components/dialogs/VerifyPlan.tsx");
-    expect(verify).toContain('label: "What could break"');
-    expect(verify).toContain('openMap(session.title, { section: "risk" })');
+    expect(src("components/behaviors/cardModel.ts")).toContain('label: "What could break"');
+    expect(src("components/behaviors/BehaviorsCard.tsx")).toContain('openMap(session.title, { section: "risk" })');
   });
 });
 

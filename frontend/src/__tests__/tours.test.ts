@@ -116,7 +116,12 @@ describe("the tours registry", () => {
     expect(all("new")).toContain("#new-describe-text");
     expect(all("intake")).toContain("#intake-add-source");
     expect(all("intake")).toContain("#intake-tab-autostart");
-    expect(all("verify")).toContain("#verify-title");
+    // Verify is a stop on the route: its tour walks the Sky (the stop, its
+    // card in place, the board), never a dialog.
+    expect(all("verify")).toContain('[data-tour="behaviors-stop"]');
+    expect(all("verify")).toContain('[data-tour="behaviors-card"]');
+    expect(all("verify")).toContain('[data-tour="behaviors-board"]');
+    expect(TOURS.verify.steps).toHaveLength(3);
     expect(all("schedule")).toContain("#templates-new");
     expect(all("settings")).toContain("#settings-search");
   });
@@ -463,7 +468,8 @@ describe("the top bar in the calm first hour", () => {
 
   it("both buttons always render; the rule only adds tb-quiet (muted, still labelled)", () => {
     expect(TOPBAR_SRC).not.toMatch(/\{shows\.(verify|schedule) &&/);
-    expect(TOPBAR_SRC).toContain('className={"tb-item" + (quiet.verify ? " tb-quiet" : "") + (isFolded("verify") ? " tb-folded" : "")}');
+    // Verify has no button any more (docs/behaviors.md §4).
+    expect(TOPBAR_SRC).not.toContain("quiet.verify");
     expect(TOPBAR_SRC).toContain('className={"tb-item" + (quiet.schedule ? " tb-quiet" : "") + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(TOPBAR_SRC).toContain("calm: useCalm(),");
   });
