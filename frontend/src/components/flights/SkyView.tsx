@@ -528,7 +528,8 @@ export function SkyView() {
   // A grounded line dragged by its bar: the session line under the pointer,
   // which takes its stops on release.
   const [mergeOver, setMergeOver] = useState("");
-  // Settings → Appearance → Birds in the Sky: the background flock, or none.
+  // Settings → Appearance → Birds in the Sky: the background flock (off by
+  // default). SkyFlock always mounts, so the weather shows either way.
   const skyBirds = useUi((s) => s.skyBirds);
   const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
   // What a shelf chip being dragged carries (read at its dragstart).
@@ -2700,7 +2701,7 @@ export function SkyView() {
             onDrop={onNewDrop}
             onScroll={onViewportScroll}
           >
-            {skyBirds && <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />}
+            <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} birds={skyBirds} />
             <div
               className={"sky-plane" + (focusMode ? " sky-focus" : "")}
               data-dragging={drag ? "" : undefined}

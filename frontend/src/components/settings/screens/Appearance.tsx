@@ -270,8 +270,9 @@ function ReduceMotionRow() {
   );
 }
 
-/** Birds in the Sky: the flock drifting across the Sky's background
- * (SkyFlock). On by default; off, the Sky draws none. */
+/** Birds in the Sky: the ambient flock drifting across the Sky's background
+ * (SkyFlock). Off by default; on, the flock flies. Either way the weather
+ * (clouds, the night tint) and the birds on your chains stay. */
 function SkyBirdsRow() {
   const on = useUi((s) => s.skyBirds);
   const setOn = useUi((s) => s.setSkyBirds);
@@ -279,7 +280,7 @@ function SkyBirdsRow() {
     <div className="set-row set-switch-row">
       <span className="notif-rule-text">
         <span className="set-label">Birds in the Sky</span>
-        <span className="set-hint notif-rule-desc">The flock drifting across the Sky's background. The birds on your chains stay.</span>
+        <span className="set-hint notif-rule-desc">A flock drifting across the Sky's background. Off by default; the birds on your chains always stay.</span>
       </span>
       <label className="ca-switch">
         <input
