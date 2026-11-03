@@ -216,10 +216,10 @@ describe("a person block", () => {
 
   it("names the peer, the state dot, and invites a drop", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-block sky-person" data-person="L1" data-state="verified" role="group" aria-label="Bob — drop a line here to share its session">/);
+    expect(h).toMatch(/^<div class="sky-block sky-person" data-person="L1" data-state="verified" role="group" aria-label="Bob — drop a chain here to share its session">/);
     expect(h).toContain('<div class="sky-block-head" data-sky-head="true" title="Drag to move">');
     expect(h).toContain('<strong class="sky-block-name">Bob</strong>');
-    expect(h).toContain("Drop a line to share it");
+    expect(h).toContain("Drop a chain to share it");
     expect(html({ connected: false })).toContain('data-state="offline"');
     expect(html({ sas_verified: false })).toContain('data-state="unverified"');
   });
@@ -256,7 +256,7 @@ describe("a device block", () => {
 
   it("names the device, its state, its sessions; a dropped line asks to move with the mid-turn tick", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-block sky-device" data-device="mini" data-state="on" role="group" aria-label="mac-mini — drop a line here to move its session there">/);
+    expect(h).toMatch(/^<div class="sky-block sky-device" data-device="mini" data-state="on" role="group" aria-label="mac-mini — drop a chain here to move its session there">/);
     expect(h).toContain("darwin · 2 sessions");
     const ask = html({}, "fix-login");
     expect(ask).toContain("Move <strong>fix-login</strong> to mac-mini? Its agent pauses while it moves.");

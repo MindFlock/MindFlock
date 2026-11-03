@@ -196,13 +196,13 @@ export function LineRuler({ segments }: { segments: readonly LineSegment[] }) {
   const total = totalSeconds(segments);
   if (!segments.length || total <= 0) return null;
   return (
-    <div className="skl-ruler" role="img" aria-label={"Time flown: " + fmtDuration(total) + " over " + segments.length + (segments.length === 1 ? " stop" : " stops")} data-no-drag>
+    <div className="skl-ruler" role="img" aria-label={"Time so far: " + fmtDuration(total) + " over " + segments.length + (segments.length === 1 ? " stop" : " stops")} data-no-drag>
       <div className="skl-ruler-bar">
         {segments.map((s) => (
           <span key={s.step} className={"skl-ruler-seg skl-ruler-" + s.state} style={{ flexGrow: Math.max(s.seconds, total / 200) }} title={segmentTitle(s)} data-step={s.step} />
         ))}
       </div>
-      <span className="skl-ruler-total" title={"Time flown so far"}>
+      <span className="skl-ruler-total" title={"Time spent so far"}>
         {fmtDuration(total)}
       </span>
     </div>
@@ -320,9 +320,9 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
         onClose();
       }}
     >
-      <div className="skl-card-head" title="Double-click to fold it back into a box">
+      <div className="skl-card-head" title="Double-click to fold it back into the chain">
         <span className="skl-card-name">{windowName(inst.title)}</span>
-        <button type="button" className="skl-card-fold" aria-label={"Fold " + windowName(inst.title) + " back into a box"} title="Back to a box" onClick={onClose}>
+        <button type="button" className="skl-card-fold" aria-label={"Fold " + windowName(inst.title) + " back into the chain"} title="Back to the chain" onClick={onClose}>
           ▣
         </button>
       </div>
@@ -547,8 +547,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
     p.layout.open
-      ? { key: "open", label: "Fold the session back", title: "Back to its agent's tile in the frame", onSelect: () => p.onLayout({ open: false }) }
-      : { key: "open", label: "Open session", title: "Its agent's terminal, here in the agent tile's place", onSelect: () => p.onLayout({ open: true }) },
+      ? { key: "open", label: "Fold the session back", title: "Back to its agent's stop on the chain", onSelect: () => p.onLayout({ open: false }) }
+      : { key: "open", label: "Open session", title: "Its agent's terminal, here in place of the agent's stop", onSelect: () => p.onLayout({ open: true }) },
     {
       key: "grid",
       label: "Open in the grid",
@@ -558,14 +558,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         setView("grid");
       },
     },
-    { key: "only", label: "Show only this line", title: "This session: one chain, filling the sky", onSelect: () => showInSky(p.title) },
+    { key: "only", label: "Show only this chain", title: "This session: one chain, filling the sky", onSelect: () => showInSky(p.title) },
     ...(folds
-      ? [{ key: "flown", label: foldFlown ? "Show flown stops" : "Fold flown stops", title: "The stops this flight has already flown: each on its own, or one pill", className: "skl-mi-group", onSelect: () => setFoldFlown((x) => !x) }]
+      ? [{ key: "flown", label: foldFlown ? "Show finished stops" : "Fold finished stops", title: "The stops this chain has already run: each on its own, or one pill", className: "skl-mi-group", onSelect: () => setFoldFlown((x) => !x) }]
       : []),
     p.layout.pinned
-      ? { key: "tidy", label: "Tidy this line", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
+      ? { key: "tidy", label: "Tidy this chain", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
       : { key: "pin", label: "Pin here", title: "Keep this chain where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
-    { key: "flyway", label: "Add a stop…", title: "A stop or a saved stop, at the end of the chain", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
+    { key: "flyway", label: "Add a stop…", title: "A stop or a saved chain, at the end of the chain", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
     // A ticket's line: its stops for every NEW item from its source (this one
     // keeps flying as it is) — the only way a line changes a source's default.
     ...(promote ? [{ key: "promote", label: promote.label, title: promote.title, className: "skl-mi-promote", onSelect: () => void promote.run() }] : []),

@@ -160,10 +160,10 @@ function WaitingChip({ w, block, onFly }: { w: LaneWaiting; block: SourceBlock; 
           type="button"
           className="btn-primary fl-btn sky-lane-fly"
           disabled={busy}
-          title={"Take off on " + w.item.reference + " · " + block.flyway.name}
+          title={"Run on " + w.item.reference + " · " + block.flyway.name}
           onClick={() => void fly()}
         >
-          {busy ? "…" : "Fly"}
+          {busy ? "…" : "Run"}
         </button>
       </div>
       {error && (
@@ -223,13 +223,13 @@ function Block({
         <button
           type="button"
           className="fl-icon-btn sky-lane-flyway-btn"
-          aria-label={"Edit the default stops for " + block.label}
+          aria-label={"Edit the default chain for " + block.label}
           data-editing={editing ? "" : undefined}
           title={stopsTip(block, editing)}
           onClick={() => onEditDefault({ kind: block.kind, target: block.id }, block.label)}
         >
           <span className={"sky-lane-stops" + (block.flyway.own ? " own" : "") + (editing ? " editing" : "")}>
-            <span className="sky-lane-stops-key">Stops</span>
+            <span className="sky-lane-stops-key">Chain</span>
             <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{stopsWords(block.flyway)}</span>
             <span className="sky-lane-stops-edit" aria-hidden="true">
               {editing ? "editing…" : "✎"}

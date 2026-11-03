@@ -103,7 +103,7 @@ describe("the intake lane", () => {
     expect(sc).toContain('data-waiting="tickets:sc:1"');
     expect(sc).toContain(">sc-1<");
     expect(sc).toContain(">Fix the login<");
-    expect(sc).toMatch(/class="btn-primary fl-btn sky-lane-fly"[^>]*>Fly</);
+    expect(sc).toMatch(/class="btn-primary fl-btn sky-lane-fly"[^>]*>Run</);
     expect(sc).toContain('data-lane-target="sc-3"');
     expect(sc).not.toContain('data-waiting="tickets:sc:3"');
     const prs = html.slice(html.indexOf('data-lane-source="prs:acme/app"'));

@@ -157,16 +157,16 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
   const headDown = (e: ReactPointerEvent) => {
     if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
   };
-  const moveHint = draggable && onHeadDown ? "Drag to move the landing strip" : "";
+  const moveHint = draggable && onHeadDown ? "Drag to move the Finished strip" : "";
   const total = landedCount(data);
 
   if (folded)
     return (
-      <nav ref={rootRef} className="sky-lane sky-lane-rail sky-landing" aria-label="Landing" data-collapsed="true" title={moveHint || undefined} onPointerDown={headDown}>
-        <button type="button" className="sky-lane-toggle" aria-expanded={false} title="Open the landing strip" onClick={() => fold(false)}>
+      <nav ref={rootRef} className="sky-lane sky-lane-rail sky-landing" aria-label="Finished" data-collapsed="true" title={moveHint || undefined} onPointerDown={headDown}>
+        <button type="button" className="sky-lane-toggle" aria-expanded={false} title="Open the Finished strip" onClick={() => fold(false)}>
           ›
         </button>
-        <button type="button" className="sky-lane-rail-icon fl-kind-badge sky-landing-glyph" title={"Landing — " + (total ? total + " landed today" : "nothing landed today")} onClick={() => fold(false)}>
+        <button type="button" className="sky-lane-rail-icon fl-kind-badge sky-landing-glyph" title={"Finished — " + (total ? total + " merged today" : "nothing merged today")} onClick={() => fold(false)}>
           ⤓{total > 0 && <span className="sky-lane-rail-count">{total}</span>}
         </button>
       </nav>
@@ -176,7 +176,7 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
     <nav
       ref={rootRef}
       className="sky-lane sky-landing"
-      aria-label="Landing"
+      aria-label="Finished"
       data-open={open ? "" : undefined}
       style={{ width: frameNow.w > 0 ? frameNow.w : undefined, height: frameNow.h > 0 ? frameNow.h : undefined }}
     >
@@ -191,9 +191,9 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
           onToggleOpen();
         }}
       >
-        <span className="sky-lane-title">Landing</span>
+        <span className="sky-lane-title">Finished</span>
         {total > 0 && (
-          <span className="fl-count" title={total + " landed today"}>
+          <span className="fl-count" title={total + " merged today"}>
             {total}
           </span>
         )}
@@ -202,14 +202,14 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
             type="button"
             className="sky-lane-toggle sky-lane-expand"
             aria-expanded={open}
-            aria-label={open ? "Fold the landing strip's rows" : "Expand the landing strip: every landed flight"}
-            title={open ? "Fold: the first rows of each repo" : "Expand: every landed flight"}
+            aria-label={open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain"}
+            title={open ? "Fold: the first rows of each repo" : "Expand: every finished chain"}
             onClick={onToggleOpen}
           >
             {open ? "▾" : "▸"}
           </button>
         )}
-        <button type="button" className="sky-lane-toggle" aria-expanded={true} title="Fold the landing strip" onClick={() => fold(true)}>
+        <button type="button" className="sky-lane-toggle" aria-expanded={true} title="Fold the Finished strip" onClick={() => fold(true)}>
           ‹
         </button>
       </div>
@@ -228,8 +228,8 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
           role="separator"
           tabIndex={0}
           data-no-drag
-          aria-label="Resize the landing strip"
-          title="Drag to resize the landing strip"
+          aria-label="Resize the Finished strip"
+          title="Drag to resize the Finished strip"
           onPointerDown={resizeDown}
           onPointerMove={resizeMove}
           onPointerUp={resizeUp}
@@ -255,7 +255,7 @@ function RepoRow({ repo, open, now }: { repo: LandingRepo; open: boolean; now?: 
         {mergeWords(repo.last_merge_at, now, repo.last_merge_kind ?? undefined)}
       </div>
       {(repo.landed || []).length > 0 && (
-        <ul className="sky-landing-landed" aria-label={"Landed today in " + repo.name}>
+        <ul className="sky-landing-landed" aria-label={"Merged today in " + repo.name}>
           {shown.map((l) => (
             <li key={l.flight} className="sky-landing-flight">
               <span className="sky-landing-flight-name" title={l.title}>

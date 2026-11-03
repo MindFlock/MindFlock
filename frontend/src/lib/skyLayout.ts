@@ -741,10 +741,10 @@ export function estimateLine(base: { w: number; h: number }, stored: StoredLine 
 export type SkyMode = "all" | "mine" | "perched" | "one";
 
 export const SKY_MODES: ReadonlyArray<{ id: SkyMode; label: string; title: string }> = [
-  { id: "all", label: "All", title: "Every session — a worker inside its lead's line" },
-  { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their line" },
-  { id: "perched", label: "Perched on you", title: "Only the lines waiting on you" },
-  { id: "one", label: "This session", title: "One line, filling the sky" },
+  { id: "all", label: "All", title: "Every session — a worker inside its lead's chain" },
+  { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their chain" },
+  { id: "perched", label: "Needs you", title: "Only the chains that need you" },
+  { id: "one", label: "This session", title: "One chain, filling the sky" },
 ];
 
 /** Drawn in the sky at all: not a hidden helper (a verify run). */

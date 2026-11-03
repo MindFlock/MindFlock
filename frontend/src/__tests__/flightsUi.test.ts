@@ -401,7 +401,7 @@ describe("the sky", () => {
     expect(html.slice(html.indexOf('data-line="second"'))).toContain('data-chain="second"');
     expect(code("components/flights/SkyLine.tsx")).toContain("bird={birdPerch(moves.diagram)}");
     // The toolbar: the views, find, Tidy, the zoom (New session is the shelf's chip).
-    for (const w of [">All<", ">Mine<", ">Perched on you<", ">This session<", ">Tidy<", ">Fit<", ">100%<", 'aria-label="Find a line"'])
+    for (const w of [">All<", ">Mine<", ">Needs you<", ">This session<", ">Tidy<", ">Fit<", ">100%<", 'aria-label="Find a chain"'])
       expect(html).toContain(w);
     expect(html).toContain('data-tour="flights-newblock"');
     expect(html).not.toContain("✈");
@@ -417,7 +417,7 @@ describe("the sky", () => {
     expect(drawer).toContain(">Fix the login</button>");
     expect(drawer).toContain("Perch: Approve the merge");
     expect(drawer).toMatch(/class="btn-primary fl-btn fl-done"[^>]*>Done<\/button>/);
-    expect(drawer.indexOf("Perched on you")).toBeLessThan(drawer.indexOf("Waiting to fly"));
+    expect(drawer.indexOf("Needs you")).toBeLessThan(drawer.indexOf("Waiting to start"));
     // The running flight isn't perched: not in the drawer.
     expect(drawer).not.toContain(">Second</button>");
   });
@@ -606,8 +606,8 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
     });
     expect(html).toMatch(/class="fl-waiting-head">Tickets</);
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-tickets">Ticket<');
-    expect(html).toContain(">Fly</button>");
-    expect(html).toContain("flies by itself");
+    expect(html).toContain(">Run</button>");
+    expect(html).toContain("starts by itself");
     const pick = html.slice(html.indexOf('class="fl-chiprow fl-plan-pick"'));
     expect(pick).toMatch(/aria-checked="true" class="fl-pick on"[^>]*data-value="p_mine">Mine</);
     expect(html).not.toContain("<select");

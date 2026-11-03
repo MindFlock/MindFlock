@@ -188,9 +188,9 @@ describe("Group's hint", () => {
   it("says why otherwise", () => {
     expect(groupHint(grounded, [0, 4])).toBe("Pick stops that sit next to each other");
     expect(groupHint(grounded, [1, 2, 3])).toBe("These already are one stop");
-    expect(groupHint(null, [0])).toMatch(/aren't on a flight/);
+    expect(groupHint(null, [0])).toMatch(/aren't on a chain/);
     const flying = { ...grounded, state: "running", cursor: 2 } as unknown as Flight;
-    expect(groupHint(flying, [1, 2])).toMatch(/has flown, or is flying/);
+    expect(groupHint(flying, [1, 2])).toMatch(/has run, or is running/);
   });
 });
 
@@ -204,7 +204,7 @@ describe("the bar", () => {
 
   it("lines: the count, Move's hint, Tidy these, Remove, Clear", () => {
     const html = render({ selection: selectLines(["a", "b"]) });
-    expect(html).toContain('aria-label="2 lines selected"');
+    expect(html).toContain('aria-label="2 chains selected"');
     expect(html).toContain("Drag a bar to move them");
     expect(html).toContain(">Tidy these</button>");
     expect(html).toContain(">Remove</button>");
@@ -215,11 +215,11 @@ describe("the bar", () => {
     const working = (id: string) => (id === "me" ? { activity: "working" } : { activity: "idle" });
     const html = render({ selection: selectLines(["me", "flight:f1"]), ask: "remove", rowOf: working });
     expect(html).toContain('role="alertdialog"');
-    expect(html).toContain('aria-label="Remove 2 lines? line me is working."');
+    expect(html).toContain('aria-label="Remove 2 chains? line me is working."');
     expect(html).toContain("1 session closes (line me): its agent stops and it moves to Recently closed.");
-    expect(html).toContain("1 line of stops with no session leaves the board (line flight:f1)");
+    expect(html).toContain("1 chain with no session leaves the board (line flight:f1)");
     const asking = render({ selection: selectLines(["me", "you"]), ask: "remove", rowOf: () => ({ activity: "clarify" }) });
-    expect(asking).toContain('aria-label="Remove 2 lines? line me, line you are running."');
+    expect(asking).toContain('aria-label="Remove 2 chains? line me, line you are running."');
     // Idle sessions and grounded lines: no question (they go at once, with Undo).
     const idle = render({ selection: selectLines(["me", "flight:f1"]), ask: "remove", rowOf: () => ({ activity: "idle" }) });
     expect(idle).not.toContain('role="alertdialog"');
@@ -230,7 +230,7 @@ describe("the bar", () => {
     const at = { lines: new Set<string>(), stops: new Map([["me", new Set(["stop:s5"])]]) };
     const html = render({ selection: at, flightOf: () => flying, ask: "remove" });
     expect(html).toContain('role="alertdialog"');
-    expect(html).toContain("The flight is at “" + STEPS[4].title + "” right now.");
+    expect(html).toContain("The chain is at “" + STEPS[4].title + "” right now.");
     const ahead = { lines: new Set<string>(), stops: new Map([["me", new Set(["stop:s1", "group:g1", "stop:s5"])]]) };
     const paused = { ...flying, state: "paused" } as unknown as Flight;
     expect(render({ selection: ahead, flightOf: () => paused, ask: "remove" })).not.toContain('role="alertdialog"');

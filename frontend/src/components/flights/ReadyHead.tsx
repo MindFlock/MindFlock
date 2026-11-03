@@ -24,7 +24,7 @@ export function ReadyHead({ flight }: { flight: Pick<Flight, "id" | "start_on" |
   const flip = () => void setStartOn(flight.id, flight.start_on === "run" ? "prompt" : "run");
   return (
     <span className="sky-ready" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
-      <span className="sky-head-chip tone-ready" title="Built, not flying yet">
+      <span className="sky-head-chip tone-ready" title="Built, not running yet">
         Ready
       </span>
       <button type="button" className="fl-icon-btn sky-run" disabled={busy} title="Run this chain now" aria-label="Run this chain now" onClick={() => void run()}>

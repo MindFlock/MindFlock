@@ -122,7 +122,7 @@ describe("the first picture", () => {
     expect(sky).toContain("else fitAll(false, true);");
     expect(sky).toContain("onClick={() => fitAll(true)}");
     expect(sky).toMatch(/k === "0"\) \{\s*handled\(\);\s*fitAll\(\);/);
-    expect(sky).toMatch(/title="See everything: every line in the window, however small/);
+    expect(sky).toMatch(/title="See everything: every chain in the window, however small/);
   });
 });
 

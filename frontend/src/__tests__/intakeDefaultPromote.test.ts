@@ -55,13 +55,13 @@ describe("the words", () => {
   it("label, tooltip and toast", () => {
     const w = L.promoteWords(src("tickets", "Tickets · Shortcut"));
     expect(w.label).toBe("Use these stops for every ticket from Shortcut");
-    expect(w.done).toBe("New tickets from Shortcut fly these stops");
+    expect(w.done).toBe("New tickets from Shortcut run this chain");
     // It changes what NEW items fly; this one keeps running as it is.
     expect(w.title).toContain("NEW tickets from Shortcut");
     expect(w.title).toContain("This ticket keeps running as it is");
     const p = L.promoteWords(src("prs", "PRs · o/r"));
     expect(p.label).toBe("Use these stops for every PR from o/r");
-    expect(p.done).toBe("New PRs from o/r fly these stops");
+    expect(p.done).toBe("New PRs from o/r run this chain");
     expect(L.promoteWords(src("issues", "Issues · a/b")).label).toBe("Use these stops for every issue from a/b");
   });
 });
@@ -78,7 +78,7 @@ describe("pressing it", () => {
     expect(await L.promoteStops("f1")).toBe(true);
     expect(setIntakeDefault).toHaveBeenCalledWith({ from_flight: "f1" });
     const [msg, opts] = vi.mocked(toast).mock.calls[0];
-    expect(msg).toBe("New tickets from Shortcut fly these stops");
+    expect(msg).toBe("New tickets from Shortcut run this chain");
     expect(opts?.action?.label).toBe("Undo");
     // The same entry Ctrl+Z pops.
     expect(U.undoCount()).toBe(1);

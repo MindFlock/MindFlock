@@ -406,7 +406,7 @@ describe("round 12: workers live inside their lead's line", () => {
     const v = code("components/flights/SkyView.tsx");
     expect(v).toContain("const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });");
     expect(code("components/flights/SkyLine.tsx")).toContain("useSessionLine(p.title, src, { family: true,");
-    expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's line");
+    expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's chain");
   });
 });
 
@@ -438,7 +438,7 @@ describe("round 13: nothing focused, place don't tack, the floating palette", ()
     // A drop on empty sky makes its line, unfocused.
     expect(v).not.toMatch(/pinned: true \}\)\);\s*setGroundFocus\(id\);/);
     // This session with nothing focused says what to do.
-    expect(v).toContain('"Pick a line to show it alone."');
+    expect(v).toContain('"Pick a chain to show it alone."');
     // Enter opens only the focused line's box.
     expect(v).toContain('} else if (k === "Enter" && focusLine) {');
   });
