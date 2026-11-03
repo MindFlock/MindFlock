@@ -46783,6 +46783,10 @@ async function skipSetupStep(step, undo = false) {
 		summary: r.summary
 	} : old);
 }
+async function chooseSetupAgent(provider) {
+	const d = await api("/api/setup/agent", { json: { provider } });
+	queryClient.setQueryData(SETUP_KEY, d);
+}
 //#endregion
 //#region src/lib/calm.ts
 var NEWCOMER_DAYS = 7;
@@ -59121,6 +59125,51 @@ function StepHead({ step }) {
 		})
 	] });
 }
+function AgentPicker$1({ status, onPicked }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const agents = status?.agents || [];
+	if (agents.length < 2) return null;
+	const current = status?.default_provider || "";
+	const pick = async (name) => {
+		if (!name || name === current) return;
+		setBusy(true);
+		try {
+			await chooseSetupAgent(name);
+			onPicked?.();
+		} catch (e) {
+			toast(e.message);
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "setup-agent-pick",
+		onClick: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "setup-agent-pick-label",
+				children: "Your agent"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+				id: "setup-agent-select",
+				value: current,
+				disabled: busy,
+				onChange: (e) => void pick(e.target.value),
+				children: [!agents.some((a) => a.name === current) && current && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: current,
+					children: agentName(current)
+				}), agents.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: a.name,
+					children: a.label + (a.installed ? " — installed" : "")
+				}, a.name))]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted setup-hint",
+				children: "The coding agent your sessions run — pick the one you have an account for."
+			})
+		]
+	});
+}
 function SkipRow({ step }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	if (step.done) return null;
@@ -59265,27 +59314,34 @@ function SetupChecklist$1() {
 								})
 							})]
 						}),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "setup-doctor",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
-								essential: true,
-								fallback: status?.doctor,
-								tourNext: tools.id === next,
-								reprobeKey,
-								onChange: () => void refreshSetup()
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentPicker$1, {
+								status,
+								onPicked: () => setReprobeKey((k) => k + 1)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "setup-doctor",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DoctorList, {
+									essential: true,
+									fallback: status?.doctor,
+									tourNext: tools.id === next,
+									reprobeKey,
+									onChange: () => void refreshSetup()
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "setup-actions",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "linklike setup-recheck",
+									onClick: (e) => {
+										e.stopPropagation();
+										setReprobeKey((k) => k + 1);
+									},
+									children: "Re-check"
+								})
 							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "setup-actions",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "linklike setup-recheck",
-								onClick: (e) => {
-									e.stopPropagation();
-									setReprobeKey((k) => k + 1);
-								},
-								children: "Re-check"
-							})
-						})]
+						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Step, {
 						step: agent,

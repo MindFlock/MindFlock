@@ -53,7 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **First run says what MindFlock is**: a 3-step welcome with a picture
   (session → route → Needs you), a short Sky tour, calm empty states for the
   Sky and the Grid, and *How MindFlock works* in Settings → Help.
-- **GitHub Copilot CLI** is a bundled agent.
+- **Any built-in agent from the first launch.** Setup's step ① has a *Your
+  agent* picker — Claude Code, Codex, Antigravity, Aider, OpenCode, Cline,
+  Goose or GitHub Copilot, installed ones first — and then installs and signs
+  in to the one you chose; no Claude account is needed for any other. With no
+  default set, MindFlock picks the agent you have instead of assuming Claude.
+- **GitHub Copilot CLI** is a bundled agent: installs from setup, signs in with
+  `copilot login` (or a token), its approval and question dialogs show as
+  **Needs you** with its own answers, it writes commit messages, and it gets
+  the MindFlock MCP.
 - **Voice:** a server-side speech fallback chain, earlier final transcripts,
   dictation gated at send time, capture off the main thread, never typing into
   a dialog; the "MindFlock" wake word is stricter (fewer false wakes).
@@ -74,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - "Setup 2 of 3" no longer stays on screen once a session is running.
+- Every non-Claude agent was walked end to end (session → task → route to a
+  push) on a machine without Claude, and what broke is fixed: Codex's first-run
+  trust screen, agy's signed-out and permission prompts, Cline and Goose read as
+  "not installed" (and couldn't be the default), Aider's first-run questions
+  swallowing the task and never reading as working, Cline's promo screens,
+  Goose's banner in commit messages (and Goose now gets the MindFlock MCP), and
+  the usage panel showing Claude rows to people without Claude.
 
 ## [0.10.6] - 2026-10-29
 

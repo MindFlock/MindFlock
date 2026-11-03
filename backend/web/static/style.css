@@ -1646,6 +1646,25 @@
 .setup-new-another {
   font-size: 13px;
 }
+
+/* Step ①'s "Your agent" picker, above the checks. */
+.setup-checklist .setup-agent-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 10px;
+}
+.setup-checklist .setup-agent-pick-label {
+  font-weight: 600;
+}
+.setup-checklist .setup-agent-pick select {
+  max-width: 100%;
+}
+.setup-checklist .setup-agent-pick .setup-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
 
