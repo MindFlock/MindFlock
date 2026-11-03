@@ -1,5 +1,5 @@
 /* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
-   The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
+   The fields' own look (.fl-form) is StopParts.css's; the schedule row is TemplateEditor's. */
 
 /* Its own card: the Modal is only the fixed backdrop (NewSessionDialog.css
    .modal), so without these the form floated bare over the Sky. Portaled to

@@ -235,31 +235,6 @@
   min-height: 44px;
 }
 
-.fl-schedule {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-}
-
-.fl-schedule-at {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.fl-schedule .fl-time.fl-input {
-  width: 110px;
-}
-
-.fl-schedule .fl-date.fl-input {
-  width: 150px;
-}
-
-.fl-schedule > .fl-input {
-  width: 180px;
-}
-
 .fl-builtin-tag {
   font-size: 10.5px;
   border: 1px solid var(--border);

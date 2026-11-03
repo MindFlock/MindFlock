@@ -103,6 +103,16 @@ let _host: KeymapHost | null = null;
 
 // --- Guards ----------------------------------------------------------------
 
+/** The Sky is showing and the focus is on it (or on nothing): its own "?"
+ * opens the Sky's shortcut sheet, so the app-wide one must not open over it. */
+export function skyOwnsSheet(): boolean {
+  if (typeof document === "undefined") return false;
+  const sky = document.getElementById("sky-view");
+  if (!sky || !(sky as HTMLElement).offsetParent) return false;
+  const el = document.activeElement;
+  return !el || el === document.body || sky.contains(el);
+}
+
 export function isEditingTarget(el: Element | null): boolean {
   if (!el) return false;
   const tag = el.tagName;
@@ -640,7 +650,9 @@ export const KEYMAP: KeymapEntry[] = [
     shift: "any",
     id: "sheet",
     help: ["Navigation", "?", "This shortcut sheet"],
-    when: () => !isEditingTarget(document.activeElement),
+    // The Sky has its own sheet (SkyView's "?"): while it is on screen and the
+    // focus is on the sky or nowhere, the app's sheet steps aside for it.
+    when: () => !isEditingTarget(document.activeElement) && !skyOwnsSheet(),
     run: () => _host?.toggleShortcuts(),
   },
   // -- View ----------------------------------------------------------------

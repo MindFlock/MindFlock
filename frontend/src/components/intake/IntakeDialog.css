@@ -1935,7 +1935,7 @@
 
 /* Round 5 ------------------------------------------------------------------ */
 
-/* The Auto-start tab's three switches + Pause all: one home for auto-start. */
+/* The Auto-start tab's switches: one home for auto-start (no Pause all). */
 .ik-autostart-switches {
   display: flex;
   flex-direction: column;

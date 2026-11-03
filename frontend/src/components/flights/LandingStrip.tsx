@@ -78,7 +78,6 @@ export function checksWords(tone: CheckTone): string {
  * says which sends `last_merge_kind`; an older one doesn't, and its time may
  * be either, so the words never claim a merge they can't vouch for. */
 export type MergeKind = "merge" | "commit";
-type RepoWithKind = LandingRepo & { last_merge_kind?: MergeKind };
 
 /** "merged 2h ago" (a merge commit), "last commit 2h ago" (no merge yet),
  * "updated 2h ago" (the server didn't say which), or "no merges yet". */
@@ -253,7 +252,7 @@ function RepoRow({ repo, open, now }: { repo: LandingRepo; open: boolean; now?: 
         <code className="sky-landing-branch">{repo.branch || "?"}</code>
       </div>
       <div className="sky-landing-merge muted" title="The default branch's last merge (or, with none yet, its last commit)">
-        {mergeWords(repo.last_merge_at, now, (repo as RepoWithKind).last_merge_kind)}
+        {mergeWords(repo.last_merge_at, now, repo.last_merge_kind ?? undefined)}
       </div>
       {(repo.landed || []).length > 0 && (
         <ul className="sky-landing-landed" aria-label={"Landed today in " + repo.name}>

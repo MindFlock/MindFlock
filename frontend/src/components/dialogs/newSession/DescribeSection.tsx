@@ -626,7 +626,7 @@ export function DescribeSection({
       {/* Where Start runs, as ONE line under the box: the folder is a real
           picker (recent folders + Browse…), then whether it gets a branch of
           its own. Nothing on it moves while you type, and the way to the full
-          form is the footer's More options alone (one name, one place). */}
+          form is the footer's Set it up myself alone (one name, one place). */}
       {!runMode && (
       <>
       <StartsInLine

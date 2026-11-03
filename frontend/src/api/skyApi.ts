@@ -37,6 +37,8 @@ export interface LandingRepo {
   checks: CheckTone;
   /** The last merge commit's time (unix seconds), null when there is none. */
   last_merge_at: number | null;
+  /** What `last_merge_at` is: a merge commit's time, or the last commit's (no merge yet). */
+  last_merge_kind?: "merge" | "commit" | null;
   landed: LandedFlight[];
 }
 

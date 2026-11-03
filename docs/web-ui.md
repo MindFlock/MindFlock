@@ -4472,16 +4472,18 @@ often it checks (*checks every 20 s* / *every minute*, from the source's
 `poll_interval_seconds` or `github.poll_interval_seconds` /
 `issue_poll_interval_seconds`, else the pipeline's defaults) or why it can't be
 on yet (*Add a repository first — on the GitHub PRs tab*; *Jira can't connect —
-press Fix on the Tickets tab*). Beside them, **Pause all auto-start**
-(`#ik-pause-all`) turns every switch that is on, off, in one press. It is not
-the old pause — there is no **Pause intake** any more: Pause all records nothing
-and has no Resume, and turning one back on is that switch (an older build's
+press Fix on the Tickets tab*). There is no **Pause all** and no **Pause
+intake**: turning a source off is its own switch (an older build's
 `general.intake_paused` is still never read). The toasts keep the switches'
 long names (*Auto-start tickets on*, *Auto-address review comments off*,
-*Auto-start new issues on*).
-The Tickets / GitHub PRs / GitHub issues tabs show one line where their switch
-used to be — *Auto-start: on — checks every 20 s* · **Change ›** (or *off* ·
-**Turn on ›**) — which goes to the switches.
+*Auto-start new issues on*). Under the switches a folded **Ticket sessions**
+section holds the ticket-session settings that used to sit in Settings: how
+ticket sessions copy the repo (`engine.mode`), **Open IDE when a ticket
+starts**, and **Ticket sessions in MindFlock** (`engine.enabled`); Settings
+keeps a **Set in Intake ›** row under each old name.
+The Tickets / GitHub PRs / GitHub issues tabs show one status line where their
+switch used to be — *Auto-start: on — checks every 20 s* — and the dialog
+header's **Auto-start switches ›** goes to the switches.
 
 **What auto-starts, in one line.** A line above the tabs says what starts on its
 own right now across the three switches (*Auto-start is on for tickets and PR
@@ -5976,8 +5978,8 @@ A few screens got quieter:
   chips). Its flags field suggests a
   harmless per-agent example (never a permission-skipping flag), and
   **Sessions running at once** says it plainly: no limit on sessions you
-  start, **Ticket sessions at once** (`engine.max_sessions`, the same field
-  as Intake → Queue) for auto-started ticket sessions, and a link to Agent
+  start, a **Set in Intake ›** row for auto-started ticket sessions
+  (`engine.max_sessions` is set only in Intake › Auto-start), and a link to Agent
   orchestration's spawn limits for sessions an agent starts.
 - **Connections** leads with **What you use** — the default agent, GitHub
   and the ticket tracker — and its header count covers exactly those rows in
