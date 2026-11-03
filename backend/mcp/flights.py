@@ -10,8 +10,15 @@ server serves at ``GET /api/flights/kinds``; nothing here hard-codes the list,
 so a kind added on the server (round 16's ``loop``) is usable at once.
 
 The path from a sentence to a running flight is ``describe_flight`` (the
-server's one-shot model turns prose into normalised steps, and the kinds list
-comes along so the agent can hand-write or fix them) → ``start_flight``.
+server's one-shot model turns prose into normalised steps, and the stop
+cookbook comes along — when each kind fits, the common routes, the order —
+so the agent can hand-write or fix them) → ``start_flight(dry_run=true)``
+(the route read back as one sentence for the person to OK) → ``start_flight``.
+The cookbook (:mod:`backend.web.core.flight_cookbook`, pure stdlib) is the
+same one the server's one-shot prompt reads, so the Sky's sentence box and an
+agent agree; its :func:`~backend.web.core.flight_cookbook.lint` turns a route
+that can't work (a Join with no Split, Merge before Open PR …) into a refusal
+that says what to do instead.
 
 Scope: a session flies, steers and edits flights on ITSELF or on one of its
 descendants — the rule ``ship_session`` / ``set_autopilot`` follow
@@ -33,6 +40,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend import client
 from backend.mcp.policy import Flock
 from backend.mcp.protocol import ToolContext, ToolError
+from backend.web.core import flight_cookbook as cookbook
 
 _log = logging.getLogger(__name__)
 
@@ -42,6 +50,10 @@ __all__ = [
     "STEP_OPS",
     "compact_flight",
     "compact_kinds",
+    "cookbook_view",
+    "find_plan",
+    "read_back",
+    "saved_lines",
     "step_line",
 ]
 
@@ -56,37 +68,50 @@ DESCRIBE_TIMEOUT_S = 90.0
 START_TIMEOUT_S = 120.0
 #: flight_status stays about this small (JSON characters).
 STATUS_BUDGET = 2000
+#: describe_flight with the whole cookbook stays under this (JSON characters).
+DESCRIBE_BUDGET = 12000
 HISTORY_LINES = 10
 MAX_STEPS = 40
 
 D_DESCRIBE = (
-    "Turn a sentence into a route's stops. A ROUTE is a row of stops "
-    "MindFlock's driver carries one session through (an agent prompt, tests, "
-    "a ship stop, a wait, a Wait for me stop for your user, a loop back…). "
-    "text: the route in plain words ('run the tests, fix failures, open a "
-    "PR, wait for checks'); want: plan (several stops, default) or step "
-    "(one). The server's one-shot model answers with normalised steps {id, "
-    "kind, title, config, on_fail, when?} plus one line each. Also returns "
-    "kinds (kind · label · summary · config fields) so you can hand-write or "
-    "fix steps; kinds=false skips them. error no_model / could_not_describe: "
-    "no steps — write them from kinds. Nothing starts: pass the steps to "
-    "start_flight (or save_flight_plan)."
+    "Turn your user's description of a route into its stops. A ROUTE is the "
+    "row of stops MindFlock carries one session through (agent, tests, Open "
+    "PR, CI checks, Wait for me, Merge when green…). text: the route in plain "
+    "words, as your user said it; want: plan (default) or step. Returns steps "
+    "{id, kind, title, config, on_fail, when?} from the server's one-shot "
+    "model, sentence (the route read back in one line), problems / warnings "
+    "(what to fix, and how), and the COOKBOOK: stops (per kind: use / not / "
+    "fields / waits; RARE kinds only when your user named them), recipes "
+    "(common routes, terse) and rules (order, on_fail, when to ask); saved "
+    "lists your user's saved routes (id · name · starts · stops) for 'like "
+    "last time'. "
+    "kinds=false skips the cookbook. Check the steps against the cookbook "
+    "and fix them yourself; if the request is ambiguous (merge with no OK "
+    "named, no schedule time, a URL or command not given) ask your user "
+    "instead. error no_model / could_not_describe: write the steps from the "
+    "cookbook. Nothing starts: start_flight(dry_run=true) reads it back, "
+    "then start_flight (or save_flight_plan)."
 )
 D_START = (
     "Start a route. steps: [{kind, title?, config?, on_fail?, when?, halt?}] "
-    "(from describe_flight, or by hand from its kinds) and/or plan_id (a saved "
-    "route; its steps come first). title: the session that runs it — default "
-    "yourself; else one of your descendants. On an existing session the "
-    "route starts at the first non-agent stop (the work so far counts as the "
-    "agent stop) unless at= names a stop id (s1…). grounded=true puts the "
-    "stops on your user's Sky with no session (they attach one). name: the "
-    "route's name. A stop that can't be undone (ship lane merge, a kind whose "
-    "risk is irreversible) needs confirm_merge=true. One route per session: "
-    "409 in_flight means it has one (flight_status). A loop stop's "
-    'config.back_to is an earlier stop id, or "agent": the session\'s own '
-    "agent is sent config.prompt (empty = its last prompt), then the stops "
-    "run again after that turn (needs a session). Returns {id, state, "
-    "steps, session}; then flight_status / control_flight."
+    "(from describe_flight, or by hand from its cookbook) and/or plan_id (a "
+    "saved route's id or name; its steps come first). title: the session that runs it — "
+    "default yourself; else one of your descendants. On an existing session "
+    "the work so far counts as the first agent stop and the route runs on at "
+    "once — right when that work is DONE. Work still ahead? at='s1' (the agent "
+    "stop's prompt is queued to that session and sent when its turn ends), or "
+    "start_on='prompt' (takes off with your user's next prompt) / 'run' "
+    "(waits for Run). grounded=true puts the stops on your user's Sky with no "
+    "session. name: the route's name. A stop that can't be undone (ship lane "
+    "merge, a kind whose risk is irreversible) needs confirm_merge=true. One "
+    "route per session: 409 in_flight means it has one (flight_status). A "
+    'loop\'s config.back_to is an earlier stop id, or "agent". dry_run=true '
+    "starts nothing: the sentence to read back to your user, problems / "
+    "warnings, needs_confirm_merge, merge_blocked (you may not merge "
+    "yourself: start it grounded). A route that can't work (Join with no "
+    "Split, Merge before Open PR, a Loop to a later stop…) is refused with "
+    "what to do instead. Returns {id, state, steps, session, sentence, "
+    "warnings?}; then flight_status / control_flight."
 )
 D_STATUS = (
     "A route, compact: state (grounded|ready|running|waiting_you|paused|"
@@ -118,8 +143,9 @@ D_SAVE_PLAN = (
     "calls it a plan): name, steps (as start_flight takes them), description, "
     "trigger {kind: manual|ticket|pr|issue|schedule, schedule?: {at:'HH:MM', "
     "days:'daily'|'weekdays'} | {cron} | {once}, paused?} — a schedule "
-    "trigger starts it by itself. Returns {plan_id, name, steps}; "
-    "start_flight(plan_id=…) runs it."
+    "trigger starts it by itself (ask your user for the time if they gave "
+    "none). dry_run=true saves nothing and reads it back. Returns {plan_id, "
+    "name, steps, sentence}; start_flight(plan_id=…) runs it."
 )
 
 
@@ -187,6 +213,17 @@ S_START = _obj(
         "name": {"type": "string", "maxLength": 80},
         "at": dict(_STEP_ID, description="stop id to start at"),
         "confirm_merge": {"type": "boolean", "default": False},
+        "dry_run": {
+            "type": "boolean",
+            "default": False,
+            "description": "start nothing: the read-back sentence and problems",
+        },
+        "start_on": {
+            "type": "string",
+            "enum": ["now", "prompt", "run"],
+            "default": "now",
+            "description": "now | prompt (the session's next prompt) | run (Run)",
+        },
     }
 )
 S_STATUS = _obj({"id": _FLIGHT_ID, "title": _TITLE})
@@ -233,6 +270,7 @@ S_SAVE_PLAN = _obj(
             },
             "required": ["kind"],
         },
+        "dry_run": {"type": "boolean", "default": False},
     },
     ("name", "steps"),
 )
@@ -271,6 +309,140 @@ def compact_kinds(dto: dict) -> List[str]:
             line += " · [%s]" % ", ".join(risk)
         out.append(line)
     return out
+
+
+def cookbook_view(dto: dict, budget: int = DESCRIBE_BUDGET) -> dict:
+    """The stop cookbook for the kinds THIS server serves: ``stops`` (one line
+    per kind — use / not / fields / waits — or, for a kind newer than the
+    cookbook, the server's own summary line), ``recipes`` (common routes in
+    the terse ``kind(cfg)!on_fail`` notation), ``rules``. Lines shrink until
+    the whole view fits ``budget`` JSON characters."""
+    kinds = [k for k in dto.get("kinds") or [] if isinstance(k, dict) and k.get("kind")]
+    served = {str(k["kind"]) for k in kinds}
+
+    def build(width: int) -> dict:
+        stops: List[str] = []
+        for k in kinds:
+            kind = str(k["kind"])
+            line = cookbook.stop_line(kind, str(k.get("label") or ""))
+            if not line:
+                line = compact_kinds({"kinds": [k]})[0]
+            elif "irreversible" in [str(r) for r in k.get("risk") or []]:
+                line += " · [irreversible]"
+            stops.append(_cut(line, width))
+        recipes = [
+            _cut(cookbook.recipe_line(r), width + 120)
+            for r in cookbook.RECIPES
+            if all(s["kind"] in served for s in r["steps"])
+        ]
+        return {"stops": stops, "recipes": recipes, "rules": list(cookbook.RULES)}
+
+    width = 400
+    out = build(width)
+    while len(json.dumps(out, ensure_ascii=False)) > budget and width > 80:
+        width -= 40
+        out = build(width)
+    return out
+
+
+#: What to do when a session may not merge itself (scope children): the same
+#: stops, grounded — they wait on the user's Sky and the user's attach is the OK.
+GROUNDED_WAY = (
+    "Start the same steps with grounded=true (and confirm_merge=true, a name) "
+    "instead — no need to ask again: they wait on your user's Sky until they "
+    "attach this session, and that attach is their OK for the merge"
+)
+
+#: describe_flight lists at most this many saved routes.
+SAVED_MAX = 15
+
+
+def saved_lines(plans: List[dict], limit: int = SAVED_MAX) -> List[str]:
+    """The shelf, one line per saved route: ``id · name · starts: trigger ·
+    kind(cfg) → …`` — so "like last time" can find it (``plan_id`` takes the
+    id or the name)."""
+    out: List[str] = []
+    for p in plans[:limit]:
+        if not isinstance(p, dict) or not p.get("id"):
+            continue
+        trig = p.get("trigger") if isinstance(p.get("trigger"), dict) else {}
+        kind = str(trig.get("kind") or "manual")
+        sched = trig.get("schedule") if isinstance(trig.get("schedule"), dict) else {}
+        if kind == "schedule" and sched:
+            kind += " " + _cut(
+                " ".join(str(v) for v in sched.values() if v not in ("", None)), 30
+            )
+        steps = [s for s in p.get("steps") or [] if isinstance(s, dict)]
+        out.append(
+            _cut(
+                "%s · %s · starts: %s · %s"
+                % (
+                    p["id"],
+                    p.get("name") or p["id"],
+                    kind,
+                    cookbook.notation(steps, 24),
+                ),
+                260,
+            )
+        )
+    if len(plans) > limit:
+        out.append("… %d more saved routes" % (len(plans) - limit))
+    return out
+
+
+def find_plan(plans: List[dict], ref: str) -> Optional[dict]:
+    """A saved route by id, else by name (any case), else by a unique name
+    prefix; None when nothing (or more than one) matches."""
+    ref = str(ref or "").strip()
+    rows = [p for p in plans if isinstance(p, dict) and p.get("id")]
+    for p in rows:
+        if p["id"] == ref:
+            return p
+    key = ref.casefold()
+    named = [p for p in rows if str(p.get("name") or "").casefold() == key]
+    if len(named) == 1:
+        return named[0]
+    pre = [p for p in rows if str(p.get("name") or "").casefold().startswith(key)]
+    return pre[0] if len(pre) == 1 and key else None
+
+
+def _labels(dto: dict) -> Dict[str, str]:
+    return {
+        str(k.get("kind")): str(k.get("label") or k.get("kind"))
+        for k in dto.get("kinds") or []
+        if isinstance(k, dict) and k.get("kind")
+    }
+
+
+def read_back(
+    steps: List[dict],
+    dto: dict,
+    on_session: bool = True,
+    has_pr: bool = False,
+) -> Dict[str, Any]:
+    """``{sentence, problems?, warnings?}`` for ``steps``: the route in one
+    line to read back to the person, and the cookbook's lint (errors =
+    problems, the tools refuse those; warnings = odd, worth saying)."""
+    known = [str(k.get("kind")) for k in dto.get("kinds") or [] if isinstance(k, dict)]
+    issues = cookbook.lint(
+        steps, known=known or None, on_session=on_session, has_pr=has_pr
+    )
+    out: Dict[str, Any] = {"sentence": cookbook.sentence(steps, _labels(dto))}
+    probs = [cookbook.issue_line(x) for x in issues if x["level"] == "error"]
+    warns = [cookbook.issue_line(x) for x in issues if x["level"] != "error"]
+    if probs:
+        out["problems"] = probs
+    if warns:
+        out["warnings"] = warns
+    return out
+
+
+def _refuse(what: str, view: Dict[str, Any]) -> ToolError:
+    return ToolError(
+        "%s: this route can't work as written — %s. (Route: %s.) Fix those "
+        "stops and try again; start_flight(dry_run=true) checks without "
+        "starting." % (what, "; ".join(view["problems"]), view["sentence"])
+    )
 
 
 def step_line(step: dict, state: Optional[dict] = None, width: int = 60) -> str:
@@ -440,6 +612,11 @@ class FlightTools:
             msg += " — %s" % _cut(body["detail"], 300)
         if body.get("field"):
             msg += " (field %s)" % body["field"]
+            taught = cookbook.field_hint(
+                str(body["field"]), str(body.get("detail") or "")
+            )
+            if taught:
+                msg += ". " + taught
         hint = {
             "in_flight": "that session already has a route running: "
             "flight_status(title=…) shows it; cancel it first or edit_flight it",
@@ -524,8 +701,8 @@ class FlightTools:
         except ToolError as err:
             if bad and "merg" in str(err):
                 raise ToolError(
-                    "%s (stops that can't be undone: %s). Or start it "
-                    "grounded=true for your user to attach." % (err, ", ".join(bad))
+                    "%s (stops that can't be undone: %s). %s"
+                    % (err, ", ".join(bad), GROUNDED_WAY)
                 ) from None
             raise
 
@@ -569,25 +746,36 @@ class FlightTools:
                 out["error"] = "no_model"
                 out["hint"] = (
                     "no model CLI is installed for the server's one-shot describe: "
-                    "write the steps yourself from kinds and pass them to "
-                    "start_flight"
+                    "write the steps yourself from the stops and recipes below, "
+                    "then start_flight(dry_run=true)"
                 )
             elif err.message == "could_not_describe":
                 out["steps"] = []
                 out["error"] = "could_not_describe"
                 detail = (err.payload or {}).get("detail")
                 out["hint"] = (
-                    "the model's answer was not a route%s: rephrase, or write "
-                    "the steps from kinds"
+                    "the model's answer was not a route%s: write the steps "
+                    "yourself from the stops and recipes below"
                     % (" (%s)" % _cut(detail, 200) if detail else "")
                 )
             else:
                 raise self._flight_error(err, "describe_flight") from None
-        if args.get("kinds", True) or out.get("error"):
-            dto = self._kinds()
-            out["kinds"] = compact_kinds(dto)
+        full = bool(args.get("kinds", True) or out.get("error"))
+        # kinds=false: the agent has the cookbook already — no kinds fetch;
+        # the read-back lints against the cookbook's own kinds.
+        dto = self._kinds() if full else {}
+        if out.get("steps"):
+            out.update(read_back(out["steps"], dto))
+        if full:
+            out.update(cookbook_view(dto))
             if dto.get("on_fail"):
                 out["on_fail"] = list(dto["on_fail"])
+            try:
+                plans = self._plans()
+            except ToolError:
+                plans = []
+            if plans:
+                out["saved"] = saved_lines(plans)
         return out
 
     # -- start_flight ----------------------------------------------------------- #
@@ -613,8 +801,48 @@ class FlightTools:
                 )
         check = list(steps)
         if plan_id:
-            plan = self._plan(plan_id)
+            plans = self._plans()
+            plan = find_plan(plans, plan_id)
+            if plan is None and not plan_id.startswith("builtin:"):
+                names = ", ".join(
+                    "%s (%s)" % (p.get("name"), p.get("id")) for p in plans[:SAVED_MAX]
+                )
+                raise ToolError(
+                    "start_flight: no saved route %r — plan_id is a saved route's "
+                    "id or name: %s" % (plan_id, names or "none saved yet")
+                )
+            plan = plan or {}
+            plan_id = str(plan.get("id") or plan_id)
             check = list(plan.get("steps") or []) + check
+        dto = self._kinds()
+        view = read_back(check, dto, on_session=not grounded) if check else {}
+        if args.get("dry_run"):
+            out = dict(view, dry_run=True, session=title or None)
+            out["lines"] = [step_line(s) for s in check]
+            bad = _irreversible(check, self._kinds_by_name())
+            nxt = (
+                "read the sentence back to your user; on their OK call "
+                "start_flight with the same arguments and no dry_run"
+            )
+            if bad:
+                out["needs_confirm_merge"] = bad
+                if title:
+                    try:
+                        self.policy.require_ship(
+                            flock, title, what, merge=True, confirm_merge=True
+                        )
+                    except ToolError as err:
+                        out["merge_blocked"] = "%s. %s" % (err, GROUNDED_WAY)
+                        nxt = (
+                            "read the sentence back and say it will wait on their "
+                            "Sky for them to attach this session; on their OK call "
+                            "start_flight with grounded=true, the same steps, "
+                            "confirm_merge=true and a name"
+                        )
+            out["next"] = "fix the problems first" if view.get("problems") else nxt
+            return out
+        if view.get("problems"):
+            raise _refuse(what, view)
         self._may_fly(flock, title, what, check, confirm)
         payload: Dict[str, Any] = {"by": self._by(flock)}
         if plan_id:
@@ -629,6 +857,8 @@ class FlightTools:
             payload["title"] = title
             if args.get("at"):
                 payload["start_at"] = str(args["at"])
+        if args.get("start_on") in ("prompt", "run"):
+            payload["start_on"] = args["start_on"]
         resp = self._fl_api(
             "POST", "/api/flights/start", payload, what, timeout=START_TIMEOUT_S
         )
@@ -646,15 +876,19 @@ class FlightTools:
                 f = r.get("flight") if isinstance(r.get("flight"), dict) else f
             except ToolError as err:
                 _log.info("start_flight: rename failed: %s", err)
-        view = compact_flight(f, self.clock())
+        compact = compact_flight(f, self.clock())
         out = {
             "id": f.get("id"),
             "state": f.get("state"),
             "session": f.get("session") or None,
             "name": f.get("plan_name"),
-            "cursor": view.get("cursor"),
-            "steps": view.get("steps"),
+            "cursor": compact.get("cursor"),
+            "steps": compact.get("steps"),
         }
+        flown = [s for s in f.get("steps") or [] if isinstance(s, dict)]
+        out["sentence"] = cookbook.sentence(flown or check, _labels(dto))
+        if view.get("warnings"):
+            out["warnings"] = view["warnings"]
         if resp.get("absorbed"):
             out["absorbed"] = resp["absorbed"]
             out["note"] = (
@@ -666,14 +900,18 @@ class FlightTools:
                 "grounded: the stops sit on your user's Sky until they attach a "
                 "session"
             )
+        elif f.get("state") == "ready":
+            out["note"] = (
+                "ready: it takes off with the session's next prompt (or Run)"
+                if f.get("start_on") == "prompt"
+                else "ready: it takes off when your user presses Run "
+                "(or control_flight op=run)"
+            )
         return out
 
-    def _plan(self, plan_id: str) -> dict:
-        resp = self._fl_api("GET", "/api/flights/plans", what="start_flight")
-        for p in resp.get("plans") or []:
-            if isinstance(p, dict) and p.get("id") == plan_id:
-                return p
-        return {}  # the server says unknown_plan (a virtual id may still work)
+    def _plans(self) -> List[dict]:
+        resp = self._fl_api("GET", "/api/flights/plans", what="saved routes")
+        return [p for p in resp.get("plans") or [] if isinstance(p, dict)]
 
     # -- flight_status ---------------------------------------------------------- #
     def flight_status(self, args: dict, ctx: ToolContext) -> dict:
@@ -727,6 +965,25 @@ class FlightTools:
         if not (add or remove or rename):
             raise ToolError("edit_flight needs add, remove or rename")
         f = self._get_flight(str(args["id"]), what)
+        if add:
+            have = [s for s in f.get("steps") or [] if isinstance(s, dict)]
+            gone = set(remove)
+            after = [s for s in have if str(s.get("id") or "") not in gone]
+            at = args.get("at")
+            at = len(after) if at is None else max(0, min(int(at), len(after)))
+            after = after[:at] + add + after[at:]
+            dto = self._kinds()
+            known = [str(k.get("kind")) for k in dto.get("kinds") or []]
+            old = {
+                x["text"]
+                for x in cookbook.errors(cookbook.lint(have, known=known or None))
+            }
+            view = read_back(after, dto, on_session=bool(f.get("session")))
+            new = [
+                p for p in view.get("problems") or [] if p.split(": ", 1)[-1] not in old
+            ]
+            if new:
+                raise _refuse(what, dict(view, problems=new))
         self._may_fly(
             flock,
             str(f.get("session") or ""),
@@ -769,6 +1026,18 @@ class FlightTools:
         steps = self._clean_steps(args.get("steps"))
         if not steps:
             raise ToolError("save_flight_plan needs steps")
+        trig = args.get("trigger") if isinstance(args.get("trigger"), dict) else {}
+        dto = self._kinds()
+        view = read_back(steps, dto, on_session=False, has_pr=trig.get("kind") == "pr")
+        if args.get("dry_run"):
+            return dict(
+                view,
+                dry_run=True,
+                lines=[step_line(s) for s in steps],
+                trigger=trig or {"kind": "manual"},
+            )
+        if view.get("problems"):
+            raise _refuse("save_flight_plan", view)
         payload: Dict[str, Any] = {
             "name": str(args.get("name") or "").strip(),
             "steps": steps,
@@ -786,7 +1055,10 @@ class FlightTools:
                 step_line(s) for s in plan.get("steps") or [] if isinstance(s, dict)
             ],
         }
-        trig = plan.get("trigger")
-        if isinstance(trig, dict) and trig.get("kind") not in (None, "manual"):
-            out["trigger"] = trig
+        out["sentence"] = view["sentence"]
+        if view.get("warnings"):
+            out["warnings"] = view["warnings"]
+        saved = plan.get("trigger")
+        if isinstance(saved, dict) and saved.get("kind") not in (None, "manual"):
+            out["trigger"] = saved
         return out

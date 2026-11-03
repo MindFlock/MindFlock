@@ -146,8 +146,8 @@ class TestRegistry:
         assert "mcp__mindflock__send_message" in INSTRUCTIONS
         assert "NOT the built-in SendMessage" in INSTRUCTIONS
         assert (
-            "Routes: describe_flight → start_flight; flight_status; control_flight"
-            in INSTRUCTIONS
+            "Routes: describe_flight → start_flight (dry_run first); flight_status, "
+            "control_flight" in INSTRUCTIONS
         )
 
     def test_footer_names_the_tool_per_provider(self):

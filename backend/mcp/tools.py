@@ -95,9 +95,9 @@ needs_input: read_output(view="screen"), then answer_prompt or ask your user.
 
 TEAM RUN ("3 at a time, PR each"): start_team_run; wait_for_run, get_run, list_runs; control_run steers. Split lead: propose_run_plan; report_integrated after a conflict.
 
-Routes: describe_flight → start_flight; flight_status; control_flight; edit_flight, save_flight_plan.
+Routes: describe_flight → start_flight (dry_run first); flight_status, control_flight, edit_flight, save_flight_plan.
 
-Also: get_session, check_inbox, wait_for_message, set_parent. Steer/ship/close/delete only your descendants (ship and run a route also on yourself).
+Also: get_session, check_inbox, wait_for_message, set_parent. Steer/ship/close/delete only your descendants (ship/route yourself).
 
 Long job: expect_background_job(duration) or prefix MINDFLOCK_EXPECT=6h."""
 
