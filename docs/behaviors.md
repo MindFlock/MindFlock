@@ -137,9 +137,10 @@ too; openBehaviors from the grid switches to the Sky.
 - `frontend/src/lib/behaviors.ts` — `BehaviorTone`, `BehaviorSummary`,
   `behaviorSummary(plan)`, `planForSession(plans, row)`, `orphanPlans(plans,
   rows)`, `nextNeedingYou(plans)`. Owned by vs-card (fills the bodies).
+- `frontend/src/components/behaviors/BehaviorsSettings.tsx` — `BehaviorsSettingsProps` + a placeholder (the board's ⋯ settings). Owned by vs-card.
 - `frontend/src/components/behaviors/BehaviorsCard.tsx` — `BehaviorsCardProps`
   + a placeholder. Owned by vs-card.
 
 ## As built
 
-(Workers append a short "### As built: <task>" section here.)
+Each worker writes its notes to `docs/behaviors/<task>.md`; the integrator folds them in here.
