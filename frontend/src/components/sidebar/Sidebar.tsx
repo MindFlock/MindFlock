@@ -96,7 +96,7 @@ export function ViewRow({ calm }: { calm: boolean }) {
   const k = usableShortcuts("view");
   const keys = k.length ? " (" + k.join(" / ") + ")" : "";
   const perchLine =
-    perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+    perch.count > 0 ? "\n" + perch.count + " need you" : "";
   return (
     <div id="view-modes">
       <span className="vm-label">View</span>
@@ -130,7 +130,7 @@ export function ViewRow({ calm }: { calm: boolean }) {
             aria-pressed={ui.view === v}
             // The word can drop to the glyph on a narrow sidebar: the name
             // stays, and carries the count the badge shows.
-            aria-label={viewLabel(v) + (v === "sky" && perch.count > 0 ? ", " + perch.count + " perched on you" : "")}
+            aria-label={viewLabel(v) + (v === "sky" && perch.count > 0 ? ", " + perch.count + " need you" : "")}
             data-view={v}
             data-tour={v === "sky" ? "view-sky" : undefined}
             title={viewLabel(v) + " — " + VIEW_BLURB[v] + keys + (v === "sky" ? perchLine : "")}

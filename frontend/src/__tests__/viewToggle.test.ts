@@ -118,8 +118,8 @@ describe("the sidebar's View row: Auto 1 2 4 9 │ Grid Sky", () => {
     expect(render(createElement(ViewRow, { calm: false }))).not.toContain("vt-count");
     const two = render(createElement(ViewRow, { calm: false }), [perched("a"), perched("b")]);
     expect(two).toMatch(/<span class="vt-word">Sky<\/span><span class="vt-count">2<\/span><\/button>/);
-    expect(two).toMatch(/aria-label="Sky, 2 perched on you"/);
-    expect(two).toMatch(/title="Sky — [^"]*\n2 flights perched on you"/);
+    expect(two).toMatch(/aria-label="Sky, 2 need you"/);
+    expect(two).toMatch(/title="Sky — [^"]*\n2 need you"/);
     const halted = render(createElement(ViewRow, { calm: false }), [perched("a", "halted")]);
     expect(halted).toContain('<span class="vt-count is-failing">1</span>');
   });

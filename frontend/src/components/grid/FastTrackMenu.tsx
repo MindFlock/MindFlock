@@ -237,7 +237,7 @@ export function FastTrackMenu({
           </span>
           <span className="pb-key">{keyOf(e)}</span>
           <span className="pb-desc">
-            {e.kind === "stops" ? "Its Flight tab: add, remove or move its stops" : "Its line on the Sky's board"}
+            {e.kind === "stops" ? "Its Chain tab: add, remove or move its stops" : "Its chain on the Sky"}
           </span>
         </div>
       );

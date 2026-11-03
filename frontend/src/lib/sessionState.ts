@@ -138,8 +138,8 @@ export const STATE_LABEL: Record<Exclude<SessionStateKey, "needs_you">, string> 
 /** The label of each reason a session can need you. */
 export const REASON_LABEL: Record<SessionReason, string> = {
   question: "Question",
-  // "Perch: <the stop's title>" when the row names it (flightYouLabel).
-  flight_you: "Perch",
+  // "Wait for me: <the stop's title>" when the row names it (flightYouLabel).
+  flight_you: "Wait for me",
   precommit_failed: "Pre-commit failed",
   checks_failing: "Checks failing",
   setup_failed: "Setup failed",
@@ -275,7 +275,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
     return {
       ...needsYou(
         "flight_you",
-        flightYouLabel(fl.step.title) + " — flight “" + fl.plan_name + "” is perched on you; press Done on its strip, the Board or the bell"
+        flightYouLabel(fl.step.title) + " — chain “" + fl.plan_name + "” needs you; press Done on its strip, the Sky or the bell"
       ),
       label: flightYouLabel(fl.step.title),
     };
