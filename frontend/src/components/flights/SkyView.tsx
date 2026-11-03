@@ -81,12 +81,16 @@
  * Round 15 (docs/flights.md "As built: round 15 objects"): everything on the
  * plane that is not a line is a SKY OBJECT from one registry
  * (lib/skyObjects `SKY_OBJECTS` → `skyObjects(data)`): the intake lane and
- * the palette (left, placed first), the landing strip and the device and
- * people blocks (a column right of every line, `rightColumn`), the sticky
- * notes (free, pinned where they were put — server-side, `/api/sky/notes`).
- * One loop places, draws, drags, sizes and measures them (`hostFor`). A
- * session's line dragged alone onto a person or device block asks the block
- * to share or move it (`dropped`); a note dragged onto a line attaches to
+ * the palette (left, placed first), the Finished strip and the people
+ * blocks (a column right of every line, `rightColumn`), the sticky notes
+ * (free, pinned where they were put — server-side, `/api/sky/notes`). One
+ * loop places, draws, drags, sizes and measures them (`hostFor`). The
+ * Finished strip is hidden by default — ⋯ › Show the Finished strip
+ * (`FINISHED_KEY`, per device); hidden, it takes no room. Devices are not
+ * board objects: while a session's chain is dragged alone, the other devices
+ * show as drop targets along the view's top edge (DeviceBlocks `DeviceDock`,
+ * `sessionDrag`). A session's line dragged alone onto a person block or a
+ * device target asks it to share or move it (`dropped`); a note dragged onto a line attaches to
  * it and moves with it; ⋯ → Add a note, or a right-click on empty sky, puts
  * a note at the pointer; Delete on a focused note removes it with Undo.
  *
@@ -114,13 +118,14 @@
  * (SkyWires); a stops-only chain something hands off to wears a trigger head. */
 
 import { optimisticDelete } from "../../lib/flightOptimism";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
 import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
 import type { Instance } from "../../api/types";
 import { errMsg } from "../../lib/format";
 import {
   hitAt,
+  deviceKey,
   isObjectKey,
   newNoteId,
   noteDropped,
@@ -137,6 +142,8 @@ import {
   type SkyObjectItem,
   type SkyObjectView,
 } from "../../lib/skyObjects";
+import { DeviceDock } from "./DeviceBlocks";
+import type { LandingStripProps } from "./LandingStrip";
 import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
@@ -278,6 +285,8 @@ const SHELF_FOLD_KEY = "mf_sky_stops_folded";
 const TIDY_MS = 350;
 /** The minimap open (default) or folded to its glyph, per device. */
 const MINIMAP_KEY = "mf_sky_minimap";
+/** The Finished strip shown ("1"); hidden unless turned on, per device. */
+const FINISHED_KEY = "mf_sky_finished";
 /** The toolbar's two tools, in words. */
 const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
   drag: { label: "✥ Drag", title: "Drag mode (V): a chain moves by its bar, a drag on empty sky selects" },
@@ -457,6 +466,11 @@ export function SkyView() {
   const [focusMode, setFocusMode] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [minimapOpen, setMinimapOpen] = useState(() => readPref(MINIMAP_KEY) !== "0");
+  const [finishedOn, setFinishedOnState] = useState(() => readPref(FINISHED_KEY) === "1");
+  const setFinishedOn = useCallback((v: boolean) => {
+    setFinishedOnState(v);
+    writePref(FINISHED_KEY, v ? "1" : "0");
+  }, []);
   const [filterFocus, setFilterFocus] = useState(false);
   const [cam, setCamState] = useState<SkyCamera>(() => memo?.cam || { x: 0, y: 0, z: 1 });
   const camRef = useRef(cam);
@@ -520,13 +534,14 @@ export function SkyView() {
   // What a shelf chip being dragged carries (read at its dragstart).
   const dragged = useRef<{ plan: FlightPlan } | { kind: string } | null>(null);
   const [flash, setFlash] = useState("");
-  // Round 15: the sky objects' data — the landing strip's (a minute's
-  // cache on the server too), the peer links (people blocks), the other
-  // devices (device blocks) and the sticky notes (server-side, saved a
+  // Round 15: the sky objects' data — the Finished strip's (a minute's
+  // cache on the server too; fetched only while it is shown), the peer links
+  // (people blocks), the other devices (drop targets while a session's chain
+  // is dragged) and the sticky notes (server-side, saved a
   // moment after every change) — and what the objects are asking: a line
   // dropped on a block (`dropped`, key → title), the note being edited, the
   // right-click menu on empty sky.
-  const landingQ = useLandingData(!narrow && mode !== "one");
+  const landingQ = useLandingData(!narrow && mode !== "one" && finishedOn);
   const linksQ = usePeerLinks();
   const devicesQ = useDevices();
   const notesQ = useSkyNotesQuery();
@@ -548,6 +563,9 @@ export function SkyView() {
   }, []);
   const [editingNote, setEditingNote] = useState("");
   const [dropped, setDropped] = useState<Record<string, string>>({});
+  // A session's chain in the hand (alone): the device targets show.
+  const [sessionDrag, setSessionDrag] = useState(false);
+  const deviceEls = useRef(new Map<string, HTMLElement>());
   const [groundMenu, setGroundMenu] = useState<{ x: number; y: number; at: Pos } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const space = useRef(false);
@@ -618,7 +636,10 @@ export function SkyView() {
   const links = useMemo(() => linksQ.data?.links || [], [linksQ.data]);
   const devices = useMemo(() => (devicesQ.data?.devices || []).filter((d) => d.device && d.device !== devicesQ.data?.self?.device), [devicesQ.data]);
   const objData: SkyObjectData = useMemo(() => ({ mode, narrow, intakeOn, paletteOn, links, devices, notes }), [mode, narrow, intakeOn, paletteOn, links, devices, notes]);
-  const objects = useMemo(() => skyObjects(objData), [objData]);
+  // Devices are drop targets shown during a session drag (the dock), never
+  // board objects; the Finished strip is on the board only when turned on —
+  // hidden, it is not placed and reserves no room in the right column.
+  const objects = useMemo(() => skyObjects(objData).filter((o) => o.def.kind !== "device" && (o.def.kind !== "landing" || finishedOn)), [objData, finishedOn]);
   const objectById = useMemo(() => new Map(objects.map((o) => [o.key, o])), [objects]);
   const objectBox = useCallback(
     (o: SkyObjectItem): { w: number; h: number } => (o.def.kind === "note" ? noteSize(o.data as SkyNote) : o.def.size(layout[o.key], measured[o.key])),
@@ -1077,19 +1098,30 @@ export function SkyView() {
     // under the pointer (the others sit still while it moves).
     const merging = isGroundedKey(id) && ids.length === 1;
     const others = merging ? lines.filter((l) => l.id !== id).map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } })) : [];
-    // Round 15: a session's line dragged alone may land on a person or a
-    // device block (the block then asks); a note dragged alone on any line
-    // (it attaches). The object under the pointer lights as the target.
+    // Round 15: a session's line dragged alone may land on a person block or
+    // a device target (it then asks); a note dragged alone on any line (it
+    // attaches). The object under the pointer lights as the target. The
+    // device targets are the dock's (screen px, shown once the drag starts).
     const kind = objectKind(id);
     const toBlock = !kind && !merging && !isGroundedKey(id) && ids.length === 1;
     const toLine = kind === "note" && ids.length === 1;
     const blocks = toBlock ? objects.filter((o) => o.def.accepts === "session").map((o) => ({ id: o.key, rect: rectOf(o.key)! })) : [];
     const lineRects = toLine ? lines.map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } })) : [];
+    const toDevice = toBlock && devices.length > 0 && mode !== "one";
+    const deviceAt = (ev: PointerEvent) => {
+      if (!toDevice) return "";
+      for (const [key, el] of deviceEls.current) {
+        const r = el.getBoundingClientRect();
+        if (ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom) return key;
+      }
+      return "";
+    };
     const mergeAt = (ev: PointerEvent) =>
-      merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? hitAt(planeAt(ev.clientX, ev.clientY), blocks) : toLine ? hitAt(planeAt(ev.clientX, ev.clientY), lineRects) : "";
+      merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? deviceAt(ev) || hitAt(planeAt(ev.clientX, ev.clientY), blocks) : toLine ? hitAt(planeAt(ev.clientX, ev.clientY), lineRects) : "";
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pid) return;
       if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
+      if (!g.moved && toDevice) setSessionDrag(true);
       g.moved = true;
       const d = delta(ev);
       g.dx = d.dx;
@@ -1109,6 +1141,7 @@ export function SkyView() {
       setDrag(null);
       setGuides([]);
       setMergeOver("");
+      setSessionDrag(false);
       const landed = g.moved && ev.type !== "pointercancel" ? mergeAt(ev) : "";
       const into = merging ? landed : "";
       if (into) {
@@ -2284,6 +2317,13 @@ export function SkyView() {
           items={[
             { key: "note", label: "Add a note", title: "A sticky note in the middle of the view", onSelect: () => addNote(middle()) },
             { key: "keys", label: "Keyboard shortcuts…", title: "Every key the sky knows (?)", onSelect: () => setShortcutsOpen(true) },
+            {
+              key: "finished",
+              label: (finishedOn ? "✓ " : "") + "Show the Finished strip",
+              title: "Each repo's main branch — its CI and its last merge — and the chains merged today, in a strip right of the chains",
+              className: "sky-finished-toggle",
+              onSelect: () => setFinishedOn(!finishedOn),
+            },
           ]}
         />
       )}
@@ -2592,6 +2632,9 @@ export function SkyView() {
   const objectFor = (o: SkyObjectItem) => {
     const host = hostFor(o);
     if (o.def.kind === "intake" || o.def.kind === "palette") return <Fragment key={o.key}>{o.def.render(host)}</Fragment>;
+    // The Finished strip's × hides it (the ⋯ toggle brings it back).
+    const drawn = o.def.render(host);
+    const body = o.def.kind === "landing" && isValidElement(drawn) ? cloneElement(drawn as ReactElement<LandingStripProps>, { onHide: () => setFinishedOn(false) }) : drawn;
     return (
       <div
         key={o.key}
@@ -2601,7 +2644,7 @@ export function SkyView() {
         data-dim={dimmed(o.key) ? "" : undefined}
         style={{ transform: `translate(${host.pos.x}px, ${host.pos.y}px)`, "--sky-z": cam.z } as React.CSSProperties}
       >
-        {o.def.render(host)}
+        {body}
       </div>
     );
   };
@@ -2730,6 +2773,22 @@ export function SkyView() {
               />
             )}
             {selBar}
+            {/* The other devices as drop targets: shown while a session's
+                chain is dragged alone, or while a drop's question is open. */}
+            {mode !== "one" && (
+              <DeviceDock
+                devices={devices}
+                dragging={sessionDrag}
+                over={mergeOver}
+                dropped={dropped}
+                keyOf={deviceKey}
+                onDone={objView.answerDrop}
+                targetRef={(key, el) => {
+                  if (el) deviceEls.current.set(key, el);
+                  else deviceEls.current.delete(key);
+                }}
+              />
+            )}
             {/* Round 17: the minimap (folded to its glyph or open, remembered)
                 and the off-screen hints, bottom-right above the shelf; the
                 shortcuts sheet over it all. The three are seams the

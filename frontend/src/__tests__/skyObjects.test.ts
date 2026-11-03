@@ -26,7 +26,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const sky = await import("../lib/skyLayout");
 const O = await import("../lib/skyObjects");
 const { PersonBlock, shareBlockReason } = await import("../components/flights/PeopleBlocks");
-const { DeviceBlock, deviceBlockReason, deviceMoveError, NO_DEVICE_MOVE } = await import("../components/flights/DeviceBlocks");
+const { DeviceBlock, DeviceDock, deviceBlockReason, deviceMoveError, deviceTargetWords, NO_DEVICE_MOVE } = await import("../components/flights/DeviceBlocks");
 const { StickyNote, NOTE_MAX_CHARS } = await import("../components/flights/StickyNote");
 const { ApiError } = await import("../api/client");
 
@@ -149,7 +149,9 @@ describe("SkyView iterates the one list", () => {
   const v = code("components/flights/SkyView.tsx");
 
   it("builds the objects from the registry and draws them in one loop; the lane and the palette keep their JSX", () => {
-    expect(v).toContain("const objects = useMemo(() => skyObjects(objData), [objData]);");
+    // Devices are never board objects (drop targets during a session drag);
+    // the Finished strip only when turned on.
+    expect(v).toContain('const objects = useMemo(() => skyObjects(objData).filter((o) => o.def.kind !== "device" && (o.def.kind !== "landing" || finishedOn)), [objData, finishedOn]);');
     expect(v).toContain("{objects.map(objectFor)}");
     expect(v).toContain('if (o.def.kind === "intake" || o.def.kind === "palette") return <Fragment key={o.key}>{o.def.render(host)}</Fragment>;');
     expect(v).toContain("renderIntake,\n    renderPalette,");
@@ -170,7 +172,7 @@ describe("SkyView iterates the one list", () => {
     expect(v).toContain('const obj = el.closest(".sky-object[data-object]");');
   });
 
-  it("a session line dragged alone onto a person or device block asks the block; a note onto a line attaches", () => {
+  it("a session line dragged alone onto a person block or a device target asks it; a note onto a line attaches", () => {
     expect(v).toContain("const toBlock = !kind && !merging && !isGroundedKey(id) && ids.length === 1;");
     expect(v).toContain('const toLine = kind === "note" && ids.length === 1;');
     expect(v).toContain('const blocks = toBlock ? objects.filter((o) => o.def.accepts === "session").map((o) => ({ id: o.key, rect: rectOf(o.key)! })) : [];');
@@ -180,7 +182,14 @@ describe("SkyView iterates the one list", () => {
     expect(v).toContain('const into = merging ? landed : "";');
     expect(v).toContain('(mergeOver && !l.flight && drag?.from[l.id] ? " is-merging" : "")');
     // The merge hit test's own path for grounded lines is untouched.
-    expect(v).toContain("merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? hitAt(");
+    expect(v).toContain("merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? deviceAt(ev) || hitAt(");
+    // The device targets: shown once a session's chain moves, gone on release,
+    // hit in screen px (the dock is over the viewport, not on the plane).
+    expect(v).toContain('const toDevice = toBlock && devices.length > 0 && mode !== "one";');
+    expect(v).toContain("if (!g.moved && toDevice) setSessionDrag(true);");
+    expect(v).toMatch(/setMergeOver\(""\);\s*setSessionDrag\(false\);/);
+    expect(v).toContain("const r = el.getBoundingClientRect();");
+    expect(v).toMatch(/<DeviceDock\s+devices=\{devices\}\s+dragging=\{sessionDrag\}\s+over=\{mergeOver\}\s+dropped=\{dropped\}\s+keyOf=\{deviceKey\}\s+onDone=\{objView\.answerDrop\}/);
     // A block's answer clears what it was asked.
     expect(v).toMatch(/answerDrop: \(key\) =>\s*setDropped\(\(d\) => \{\s*const \{ \[key\]: _gone, \.\.\.rest \} = d;\s*return rest;/);
   });
@@ -251,14 +260,20 @@ describe("a person block", () => {
   });
 });
 
-describe("a device block", () => {
-  const html = (over: Partial<Device> = {}, dropped = "") => renderToStaticMarkup(createElement(DeviceBlock, { device: device(over), dropped, onHeadDown() {}, onDone() {} }));
+describe("a device drop target", () => {
+  const html = (over: Partial<Device> = {}, dropped = "", target = false) => renderToStaticMarkup(createElement(DeviceBlock, { device: device(over), dropped, target, onDone() {} }));
 
-  it("names the device, its state, its sessions; a dropped line asks to move with the mid-turn tick", () => {
+  it("says where the chain goes and what is there; a dropped line asks to move with the mid-turn tick", () => {
     const h = html();
-    expect(h).toMatch(/^<div class="sky-block sky-device" data-device="mini" data-state="on" role="group" aria-label="mac-mini — drop a chain here to move its session there">/);
-    expect(h).toContain("darwin · 2 sessions");
+    expect(h).toMatch(/^<div class="sky-device" data-device="mini" data-state="on" role="group" aria-label="Move to mac-mini — drop the chain here">/);
+    expect(h).toContain('<span class="sky-device-title" title="mini">Move to mac-mini</span>');
+    expect(h).toContain('<div class="sky-device-sub">2 sessions there · darwin</div>');
+    expect(html({}, "", true)).toMatch(/^<div class="sky-device is-over"/);
+    expect(deviceTargetWords({ connected: true, sessions: 1 })).toBe("1 session there");
+    expect(deviceTargetWords({ connected: true, sessions: 0 })).toBe("No sessions there");
+    expect(deviceTargetWords({ connected: false, sessions: 4 })).toBe("Not connected");
     const ask = html({}, "fix-login");
+    expect(ask).toMatch(/^<div class="sky-device is-asking"/);
     expect(ask).toContain("Move <strong>fix-login</strong> to mac-mini? Its agent pauses while it moves.");
     expect(ask).toContain("Even if it is mid-turn");
     expect(ask).toContain('<button type="submit" class="fl-btn btn-primary">Move</button>');
@@ -266,6 +281,29 @@ describe("a device block", () => {
     expect(off).toContain("Not connected");
     expect(off).not.toContain('type="submit"');
     expect(deviceBlockReason({ connected: true })).toBe("");
+  });
+
+  it("the dock: every device while a chain is dragged, only the asked one after a drop, nothing otherwise", () => {
+    const keyOf = (d: string) => "device:" + d;
+    const dock = (dragging: boolean, dropped: Record<string, string> = {}) =>
+      renderToStaticMarkup(createElement(DeviceDock, { devices: [device(), device({ device: "pi", host: "pi" })], dragging, over: "", dropped, keyOf, onDone() {}, targetRef() {} }));
+    expect(dock(false)).toBe("");
+    const drag = dock(true);
+    expect(drag).toContain('<div class="sky-device-dock is-dragging" role="region" aria-label="Move the session to another device" data-no-drag="true">');
+    expect(drag).toContain("Drop the chain on a device to move the session there");
+    expect([...drag.matchAll(/data-device="([^"]+)"/g)].map((m) => m[1])).toEqual(["mini", "pi"]);
+    const asked = dock(false, { "device:pi": "fix-login" });
+    expect([...asked.matchAll(/data-device="([^"]+)"/g)].map((m) => m[1])).toEqual(["pi"]);
+    expect(asked).not.toContain("Drop the chain");
+  });
+
+  it("the calm sky-object look (SKY_OBJECT_STYLE): one hairline, radius 14, a 30px bar, 13px / 600 title, muted 11.5px second line", () => {
+    const c = cssOf("components/flights/DeviceBlocks.css");
+    expect(c).toMatch(/\.sky-device \{[^}]*border: 1px solid color-mix\(in srgb, var\(--muted\) 30%, transparent\);[^}]*border-radius: 14px;/);
+    expect(c).toMatch(/\.sky-device-bar \{[^}]*height: 30px;/);
+    expect(c).toMatch(/\.sky-device-title \{[^}]*font-size: 13px;[^}]*font-weight: 600;/);
+    expect(c).toMatch(/\.sky-device-sub \{[^}]*color: var\(--muted\);[^}]*font-size: 11\.5px;/);
+    expect(c).not.toMatch(/text-transform: uppercase/);
   });
 
   it("calls the existing move route with the device; a folder-only server's refusal is named plainly", () => {

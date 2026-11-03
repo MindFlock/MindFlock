@@ -1,18 +1,24 @@
-/** The landing strip (docs/flights.md "Round 15" → `objects`, "As built:
- * round 15 objects"): a sky object placed right of every line (layout key
- * "landing", lib/skyLayout `LANDING_KEY`) that shows, per repo in the sky,
- * its default branch — the name, the checks of its head (green / red /
- * pending / none), the age of its last merge (or of its last commit, said
- * so, when it has none — `mergeWords`) — and **Landed today**: the flights
- * finished `done` whose last ship step merged, in the last 24 h (the
- * session's name, a PR link). Data: `GET /api/sky/landing` (api/skyApi),
- * which the host fetches and passes in (`data`), refetched every minute.
+/** The Finished strip (docs/flights.md "Round 15" → `objects`, "As built:
+ * round 15 objects"; reworked in round-consolidate): a sky object placed
+ * right of every line (layout key "landing", lib/skyLayout `LANDING_KEY`),
+ * HIDDEN by default — the Sky's ⋯ › Show the Finished strip turns it on
+ * (remembered per device, SkyView `FINISHED_KEY`), its × turns it off. It
+ * says what it is under its title (`FINISHED_EXPLAIN`) and shows, per repo in
+ * the sky, its default branch — the name, the checks of its head (green /
+ * red / pending / none), the age of its last merge (or of its last commit,
+ * said so, when it has none — `mergeWords`) — and the chains merged today:
+ * the flights finished `done` whose last ship step merged, in the last 24 h
+ * (the session's name, a PR link). Data: `GET /api/sky/landing`
+ * (api/skyApi), which the host fetches only while it is shown and passes in
+ * (`data`), refetched every minute.
  *
- * It behaves like the intake lane: drags by its head (`onHeadDown`, unless
- * `draggable` is false — click mode), folds to a rail (‹ / ›, remembered per
- * device), expands from its head (▸ / ▾, `open`: every landed row instead of
- * the first three per repo), sizes by its corner (`onResize`, the delta over
- * the zoom), and measures itself for the host (`onMeasure`). */
+ * The look is ux-lab SKY_OBJECT_STYLE.md (LandingStrip.css): the session
+ * frame's calm box — one hairline, radius 14px, a 30px title strip with the
+ * title in normal case and quiet `fl-icon-btn`s — and quiet rows separated
+ * by hairlines. It drags by its title bar (`onHeadDown`, unless `draggable`
+ * is false — click mode), expands from it (▸ / ▾, `open`: every merged row
+ * instead of the first three per repo), sizes by its corner (`onResize`,
+ * the delta over the zoom), and measures itself for the host (`onMeasure`). */
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { CheckTone, LandedFlight, LandingData, LandingRepo } from "../../api/skyApi";
@@ -31,6 +37,8 @@ export interface LandingStripProps {
   /** Expanded: every landed row (folded: the first three per repo). */
   open?: boolean;
   onToggleOpen?(): void;
+  /** Its ×: hide the strip (the ⋯ menu brings it back). */
+  onHide?(): void;
   onHeadDown?(e: ReactPointerEvent): void;
   draggable?: boolean;
   onResize?(w: number, h: number): void;
@@ -39,21 +47,8 @@ export interface LandingStripProps {
   now?: number;
 }
 
-const FOLDED_KEY = "mf_sky_landing_folded";
-const readFolded = () => {
-  try {
-    return typeof localStorage !== "undefined" && localStorage.getItem(FOLDED_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
-const writeFolded = (v: boolean) => {
-  try {
-    localStorage.setItem(FOLDED_KEY, v ? "1" : "0");
-  } catch {
-    /* a private window */
-  }
-};
+/** The line under its title: what the strip is for. */
+export const FINISHED_EXPLAIN = "Each repo's main branch: its CI and its last merge — and chains merged today";
 
 /** How many landed rows a folded strip shows per repo. */
 export const LANDED_FOLDED = 3;
@@ -103,8 +98,7 @@ export const landedCount = (data: LandingData | null | undefined): number => (da
 /** A press on the head that is the head's own (not one of its buttons). */
 const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");
 
-export function LandingStrip({ data, error = "", width, height, zoom = 1, open = false, onToggleOpen, onHeadDown, draggable = true, onResize, onMeasure, now }: LandingStripProps) {
-  const [folded, setFolded] = useState(readFolded);
+export function LandingStrip({ data, error = "", width, height, zoom = 1, open = false, onToggleOpen, onHide, onHeadDown, draggable = true, onResize, onMeasure, now }: LandingStripProps) {
   const rootRef = useRef<HTMLElement>(null);
   const [live, setLive] = useState<{ w: number; h: number } | null>(null);
   const grab = useRef<{ id: number; sx: number; sy: number; w: number; h: number } | null>(null);
@@ -149,39 +143,23 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [folded]);
-  const fold = (v: boolean) => {
-    setFolded(v);
-    writeFolded(v);
-  };
+  }, []);
   const headDown = (e: ReactPointerEvent) => {
     if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
   };
   const moveHint = draggable && onHeadDown ? "Drag to move the Finished strip" : "";
   const total = landedCount(data);
 
-  if (folded)
-    return (
-      <nav ref={rootRef} className="sky-lane sky-lane-rail sky-landing" aria-label="Finished" data-collapsed="true" title={moveHint || undefined} onPointerDown={headDown}>
-        <button type="button" className="sky-lane-toggle" aria-expanded={false} title="Open the Finished strip" onClick={() => fold(false)}>
-          ›
-        </button>
-        <button type="button" className="sky-lane-rail-icon fl-kind-badge sky-landing-glyph" title={"Finished — " + (total ? total + " merged today" : "nothing merged today")} onClick={() => fold(false)}>
-          ⤓{total > 0 && <span className="sky-lane-rail-count">{total}</span>}
-        </button>
-      </nav>
-    );
-
   return (
     <nav
       ref={rootRef}
-      className="sky-lane sky-landing"
+      className="sky-landing"
       aria-label="Finished"
       data-open={open ? "" : undefined}
       style={{ width: frameNow.w > 0 ? frameNow.w : undefined, height: frameNow.h > 0 ? frameNow.h : undefined }}
     >
       <div
-        className="sky-lane-head"
+        className="sky-landing-bar"
         data-sky-head
         title={[moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || undefined}
         onPointerDown={headDown}
@@ -191,40 +169,47 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
           onToggleOpen();
         }}
       >
-        <span className="sky-lane-title">Finished</span>
+        <span className="sky-landing-title">Finished</span>
         {total > 0 && (
-          <span className="fl-count" title={total + " merged today"}>
-            {total}
+          <span className="sky-landing-count" title={total + " merged today"}>
+            {total} today
           </span>
         )}
-        {onToggleOpen && (
-          <button
-            type="button"
-            className="sky-lane-toggle sky-lane-expand"
-            aria-expanded={open}
-            aria-label={open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain"}
-            title={open ? "Fold: the first rows of each repo" : "Expand: every finished chain"}
-            onClick={onToggleOpen}
-          >
-            {open ? "▾" : "▸"}
-          </button>
-        )}
-        <button type="button" className="sky-lane-toggle" aria-expanded={true} title="Fold the Finished strip" onClick={() => fold(true)}>
-          ‹
-        </button>
+        <span className="sky-landing-tools">
+          {onToggleOpen && (
+            <button
+              type="button"
+              className="fl-icon-btn sky-landing-expand"
+              aria-expanded={open}
+              aria-label={open ? "Fold the Finished strip's rows" : "Expand the Finished strip: every finished chain"}
+              title={open ? "Fold: the first rows of each repo" : "Expand: every finished chain"}
+              onClick={onToggleOpen}
+            >
+              {open ? "▾" : "▸"}
+            </button>
+          )}
+          {onHide && (
+            <button type="button" className="fl-icon-btn sky-landing-hide" aria-label="Hide the Finished strip" title="Hide the Finished strip — ⋯ › Show the Finished strip brings it back" onClick={onHide}>
+              ×
+            </button>
+          )}
+        </span>
       </div>
-      {error ? (
-        <p className="sky-lane-empty muted">{error}</p>
-      ) : !data ? (
-        <p className="sky-lane-empty muted">Looking at the repos…</p>
-      ) : !(data.repos || []).length ? (
-        <p className="sky-lane-empty muted">No repo in the sky yet.</p>
-      ) : (
-        data.repos.map((r) => <RepoRow key={r.root} repo={r} open={open} now={now} />)
-      )}
+      <p className="sky-landing-explain">{FINISHED_EXPLAIN}</p>
+      <div className="sky-landing-rows">
+        {error ? (
+          <p className="sky-landing-empty">{error}</p>
+        ) : !data ? (
+          <p className="sky-landing-empty">Looking at the repos…</p>
+        ) : !(data.repos || []).length ? (
+          <p className="sky-landing-empty">No repo in the sky yet.</p>
+        ) : (
+          data.repos.map((r) => <RepoRow key={r.root} repo={r} open={open} now={now} />)
+        )}
+      </div>
       {onResize && (
         <span
-          className="sky-lane-resize skl-resize"
+          className="sky-landing-resize skl-resize"
           role="separator"
           tabIndex={0}
           data-no-drag
@@ -251,11 +236,14 @@ function RepoRow({ repo, open, now }: { repo: LandingRepo; open: boolean; now?: 
         </strong>
         <code className="sky-landing-branch">{repo.branch || "?"}</code>
       </div>
-      <div className="sky-landing-merge muted" title="The default branch's last merge (or, with none yet, its last commit)">
+      <div className="sky-landing-merge" title="The default branch's last merge (or, with none yet, its last commit)">
         {mergeWords(repo.last_merge_at, now, repo.last_merge_kind ?? undefined)}
       </div>
       {(repo.landed || []).length > 0 && (
         <ul className="sky-landing-landed" aria-label={"Merged today in " + repo.name}>
+          <li className="sky-landing-landed-cap" aria-hidden="true">
+            Merged today
+          </li>
           {shown.map((l) => (
             <li key={l.flight} className="sky-landing-flight">
               <span className="sky-landing-flight-name" title={l.title}>
@@ -266,10 +254,10 @@ function RepoRow({ repo, open, now }: { repo: LandingRepo; open: boolean; now?: 
                   PR ↗
                 </a>
               )}
-              <span className="sky-landing-at muted">{relTime(l.at, { now })}</span>
+              <span className="sky-landing-at">{relTime(l.at, { now })}</span>
             </li>
           ))}
-          {more > 0 && <li className="sky-landing-more muted">+{more} more — expand ▸</li>}
+          {more > 0 && <li className="sky-landing-more">+{more} more — expand ▸</li>}
         </ul>
       )}
     </section>
