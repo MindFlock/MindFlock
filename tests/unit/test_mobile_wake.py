@@ -146,7 +146,7 @@ def test_wake_detector_takes_only_a_lone_utterance():
 @pytest.mark.skipif(_node() is None, reason="needs node")
 def test_wake_gate_under_node():
     """voiceWakeGate, the page's own: off, hidden, listening, a recording,
-    the page speaking or < 500 ms after, a check in flight, < 1.5 s since the
+    the page speaking or < 500 ms after, a check in flight, < 0.4 s since the
     last check — in that order — else a check may go."""
     js = _js()
     consts = re.findall(r"  var VOICE_WAKE_(?:GAP|AFTER_SPEECH)_MS = [^;]+;", js)
@@ -161,8 +161,8 @@ def test_wake_gate_under_node():
         "console.log(JSON.stringify({\n"
         "  ok: g({}), off: g({ on: false }), hidden: g({ hidden: true }), listening: g({ listening: true }),\n"
         "  recording: g({ recording: true }), speaking: g({ speaking: true }), after: g({ spokeAgo: 499 }),\n"
-        "  afterDone: g({ spokeAgo: 500 }), inflight: g({ inflight: true }), rate: g({ sinceCheck: 1499 }),\n"
-        "  rateDone: g({ sinceCheck: 1500 }), order: g({ hidden: true, speaking: true, inflight: true }),\n"
+        "  afterDone: g({ spokeAgo: 500 }), inflight: g({ inflight: true }), rate: g({ sinceCheck: 399 }),\n"
+        "  rateDone: g({ sinceCheck: 400 }), order: g({ hidden: true, speaking: true, inflight: true }),\n"
         "}));\n"
     )
     out = _run(script)
@@ -223,10 +223,17 @@ def test_wake_request_shape_and_answers():
     check = _fn(js, "voiceWakeCheck")
     assert 'fetch("/api/voice/wake?lang=" + encodeURIComponent(' in check
     assert 'headers: { "Content-Type": "audio/wav" }' in check
-    assert "if (voiceWakeLive()) return;" in check
+    assert "if (why) return;" in check
     assert "W.inflight = true;" in check and "W.at = Date.now();" in check
     assert "x.r.status === 409" in check and "voiceWakeOff(" in check
-    assert "if (x.j.wake) voiceWoke();" in check
+    assert "if (x.j.wake) { W.pending = null; voiceWoke(); }" in check
+    # A word said while a check was in flight is kept and goes on the no.
+    assert "W.pending = { blob: blob, r: r };" in check
+    assert check.count("voiceWakeFlush();") == 2
+    flush = _fn(js, "voiceWakeFlush")
+    assert "Date.now() - ((p.r && p.r.endAt) || 0) > VOICE_WAKE_PENDING_MS" in flush
+    assert "voiceWakeCheck(p.blob, p.r);" in flush
+    assert 'return why === "" || why === "inflight" || why === "rate";' in js
     woke = _fn(js, "voiceWoke")
     assert "voiceWakeChime();" in woke and 'voiceCaption("Yes?");' in woke
     assert "navigator.vibrate(12)" in woke
@@ -276,7 +283,8 @@ def test_wake_request_shape_and_answers():
     assert 'var ok = voiceChime("start");' in _fn(js, "voiceWakeChime")
     chime = _fn(js, "voiceChime")
     assert "voice.audioCtx" in chime and "createOscillator" in chime
-    assert "var VOICE_WAKE_GAP_MS = 1500;" in js
+    assert "var VOICE_WAKE_GAP_MS = 400;" in js
+    assert "var VOICE_WAKE_PENDING_MS = 2500;" in js
     assert "var VOICE_WAKE_AFTER_SPEECH_MS = 500;" in js
 
 

@@ -7,7 +7,8 @@
  * straight on from speech; syllables a breath apart are one word; the quiet
  * tail is waited for; the clip carries the lead-in. The gate (hidden,
  * recording, the app talking and the 500 ms after, one in flight, one per
- * 1.5 s). The standby's lifecycle with fakes: it holds the mic and records a
+ * 0.4 s; a word that comes while one is in flight is kept and goes on the
+ * no). The standby's lifecycle with fakes: it holds the mic and records a
  * rolling window; a candidate's clip goes to the check; `wake: true` wakes,
  * false does nothing, 409 stops it with its line (and switching it on again
  * clears that); a refused mic stops it; a dictation and a hidden page pause
@@ -34,6 +35,7 @@ const {
   WAKE_MAX_MS,
   WAKE_MIN_MS,
   WAKE_NO_RECOGNIZER_LINE,
+  WAKE_PENDING_MS,
   WAKE_QUIET_MS,
   WAKE_TAIL_MS,
   WakeStandby,
@@ -69,9 +71,9 @@ function detect(levels: number[], blockMs = BLOCK): Array<WakeCandidate & { at: 
 }
 
 describe("the thresholds", () => {
-  it("are a word's: 350 ms of quiet before and 200 ms after 250 ms–1.6 s of speech, 100 ms lead-in, 1.5 s between checks, 500 ms after talking", () => {
+  it("are a word's: 350 ms of quiet before and 200 ms after 250 ms–1.6 s of speech, 100 ms lead-in, 0.4 s between checks, a kept word fresh 2.5 s, 500 ms after talking", () => {
     expect([WAKE_QUIET_MS, WAKE_TAIL_MS, WAKE_MIN_MS, WAKE_MAX_MS, WAKE_LEAD_MS]).toEqual([350, 200, 250, 1600, 100]);
-    expect([WAKE_CHECK_GAP_MS, WAKE_AFTER_SPEECH_MS]).toEqual([1500, 500]);
+    expect([WAKE_CHECK_GAP_MS, WAKE_PENDING_MS, WAKE_AFTER_SPEECH_MS]).toEqual([400, 2500, 500]);
     // The rolling window holds the longest clip there can be.
     expect(WAKE_KEEP_S * 1000).toBeGreaterThan(WAKE_LEAD_MS + WAKE_MAX_MS + WAKE_TAIL_MS + 2 * 100);
   });
@@ -368,31 +370,46 @@ describe("WakeStandby", () => {
     expect(r.check).toHaveBeenCalledTimes(1);
   });
 
-  it("one check in flight, and at most one per 1.5 s", async () => {
-    let answer: (v: WakeVerdict) => void = () => {};
-    const r = rig({ check: () => new Promise<WakeVerdict>((res) => (answer = res)) });
+  it("one check in flight: a word said meanwhile is kept (the newest) and goes the moment the check says no", async () => {
+    const answers: Array<(v: WakeVerdict) => void> = [];
+    const r = rig({ check: () => new Promise<WakeVerdict>((res) => answers.push(res)) });
+    r.sb.set(true, true);
+    await flush();
+    r.word(); // a cough, say: checked
+    await flush();
+    expect(r.check).toHaveBeenCalledTimes(1);
+    r.word(); // the real word, while the cough's check is in flight: kept
+    await flush();
+    expect(r.check).toHaveBeenCalledTimes(1);
+    expect(r.recs[0].last).toHaveBeenCalledTimes(2); // its clip taken when it came
+    answers[0]({ status: 200, wake: false, text: "", error: "" });
+    await flush();
+    expect(r.check).toHaveBeenCalledTimes(2); // at once, not at the next block
+    answers[1]({ status: 200, wake: true, text: "MindFlock", error: "" });
+    await flush();
+    expect(r.onWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("a kept word goes stale after 2.5 s, and a yes drops it", async () => {
+    const answers: Array<(v: WakeVerdict) => void> = [];
+    const r = rig({ check: () => new Promise<WakeVerdict>((res) => answers.push(res)) });
     r.sb.set(true, true);
     await flush();
     r.word();
     await flush();
-    expect(r.check).toHaveBeenCalledTimes(1);
-    r.word(); // in flight (and too soon)
-    r.tick(5000);
-    r.word(); // still in flight
+    r.word(); // kept…
+    r.feed(quiet(WAKE_PENDING_MS + 100)); // …until it is stale
+    answers[0]({ status: 200, wake: false, text: "", error: "" });
     await flush();
     expect(r.check).toHaveBeenCalledTimes(1);
-    answer({ status: 200, wake: false, text: "", error: "" });
-    await flush();
-    r.tick(WAKE_CHECK_GAP_MS);
     r.word();
     await flush();
     expect(r.check).toHaveBeenCalledTimes(2);
-    // Two words inside 1.5 s: the second waits.
-    answer({ status: 200, wake: false, text: "", error: "" });
+    r.word(); // kept while the second is in flight
+    answers[1]({ status: 200, wake: true, text: "MindFlock", error: "" });
     await flush();
-    r.feed([...loud(300), ...quiet(400)]);
-    await flush();
-    expect(r.check).toHaveBeenCalledTimes(2);
+    expect(r.onWake).toHaveBeenCalledTimes(1);
+    expect(r.check).toHaveBeenCalledTimes(2); // the kept one never goes after a yes
   });
 
   it("a dictation pauses it (the tap stops, the mic goes back to the dictation's hold) and its end resumes it", async () => {
