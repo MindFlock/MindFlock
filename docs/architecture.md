@@ -193,11 +193,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `…/clear-key`): an `openai`-compatible host or lazily imported local
   models (faster-whisper, piper; `uv sync --group voice`) behind the memory
   guard — local recognition's two whisper models (one-shot `small`, a faster
-  streaming `base.en`) resident while configured, a piper voice unloaded
-  after 30 idle minutes — recognition warmed at boot and on every
-  `GET /api/voice`, the voice at boot only with "Read everything" on and on
-  fetches without `?warm=0` (the desktop app sends `warm=0` until voice is in
-  use there) (`speech.warm_in_background`; a local OpenAI-compatible voice
+  streaming `base.en`) loaded only while a listening mode is on (the
+  standby's lease, `POST /api/voice/listen`, or a phrase's stream) and
+  resident while a lease lasts, a piper voice unloaded after 30 idle
+  minutes — the voice at boot only with "Read everything" on and on
+  fetches without `?warm=0` (every client sends `warm=0` unless something
+  will be said soon — Voice Lab starts on first use and stops after 10 idle
+  minutes; dictation never wakes it) (`speech.warm_in_background`; a local OpenAI-compatible voice
   host gets one throwaway synthesis). A line the
   voice host cannot say in its queue-aware budget falls back to piper, one
   voice per reply (`speech.TtsChain`); only a DEAD host (refused, reset,
@@ -427,8 +429,14 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `/proc/pressure/memory` and returns `ok` / `low` / `critical` / `unknown`.
   Agent spawns, team-run starts, pipeline launches and the revive sweep hold
   while it reads low; the lifespan's `_memory_watch_loop` emits
-  `system.memory_changed` on each level change. See
+  `system.memory_changed` on each level change and, while low, unloads the
+  idle speech models; background ticks shed on `server._memory_low()`. See
   [session-engine.md](session-engine.md#memory-guard).
+- **Tick pool + loop watchdog** — the always-on ticks run on
+  `server._BG_POOL` (`_in_bg_pool`, 6 threads), never on the default executor
+  the request handlers' `asyncio.to_thread` uses; `web/core/loop_watchdog.py`
+  appends every thread's stack to `logs/stacks.log` when the event loop's
+  heartbeat is 10 s old.
 - **Heavy-job slots** (`backend/slot.py`, `mindflock slot -- CMD`) — the
   other half: a server-less, flock-based semaphore that repos put in front of
   heavy commands (test suites in commit hooks), so jobs from many sessions
@@ -445,7 +453,8 @@ FastAPI app `backend.web.server:app`. Key pieces:
   backward in 64 KB blocks and stop at the first match.
 - **Sleeping agents** (`web/core/sleep.py`) — the lifespan's sleep sweep stops
   the CLI (and MCP servers) of an agent idle, unwatched and with nothing
-  waiting for it for `general.sleep_idle_minutes` (5 min while memory is low),
+  waiting for it for `general.sleep_idle_minutes` (`general.memory_sleep_minutes`,
+  5, while memory is low — one `system.sessions_slept` notice per pass),
   keeping the session; `ensure_awake` relaunches it, resuming, from every path
   that types into a session. See
   [session-engine.md](session-engine.md#sleeping-agents).

@@ -104,6 +104,8 @@ import {
   passLine,
   loadVoiceCfg,
   voiceInUse,
+  speaksOnServer,
+  LISTEN_LEASE,
   loadVoicePrefs,
   noRecognizerLine,
   recognizerErrorLine,
@@ -183,7 +185,15 @@ const serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_str
 const browserSp = browserSpeaker();
 // Confirmations keep their audio per voice (a slow local voice must not
 // make "Sent." wait seconds).
+// A cold voice host (Voice Lab after its idle stop) starts on the line asked
+// of it: the pill says "Starting voice…" while that takes more than a second.
+const startingListeners = new Set<(on: boolean) => void>();
 const serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) });
+serverSp.onStarting = (on) => startingListeners.forEach((l) => l(on));
+// Local recognition is loaded only while someone listens: a phrase after a
+// while idle waits for it — the pill says "Starting the mic…" meanwhile.
+const loadingListeners = new Set<(on: boolean) => void>();
+serverRec.onLoading = (on) => loadingListeners.forEach((l) => l(on));
 const tracker = new ReplyTracker();
 /** "Everything": the turns already read (idle and turn_ended both carry one). */
 const heard = new HeardTurns();
@@ -433,6 +443,16 @@ export function TopBarMic() {
   const [cfg, setCfg] = useState<VoiceCfg | null>(null);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(queue.busy);
+  const [starting, setStarting] = useState(false);
+  const [warming, setWarming] = useState(false);
+  useEffect(() => {
+    startingListeners.add(setStarting);
+    loadingListeners.add(setWarming);
+    return () => {
+      startingListeners.delete(setStarting);
+      loadingListeners.delete(setWarming);
+    };
+  }, []);
   /** A line is audible now (not just its turn): while listening, the
    * recorder is muted for it — the button says so. */
   const [sounding, setSounding] = useState(queue.audibleNow);
@@ -813,9 +833,11 @@ export function TopBarMic() {
     } = {}
   ): LiveDictation | null => {
     if (live.current) return null;
-    // Talking now: the server's voice must be up by the time a reply is read
-    // out (a no-op on the server when it already is).
-    if (cfgNow.tts === "server") void refreshCfg(true);
+    // Talking now: when something will be SAID with the server's voice (a
+    // reply read out, a spoken confirmation, the name after a switch), it
+    // must be up by then — a no-op on the server when it already is. Plain
+    // dictation never wakes it: recognition runs in the server itself.
+    if (speaksOnServer(prefsRef.current, cfgNow)) void refreshCfg(true);
     // The ask pop-up is up: the mic answers THAT session — unless a box other
     // than its answer field has the keyboard (that one gets the words).
     const ask = askVoice();
@@ -1329,6 +1351,11 @@ export function TopBarMic() {
   useEffect(() => {
     standby.current?.set(!!prefs.wake);
   }, [prefs.wake]);
+  // While standby listens, the server keeps its recognition in memory (a
+  // wake answered at once): this page holds a listening lease, renewed.
+  useEffect(() => {
+    LISTEN_LEASE.set(!!wake.on);
+  }, [wake.on]);
   // A dictation pauses it; its end resumes it — so does the page coming back.
   useEffect(() => {
     standby.current?.sync();
@@ -1362,7 +1389,9 @@ export function TopBarMic() {
     setMenuOpen(true);
     // The options are often the step before talking: ready the mic now.
     warmMic(true);
-    void refreshCfg(true);
+    // The voice only when it is in use here (replies, standby): turning
+    // replies on in this menu readies it then (setPrefs).
+    void refreshCfg();
   };
 
   // The push-to-talk hotkey (the keymap's Talk action): works wherever the
@@ -1446,7 +1475,7 @@ export function TopBarMic() {
   const paused = listening && sounding;
   // The last line (an error, "Sent to…") is there on hover — never a box.
   const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
-  const pill = micPill({ listening, speaking, quiet });
+  const pill = micPill({ listening, speaking, quiet, starting, warming });
 
   // Under the mic, all of it inside the window (8 px from every edge; it
   // scrolls inside when the window is short).

@@ -733,6 +733,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
+| `MINDFLOCK_LOOP_WATCHDOG` | on | `0` turns off the event-loop stall watchdog ([session-engine.md](session-engine.md#memory-guard)): a loop stuck past `MINDFLOCK_LOOP_STALL_S` (default `10`) seconds appends a header and every thread's stack to `logs/stacks.log`. |
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
 | `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
@@ -1092,11 +1093,21 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   sat idle — its turn ended, nobody's terminal attached, nothing queued or
   waiting for it — before its CLI and MCP servers are stopped to free their
   memory ([session-engine.md](session-engine.md#sleeping-agents)). Unset = 45;
-  `0` turns sleeping off. While memory reads low the wait drops to 5 minutes
-  (never above the value). Opening a sleeping session or sending it anything
+  `0` turns the everyday sleeping off. While memory reads low the wait is
+  `general.memory_sleep_minutes` instead (below). Opening a sleeping session or sending it anything
   wakes it, resuming the conversation. Owner only (`auth.may_configure`), and
   per device: never synced (it is about this machine's memory). Read per
   sweep, so a save applies within a minute.
+- **Memory thresholds** (`general.memory_low_pct`, `general.memory_critical_pct`,
+  `general.memory_sleep_minutes`; JSON / `PUT /api/settings`): when this
+  machine counts as short of memory — the share of RAM the kernel reports
+  available at or below which the [memory guard](session-engine.md#memory-guard)
+  reads low (unset = 15) / critical (unset = 7; never above low; `0` drops
+  the share signal, the 2 GB / 1 GB floors and PSI still count) — and how many
+  idle minutes an agent gets while it does before it is put to sleep (unset =
+  5; `0` = never sleep for memory). The memory sleep applies even with
+  `sleep_idle_minutes` 0, and each pass that sleeps any sends one notice.
+  Per device, never synced; re-read within 30 s.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether
@@ -1311,20 +1322,39 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     low). With `stt_backend = "local"` the whisper models (`stt_model` for a
     phrase sent whole and the accurate pass, `stt_stream_model` for the live
     transcript and the wake word, `stt_final` when it names a third) are
-    **resident**: loaded 3 s after boot and whenever a voice client fetches
-    `GET /api/voice`, and never idle-unloaded while `local` stays configured,
-    so a mic press never waits for a model; a piper voice is unloaded after
-    30 idle minutes. **The voice warms when voice is in use**: at boot (6 s
+    **loaded only while a listening mode is on** (~1.1 GB): never at boot
+    nor by a status read, but when the wake-word standby turns on (it holds
+    a listening lease, `POST /api/voice/listen`, renewed every minute —
+    while any page holds one the models stay resident, so a wake is answered
+    at once) or when a phrase's stream opens. With nobody listening they are
+    idle-unloaded after 30 unused minutes like any model, so the first
+    dictation after that waits a few seconds for them: the mic's pill and
+    the phone's strip say **Starting the mic…** until the first words come
+    back. A piper voice is unloaded after 30 idle minutes. **The voice warms when voice is in use**: at boot (6 s
     after start) only while "Read everything" is on, and on
     `GET /api/voice` unless it carries `?warm=0`. A `local` piper voice is
     loaded, an `openai` host on this machine or network (Voice Lab at
     `http://127.0.0.1:8770/v1`) is asked to say one word with `tts_voice` so
     it loads its model — a remote, paid host never is — and the `system`
-    engine is probed. The desktop app sends `warm=0` on load and focus until
-    voice is in use there (replies read out, wake-word standby on, the mic
-    pressed or its menu opened), so an idle desktop never keeps a local
-    voice host up: Voice Lab's own idle timeout (30 min) can stop it. The
-    phone's voice page and Settings → Voice warm as before. Only `local` recognition **streams**
+    engine is probed. **Voice Lab starts on first use and stops after 10
+    idle minutes** (its socket-activated proxy exits after 10 min with no
+    connection), so nothing but speech may reach it: every client reads
+    `GET /api/voice?warm=0` unless something will be SAID soon — the
+    desktop while replies are read out or standby is on, and on a mic press
+    only when a reply, a spoken confirmation or "Read everything" will
+    follow; the phone page while voice is on with replies or confirmations,
+    on Everything, or with standby on; Settings → Voice never (it shows a
+    local host as "starts when you use voice", and **Say a test sentence**
+    is the one explicit try). Dictation alone never wakes it: recognition
+    runs inside the server. The first line after an idle stop takes as
+    long as the host needs to start and load its model: the desktop pill
+    and the phone's strip say **Starting voice…** once it has taken over a
+    second. The server waits up to 90 s for a starting host, in its own
+    voice, instead of saying the line with piper or marking the host down
+    (a refused connection is still down at once), and the phone lets that
+    line's clips take up to 100 s instead of handing it to its own voice.
+    Reading the status with `?warm=0` never re-checks a host marked down
+    or too slow, so it sends Voice Lab nothing. Only `local` recognition **streams**
     (words appear while the person speaks: `POST /api/voice/stream`,
     `GET /api/voice`'s `server_ready.stt_stream`); with `system` or
     `openai` the mic sends one clip per phrase. The built-in Windows recognizer is

@@ -35,7 +35,12 @@ included. Nothing used to offload it. Sleeping does:
   background job, nothing queued, no message waiting, no team run or
   fast-track chain or working children depending on it, nobody's terminal
   attached and nobody typing. While memory reads low (``memory_pressure``
-  low/critical) the wait drops to :data:`PRESSURE_IDLE_MINUTES`.
+  low/critical) the wait drops to ``general.memory_sleep_minutes`` (default
+  :data:`PRESSURE_IDLE_MINUTES`; 0 = never for memory) — even with everyday
+  sleeping off — and the pass that sleeps any for memory emits ONE
+  ``system.sessions_slept`` event (the notify addon's calm notice: what was
+  put to sleep and why). An agent mid-turn is never a candidate (the
+  ``turn not ended`` / ``not idle`` vetoes hold at every level).
 
 * **Wake** — :func:`ensure_awake`, the one helper every path that types into
   a session goes through when the session is asleep (a terminal attaching,
@@ -68,7 +73,8 @@ from backend.web.core import title_store
 
 #: ``general.sleep_idle_minutes`` when unset.
 DEFAULT_IDLE_MINUTES = 45
-#: The wait while memory reads low/critical (never longer than the setting).
+#: ``general.memory_sleep_minutes`` when unset: the wait while memory reads
+#: low/critical (never longer than the everyday wait when that is on).
 PRESSURE_IDLE_MINUTES = 5
 #: How often the sweep looks.
 TICK_SECONDS = 60.0
@@ -311,17 +317,37 @@ def idle_minutes() -> int:
     return max(0, int(val))
 
 
+def memory_sleep_minutes() -> int:
+    """``general.memory_sleep_minutes`` (unset = :data:`PRESSURE_IDLE_MINUTES`,
+    0 = never sleep an agent for memory). Never raises; a LOCAL import, like
+    :func:`idle_minutes`."""
+    try:
+        from backend.config import settings as _settings
+
+        val = _settings.load_settings().general.memory_sleep_minutes
+    except Exception:  # noqa: BLE001 — an unreadable store keeps the default
+        return PRESSURE_IDLE_MINUTES
+    if val is None:
+        return PRESSURE_IDLE_MINUTES
+    return max(0, int(val))
+
+
 def threshold_seconds(level: Optional[str] = None) -> Optional[float]:
     """How long an agent must have sat idle before the sweep may sleep it,
-    or None when sleeping is off. Memory low/critical caps it at
-    :data:`PRESSURE_IDLE_MINUTES`."""
+    or None when nothing may be slept. While memory reads low/critical the
+    wait is :func:`memory_sleep_minutes` (capped by the everyday wait when that
+    is on), so a machine running out sheds idle agents even with everyday
+    sleeping off; ``memory_sleep_minutes`` 0 leaves pressure to the everyday
+    wait alone."""
     mins = idle_minutes()
-    if mins <= 0:
-        return None
     if level is None:
         level = memory_pressure.level()
     if level in ("low", "critical"):
-        mins = min(mins, PRESSURE_IDLE_MINUTES)
+        pressure = memory_sleep_minutes()
+        if pressure > 0:
+            mins = min(mins, pressure) if mins > 0 else pressure
+    if mins <= 0:
+        return None
     return mins * 60.0
 
 
@@ -801,9 +827,10 @@ def tick(srv=None, now: Optional[float] = None) -> List[str]:
         idle_s = threshold_seconds(level)
         if idle_s is None:
             return slept
+        everyday = idle_minutes() * 60.0
         reason = (
             REASON_MEMORY
-            if level in ("low", "critical") and idle_s < (idle_minutes() * 60.0)
+            if level in ("low", "critical") and (everyday <= 0 or idle_s < everyday)
             else REASON_IDLE
         )
         from backend.web.core import events as _events
@@ -838,9 +865,55 @@ def tick(srv=None, now: Optional[float] = None) -> List[str]:
                     slept.append(title)
             except Exception as err:  # noqa: BLE001
                 _info("sleep %s: failed (%s)", title, err)
+        if slept and reason == REASON_MEMORY:
+            announce_memory_sleep(slept)
     except Exception:  # noqa: BLE001 — the sweep must never die
         pass
     return slept
+
+
+def memory_notice_text(titles: List[str], why: str = "") -> str:
+    """The one calm sentence for a memory sleep: ``Memory is low (2.1 GB free
+    of 20.0 GB), so 2 idle agents were put to sleep: a, b. They wake when you
+    open or message them.``"""
+    names = ", ".join(titles[:5]) + (
+        " and %d more" % (len(titles) - 5) if len(titles) > 5 else ""
+    )
+    lead = why[:1].upper() + why[1:] if why else "Memory is low"
+    count = (
+        "1 idle agent was" if len(titles) == 1 else "%d idle agents were" % len(titles)
+    )
+    return "%s, so %s put to sleep: %s. %s when you open or message %s." % (
+        lead,
+        count,
+        names,
+        "It wakes" if len(titles) == 1 else "They wake",
+        "it" if len(titles) == 1 else "them",
+    )
+
+
+def announce_memory_sleep(titles: List[str]) -> Optional[dict]:
+    """ONE ``system.sessions_slept`` event for a pass that slept agents for
+    memory (the notify addon's ``sessions_slept`` rule), rather than a notice
+    per agent. → the envelope, or None. Never raises."""
+    try:
+        from backend.web.core import events as _events
+
+        snap = memory_pressure.snapshot()
+        why = memory_pressure.describe(snap)
+        return _events.BUS.emit(
+            "system.sessions_slept",
+            new=str(len(titles)),
+            data={
+                "count": len(titles),
+                "titles": list(titles),
+                "reason": REASON_MEMORY,
+                "memory": snap,
+                "detail": memory_notice_text(titles, why),
+            },
+        )
+    except Exception:  # noqa: BLE001 — a notice must never break the sweep
+        return None
 
 
 async def run_loop(srv=None) -> None:
@@ -856,7 +929,8 @@ async def run_loop(srv=None) -> None:
         await asyncio.sleep(left + 1.0)
     while True:
         try:
-            await asyncio.to_thread(tick, srv)
+            runner = getattr(srv, "_in_bg_pool", None)  # the ticks' own pool
+            await (runner(tick, srv) if runner else asyncio.to_thread(tick, srv))
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(TICK_SECONDS)

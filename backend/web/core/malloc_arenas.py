@@ -52,3 +52,19 @@ def cap_arenas(limit: int = ARENA_MAX) -> Optional[int]:
     except Exception:  # noqa: BLE001 — tuning is best-effort, never fatal
         return None
     return limit if ok == 1 else None
+
+
+def trim() -> bool:
+    """``malloc_trim(0)``: hand freed heap pages back to the kernel now (after
+    a big release — the speech models shed for memory). glibc only; never
+    raises. → whether it ran."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None)
+        libc.malloc_trim(ctypes.c_size_t(0))
+    except Exception:  # noqa: BLE001
+        return False
+    return True

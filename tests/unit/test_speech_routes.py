@@ -164,13 +164,15 @@ class TestGet:
         assert body["stream_model"] == ""  # the fake does not stream
         assert body["warm"] == {"stt": "", "tts": ""}
 
-    def test_warms_both_kinds(self, fakes, monkeypatch):
+    def test_warms_the_voice_never_recognition(self, fakes, monkeypatch):
+        """A status read never loads recognition (local whisper, ~1.1 GB):
+        that follows a listening mode (POST /api/voice/listen, a stream)."""
         calls: list = []
         monkeypatch.setattr(
             speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
         )
         assert client.get("/api/voice").status_code == 200
-        assert calls == ["stt", "tts"]
+        assert calls == ["tts"]
 
     def test_warm_0_reads_it_without_waking_the_voice(self, fakes, monkeypatch):
         """The desktop app reads it on every load and focus: a local voice host
@@ -186,10 +188,10 @@ class TestGet:
         body = client.get("/api/voice?warm=0")
         assert body.status_code == 200
         assert "words" in body.json()
-        assert calls == ["stt"]  # in-process: no host to wake
+        assert calls == []  # nothing: not the voice, not recognition
         assert kicks == []
         client.get("/api/voice")
-        assert calls == ["stt", "stt", "tts"] and kicks == [1]
+        assert calls == ["tts"] and kicks == [1]
 
     @pytest.mark.parametrize(
         "value, wakes",
@@ -215,7 +217,7 @@ class TestGet:
         monkeypatch.setattr(speech_routes.PREWARM, "kick", lambda: kicks.append(1))
         r = client.get("/api/voice", params={"warm": value})
         assert r.status_code == 200
-        assert calls == (["stt", "tts"] if wakes else ["stt"])
+        assert calls == (["tts"] if wakes else [])
         assert kicks == ([1] if wakes else [])
 
     def test_a_cold_read_loses_nothing(self, fakes, monkeypatch):
@@ -231,6 +233,29 @@ class TestGet:
         assert cold == warm
         for key in ("server_ready", "words", "warm", "configure_allowed"):
             assert key in cold
+
+    def test_warm_0_reads_the_status_without_probing_the_host(self, fakes, monkeypatch):
+        """The status in the body is a READ with ``warm=0``: a voice host
+        marked down or too slow is reported, never re-checked from here (a
+        probe would wake Voice Lab after its idle stop on every page load);
+        a warm read may re-check it, as a line does."""
+        from backend.web.routes import speech as speech_routes
+
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: None
+        )
+        monkeypatch.setattr(speech_routes.PREWARM, "kick", lambda: None)
+        real = speech.describe
+        probes: list = []
+
+        def describe(probe=True):
+            probes.append(probe)
+            return real(probe=probe)
+
+        monkeypatch.setattr(speech, "describe", describe)
+        assert client.get("/api/voice?warm=0").status_code == 200
+        assert client.get("/api/voice").status_code == 200
+        assert probes == [False, True]
 
     def test_a_cold_read_still_self_heals_the_install(self, fakes, monkeypatch):
         from backend.web.core import speech_install
@@ -267,16 +292,17 @@ class TestGet:
         monkeypatch.setattr(server._voice, "say_all", lambda: True)
         with TestClient(server.app):
             pass
-        assert calls == [("stt", 3.0), ("tts", 6.0)]
+        # Recognition is never loaded at boot: it waits for a listening mode.
+        assert calls == [("tts", 6.0)]
         calls.clear()
         monkeypatch.setattr(server._voice, "say_all", lambda: False)
         with TestClient(server.app):
             pass
-        assert calls == [("stt", 3.0)]  # Voice Lab waits for a voice client
+        assert calls == []  # Voice Lab waits for a voice client
 
     def test_boot_survives_a_failing_say_all(self, fakes, monkeypatch):
-        """Recognition is warmed BEFORE the say_all read, so a marker that
-        can't be read costs only the voice warm — never startup."""
+        """A marker that can't be read costs only the voice warm — never
+        startup (and recognition is not warmed at boot at all)."""
         monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")
         calls: list = []
         monkeypatch.setattr(
@@ -291,7 +317,7 @@ class TestGet:
         monkeypatch.setattr(server._voice, "say_all", boom)
         with TestClient(server.app):
             pass  # startup completed
-        assert calls == [("stt", 3.0)]
+        assert calls == []
 
     def test_the_suite_skips_the_boot_warm(self, fakes, monkeypatch):
         monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "0")
@@ -1193,6 +1219,57 @@ class TestStream:
 # --------------------------------------------------------------------------- #
 # /api/voice/install-local
 # --------------------------------------------------------------------------- #
+class TestListen:
+    """Recognition (local whisper, ~1.1 GB) is in memory only while a
+    listening mode is on: the wake-word standby holds a lease
+    (POST /api/voice/listen), and a phrase's stream opening loads it."""
+
+    @pytest.fixture
+    def warms(self, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        return calls
+
+    def test_on_takes_a_lease_and_loads_recognition(self, fakes, warms):
+        r = client.post("/api/voice/listen", json={"on": True, "client": "page-1"})
+        assert r.status_code == 200
+        assert r.json() == {
+            "listening": True,
+            "lease_s": int(speech.LISTEN_LEASE_SECONDS),
+            "stt_loaded": False,
+        }
+        assert warms == ["stt"]
+        assert speech.listening() is True
+
+    def test_off_ends_this_pages_lease_only(self, fakes, warms):
+        client.post("/api/voice/listen", json={"on": True, "client": "page-1"})
+        client.post("/api/voice/listen", json={"on": True, "client": "page-2"})
+        r = client.post("/api/voice/listen", json={"on": False, "client": "page-1"})
+        assert r.json()["listening"] is True  # page-2 still listens
+        r = client.post("/api/voice/listen", json={"on": False, "client": "page-2"})
+        assert r.json()["listening"] is False
+        assert warms == ["stt", "stt"]  # an off never loads anything
+
+    def test_a_body_less_post_is_on(self, fakes, warms):
+        assert client.post("/api/voice/listen").json()["listening"] is True
+
+    def test_a_stream_loads_recognition_when_it_is_not_in_memory(
+        self, streaming, monkeypatch, warms
+    ):
+        monkeypatch.setattr(speech, "stt_loaded", lambda: False)
+        body = _open().json()
+        assert body["loading"] is True and warms == ["stt"]
+        monkeypatch.setattr(speech, "stt_loaded", lambda: True)
+        body = _open().json()
+        assert body["loading"] is False and warms == ["stt"]
+
+    def test_get_reports_whether_recognition_is_loaded(self, fakes, monkeypatch):
+        monkeypatch.setattr(speech, "stt_loaded", lambda: True)
+        assert client.get("/api/voice?warm=0").json()["server_ready"]["stt_loaded"]
+
+
 class TestInstallLocal:
     @pytest.fixture
     def install(self, monkeypatch):

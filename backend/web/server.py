@@ -141,7 +141,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import contextvars
 import datetime as _datetime
+import functools
 import json
 import os
 import re
@@ -410,6 +412,7 @@ from backend.web.core import restart as _restart
 from backend.web.core import held as _held
 from backend.web.core import revive as _revive
 from backend.web.core import sleep as _sleep
+from backend.web.core import loop_watchdog as _loop_watchdog
 from backend.web.core import self_update as _self_update
 from backend.web.core import spoken as _spoken
 from backend.web.core import asking as _asking
@@ -764,20 +767,19 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(_rename.migrate_once, sys.modules[__name__])
         except Exception:  # noqa: BLE001 — never block startup on a migration
             pass
-    # Voice: the local whisper models configured for recognition are loaded a
-    # few seconds after boot, and the voice a few after that (daemon threads;
-    # each a no-op when there is nothing to warm), so the first press of the
-    # mic — or the first line read aloud — after a restart is not a wait.
-    # MINDFLOCK_VOICE_WARM=0 skips it (the test suite: a warm-up thread left
-    # by one app's lifespan would otherwise load a model into the next test).
-    # The VOICE only when "Read everything" is on (lines will be spoken with
-    # nobody asking): otherwise a local voice host (Voice Lab, gigabytes) is
-    # woken by the first client actually using voice (GET /api/voice).
+    # Voice: warmed at boot only when "Read everything" is on (lines will be
+    # spoken with nobody asking), 6 s after start on a daemon thread;
+    # otherwise a local voice host (Voice Lab, gigabytes) is woken by the
+    # first client actually using voice (GET /api/voice). MINDFLOCK_VOICE_WARM=0
+    # skips it (the test suite: a warm-up thread left by one app's lifespan
+    # would otherwise load a model into the next test).
     if os.environ.get("MINDFLOCK_VOICE_WARM", "1") != "0":
         try:
             from backend.web.core import speech as _speech_warm
 
-            _speech_warm.warm_in_background("stt", delay_s=3.0)
+            # Recognition is NOT loaded at boot (~1.1 GB for local
+            # whisper): only once a listening mode is on — the standby's
+            # POST /api/voice/listen, a phrase's stream opening.
             if _voice.say_all():
                 _speech_warm.warm_in_background("tts", delay_s=6.0)
         except Exception:  # noqa: BLE001 — warming is best effort
@@ -960,6 +962,12 @@ async def lifespan(app: FastAPI):
     if _sleep_loop_enabled():
         _register_task(_sleep.run_loop())
     _register_task(_memory_watch_loop())
+    # Event-loop stall watchdog (core.loop_watchdog): a loop stuck for 10 s
+    # appends every thread's stack + the memory reading to logs/stacks.log
+    # by itself. Off under pytest (a slow CI box is no wedge).
+    if _loop_watchdog_enabled():
+        _register_task(_loop_watchdog.heartbeat_loop())
+        _loop_watchdog.start()
     # The Map's snapshot warmer reads every open session's worktree — never
     # under pytest (ENGINE is the developer's real state there).
     if _code_map_warm_on_start_enabled():
@@ -997,6 +1005,7 @@ async def lifespan(app: FastAPI):
         for _t in _BG_TASKS:
             _t.cancel()
         _BG_TASKS.clear()
+        _loop_watchdog.stop()
         # Hand back this server's team-run leases: a restart drives (and
         # reconciles) its runs on the first pass instead of waiting out them.
         try:
@@ -1197,6 +1206,51 @@ ENGINE = get_engine()
 # --------------------------------------------------------------------------- #
 # REST API
 # --------------------------------------------------------------------------- #
+
+
+# ---- The background ticks' own thread pool -------------------------------- #
+# Every always-on tick (instances, state, dialog watch, Ctrl+F index, red zone,
+# sleep) used to borrow asyncio's default executor — the same 12 threads
+# (min(32, cpus + 4)) every ``await asyncio.to_thread`` in a request handler
+# waits on. Under memory pressure a tick's git/tmux/gh children take minutes
+# instead of milliseconds, the ticks hold their threads that long, and the
+# handlers queue behind them: the app looks hung while the loop is idle. The
+# ticks now share this small pool instead, so they can only slow each other,
+# never a request. Bounded: a stuck tick waits its turn, it doesn't grow the
+# process by another thread (each one is another glibc arena / stack).
+_BG_POOL_WORKERS = 6
+_BG_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_BG_POOL_WORKERS, thread_name_prefix="mf-tick"
+)
+
+
+def _memory_low() -> bool:
+    """Whether memory reads low or critical (:mod:`backend.memory_pressure`,
+    cached 2 s) — the gate background work sheds on: Ctrl+F's pre-indexing,
+    the PR lookups that spawn ``gh`` (a cached answer is served instead), the
+    probe pool's width. Never raises; unknown is not low."""
+    try:
+        from backend import memory_pressure as _mem
+
+        return _mem.is_low()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+#: The per-session probe pool's width: ``_PROBE_POOL_LOW`` while memory reads
+#: low (each probe forks git/tmux/gh children; fewer at once is less to page
+#: in when there is nothing left to page them into).
+_PROBE_POOL_MAX = 8
+_PROBE_POOL_LOW = 2
+
+
+async def _in_bg_pool(fn, *args):
+    """``await asyncio.to_thread(fn, *args)``, on the ticks' own pool
+    (:data:`_BG_POOL`) rather than the default executor the request handlers
+    use. The caller's contextvars ride along, as with ``to_thread``."""
+    loop = asyncio.get_running_loop()
+    ctx = contextvars.copy_context()
+    return await loop.run_in_executor(_BG_POOL, functools.partial(ctx.run, fn, *args))
 
 
 # ---- Short-TTL memo for the expensive per-session probes ------------------- #
@@ -1561,7 +1615,7 @@ async def _events_state_tick_loop() -> None:
     the last client disconnects (restarted by the next connect)."""
     while _EVENTS_WS_CLIENTS > 0:
         try:
-            await asyncio.to_thread(_tick_state_changes)
+            await _in_bg_pool(_tick_state_changes)
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(_EVENTS_TICK_INTERVAL)
@@ -1973,8 +2027,9 @@ def _build_instances_snapshot() -> list:
     if len(insts) <= 1:
         rows = [_session_snapshot(i, queues) for i in insts]
     else:
+        width = _PROBE_POOL_LOW if _memory_low() else _PROBE_POOL_MAX
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(8, len(insts)), thread_name_prefix="session-probe"
+            max_workers=min(width, len(insts)), thread_name_prefix="session-probe"
         ) as ex:
             rows = list(ex.map(lambda i: _session_snapshot(i, queues), insts))
     # A copy window shows the lane of the window that drives its branch.
@@ -2500,7 +2555,7 @@ async def _dialog_watch_loop() -> None:
     while True:
         try:
             rows = _dialog_watch_rows()
-            acts = await asyncio.to_thread(watch.poll, rows) if rows else []
+            acts = await _in_bg_pool(watch.poll, rows) if rows else []
             if not rows:
                 watch.poll(())  # forget every session's state
             for title, screen, stable in acts:
@@ -2517,7 +2572,7 @@ async def _instances_tick_loop() -> None:
     """Drive :func:`_instances_tick` forever (started by the lifespan)."""
     while True:
         try:
-            await asyncio.to_thread(_instances_tick)
+            await _in_bg_pool(_instances_tick)
         except Exception:  # noqa: BLE001 — the tick must never die
             pass
         await asyncio.sleep(_INSTANCES_TICK_INTERVAL)
@@ -2556,7 +2611,11 @@ def _find_index_tick() -> None:
     it waits on a question — paging keys could move a dialog's selection),
     no input from a person for a while, the screen still, and at most one
     screen attached (the browser freezes its view on the notify event;
-    other screens wouldn't)."""
+    other screens wouldn't). Skipped whole while memory reads low: a sweep
+    is dozens of tmux round trips per pane, and Ctrl+F still works without
+    an index (it builds one on demand)."""
+    if _memory_low():
+        return
     activity: Dict[str, str] = {}
     try:
         for row in _events.sessions_snapshot():
@@ -2599,7 +2658,7 @@ async def _find_index_loop() -> None:
         return
     while True:
         try:
-            await asyncio.to_thread(_find_index_tick)
+            await _in_bg_pool(_find_index_tick)
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_FIND_INDEX_INTERVAL)
@@ -2607,6 +2666,15 @@ async def _find_index_loop() -> None:
 
 #: Test seam, like _RED_ZONE_LOOP_ENABLED: None = on except under pytest.
 _TEAM_RUN_LOOP_ENABLED: Optional[bool] = None
+
+#: Test seam for the loop-stall watchdog: None = on except under pytest.
+_LOOP_WATCHDOG_ENABLED: Optional[bool] = None
+
+
+def _loop_watchdog_enabled() -> bool:
+    if _LOOP_WATCHDOG_ENABLED is not None:
+        return bool(_LOOP_WATCHDOG_ENABLED)
+    return _loop_watchdog.enabled() and not _restart._under_pytest()
 
 
 def _flight_dto(title: str, inst=None):
@@ -2655,7 +2723,7 @@ async def _red_zone_loop() -> None:
         return
     while True:
         try:
-            await asyncio.to_thread(_red_zone_tick)
+            await _in_bg_pool(_red_zone_tick)
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_RED_ZONE_INTERVAL)
@@ -2868,9 +2936,28 @@ async def _memory_watch_loop() -> None:
                     data={"message": msg, "memory": snap},
                 )
                 last = lvl
+            if lvl in ("low", "critical"):
+                await asyncio.to_thread(_shed_for_memory)
         except Exception:  # noqa: BLE001 — a watch must never die
             pass
         await asyncio.sleep(_MEMORY_WATCH_SECONDS)
+
+
+def _shed_for_memory() -> list:
+    """While memory reads low: give back what the server itself holds and
+    can rebuild — the local speech models (core.speech.shed_for_memory: the
+    resident whisper models are ~1 GB of this process), unused for 2 min.
+    Background work sheds itself on :func:`_memory_low`; idle agents are put
+    to sleep by core.sleep. → what was dropped. Never raises."""
+    try:
+        from backend.web.core import speech as _speech_shed
+
+        dropped = _speech_shed.shed_for_memory()
+    except Exception:  # noqa: BLE001
+        return []
+    if dropped and log.InfoLog is not None:
+        log.InfoLog.Printf("memory: unloaded %s", ", ".join(dropped))
+    return dropped
 
 
 # --------------------------------------------------------------------------- #
@@ -7800,8 +7887,8 @@ def _pr_merge_state(wt: str, branch: str, force: bool = False):
         return None
     now = time.time()
     cached = _MERGE_STATE_CACHE.get(branch)
-    if not force and cached and cached[0] > now:
-        return cached[1]
+    if not force and cached and (cached[0] > now or _memory_low()):
+        return cached[1]  # past its TTL too while memory is low: no new gh
     state = _github_pr.pr_merge_state_sync(wt, branch)
     _MERGE_STATE_CACHE[branch] = (now + _MERGE_STATE_TTL, state)
     return state
@@ -7831,8 +7918,8 @@ def _pr_review_state(wt: str, branch: str, info, force: bool = False) -> str:
         return ""
     now = time.time()
     cached = _REVIEW_CACHE.get(branch)
-    if not force and cached and cached[0] > now:
-        return cached[1]
+    if not force and cached and (cached[0] > now or _memory_low()):
+        return cached[1]  # past its TTL too while memory is low: no new gh
     verdict = _github_pr.pr_review_state_sync(wt, number)
     _REVIEW_CACHE[branch] = (now + _REVIEW_TTL, verdict)
     return verdict
@@ -7861,6 +7948,12 @@ def _pr_info(wt: str, branch: str, force: bool = False):
     now = time.time()
     cached = _PR_CACHE.get(branch)
     if not force and cached and cached[0] > now:
+        return cached[1]
+    # While memory reads low, a known answer stands past its TTL: each lookup
+    # forks `gh` (a ~40 MB Go binary) per branch per minute, which is exactly
+    # the background churn a machine out of memory can't page in. A forced
+    # lookup (a person pressed something) still asks.
+    if not force and cached and _memory_low():
         return cached[1]
     info = (
         _gh_pr_info(wt, branch)

@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Running low on memory no longer wedges the server.** The background
+  ticks have their own small thread pool, so a tick stuck on a slow git, tmux
+  or gh call can't hold up the app's requests. While memory reads low the
+  server also does less: fewer probes at once, no new `gh` lookups (cached
+  answers stand), no Ctrl+F pre-indexing, and the local speech models it
+  holds (about 1 GB) are unloaded once unused for 2 minutes. If the event
+  loop does stall for 10 s, every thread's stack and the memory reading are
+  written to `logs/stacks.log` by themselves.
+- **Low memory puts idle agents to sleep, and says so.** When memory reads
+  low, agents idle for 5 minutes (`general.memory_sleep_minutes`) go to sleep,
+  longest-idle first, even with everyday sleeping turned off. One notice names
+  them and why, and they wake when you open or message them. Agents mid-turn
+  are never touched. When memory counts as low or critical is now a setting
+  (`general.memory_low_pct`, 15; `general.memory_critical_pct`, 7).
+- **Voice Lab stays off while you aren't using voice.** It starts on first
+  use and stops after 10 idle minutes, and now only speech wakes it:
+  dictating (recognition runs inside MindFlock) no longer does, nor does
+  opening the mic's menu, the phone page loading or coming back to the
+  front, or Settings → Voice (which now says a local voice "starts when you
+  use voice"; **Say a test sentence** still tries it). The first line after
+  it has been idle shows **Starting voice…** while it starts, and is said in
+  your chosen voice once it is up (the server waits up to 90 s for it)
+  instead of by the backup voice or as an error.
+- **Speech recognition is loaded only while you listen.** The local
+  recognition models (about 1.1 GB) are no longer loaded at startup or
+  whenever a page opens: they load when the wake-word standby turns on (and
+  stay loaded while it is on, so "MindFlock" is answered at once) or when you
+  start dictating, and unload after 30 unused minutes otherwise. The first
+  dictation after that shows **Starting the mic…** for the few seconds the
+  models take to load.
 - **A rename renames the session.** There is no hidden second name any more:
   renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
   `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,

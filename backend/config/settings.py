@@ -1250,7 +1250,18 @@ class GeneralSettings:
     idle, unwatched and with nothing waiting for it this many minutes; it
     wakes, resuming its conversation, as soon as it is opened or sent
     anything. ``None`` (never set) = 45; ``0`` turns sleeping off. While
-    memory reads low the wait drops to 5 minutes (never above this value).
+    memory reads low the wait drops to ``memory_sleep_minutes``.
+
+    ``memory_sleep_minutes``: while memory reads low or critical
+    (:mod:`backend.memory_pressure`), agents idle this long are put to sleep,
+    longest-idle first, whatever ``sleep_idle_minutes`` says (``0`` there
+    turns off only the everyday sleeping). ``None`` = 5; ``0`` turns sleeping
+    for memory off.
+
+    ``memory_low_pct`` / ``memory_critical_pct``: the share of RAM the kernel
+    reports available (MemAvailable) at or below which memory reads low /
+    critical. ``None`` = 15 / 7; ``0`` drops that signal (the absolute floors
+    and the PSI stall readings still count).
 
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
@@ -1311,6 +1322,9 @@ class GeneralSettings:
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     revive_on_start: Optional[bool] = None  # None = OFF (see docstring)
     sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
+    memory_sleep_minutes: Optional[int] = None  # None = 5; 0 = off (see docstring)
+    memory_low_pct: Optional[int] = None  # None = 15 (see docstring)
+    memory_critical_pct: Optional[int] = None  # None = 7 (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
     agent_max_children: Optional[int] = None  # None = lineage default (8)
@@ -1361,6 +1375,9 @@ class GeneralSettings:
             d["revive_on_start"] = self.revive_on_start
         if self.sleep_idle_minutes is not None:
             d["sleep_idle_minutes"] = self.sleep_idle_minutes
+        for key in ("memory_sleep_minutes", "memory_low_pct", "memory_critical_pct"):
+            if getattr(self, key) is not None:
+                d[key] = getattr(self, key)
         if self.agent_mcp is not None:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
@@ -1408,6 +1425,9 @@ class GeneralSettings:
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             revive_on_start=_opt_bool(d.get("revive_on_start")),
             sleep_idle_minutes=_opt_nonneg_int(d.get("sleep_idle_minutes")),
+            memory_sleep_minutes=_opt_nonneg_int(d.get("memory_sleep_minutes")),
+            memory_low_pct=_opt_pct(d.get("memory_low_pct")),
+            memory_critical_pct=_opt_pct(d.get("memory_critical_pct")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),
@@ -2167,6 +2187,12 @@ def _opt_nonneg_int(v: Any) -> Optional[int]:
     """:func:`_opt_int`, with a negative count read as unset."""
     n = _opt_int(v)
     return n if n is not None and n >= 0 else None
+
+
+def _opt_pct(v: Any) -> Optional[int]:
+    """:func:`_opt_nonneg_int`, capped at 90 (a percent of RAM)."""
+    n = _opt_nonneg_int(v)
+    return min(n, 90) if n is not None else None
 
 
 def _opt_pos_int(v: Any) -> Optional[int]:
