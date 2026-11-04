@@ -153,6 +153,9 @@ def chain(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setattr(speech, "_arm_timer", lambda: None)
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
     monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
+    # The host is WARM unless a test says otherwise (TestColdStart: Voice Lab
+    # stopped while idle and starts on the next request).
+    monkeypatch.setattr(speech.OpenAITTS, "starts_cold", lambda self: False)
     piper = _Piper()
     host = speech.OpenAITTS()
     monkeypatch.setattr(speech, "BACKENDS", {"stt": [], "tts": [host, piper]})
@@ -372,6 +375,118 @@ class TestDeadIsDown:
         assert chain.c.down_reason(chain.host) == ""
         _wait(lambda: bool(chain.c.down_reason(chain.host)))
         assert "sent nothing back" in chain.c.down_reason(chain.host)
+
+
+_REAL_STARTS_COLD = speech.OpenAITTS.starts_cold
+
+
+class TestColdStart:
+    """Voice Lab off while idle (owner, 2026-11-04): its socket proxy stops
+    it after 10 idle minutes and the next connection starts it again, the
+    first synthesis loading its model (~40 s for F5 on a CPU). That first
+    line WAITS for it, in the owner's voice, instead of going to piper at
+    its budget or marking the host down — and status reads never send it
+    anything (``probe=False``), so nothing but speech wakes it."""
+
+    @pytest.fixture(autouse=True)
+    def _cold(self, chain, monkeypatch):  # after chain, which turns it off
+        monkeypatch.setattr(speech.OpenAITTS, "starts_cold", _REAL_STARTS_COLD)
+
+    def test_a_loopback_host_starts_cold_and_a_remote_api_never(self, chain):
+        chain.point(_free_band_port())
+        assert chain.host.starts_cold() is True
+        assert chain.c.cold(chain.host) is True  # never answered yet
+        S.update_settings(
+            voice={"tts_url": "https://api.openai.com/v1"}
+        )  # a remote API
+        S.invalidate()
+        assert chain.host.starts_cold() is False
+        assert chain.c.cold(chain.host) is False
+        assert chain.c.cold(chain.piper) is False  # not a serial host
+
+    def test_the_first_line_waits_for_a_starting_host(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.2)  # a warm line would go to piper at 0.2 s
+        fake = chain.serve("serial", floor=1.0)  # starting + loading
+        _a, _m, engine, fb = chain.c.speak(chain.host, "Hello.")
+        assert engine is chain.host and fb is False
+        assert chain.piper.spoken == []
+        assert chain.c.down_reason(chain.host) == ""
+        assert fake.texts() == ["Hello."]
+        # Not a speed sample: a model loading is not the host's pace.
+        assert chain.c.speed(chain.host)["samples"] == 0
+        # Up now: the next line is warm (its budget applies again).
+        assert chain.c.cold(chain.host) is False
+        fake.floor = 0.0
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Again.")
+        assert engine is chain.host
+
+    def test_lines_asked_while_it_starts_wait_with_it(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.2)
+        chain.serve("serial", floor=0.6)
+        out = _at_once(chain.c.speak, [(chain.host, "One."), (chain.host, "Two.")])
+        assert [r[2] for r in out] == [chain.host, chain.host]
+        assert chain.piper.spoken == []
+
+    def test_cold_again_after_ten_idle_minutes(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.2)
+        chain.serve("ok", floor=0.0)
+        chain.c.speak(chain.host, "Hello.")
+        assert chain.c.cold(chain.host) is False
+        chain.now[0] += speech.COLD_AFTER_SECONDS - 1
+        assert chain.c.cold(chain.host) is False
+        chain.now[0] += 1
+        assert chain.c.cold(chain.host) is True
+
+    def test_a_refused_host_is_still_down_at_once(self, chain, monkeypatch):
+        """Waiting is for a host that is STARTING (the connection is held);
+        one that refuses is down, as before."""
+        chain.point(_free_band_port())
+        t0 = time.monotonic()
+        _a, _m, engine, fb = chain.c.speak(chain.host, "Hello.")
+        assert time.monotonic() - t0 < 1.0
+        assert engine is chain.piper and fb is True
+        assert chain.c.down_reason(chain.host)
+
+    def test_past_the_cold_start_timeout_it_is_down(self, chain, monkeypatch):
+        monkeypatch.setattr(speech, "COLD_START_TIMEOUT", 0.4)
+        monkeypatch.setattr(speech, "TTS_TIMEOUT", 0.4)
+        chain.serve("ok", floor=3.0)
+        t0 = time.monotonic()
+        _a, _m, engine, fb = chain.c.speak(chain.host, "Hello.")
+        assert 0.3 < time.monotonic() - t0 < 2.5
+        assert engine is chain.piper and fb is True
+        assert "sent nothing back" in chain.c.down_reason(chain.host)
+
+    def test_a_status_read_never_probes_a_down_host(self, chain, monkeypatch):
+        started = _no_probe(monkeypatch)
+        chain.point(_free_band_port())
+        chain.c.mark_down(chain.host, "could not reach it")
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1  # the re-check is due
+        st = chain.c.status(chain.host, probe=False)
+        assert st["why"] == "could not reach it"
+        assert started == []
+        speech.describe(probe=False)
+        assert started == []
+        # A line (or a warm read) does re-check it.
+        chain.c.status(chain.host)
+        assert started == ["mindflock-voice-probe"]
+
+    def test_a_status_read_never_probes_a_slow_host(self, chain, monkeypatch):
+        started = _no_probe(monkeypatch)
+        chain.point(_free_band_port())
+        with chain.c._lock:
+            chain.c._learn(chain.host.health_key(), "Hello.", 60.0)
+        chain.now[0] += speech.SLOW_RECHECK_SECONDS + 1
+        assert chain.c.too_slow(chain.host, probe=False)
+        assert chain.c.status(chain.host, probe=False)["slow"]
+        assert started == []
+        chain.c.too_slow(chain.host)
+        assert started == ["mindflock-voice-pace"]
+
+    def test_describe_reports_a_cold_voice(self, chain):
+        chain.point(_free_band_port())
+        ready = speech.describe(probe=False)["server_ready"]
+        assert ready["tts_cold"] is True
 
 
 class TestBudgetMath:

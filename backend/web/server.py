@@ -141,7 +141,9 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import contextlib
+import contextvars
 import datetime as _datetime
+import functools
 import json
 import os
 import re
@@ -409,7 +411,9 @@ from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
 from backend.web.core import held as _held
 from backend.web.core import revive as _revive
+from backend.web.core import launch_gate as _launch_gate
 from backend.web.core import sleep as _sleep
+from backend.web.core import loop_watchdog as _loop_watchdog
 from backend.web.core import self_update as _self_update
 from backend.web.core import spoken as _spoken
 from backend.web.core import asking as _asking
@@ -764,20 +768,19 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(_rename.migrate_once, sys.modules[__name__])
         except Exception:  # noqa: BLE001 — never block startup on a migration
             pass
-    # Voice: the local whisper models configured for recognition are loaded a
-    # few seconds after boot, and the voice a few after that (daemon threads;
-    # each a no-op when there is nothing to warm), so the first press of the
-    # mic — or the first line read aloud — after a restart is not a wait.
-    # MINDFLOCK_VOICE_WARM=0 skips it (the test suite: a warm-up thread left
-    # by one app's lifespan would otherwise load a model into the next test).
-    # The VOICE only when "Read everything" is on (lines will be spoken with
-    # nobody asking): otherwise a local voice host (Voice Lab, gigabytes) is
-    # woken by the first client actually using voice (GET /api/voice).
+    # Voice: warmed at boot only when "Read everything" is on (lines will be
+    # spoken with nobody asking), 6 s after start on a daemon thread;
+    # otherwise a local voice host (Voice Lab, gigabytes) is woken by the
+    # first client actually using voice (GET /api/voice). MINDFLOCK_VOICE_WARM=0
+    # skips it (the test suite: a warm-up thread left by one app's lifespan
+    # would otherwise load a model into the next test).
     if os.environ.get("MINDFLOCK_VOICE_WARM", "1") != "0":
         try:
             from backend.web.core import speech as _speech_warm
 
-            _speech_warm.warm_in_background("stt", delay_s=3.0)
+            # Recognition is NOT loaded at boot (~1.1 GB for local
+            # whisper): only once a listening mode is on — the standby's
+            # POST /api/voice/listen, a phrase's stream opening.
             if _voice.say_all():
                 _speech_warm.warm_in_background("tts", delay_s=6.0)
         except Exception:  # noqa: BLE001 — warming is best effort
@@ -960,6 +963,22 @@ async def lifespan(app: FastAPI):
     if _sleep_loop_enabled():
         _register_task(_sleep.run_loop())
     _register_task(_memory_watch_loop())
+    # The launch gate's queue (core.launch_gate): what waited for memory when
+    # the server stopped waits again — automatic starts, so through the gate,
+    # one at a time. Off under pytest (ENGINE is the developer's real state).
+    if not _restart._under_pytest():
+        _session_create._LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
+        _back = await asyncio.to_thread(_launch_gate.restore)
+        if _back and log.InfoLog is not None:
+            log.InfoLog.Printf(
+                "launch gate: %d launch(es) wait for memory again", _back
+            )
+    # Event-loop stall watchdog (core.loop_watchdog): a loop stuck for 10 s
+    # appends every thread's stack + the memory reading to logs/stacks.log
+    # by itself. Off under pytest (a slow CI box is no wedge).
+    if _loop_watchdog_enabled():
+        _register_task(_loop_watchdog.heartbeat_loop())
+        _loop_watchdog.start()
     # The Map's snapshot warmer reads every open session's worktree — never
     # under pytest (ENGINE is the developer's real state there).
     if _code_map_warm_on_start_enabled():
@@ -997,6 +1016,7 @@ async def lifespan(app: FastAPI):
         for _t in _BG_TASKS:
             _t.cancel()
         _BG_TASKS.clear()
+        _loop_watchdog.stop()
         # Hand back this server's team-run leases: a restart drives (and
         # reconciles) its runs on the first pass instead of waiting out them.
         try:
@@ -1197,6 +1217,51 @@ ENGINE = get_engine()
 # --------------------------------------------------------------------------- #
 # REST API
 # --------------------------------------------------------------------------- #
+
+
+# ---- The background ticks' own thread pool -------------------------------- #
+# Every always-on tick (instances, state, dialog watch, Ctrl+F index, red zone,
+# sleep) used to borrow asyncio's default executor — the same 12 threads
+# (min(32, cpus + 4)) every ``await asyncio.to_thread`` in a request handler
+# waits on. Under memory pressure a tick's git/tmux/gh children take minutes
+# instead of milliseconds, the ticks hold their threads that long, and the
+# handlers queue behind them: the app looks hung while the loop is idle. The
+# ticks now share this small pool instead, so they can only slow each other,
+# never a request. Bounded: a stuck tick waits its turn, it doesn't grow the
+# process by another thread (each one is another glibc arena / stack).
+_BG_POOL_WORKERS = 6
+_BG_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_BG_POOL_WORKERS, thread_name_prefix="mf-tick"
+)
+
+
+def _memory_low() -> bool:
+    """Whether memory reads low or critical (:mod:`backend.memory_pressure`,
+    cached 2 s) — the gate background work sheds on: Ctrl+F's pre-indexing,
+    the PR lookups that spawn ``gh`` (a cached answer is served instead), the
+    probe pool's width. Never raises; unknown is not low."""
+    try:
+        from backend import memory_pressure as _mem
+
+        return _mem.is_low()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+#: The per-session probe pool's width: ``_PROBE_POOL_LOW`` while memory reads
+#: low (each probe forks git/tmux/gh children; fewer at once is less to page
+#: in when there is nothing left to page them into).
+_PROBE_POOL_MAX = 8
+_PROBE_POOL_LOW = 2
+
+
+async def _in_bg_pool(fn, *args):
+    """``await asyncio.to_thread(fn, *args)``, on the ticks' own pool
+    (:data:`_BG_POOL`) rather than the default executor the request handlers
+    use. The caller's contextvars ride along, as with ``to_thread``."""
+    loop = asyncio.get_running_loop()
+    ctx = contextvars.copy_context()
+    return await loop.run_in_executor(_BG_POOL, functools.partial(ctx.run, fn, *args))
 
 
 # ---- Short-TTL memo for the expensive per-session probes ------------------- #
@@ -1561,7 +1626,7 @@ async def _events_state_tick_loop() -> None:
     the last client disconnects (restarted by the next connect)."""
     while _EVENTS_WS_CLIENTS > 0:
         try:
-            await asyncio.to_thread(_tick_state_changes)
+            await _in_bg_pool(_tick_state_changes)
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(_EVENTS_TICK_INTERVAL)
@@ -1778,6 +1843,7 @@ def _session_snapshot(i, queues: dict) -> dict:
     # A killed agent coming back by itself, or left Offline and why
     # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
     d["auto_revive"] = _revive.auto_state(i.Title)
+    d["waiting_for_memory"] = _launch_gate.waiting(i.Title)
     tok = _session_tokens(i)
     d["tokens"] = tok.get("out", 0)  # output tokens
     d["tokens_in"] = tok.get("in", 0)  # real input only (no cache)
@@ -1904,6 +1970,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["autopilot"] = _autopilot_dto(i.Title)
     d["flight"] = _flight_dto(i.Title, i)
     d["auto_revive"] = _revive.auto_state(i.Title)
+    d["waiting_for_memory"] = _launch_gate.waiting(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
     d["tokens_ctx"] = d["tokens_ctx_window"] = 0
@@ -1944,7 +2011,18 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
 # call sites below (and the tests) reading the same as before.
 _pending_add = _pending.add
 _pending_drop = _pending.drop
-_pending_rows = _pending.rows
+
+
+def _pending_rows() -> list:
+    """:func:`core.pending.rows` (accepted starts with no session yet), each
+    with ``waiting_for_memory``: the launch gate's record while it is an
+    agent-spawned create waiting for memory (core.launch_gate), else None."""
+    out = _pending.rows()
+    for r in out:
+        r["waiting_for_memory"] = _launch_gate.waiting(str(r.get("title") or ""))
+    return out
+
+
 _pending_has = _pending.has
 _cached_session_title = _pending.cached_session_title
 
@@ -1973,8 +2051,9 @@ def _build_instances_snapshot() -> list:
     if len(insts) <= 1:
         rows = [_session_snapshot(i, queues) for i in insts]
     else:
+        width = _PROBE_POOL_LOW if _memory_low() else _PROBE_POOL_MAX
         with concurrent.futures.ThreadPoolExecutor(
-            max_workers=min(8, len(insts)), thread_name_prefix="session-probe"
+            max_workers=min(width, len(insts)), thread_name_prefix="session-probe"
         ) as ex:
             rows = list(ex.map(lambda i: _session_snapshot(i, queues), insts))
     # A copy window shows the lane of the window that drives its branch.
@@ -2163,6 +2242,7 @@ def _instances_tick() -> None:
             # unannounced while it does.
             _revive.observe(sys.modules[__name__], title, inst, d["activity"])
             d["auto_revive"] = _revive.auto_state(title)
+            d["waiting_for_memory"] = _launch_gate.waiting(title)
             # …or is now held offline (core.held), or no longer is.
             for _k in ("held_offline", "held_since", "held_reason"):
                 d.pop(_k, None)
@@ -2500,7 +2580,7 @@ async def _dialog_watch_loop() -> None:
     while True:
         try:
             rows = _dialog_watch_rows()
-            acts = await asyncio.to_thread(watch.poll, rows) if rows else []
+            acts = await _in_bg_pool(watch.poll, rows) if rows else []
             if not rows:
                 watch.poll(())  # forget every session's state
             for title, screen, stable in acts:
@@ -2517,7 +2597,7 @@ async def _instances_tick_loop() -> None:
     """Drive :func:`_instances_tick` forever (started by the lifespan)."""
     while True:
         try:
-            await asyncio.to_thread(_instances_tick)
+            await _in_bg_pool(_instances_tick)
         except Exception:  # noqa: BLE001 — the tick must never die
             pass
         await asyncio.sleep(_INSTANCES_TICK_INTERVAL)
@@ -2556,7 +2636,11 @@ def _find_index_tick() -> None:
     it waits on a question — paging keys could move a dialog's selection),
     no input from a person for a while, the screen still, and at most one
     screen attached (the browser freezes its view on the notify event;
-    other screens wouldn't)."""
+    other screens wouldn't). Skipped whole while memory reads low: a sweep
+    is dozens of tmux round trips per pane, and Ctrl+F still works without
+    an index (it builds one on demand)."""
+    if _memory_low():
+        return
     activity: Dict[str, str] = {}
     try:
         for row in _events.sessions_snapshot():
@@ -2599,7 +2683,7 @@ async def _find_index_loop() -> None:
         return
     while True:
         try:
-            await asyncio.to_thread(_find_index_tick)
+            await _in_bg_pool(_find_index_tick)
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_FIND_INDEX_INTERVAL)
@@ -2607,6 +2691,15 @@ async def _find_index_loop() -> None:
 
 #: Test seam, like _RED_ZONE_LOOP_ENABLED: None = on except under pytest.
 _TEAM_RUN_LOOP_ENABLED: Optional[bool] = None
+
+#: Test seam for the loop-stall watchdog: None = on except under pytest.
+_LOOP_WATCHDOG_ENABLED: Optional[bool] = None
+
+
+def _loop_watchdog_enabled() -> bool:
+    if _LOOP_WATCHDOG_ENABLED is not None:
+        return bool(_LOOP_WATCHDOG_ENABLED)
+    return _loop_watchdog.enabled() and not _restart._under_pytest()
 
 
 def _flight_dto(title: str, inst=None):
@@ -2655,7 +2748,7 @@ async def _red_zone_loop() -> None:
         return
     while True:
         try:
-            await asyncio.to_thread(_red_zone_tick)
+            await _in_bg_pool(_red_zone_tick)
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_RED_ZONE_INTERVAL)
@@ -2795,6 +2888,12 @@ async def post_server_revive_all(request: Request) -> JSONResponse:
                 {"error": "titles must be a list of session titles"}, status_code=400
             )
         only = titles
+    # A person's Start all: while memory is low it asks first (409
+    # memory_confirm until resent with start_anyway). Either way the sweep
+    # itself still paces its launches through the launch gate.
+    refusal = await _person_memory_refusal(payload)
+    if refusal is not None:
+        return refusal
     return JSONResponse(
         await _revive.sweep(trigger="on demand", only=only, release_held=True)
     )
@@ -2812,7 +2911,103 @@ def get_system_memory() -> JSONResponse:
 
     snap = _mem.snapshot()
     snap["message"] = _mem.describe(snap)
+    # The launch gate (core.launch_gate): what waits for memory, and why.
+    snap["gate"] = _launch_gate.status()
     return JSONResponse(snap)
+
+
+# --------------------------------------------------------------------------- #
+# The launch gate (core.launch_gate): every agent start asks it first.
+# --------------------------------------------------------------------------- #
+def _start_anyway(payload) -> bool:
+    """Whether a person's request carries ``start_anyway: true`` (the memory
+    confirm's Start anyway)."""
+    return isinstance(payload, dict) and payload.get("start_anyway") is True
+
+
+async def _person_memory_refusal(payload=None) -> Optional[JSONResponse]:
+    """A person's start (New, Duplicate, Start, Start all, Resume, Wake): None
+    when the gate says go or they chose Start anyway, else **409**
+    ``{"memory_confirm": true, "level", "message", ...}`` for the app's
+    confirm (:func:`core.launch_gate.person_refusal`)."""
+    if _start_anyway(payload):
+        return None
+    verdict = await asyncio.to_thread(_launch_gate.decide, "person")
+    body = _launch_gate.person_refusal(verdict)
+    return None if body is None else JSONResponse(body, status_code=409)
+
+
+async def _body_dict(request: Request) -> dict:
+    """The request's JSON object body, ``{}`` when there is none."""
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 — no body is the common case
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+@app.get("/api/launch-gate")
+def get_launch_gate() -> JSONResponse:
+    """What the launch gate (core.launch_gate) is holding: ``{"holding",
+    "queued": [{"id", "title", "kind", "source", "parent", "since",
+    "reason", "position", "creates"}], "reason", "live", "cap", "warming",
+    "projected_available", "projected_level"}``."""
+    return JSONResponse(_launch_gate.status())
+
+
+@app.post("/api/launch-gate/{title}/start")
+async def post_launch_gate_start(title: str, request: Request) -> JSONResponse:
+    """Start anyway: launch a session waiting for memory now, past the gate
+    (the row's Start-anyway action). Owner only (it launches an agent). **404**
+    when nothing by that name waits. → ``{"title", "started": bool,
+    "error"}``."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    if _launch_gate.waiting(title) is None:
+        return JSONResponse(
+            {"error": "%s is not waiting for memory" % title}, status_code=404
+        )
+    loops = _session_create._LAUNCH_LOOP
+    loops["loop"] = loops["loop"] or asyncio.get_running_loop()
+    _was, err = await asyncio.to_thread(_launch_gate.start_now, title)
+    if title in ENGINE.instances:
+        _republish_session(title)
+    return JSONResponse({"title": title, "started": err is None, "error": err or ""})
+
+
+@app.post("/api/launch-gate/{title}/cancel")
+async def post_launch_gate_cancel(title: str, request: Request) -> JSONResponse:
+    """Stop waiting: drop a launch from the gate's queue. A queued create is
+    never made, and a queued relaunch or wake stays Offline/asleep. **404**
+    when nothing by that name waits. → ``{"title", "cancelled": true}``."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    rec = _launch_gate.waiting(title)
+    if not _launch_gate.cancel(title):
+        return JSONResponse(
+            {"error": "%s is not waiting for memory" % title}, status_code=404
+        )
+    if rec and rec.get("creates"):
+        _pending.drop(title)
+    if title in ENGINE.instances:
+        _republish_session(title)
+    return JSONResponse({"title": title, "cancelled": True})
+
+
+@app.post("/api/server/sleep-idle")
+async def post_server_sleep_idle(request: Request) -> JSONResponse:
+    """Put idle agents to sleep now (the memory confirm's second choice;
+    :func:`core.sleep.sleep_idle_now`): every agent whose turn has ended and
+    that nobody is watching, longest-idle first, at most ``limit`` (body,
+    default 8). Owner only. → ``{"slept": [titles], "freed_mb": n}``."""
+    if not await _auth.may_configure(request.scope):
+        return _auth.configure_refused()
+    body = await _body_dict(request)
+    try:
+        limit = max(1, min(32, int(body.get("limit") or 8)))
+    except (TypeError, ValueError):
+        limit = 8
+    return JSONResponse(await asyncio.to_thread(_sleep.sleep_idle_now, None, limit))
 
 
 @app.get("/api/system/slots")
@@ -2868,9 +3063,28 @@ async def _memory_watch_loop() -> None:
                     data={"message": msg, "memory": snap},
                 )
                 last = lvl
+            if lvl in ("low", "critical"):
+                await asyncio.to_thread(_shed_for_memory)
         except Exception:  # noqa: BLE001 — a watch must never die
             pass
         await asyncio.sleep(_MEMORY_WATCH_SECONDS)
+
+
+def _shed_for_memory() -> list:
+    """While memory reads low: give back what the server itself holds and
+    can rebuild — the local speech models (core.speech.shed_for_memory: the
+    resident whisper models are ~1 GB of this process), unused for 2 min.
+    Background work sheds itself on :func:`_memory_low`; idle agents are put
+    to sleep by core.sleep. → what was dropped. Never raises."""
+    try:
+        from backend.web.core import speech as _speech_shed
+
+        dropped = _speech_shed.shed_for_memory()
+    except Exception:  # noqa: BLE001
+        return []
+    if dropped and log.InfoLog is not None:
+        log.InfoLog.Printf("memory: unloaded %s", ", ".join(dropped))
+    return dropped
 
 
 # --------------------------------------------------------------------------- #
@@ -4511,8 +4725,19 @@ async def create_instance(payload: dict, request: Request) -> JSONResponse:
     the three creation modes, lineage and spawn limits, the claim under the
     registry lock) so a team run creates its sessions through the same code.
     The session records the person the request is for (core.person_sessions).
+
+    Every create asks the launch gate (core.launch_gate) first
+    (:func:`core.session_create.create_requested`). An agent-spawned one
+    (``spawned: true``) that has to wait is queued and answered 202
+    ``{"queued": true, "status": "queued: waiting for memory"}``; the queue
+    creates it when memory allows. A person's create while memory is low is
+    **409** ``{"memory_confirm": true, ...}`` until it is resent with
+    ``start_anyway: true``. A team run's members (``run_member``) are paced by
+    the run's own planner.
     """
-    return await _session_create.create(payload, person=_auth.request_person(request))
+    return await _session_create.create_requested(
+        payload, person=_auth.request_person(request)
+    )
 
 
 @app.get("/api/create_failures")
@@ -4849,15 +5074,21 @@ async def instance_pause(title: str) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/resume")
-async def instance_resume(title: str) -> JSONResponse:
+async def instance_resume(title: str, request: Request) -> JSONResponse:
     """Resume a paused session: ``inst.Resume`` relaunches the agent in the same
     worktree (a session paused under the old scheme, whose worktree was removed,
     is rebuilt first — the engine's legacy path), re-deriving its port block
     into the fresh tmux env first, then persist and emit ``session.resumed``.
-    A resume error is a 400."""
+    A resume error is a 400. A person's start: while memory is low it is
+    **409** ``{"memory_confirm": true}`` until resent with ``{"start_anyway":
+    true}`` (core.launch_gate)."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    refusal = await _person_memory_refusal(await _body_dict(request))
+    if refusal is not None:
+        return refusal
+    _launch_gate.note_start(title)
     # O4: ExtraEnv isn't persisted — re-derive the port block so a resumed
     # session's fresh tmux gets the same env its worktree was set up with.
     # The auth-profile / local-model overlay has to be re-derived here for the
@@ -5038,7 +5269,7 @@ async def instance_job_expect_clear(title: str, job_id: str) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/revive")
-async def instance_revive(title: str) -> JSONResponse:
+async def instance_revive(title: str, request: Request) -> JSONResponse:
     """Restart an offline agent: the Offline chip's Restart action.
 
     Calls the same lazy revive a terminal attach or a sent prompt does
@@ -5050,7 +5281,10 @@ async def instance_revive(title: str) -> JSONResponse:
 
     An agent that died mid-turn also gets a "continue where you left off" at
     the front of its prompt queue (:func:`core.revive.relaunch`). A person's
-    Restart is never held for memory, but the answer says when it is low.
+    Restart is never queued, but while memory is low (core.launch_gate) it
+    is **409** ``{"memory_confirm": true, "level", "message"}`` until resent
+    with ``{"start_anyway": true}``. A session waiting for memory in the
+    gate's queue leaves the queue: this IS its start.
     It is also the Start of a session HELD OFFLINE (core.held): the hold is
     released, then the agent launched (a failed launch keeps it held).
     → ``{"title", "revived": true, "continued": bool, "memory_warning": str}``."""
@@ -5061,6 +5295,11 @@ async def instance_revive(title: str) -> JSONResponse:
         return JSONResponse(
             {"error": "session is paused — resume it instead"}, status_code=409
         )
+    refusal = await _person_memory_refusal(await _body_dict(request))
+    if refusal is not None:
+        return refusal
+    _launch_gate.cancel(title)
+    _launch_gate.note_start(title)
     _, rerr, continued = await asyncio.to_thread(
         lambda: _revive.relaunch(inst, title, release=True)
     )
@@ -5100,14 +5339,23 @@ async def instance_sleep(title: str) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/wake")
-async def instance_wake(title: str) -> JSONResponse:
+async def instance_wake(title: str, request: Request) -> JSONResponse:
     """Wake a sleeping session's agent: relaunch it, resuming its
     conversation (the rail's Wake chip; opening it or sending it anything
     does the same). Not asleep is a no-op (``woke: false``). **409** with the
-    reason when its workspace is gone. → ``{"title", "woke": bool}``."""
+    reason when its workspace is gone. A person's start: while memory is low
+    it is **409** ``{"memory_confirm": true}`` until resent with
+    ``{"start_anyway": true}`` (core.launch_gate). → ``{"title", "woke":
+    bool}``."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
+    if _sleep.is_sleeping(title):
+        refusal = await _person_memory_refusal(await _body_dict(request))
+        if refusal is not None:
+            return refusal
+        _launch_gate.cancel(title)
+        _launch_gate.note_start(title)
     woke, werr = await asyncio.to_thread(
         _sleep.ensure_awake, inst, title, "woken on request"
     )
@@ -7312,6 +7560,10 @@ _MSG_WAKING = (
     "the recipient was asleep — it is waking up, and the message is typed in "
     "once it is ready"
 )
+_MSG_WAITING_FOR_MEMORY = (
+    "the recipient is asleep and waits for memory to wake (it is queued) — "
+    "the message is typed in once it is running"
+)
 _MSG_HUMAN_TYPING = (
     "someone is typing in the recipient's pane — it is typed in once they stop"
 )
@@ -7361,7 +7613,9 @@ def _mail_deliver_now(inst, title: str, msg: dict, activities=_MSG_NOW_ACTIVITIE
     if _sleep.is_sleeping(title):
         # Asleep (core.sleep): wake it; the lane types the message once the
         # relaunched CLI has drawn its prompt (the wake opened the boot grace).
-        _woke, werr = _sleep.ensure_awake(inst, title, "a message arrived")
+        _woke, werr = _sleep.ensure_awake(inst, title, "a message arrived", auto=True)
+        if werr == _launch_gate.WAITING_FOR_MEMORY:
+            return "pending", _MSG_WAITING_FOR_MEMORY
         if werr is not None:
             return "pending", _MSG_NOT_RUNNING
         return "pending", _MSG_WAKING
@@ -7800,8 +8054,8 @@ def _pr_merge_state(wt: str, branch: str, force: bool = False):
         return None
     now = time.time()
     cached = _MERGE_STATE_CACHE.get(branch)
-    if not force and cached and cached[0] > now:
-        return cached[1]
+    if not force and cached and (cached[0] > now or _memory_low()):
+        return cached[1]  # past its TTL too while memory is low: no new gh
     state = _github_pr.pr_merge_state_sync(wt, branch)
     _MERGE_STATE_CACHE[branch] = (now + _MERGE_STATE_TTL, state)
     return state
@@ -7831,8 +8085,8 @@ def _pr_review_state(wt: str, branch: str, info, force: bool = False) -> str:
         return ""
     now = time.time()
     cached = _REVIEW_CACHE.get(branch)
-    if not force and cached and cached[0] > now:
-        return cached[1]
+    if not force and cached and (cached[0] > now or _memory_low()):
+        return cached[1]  # past its TTL too while memory is low: no new gh
     verdict = _github_pr.pr_review_state_sync(wt, number)
     _REVIEW_CACHE[branch] = (now + _REVIEW_TTL, verdict)
     return verdict
@@ -7861,6 +8115,12 @@ def _pr_info(wt: str, branch: str, force: bool = False):
     now = time.time()
     cached = _PR_CACHE.get(branch)
     if not force and cached and cached[0] > now:
+        return cached[1]
+    # While memory reads low, a known answer stands past its TTL: each lookup
+    # forks `gh` (a ~40 MB Go binary) per branch per minute, which is exactly
+    # the background churn a machine out of memory can't page in. A forced
+    # lookup (a person pressed something) still asks.
+    if not force and cached and _memory_low():
         return cached[1]
     info = (
         _gh_pr_info(wt, branch)
@@ -8067,16 +8327,21 @@ async def close_instance(title: str) -> JSONResponse:
 
 
 @app.post("/api/instances/{title}/copy")
-async def copy_instance(title: str) -> JSONResponse:
+async def copy_instance(title: str, request: Request) -> JSONResponse:
     """Open a NEW agent session sharing the source session's worktree.
 
     Runs in-place in the source's worktree directory — same files, same branch,
     a second live Claude session. Cleanup of the copy never deletes the shared
     worktree (in-place semantics), so the original session keeps owning it.
+    A person's start: while memory is low it is **409** ``{"memory_confirm":
+    true}`` until resent with ``{"start_anyway": true}`` (core.launch_gate).
     """
     src, err = _inst_or_404(title)
     if err is not None:
         return err
+    refusal = await _person_memory_refusal(await _body_dict(request))
+    if refusal is not None:
+        return refusal
     peer_err = _peer_guard.refusal(src, "copying")
     if peer_err is not None:
         return peer_err
@@ -8114,6 +8379,7 @@ async def copy_instance(title: str) -> JSONResponse:
     inst.SetStatus(Loading)
     with ENGINE.lock:
         ENGINE.instances[new_title] = inst
+    _launch_gate.note_start(new_title)
 
     async def _bg_start() -> None:
         try:

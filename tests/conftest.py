@@ -10,6 +10,14 @@ from pathlib import Path
 # No boot-time model warm-up under the suite: a daemon thread left by one
 # app's lifespan would load a model into a later test's cache.
 os.environ.setdefault("MINDFLOCK_VOICE_WARM", "0")
+# No agent scopes (systemd-run) and no gitnexus shim in launch strings: tests
+# pin those strings, and must never start a real systemd scope. The tests of
+# backend.providers.agent_limits turn them back on with fakes.
+os.environ.setdefault("MINDFLOCK_AGENT_SCOPE", "0")
+os.environ.setdefault("MINDFLOCK_GITNEXUS_GATE", "0")
+# run.main() lowers the SERVER's oom_score_adj; under pytest that process is
+# the test runner, which must stay killable.
+os.environ.setdefault("MINDFLOCK_SERVER_OOM_PROTECT", "0")
 
 import pytest
 
@@ -235,6 +243,21 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         from backend import memory_pressure as _memory_pressure
 
         _memory_pressure._reset_for_tests()
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
+    # ...and the launch gate (core.launch_gate) counts the REAL tmux agents
+    # against its live cap: no agents, an empty queue, no spacing carried
+    # over from the test before. Its tests feed it their own.
+    monkeypatch.setenv("MINDFLOCK_AUTO_LAUNCH_SPACING", "0")
+    monkeypatch.setenv(
+        "MINDFLOCK_LAUNCH_QUEUE_FILE", str(tmp_path / "mindflock" / "launch_queue.json")
+    )
+    try:
+        from backend.web.core import launch_gate as _launch_gate
+
+        _launch_gate._reset_for_tests()
+        _launch_gate.set_probe(lambda: [])
+        monkeypatch.setattr(_launch_gate, "AUTO_DRAIN", False)
     except Exception:  # noqa: BLE001 — import is best-effort here
         pass
     # ``/answer`` remembers the dialog it just answered (a repeat within a

@@ -664,6 +664,58 @@ def record_result(story, branch: str | None = None, error: str | None = None) ->
 # Launching a ticket session (the Intake panel's "Begin work", the MCP's
 # spawn_ticket_session, and a team run's ticket task)
 # --------------------------------------------------------------------------- #
+def _gate_turn(title: str, lineage: dict):
+    """Ask the launch gate for an agent's ticket start → ``(event, record)``:
+    the event is set when it may launch (now, or when the queue gets to it),
+    the record is its queue entry (None = it goes now). A full queue is a
+    409 :class:`LaunchError` (its pending row dropped)."""
+    import threading
+
+    from backend.web.core import launch_gate as _gate
+
+    ev = threading.Event()
+
+    def _go():
+        ev.set()
+        return None
+
+    try:
+        rec = _gate.gate_auto(
+            title,
+            _go,
+            kind="ticket",
+            source="agent",
+            parent=str(lineage.get("parent") or ""),
+            creates=True,
+        )
+    except _gate.QueueFull as err:
+        _server()._pending_drop(title)
+        raise LaunchError(
+            409,
+            {"error": "%s — try again later" % err, "memory_queue_full": True},
+        ) from None
+    if rec is None:
+        ev.set()
+    return ev, rec
+
+
+#: How often a waiting ticket start checks for its turn.
+_TURN_POLL_SECONDS = 1.0
+
+
+async def _await_turn(title: str, ev) -> None:
+    """Wait until the launch gate lets ``title`` go; raise when its wait was
+    cancelled (Stop waiting on its row)."""
+    from backend.web.core import launch_gate as _gate
+
+    while not ev.is_set():
+        if _gate.waiting(title) is None:
+            last = _gate.last_outcome(title) or {}
+            if last.get("error") == "cancelled":
+                raise RuntimeError("cancelled while waiting for memory")
+        await asyncio.sleep(_TURN_POLL_SECONDS)
+
+
 class LaunchError(Exception):
     """A ticket start refused before anything launched: ``status`` and
     ``body`` are exactly what the route answers with."""
@@ -728,15 +780,10 @@ async def launch(
     """
     srv = _server()
     lineage = dict(lineage or _NO_LINEAGE)
-    # Memory guard: an agent starting tickets as its workers waits for
-    # headroom, exactly like its spawn_session (core.session_create). A run's
-    # ticket tasks are held by the run's planner; the Intake panel never is.
-    if lineage.get("spawned") and not run_id:
-        from backend.web.core import session_create as _session_create
-
-        refusal = await asyncio.to_thread(_session_create.memory_refusal)
-        if refusal is not None:
-            raise LaunchError(409, refusal)
+    # Memory: an agent starting tickets as its workers waits its turn in the
+    # launch gate, like its spawn_session (core.launch_gate) — see the
+    # launch below. A run's ticket tasks are held by the run's planner; the
+    # Intake panel (a person) never is.
     agent_override = str(agent or "")
     effort_override = str(effort or "")
     depth_override = str(depth or "")
@@ -872,6 +919,11 @@ async def launch(
     # before a run's brief and an agent-spawned worker's footer.
     prompt_tail = flight_tail + prompt_tail
 
+    # An agent's start is automatic: it asks the launch gate now (atomically)
+    # and, when it has to wait, its pending row says "Waiting for memory" and
+    # the launch below waits for its turn. Not saved across a restart.
+    turn = _gate_turn(title, lineage) if lineage.get("spawned") and not run_id else None
+
     async def _bg_start() -> None:
         # Same shape as the pipeline's SessionRunner.run, but against THIS
         # server's engine so the session shows up in the grid without a
@@ -879,6 +931,8 @@ async def launch(
         # unlike the PR path there is no pre-provision step.
         marked = False
         try:
+            if turn is not None:
+                await _await_turn(title, turn[0])
             # A source spanning several repos: pick the one(s) this ticket
             # needs first — it decides where the worktree is cut and what the
             # prompt says about the other repos. May ask the agent CLI, so off
@@ -1011,6 +1065,17 @@ async def launch(
 
     srv._register_task(_bg_start())
     body = {"started": True, "title": title}
+    if turn is not None and turn[1] is not None:
+        body.update(
+            {
+                "queued": True,
+                "status": "queued: waiting for memory",
+                # Not "reason": that one says why no report-back footer.
+                "memory_reason": turn[1]["reason"],
+                "position": turn[1]["position"],
+                "waiting_for_memory": turn[1],
+            }
+        )
     if lineage["parent"] or lineage["spawned"] or lineage["report_back"]:
         # What an agent-spawned start needs to report about its worker.
         body.update(

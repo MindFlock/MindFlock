@@ -218,6 +218,18 @@
   display: inline;
 }
 
+/* Waiting for memory (backend core/launch_gate.py) is calm too: it starts
+   by itself, so "Start anyway" shows only on hover / keyboard focus. */
+.inst .stagechip.chip-waitmem .chip-act {
+  display: none;
+  margin-left: 4px;
+}
+
+.inst .stagechip.chip-waitmem:hover .chip-act,
+.inst .stagechip.chip-waitmem:focus-visible .chip-act {
+  display: inline;
+}
+
 /* The session's actions (⋮), at the row's right end beside the ✕. Quiet
    until it's wanted: drawn on hover, on keyboard focus anywhere in the row,
    on the selected row and while its menu is open. Hidden by opacity, never

@@ -501,16 +501,15 @@ class TestTicketStartLineage:
         r = ticket.post({"id": "1", "parent": "orch", "spawned": True})
         assert r.status_code == 409 and r.json()["budget_locked"] is True
 
-    def test_low_memory_refuses_an_agents_ticket_start(self, ticket, reg, monkeypatch):
-        """An agent starting tickets as workers waits for memory like its
-        spawn_session does; the Intake panel's own start is never held."""
+    @staticmethod
+    def _low(monkeypatch, level="low"):
         from backend import memory_pressure
 
         monkeypatch.setattr(
             memory_pressure,
             "snapshot",
             lambda **kw: {
-                "level": "low",
+                "level": level,
                 "available": 1 << 30,
                 "total": 16 << 30,
                 "available_pct": 6.3,
@@ -518,13 +517,51 @@ class TestTicketStartLineage:
                 "at": 0.0,
             },
         )
+
+    def test_low_memory_queues_an_agents_ticket_start(self, ticket, reg, monkeypatch):
+        """An agent starting tickets as workers waits its turn in the launch
+        gate like its spawn_session does: 202 queued, nothing launched until
+        the queue lets it go."""
+        from backend.web.core import launch_gate
+
+        self._low(monkeypatch)
         reg["orch"] = _Inst("orch")
         r = ticket.post({"id": "1", "parent": "orch", "spawned": True})
-        assert r.status_code == 409
-        assert r.json()["error"].startswith("memory is low")
-        assert r.json()["memory"]["level"] == "low"
-        assert ticket.tasks == []
-        assert ticket.post({"id": "1"}).status_code == 202
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert body["queued"] is True and body["status"] == "queued: waiting for memory"
+        assert body["memory_reason"].startswith("memory is low")
+        title = body["title"]
+        assert launch_gate.waiting(title)["kind"] == "ticket"
+        self._low(monkeypatch, "ok")
+        assert launch_gate.drain_once() == title
+        _run(ticket.tasks)
+        (opts,) = ticket.seen
+        assert opts.parent == "orch" and opts.spawned is True
+
+    def test_a_cancelled_ticket_wait_launches_nothing(self, ticket, reg, monkeypatch):
+        from backend.web.core import launch_gate, ticket_start
+
+        monkeypatch.setattr(ticket_start, "_TURN_POLL_SECONDS", 0.0)
+        self._low(monkeypatch)
+        reg["orch"] = _Inst("orch")
+        title = ticket.post({"id": "1", "parent": "orch", "spawned": True}).json()[
+            "title"
+        ]
+        assert launch_gate.cancel(title)
+        _run(ticket.tasks)
+        assert ticket.seen == []
+        assert "cancelled while waiting for memory" in (
+            server._CREATE_FAILURES.get(title) or {}
+        ).get("error", "")
+
+    def test_low_memory_never_queues_the_intake_panel(self, ticket, monkeypatch):
+        from backend.web.core import launch_gate
+
+        self._low(monkeypatch, "critical")
+        r = ticket.post({"id": "1"})
+        assert r.status_code == 202 and "queued" not in r.json()
+        assert launch_gate.items() == []
 
     def test_children_limit_is_409_before_the_202(self, ticket, reg, monkeypatch):
         monkeypatch.setenv("MINDFLOCK_MAX_CHILDREN", "1")

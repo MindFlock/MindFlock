@@ -252,8 +252,19 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         # How soon THIS machine puts idle agents to sleep: it is about its
         # own memory, which differs per device.
         "sleep_idle_minutes",
+        # When THIS machine counts as short of memory, and how soon it puts
+        # idle agents to sleep then (backend.memory_pressure, core.sleep).
+        "memory_sleep_minutes",
+        "memory_low_pct",
+        "memory_critical_pct",
+        # The launch gate's live-agent cap and per-agent warm-up size are
+        # THIS machine's RAM too (core.launch_gate).
+        "max_live_agents",
+        "agent_warmup_mb",
         # Names from THIS machine's Claude config, sharing THIS machine's RAM.
         "mcp_shared_servers",
+        # Memory limits sized to THIS machine's RAM (providers.agent_limits).
+        "agent_memory",
     ),
     "notifications": ("ntfy_click_url",),
     # Which speech backends THIS machine runs or is keyed for.

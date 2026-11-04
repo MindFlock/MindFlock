@@ -35,7 +35,12 @@ included. Nothing used to offload it. Sleeping does:
   background job, nothing queued, no message waiting, no team run or
   fast-track chain or working children depending on it, nobody's terminal
   attached and nobody typing. While memory reads low (``memory_pressure``
-  low/critical) the wait drops to :data:`PRESSURE_IDLE_MINUTES`.
+  low/critical) the wait drops to ``general.memory_sleep_minutes`` (default
+  :data:`PRESSURE_IDLE_MINUTES`; 0 = never for memory) — even with everyday
+  sleeping off — and the pass that sleeps any for memory emits ONE
+  ``system.sessions_slept`` event (the notify addon's calm notice: what was
+  put to sleep and why). An agent mid-turn is never a candidate (the
+  ``turn not ended`` / ``not idle`` vetoes hold at every level).
 
 * **Wake** — :func:`ensure_awake`, the one helper every path that types into
   a session goes through when the session is asleep (a terminal attaching,
@@ -68,7 +73,8 @@ from backend.web.core import title_store
 
 #: ``general.sleep_idle_minutes`` when unset.
 DEFAULT_IDLE_MINUTES = 45
-#: The wait while memory reads low/critical (never longer than the setting).
+#: ``general.memory_sleep_minutes`` when unset: the wait while memory reads
+#: low/critical (never longer than the everyday wait when that is on).
 PRESSURE_IDLE_MINUTES = 5
 #: How often the sweep looks.
 TICK_SECONDS = 60.0
@@ -311,17 +317,37 @@ def idle_minutes() -> int:
     return max(0, int(val))
 
 
+def memory_sleep_minutes() -> int:
+    """``general.memory_sleep_minutes`` (unset = :data:`PRESSURE_IDLE_MINUTES`,
+    0 = never sleep an agent for memory). Never raises; a LOCAL import, like
+    :func:`idle_minutes`."""
+    try:
+        from backend.config import settings as _settings
+
+        val = _settings.load_settings().general.memory_sleep_minutes
+    except Exception:  # noqa: BLE001 — an unreadable store keeps the default
+        return PRESSURE_IDLE_MINUTES
+    if val is None:
+        return PRESSURE_IDLE_MINUTES
+    return max(0, int(val))
+
+
 def threshold_seconds(level: Optional[str] = None) -> Optional[float]:
     """How long an agent must have sat idle before the sweep may sleep it,
-    or None when sleeping is off. Memory low/critical caps it at
-    :data:`PRESSURE_IDLE_MINUTES`."""
+    or None when nothing may be slept. While memory reads low/critical the
+    wait is :func:`memory_sleep_minutes` (capped by the everyday wait when that
+    is on), so a machine running out sheds idle agents even with everyday
+    sleeping off; ``memory_sleep_minutes`` 0 leaves pressure to the everyday
+    wait alone."""
     mins = idle_minutes()
-    if mins <= 0:
-        return None
     if level is None:
         level = memory_pressure.level()
     if level in ("low", "critical"):
-        mins = min(mins, PRESSURE_IDLE_MINUTES)
+        pressure = memory_sleep_minutes()
+        if pressure > 0:
+            mins = min(mins, pressure) if mins > 0 else pressure
+    if mins <= 0:
+        return None
     return mins * 60.0
 
 
@@ -734,11 +760,19 @@ def sleep_now(inst, title: str, srv=None) -> Optional[str]:
     return put_to_sleep(srv, inst, title, REASON_MANUAL)
 
 
-def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[str]]:
+def ensure_awake(
+    inst, title: str, why: str, srv=None, *, auto: bool = False
+) -> Tuple[bool, Optional[str]]:
     """Wake ``title`` if it is asleep → ``(woke, error)``. Every path that
     types into a session calls this first (or relaunches through
     ``_ensure_agent_session``, which ends the sleep the same way). ``why`` is
     what the log line says woke it. Blocking — off the loop.
+
+    ``auto``: nobody asked for this wake (a queued prompt, a mailbox
+    delivery), so it goes through the launch gate (core.launch_gate). When
+    the gate says wait, the wake joins its queue instead (the row shows
+    "Waiting for memory") and the answer is ``(False,
+    launch_gate.WAITING_FOR_MEMORY)``. The queue wakes it when memory allows.
 
     A PAUSED session is never woken: Pause outranks a sleep (the pause route
     drops the record), so a leftover one is dropped here and the wake is
@@ -757,6 +791,24 @@ def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[s
         return False, PAUSED_REFUSED
     if srv is None:
         srv = _server()
+    if auto:
+        from backend.web.core import launch_gate as _gate
+
+        def _later() -> Optional[str]:
+            cur = srv.ENGINE.instances.get(title)
+            if cur is None:
+                return "the session was closed"
+            return ensure_awake(cur, title, why, srv)[1]
+
+        try:
+            queued = _gate.gate_auto(
+                title, _later, kind="wake", source=why, args={"why": why}
+            )
+        except _gate.QueueFull as err:
+            _info("wake %s: not started (%s)", title, err)
+            return False, str(err)
+        if queued is not None:
+            return False, _gate.WAITING_FOR_MEMORY
     _WAKE_WHY[title] = why
     _name, err = srv._ensure_agent_session(inst, title)
     if err is not None:
@@ -771,6 +823,78 @@ def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[s
     except Exception:  # noqa: BLE001
         pass
     return True, None
+
+
+def _restore_wake(rec: dict):
+    """A saved wake after a restart (core.launch_gate): its launch, or None
+    (dropped) when the session is gone or no longer asleep."""
+    title = str(rec.get("title") or "")
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None or not is_sleeping(title):
+        return None
+    why = str((rec.get("args") or {}).get("why") or "a queued wake")
+
+    def _later() -> Optional[str]:
+        cur = srv.ENGINE.instances.get(title)
+        if cur is None:
+            return "the session was closed"
+        return ensure_awake(cur, title, why, srv)[1]
+
+    return _later
+
+
+def _register_wake() -> None:
+    from backend.web.core import launch_gate as _gate
+
+    _gate.register_kind("wake", _restore_wake)
+
+
+_register_wake()
+
+
+def sleep_idle_now(srv=None, limit: int = 8) -> dict:
+    """A person's "Put idle agents to sleep" (the memory confirm's second
+    choice): every session :func:`veto` allows with ``manual`` (every safety
+    rule, none of the timing ones), longest-idle first, at most ``limit`` →
+    ``{"slept": [titles], "freed_mb": n}``. Blocking — off the loop. Never
+    raises."""
+    if srv is None:
+        srv = _server()
+    slept: List[str] = []
+    freed = 0
+    try:
+        from backend.web.core import events as _events
+
+        now = time.time()
+        rows = [r for r in _events.sessions_snapshot() if isinstance(r, dict)]
+        by_title = {r.get("title"): r for r in rows if not r.get("device")}
+        with srv.ENGINE.lock:
+            items = list(srv.ENGINE.instances.items())
+        candidates: List[Tuple[float, str, object]] = []
+        for title, inst in items:
+            row = by_title.get(title)
+            if row is None:
+                continue
+            try:
+                why = veto(srv, inst, title, row, now, 0.0, rows=rows, manual=True)
+            except Exception:  # noqa: BLE001
+                continue
+            if why is None:
+                candidates.append(
+                    (float(row.get("activity_since") or now), title, inst)
+                )
+        candidates.sort(key=lambda c: c[0])
+        for since, title, inst in candidates[: max(0, int(limit))]:
+            try:
+                if put_to_sleep(srv, inst, title, REASON_MANUAL, now - since) is None:
+                    slept.append(title)
+                    freed += int((info(title) or {}).get("freed_mb") or 0)
+            except Exception as err:  # noqa: BLE001
+                _info("sleep %s: failed (%s)", title, err)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"slept": slept, "freed_mb": freed}
 
 
 # --------------------------------------------------------------------------- #
@@ -801,9 +925,10 @@ def tick(srv=None, now: Optional[float] = None) -> List[str]:
         idle_s = threshold_seconds(level)
         if idle_s is None:
             return slept
+        everyday = idle_minutes() * 60.0
         reason = (
             REASON_MEMORY
-            if level in ("low", "critical") and idle_s < (idle_minutes() * 60.0)
+            if level in ("low", "critical") and (everyday <= 0 or idle_s < everyday)
             else REASON_IDLE
         )
         from backend.web.core import events as _events
@@ -838,9 +963,55 @@ def tick(srv=None, now: Optional[float] = None) -> List[str]:
                     slept.append(title)
             except Exception as err:  # noqa: BLE001
                 _info("sleep %s: failed (%s)", title, err)
+        if slept and reason == REASON_MEMORY:
+            announce_memory_sleep(slept)
     except Exception:  # noqa: BLE001 — the sweep must never die
         pass
     return slept
+
+
+def memory_notice_text(titles: List[str], why: str = "") -> str:
+    """The one calm sentence for a memory sleep: ``Memory is low (2.1 GB free
+    of 20.0 GB), so 2 idle agents were put to sleep: a, b. They wake when you
+    open or message them.``"""
+    names = ", ".join(titles[:5]) + (
+        " and %d more" % (len(titles) - 5) if len(titles) > 5 else ""
+    )
+    lead = why[:1].upper() + why[1:] if why else "Memory is low"
+    count = (
+        "1 idle agent was" if len(titles) == 1 else "%d idle agents were" % len(titles)
+    )
+    return "%s, so %s put to sleep: %s. %s when you open or message %s." % (
+        lead,
+        count,
+        names,
+        "It wakes" if len(titles) == 1 else "They wake",
+        "it" if len(titles) == 1 else "them",
+    )
+
+
+def announce_memory_sleep(titles: List[str]) -> Optional[dict]:
+    """ONE ``system.sessions_slept`` event for a pass that slept agents for
+    memory (the notify addon's ``sessions_slept`` rule), rather than a notice
+    per agent. → the envelope, or None. Never raises."""
+    try:
+        from backend.web.core import events as _events
+
+        snap = memory_pressure.snapshot()
+        why = memory_pressure.describe(snap)
+        return _events.BUS.emit(
+            "system.sessions_slept",
+            new=str(len(titles)),
+            data={
+                "count": len(titles),
+                "titles": list(titles),
+                "reason": REASON_MEMORY,
+                "memory": snap,
+                "detail": memory_notice_text(titles, why),
+            },
+        )
+    except Exception:  # noqa: BLE001 — a notice must never break the sweep
+        return None
 
 
 async def run_loop(srv=None) -> None:
@@ -856,7 +1027,8 @@ async def run_loop(srv=None) -> None:
         await asyncio.sleep(left + 1.0)
     while True:
         try:
-            await asyncio.to_thread(tick, srv)
+            runner = getattr(srv, "_in_bg_pool", None)  # the ticks' own pool
+            await (runner(tick, srv) if runner else asyncio.to_thread(tick, srv))
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(TICK_SECONDS)

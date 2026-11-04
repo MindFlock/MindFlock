@@ -1,0 +1,503 @@
+"""Memory limits for the agents MindFlock launches, and a gate on GitNexus.
+
+What ran this machine out of memory (2026-11-04, ``journalctl -k -b -1``):
+20 GB of RAM and all 16 GB of swap held by ~18 agent trees, until the kernel
+OOM killer fired — minutes into a swap thrash that left WSL wedged. The single
+biggest processes were ``gitnexus analyze --force`` runs from a repo's
+pre-commit hook (3.8 / 4.3 / 4.6 GB each, several at once: every agent that
+committed started its own, and GitNexus sizes its heap to 0.75x RAM — 16 GB
+here), then ``pytest -n 8`` suites (8 workers x ~0.7 GB) in other sessions.
+The server (``oom_score_adj`` 0) was not the victim; the WSL VM was, because
+nothing stopped one agent's tree from taking everything first.
+
+Two guards, both applied where an agent is launched:
+
+* **A cgroup per agent** (Linux with a systemd user manager). The launch runs
+  inside ``systemd-run --user --scope`` with ``MemoryHigh`` (the kernel
+  throttles and reclaims above it), ``MemoryMax`` (the kernel's OOM killer
+  acts *inside that agent's tree* above it — the biggest process there, the
+  test worker or the indexer, not the server or another agent) and
+  ``MemorySwapMax``. Every agent scope sits in one slice,
+  :data:`FLEET_SLICE`, which carries a limit for ALL agents together, so the
+  server, the tmux server and the rest of the machine always keep the
+  remainder. Where there is no systemd user manager (macOS, a WSL without
+  systemd, a container) the launch is unchanged.
+
+* **A ``gitnexus`` shim** on the agents' ``PATH`` (when GitNexus is
+  installed). ``gitnexus analyze`` runs through ``mindflock slot --pool
+  gitnexus --max 1`` (:mod:`backend.slot`): one analyze at a time machine-wide,
+  queued first-come first-served, with a V8 heap cap (``NODE_OPTIONS
+  --max-old-space-size``, which GitNexus honours instead of its 0.75x RAM
+  default) and ``oom_score_adj`` 800, so an indexer is what the OOM killer
+  takes first. Every other ``gitnexus`` subcommand (``mcp``, ``augment``…)
+  execs the real binary untouched. It covers any repo's hook — a pre-commit
+  ``gitnexus analyze``, ``node .gitnexus/run.cjs analyze`` (which looks
+  ``gitnexus`` up on ``PATH``) — and an agent typing the command itself.
+
+Settings (``general.agent_memory`` in settings.json, per device; every key
+optional, ``""`` = the default)::
+
+    {"enabled": true,                       # false = no scopes, no shim
+     "high": "30%", "max": "40%", "swap": "15%",           # each agent
+     "fleet_high": "65%", "fleet_max": "75%", "fleet_swap": "40%",  # all agents
+     "gitnexus_heap_mb": 4096,              # 0 = no gitnexus shim
+     "gitnexus_at_once": 1}
+
+Sizes are a share of physical RAM (``"30%"``), bytes with an optional
+K/M/G/T suffix (``"6G"``), or ``"off"`` for no limit. ``MINDFLOCK_AGENT_SCOPE=0``
+turns the scopes off and ``MINDFLOCK_GITNEXUS_GATE=0`` the shim (the test suite
+sets both).
+
+Like :mod:`backend.providers.launch_script`, this depends on nothing outside
+:mod:`backend.providers` but the settings file, so every launch path can use it.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from typing import Dict, List, Optional, Tuple
+
+__all__ = [
+    "DEFAULTS",
+    "FLEET_SLICE",
+    "SHIM_MARKER",
+    "config",
+    "gitnexus_shim_dir",
+    "gitnexus_shim_text",
+    "parse_size",
+    "resolved_limits",
+    "scope_available",
+    "scope_command",
+    "wrap_launch",
+]
+
+#: The slice every agent scope goes in (a child of the user manager's
+#: ``app.slice``); its own limits cap all agents together.
+FLEET_SLICE = "app-mindflock.slice"
+
+DEFAULTS: Dict[str, object] = {
+    "enabled": True,
+    # One agent: throttled above 30% of RAM, OOM-killed (inside its own tree)
+    # above 40%, at most 15% of RAM worth of swap. A ~0.45 GB CLI with its MCP
+    # servers plus a 4-worker test run fits under the throttle; an 8-worker
+    # suite of 0.7 GB workers on a 20 GB machine meets the ceiling — and loses
+    # a worker, not the machine.
+    "high": "30%",
+    "max": "40%",
+    "swap": "15%",
+    # All agents together: whatever they do, the server (~0.5-1.5 GB), the
+    # tmux server, the editor and the OS keep a quarter of RAM and most swap.
+    "fleet_high": "65%",
+    "fleet_max": "75%",
+    "fleet_swap": "40%",
+    # 4 GB of V8 heap: the sitecheck repo's analyze peaked at 3.8-4.6 GB RSS
+    # (heap + native graph store); one at a time, that fits anywhere this runs.
+    "gitnexus_heap_mb": 4096,
+    "gitnexus_at_once": 1,
+}
+
+_SIZE_KEYS = ("high", "max", "swap", "fleet_high", "fleet_max", "fleet_swap")
+_INT_KEYS = ("gitnexus_heap_mb", "gitnexus_at_once")
+
+#: First line after the shebang of a shim this module wrote: never resolved as
+#: "the real gitnexus" and safe to overwrite.
+SHIM_MARKER = "# mindflock gitnexus shim"
+
+#: ``oom_score_adj`` an indexer gives itself (agents run at 500).
+GITNEXUS_OOM_SCORE_ADJ = 800
+
+#: Longest an analyze waits for its turn before running anyway, seconds. A
+#: queue of agents committing one after another is minutes; a hung holder is
+#: the only thing this ever trips on.
+GITNEXUS_WAIT_SECONDS = 1800
+
+_SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]?)i?b?\s*$", re.I)
+_PCT_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*%\s*$")
+_OFF_WORDS = ("off", "none", "infinity", "unlimited", "no", "false")
+_UNIT_SAFE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+# --- settings ---------------------------------------------------------------
+
+
+def _settings_blob() -> dict:
+    """``general.agent_memory`` from settings.json, ``{}`` on any trouble."""
+    try:
+        from backend.config.settings import load_settings
+
+        raw = load_settings().general.agent_memory
+    except Exception:  # noqa: BLE001 — a launch never fails over a setting
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def clean_config(raw) -> Dict[str, object]:
+    """The known keys of a stored ``agent_memory`` dict, junk dropped (what
+    settings.json keeps — the defaults are never written)."""
+    out: Dict[str, object] = {}
+    if not isinstance(raw, dict):
+        return out
+    if isinstance(raw.get("enabled"), bool):
+        out["enabled"] = raw["enabled"]
+    for key in _SIZE_KEYS:
+        v = raw.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            v = str(int(v))
+        if isinstance(v, str) and v.strip() and _valid_size(v):
+            out[key] = v.strip()
+    for key in _INT_KEYS:
+        v = raw.get(key)
+        if isinstance(v, bool):
+            continue
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            continue
+        if n >= 0:
+            out[key] = n
+    return out
+
+
+def config(raw: Optional[dict] = None) -> Dict[str, object]:
+    """:data:`DEFAULTS` overlaid with the stored settings (``raw`` for tests)."""
+    merged = dict(DEFAULTS)
+    merged.update(clean_config(_settings_blob() if raw is None else raw))
+    return merged
+
+
+def _valid_size(spec: str) -> bool:
+    s = spec.strip().lower()
+    return bool(s in _OFF_WORDS or _PCT_RE.match(s) or _SIZE_RE.match(s))
+
+
+def _total_memory() -> int:
+    try:
+        return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
+    except (AttributeError, OSError, ValueError):
+        return 0
+
+
+def parse_size(spec, total: int) -> Optional[int]:
+    """Bytes for a size setting: ``"30%"`` of ``total``, ``"6G"``, ``"512M"``,
+    a plain byte count; ``0`` = no limit (``"off"``, ``"0"``); ``None`` for
+    something unreadable (or a percentage with ``total`` unknown)."""
+    s = str(spec if spec is not None else "").strip().lower()
+    if not s:
+        return None
+    if s in _OFF_WORDS:
+        return 0
+    m = _PCT_RE.match(s)
+    if m:
+        if total <= 0:
+            return None
+        pct = float(m.group(1))
+        return 0 if pct <= 0 else int(total * min(pct, 100.0) / 100.0)
+    m = _SIZE_RE.match(s)
+    if not m:
+        return None
+    mult = {"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}
+    return int(float(m.group(1)) * mult[m.group(2).lower()])
+
+
+def resolved_limits(
+    cfg: Optional[Dict[str, object]] = None, total: Optional[int] = None
+) -> Dict[str, int]:
+    """Every size setting in bytes (``0`` = unlimited), defaults filling in
+    anything unreadable."""
+    cfg = config() if cfg is None else cfg
+    total = _total_memory() if total is None else total
+    out: Dict[str, int] = {}
+    for key in _SIZE_KEYS:
+        value = parse_size(cfg.get(key), total)
+        if value is None:
+            value = parse_size(DEFAULTS[key], total)
+        out[key] = value or 0
+    return out
+
+
+def _env_off(name: str) -> bool:
+    return (os.environ.get(name) or "").strip().lower() in ("0", "off", "false", "no")
+
+
+# --- the systemd user scope ---------------------------------------------------
+
+_PROBE_LOCK = threading.Lock()
+#: (checked at monotonic, available). A yes is trusted for 10 minutes, a no for
+#: one: a user manager that was not up yet at boot (WSL starts it lazily) is
+#: picked up by the next launch a minute later.
+_PROBE: Optional[Tuple[float, bool]] = None
+_PROBE_TTL_YES = 600.0
+_PROBE_TTL_NO = 60.0
+
+
+def _systemd_run() -> Optional[str]:
+    if not sys.platform.startswith("linux"):
+        return None
+    return shutil.which("systemd-run")
+
+
+def _memory_props(prefix: str, limits: Dict[str, int]) -> List[str]:
+    """``MemoryHigh=…`` style assignments for the non-zero limits."""
+    props = []
+    for key, prop in (
+        ("high", "MemoryHigh"),
+        ("max", "MemoryMax"),
+        ("swap", "MemorySwapMax"),
+    ):
+        value = limits.get(prefix + key, 0)
+        if value > 0:
+            props.append("%s=%d" % (prop, value))
+    return props
+
+
+def _apply_fleet_limits(limits: Dict[str, int]) -> None:
+    """Put the all-agents limits on :data:`FLEET_SLICE` (runtime-only: gone at
+    reboot, re-applied by the first launch after it). Best-effort."""
+    props = _memory_props("fleet_", limits)
+    systemctl = shutil.which("systemctl")
+    if not props or not systemctl:
+        return
+    try:
+        subprocess.run(
+            [systemctl, "--user", "set-property", "--runtime", FLEET_SLICE, *props],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def scope_available(*, refresh: bool = False) -> bool:
+    """Whether launches can run in a systemd user scope: ``systemd-run`` exists
+    and a throwaway scope in :data:`FLEET_SLICE` actually starts (the user
+    manager is up and reachable). The first yes also puts the fleet limits on
+    the slice. Cached (see :data:`_PROBE`)."""
+    global _PROBE
+    if _env_off("MINDFLOCK_AGENT_SCOPE"):
+        return False
+    with _PROBE_LOCK:
+        now = time.monotonic()
+        if not refresh and _PROBE is not None:
+            at, ok = _PROBE
+            if now - at < (_PROBE_TTL_YES if ok else _PROBE_TTL_NO):
+                return ok
+        exe = _systemd_run()
+        ok = False
+        if exe:
+            try:
+                ok = (
+                    subprocess.run(
+                        [
+                            exe,
+                            "--user",
+                            "--scope",
+                            "--quiet",
+                            "--collect",
+                            "--slice=" + FLEET_SLICE,
+                            "--",
+                            "true",
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                        check=False,
+                    ).returncode
+                    == 0
+                )
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+        first_yes = ok and (_PROBE is None or not _PROBE[1])
+        _PROBE = (now, ok)
+    if first_yes:
+        _apply_fleet_limits(resolved_limits())
+    return ok
+
+
+def unit_name(session_name: str) -> str:
+    """A unique, readable scope name for one launch of ``session_name``."""
+    safe = _UNIT_SAFE.sub("_", session_name or "agent")[:80] or "agent"
+    return "mindflock-%s-%d" % (safe, time.time_ns() // 1_000_000)
+
+
+def scope_command(
+    session_name: str,
+    limits: Optional[Dict[str, int]] = None,
+    exe: str = "systemd-run",
+) -> List[str]:
+    """The ``systemd-run`` argv (up to and including ``--``) that starts one
+    agent launch in its own scope with the per-agent limits."""
+    limits = resolved_limits() if limits is None else limits
+    argv = [
+        exe,
+        "--user",
+        "--scope",
+        "--quiet",
+        "--collect",
+        "--slice=" + FLEET_SLICE,
+        "--unit=" + unit_name(session_name),
+    ]
+    for prop in _memory_props("", limits):
+        argv += ["-p", prop]
+    argv.append("--")
+    return argv
+
+
+# --- the gitnexus shim ------------------------------------------------------
+
+
+def _run_dir() -> str:
+    env = (os.environ.get("MINDFLOCK_RUN_DIR") or "").strip()
+    if env:
+        return env
+    return os.path.join(os.path.expanduser("~"), ".mindflock", "run")
+
+
+def shim_dir() -> str:
+    return os.path.join(_run_dir(), "bin")
+
+
+def _package_root() -> str:
+    """The directory holding the ``backend`` package this code runs from."""
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def gitnexus_shim_text(
+    python: str,
+    heap_mb: int,
+    at_once: int = 1,
+    wait_seconds: int = GITNEXUS_WAIT_SECONDS,
+    package_root: Optional[str] = None,
+) -> str:
+    """The POSIX sh ``gitnexus`` shim (see the module docstring).
+
+    The real binary is looked up at run time on ``PATH`` with the shim's own
+    directory left out, so installing or moving GitNexus later needs nothing
+    regenerated. If MindFlock's interpreter is gone (an uninstall), analyze
+    still runs — capped, just not queued. ``-P`` keeps the repo being
+    committed (the hook's cwd) off ``sys.path``; ``PYTHONPATH`` names the
+    package this server runs from, installed or a checkout alike."""
+    sd = shlex.quote(shim_dir())
+    py = shlex.quote(python)
+    root = shlex.quote(package_root or _package_root())
+    return (
+        "#!/bin/sh\n"
+        f"{SHIM_MARKER} (backend/providers/agent_limits.py) — regenerated at\n"
+        "# every agent launch. One `gitnexus analyze` at a time machine-wide, with a\n"
+        "# capped heap; everything else is the real gitnexus, untouched.\n"
+        f"shim_dir={sd}\n"
+        "real=\n"
+        "IFS_save=$IFS; IFS=:\n"
+        "for d in $PATH; do\n"
+        '  [ -n "$d" ] || continue\n'
+        '  [ "$d" = "$shim_dir" ] && continue\n'
+        '  if [ -x "$d/gitnexus" ] && ! grep -q "^'
+        + SHIM_MARKER
+        + '" "$d/gitnexus" 2>/dev/null; then\n'
+        "    real=$d/gitnexus; break\n"
+        "  fi\n"
+        "done\n"
+        "IFS=$IFS_save\n"
+        'if [ -z "$real" ]; then echo "gitnexus: not found on PATH" >&2; exit 127; fi\n'
+        'if [ "$1" != analyze ] || [ "${MINDFLOCK_GITNEXUS_GATE:-1}" = 0 ]; then\n'
+        '  exec "$real" "$@"\n'
+        "fi\n"
+        f"{{ echo {GITNEXUS_OOM_SCORE_ADJ} >/proc/self/oom_score_adj; }} 2>/dev/null || :\n"
+        'case " ${NODE_OPTIONS-} " in\n'
+        "  *max-old-space-size*) ;;\n"
+        f'  *) NODE_OPTIONS="${{NODE_OPTIONS:+$NODE_OPTIONS }}--max-old-space-size={int(heap_mb)}"; export NODE_OPTIONS ;;\n'
+        "esac\n"
+        f"if [ -x {py} ]; then\n"
+        f"  PYTHONPATH={root} exec {py} -P -m backend.slot --pool gitnexus --max {max(1, int(at_once))} "
+        f'--timeout {int(wait_seconds)} -- "$real" "$@"\n'
+        "fi\n"
+        'exec "$real" "$@"\n'
+    )
+
+
+def _real_gitnexus_on_path(path: Optional[str] = None) -> Optional[str]:
+    sd = os.path.realpath(shim_dir())
+    for d in (path if path is not None else os.environ.get("PATH", "")).split(
+        os.pathsep
+    ):
+        if not d or os.path.realpath(d) == sd:
+            continue
+        cand = os.path.join(d, "gitnexus")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def gitnexus_shim_dir(cfg: Optional[Dict[str, object]] = None) -> Optional[str]:
+    """Write (or refresh) the ``gitnexus`` shim and return its directory, for
+    the front of an agent's ``PATH`` — or None when the gate is off, GitNexus
+    is not installed, or the file can't be written."""
+    if _env_off("MINDFLOCK_GITNEXUS_GATE"):
+        return None
+    cfg = config() if cfg is None else cfg
+    heap = int(cfg.get("gitnexus_heap_mb") or 0)
+    if not cfg.get("enabled", True) or heap <= 0:
+        return None
+    if not _real_gitnexus_on_path():
+        return None
+    text = gitnexus_shim_text(
+        sys.executable, heap, int(cfg.get("gitnexus_at_once") or 1)
+    )
+    directory = shim_dir()
+    path = os.path.join(directory, "gitnexus")
+    try:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                current = fh.read()
+        except OSError:
+            current = None
+        if current != text:
+            os.makedirs(directory, exist_ok=True)
+            tmp = "%s.%d.tmp" % (path, os.getpid())
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.chmod(tmp, 0o755)
+            os.replace(tmp, path)
+    except OSError:
+        return None
+    return directory
+
+
+# --- composing a launch -------------------------------------------------------
+
+
+def wrap_launch(cmd: str, session_name: str) -> str:
+    """``cmd`` (a shell string a ``sh -c`` will run) with the agent guards
+    around it: the ``gitnexus`` shim's directory at the front of ``PATH`` and
+    the whole launch in its own memory-limited systemd scope. ``cmd`` itself
+    when every guard is off or unavailable, so the launch is byte-identical to
+    what it was before this module on such a machine.
+
+    The scope runs ``sh -c <cmd>``: ``systemd-run --scope`` execs it in place,
+    so the pane's terminal, environment, working directory and exit status
+    are the agent's own."""
+    try:
+        cfg = config()
+        if not cfg.get("enabled", True):
+            return cmd
+        out = cmd
+        if scope_available():
+            exe = _systemd_run() or "systemd-run"
+            argv = scope_command(session_name, resolved_limits(cfg), exe)
+            out = " ".join(shlex.quote(a) for a in argv) + " sh -c " + shlex.quote(cmd)
+        shims = gitnexus_shim_dir(cfg)
+        if shims:
+            out = 'PATH=%s:"$PATH"; export PATH; %s' % (shlex.quote(shims), out)
+        return out
+    except Exception:  # noqa: BLE001 — a guard never blocks a launch
+        return cmd

@@ -24727,7 +24727,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$8 = /* @__PURE__ */ new Set();
+var listeners$9 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24751,7 +24751,7 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$8) l();
+	for (const l of listeners$9) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
@@ -25337,6 +25337,18 @@ function haltedState(fl) {
 	};
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
+var WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
+function waitingState(w) {
+	return {
+		state: "starting",
+		label: WAITING_FOR_MEMORY_LABEL,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		waiting: true,
+		hint: "Waiting for memory" + (w.reason ? " — " + w.reason : "") + (w.position > 1 ? " (" + w.position + " in line)" : "") + ". It starts by itself once there is room; Start anyway starts it now."
+	};
+}
 var SLEEPING_LABEL = "Sleeping";
 function sleepingState(info, now) {
 	const since = Number(info.since) || 0;
@@ -25381,6 +25393,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Moving the session's folder — it resumes there when the move is done"
 	};
+	if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory);
 	if (inst.pending || inst.status === "loading") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -26729,7 +26742,7 @@ var DEBOUNCE_MS = 500;
 var RETRY_MIN_MS = 5e3;
 var RETRY_MAX_MS$1 = 12e4;
 var DIRTY_KEY = "mf_prefs_dirty";
-var pending$3 = /* @__PURE__ */ new Set();
+var pending$4 = /* @__PURE__ */ new Set();
 var gen = /* @__PURE__ */ new Map();
 var timer = null;
 var retryMs = 0;
@@ -26817,7 +26830,7 @@ function settleFields(fields, sentGen = null, kv = storage$3()) {
 	let changed = false;
 	for (const f of fields) {
 		if (sentGen && (gen.get(f) || 0) !== (sentGen.get(f) || 0)) continue;
-		if (pending$3.has(f)) continue;
+		if (pending$4.has(f)) continue;
 		if (d.delete(f)) changed = true;
 	}
 	if (changed) saveDirty(d, kv);
@@ -26837,13 +26850,13 @@ function withoutEcho(fn) {
 }
 function pendingFields(kv = storage$3()) {
 	const out = dirtyFields(kv);
-	for (const f of pending$3) out.add(f);
+	for (const f of pending$4) out.add(f);
 	return out;
 }
 function notePrefWrite(lsKey, kv = storage$3()) {
 	const field = prefFieldFor(lsKey);
 	if (!field || suspended) return;
-	pending$3.add(field);
+	pending$4.add(field);
 	gen.set(field, (gen.get(field) || 0) + 1);
 	markDirty(field, kv);
 	retryMs = 0;
@@ -26865,8 +26878,8 @@ function bodyFor(fields, kv) {
 async function flushPrefWrites(kv = storage$3()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
-	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
-	pending$3.clear();
+	const fields = /* @__PURE__ */ new Set([...pending$4, ...dirtyFields(kv)]);
+	pending$4.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
 	let res;
@@ -26898,8 +26911,8 @@ function settleExcept(fields, refused, sentGen, kv, resOrErr) {
 function flushPrefsOnHide(kv = storage$3()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
-	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
-	pending$3.clear();
+	const fields = /* @__PURE__ */ new Set([...pending$4, ...dirtyFields(kv)]);
+	pending$4.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
 	beacon(bodyFor(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
@@ -27999,7 +28012,7 @@ function useMemory() {
 	return useQuery({
 		queryKey: ["system-memory"],
 		queryFn: () => api("/api/system/memory"),
-		refetchInterval: 15e3,
+		refetchInterval: (q) => q.state.data?.gate?.holding ? 5e3 : 15e3,
 		retry: false
 	});
 }
@@ -30259,6 +30272,88 @@ function IdleFlockRow() {
 	});
 }
 //#endregion
+//#region src/lib/memoryConfirm.ts
+function memoryConfirmOf(e) {
+	const err = e;
+	if (!err || typeof err !== "object" || err.status !== 409) return null;
+	const b = err.body;
+	if (!b || typeof b !== "object" || b.memory_confirm !== true) return null;
+	return {
+		memory_confirm: true,
+		level: b.level === "critical" ? "critical" : "low",
+		message: typeof b.message === "string" && b.message ? b.message : "Memory is low.",
+		error: b.error,
+		free: b.free,
+		total: b.total,
+		warming: b.warming,
+		live: b.live
+	};
+}
+var pending$3 = null;
+var listeners$8 = /* @__PURE__ */ new Set();
+function emit$1() {
+	for (const l of listeners$8) l();
+}
+function subscribeMemoryConfirm(fn) {
+	listeners$8.add(fn);
+	return () => listeners$8.delete(fn);
+}
+function currentMemoryConfirm() {
+	return pending$3;
+}
+function askMemoryConfirm(body, what, canSleep = true) {
+	return new Promise((resolve) => {
+		if (pending$3) pending$3.resolve("cancel");
+		const me = {
+			body,
+			what,
+			canSleep,
+			resolve(choice) {
+				if (pending$3 === me) {
+					pending$3 = null;
+					emit$1();
+				}
+				resolve(choice);
+			}
+		};
+		pending$3 = me;
+		emit$1();
+	});
+}
+var memoryConfirmDeps = {
+	ask: askMemoryConfirm,
+	sleepIdle: () => api("/api/server/sleep-idle", { json: {} })
+};
+var MemoryCancelled = class extends Error {
+	constructor() {
+		super("Not started: memory is low");
+	}
+};
+function isMemoryCancel(e) {
+	return e instanceof MemoryCancelled;
+}
+async function withMemoryConfirm(what, send, onSlept) {
+	let slept = false;
+	for (;;) try {
+		return await send(false);
+	} catch (e) {
+		const body = memoryConfirmOf(e);
+		if (!body) throw e;
+		const choice = await memoryConfirmDeps.ask(body, what, !slept);
+		if (choice === "start") return await send(true);
+		if (choice === "cancel" || slept) throw new MemoryCancelled();
+		slept = true;
+		const a = await memoryConfirmDeps.sleepIdle();
+		onSlept?.(a);
+	}
+}
+function sleptLine(a) {
+	const n = a.slept.length;
+	if (!n) return "No agent was idle and unwatched, so none was put to sleep.";
+	const freed = a.freed_mb >= 1024 ? (a.freed_mb / 1024).toFixed(1) + " GB" : a.freed_mb + " MB";
+	return "Put " + n + " idle agent" + (n === 1 ? "" : "s") + " to sleep (freed ~" + freed + ").";
+}
+//#endregion
 //#region src/components/grid/layout.ts
 var MAX_VISIBLE = 9;
 var DROP_PH = "\0drop";
@@ -32133,7 +32228,7 @@ async function copySession(title) {
 	const guess = addPendingSession(copyTitle(displayName(title), /* @__PURE__ */ new Set([...titles, ...titles.map((t) => displayName(t))])));
 	placeAfter(guess, title);
 	try {
-		const inst = await instApi(title, "/copy", { method: "POST" });
+		const inst = await withMemoryConfirm(displayName(title) + "'s copy", (anyway) => instApi(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
 		if (inst?.title) clearStaleAlias(inst.title);
 		landPendingSession(guess, inst);
 		await refreshInstances();
@@ -32144,7 +32239,7 @@ async function copySession(title) {
 		}
 	} catch (err) {
 		failPendingSession(guess);
-		errorPop("Copy failed", errMsg(err));
+		if (!isMemoryCancel(err)) errorPop("Copy failed", errMsg(err));
 	}
 }
 async function branchSession(title) {
@@ -32428,9 +32523,9 @@ async function pauseSession(title) {
 async function resumeSession(title) {
 	if (!title) return;
 	try {
-		await instApi(title, "/resume", { method: "POST" });
+		await withMemoryConfirm(displayName(title), (anyway) => instApi(title, "/resume", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
 	} catch (err) {
-		errorPop("Resume failed", errMsg(err));
+		if (!isMemoryCancel(err)) errorPop("Resume failed", errMsg(err));
 	}
 	await refreshInstances();
 }
@@ -44305,6 +44400,15 @@ var VOICE_PREFS_KEY = "cs_voice_desktop";
 function voiceInUse(p) {
 	return p.replies !== "off" || !!p.wake;
 }
+function speaksOnServer(p, cfg, electron = isElectron()) {
+	if (ttsEngine(cfg, electron) !== "server") return false;
+	return voiceInUse(p) || p.confirm !== false || cfg.say_all === true;
+}
+var VOICE_STARTING_MS = 1e3;
+var VOICE_COLD_MS = 6e5;
+function voiceMayBeCold(lastOk, now) {
+	return !lastOk || now - lastOk >= VOICE_COLD_MS;
+}
 var REPLIES_CHOICES = [
 	{
 		value: "off",
@@ -44427,9 +44531,42 @@ var HUSH_CAPTION_MS = 1e3;
 var MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 function micPill(s) {
 	if (s.quiet) return HUSH_LINE;
-	if (s.listening) return "Listening…";
+	if (s.listening) return s.warming ? STARTING_MIC_LINE : "Listening…";
+	if (s.speaking && s.starting) return STARTING_VOICE_LINE;
 	return s.speaking ? "Speaking…" : "";
 }
+var STARTING_VOICE_LINE = "Starting voice…";
+var STARTING_MIC_LINE = "Starting the mic…";
+var LISTEN_RENEW_MS = 6e4;
+function listenLeaser(post = postListen) {
+	let on = false;
+	let timer;
+	const send = (want) => void post(want).catch(() => {});
+	return {
+		set(want) {
+			if (want === on) return;
+			on = want;
+			clearInterval(timer);
+			timer = void 0;
+			send(want);
+			if (want) timer = setInterval(() => send(true), LISTEN_RENEW_MS);
+		},
+		get on() {
+			return on;
+		}
+	};
+}
+function postListen(on) {
+	return apiRaw("/api/voice/listen", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			on,
+			client: VOICE_CLIENT_ID
+		})
+	});
+}
+var LISTEN_LEASE = listenLeaser();
 function retype(before, after) {
 	const a = Array.from(before);
 	const b = Array.from(after);
@@ -46471,6 +46608,32 @@ function serverSpeaker(fallback, opts = {}) {
 	const keyOf = (part) => (opts.voiceKey ? opts.voiceKey() : "") + "\n" + part;
 	const playing = /* @__PURE__ */ new Map();
 	let inflight = null;
+	const now = opts.now || (() => Date.now());
+	let lastOk = 0;
+	let startTimer;
+	let startShown = false;
+	const endStarting = () => {
+		clearTimeout(startTimer);
+		startTimer = void 0;
+		if (startShown) {
+			startShown = false;
+			self.onStarting?.(false);
+		}
+	};
+	const watchStart = (p) => {
+		if (!self.onStarting || !voiceMayBeCold(lastOk, now())) return;
+		endStarting();
+		const t = setTimeout(() => {
+			if (startTimer !== t) return;
+			startShown = true;
+			self.onStarting?.(true);
+		}, VOICE_STARTING_MS);
+		startTimer = t;
+		const done = () => {
+			if (startTimer === t || startShown) endStarting();
+		};
+		p.then(done, done);
+	};
 	const fetchAudio = async (ctx, part, ac) => {
 		const r = await apiRaw("/api/voice/speak", {
 			method: "POST",
@@ -46482,7 +46645,9 @@ function serverSpeaker(fallback, opts = {}) {
 			const j = await r.json().catch(() => ({}));
 			throw new Error(j.error || "HTTP " + r.status);
 		}
-		return ctx.decodeAudioData(await r.arrayBuffer());
+		const buf = await r.arrayBuffer();
+		lastOk = now();
+		return ctx.decodeAudioData(buf);
 	};
 	const remember = (part, p) => {
 		const key = keyOf(part);
@@ -46494,6 +46659,7 @@ function serverSpeaker(fallback, opts = {}) {
 	};
 	const self = {
 		lastError: "",
+		onStarting: opts.onStarting,
 		reportsAudible: true,
 		cached(part) {
 			return cache.has(keyOf(part));
@@ -46529,6 +46695,7 @@ function serverSpeaker(fallback, opts = {}) {
 					if (inflight === ac) inflight = null;
 				};
 				p.then(settled, settled);
+				if (i === 0) watchStart(p);
 				if (cacheable(parts[i])) remember(parts[i], p);
 				return p;
 			};
@@ -46560,6 +46727,7 @@ function serverSpeaker(fallback, opts = {}) {
 			gen++;
 			inflight?.abort();
 			inflight = null;
+			endStarting();
 			const cut = [...playing];
 			playing.clear();
 			for (const [s, finish] of cut) {
@@ -46822,6 +46990,12 @@ var VOICE_CLIENT_ID = (() => {
 })();
 function serverRecognizer(opts = {}) {
 	const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, void 0, runningAudioCtx);
+	let loading = false;
+	const setLoading = (on) => {
+		if (loading === on) return;
+		loading = on;
+		self.onLoading?.(on);
+	};
 	let holding = false;
 	let h = null;
 	let want = false;
@@ -46970,6 +47144,7 @@ function serverRecognizer(opts = {}) {
 	};
 	const fallBack = (c, line) => {
 		if (!c.stream) return;
+		setLoading(false);
 		streaming = false;
 		for (const p of /* @__PURE__ */ new Set([c, cur])) {
 			if (!p?.stream) continue;
@@ -47025,6 +47200,7 @@ function serverRecognizer(opts = {}) {
 					c.opened = Date.now();
 					open.add(id);
 					voiceMark("stream");
+					if (r.j.loading === true) setLoading(true);
 				} else if (r.status === 409) {
 					self.lastError = String(r.j.error || "the server can't stream");
 					fallBack(c, "");
@@ -47046,6 +47222,7 @@ function serverRecognizer(opts = {}) {
 			if (h !== hh || !hh || !c.stream) return;
 			if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 			self.lastError = "";
+			setLoading(false);
 			const ms = Number(r.j.ms);
 			if (ms > 0) {
 				self.passMs = ms;
@@ -47104,6 +47281,7 @@ function serverRecognizer(opts = {}) {
 			open.delete(sid);
 			try {
 				const r = await call(streamPath(sid, "/end"), { method: "POST" });
+				setLoading(false);
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 				c.stream = false;
@@ -47298,6 +47476,7 @@ function serverRecognizer(opts = {}) {
 	const self = {
 		name: "server",
 		lastError: "",
+		onLoading: void 0,
 		passMs: null,
 		finalMs: null,
 		mic,
@@ -47355,6 +47534,7 @@ function serverRecognizer(opts = {}) {
 			finishing = false;
 			h = null;
 			token = null;
+			setLoading(false);
 			clearTimeout(capTimer);
 			unlistenOver();
 			try {
@@ -47471,7 +47651,8 @@ var WAKE_TAIL_MS = 200;
 var WAKE_MIN_MS = 250;
 var WAKE_MAX_MS = 1600;
 var WAKE_LEAD_MS = 100;
-var WAKE_CHECK_GAP_MS = 1500;
+var WAKE_CHECK_GAP_MS = 400;
+var WAKE_PENDING_MS = 2500;
 var WAKE_AFTER_SPEECH_MS = 500;
 var WAKE_KEEP_S = 3;
 var WAKE_LISTEN_MS = 8e3;
@@ -47488,6 +47669,7 @@ var LoneUtterance = class {
 	start = -1;
 	lastLoud = 0;
 	long = false;
+	prev = -1;
 	feed(rms, blockMs) {
 		const at = this.t;
 		this.t += Math.max(0, blockMs);
@@ -47500,10 +47682,18 @@ var LoneUtterance = class {
 				return null;
 			}
 			if (this.quiet < WAKE_QUIET_MS) {
+				if (this.prev >= 0) {
+					this.start = this.prev;
+					this.prev = -1;
+					this.lastLoud = this.t;
+					this.long = this.lastLoud - this.start > WAKE_MAX_MS;
+					return null;
+				}
 				this.quiet = 0;
 				return null;
 			}
 			this.start = at;
+			this.prev = -1;
 			this.lastLoud = this.t;
 			this.long = false;
 			return null;
@@ -47518,6 +47708,7 @@ var LoneUtterance = class {
 		const loudMs = this.lastLoud - this.start;
 		const clipMs = WAKE_LEAD_MS + (this.t - this.start);
 		const long = this.long;
+		this.prev = long ? -1 : this.start;
 		this.start = -1;
 		this.quiet = gap;
 		return long || loudMs < WAKE_MIN_MS ? null : {
@@ -47617,6 +47808,7 @@ var WakeStandby = class {
 	lastSpoke = -Infinity;
 	lastCheck = -Infinity;
 	inFlight = false;
+	pending = null;
 	waiting = null;
 	line = "";
 	constructor(deps) {
@@ -47734,25 +47926,55 @@ var WakeStandby = class {
 		const speaking = this.deps.speaking();
 		if (speaking) this.lastSpoke = now;
 		const cand = this.det.feed(rms, ms);
-		if (!cand) return;
-		if (wakeGate({
+		if (!cand) {
+			this.flush(g);
+			return;
+		}
+		const gate = this.gate(now, cand.clipMs, speaking);
+		if (gate === "busy" || gate === "soon") {
+			this.pending = {
+				clip: rec.last(cand.clipMs / 1e3),
+				soundEnd: now - cand.tailMs,
+				clipMs: cand.clipMs
+			};
+			return;
+		}
+		if (gate !== "ok") return;
+		this.lastCheck = now;
+		this.check(g, rec.last(cand.clipMs / 1e3), now - cand.tailMs);
+	}
+	gate(now, clipMs, speaking = this.deps.speaking()) {
+		return wakeGate({
 			now,
-			clipMs: cand.clipMs,
+			clipMs,
 			visible: this.visible(),
 			recording: this.deps.recording(),
 			speaking,
 			lastSpoke: this.lastSpoke,
 			inFlight: this.inFlight,
 			lastCheck: this.lastCheck
-		}) !== "ok") return;
-		this.lastCheck = now;
-		this.check(g, rec, cand, now - cand.tailMs);
+		});
 	}
-	async check(g, rec, cand, soundEnd) {
+	flush(g) {
+		const p = this.pending;
+		if (!p || g !== this.gen) return;
+		const now = this.now();
+		if (now - p.soundEnd > WAKE_PENDING_MS) {
+			this.pending = null;
+			return;
+		}
+		const gate = this.gate(now, p.clipMs + (now - p.soundEnd));
+		if (gate === "busy" || gate === "soon") return;
+		this.pending = null;
+		if (gate !== "ok") return;
+		this.lastCheck = now;
+		this.check(g, p.clip, p.soundEnd);
+	}
+	async check(g, clipP, soundEnd) {
 		this.inFlight = true;
 		let v = null;
 		try {
-			const clip = await rec.last(cand.clipMs / 1e3);
+			const clip = await clipP;
 			if (clip && g === this.gen) v = await (this.deps.check || postWake)(clip);
 		} finally {
 			this.inFlight = false;
@@ -47760,9 +47982,12 @@ var WakeStandby = class {
 		if (!v || g !== this.gen) return;
 		if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
 		if (v.wake && !this.deps.recording()) {
+			this.pending = null;
 			this.deps.onWake(soundEnd);
 			this.sync();
+			return;
 		}
+		this.flush(g);
 	}
 	close() {
 		this.gen++;
@@ -47771,6 +47996,7 @@ var WakeStandby = class {
 		this.waiting = null;
 		const rec = this.rec;
 		this.rec = null;
+		this.pending = null;
 		rec?.cancel();
 		if (this.holding) {
 			this.holding = false;
@@ -48330,7 +48556,11 @@ var browserRec = browserRecognizer();
 var cfgNow = DEFAULT_VOICE_CFG;
 var serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream });
 var browserSp = browserSpeaker();
+var startingListeners = /* @__PURE__ */ new Set();
 var serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) });
+serverSp.onStarting = (on) => startingListeners.forEach((l) => l(on));
+var loadingListeners = /* @__PURE__ */ new Set();
+serverRec.onLoading = (on) => loadingListeners.forEach((l) => l(on));
 var tracker = new ReplyTracker();
 var heard = new HeardTurns();
 var clock = new HeardClock();
@@ -48521,6 +48751,16 @@ function TopBarMic() {
 	const [cfg, setCfg] = (0, import_react.useState)(null);
 	const [listening, setListening] = (0, import_react.useState)(false);
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
+	const [starting, setStarting] = (0, import_react.useState)(false);
+	const [warming, setWarming] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		startingListeners.add(setStarting);
+		loadingListeners.add(setWarming);
+		return () => {
+			startingListeners.delete(setStarting);
+			loadingListeners.delete(setWarming);
+		};
+	}, []);
 	const [sounding, setSounding] = (0, import_react.useState)(queue.audibleNow);
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
@@ -48785,7 +49025,7 @@ function TopBarMic() {
 	};
 	const start = (into, opts = {}) => {
 		if (live.current) return null;
-		if (cfgNow.tts === "server") refreshCfg(true);
+		if (speaksOnServer(prefsRef.current, cfgNow)) refreshCfg(true);
 		const ask = askVoice();
 		if (ask && !opts.title && (!into || into === ask.field())) {
 			into = null;
@@ -49214,6 +49454,9 @@ function TopBarMic() {
 		standby.current?.set(!!prefs.wake);
 	}, [prefs.wake]);
 	(0, import_react.useEffect)(() => {
+		LISTEN_LEASE.set(!!wake.on);
+	}, [wake.on]);
+	(0, import_react.useEffect)(() => {
 		standby.current?.sync();
 	}, [listening]);
 	(0, import_react.useEffect)(() => {
@@ -49236,7 +49479,7 @@ function TopBarMic() {
 	const openMenu = () => {
 		setMenuOpen(true);
 		warmMic(true);
-		refreshCfg(true);
+		refreshCfg();
 	};
 	const keyRef = (0, import_react.useRef)({
 		hold,
@@ -49307,7 +49550,9 @@ function TopBarMic() {
 	const pill = micPill({
 		listening,
 		speaking,
-		quiet
+		quiet,
+		starting,
+		warming
 	});
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
 	const popW = Math.min(POP_W, window.innerWidth - 32);
@@ -49745,8 +49990,9 @@ function pushFailedNote(session, data) {
 async function revive(title, verb) {
 	let r;
 	try {
-		r = await instApi(title, "/revive", { method: "POST" });
+		r = await withMemoryConfirm(displayName(title), (anyway) => instApi(title, "/revive", anyway ? { json: { start_anyway: true } } : { method: "POST" }), (a) => toast(sleptLine(a)));
 	} catch (e) {
+		if (isMemoryCancel(e)) return null;
 		toast("Couldn't " + verb.toLowerCase() + " " + displayName(title) + " — " + errMsg(e));
 		return null;
 	}
@@ -53063,7 +53309,7 @@ function MemoryNotice() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",
-				children: ["MindFlock is holding new agent-spawned sessions, team-run lines and auto-restarts until it recovers. Closing idle sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
+				children: ["Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait until it recovers, one at a time; a start of yours asks first. Putting idle agents to sleep or closing sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-foot",
@@ -53130,6 +53376,57 @@ function StateNotice() {
 				})
 			})
 		]
+	});
+}
+//#endregion
+//#region src/lib/launchGate.ts
+function gatePath(title, act) {
+	return "/api/launch-gate/" + encodeURIComponent(title) + "/" + act;
+}
+async function startWaiting(title) {
+	try {
+		const r = await api(gatePath(title, "start"), { method: "POST" });
+		if (!r.started) {
+			toast("Couldn't start " + displayName(title) + " — " + (r.error || "it failed to start"));
+			return false;
+		}
+		toast("Starting " + displayName(title) + " now…");
+		return true;
+	} catch (e) {
+		toast("Couldn't start " + displayName(title) + " — " + errMsg(e));
+		return false;
+	} finally {
+		refreshInstances();
+	}
+}
+function holdingLine(g) {
+	if (!g || !g.holding || !g.queued.length) return "";
+	const n = g.queued.length;
+	return (/automatic starts stop at/.test(g.reason || "") ? "Agent limit reached" : "Memory low") + " — new agents wait (" + n + " waiting)";
+}
+//#endregion
+//#region src/components/sidebar/MemoryWaitBar.tsx
+function MemoryWaitBar() {
+	const { data } = useMemory();
+	const g = data?.gate;
+	const line = holdingLine(g);
+	if (!g || !line) return null;
+	const next = g.queued[0];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "memory-wait-bar",
+		role: "status",
+		"aria-label": "Agents waiting for memory",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "mw-text",
+			title: (g.reason || "") + " — they start one at a time once there is room",
+			children: line
+		}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ob-btn",
+			title: "Start " + next.title + " now, past the memory gate",
+			onClick: () => void startWaiting(next.title),
+			children: "Start next anyway"
+		})]
 	});
 }
 //#endregion
@@ -55239,8 +55536,9 @@ function Banner({ block, title }) {
 //#region src/lib/wake.ts
 async function wakeSession(title) {
 	try {
-		await instApi(title, "/wake", { method: "POST" });
+		await withMemoryConfirm(displayName(title), (anyway) => instApi(title, "/wake", anyway ? { json: { start_anyway: true } } : { method: "POST" }), (a) => toast(sleptLine(a)));
 	} catch (e) {
+		if (isMemoryCancel(e)) return false;
 		toast("Couldn't wake " + displayName(title) + " — " + errMsg(e));
 		return false;
 	}
@@ -57263,7 +57561,19 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							})
 						]
 					}),
-					lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "stagechip chip-restart chip-waitmem " + chip.cls,
+						title: chip.title,
+						"aria-label": "Waiting for memory — start it anyway",
+						onClick: (e) => act(() => void startWaiting(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chip-act",
+							"aria-hidden": "true",
+							children: "Start anyway"
+						})]
+					}) : lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "stagechip wrapchip leadchip",
 						title: lchip.title,
@@ -58625,9 +58935,12 @@ function sweepToast(r, offline) {
 	const continued = r.continued?.length || 0;
 	const skipped = r.skipped || {};
 	const mine = offline.filter((t) => skipped[t] !== void 0);
-	const memory = mine.filter((t) => skipped[t] === "low memory").length;
+	const queued = new Set(r.waiting || []);
+	const memory = mine.filter((t) => skipped[t] === "low memory" && !queued.has(t)).length;
+	const waits = mine.filter((t) => queued.has(t)).length;
 	let line = revived ? "Started " + revived + (revived === 1 ? " agent" : " agents") : "No agents started";
 	if (continued) line += " — " + continued + " told to continue where " + (continued === 1 ? "it" : "they") + " left off";
+	if (waits) line += "; " + waits + " waiting for memory — " + (waits === 1 ? "it starts" : "they start") + (waits === 1 ? " by itself" : " by themselves") + " once there is room";
 	if (memory) line += "; " + memory + " not started: memory is low";
 	const other = mine.filter((t) => skipped[t] !== "low memory");
 	if (other.length) {
@@ -58673,13 +58986,17 @@ function OfflineBar() {
 		if (busy) return;
 		setBusy(true);
 		try {
-			const r = await api("/api/server/revive-all", {
+			const r = await withMemoryConfirm(titles.length + " offline agent" + (titles.length === 1 ? "" : "s"), (anyway) => api("/api/server/revive-all", {
 				method: "POST",
-				json: { titles }
-			});
+				json: anyway ? {
+					titles,
+					start_anyway: true
+				} : { titles }
+			}), (a) => toast(sleptLine(a)));
 			for (const t of r.revived || []) forceActivity(t, "idle");
 			toast(sweepToast(r, titles));
 		} catch (e) {
+			if (isMemoryCancel(e)) return;
 			toast("Couldn't start the offline agents — " + errMsg(e));
 		} finally {
 			setBusy(false);
@@ -58690,7 +59007,7 @@ function OfflineBar() {
 		type: "button",
 		className: "ob-btn",
 		disabled: busy || !titles.length,
-		title: "Start every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: starts wait for headroom, and the rest stay offline if none comes." : ""),
+		title: "Start every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: it asks first, and starts that can't fit yet wait for memory." : ""),
 		onClick: () => void run(),
 		children: "▶ Start all"
 	});
@@ -61407,6 +61724,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						}),
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryWaitBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSharedRows, {}),
@@ -104338,7 +104656,10 @@ function newSessionSubmit(ctx) {
 		const guess = addPendingSession(body.title || "untitled", target);
 		closeDialog();
 		try {
-			const made = await deviceApi(target)("/api/instances", { json: body });
+			const made = await withMemoryConfirm("a new agent", (anyway) => deviceApi(target)("/api/instances", { json: anyway ? {
+				...body,
+				start_anyway: true
+			} : body }));
 			const inst = {
 				...made,
 				title: deviceTitle(target, made.title)
@@ -115051,6 +115372,7 @@ function voiceFields(kind, where, backend) {
 	};
 }
 var noDot = (s) => s.replace(/\.\s*$/, "");
+var VOICE_HOST_ON_USE = "starts when you use voice, stops when idle";
 function readinessLine(kind, view, where, backend = "") {
 	if (where !== "server") return {
 		ok: false,
@@ -115070,6 +115392,10 @@ function readinessLine(kind, view, where, backend = "") {
 		else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
 	}
 	detail = noDot(detail);
+	if (ok && kind === "tts" && id === "openai" && localVoice({
+		...DEFAULT_VOICE_CFG,
+		server_ready: sr
+	})) detail += (detail ? " — " : "") + VOICE_HOST_ON_USE;
 	if (ok) return {
 		ok,
 		text: `Server ${word} ready (${id || "server"})${detail ? ": " + detail : ""}.`
@@ -115208,7 +115534,7 @@ function VoiceSection({ active }) {
 	(0, import_react.useEffect)(() => {
 		if (!active) return;
 		let live = true;
-		api("/api/voice").then((v) => {
+		api("/api/voice?warm=0").then((v) => {
 			applyVoiceView(v);
 			if (live) setView(v);
 		}).catch((err) => {
@@ -129081,6 +129407,60 @@ function AskMicRow({ title }) {
 	});
 }
 //#endregion
+//#region src/components/MemoryConfirm.tsx
+function MemoryConfirm() {
+	const p = (0, import_react.useSyncExternalStore)(subscribeMemoryConfirm, currentMemoryConfirm, currentMemoryConfirm);
+	if (!p) return null;
+	const critical = p.body.level === "critical";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "memory-confirm",
+		role: "alertdialog",
+		"aria-labelledby": "memory-confirm-head",
+		onClose: () => p.resolve("cancel"),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mc-card" + (critical ? " critical" : ""),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					id: "memory-confirm-head",
+					children: critical ? "Memory is critically low" : "Memory is low"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mc-message",
+					children: p.body.message
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mc-what",
+					children: critical ? "MindFlock won't start " + p.what + " unless you say so. Putting idle agents to sleep frees their memory and keeps their conversations." : "Agents that start by themselves are waiting until memory recovers. Putting idle agents to sleep frees their memory and keeps their conversations."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "modal-actions",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "memory-confirm-cancel",
+							onClick: () => p.resolve("cancel"),
+							children: "Cancel"
+						}),
+						p.canSleep && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "memory-confirm-sleep",
+							onClick: () => p.resolve("sleep"),
+							children: "Put idle agents to sleep first"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "memory-confirm-start",
+							className: critical ? "mc-danger" : "mc-start",
+							onClick: () => p.resolve("start"),
+							children: "Start anyway"
+						})
+					]
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/chat/ChatPanel.tsx
 function ChatPanel() {
 	const { data: config } = useConfig();
@@ -137054,7 +137434,10 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 }
 async function postInstance(body, device) {
 	if (device) return deviceTitle(device, (await deviceApi(device)("/api/instances", { json: body })).title);
-	return (await api("/api/instances", { json: body })).title;
+	return (await withMemoryConfirm("a new agent", async (anyway) => anyway ? await api("/api/instances", { json: {
+		...body,
+		start_anyway: true
+	} }) : await api("/api/instances", { json: body }))).title;
 }
 //#endregion
 //#region src/components/flights/SkyDrawer.tsx
@@ -144257,6 +144640,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryConfirm, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),

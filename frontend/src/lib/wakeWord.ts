@@ -16,7 +16,11 @@
  *    no dictation records, the app is not talking (nor stopped less than
  *    {@link WAKE_AFTER_SPEECH_MS} before the clip began — its own voice must
  *    never wake it), one check in flight, at most one per
- *    {@link WAKE_CHECK_GAP_MS}.
+ *    {@link WAKE_CHECK_GAP_MS}. A candidate that comes while a check is in
+ *    flight (or too soon after one) is KEPT — the newest one — and goes the
+ *    moment that check says no, if its word ended at most
+ *    {@link WAKE_PENDING_MS} before: a cough or a key click checked just
+ *    before the word must never swallow the word.
  *  - the check: the clip (with {@link WAKE_LEAD_MS} of lead-in) goes to
  *    POST /api/voice/wake, which recognises it with the word as the hint and
  *    says whether it is the word alone (backend/web/core/wake.py). `wake:
@@ -51,8 +55,13 @@ export const WAKE_MIN_MS = 250;
 export const WAKE_MAX_MS = 1600;
 /** Audio before the onset sent with the clip (the first consonant's attack). */
 export const WAKE_LEAD_MS = 100;
-/** At most one check this often… */
-export const WAKE_CHECK_GAP_MS = 1500;
+/** At most one check this often (the detector itself needs ~0.8 s between
+ * two lone utterances: quiet before, the word, the tail)… */
+export const WAKE_CHECK_GAP_MS = 400;
+/** A candidate kept while a check was in flight still goes this long after
+ * its word ended; later it is stale (the person has given up or said it
+ * again). */
+export const WAKE_PENDING_MS = 2500;
 /** …and none for a clip that began less than this after the app stopped talking. */
 export const WAKE_AFTER_SPEECH_MS = 500;
 /** The rolling window standby keeps (s): the longest clip and then some. */
@@ -88,7 +97,15 @@ const RELEARN_MS = 5000;
  * 5% a block) — except that it does not creep during a stretch of speech
  * (under {@link RELEARN_MS}): a steady voice would otherwise turn "quiet"
  * and a sentence end early as a word. A block is speech by voiceMic's
- * {@link isLoud}. */
+ * {@link isLoud}.
+ *
+ * A pause inside a lone utterance ("Hey, MindFlock", "Mind… flock" said
+ * slowly) is longer than the tail, so its first part goes alone ("Hey") —
+ * and its second part, starting less than {@link WAKE_QUIET_MS} after,
+ * would be "speech straight on from speech" and never go. So speech that
+ * resumes that soon after a stretch that STARTED after quiet (and was not a
+ * sentence) carries that stretch on: the next candidate's clip holds both
+ * parts, under the same {@link WAKE_MAX_MS}. */
 export class LoneUtterance {
   private floor = 0;
   /** The end of the last block fed (ms since the detector began). */
@@ -101,6 +118,10 @@ export class LoneUtterance {
   private lastLoud = 0;
   /** The stretch outran {@link WAKE_MAX_MS}: a sentence. */
   private long = false;
+  /** The onset of the stretch that just ended (it started after quiet and
+   * was not a sentence), -1 for none: speech resuming within
+   * {@link WAKE_QUIET_MS} carries it on. */
+  private prev = -1;
 
   feed(rms: number, blockMs: number): WakeCandidate | null {
     const at = this.t;
@@ -113,13 +134,22 @@ export class LoneUtterance {
         this.quiet += blockMs;
         return null;
       }
-      // Speech straight on from speech (or from the moment standby began):
-      // the middle of something, never a word on its own.
       if (this.quiet < WAKE_QUIET_MS) {
+        // Straight on from a lone stretch: its second part ("Hey, | MindFlock").
+        if (this.prev >= 0) {
+          this.start = this.prev;
+          this.prev = -1;
+          this.lastLoud = this.t;
+          this.long = this.lastLoud - this.start > WAKE_MAX_MS;
+          return null;
+        }
+        // Speech straight on from speech (or from the moment standby began):
+        // the middle of something, never a word on its own.
         this.quiet = 0;
         return null;
       }
       this.start = at;
+      this.prev = -1;
       this.lastLoud = this.t;
       this.long = false;
       return null;
@@ -134,6 +164,7 @@ export class LoneUtterance {
     const loudMs = this.lastLoud - this.start;
     const clipMs = WAKE_LEAD_MS + (this.t - this.start);
     const long = this.long;
+    this.prev = long ? -1 : this.start;
     this.start = -1;
     this.quiet = gap;
     return long || loudMs < WAKE_MIN_MS ? null : { loudMs, clipMs, tailMs: gap };
@@ -296,6 +327,9 @@ export class WakeStandby {
   private lastSpoke = -Infinity;
   private lastCheck = -Infinity;
   private inFlight = false;
+  /** The newest candidate that came while a check was in flight (or too
+   * soon): its clip, taken when it came, and when its word ended/began. */
+  private pending: { clip: Promise<Blob | null>; soundEnd: number; clipMs: number } | null = null;
   private waiting: (() => void) | null = null;
   private line = "";
 
@@ -429,10 +463,25 @@ export class WakeStandby {
     const speaking = this.deps.speaking();
     if (speaking) this.lastSpoke = now;
     const cand = this.det.feed(rms, ms);
-    if (!cand) return;
-    const gate = wakeGate({
+    if (!cand) {
+      this.flush(g);
+      return;
+    }
+    const gate = this.gate(now, cand.clipMs, speaking);
+    if (gate === "busy" || gate === "soon") {
+      // Taken now: the rolling window moves on.
+      this.pending = { clip: rec.last(cand.clipMs / 1000), soundEnd: now - cand.tailMs, clipMs: cand.clipMs };
+      return;
+    }
+    if (gate !== "ok") return;
+    this.lastCheck = now;
+    void this.check(g, rec.last(cand.clipMs / 1000), now - cand.tailMs);
+  }
+
+  private gate(now: number, clipMs: number, speaking = this.deps.speaking()): WakeGateResult {
+    return wakeGate({
       now,
-      clipMs: cand.clipMs,
+      clipMs,
       visible: this.visible(),
       recording: this.deps.recording(),
       speaking,
@@ -440,16 +489,32 @@ export class WakeStandby {
       inFlight: this.inFlight,
       lastCheck: this.lastCheck,
     });
-    if (gate !== "ok") return;
-    this.lastCheck = now;
-    void this.check(g, rec, cand, now - cand.tailMs);
   }
 
-  private async check(g: number, rec: WavRecording, cand: WakeCandidate, soundEnd: number): Promise<void> {
+  /** The kept candidate goes once the gate opens — if it is still fresh and
+   * nothing (the app's voice, a dictation, a hidden page) shut it since. */
+  private flush(g: number): void {
+    const p = this.pending;
+    if (!p || g !== this.gen) return;
+    const now = this.now();
+    if (now - p.soundEnd > WAKE_PENDING_MS) {
+      this.pending = null;
+      return;
+    }
+    // Judged as of the moment it came (its clip ends at its word's tail).
+    const gate = this.gate(now, p.clipMs + (now - p.soundEnd));
+    if (gate === "busy" || gate === "soon") return;
+    this.pending = null;
+    if (gate !== "ok") return;
+    this.lastCheck = now;
+    void this.check(g, p.clip, p.soundEnd);
+  }
+
+  private async check(g: number, clipP: Promise<Blob | null>, soundEnd: number): Promise<void> {
     this.inFlight = true;
     let v: WakeVerdict | null = null;
     try {
-      const clip = await rec.last(cand.clipMs / 1000);
+      const clip = await clipP;
       if (clip && g === this.gen) v = await (this.deps.check || postWake)(clip);
     } finally {
       this.inFlight = false;
@@ -458,9 +523,13 @@ export class WakeStandby {
     if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
     // A wake while something else started recording meanwhile: that one wins.
     if (v.wake && !this.deps.recording()) {
+      this.pending = null;
       this.deps.onWake(soundEnd);
       this.sync();
+      return;
     }
+    // A no: the word said meanwhile goes now, not at the next block.
+    this.flush(g);
   }
 
   private close(): void {
@@ -470,6 +539,7 @@ export class WakeStandby {
     this.waiting = null;
     const rec = this.rec;
     this.rec = null;
+    this.pending = null;
     rec?.cancel();
     if (this.holding) {
       this.holding = false;

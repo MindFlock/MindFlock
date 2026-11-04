@@ -437,6 +437,14 @@ _MEMORY_TMUX_DICTS = (
 )
 
 
+def _launch_queue(old: str, new: str) -> None:
+    """``launch_queue.json`` (core.launch_gate): a queued launch's title, a
+    waiting create's parent, and the gate's in-memory entries."""
+    from backend.web.core import launch_gate as m
+
+    m.rename(old, new)
+
+
 def _memory(old: str, new: str) -> None:
     import importlib
 
@@ -532,6 +540,10 @@ def install() -> None:
     register("session fences", _session_fences, files=("red_zones.json",), keyed="tmux")
     register("memory", _memory)
     register("memory (tmux)", _memory_tmux, keyed="tmux")
+    # After "sleep" and "memory": a renamed queued launch is rebuilt through
+    # its kind's factory, which reads the sleep store and the prompt-queue
+    # state under the NEW title.
+    register("launch queue", _launch_queue, files=("launch_queue.json",))
     # core.rename's own map, so the coverage test sees it declared.
     register("renamed_from", lambda old, new: None, files=(_rename._MAP_FILE,))
 

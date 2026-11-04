@@ -2018,7 +2018,10 @@ def plan_actions(run: dict, obs: dict, now: float) -> List[dict]:
 
         {"boot": bool,                       # the silent reconcile pass
          "limited_providers": [..],
-         "memory_low": bool,                 # hold new starts (memory_pressure)
+         "memory_low": bool,                 # hold new starts (memory_pressure +
+                                             # the launch gate: warming, cap)
+         "start_budget": int | None,         # most new starts this pass
+                                             # (launch_gate.room; None = any)
          "cost": float,                      # sum of member costs
          "tasks": {task_id: {
              "present", "created_at", "pending", "status", "activity",
@@ -2123,6 +2126,8 @@ def _plan_starts(run: dict, obs: dict, now: float, acts: List[dict]) -> List[dic
         and backoff.get(t["id"], float(t.get("retry_at") or 0.0)) <= now
     ]
     queued.sort(key=lambda t: (not t.get("start_now"),))
+    budget = obs.get("start_budget")
+    budget = int(budget) if isinstance(budget, (int, float)) else None
     for t in queued:
         if not t.get("start_now"):
             if active >= int(run["concurrency"]):
@@ -2136,6 +2141,14 @@ def _plan_starts(run: dict, obs: dict, now: float, acts: List[dict]) -> List[dic
             # The task stays queued and starts once the reading recovers.
             if obs.get("memory_low"):
                 continue
+        if not t.get("start_now") and budget is not None:
+            # As many new lines as still fit (core.launch_gate.room): an
+            # agent just started reads near zero until it has grown, so one
+            # pass must not start more than memory holds once they have. The
+            # next pass counts these as warming. A start_now is a person's.
+            if budget <= 0:
+                continue
+            budget -= 1
         out.append(_act("start", t))
         active += 1
     return out

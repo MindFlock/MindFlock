@@ -29,9 +29,16 @@ def reg(monkeypatch):
 
 def test_the_route_is_a_thin_wrapper():
     src = inspect.getsource(server.create_instance)
-    assert "return await _session_create.create(" in src
+    body = src.split('"""')[-1]  # past the docstring: the code itself
+    # One call into core.session_create (the launch gate's asking lives there
+    # too, in create_requested)…
+    assert "return await _session_create.create_requested(" in body
+    assert body.count("await ") == 1
     # …stamping the person the request is for, never one named in the payload.
-    assert "person=_auth.request_person(request)" in src
+    assert "person=_auth.request_person(request)" in body
+    # And every branch of create_requested ends in create() itself.
+    gated = inspect.getsource(session_create.create_requested)
+    assert gated.count("return await create(payload, person=person") == 3
 
 
 def test_create_result_claims_the_title_and_answers_202(reg, monkeypatch):

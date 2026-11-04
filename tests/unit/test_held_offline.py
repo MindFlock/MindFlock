@@ -623,3 +623,25 @@ def test_the_server_can_dump_its_stacks_on_sigusr1(tmp_path, monkeypatch):
         assert (tmp_path / "logs" / "stacks.log").exists()
     finally:
         faulthandler.unregister(signal.SIGUSR1)
+
+
+def test_start_all_budgets_for_agents_still_warming_up(monkeypatch):
+    """18 held sessions + Start all: each launch counts the agents started in
+    the last WARMUP_SECONDS, so the sweep stops before they outgrow memory."""
+    from backend import memory_pressure
+    from backend.web.core import revive
+
+    gib = 1024**3
+    monkeypatch.setattr(memory_pressure, "is_low", lambda **k: False)
+    monkeypatch.setattr(
+        memory_pressure,
+        "snapshot",
+        lambda **k: {"available": 6 * gib, "total": 20 * gib},
+    )
+    monkeypatch.setattr(memory_pressure, "thresholds", lambda: {"low": (0.15, 0, 0, 0)})
+    # 6 GiB free, 3 GiB is the low line: room for 4 warming agents (4 x 0.68), not 5.
+    assert revive._headroom_ok(0)
+    assert revive._headroom_ok(4)
+    assert not revive._headroom_ok(5)
+    monkeypatch.setattr(memory_pressure, "is_low", lambda **k: True)
+    assert not revive._headroom_ok(0)

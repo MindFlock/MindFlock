@@ -647,10 +647,17 @@ someone needs it.
     queue or mailbox send, and the last wake.
 
   The threshold is `general.sleep_idle_minutes` (unset = 45; `0` turns
-  sleeping off entirely). **Under memory pressure** — `memory_pressure` low
-  or critical — it drops to 5 minutes (never above the setting), and those
-  sleeps record `reason: memory`; longest-idle first is what frees the most
-  stale memory soonest. `POST /api/instances/{title}/sleep` and `mindflock
+  off the everyday sleeping). **Under memory pressure** — `memory_pressure`
+  low or critical — it is `general.memory_sleep_minutes` (unset = 5; never
+  above the everyday wait when that is on; `0` = never sleep for memory),
+  which applies even with everyday sleeping off. Those sleeps record
+  `reason: memory`; longest-idle first is what frees the most stale memory
+  soonest. A pass that sleeps any for memory emits ONE `system.sessions_slept`
+  event — the notify rule **Idle agents are put to sleep to free memory**
+  (on by default): *"Memory is low: 2.1 GB free of 20.0 GB (10%), so 2 idle
+  agents were put to sleep: a, b. They wake when you open or message
+  them."* An agent mid-turn is never a candidate at any level (the *turn not
+  ended* / *not idle* vetoes). `POST /api/instances/{title}/sleep` and `mindflock
   sleep` sleep one now: every rule above except the timing ones.
 - **Wake.** `sleep.ensure_awake(inst, title, why)` is the one helper: it
   relaunches through `_ensure_agent_session` and opens the prompt queue's
@@ -685,21 +692,24 @@ imports it too) reads two signals and returns `ok` / `low` / `critical`
 
 | Signal | low at | critical at |
 |---|---|---|
-| `MemAvailable` (`/proc/meminfo`) | ≤ 15 % of `MemTotal` or ≤ 2 GB | ≤ 7 % or ≤ 1 GB |
+| `MemAvailable` (`/proc/meminfo`) | ≤ 15 % of `MemTotal` (`general.memory_low_pct`) or ≤ 2 GB | ≤ 7 % (`general.memory_critical_pct`) or ≤ 1 GB |
 | PSI `some avg60` (`/proc/pressure/memory`) | ≥ 20 % | ≥ 40 % |
 | PSI `full avg60` | ≥ 5 % | ≥ 15 % |
 
+The two shares are settings (per device, never synced; `0` drops the share
+signal, leaving the floors and PSI); the floors and PSI lines are fixed.
 Stepping back down needs every reading past a recovery line a margin beyond the
-entry one (20 % / 2.5 GB / some 10 / full 2 to leave `low`; 10 % / 1.5 GB /
-some 30 / full 10 to leave `critical`), so a box hovering at the line doesn't
-flap. A reading is cached for 2 s, and the level is per process: the ticket
+entry one (share + 5 points / 2.5 GB / some 10 / full 2 to leave `low`; share +
+3 points / 1.5 GB / some 30 / full 10 to leave `critical` — 20 % and 10 % at
+the defaults), so a box hovering at the line doesn't flap. A reading is cached for 2 s, and the level is per process: the ticket
 pipeline keeps its own, so it and the server can briefly disagree near a line.
 While the level is `low` or `critical`:
 
-- **Agent spawns are refused** — `POST /api/instances` with `spawned: true`
-  (the MCP's `spawn_session`) and an agent's `POST /api/tickets/start` answer
-  **409** with `memory` in the body. A person's New and Intake starts, and a
-  team run's own members, are never refused here.
+- **Agent spawns wait** — `POST /api/instances` with `spawned: true` (the
+  MCP's `spawn_session`) and an agent's `POST /api/tickets/start` (the MCP's
+  `spawn_ticket_session`) are queued in the [launch gate](#launch-gate) and
+  answered 202 `queued: waiting for memory`. A person's New asks first
+  (below); a team run's own members are paced by the run's planner.
 - **Team runs start no new lines** — the planner holds queued tasks exactly
   as it does for a usage limit (a task marked `start_now` still starts); the
   run's `waiting_for_memory` puts a *memory* badge on its rail header.
@@ -711,11 +721,124 @@ While the level is `low` or `critical`:
   full size, so a reading right after a launch says nothing about it. On
   2026-11-04 one PR scan launched a review per PR back to back, every one past
   an `ok` reading, and ran WSL out of memory.
-- **The revive sweep waits**, as above. A person's single Restart is never
-  held; its response carries `memory_warning` instead.
-- **Idle agents sleep sooner** — after 5 minutes idle instead of
-  `general.sleep_idle_minutes` ([Sleeping agents](#sleeping-agents)), longest
-  idle first, giving back their CLI's and MCP servers' memory.
+- **The revive sweep waits**, as above, and hands what it can't start to the
+  launch gate's queue. A person's single Start asks first (below).
+- **Idle agents sleep sooner** — after `general.memory_sleep_minutes` (5)
+  idle instead of `general.sleep_idle_minutes` ([Sleeping agents](#sleeping-agents)),
+  longest idle first, giving back their CLI's and MCP servers' memory, with
+  one notice per pass naming them.
+- **The server sheds its own background work** (`server._memory_low()`):
+  the per-session probe pool narrows from 8 threads to 2; the PR, merge-state
+  and review lookups serve their cached answer past its TTL instead of
+  forking `gh` per branch per minute (a forced lookup — a person pressing
+  something — still asks); Ctrl+F's background pre-indexing skips its pass
+  (Ctrl+F still indexes on demand); and the memory watch unloads the local
+  speech models unused for 2 minutes (`speech.shed_for_memory` — the resident
+  whisper models too, ~1 GB of the server's own memory, then `malloc_trim`).
+  Model loads are refused while the level is low, so nothing reloads until it
+  recovers.
+
+### Launch gate
+
+Every reading above is of memory *now*. An agent reads near zero the second
+it starts and 350-800 MB a minute later, so a burst of starts passes every
+check before any of them has grown. On 2026-11-04 that happened three ways:
+Start all over 18 held sessions, an orchestrator fanning out a dozen workers,
+and a PR scan launching a review per PR. The OOM killer fired three times and
+WSL wedged. `backend/web/core/launch_gate.py` is the one admission gate every
+agent start asks first. It answers **go / wait / refuse** from:
+
+- **memory** (the level above);
+- **agents still warming up** — every MindFlock agent tmux session created
+  in the last 90 s (read from tmux's own `session_created`, so starts from
+  any path and any process count), plus starts this server admitted that
+  have no tmux session yet. Each is assumed to still take ~700 MB
+  (`general.agent_warmup_mb`; the `MINDFLOCK_AGENT_WARMUP_MB` env var wins). The gate works out what memory would read
+  once they have grown, and that projection counts like the level;
+- **live agents** against a machine-wide cap (`general.max_live_agents`,
+  the `MINDFLOCK_MAX_LIVE_AGENTS` env var wins; default one per 1.2 GB of
+  RAM, 16 on 20 GB; `0` = no cap). The cap applies to automatic starts only.
+  Both settings are per device and never synced.
+
+**Automatic starts wait in a FIFO queue.** That means an agent-spawned
+create, a queued prompt relaunching or waking its agent, a mailbox wake, a
+revive sweep's rest, and auto-revive after a kill. A newcomer never jumps the
+queue. The queue drains by itself, one launch at a time, at least 20 s apart
+(`MINDFLOCK_AUTO_LAUNCH_SPACING`), as the gate allows. Past 32 waiting
+(`MINDFLOCK_LAUNCH_QUEUE_MAX`) a new one is refused. A waiting session's row
+carries `waiting_for_memory` (`{id, title, kind, source, parent, since,
+reason, position, creates}`); the rail says **Waiting for memory** on it, with
+**Start anyway** on hover. An agent-spawned create that waits has no session
+yet. It is listed as a provisioning placeholder row (`pending`, the one
+force-starts use), so the orchestrator's `wait_for_session` and the rail both
+see it. The queue is saved to `<config dir>/launch_queue.json`
+(`MINDFLOCK_LAUNCH_QUEUE_FILE`) on every change. At boot each saved entry
+comes back through its kind's factory (`launch_gate.register_kind`): a queued
+create (`spawn` / `flight` / `schedule`, with its placeholder row), a queued
+prompt's relaunch, a wake, a revive. Each waits for the gate again. An entry
+whose session is gone (or no longer asleep) is dropped. An agent's queued
+ticket start is not saved: its pending row does not survive a restart
+either, so the orchestrator's `wait_for_session` reads it as `gone`.
+Renaming a session (`core.rename_stores`, `launch_gate.rename`) moves its
+waiting entry to the new name, rebuilt through the same factory (a launch
+closes over the title it was queued with), and re-parents any worker still
+waiting to be created under it, in the saved file too.
+
+**A person's start asks first.** That covers New session, Duplicate, Start
+(`/revive`), Start all (`/revive-all`), Resume and Wake. While the gate reads
+low (now or projected), these answer **409** `{memory_confirm: true, level,
+message, free, warming, live}`. The app shows its own dialog: *Start anyway*
+(resend with `start_anyway: true`), *Put idle agents to sleep first* (`POST
+/api/server/sleep-idle`, then try again), *Cancel*. Critical is the same
+dialog with stronger words. A person is never queued and never capped. Start
+all still paces its launches through the gate after the confirm.
+
+**Paths.** Every place that launches an agent CLI, and how it is gated:
+
+| Path | Gate |
+|---|---|
+| New session (`POST /api/instances`, person) | confirm |
+| MCP `spawn_session` (`POST /api/instances` `spawned: true`) | queue (202 `queued`) |
+| MCP `spawn_ticket_session` (an agent's `/api/tickets/start`) | queue (202 `queued`, `memory_reason`; its launch waits its turn) |
+| A flight step starting a session (`create_result(auto="flight")`) | queue (the flight reads the pending row as provisioning) |
+| A scheduled template fire (`auto="schedule"`) | queue. A person's Run now is not queued |
+| Duplicate (`/copy`), Start (`/revive`), Resume, Wake, Start all | confirm |
+| A spoken "new session" (voice) | says why instead of starting while memory is low |
+| Revive sweep (boot / Start all's rest) | paced by warming; the rest queued |
+| Auto-revive after a kill (`revive.auto_tick`) | holds while the gate says wait |
+| Prompt-queue drain relaunching or waking its agent | queue |
+| Mailbox delivery waking a sleeper | queue |
+| Team runs | the planner holds new lines on memory, warming or the cap (`decide(...)["why"]`), and a pass starts at most `launch_gate.room()` new ones |
+| Ticket pipeline (`ticket_ingestion.session_runner`, another process) | its own wait loop on `launch_gate.decide` (memory, warming, cap), capped at 30 min |
+| The phone (`/m`): Restart, Wake, Resume, New session | confirm (its ask sheet, Start anyway) |
+| A terminal attach / Send waking a sleeper | not gated (a person's action) |
+
+A queued create runs *gated*: its own older memory check
+(`session_create.memory_refusal`) is skipped, so **Start anyway** on a queued
+worker starts it even while memory still reads low.
+
+**A squeeze must not wedge the server.** On 2026-11-04 the server twice kept
+its listen sockets but answered nothing for minutes (the accept backlog full,
+~190 % CPU, every thread on a futex): the signature of the process thrashing
+— whichever thread holds the GIL takes a major page fault, and every other
+thread, the event loop's included, waits on the GIL behind it. Three things
+keep it answering, and say why when it doesn't:
+
+- **The ticks have their own pool.** The always-on loops (instances, state,
+  dialog watch, Ctrl+F index, red zone, sleep) run on `server._BG_POOL` (6
+  threads, `mf-tick-*`) via `_in_bg_pool`, not on asyncio's default executor
+  (12 threads) that every request handler's `await asyncio.to_thread` waits
+  on. A tick stuck on a slow child can delay other ticks, never a request.
+- **Less to page in** — the shedding above: fewer threads and children
+  touching memory at once, and the server's largest allocation released.
+- **A stall writes itself down** (`core/loop_watchdog.py`). The loop stamps
+  a heartbeat every second; a daemon thread checks it, and when it is 10 s
+  old (`MINDFLOCK_LOOP_STALL_S`) appends to `<config dir>/logs/stacks.log` a
+  header — time, how long, memory level / available / PSI, load, the
+  server's RSS and thread count — then every thread's stack (`faulthandler`),
+  again every minute of a long stall, and an "answered again after N s" line
+  when it recovers. `MINDFLOCK_LOOP_WATCHDOG=0` turns it off. `kill -USR1
+  <server pid>` still dumps on demand (no header) into the same file.
 
 The server's memory watch polls every 10 s, logs each level change and emits
 `system.memory_changed`. It starts from `ok`, so a server that boots already
@@ -757,11 +880,64 @@ the ticket pipeline's standalone launch (`launch_script.launch_command`, used
 by `AgentCliRunner` and `PRClaudeRunner`), a session's shell tab, and the
 usage-refresh windows. `MINDFLOCK_OOM_SCORE_ADJ` overrides the value (`0`
 turns it off; the launch strings are then byte-identical to before). The tmux
-server keeps its own score. The server does **not** lower its own: going below
-0 needs `CAP_SYS_RESOURCE`, which a normal install never has, and if it did
-run privileged the lowered score would be inherited by everything it starts
-that doesn't raise its own (the tmux server, git, the pipeline child) —
-raising the agents already puts the server behind them.
+server keeps its own score. The server never goes **below 0**: that needs
+`CAP_SYS_RESOURCE`, which a normal install never has, and if it did run
+privileged the lowered score would be inherited by everything it starts that
+doesn't raise its own (the tmux server, git, the pipeline child) — raising the
+agents already puts the server behind them. At boot it does come back *down*
+to the lowest non-negative value the kernel allows (`run.protect_from_oom`):
+nothing to do when started from a shell or WSL's init (0), 100 instead of 200
+under a systemd user manager. `MINDFLOCK_SERVER_OOM_PROTECT=0` skips it.
+
+#### Before the OOM killer: each agent in its own memory-limited scope
+
+**What crashed WSL on 2026-11-04 was the swap, not the victim choice.** The
+kernel log of the dead boot (`journalctl -k -b -1`) shows RAM and all 16 GB of
+swap full (~35 GB of anonymous memory across ~18 agent trees) before the OOM
+killer fired; it did take agent-tree processes (score 500), but only after
+minutes of swap thrash, and WSL never recovered. The biggest processes were
+`gitnexus analyze --force` runs from a repo's pre-commit hook — 3.8, 4.3 and
+4.6 GB each, several at once (every agent that commits starts one, and
+GitNexus sizes its V8 heap to 0.75x RAM: `--max-old-space-size=16384`) —
+then `pytest -n 8` suites (8 workers x ~0.7 GB) in other sessions.
+
+So every agent launch (the exit-marker wrapper and `TmuxSession.start`) now
+runs inside `systemd-run --user --scope` (`backend.providers.agent_limits`):
+
+- **Per agent**: `MemoryHigh` 30% of RAM (the kernel throttles and reclaims
+  that tree above it), `MemoryMax` 40% (above it the OOM killer acts *inside
+  that agent's cgroup* — its biggest process, the test worker or the indexer —
+  long before the machine is out), `MemorySwapMax` 15%.
+- **All agents together**: every scope sits in `app-mindflock.slice`, which
+  gets `MemoryHigh` 65% / `MemoryMax` 75% / `MemorySwapMax` 40%
+  (`systemctl --user set-property --runtime`, applied by the first launch
+  after a reboot), so the server, the tmux server, the editor and the OS keep
+  the rest whatever the agents do.
+- The scope is named `mindflock-<session>-<ms>.scope`
+  (`systemctl --user status 'mindflock-*'` shows each agent's memory). The
+  pane's terminal, environment, cwd and exit status are the agent's own:
+  `systemd-run --scope` execs `sh -c <launch>` in place.
+- Availability is probed with a throwaway scope (cached 10 min, a "no" for
+  1 min — WSL starts the user manager lazily, so a boot-time "no" is picked up
+  a minute later). No `systemd-run`, no user bus, macOS: the launch string is
+  exactly what it was.
+
+**`gitnexus analyze` takes turns.** When GitNexus is installed, launches put
+`<run dir>/bin` first on the agent's `PATH`; its `gitnexus` shim runs
+`analyze` through `mindflock slot --pool gitnexus --max 1 --timeout 1800`
+(one at a time machine-wide, first come first served, waits for memory) with
+`NODE_OPTIONS=--max-old-space-size=4096` (GitNexus honours a user heap instead
+of its 0.75x RAM default; a heap already in `NODE_OPTIONS` is kept) and
+`oom_score_adj` 800. Everything else (`gitnexus mcp`, `augment`, `status`…)
+execs the real binary untouched. That covers a pre-commit `gitnexus analyze`,
+`node .gitnexus/run.cjs analyze` (it looks `gitnexus` up on `PATH`) and an
+agent running the command itself; `npx gitnexus` bypasses it.
+
+All of it is `general.agent_memory` in settings.json (see
+[configuration.md](configuration.md)); `MINDFLOCK_AGENT_SCOPE=0` turns the
+scopes off and `MINDFLOCK_GITNEXUS_GATE=0` the shim (the test suite sets
+both). It applies to agents launched after the change; running ones keep
+the cgroup they started in.
 
 **A SIGKILL is not a failed resume.** A resume chain's fallbacks (`claude
 --continue || { sleep 3; retry } || fresh`, a generic CLI's `resume || fresh`,

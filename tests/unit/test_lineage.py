@@ -828,24 +828,104 @@ def _memory(monkeypatch, level):
     monkeypatch.setattr(memory_pressure, "snapshot", lambda **kw: dict(snap))
 
 
-def test_low_memory_refuses_an_agents_spawn(create, monkeypatch):
+def test_low_memory_queues_an_agents_spawn(create, monkeypatch):
     """An orchestrator fanning out workers is how a big job runs the box out
-    of memory: its create is a 409 that names the reason (and carries the
-    reading, so a caller can wait rather than give up)."""
+    of memory: its create waits in the launch gate's queue (202, "queued:
+    waiting for memory", with the reason) instead of failing its task, and the
+    queue creates it once memory allows."""
+    from backend.web.core import launch_gate
+
     _memory(monkeypatch, "low")
     create.reg.add("orch")
     r = create.post(title="w1", parent="orch", spawned=True)
-    assert r.status_code == 409
-    assert r.json()["error"].startswith("memory is low: 1.0 GB free of 16.0 GB")
-    assert r.json()["memory"]["level"] == "low"
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["queued"] is True and body["status"] == "queued: waiting for memory"
+    assert body["reason"].startswith("memory is low: 1.0 GB free of 16.0 GB")
+    assert body["position"] == 1 and body["title"] == "w1"
     assert create.captured == [] and "w1" not in create.reg.instances
+    # The name is taken while it waits.
+    r = create.post(title="w1", parent="orch", spawned=True)
+    assert r.status_code == 409 and "exists" in r.json()["error"]
+    # Still low: the drain holds it. Recovered: the queue creates it.
+    assert launch_gate.drain_once() is None
+    _memory(monkeypatch, "ok")
+    assert launch_gate.drain_once() == "w1"
+    assert [o.title for o in create.captured] == ["w1"]
+    assert create.captured[0].parent == "orch" and create.captured[0].spawned
+    assert launch_gate.waiting("w1") is None
 
 
-def test_low_memory_never_refuses_a_person_or_a_run_member(create, monkeypatch):
-    """A person's New goes through (the notice says what they walk into); a
-    team run's own member is held by the run's planner, not failed here."""
+@pytest.mark.parametrize("auto", ["flight", "schedule"])
+def test_a_flight_or_scheduled_create_waits_like_a_spawn(
+    create, monkeypatch, tmp_path, auto
+):
+    """A flight step's or a schedule's new session is an automatic start:
+    queued (a pending row the flight reads as provisioning), created once
+    memory allows, with no second memory check refusing it then."""
+    import asyncio
+
+    from backend.web.core import launch_gate, pending
+
+    _memory(monkeypatch, "low")
+    payload = {"title": "f1", "program": "bash", "repo_path": str(tmp_path)}
+    status, body = asyncio.run(server._session_create.create_result(payload, auto=auto))
+    try:
+        assert status == 202 and body["queued"] is True and body["title"] == "f1"
+        assert pending.has("f1") and launch_gate.waiting("f1")["kind"] == auto
+        assert create.captured == []
+        _memory(monkeypatch, "ok")
+        assert launch_gate.drain_once() == "f1"
+        assert [o.title for o in create.captured] == ["f1"]
+        assert not pending.has("f1")
+    finally:
+        pending.drop("f1")
+
+
+def test_start_anyway_on_a_queued_spawn_is_not_refused_again(create, monkeypatch):
+    """Memory still low: Start anyway is the person's override, and the
+    create's own memory check no longer refuses it."""
+    from backend.web.core import launch_gate
+
+    _memory(monkeypatch, "low")
+    create.reg.add("orch")
+    assert create.post(title="w5", parent="orch", spawned=True).json()["queued"]
+    r = client.post("/api/launch-gate/w5/start")
+    assert r.json() == {"title": "w5", "started": True, "error": ""}
+    assert [o.title for o in create.captured] == ["w5"]
+    assert launch_gate.items() == []
+
+
+def test_a_queued_spawn_is_listed_until_cancelled(create, monkeypatch):
+    """While it waits the worker is a pending placeholder row marked
+    waiting_for_memory; cancelling it drops the row and creates nothing."""
+    from backend.web.core import launch_gate, pending
+
     _memory(monkeypatch, "critical")
-    assert create.post(title="mine").status_code == 202
+    create.reg.add("orch")
+    assert create.post(title="w9", parent="orch", spawned=True).status_code == 202
+    try:
+        (row,) = [r for r in server._pending_rows() if r["title"] == "w9"]
+        assert row["pending"] is True and row["parent"] == "orch"
+        assert row["waiting_for_memory"]["creates"] is True
+        r = client.post("/api/launch-gate/w9/cancel")
+        assert r.json() == {"title": "w9", "cancelled": True}
+        assert not pending.has("w9") and launch_gate.items() == []
+        assert create.captured == []
+    finally:
+        pending.drop("w9")
+
+
+def test_low_memory_asks_a_person_and_never_gates_a_run_member(create, monkeypatch):
+    """A person's New while memory is critical is a 409 the app turns into a
+    confirm (memory_confirm), and goes through with start_anyway; a team
+    run's own member is held by the run's planner, not here."""
+    _memory(monkeypatch, "critical")
+    r = create.post(title="mine")
+    assert r.status_code == 409
+    assert r.json()["memory_confirm"] is True and r.json()["level"] == "critical"
+    assert "Memory is critically low: 1.0 GB free." in r.json()["message"]
+    assert create.post(title="mine", start_anyway=True).status_code == 202
     create.reg.add("lead")
     r = create.post(title="m1", parent="lead", spawned=True, run_member=True)
     assert r.status_code == 202, r.text

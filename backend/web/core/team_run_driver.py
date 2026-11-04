@@ -260,7 +260,8 @@ def observe(run: dict, now: float, boot: bool = False) -> dict:
     out = {
         "boot": boot,
         "limited_providers": sorted(limited),
-        "memory_low": _memory_pressure.is_low(),
+        "memory_low": _memory_pressure.is_low() or _gate_holds(),
+        "start_budget": _gate_room(),
         "provider": provider,
         "cost": round(cost, 4),
         "tasks": tasks,
@@ -294,6 +295,30 @@ def _observe_sf_report(run: dict, t: dict) -> dict:
     except Exception:  # noqa: BLE001
         pass
     return {}
+
+
+def _gate_holds() -> bool:
+    """Whether the launch gate (core.launch_gate) holds new automatic starts
+    for memory: low now, low once the agents still starting have grown, or the
+    machine's live-agent cap reached. Its spacing alone does not hold a run
+    (the pass's start budget, :func:`_gate_room`, paces it). Never raises."""
+    try:
+        from backend.web.core import launch_gate
+
+        return launch_gate.decide("auto").get("why") in ("memory", "warming", "cap")
+    except Exception:  # noqa: BLE001 — advisory
+        return False
+
+
+def _gate_room():
+    """:func:`core.launch_gate.room`: the most new lines this pass may start
+    (None = no limit known). Never raises."""
+    try:
+        from backend.web.core import launch_gate
+
+        return launch_gate.room()
+    except Exception:  # noqa: BLE001 — advisory
+        return None
 
 
 def _observe_lead(run, now, rows, pending, instances, records, failures) -> dict:

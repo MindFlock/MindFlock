@@ -1005,7 +1005,8 @@ class ShipTools:
         self.policy.spawned_by_me.add(title)
         self._note_dispatch(title)
         ready, row = False, None
-        if args.get("wait_ready", True):
+        queued = bool(resp.get("queued"))
+        if args.get("wait_ready", True) and not queued:
             ctx.start_progress(self.ticket_ready_wait_s)
             ready, row = self._await_ticket_row(title, ctx)
         out: Dict[str, Any] = {
@@ -1028,6 +1029,16 @@ class ShipTools:
                 "base branch, not forked from your HEAD"
             ],
         }
+        if queued:
+            # Memory is short (the server's launch gate): queued, not failed.
+            out.update(
+                {
+                    "status": "queued: waiting for memory",
+                    "queued": True,
+                    "memory_reason": resp.get("memory_reason") or "",
+                    "position": resp.get("position"),
+                }
+            )
         if resp.get("reason"):
             out["reason"] = resp["reason"]
         if "report_back" not in resp:
@@ -1035,7 +1046,12 @@ class ShipTools:
                 "this MindFlock server ignores parent/report-back on ticket "
                 "starts (upgrade it): the session is not your child"
             )
-        if not ready:
+        if queued:
+            out["hint"] = (
+                "MindFlock starts it once memory allows (one at a time, oldest "
+                "first); wait_for_session waits through the queue"
+            )
+        elif not ready:
             out["hint"] = (
                 "still provisioning (a first clone can take minutes); "
                 "wait_for_session will wait for it"

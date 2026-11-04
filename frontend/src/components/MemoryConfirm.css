@@ -1,0 +1,48 @@
+/* The "Memory is low" confirm (components/MemoryConfirm.tsx). */
+#memory-confirm .mc-card {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  padding: 16px 18px 14px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 10px;
+}
+
+#memory-confirm .mc-card.critical {
+  border-left-color: var(--red);
+}
+
+#memory-confirm h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+#memory-confirm .mc-message {
+  margin: 0 0 6px;
+  line-height: 1.45;
+}
+
+#memory-confirm .mc-what {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+#memory-confirm .modal-actions {
+  flex-wrap: wrap;
+}
+
+#memory-confirm .mc-start {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#memory-confirm .mc-danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}

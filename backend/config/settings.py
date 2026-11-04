@@ -1250,7 +1250,27 @@ class GeneralSettings:
     idle, unwatched and with nothing waiting for it this many minutes; it
     wakes, resuming its conversation, as soon as it is opened or sent
     anything. ``None`` (never set) = 45; ``0`` turns sleeping off. While
-    memory reads low the wait drops to 5 minutes (never above this value).
+    memory reads low the wait drops to ``memory_sleep_minutes``.
+
+    ``memory_sleep_minutes``: while memory reads low or critical
+    (:mod:`backend.memory_pressure`), agents idle this long are put to sleep,
+    longest-idle first, whatever ``sleep_idle_minutes`` says (``0`` there
+    turns off only the everyday sleeping). ``None`` = 5; ``0`` turns sleeping
+    for memory off.
+
+    ``memory_low_pct`` / ``memory_critical_pct``: the share of RAM the kernel
+    reports available (MemAvailable) at or below which memory reads low /
+    critical. ``None`` = 15 / 7; ``0`` drops that signal (the absolute floors
+    and the PSI stall readings still count).
+
+    ``max_live_agents`` / ``agent_warmup_mb``: the launch gate
+    (:mod:`backend.web.core.launch_gate`). The first is the most live agents
+    that automatic starts (an agent's spawned worker, a queued prompt, a
+    schedule, a flight, the ticket pipeline) bring the machine to. ``None`` =
+    one per 1.2 GB of RAM; ``0`` = no cap. The second is what one agent
+    started in the last 90 s is assumed to still take as it grows. ``None`` =
+    700. The ``MINDFLOCK_MAX_LIVE_AGENTS`` / ``MINDFLOCK_AGENT_WARMUP_MB`` env
+    vars win.
 
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
@@ -1285,6 +1305,14 @@ class GeneralSettings:
     device (RAM is), so settings sync leaves it alone. ``backend.slot`` reads
     the file directly, never through this layer — it wraps every commit.
 
+    ``agent_memory``: the memory limits every launched agent runs under and
+    the ``gitnexus analyze`` gate (:mod:`backend.providers.agent_limits`) —
+    ``enabled``, per-agent ``high`` / ``max`` / ``swap``, all-agents
+    ``fleet_high`` / ``fleet_max`` / ``fleet_swap`` (``"30%"`` of RAM,
+    ``"6G"``, ``"off"``), ``gitnexus_heap_mb`` (0 = no gate) and
+    ``gitnexus_at_once``. ``{}`` (the default) = the built-in defaults; only
+    keys the user set are stored. Per device (RAM is). Read at launch.
+
     ``workers_request`` / ``workers_model``: Flock mode's words
     (:mod:`backend.web.core.flock_mode`) — the request a session gets with
     each prompt while its Flock mode is on (or with one ``/send {flock:
@@ -1311,6 +1339,11 @@ class GeneralSettings:
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
     revive_on_start: Optional[bool] = None  # None = OFF (see docstring)
     sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
+    memory_sleep_minutes: Optional[int] = None  # None = 5; 0 = off (see docstring)
+    memory_low_pct: Optional[int] = None  # None = 15 (see docstring)
+    memory_critical_pct: Optional[int] = None  # None = 7 (see docstring)
+    max_live_agents: Optional[int] = None  # None = RAM / 1.2 GB; 0 = no cap
+    agent_warmup_mb: Optional[int] = None  # None = 700 (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
     agent_max_children: Optional[int] = None  # None = lineage default (8)
@@ -1318,6 +1351,7 @@ class GeneralSettings:
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
     heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
     mcp_shared_servers: List[str] = field(default_factory=list)
+    agent_memory: Dict[str, Any] = field(default_factory=dict)  # see docstring
     # The DEFAULT FOLDER (2026-11-02): a chain run with no session picked
     # runs here ("" = MindFlock's own ~/.mindflock/default).
     default_folder: str = ""
@@ -1361,6 +1395,15 @@ class GeneralSettings:
             d["revive_on_start"] = self.revive_on_start
         if self.sleep_idle_minutes is not None:
             d["sleep_idle_minutes"] = self.sleep_idle_minutes
+        for key in (
+            "memory_sleep_minutes",
+            "memory_low_pct",
+            "memory_critical_pct",
+            "max_live_agents",
+            "agent_warmup_mb",
+        ):
+            if getattr(self, key) is not None:
+                d[key] = getattr(self, key)
         if self.agent_mcp is not None:
             d["agent_mcp"] = self.agent_mcp
         if self.agent_mcp_scope:
@@ -1375,6 +1418,8 @@ class GeneralSettings:
             d["heavy_slots"] = self.heavy_slots
         if self.mcp_shared_servers:
             d["mcp_shared_servers"] = list(self.mcp_shared_servers)
+        if self.agent_memory:
+            d["agent_memory"] = dict(self.agent_memory)
         if self.workers_request and self.workers_request != DEFAULT_WORKERS_REQUEST:
             d["workers_request"] = self.workers_request
         if self.workers_model and self.workers_model != DEFAULT_WORKERS_MODEL:
@@ -1408,6 +1453,11 @@ class GeneralSettings:
             resume_on_usage_reset=_opt_bool(d.get("resume_on_usage_reset")),
             revive_on_start=_opt_bool(d.get("revive_on_start")),
             sleep_idle_minutes=_opt_nonneg_int(d.get("sleep_idle_minutes")),
+            memory_sleep_minutes=_opt_nonneg_int(d.get("memory_sleep_minutes")),
+            memory_low_pct=_opt_pct(d.get("memory_low_pct")),
+            memory_critical_pct=_opt_pct(d.get("memory_critical_pct")),
+            max_live_agents=_opt_nonneg_int(d.get("max_live_agents")),
+            agent_warmup_mb=_opt_nonneg_int(d.get("agent_warmup_mb")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),
@@ -1415,6 +1465,7 @@ class GeneralSettings:
             agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
             heavy_slots=_opt_pos_int(d.get("heavy_slots")),
             mcp_shared_servers=_mcp_server_names(d.get("mcp_shared_servers")),
+            agent_memory=_agent_memory(d.get("agent_memory")),
             default_folder=str(d.get("default_folder") or "").strip()[:1024],
             workers_request=str(d.get("workers_request", "") or "").strip()
             or DEFAULT_WORKERS_REQUEST,
@@ -2169,6 +2220,12 @@ def _opt_nonneg_int(v: Any) -> Optional[int]:
     return n if n is not None and n >= 0 else None
 
 
+def _opt_pct(v: Any) -> Optional[int]:
+    """:func:`_opt_nonneg_int`, capped at 90 (a percent of RAM)."""
+    n = _opt_nonneg_int(v)
+    return min(n, 90) if n is not None else None
+
+
 def _opt_pos_int(v: Any) -> Optional[int]:
     """:func:`_opt_int`, with anything below 1 read as unset."""
     n = _opt_int(v)
@@ -2348,6 +2405,14 @@ def _str_list(v: Any) -> List[str]:
 
 
 _MCP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _agent_memory(v: Any) -> Dict[str, Any]:
+    """``general.agent_memory``: only the keys and values
+    :mod:`backend.providers.agent_limits` understands."""
+    from backend.providers.agent_limits import clean_config
+
+    return clean_config(v)
 
 
 def _mcp_server_names(v: Any) -> List[str]:

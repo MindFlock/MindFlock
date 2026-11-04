@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Agents wait their turn for memory instead of piling on.** Every way an
+  agent starts now asks one gate first. It counts the agents started in the
+  last 90 seconds as still growing (~700 MB each, read from tmux, so the
+  ticket pipeline's and every other path's starts count too), and caps how
+  many agents may run at once (one per 1.2 GB of RAM by default, 16 on
+  20 GB; `MINDFLOCK_MAX_LIVE_AGENTS`). Starts nobody asked for wait in a
+  queue and start one at a time as memory allows: a worker an agent spawns
+  (it is told "queued: waiting for memory", not failed), a queued prompt or
+  message relaunching or waking its agent, what Start all couldn't fit. Their
+  rows say **Waiting for memory**, with **Start anyway** on hover, and the
+  rail says **Memory low — new agents wait** until the queue clears. Your own
+  New session, Duplicate, Start, Start all, Resume and Wake still go, but
+  while memory is low they ask first: *Memory is low: 3.1 GB free. Starting
+  another agent may freeze the machine*, with **Start anyway**, **Put idle
+  agents to sleep first** or **Cancel** (on the phone too). Flights,
+  scheduled templates, team runs and tickets an agent starts wait their turn
+  the same way, a spoken "new session" says why it didn't start, and what is
+  waiting survives a server restart and a rename (a renamed session keeps its place in the queue). The cap and the per-agent size are
+  settings (`general.max_live_agents`, `general.agent_warmup_mb`), per device.
+- **One agent can no longer take the whole machine down.** Each agent now
+  runs in its own systemd user scope with a memory ceiling (throttled above
+  30% of RAM, stopped above 40%, swap capped), and all agents together are
+  capped at 75% of RAM, so a runaway test run or indexer loses a process
+  instead of pushing WSL into a swap thrash. `gitnexus analyze` from any
+  repo's commit hook now runs one at a time on the machine with a 4 GB heap
+  (it used to size itself to 0.75x RAM — 16 GB — once per committing agent).
+  Tunable as `general.agent_memory`; Linux with systemd only, unchanged
+  elsewhere.
+- **Running low on memory no longer wedges the server.** The background
+  ticks have their own small thread pool, so a tick stuck on a slow git, tmux
+  or gh call can't hold up the app's requests. While memory reads low the
+  server also does less: fewer probes at once, no new `gh` lookups (cached
+  answers stand), no Ctrl+F pre-indexing, and the local speech models it
+  holds (about 1 GB) are unloaded once unused for 2 minutes. If the event
+  loop does stall for 10 s, every thread's stack and the memory reading are
+  written to `logs/stacks.log` by themselves.
+- **Low memory puts idle agents to sleep, and says so.** When memory reads
+  low, agents idle for 5 minutes (`general.memory_sleep_minutes`) go to sleep,
+  longest-idle first, even with everyday sleeping turned off. One notice names
+  them and why, and they wake when you open or message them. Agents mid-turn
+  are never touched. When memory counts as low or critical is now a setting
+  (`general.memory_low_pct`, 15; `general.memory_critical_pct`, 7).
+- **Voice Lab stays off while you aren't using voice.** It starts on first
+  use and stops after 10 idle minutes, and now only speech wakes it:
+  dictating (recognition runs inside MindFlock) no longer does, nor does
+  opening the mic's menu, the phone page loading or coming back to the
+  front, or Settings → Voice (which now says a local voice "starts when you
+  use voice"; **Say a test sentence** still tries it). The first line after
+  it has been idle shows **Starting voice…** while it starts, and is said in
+  your chosen voice once it is up (the server waits up to 90 s for it)
+  instead of by the backup voice or as an error.
+- **Speech recognition is loaded only while you listen.** The local
+  recognition models (about 1.1 GB) are no longer loaded at startup or
+  whenever a page opens: they load when the wake-word standby turns on (and
+  stay loaded while it is on, so "MindFlock" is answered at once) or when you
+  start dictating, and unload after 30 unused minutes otherwise. The first
+  dictation after that shows **Starting the mic…** for the few seconds the
+  models take to load.
 - **A rename renames the session.** There is no hidden second name any more:
   renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
   `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,
@@ -54,6 +112,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"MindFlock" wakes the mic reliably, and fast.** A word said while the
+  previous check was still on its way (a cough, a key click, your first try)
+  is now kept and checked next instead of dropped; "Hey, MindFlock" and a
+  slow "Mind… flock" are heard whole; "My clock" counts as the word. The
+  server's check is meant to drop from 1–8 s to ~0.2 s by decoding the clip on a
+  10 s window, once, without the no-speech filter that turned an uncertain
+  "MindFlock" into nothing (the decode settings are in `core/wake.py`;
+  `core/speech.py` applying them is a separate change). Same rules on the
+  desktop and the phone. Measured by the new `tests/bench/wake_stream_bench.py`
+  (docs/voice-wake.md).
 - **A halted stop says why and what to do.** It keeps its name, shows the
   reason on one line, and offers Retry · Skip · **Let the agent fix it** on any
   kind of stop (the menu too); a click opens its details. A halt point you set

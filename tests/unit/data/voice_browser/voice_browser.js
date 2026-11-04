@@ -2476,21 +2476,31 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const w1 = state.wakes[0] || {};
     check("wake: a lone word → ONE POST /api/voice/wake, a 16 kHz WAV of just it (lead-in, the word, its quiet tail)", state.wakes.length === 1 && w1.ctype === "audio/wav" && w1.head === "RIFF" && w1.rate === 16000 && w1.ms >= 800 && w1.ms <= 1600 && /^en/.test(w1.lang || ""), JSON.stringify(state.wakes));
     check("wake: …and nothing else reached the server (no transcribe, no stream)", state.transcribes.length === 0 && state.streamOpens.length === opensW);
+    // A word said while a check is in flight (a cough's, say) is kept and
+    // goes the moment that check says no — never dropped.
+    state.wakeDelay = 2000;
     await sleep(400);
     await lone(300);
+    await until(() => state.wakes.length >= 2, 3000);
+    await sleep(500);
+    await lone(400);
+    await sleep(300);
+    check("wake: a second lone word while a check is in flight waits for it", state.wakes.length === 2, JSON.stringify(state.wakes));
+    await until(() => state.wakes.length >= 3, 3000);
+    check("wake: …and goes the moment that check says no", state.wakes.length === 3, JSON.stringify(state.wakes));
+    state.wakeDelay = 0;
     await sleep(800);
     check("wake: not the word → nothing (idle, no chime, not listening)", (await W(() => window.mfVoice.state === "idle" && window.mfVoice.wakeState.chimes === 0)));
-    check("wake: one check per 1.5 s — a second lone word right after is not sent", state.wakes.length === 1, JSON.stringify(state.wakes));
     await sleep(800);
     await lone(2000);
     await sleep(900);
-    check("wake: a sentence (2 s of sound) is never sent", state.wakes.length === 1, JSON.stringify(state.wakes));
+    check("wake: a sentence (2 s of sound) is never sent", state.wakes.length === 3, JSON.stringify(state.wakes));
     await lone(120);
     await sleep(900);
-    check("wake: …nor a click (120 ms)", state.wakes.length === 1, JSON.stringify(state.wakes));
+    check("wake: …nor a click (120 ms)", state.wakes.length === 3, JSON.stringify(state.wakes));
     await lone(500);
-    await until(() => state.wakes.length >= 2, 3000);
-    check("wake: past the rate limit the next lone word is sent", state.wakes.length === 2, JSON.stringify(state.wakes));
+    await until(() => state.wakes.length >= 4, 3000);
+    check("wake: the next lone word is sent", state.wakes.length === 4, JSON.stringify(state.wakes));
     // The word: listening at once, as a tap does — the chime, a tick in the
     // same moment. The server's check takes 300 ms (its fast model).
     state.wakeReply = { wake: true, text: "MindFlock." };
@@ -2504,7 +2514,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("wake: listening started the moment the answer came (no wait for the chime)", wk.startedAt - state.wakeAnsweredAt < 100, JSON.stringify([wk.startedAt - state.wakeAnsweredAt, wk]));
     check("wake: the word's end → listening measured: the 200 ms tail + the 300 ms check (+ the round trip), in the trace too", wk.ms >= 450 && wk.ms < 1000 && wk.trace && wk.trace.wake === wk.ms, JSON.stringify(wk));
     console.log("  wake: the word's end → listening " + wk.ms + " ms (200 ms tail, 300 ms mocked check)");
-    check("wake: the word → listening, as a tap in toggle mode (prompt, the recorder on)", (await W(() => window.mfVoice.state === "listening" && window.mfVoice.listen.mode === "prompt" && !window.mfVoice.listen.held)) && state.wakes.length === 3);
+    check("wake: the word → listening, as a tap in toggle mode (prompt, the recorder on)", (await W(() => window.mfVoice.state === "listening" && window.mfVoice.listen.mode === "prompt" && !window.mfVoice.listen.held)) && state.wakes.length === 5);
     check("wake: …the chime played (the page's AudioContext)", (await W(() => window.mfVoice.wakeState.chimes)) === 1);
     check("wake: …the strip says only “Listening…” (no “Yes?” on it)", (await W(() => document.getElementById("voice-caption").textContent === "Listening…" && window.__caps.indexOf("Yes?") < 0)), JSON.stringify((await W(() => window.__caps)).slice(-6)));
     check("wake: …a tick (and the listening buzz)", (await W(() => window.__vibes)) - vibW >= 2, String((await W(() => window.__vibes)) - vibW));
@@ -2513,7 +2523,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(400);   // an answer starts a moment after the chime (the recorder's floor is the room's first)
     await lone(500);
     await until(() => state.transcribes.length >= 1, 4000);   // the listen's silence stop: 1.1 s after the word
-    check("wake: a word while it listens is the listen's, not a wake check", state.wakes.length === 3 && state.transcribes.length >= 1, JSON.stringify([state.wakes.length, state.transcribes.length]));
+    check("wake: a word while it listens is the listen's, not a wake check", state.wakes.length === 5 && state.transcribes.length >= 1, JSON.stringify([state.wakes.length, state.transcribes.length]));
     await pageW.click("#voice-cancel");
     await waitFor(pageW, () => window.mfVoice.state === "idle" && window.mfVoice.stt.standbyOn(), 3000, "standby again");
     check("wake: listening over → the standby again", await standbyW());

@@ -131,6 +131,17 @@ class TestStarts:
         run = _run(_task("t1", "queued", start_now=True))
         assert _ops(_plan(run, memory_low=True), "start")
 
+    def test_a_pass_starts_no_more_lines_than_memory_holds(self):
+        """The launch gate's room: three free lines, room for one — one starts
+        this pass, the rest wait for the next (which counts it as warming)."""
+        run = _run(*(_task("t%d" % i, "queued") for i in range(3)))
+        assert len(_ops(_plan(run, start_budget=1), "start")) == 1
+        assert _ops(_plan(run, start_budget=0), "start") == []
+        assert len(_ops(_plan(run, start_budget=None), "start")) == 3
+        # A start_now is a person's own and never counts against it.
+        run = _run(_task("a", "queued", start_now=True), _task("b", "queued"))
+        assert [a["task"] for a in _ops(_plan(run, start_budget=0), "start")] == ["a"]
+
 
 # --------------------------------------------------------------------------- #
 # starting

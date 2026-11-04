@@ -33,6 +33,9 @@ def _isolate(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
     # Background lookups / probes run inline, from a clean slate.
     monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
+    # A loopback host here is a WARM one (its cold start, when Voice Lab
+    # stopped while idle, is test_speech_tts_budget.TestColdStart's).
+    monkeypatch.setattr(speech.OpenAITTS, "starts_cold", lambda self: False)
     speech.forget_ffmpeg()
     speech.TTS_CHAIN.reset()
     speech.unload_all()
@@ -383,17 +386,23 @@ class TestLocalSTT:
         assert len(whisper.loads) == 1  # cached
         assert whisper.calls[1][1]["language"] is None
 
-    def test_the_wake_clip_uses_the_fast_model(self, whisper):
+    def test_the_wake_clip_uses_the_fast_model(self, whisper, monkeypatch):
+        from backend.web.core import wake
+
+        # The short encoder input hooks faster_whisper.transcribe (not in the fake).
+        monkeypatch.setattr(speech, "_hook_pad", lambda: False)
+        # The fake's transcribe takes **kw: every option counts as accepted.
+        monkeypatch.setattr(speech, "_takes", lambda model, key: True)
         stt = speech.LocalSTT()
         assert stt.wake_transcribe(b"RIFF", "audio/wav", "en-US", "MindFlock") == (
             "Hello there."
         )
         assert whisper.loads[0][0] == "base.en"
+        # Decoded as core.wake says: greedy, one temperature, no VAD, no
+        # no-speech filter, a token cap, the word as the prompt.
         assert whisper.calls[0][1] == {
             "language": "en",
-            "beam_size": 1,
-            "vad_filter": False,
-            "initial_prompt": "MindFlock",
+            **wake.decode_options("MindFlock"),
         }
         path = whisper.seen_paths[0][0]
         assert path.endswith(".wav") and not os.path.exists(path)
@@ -404,17 +413,19 @@ class TestLocalSTT:
         assert whisper.loads[2][0] == "small"
         assert whisper.calls[2][1]["beam_size"] == 5
 
-    def test_the_wake_check_pass_has_no_prompt(self, whisper):
+    def test_the_wake_check_pass_has_no_prompt(self, whisper, monkeypatch):
+        from backend.web.core import wake
+
+        monkeypatch.setattr(speech, "_hook_pad", lambda: False)
+        # The fake's transcribe takes **kw: every option counts as accepted.
+        monkeypatch.setattr(speech, "_takes", lambda model, key: True)
         stt = speech.LocalSTT()
         assert stt.wake_verify_transcribe(b"RIFF", "audio/wav", "en-US") == (
             "Hello there."
         )
         assert whisper.loads[0][0] == "base.en"  # the same fast model
-        assert whisper.calls[0][1] == {
-            "language": "en",
-            "beam_size": 1,
-            "vad_filter": False,
-        }
+        assert whisper.calls[0][1] == {"language": "en", **wake.decode_options("")}
+        assert "initial_prompt" not in whisper.calls[0][1]
         assert not os.path.exists(whisper.seen_paths[0][0])
 
     def test_the_base_wake_path_is_transcribe(self):
@@ -1591,10 +1602,21 @@ def clock(monkeypatch):
 
 
 class TestResident:
-    """While recognition is ``local`` its whisper models are never idle-
-    unloaded; piper voices (and everything else) still are."""
+    """While recognition is ``local`` AND a page listens (the wake-word
+    standby's lease, :func:`speech.listen`) its whisper models are never
+    idle-unloaded; with nobody listening they unload like everything else
+    (piper voices always do)."""
 
     WHISPERS = ["whisper:base.en", "whisper:small"]
+
+    @pytest.fixture(autouse=True)
+    def _listening(self, clock):
+        # A page in standby the whole test (its lease renewed: the clock
+        # jumps past it in these tests).
+        speech.listen("standby-page")
+        speech._LISTENING["standby-page"] = float("inf")
+        yield
+        speech._LISTENING.clear()
 
     def test_local_recognition_stays_voices_unload(self, both, clock):
         _set(stt_backend="local", tts_backend="local")
@@ -1641,6 +1663,47 @@ class TestResident:
         assert speech.loaded() == self.WHISPERS and armed == [1]
         speech.unload_all()
         assert speech.loaded() == []
+
+    def test_nobody_listening_unloads_it(self, both, clock):
+        speech._LISTENING.clear()
+        _set(stt_backend="local")
+        speech.warm("stt")
+        clock[0] += speech.IDLE_SECONDS - 1
+        assert speech.sweep_idle() == []  # a recent phrase keeps it a while
+        clock[0] += 2
+        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.loaded() == []
+
+    def test_a_lapsed_lease_unloads_it(self, both, clock):
+        speech._LISTENING.clear()
+        _set(stt_backend="local")
+        assert speech.listen("page") is True
+        speech.warm("stt")
+        assert speech.stt_loaded() is True
+        clock[0] += speech.LISTEN_LEASE_SECONDS - 1
+        assert speech.listening() is True
+        clock[0] += speech.IDLE_SECONDS  # the page went away long ago
+        assert speech.listening() is False
+        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.stt_loaded() is False
+
+    def test_a_lease_ends_on_off_and_on_unload_all(self, both):
+        speech._LISTENING.clear()
+        assert speech.listen("a") is True
+        assert speech.listen("b") is True
+        assert speech.listen("a", on=False) is True
+        assert speech.listen("b", on=False) is False
+        speech.listen("c")
+        speech.unload_all()
+        assert speech.listening() is False
+
+    def test_stt_loaded_only_for_local(self, both):
+        _set(stt_backend="system")
+        assert speech.stt_loaded() is False
+        _set(stt_backend="local")
+        assert speech.stt_loaded() is False
+        speech.warm("stt")
+        assert speech.stt_loaded() is True
 
     def test_the_memory_guard_still_refuses_a_load(self, both, monkeypatch):
         _set(stt_backend="local")

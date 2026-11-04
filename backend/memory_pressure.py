@@ -29,7 +29,13 @@ readings clear the *recovery* thresholds, which sit a margin past the entry
 ones — otherwise a box hovering at the line would flap the banner and the
 spawn gate every poll.
 
-Stdlib only: the ticket pipeline (a separate process) imports it too.
+The available-share lines are settings (``general.memory_low_pct``, default
+15; ``general.memory_critical_pct``, default 7 — percent of RAM the kernel
+says is available; ``0`` drops that signal, leaving the floor and PSI). The
+absolute floors and the PSI lines are fixed.
+
+Stdlib only at import: the ticket pipeline (a separate process) imports it
+too, and reads the settings through the same lazy, never-raising path.
 ``MINDFLOCK_MEMORY_GUARD=0`` turns the guard off (level reads ``"unknown"``).
 """
 
@@ -38,22 +44,33 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
-__all__ = ["snapshot", "level", "is_low", "describe", "LEVELS"]
+__all__ = ["snapshot", "level", "is_low", "describe", "LEVELS", "thresholds"]
 
 LEVELS = ("ok", "low", "critical")
 
 _GiB = 1024**3
 
-# Entry thresholds: a reading at or past ANY of these raises the level.
-#: (available share of total, absolute available bytes, PSI some avg60, PSI full avg60)
-_LOW = (0.15, 2 * _GiB, 20.0, 5.0)
-_CRITICAL = (0.07, 1 * _GiB, 40.0, 15.0)
-# Recovery thresholds: to step DOWN from a level, every reading must clear
-# these (a margin past the entry line of the level below it).
-_RECOVER_FROM_LOW = (0.20, int(2.5 * _GiB), 10.0, 2.0)
-_RECOVER_FROM_CRITICAL = (0.10, int(1.5 * _GiB), 30.0, 10.0)
+#: ``general.memory_low_pct`` / ``general.memory_critical_pct`` when unset:
+#: the available share of RAM (percent) at or below which memory reads low /
+#: critical.
+DEFAULT_LOW_PCT = 15
+DEFAULT_CRITICAL_PCT = 7
+#: Recovery sits this many points past the entry share (hysteresis).
+_RECOVER_LOW_MARGIN = 5
+_RECOVER_CRITICAL_MARGIN = 3
+#: How long a settings read is reused (the snapshot itself caches 2 s).
+_SETTINGS_SECONDS = 30.0
+
+# The fixed parts of each line: (absolute available bytes, PSI some avg60,
+# PSI full avg60). The available SHARE comes from the settings.
+_LOW_FIXED = (2 * _GiB, 20.0, 5.0)
+_CRITICAL_FIXED = (1 * _GiB, 40.0, 15.0)
+_RECOVER_FROM_LOW_FIXED = (int(2.5 * _GiB), 10.0, 2.0)
+_RECOVER_FROM_CRITICAL_FIXED = (int(1.5 * _GiB), 30.0, 10.0)
+
+_SHARE_CACHE: Dict[str, object] = {"at": -1e18, "val": None}
 
 #: Readings are cached this long: callers (the create route, the revive
 #: sweep, the run planner, the UI poll) can ask freely.
@@ -110,9 +127,63 @@ def _read_psi(path: str = _PSI) -> Optional[Dict[str, float]]:
     return out or None
 
 
+def _pct(v, default: int) -> int:
+    """A setting's percent: unset/garbage = ``default``, clamped to 0..90."""
+    if v is None or isinstance(v, bool):
+        return default
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(90, n))
+
+
+def _share_settings() -> Tuple[int, int]:
+    """``(low %, critical %)`` from ``general.memory_low_pct`` /
+    ``general.memory_critical_pct`` (defaults 15 / 7), re-read at most every
+    :data:`_SETTINGS_SECONDS`. Critical never sits above low. Never raises: a
+    LOCAL import, so an unreadable store (or a process without the settings
+    module) keeps the defaults."""
+    now = time.monotonic()
+    val = _SHARE_CACHE.get("val")
+    if val is not None and now - float(_SHARE_CACHE["at"]) < _SETTINGS_SECONDS:
+        return val  # type: ignore[return-value]
+    low, crit = DEFAULT_LOW_PCT, DEFAULT_CRITICAL_PCT
+    try:
+        from backend.config.settings import load_settings
+
+        g = load_settings().general
+        low = _pct(getattr(g, "memory_low_pct", None), DEFAULT_LOW_PCT)
+        crit = _pct(getattr(g, "memory_critical_pct", None), DEFAULT_CRITICAL_PCT)
+    except Exception:  # noqa: BLE001 — advisory: the defaults stand
+        pass
+    crit = min(crit, low)
+    _SHARE_CACHE.update({"at": now, "val": (low, crit)})
+    return low, crit
+
+
+def thresholds() -> Dict[str, tuple]:
+    """The four lines as ``(available share, available bytes, PSI some avg60,
+    PSI full avg60)``: ``low`` / ``critical`` (entry) and ``recover_low`` /
+    ``recover_critical`` (what every reading must clear to step down). A share
+    of 0 never trips (the setting turned that signal off)."""
+    low, crit = _share_settings()
+
+    def _share(pct: int, margin: int) -> float:
+        return (pct + margin) / 100.0 if pct > 0 else 0.0
+
+    return {
+        "low": (_share(low, 0),) + _LOW_FIXED,
+        "critical": (_share(crit, 0),) + _CRITICAL_FIXED,
+        "recover_low": (_share(low, _RECOVER_LOW_MARGIN),) + _RECOVER_FROM_LOW_FIXED,
+        "recover_critical": (_share(crit, _RECOVER_CRITICAL_MARGIN),)
+        + _RECOVER_FROM_CRITICAL_FIXED,
+    }
+
+
 def _past(th, share: float, avail: int, psi: Optional[Dict[str, float]]) -> bool:
     """Whether the readings are at or past entry thresholds ``th``."""
-    if share <= th[0] or avail <= th[1]:
+    if (th[0] > 0 and share <= th[0]) or avail <= th[1]:
         return True
     if psi:
         if psi.get("some_avg60", 0.0) >= th[2] or psi.get("full_avg60", 0.0) >= th[3]:
@@ -132,13 +203,14 @@ def _clear(th, share: float, avail: int, psi: Optional[Dict[str, float]]) -> boo
 
 def _classify(prev: str, share: float, avail: int, psi) -> str:
     """The level for these readings, given the level before them."""
-    if _past(_CRITICAL, share, avail, psi):
+    th = thresholds()
+    if _past(th["critical"], share, avail, psi):
         return "critical"
-    if prev == "critical" and not _clear(_RECOVER_FROM_CRITICAL, share, avail, psi):
+    if prev == "critical" and not _clear(th["recover_critical"], share, avail, psi):
         return "critical"
-    if _past(_LOW, share, avail, psi):
+    if _past(th["low"], share, avail, psi):
         return "low"
-    if prev in ("low", "critical") and not _clear(_RECOVER_FROM_LOW, share, avail, psi):
+    if prev in ("low", "critical") and not _clear(th["recover_low"], share, avail, psi):
         return "low"
     return "ok"
 
@@ -224,3 +296,4 @@ def describe(snap: Optional[dict] = None) -> str:
 def _reset_for_tests() -> None:
     with _LOCK:
         _STATE.update({"level": "ok", "at": 0.0, "snap": None})
+    _SHARE_CACHE.update({"at": -1e18, "val": None})

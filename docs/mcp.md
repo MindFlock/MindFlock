@@ -635,6 +635,18 @@ How the worker is created:
   [Troubleshooting](#troubleshooting)).
 - A worker still loading after 45 s is not an error: `ready: false`, and
   `wait_for_session` will wait for it.
+- **Low memory queues the worker; it does not fail.** When the server's
+  [launch gate](session-engine.md#launch-gate) says wait (memory low now or
+  once the agents still starting have grown, or the machine-wide live-agent
+  cap reached), the create is queued. The result is `{title, status:
+  "queued: waiting for memory", queued: true, ready: false, reason,
+  position, base_sha, report_back, hint}`, returned at once with no 45 s
+  wait. The server creates the worker when memory allows: one at a time,
+  oldest first, at least 20 s apart. Meanwhile it is listed as a pending
+  provisioning row, so `list_sessions` shows it and `wait_for_session` waits
+  through the queue. Don't spawn more workers to make up for it: they queue
+  behind it. The person can Start it anyway from the app. The queue is saved,
+  so a server restart keeps the worker waiting.
 
 **The report-back footer** is appended only when all three hold:
 
@@ -815,7 +827,12 @@ token, the network) is listed in `errors` instead of failing the call.
 | `wait_ready` | true | wait up to 45 s for the session to finish provisioning |
 
 → `{title, ticket: {source, id, slug, name, url}, branch, program, status,
-ready, report_back, reason?, autopilot, warnings, hint?}`.
+ready, report_back, reason?, autopilot, warnings, hint?}`. When memory is
+short (the server's [launch gate](session-engine.md#launch-gate)) the start
+is queued, not refused: `status: "queued: waiting for memory"`, `queued:
+true`, `memory_reason`, `position`, returned at once with no ready wait. The
+server launches it when the queue lets it go, and `wait_for_session` waits
+through the queue.
 
 Why a separate tool rather than a `ticket` argument on `spawn_session`: almost
 nothing about the two creates is shared. A ticket session's title, branch,

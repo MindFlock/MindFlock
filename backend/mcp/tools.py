@@ -292,8 +292,8 @@ _D_REPORT = (
 )
 _D_SPAWN = (
     "Start a new worker agent session as your child. It gets its own git "
-    "worktree and branch, forked from YOUR current HEAD commit: uncommitted "
-    "changes in your worktree are not included, so commit first. prompt must "
+    "worktree and branch, forked from YOUR HEAD commit (uncommitted changes "
+    "are not included: commit first). prompt must "
     "be self-contained (the worker cannot see your conversation): name the "
     "files or areas it owns, and give parallel workers disjoint file sets. A "
     "report-back footer asking it to call report_result is appended when its "
@@ -305,14 +305,15 @@ _D_SPAWN = (
     "branch: only safe for read-only work. launch_args are ADDED to the "
     "user's default flags for that CLI. account/model pick an "
     "auth profile / model. repo_path targets another repository (required "
-    "outside a MindFlock session). A provisioned (ticket) session's workers "
-    "fork from the repository's base branch, not your HEAD. Live children and "
+    "outside a MindFlock session). A provisioned (ticket) parent's workers "
+    "fork from the base branch. Live children and "
     "depth are capped by the server; a refusal names the knob. Order + fences: "
     "after=[titles] holds its task until those are done; only/keep_out fence "
     "it (see fence_session) before it starts, and a fence that overlaps an "
     'unfinished worker\'s waits for it (overlap="parallel" to allow); '
     "set_order sets serial / N at a time. A fenced caller's workers inherit "
-    "its fence."
+    'its fence. Low memory: status "queued: waiting for memory" (it starts '
+    "later)."
 )
 _D_WAIT = (
     "Block until the given sessions are done, then return a result per "
@@ -1850,6 +1851,30 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         title = str(created.get("title") or title)
         self.policy.spawned_by_me.add(title)
         self._note_dispatch(title)
+        if created.get("queued"):
+            # Memory is short (the server's launch gate): the worker is
+            # queued, not failed. The server creates it once memory allows.
+            queued: Dict[str, Any] = {
+                "title": title,
+                "status": "queued: waiting for memory",
+                "queued": True,
+                "ready": False,
+                "reason": created.get("reason") or "",
+                "position": created.get("position"),
+                "base_sha": base_sha,
+                "report_back": footer,
+                "hint": (
+                    "MindFlock starts it once memory allows (one at a time, "
+                    "oldest first) — keep working, or wait_for_session, which "
+                    "waits through the queue. Don't spawn more workers to make "
+                    "up for it: they would only queue behind it."
+                ),
+            }
+            if not footer:
+                queued["reason_no_report"] = reason
+            if warnings:
+                queued["warnings"] = warnings
+            return queued
 
         row = created
         ready = str(created.get("status") or "loading") != "loading"

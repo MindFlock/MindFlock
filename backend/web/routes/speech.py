@@ -701,13 +701,14 @@ def voice_get(
     ``expect_ms`` — the clients seed their wait for ``/end`` from it, not
     from a fixed worst case.
 
-    Fetching it readies the voice (the recognition models and the speaking
-    voice warmed, the session names pre-synthesised) — unless ``?warm=0``:
-    the desktop app reads this on every load and focus, and a local voice
-    host (Voice Lab: gigabytes, idles out after 30 min without a request)
-    must not be woken by someone who isn't using voice. It sends ``warm=0``
-    until voice is in use there (replies on, standby on, the mic pressed or
-    its menu opened). Recognition still warms (in-process, no host to wake)."""
+    Fetching it readies the speaking voice (warmed, the session names
+    pre-synthesised) — unless ``?warm=0``: a local voice host (Voice Lab:
+    gigabytes, stops after 10 idle minutes) must not be woken by someone who
+    isn't using voice, and the clients send ``warm=0`` unless something will
+    be said soon. It never loads RECOGNITION (local whisper, ~1.1 GB): that
+    follows a listening mode — :func:`voice_listen` (the wake-word standby)
+    and a phrase's stream opening (:func:`voice_stream_open`);
+    ``server_ready.stt_loaded`` says whether it is in memory now."""
     # An engine rebuild that dropped the local models' packages: put them
     # back (once per boot; nothing when they are there or never were).
     _install.start_self_heal()
@@ -725,20 +726,49 @@ def voice_get(
         "final": _stream.final_stats(),
         "configure_allowed": bool(allowed),
     }
-    body.update(_speech.describe())
+    # Ready the voice — or, with ?warm=0, only READ: the status never sends
+    # the host anything then (no down/too-slow re-check: core.speech
+    # TtsChain.down_reason), so a page load never wakes Voice Lab.
+    warm_on = str(warm).strip().lower() not in ("0", "false", "no", "off")
+    body.update(_speech.describe(probe=warm_on))
     # The phone seeds its wait for /end's accurate pass from this.
     body["server_ready"]["final_ms"] = body["final"]["expect_ms"]
-    # A voice client is here: have the recognition models resident and the
-    # voice warm before its first use (no-ops unless there is something to
-    # load: see core.speech.warm_in_background).
-    _speech.warm_in_background("stt")
-    if str(warm).strip().lower() not in ("0", "false", "no", "off"):
+    # Voice in use here: have the voice warm before its first line (a no-op
+    # unless there is something to load: core.speech.warm_in_background).
+    # Recognition is not warmed by a status read (voice_listen is how).
+    if warm_on:
         _speech.warm_in_background("tts")
         # And the lines it will hear first — the session names a switch
         # says — pre-synthesised while the voice is idle (Prewarm; a thread
         # of its own).
         PREWARM.kick()
     return JSONResponse(body)
+
+
+@router.post("/api/voice/listen")
+def voice_listen(request: Request, payload: Optional[dict] = None) -> JSONResponse:
+    """A page's listening mode — the wake-word standby — is on or off:
+    ``{"on": bool, "client": optional page id}`` → ``{"listening": bool,
+    "lease_s": n, "stt_loaded": bool}``. ``on`` renews this page's lease for
+    ``lease_s`` seconds (``core.speech.LISTEN_LEASE_SECONDS``; the page
+    renews it while standby lasts) and starts loading local recognition in
+    the background (a no-op when it is loaded); while any page's lease is
+    live the models stay resident (``core.speech._resident``), and with none
+    they are idle-unloaded like any other model. ``off`` ends this page's
+    lease at once. ``listening``: whether any page listens now."""
+    body = payload if isinstance(payload, dict) else {}
+    on = body.get("on") is not False
+    client = _client_key(request, body)
+    now = _speech.listen(client, on)
+    if on:
+        _speech.warm_in_background("stt")
+    return JSONResponse(
+        {
+            "listening": now,
+            "lease_s": int(_speech.LISTEN_LEASE_SECONDS),
+            "stt_loaded": _speech.stt_loaded(),
+        }
+    )
 
 
 @router.post("/api/voice/transcribe")
@@ -918,7 +948,8 @@ def voice_wake_recent() -> JSONResponse:
 def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONResponse:
     """Open a streaming recognition (``core.speech_stream``):
     ``{"lang": "en-US", "client": optional page id}`` → ``{"id", "ready":
-    true, "hints": n}`` (``n``
+    true, "hints": n, "loading": bool}`` (``loading``: local recognition was
+    not in memory and is loading now — the first words wait for it; ``n``
     characters of vocabulary hints the accurate pass is biased towards: the
     voice words, the live session titles, the MindFlock vocabulary — see
     :func:`_hints`). Only a backend that streams (``local``) can; ``GET
@@ -939,6 +970,13 @@ def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONR
             },
             status_code=409,
         )
+    # A phrase is starting: local recognition loads now if it is not in
+    # memory (nobody was listening — it is not kept loaded then), in the
+    # background while the person speaks; ``loading`` tells the page its
+    # first words may take a few seconds ("Starting the mic…").
+    loading = not _speech.stt_loaded()
+    if loading:
+        _speech.warm_in_background("stt")
     hints = _hints()
     sid = _stream.open_stream(
         backend.stream_transcriber(lang),
@@ -953,7 +991,9 @@ def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONR
             },
             status_code=409,
         )
-    return JSONResponse({"id": sid, "ready": True, "hints": len(hints)})
+    return JSONResponse(
+        {"id": sid, "ready": True, "hints": len(hints), "loading": loading}
+    )
 
 
 def _no_stream() -> JSONResponse:

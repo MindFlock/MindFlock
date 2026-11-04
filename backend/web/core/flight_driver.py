@@ -1065,9 +1065,13 @@ def needs_session(flight: dict) -> bool:
 
 
 async def _create_session(payload: dict) -> str:
+    """Create a flight's session → its title. An automatic start, so it asks
+    the launch gate (core.launch_gate): when memory is short the create waits
+    in its queue and the title is a pending row until then — the flight reads
+    it as a session still provisioning, as it does an intake start."""
     from backend.web.core import session_create as _session_create
 
-    status, body = await _session_create.create_result(payload)
+    status, body = await _session_create.create_result(payload, auto="flight")
     if status >= 400:
         raise _flights.FlightError(
             str(body.get("error") or "could not create the session"), status
@@ -1543,7 +1547,7 @@ async def _run_split(flight: dict, step: dict, action: dict) -> dict:
             payload["prompt"] = text + (
                 _mcp_tools.report_footer(title, parent, provider) if footer else ""
             )
-            status, body = await _session_create.create_result(payload)
+            status, body = await _session_create.create_result(payload, auto="flight")
             err = str(body.get("error") or "")
             if status == 409 and "exists" in err:
                 continue  # lost a race for the title: the next number
@@ -1622,7 +1626,7 @@ async def spawn_worker(
         payload["prompt"] = prompt + (
             _mcp_tools.report_footer(title, parent, provider) if footer else ""
         )
-        status, body = await _session_create.create_result(payload)
+        status, body = await _session_create.create_result(payload, auto="flight")
         err = str(body.get("error") or "")
         if status == 409 and "exists" in err:
             continue

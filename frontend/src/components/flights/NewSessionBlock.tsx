@@ -36,6 +36,7 @@
  * which pins that row's line where the block sat and hides the block; a
  * refusal brings the block back with the error (`onFailed`). */
 
+import { withMemoryConfirm } from "../../lib/memoryConfirm";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
@@ -563,6 +564,12 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
  * `postCreate` does the same). Resolves the session's title. */
 export async function postInstance(body: Record<string, unknown>, device: string): Promise<string> {
   if (device) return deviceTitle(device, (await deviceApi(device)<Instance>("/api/instances", { json: body })).title);
-  const inst = await api<Instance>("/api/instances", { json: body });
+  // A person's create: while memory is low the server asks first, and Start
+  // anyway resends it (lib/memoryConfirm).
+  const inst = await withMemoryConfirm("a new agent", async (anyway) =>
+    anyway
+      ? await api<Instance>("/api/instances", { json: { ...body, start_anyway: true } })
+      : await api<Instance>("/api/instances", { json: body })
+  );
   return inst.title;
 }

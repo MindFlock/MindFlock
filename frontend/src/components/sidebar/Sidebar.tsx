@@ -5,6 +5,7 @@
  * "Recently closed (n)" link, and the footer (view picker + count + Customize
  * + Shortcuts). */
 
+import { MemoryWaitBar } from "./MemoryWaitBar";
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { VIEWS, VIEW_BLURB, setView, viewLabel } from "../../lib/viewMode";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -615,6 +616,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               <div id="addon-bars" ref={addonBarsRef} />
               {searchVisible && <SessionFilter />}
               <BulkBar />
+              <MemoryWaitBar />
               <OfflineBar />
               <GuestBar />
               <PeerSharedRows />

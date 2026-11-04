@@ -228,3 +228,39 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* --- "Memory low — new agents wait" (MemoryWaitBar): calm, like the
+   offline bar; it clears by itself once the queue drains. --- */
+#memory-wait-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 10px;
+  margin: 0 0 2px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+#memory-wait-bar .mw-text {
+  flex: 1 1 160px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+#memory-wait-bar .ob-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+#memory-wait-bar .ob-btn:hover {
+  border-color: var(--accent);
+}
