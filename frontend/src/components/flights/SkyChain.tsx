@@ -541,6 +541,8 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       >
         {sub_ && (
           <div className="sky-subframe-bar" title={dn.title}>
+            {/* Round 21b: its identity colour, only as this dot. */}
+            <span className="sky-sub-dot" aria-hidden="true" />
             {dn.title}
           </div>
         )}
@@ -646,7 +648,6 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     const bus = w.kind === "fan" && !!to && isSubSession(to) && isBranchRow(to);
     return ["sky-wire", "sky-wire-" + w.kind, bus ? "sky-wire-bus" : "", w.done ? "is-done" : "", live ? "is-live" : "", w.loop ? "sky-loop-" + w.loop.state : "", w.ret ? "sky-ret-" + w.ret.shown : ""].filter(Boolean).join(" ");
   };
-  const tinted = (w: GraphWire) => w.kind === "line" || w.kind === "head";
 
   const b = g.bbox;
   const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
@@ -664,7 +665,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     >
       <svg className="sky-wires" aria-hidden="true" focusable="false" style={{ left: b.x, top: b.y }} width={Math.max(1, b.w)} height={Math.max(1, b.h)} viewBox={`${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`}>
         {g.wires.map((w) => (
-          <path key={w.id} className={wireClass(w)} d={w.d} data-wire={w.kind} data-from={w.from} data-to={w.to} style={tinted(w) ? { stroke: head.color } : undefined} />
+          <path key={w.id} className={wireClass(w)} d={w.d} data-wire={w.kind} data-from={w.from} data-to={w.to} />
         ))}
         {/* A return wire (a Loop, a stop going back to the agent) ends in an arrowhead. */}
         {g.wires.map((w) => (w.arrow ? <path key={"arrow:" + w.id} className={wireClass(w) + " sky-wire-arrow"} d={w.arrow} data-arrow={w.id} /> : null))}

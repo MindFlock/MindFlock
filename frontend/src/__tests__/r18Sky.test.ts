@@ -35,7 +35,7 @@ vi.mock("../lib/skyGraph", async (orig) => ({ ...(await orig<typeof import("../l
 const G = await import("../lib/groundedLines");
 const { chainColor, inPortOf, outPortOf } = await import("../lib/skyGraph");
 const W = await import("../components/flights/useSkyWiring");
-const { handoffWires, nodeOfStep, panelSpot } = await import("../components/flights/SkyWires");
+const { HANDOFF_INK, handoffWires, nodeOfStep, panelSpot } = await import("../components/flights/SkyWires");
 const SP = await import("../components/flights/StopParts");
 
 afterEach(() => {
@@ -139,7 +139,7 @@ describe("one route starts another: the links and the trigger head", () => {
 // --- The wires between chains (SkyWires) ------------------------------------------------
 
 describe("handoff wires", () => {
-  it("run from the Handoff tile's out port to the target route's entry, dashed in the source's colour", () => {
+  it("run from the Handoff tile's out port to the target route's entry, dashed in the neutral ink", () => {
     const links = [{ fromFlight: "f_a", fromStep: "s3", stepTitle: "Push", fromSession: "me", fromName: "", target: "f_b", started: false, session: "new" }];
     const [w] = handoffWires(links, [A, B]);
     const o = outPortOf(A_NODES[2]);
@@ -147,7 +147,8 @@ describe("handoff wires", () => {
     expect(w.from).toEqual({ x: 100 + o.x, y: 200 + 34 + o.y });
     expect(w.to).toEqual({ x: 900 + i.x, y: 200 + 34 + i.y });
     expect(w.d.startsWith("M " + w.from.x + " " + w.from.y)).toBe(true);
-    expect(w.color).toBe(chainColor("me"));
+    // Round 21b: neutral ink, never the source session's colour.
+    expect(w.color).toBe(HANDOFF_INK);
     expect(w.started).toBe(false);
     // An end off the plane (a filtered chain): no wire.
     expect(handoffWires(links, [A])).toEqual([]);
