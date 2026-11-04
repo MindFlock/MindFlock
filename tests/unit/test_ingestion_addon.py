@@ -567,7 +567,10 @@ class TestInheritedPipeline:
             assert ctrl._own_running() is True
             adopted = ctrl._proc
             self._release(ctrl, proc)
-            assert ctrl._own_running() is False
+            # The kernel frees the flock while the holder is still exiting, a
+            # moment before waitpid can reap it: wait for the exit itself (a
+            # busy CI runner widened that gap into a flake).
+            assert self._until(lambda: ctrl._own_running() is False)
             st = ctrl.status()
             assert st["running"] is False
             assert st["exit_reason"] == "exited with code 3"
