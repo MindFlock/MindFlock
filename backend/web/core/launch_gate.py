@@ -380,8 +380,9 @@ def person_refusal(verdict: dict) -> Optional[dict]:
         else " Starting another agent may freeze the machine."
     )
     return {
-        "error": "%s — pass start_anyway to start it regardless"
-        % (verdict.get("reason") or head),
+        # What a client without the app's dialog shows (the phone, the CLI).
+        "error": "%s%s (send it again with start_anyway: true to start it "
+        "regardless)" % (head, tail),
         "memory_confirm": True,
         "level": "critical" if critical else "low",
         "message": head + tail,

@@ -255,3 +255,20 @@ def test_a_person_wake_is_never_queued(asleep, monkeypatch):
         server.ENGINE.instances["zz"], "zz", "terminal opened"
     )
     assert (woke, err) == (True, None) and asleep.launched == ["zz"]
+
+
+def test_the_phone_shows_waiting_for_memory():
+    from pathlib import Path
+
+    js = (Path(server.__file__).parent / "static" / "mobile.js").read_text()
+    at = js.index("inst.waiting_for_memory")
+    assert '"Waiting for memory"' in js[at : at + 600]
+    # Before the provisioning row: a queued worker IS a pending row.
+    assert at < js.index('return st("starting", { hint: "Provisioning workspace" })')
+
+
+def test_a_client_without_the_dialog_reads_a_plain_sentence(monkeypatch):
+    _memory(monkeypatch, "low")
+    body = gate.person_refusal(gate.decide("person"))
+    assert body["error"].startswith("Memory is low: 3.0 GB free.")
+    assert "start_anyway: true" in body["error"]

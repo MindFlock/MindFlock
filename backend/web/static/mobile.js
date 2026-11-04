@@ -1032,6 +1032,13 @@
       return st("offline", { label: "Missing", hint: "Workspace directory no longer exists — delete this session" });
     if (inst.status === "paused")
       return st("idle", { label: "Paused", tone: "muted", hint: "Session paused" });
+    // Its automatic start waits in the launch gate's queue (backend
+    // core/launch_gate.py): it starts by itself once memory allows.
+    if (inst.waiting_for_memory)
+      return st("starting", { label: "Waiting for memory", tone: "muted",
+                              hint: "Waiting for memory" +
+                                (inst.waiting_for_memory.reason ? " — " + inst.waiting_for_memory.reason : "") +
+                                ". It starts by itself once there is room." });
     if (inst.pending || inst.status === "loading")
       return st("starting", { hint: "Provisioning workspace" });
     if (inst.sleeping)
