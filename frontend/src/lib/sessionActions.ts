@@ -557,11 +557,11 @@ function placeAfter(title: string, after: string) {
  * again for the real title the server picked, which can differ from the guess. */
 /** A copy's title, the server's `_copy_title`: the family name plus the
  * lowest free `-N` (N ≥ 2). `bot` → `bot-2`; with `bot` and `bot-3` open,
- * copying either → `bot-2`. A trailing `-N` names a family member only when
- * the bare name is open too (`sc-25355` → `sc-25355-2`, never `sc-2`). */
+ * copying either → `bot-2`; `bot7-2` → `bot7-3`. A trailing `-2`…`-99` is a
+ * copy number; a longer one is part of the name (`sc-25355` → `sc-25355-2`). */
 export function copyTitle(title: string, taken: ReadonlySet<string>): string {
-  const m = /^(.+)-(\d+)$/.exec(title);
-  const base = m && taken.has(m[1]) ? m[1] : title;
+  const m = /^(.+)-([2-9]|[1-9]\d)$/.exec(title);
+  const base = m ? m[1] : title;
   let i = 2;
   while (taken.has(base + "-" + i)) i++;
   return base + "-" + i;

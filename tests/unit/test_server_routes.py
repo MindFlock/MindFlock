@@ -540,12 +540,12 @@ def test_copy_registers_in_place_child(registered, monkeypatch, tmp_path):
     monkeypatch.setattr(server._events.BUS, "emit", lambda *a, **k: None)
     r = client.post("/api/instances/cp-2/copy")
     assert r.status_code == 202
-    assert r.json()["title"] == "cp-2-2"
+    assert r.json()["title"] == "cp-3"
     # The copy is always in-place (shares the source's worktree, never deletes it).
     assert captured["opts"].in_place is True
     assert captured["opts"].path == str(wt)
-    assert "cp-2-2" in server.ENGINE.instances
-    server.ENGINE.instances.pop("cp-2-2", None)
+    assert "cp-3" in server.ENGINE.instances
+    server.ENGINE.instances.pop("cp-3", None)
 
 
 def test_copy_title_is_the_family_name_and_the_lowest_free_number():
@@ -559,7 +559,9 @@ def test_copy_title_is_the_family_name_and_the_lowest_free_number():
         t("sitecheck-bot-2", {"sitecheck-bot", "sitecheck-bot-2", "sitecheck-bot-3"})
         == "sitecheck-bot-4"
     )
-    # A trailing number with no bare name open is part of the name.
+    # -2…-99 is a copy number even with the bare name closed.
+    assert t("sitecheck-bot7-2", {"sitecheck-bot7-2"}) == "sitecheck-bot7-3"
+    # A long trailing number is part of the name.
     assert t("sc-25355", {"sc-25355"}) == "sc-25355-2"
     assert t("bot7", {"bot7"}) == "bot7-2"
 

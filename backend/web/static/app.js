@@ -32065,8 +32065,8 @@ function placeAfter(title, after) {
 	if (next !== merged) ui.setOrder(next);
 }
 function copyTitle(title, taken) {
-	const m = /^(.+)-(\d+)$/.exec(title);
-	const base = m && taken.has(m[1]) ? m[1] : title;
+	const m = /^(.+)-([2-9]|[1-9]\d)$/.exec(title);
+	const base = m ? m[1] : title;
 	let i = 2;
 	while (taken.has(base + "-" + i)) i++;
 	return base + "-" + i;
