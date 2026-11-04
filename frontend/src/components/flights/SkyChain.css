@@ -12,6 +12,11 @@
   --sky-tile-line-hi: color-mix(in srgb, var(--text) 42%, transparent);
   --sky-wire: color-mix(in srgb, var(--text) 34%, transparent);
   --sky-port: color-mix(in srgb, var(--text) 46%, var(--panel));
+  /* Round 21b: a route's own line (its wires, the head's port and icon) in
+     one neutral ink, the same in every session: colour on the Sky means
+     STATE (the frame's border), and the session's identity is only a dot. */
+  --sky-ink: color-mix(in srgb, var(--text) 58%, transparent);
+  --sky-head-ink: color-mix(in srgb, var(--text) 78%, var(--muted));
   --sky-fam-work: var(--accent);
   --sky-fam-ship: var(--tone-waiting);
   --sky-fam-outside: color-mix(in srgb, var(--tone-working) 62%, var(--tone-waiting));
@@ -31,6 +36,8 @@
   --sky-tile-line-hi: color-mix(in srgb, var(--text) 34%, transparent);
   --sky-wire: color-mix(in srgb, var(--text) 30%, transparent);
   --sky-port: color-mix(in srgb, var(--text) 38%, var(--panel));
+  --sky-ink: color-mix(in srgb, var(--text) 50%, transparent);
+  --sky-head-ink: color-mix(in srgb, var(--text) 72%, var(--muted));
 }
 
 /* --- Wires ------------------------------------------------------------------ */
@@ -49,15 +56,17 @@
   stroke-linecap: round;
 }
 
-/* A session's wires wear its colour (set inline), softly. */
+/* The route's own line: neutral ink, never the session's colour (round
+   21b: a red-identity working route must not read as halted). */
 .sky-wire-line,
 .sky-wire-head {
-  stroke-opacity: 0.6;
+  stroke: var(--sky-ink);
+  stroke-opacity: 0.75;
 }
 
 .sky-wire-line.is-done,
 .sky-wire-head.is-done {
-  stroke-opacity: 0.85;
+  stroke-opacity: 1;
 }
 
 .sky-wire-fan,
@@ -241,7 +250,8 @@
    below that (SkyChain `stopWhy` / `stopTileBoxes`). Nothing under its tile
    shrinks: the buttons used to squeeze the name out of the fixed box. */
 .sky-node.st-halted > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra),
-.sky-node.st-perched > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra) {
+.sky-node.st-perched > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra),
+.sky-node.st-paused > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra) {
   flex-shrink: 0;
 }
 
@@ -260,6 +270,13 @@
 .sky-node.st-perched .sky-node-reason {
   font-weight: 500;
   color: var(--text);
+}
+
+/* A halt point the route reached (round 21b): nothing failed, so its line
+   is not the red of a failure. */
+.sky-node.st-paused .sky-node-reason {
+  font-weight: 500;
+  color: var(--muted);
 }
 
 /* Its buttons, in the tile: Retry · Skip on one row, Let the agent fix it
@@ -512,9 +529,9 @@
   opacity: 0.65;
 }
 
-/* The head's out port wears its session's colour. */
+/* The head's out port: neutral ink, like its wire. */
 .sky-head .sky-port-out {
-  background: var(--sky-head-color, var(--sky-port));
+  background: var(--sky-port);
 }
 
 /* --- The head: the session tile, or a trigger ----------------------------- */
@@ -524,7 +541,7 @@
 }
 
 .sky-head .sky-tile-icon {
-  color: var(--sky-head-color, var(--muted));
+  color: var(--sky-head-ink);
 }
 
 .sky-head-dot {
@@ -540,7 +557,7 @@
 
 .sky-head-trigger .sky-tile {
   border-style: dashed;
-  border-color: color-mix(in srgb, var(--sky-head-color, var(--muted)) 70%, transparent);
+  border-color: color-mix(in srgb, var(--muted) 70%, transparent);
 }
 
 .sky-head-chip {
@@ -558,9 +575,14 @@
   color: var(--fl-ink-working, var(--tone-working));
 }
 
+/* Asking / Wait for me: the rail chip's colours — SOLID amber, near-black
+   ink (--tone-attention-ink) — in both themes (round 21b, JUDGE-R21-3 #7:
+   the 20% wash under that ink was ~1.5:1 on the dark sky; solid is ~12:1
+   dark, ~9:1 light). */
 .sky-head-chip.tone-attention {
-  background: color-mix(in srgb, var(--tone-attention) 20%, transparent);
-  color: var(--tone-attention-ink, var(--text));
+  background: var(--tone-attention);
+  border-color: var(--tone-attention);
+  color: var(--tone-attention-ink, #1a1a1a);
 }
 
 .sky-head-chip.tone-broken {
@@ -825,8 +847,9 @@
   color: color-mix(in srgb, var(--text) 72%, var(--muted));
 }
 
-/* A sub-session: a small frame in its own colour — its name on the bar, its
-   agent tile inside, its own chain as a strip of mini stops. */
+/* A sub-session: a small NEUTRAL frame (round 21b: colour means state) —
+   its identity dot and name on the bar, its agent tile inside, its own
+   chain as a strip of mini stops. */
 .sky-node.sky-subframe {
   box-sizing: border-box;
   justify-content: flex-start;
@@ -834,13 +857,13 @@
   align-items: flex-start;
   text-align: left;
   padding: 0 8px 8px;
-  border: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 40%, transparent);
+  border: 1px solid var(--sky-tile-line);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 6%, var(--bg, transparent));
+  background: color-mix(in srgb, var(--panel) 70%, var(--bg, transparent));
 }
 
 .sky-node.sky-subframe:hover {
-  border-color: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 65%, transparent);
+  border-color: var(--sky-tile-line-hi);
 }
 
 .sky-node.sky-subframe.is-selected,
@@ -855,9 +878,9 @@
   height: 22px;
   margin: 0 -8px 8px;
   padding: 0 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 24%, transparent);
+  border-bottom: 1px solid var(--sky-tile-line);
   border-radius: 12px 12px 0 0;
-  background: color-mix(in srgb, var(--sky-sub-color, var(--accent)) 12%, transparent);
+  background: color-mix(in srgb, var(--panel-2, var(--panel)) 72%, transparent);
   font-size: 11.5px;
   font-weight: 600;
   line-height: 22px;
@@ -872,7 +895,18 @@
 }
 
 .sky-subframe .sky-tile-icon {
-  color: var(--sky-sub-color, var(--accent));
+  color: var(--sky-head-ink);
+}
+
+/* The sub-session's identity colour: a 6px dot before its name. */
+.sky-sub-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--sky-sub-color, var(--muted));
 }
 
 /* The bus down from the parent's agent to each sub-session's frame. */
@@ -894,7 +928,7 @@
   left: 9px;
   right: 9px;
   top: 50%;
-  border-top: 1.5px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 45%, transparent);
+  border-top: 1.5px solid var(--sky-ink);
 }
 .sky-mini {
   position: relative;

@@ -35,7 +35,7 @@ import {
   type FlightRow,
   type StepKindDef,
 } from "../../lib/flights";
-import { flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
 import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
@@ -133,9 +133,22 @@ export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "
   return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
 }
 
+/** Whether the stop the route moves to after its current one (passing the
+ * ones already done or skipped) is a halt point not yet let through. */
+export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_states">): boolean {
+  for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
+    const s = flight.steps[k];
+    const ss = flight.step_states?.[s.id];
+    if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
+    return !!s.halt && !ss?.detail?.halt_hit;
+  }
+  return false;
+}
+
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
  * what enables Done); Retry / Skip on a halted stop, and Let the agent fix it
- * wherever the server takes it (`canFixStep`). A Verify stop parked on you
+ * wherever the server takes it (`canFixStep`); Carry on / Skip at a reached
+ * halt point (`atHaltPoint`: nothing failed, so nothing to retry). A Verify stop parked on you
  * answers its behaviors instead (`VerifyStopActions`). `inTile` (a stop on
  * the Sky): its text is the tile's own line under its name, not a paragraph
  * here. */
@@ -144,7 +157,8 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
-  if (!step || (flight.state !== "waiting_you" && flight.state !== "halted")) return null;
+  const haltPoint = atHaltPoint(flight);
+  if (!step || (flight.state !== "waiting_you" && flight.state !== "halted" && !haltPoint)) return null;
   if (step.kind === "verify" && flight.state === "waiting_you") return <VerifyStopActions flight={flight} compact={compact} />;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -156,8 +170,8 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
   };
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
-  const halted = flight.state === "halted";
-  const fix = canFixStep(flight);
+  const halted = flight.state === "halted" || haltPoint;
+  const fix = !haltPoint && canFixStep(flight);
   const text = youText(flight);
   return (
     <div className={"fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
@@ -179,7 +193,17 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
         </ul>
       )}
       <div className="fl-you-acts">
-        {halted ? (
+        {haltPoint ? (
+          <button
+            type="button"
+            className="btn-primary fl-btn fl-carry"
+            disabled={busy}
+            title={"Carry on past the halt point — “" + step.title + "” runs, and the route goes on"}
+            onClick={() => void run(() => controlFlight(flight.id, "resume"))}
+          >
+            Carry on
+          </button>
+        ) : halted ? (
           <button
             type="button"
             className="btn-primary fl-btn"
@@ -216,7 +240,10 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
           className="test-btn fl-btn fl-skip"
           disabled={busy}
           title={"Skip “" + step.title + "” — the route goes on without it"}
-          onClick={() => void run(() => stepSkip(flight.id, step.id))}
+          // At a halt point the server keeps a paused route paused after a
+          // skip (`_advance_keeping_pause`): Skip carries on too, as it says
+          // — unless the next stop is a halt point itself (it halts there).
+          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && haltPoint && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume"))}
         >
           Skip
         </button>
@@ -265,7 +292,8 @@ export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () =>
   const items: MenuItem[] = [];
   const atCursor = n.index === flight.cursor;
   if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the route to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
-  if (n.state === "halted" || n.state === "failed")
+  // A reached halt point failed nothing: Carry on (below), no Retry.
+  if ((n.state === "halted" || n.state === "failed") && !(atCursor && atHaltPoint(flight)))
     items.push({ key: "retry", label: "Retry", title: "Run this stop again", onSelect: () => void stepRetry(flight.id, step.id) });
   if (atCursor)
     items.push(
@@ -319,7 +347,7 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
     expand &&
     n.kind === "stop" &&
     n.index === flight.cursor &&
-    (n.state === "perched" || n.state === "halted") &&
+    (n.state === "perched" || n.state === "halted" || (n.state === "paused" && atHaltPoint(flight))) &&
     !(opts.verifyInPlace && verifyHere);
   const renderInBox = (n: DiagramNode): ReactNode => {
     if (!flight || n.kind !== "stop") return null;

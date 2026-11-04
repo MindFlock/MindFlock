@@ -94,10 +94,11 @@ describe("SkyChain markup", () => {
     expect(html).not.toContain('data-port="in" data-node="head"');
   });
 
-  it("wires in one SVG: head/line tinted with the session colour, the loop, the + stub", () => {
+  it("wires in one SVG: head/line in the neutral ink (never the session colour, round 21b), the loop, the + stub", () => {
     const html = render(liveGraph());
     expect(count(html, "<svg class=\"sky-wires\"")).toBe(1);
-    expect(html).toMatch(/class="sky-wire sky-wire-head"[^>]*data-from="head" data-to="stop:s1"[^>]*style="stroke:hsl/);
+    expect(html).toMatch(/class="sky-wire sky-wire-head"[^>]*data-from="head" data-to="stop:s1"/);
+    expect(html).not.toMatch(/class="sky-wire[^"]*"[^>]*style="stroke:/);
     expect(html).toMatch(/class="sky-wire sky-wire-line is-live"[^>]*data-to="stop:s2"/);
     expect(html).toContain('data-wire="loop"');
     expect(html).toContain('data-wire="add"');

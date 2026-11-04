@@ -178,7 +178,7 @@ describe("sub-sessions are small frames", () => {
     const g = chainGraph(d, { head: { kind: "session", title: "Claude", sub: "Do me", session: "me", color: chainColor("me"), node: me }, key: "me", flightId: "f_13", big: C.subFrameBoxes(d.nodes, f) });
     const html = renderToStaticMarkup(createElement(C.SkyChain, { graph: g, zoom: 1, subFrames: f }));
     expect(html).toMatch(/class="sky-node sky-node-child[^"]*sky-subframe/);
-    expect(html).toContain('<div class="sky-subframe-bar" title="kid1">kid1</div>');
+    expect(html).toContain('<div class="sky-subframe-bar" title="kid1"><span class="sky-sub-dot" aria-hidden="true"></span>kid1</div>');
     expect(html).toContain('class="sky-node-title">Codex<');
     expect(html).toContain("--sky-sub-color:" + chainColor("kid1"));
     expect(html).toContain('class="sky-mini-chain"');
