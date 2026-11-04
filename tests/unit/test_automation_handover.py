@@ -341,3 +341,177 @@ def test_seeding_skips_what_is_still_in_its_grace_period(orch, ledger, grouped):
     orch.config.github.issue_min_age_minutes = 0
     assert [p.number for p in asyncio.run(orch._pr_monitor.scan())] == [3]
     assert [i.number for i in asyncio.run(orch._issue_monitor.scan())] == [8]
+
+
+# --------------------------------------------------------------------------- #
+# a device that can't yet tell which member it is (Tailscale still coming up)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def booting_laptop(monkeypatch, isolate_settings_store):
+    """A group of two where THIS machine — hostname ``EthanLaptop2026``,
+    member key ``ethanlaptopwsl2026`` (its tailnet name) — runs PR review.
+    ``me`` is what ``remote.self_identity`` answers: before Tailscale is up
+    it falls back to the hostname, which is not a member key."""
+    from backend.config import settings as S
+    from backend.web.core import fleet, remote
+
+    monkeypatch.setattr(fleet, "in_fleet", lambda: True)
+    monkeypatch.setattr(
+        fleet,
+        "live_members",
+        lambda: {
+            "ethanlaptopwsl2026": {"host": "EthanLaptop2026"},
+            "ethans-mac-mini": {"host": "Ethan's Mac mini"},
+        },
+    )
+    me = {"key": "ethanlaptop2026"}
+    monkeypatch.setattr(remote, "self_identity", lambda: dict(me))
+    S.update_settings(github={"automation_device": "ethanlaptopwsl2026"})
+    return me
+
+
+def test_the_server_records_nothing_while_it_cannot_tell_which_device_it_is(
+    ledger, booting_laptop
+):
+    """It used to note "runs on EthanLaptop2026" — this machine, by its own
+    roster entry's host — and the next pipeline then seeded every open PR as
+    handled on that "other" device, so none was ever reviewed."""
+    from backend.web.addons import ticket_ingestion as ti
+    from backend.web.core import settings_hooks
+
+    assert settings_hooks.automation_known() is False
+    assert settings_hooks.automation_here() is False  # the safe guess
+    assert settings_hooks.automation_device() == ""  # never itself
+    assert ti._observe_automation(ledger) is False
+    assert state.load_automation_mark(ledger) is None  # a guess isn't recorded
+    # Tailscale is up: it knows it is the runner, and nothing moved.
+    booting_laptop["key"] = "ethanlaptopwsl2026"
+    assert settings_hooks.automation_known() is True
+    assert ti._observe_automation(ledger) is True
+    assert state.automation_handover(ledger) is None
+    # The person picks the Mac mini: a real "runs elsewhere", by its host…
+    from backend.config import settings as S
+
+    S.update_settings(github={"automation_device": "ethans-mac-mini"})
+    assert settings_hooks.automation_device() == "Ethan's Mac mini"
+    assert ti._observe_automation(ledger) is False
+    assert state.load_automation_mark(ledger) == {
+        "here": False,
+        "runner": "Ethan's Mac mini",
+    }
+    # …and picking this laptop again is a hand-over FROM the Mac mini.
+    S.update_settings(github={"automation_device": "ethanlaptopwsl2026"})
+    assert ti._observe_automation(ledger) is True
+    assert state.automation_handover(ledger) == "Ethan's Mac mini"
+
+
+def test_a_boot_window_then_tailscale_seeds_nothing(
+    orch, ledger, grouped, booting_laptop
+):
+    """End to end: the laptop has run PR review all along (its ledgers have
+    history), boots before Tailscale, then learns it is the runner. Its
+    pipeline must review every open PR — not mark them handled elsewhere."""
+    from backend.web.addons import ticket_ingestion as ti
+
+    state.note_automation(ledger, True)  # it ran here before the reboot
+    state.mark_ledger_started(ledger, "prs")
+    state.mark_ledger_started(ledger, "issues")
+    assert ti._observe_automation(ledger) is False  # the boot window
+    booting_laptop["key"] = "ethanlaptopwsl2026"  # Tailscale is up
+    assert ti._observe_automation(ledger) is True
+    assert state.automation_handover(ledger) is None
+    asyncio.run(orch._ensure_handover())
+    assert state.load_processed_prs(ledger) == set()
+    assert state.load_processed_issues(ledger) == set()
+    assert [p.number for p in asyncio.run(orch._pr_monitor.scan())] == [1, 2]
+    assert [i.number for i in asyncio.run(orch._issue_monitor.scan())] == [7]
+
+
+def test_a_boot_window_keeps_a_real_mark(ledger, booting_laptop):
+    """What another device really ran stays recorded through a boot window:
+    the guess neither overwrites nor clears it."""
+    from backend.web.addons import ticket_ingestion as ti
+
+    state.note_automation(ledger, False, "Ethan's Mac mini")
+    assert ti._observe_automation(ledger) is False
+    assert ti._automation_status(ledger) == {
+        "automation_here": False,
+        "automation_device": "",
+    }
+    assert state.load_automation_mark(ledger) == {
+        "here": False,
+        "runner": "Ethan's Mac mini",
+    }
+
+
+def test_an_answer_of_here_is_recorded_whatever_automation_known_says(
+    ledger, monkeypatch
+):
+    """Only a "not here" is a guess worth withholding; "here" is the runner's
+    own answer (unreachable with automation_known False in practice) and is
+    recorded as the baseline — a "here" mark never seeds anything."""
+    from backend.web.addons import ticket_ingestion as ti
+    from backend.web.core import settings_hooks
+
+    monkeypatch.setattr(settings_hooks, "automation_known", lambda: False)
+    monkeypatch.setattr(settings_hooks, "automation_here", lambda: True)
+    assert ti._observe_automation(ledger) is True
+    assert state.load_automation_mark(ledger) == {"here": True, "runner": ""}
+    assert state.automation_handover(ledger) is None
+
+
+def test_a_mark_naming_this_machine_is_no_handover(orch, ledger, monkeypatch):
+    """A mark an older server already wrote that way seeds nothing either."""
+    import socket
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "EthanLaptop2026")
+    state.note_automation(ledger, False, "EthanLaptop2026")
+    assert state.automation_handover(ledger) is None
+    asyncio.run(orch._ensure_handover())
+    assert state.load_processed_prs(ledger) == set()
+    assert [p.number for p in asyncio.run(orch._pr_monitor.scan())] == [1, 2]
+    # Another device's name still hands over.
+    state.note_automation(ledger, False, "Ethan's Mac mini")
+    assert state.automation_handover(ledger) == "Ethan's Mac mini"
+
+
+def test_this_machine_is_matched_ignoring_case_and_spaces(ledger, monkeypatch, caplog):
+    import socket
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "EthanLaptop2026")
+    state.note_automation(ledger, False, " ethanlaptop2026 ")
+    with caplog.at_level(logging.WARNING, logger=state.__name__):
+        assert state.automation_handover(ledger) is None
+    assert "Ignoring an automation hand-over" in caplog.text
+    assert "that is this machine" in caplog.text
+
+
+def test_an_unnamed_runner_is_still_another_device(ledger, monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "EthanLaptop2026")
+    assert state._names_this_machine("") is False
+    assert state._names_this_machine("   ") is False
+    state.note_automation(ledger, False, "")
+    assert state.automation_handover(ledger) == "another device"
+
+
+def test_an_unreadable_hostname_names_no_machine(ledger, monkeypatch):
+    import socket
+
+    def boom():
+        raise OSError("no hostname")
+
+    monkeypatch.setattr(socket, "gethostname", boom)
+    assert state._names_this_machine("EthanLaptop2026") is False
+    state.note_automation(ledger, False, "EthanLaptop2026")
+    assert state.automation_handover(ledger) == "EthanLaptop2026"
+
+
+def test_no_mark_or_a_here_mark_is_still_no_handover(ledger, monkeypatch):
+    import socket
+
+    monkeypatch.setattr(socket, "gethostname", lambda: "EthanLaptop2026")
+    assert state.automation_handover(ledger) is None
+    state.note_automation(ledger, True)
+    assert state.automation_handover(ledger) is None

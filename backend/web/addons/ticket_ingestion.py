@@ -126,6 +126,11 @@ def _observe_automation(state_dir: Optional[Path] = None) -> bool:
         try:
             from backend.web.core import settings_hooks
 
+            if not settings_hooks.automation_known():
+                # This device can't tell yet which member it is (Tailscale
+                # still coming up): "not here" is a guess, and recorded it
+                # would read as a hand-over from another device later.
+                return here
             runner = settings_hooks.automation_device()
         except Exception:  # noqa: BLE001
             runner = ""
@@ -295,6 +300,45 @@ def _error_text(line: str) -> str:
     return text[:240]
 
 
+class _InheritedChild:
+    """The ``Popen`` surface the controller uses, over a child this process
+    did not spawn in its current image (it was started before an
+    ``os.execv``; see :meth:`TicketIngestionController._adopt_inherited`).
+    It is still our child, so ``waitpid`` reaps it and reports its exit."""
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: Optional[int] = None
+
+    def poll(self) -> Optional[int]:
+        if self.returncode is not None:
+            return self.returncode
+        try:
+            done, status = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            # Not (or no longer) ours to wait on: nothing we can track.
+            self.returncode = -1
+            return self.returncode
+        if done == 0:
+            return None
+        self.returncode = os.waitstatus_to_exitcode(status)
+        return self.returncode
+
+    def wait(self, timeout: Optional[float] = None) -> int:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self.poll() is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(str(self.pid), timeout or 0)
+            time.sleep(0.1)
+        return self.returncode  # type: ignore[return-value]
+
+    def terminate(self) -> None:
+        os.kill(self.pid, signal.SIGTERM)
+
+    def kill(self) -> None:
+        os.kill(self.pid, signal.SIGKILL)
+
+
 class TicketIngestionController:
     """Starts/stops the Shortcut-ingestion pipeline as a managed child process.
 
@@ -318,7 +362,33 @@ class TicketIngestionController:
         self._exited_at: Optional[float] = None
 
     def _own_running(self) -> bool:
+        if self._proc is None:
+            self._adopt_inherited()
         return self._proc is not None and self._proc.poll() is None
+
+    def _adopt_inherited(self) -> None:
+        """Take back a pipeline this server started before it re-exec'd.
+
+        The server restarts itself in place (``os.execv`` — Tailscale coming
+        up, an update): the pipeline it started keeps running, still its
+        child, but the new image has no ``Popen`` for it, so it read as
+        someone else's and every switch flipped afterwards (PR review, a
+        ticket source) was silently not applied until the next reboot. The
+        lock names the holder; it is ours when it says ``owner: server`` AND
+        it is this process's child (``waitpid`` only answers for one) — a
+        standalone run, or another server's pipeline, stays external."""
+        pid, meta = self._lock_holder()
+        if not pid or pid <= 0 or not meta or meta.get("owner") != "server":
+            return
+        child = _InheritedChild(pid)
+        if child.poll() is not None:
+            return  # not our child, or it already exited
+        self._proc = child  # type: ignore[assignment]
+        try:
+            # The pipeline writes its lock as it starts: near enough "since".
+            self._started_at = self._lock_path().stat().st_mtime
+        except OSError:
+            self._started_at = None
 
     def _lock_path(self) -> Path:
         return self._repo_root / ".mindflock-pipeline.lock"
