@@ -1436,13 +1436,21 @@ class LocalSTT(Backend):
         """The wake-word clip on the FAST streaming model
         (:meth:`stream_model_name`) — the judgement is one lone word, which
         it hears about as well as the one-shot model in a third of the
-        time: greedy, ``word`` as the prompt, no VAD (the clip is the word
-        already; the VAD can eat a short one)."""
-        kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
-        if word:
-            kw["initial_prompt"] = word
+        time — decoded as ``core.wake.decode_options`` says (greedy, once,
+        no VAD, no no-speech filter, a token cap; ``word`` as the prompt)
+        on a :data:`core.wake.PAD_SECONDS` encoder input."""
+        return self._wake_clip(audio, mime, lang, word)
+
+    def _wake_clip(self, audio: bytes, mime: str, lang: str, word: str) -> str:
+        from backend.web.core import wake as _wake
+
         name = self.stream_model_name(lang)
-        return self._clip(self._model(name), audio, mime, kw, name)
+        model = self._model(name)
+        kw = {"language": whisper_language(lang)}
+        kw.update(
+            (k, v) for k, v in _wake.decode_options(word).items() if _takes(model, k)
+        )
+        return self._clip(model, audio, mime, kw, name, pad=_wake.PAD_SECONDS)
 
     def wake_verify_transcribe(
         self, audio: bytes, mime: str, lang: str = ""
@@ -1450,21 +1458,25 @@ class LocalSTT(Backend):
         """:meth:`wake_transcribe` without the prompt (the veto's pass: the
         same fast model, greedy, no VAD — never ``word_timestamps``, which
         sends the prompted decoder into "MindFlock MindFlock" loops)."""
-        kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
-        name = self.stream_model_name(lang)
-        return self._clip(self._model(name), audio, mime, kw, name)
+        return self._wake_clip(audio, mime, lang, "")
 
     @staticmethod
-    def _clip(model, audio: bytes, mime: str, kw: dict, name: str = "") -> str:
+    def _clip(
+        model, audio: bytes, mime: str, kw: dict, name: str = "", pad: float = 0.0
+    ) -> str:
         """``audio`` (any container PyAV decodes) through ``model`` (named
         ``name``: the call waits its turn on that model's lane, as a
         ``clip`` job — ``speech_stream.Lane``) → its text; the temp clip is
-        removed after."""
+        removed after. ``pad``: the encoder input in seconds
+        (:func:`_padded`; 0: Whisper's 30)."""
         from backend.web.core import speech_stream as _stream
 
-        def run() -> List[str]:
+        def decode() -> List[str]:
             segments, _info = model.transcribe(path, **kw)
             return [str(getattr(s, "text", "") or "").strip() for s in segments]
+
+        def run() -> List[str]:
+            return _padded(pad, decode) if pad else decode()  # type: ignore[return-value]
 
         path = _temp_clip(audio, mime)
         try:

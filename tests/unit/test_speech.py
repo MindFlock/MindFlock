@@ -386,17 +386,23 @@ class TestLocalSTT:
         assert len(whisper.loads) == 1  # cached
         assert whisper.calls[1][1]["language"] is None
 
-    def test_the_wake_clip_uses_the_fast_model(self, whisper):
+    def test_the_wake_clip_uses_the_fast_model(self, whisper, monkeypatch):
+        from backend.web.core import wake
+
+        # The short encoder input hooks faster_whisper.transcribe (not in the fake).
+        monkeypatch.setattr(speech, "_hook_pad", lambda: False)
+        # The fake's transcribe takes **kw: every option counts as accepted.
+        monkeypatch.setattr(speech, "_takes", lambda model, key: True)
         stt = speech.LocalSTT()
         assert stt.wake_transcribe(b"RIFF", "audio/wav", "en-US", "MindFlock") == (
             "Hello there."
         )
         assert whisper.loads[0][0] == "base.en"
+        # Decoded as core.wake says: greedy, one temperature, no VAD, no
+        # no-speech filter, a token cap, the word as the prompt.
         assert whisper.calls[0][1] == {
             "language": "en",
-            "beam_size": 1,
-            "vad_filter": False,
-            "initial_prompt": "MindFlock",
+            **wake.decode_options("MindFlock"),
         }
         path = whisper.seen_paths[0][0]
         assert path.endswith(".wav") and not os.path.exists(path)
@@ -407,17 +413,19 @@ class TestLocalSTT:
         assert whisper.loads[2][0] == "small"
         assert whisper.calls[2][1]["beam_size"] == 5
 
-    def test_the_wake_check_pass_has_no_prompt(self, whisper):
+    def test_the_wake_check_pass_has_no_prompt(self, whisper, monkeypatch):
+        from backend.web.core import wake
+
+        monkeypatch.setattr(speech, "_hook_pad", lambda: False)
+        # The fake's transcribe takes **kw: every option counts as accepted.
+        monkeypatch.setattr(speech, "_takes", lambda model, key: True)
         stt = speech.LocalSTT()
         assert stt.wake_verify_transcribe(b"RIFF", "audio/wav", "en-US") == (
             "Hello there."
         )
         assert whisper.loads[0][0] == "base.en"  # the same fast model
-        assert whisper.calls[0][1] == {
-            "language": "en",
-            "beam_size": 1,
-            "vad_filter": False,
-        }
+        assert whisper.calls[0][1] == {"language": "en", **wake.decode_options("")}
+        assert "initial_prompt" not in whisper.calls[0][1]
         assert not os.path.exists(whisper.seen_paths[0][0])
 
     def test_the_base_wake_path_is_transcribe(self):
