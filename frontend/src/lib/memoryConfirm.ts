@@ -16,7 +16,7 @@
  * Electron has no window.confirm, so this is a promise the dialog settles:
  * `withMemoryConfirm(send)` wraps any start. */
 
-import { api, ApiError } from "../api/client";
+import { api, type ApiError } from "../api/client";
 
 /** The 409 body (core/launch_gate.person_refusal). */
 export interface MemoryConfirmBody {
@@ -37,8 +37,11 @@ export type MemoryChoice = "start" | "sleep" | "cancel";
 /** The memory-confirm body of a failed request, or null for any other
  * failure. */
 export function memoryConfirmOf(e: unknown): MemoryConfirmBody | null {
-  if (!(e instanceof ApiError) || e.status !== 409) return null;
-  const b = e.body as Partial<MemoryConfirmBody> | null;
+  // Read by shape (an ApiError's status + body), not instanceof: a caller's
+  // module may hold a different copy of the class (a test's client mock).
+  const err = e as Partial<ApiError> | null;
+  if (!err || typeof err !== "object" || err.status !== 409) return null;
+  const b = err.body as Partial<MemoryConfirmBody> | null;
   if (!b || typeof b !== "object" || b.memory_confirm !== true) return null;
   return {
     memory_confirm: true,

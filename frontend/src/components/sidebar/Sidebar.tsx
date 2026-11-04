@@ -616,8 +616,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               <div id="addon-bars" ref={addonBarsRef} />
               {searchVisible && <SessionFilter />}
               <BulkBar />
-              <OfflineBar />
               <MemoryWaitBar />
+              <OfflineBar />
               <GuestBar />
               <PeerSharedRows />
               {config?.guest && (
