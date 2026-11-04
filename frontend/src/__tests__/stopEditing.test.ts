@@ -175,7 +175,7 @@ describe("a box's right-click menu", () => {
 
   it("the flight's current stop: its own parts, its dialog (read-only), and that it can't change", () => {
     expect(keys(node({ state: "perched" }))).toEqual(["done", "skip", "edit", "note"]);
-    expect(keys(node({ state: "halted" }))).toEqual(["retry", "skip", "edit", "note"]);
+    expect(keys(node({ state: "halted" }))).toEqual(["retry", "fix", "skip", "edit", "note"]);
     expect(keys(node({ state: "current" }))).toEqual(["skip", "edit", "note"]);
     expect(menuItemsFor(node({ state: "current" }), all).find((i) => i.key === "edit")!.label).toBe("Details");
     expect(menuItemsFor(node({ state: "current" }), all).at(-1)!.label).toBe("The route is here — it can't change now");
@@ -304,7 +304,7 @@ describe("halt points", () => {
       "The route is here — it can't change now",
     ]);
     // Halted by a failure: Retry, not Carry on.
-    expect(keys(node({ state: "halted", step: push }), here)).toEqual(["retry", "skip", "halt", "edit", "remove", "note"]);
+    expect(keys(node({ state: "halted", step: push }), here)).toEqual(["retry", "fix", "skip", "halt", "edit", "remove", "note"]);
     // Not the current stop: no Halt now (as before), no Remove.
     expect(keys(node({ state: "perched", step: push }))).toEqual(["done", "skip", "edit", "note"]);
     // Never in the UI: "pause" or "breakpoint" as a word.

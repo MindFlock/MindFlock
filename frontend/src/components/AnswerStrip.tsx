@@ -221,6 +221,9 @@ export function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen,
   const d = state.dialog;
   if (!d) return null;
   const q = questionText(d, variant);
+  // Nothing to say or press (a dialog not parsed yet, no text): no strip at
+  // all, not an empty yellow box — the host row still opens the session.
+  if (!q && !d.command && !(d.parsed && d.options.length) && !state.note && !hint && !children) return null;
   const busy = state.phase === "sending" || state.phase === "answered";
   const prim = primaryIndex(d.options);
   const shown = state.phase === "answered" ? d.options.filter((o) => o.key === state.picked) : d.options;

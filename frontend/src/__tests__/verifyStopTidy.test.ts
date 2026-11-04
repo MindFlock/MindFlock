@@ -55,7 +55,7 @@ describe("a stop's menu on a Verify stop", () => {
     const items = menuItemsFor(node("verify", "halted"), ctx);
     expect(items.find((i) => i.key === "fix")?.label).toBe("Let the agent fix it");
     expect(items.map((i) => i.key)).toEqual(expect.arrayContaining(["retry", "fix", "skip"]));
-    expect(keys(node("ship", "halted"))).not.toContain("fix");
+    expect(keys(node("ship", "halted"))).toContain("fix"); // round 21: every halted stop
   });
 });
 

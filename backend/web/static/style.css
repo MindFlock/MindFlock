@@ -55,6 +55,26 @@
   }
 }
 
+/* --- The bird on a line, far out ----------------------------------------------- */
+
+/* Below ~60 % the Sky draws the bird bigger so it still reads (SkyLine.css's
+   far level of detail, `--sky-far-ui`). It must not do that with `zoom`: zoom
+   scales the marker's OWN left/top too, so a bird placed at plane x slid to
+   x × 1.4 at the 40 % floor — onto the next stop after zooming out or Tidy
+   (JUDGE-R21-1 #3). `scale` grows it about its layout origin instead, and
+   with transform-origin 0 0 the point its transform pins to left/top (the
+   disc's foot, translate(-50%, -78%); a branch bird's centre) stays on the
+   stop. `span` outranks SkyLine.css's `zoom` rule for the same marker. The
+   bird in hand keeps its own screen-sized transform. */
+.skl[data-lod="far"] span.fl-bird-marker {
+  zoom: 1;
+}
+
+.skl[data-lod="far"] span.fl-bird-marker:not(.fl-bird-dragging) {
+  transform-origin: 0 0;
+  scale: var(--sky-far-ui, 1);
+}
+
 /* --- The weather ---------------------------------------------------------------- */
 
 /* Quiet hours: the sky dims. Under the flock (it comes first), over the
@@ -5245,6 +5265,61 @@ a.fl-waiting-ref:hover {
   display: none;
 }
 
+/* Round 21: a stop that stops you keeps its NAME, says WHY in one line
+   under it (the whole text in the tile's tooltip), and puts its buttons
+   below that (SkyChain `stopWhy` / `stopTileBoxes`). Nothing under its tile
+   shrinks: the buttons used to squeeze the name out of the fixed box. */
+.sky-node.st-halted > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra),
+.sky-node.st-perched > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra) {
+  flex-shrink: 0;
+}
+
+.sky-node-reason {
+  margin-top: 1px;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  color: var(--red, var(--tone-broken));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-node.st-perched .sky-node-reason {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Its buttons, in the tile: Retry · Skip on one row, Let the agent fix it
+   (the longest) on its own row under them; a Wait for me's Done · Skip. */
+.sky-node .fl-you-tile {
+  padding: 0;
+  gap: 4px;
+  align-items: center;
+}
+
+.sky-node .fl-you-tile .fl-you-items {
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.sky-node .fl-you-tile .fl-you-acts {
+  justify-content: center;
+  gap: 4px;
+}
+
+.sky-node .fl-you-tile .fl-btn {
+  font-size: 12px;
+  line-height: 18px;
+  padding: 2px 10px;
+}
+
+.sky-node .fl-you-tile .fl-fix {
+  order: 3;
+  flex-basis: 100%;
+}
+
 /* --- States on the tile ------------------------------------------------------ */
 
 .sky-node.st-current .sky-tile,
@@ -7386,6 +7461,16 @@ details.fl-group-waiting > summary {
 .sky-place-foot {
   display: flex;
   justify-content: flex-end;
+}
+
+/* Round 21: no session at all, with something waiting in Intake (the calm
+   card stands down for the plain line): the line keeps a New session button. */
+.sky-empty.sky-empty-plain p {
+  margin: 0 0 10px;
+}
+
+.sky-empty.sky-empty-plain .sky-empty-new {
+  pointer-events: auto;
 }
 /* The stop palette, the stop inspector, Describe a stop…, and a flyway's
  * trigger (FlywayInspector.tsx) — prefix fl-. Shared by the flyway card on
@@ -14674,16 +14759,20 @@ details.fl-group-waiting > summary {
   min-width: 200px;
 }
 
+/* Round 21 (JUDGE-R21-1 #5): the box is NEUTRAL — theme surfaces, the same
+   in every session — so its border can say the route's STATE (below,
+   `[data-frame]`, SkyLine.tsx `frameState`). The session's identity colour
+   is only the dot by its name (`.skl-id-dot`). */
 .skl-frame-box {
   position: absolute;
   right: 0;
   bottom: 0;
   z-index: 0;
-  border: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 38%, transparent);
+  border: calc(1px / var(--sky-z, 1)) solid var(--border);
   border-radius: 14px;
-  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 5%, transparent);
+  background: color-mix(in srgb, var(--panel) 78%, transparent);
   pointer-events: none;
-  transition: border-color 0.12s, box-shadow 0.12s;
+  transition: border-color 0.12s, box-shadow 0.12s, opacity 0.15s;
 }
 
 .skl-frame > .skl-chain-wrap,
@@ -14705,15 +14794,53 @@ details.fl-group-waiting > summary {
   margin: 0 -16px 12px;
   padding: 0 6px 0 12px;
   border: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--sky-chain-color, var(--accent)) 26%, transparent);
+  border-bottom: calc(1px / var(--sky-z, 1)) solid var(--border);
   border-radius: 14px 14px 0 0;
-  background: color-mix(in srgb, var(--sky-chain-color, var(--accent)) 11%, transparent);
+  background: color-mix(in srgb, var(--panel-2) 72%, transparent);
   outline: none;
 }
 
+/* The name stays legible at the All view's fit: counter-scaled with the
+   sky's zoom (`--sky-z`) to ~12px on screen down to 50%, capped so it
+   still fits the bar's fixed 30px (below 50% it shrinks with the sky). */
 .skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-name {
   flex: 0 1 auto;
-  max-width: 260px;
+  max-width: 21em;
+  font-size: clamp(12.5px, calc(12px / var(--sky-z, 1)), 24px);
+  line-height: 1.15;
+}
+
+/* The session's identity colour: a 6px dot (screen-sized) before its name. */
+.skl-frame-bar .skl-id-dot {
+  flex: none;
+  width: clamp(6px, calc(6px / var(--sky-z, 1)), 12px);
+  height: clamp(6px, calc(6px / var(--sky-z, 1)), 12px);
+  border-radius: 50%;
+  background: var(--sky-chain-color, var(--accent));
+}
+
+/* A ready route's ▶ Run on the bar (round 21, JUDGE-R21-2 #8): ReadyHead's
+   column (Ready + ▶ Run, then how it starts) laid out as one row, so it
+   fits the bar; right of the bar's text, left of the ⋯. */
+.skl-frame-bar .sky-ready {
+  flex: 0 1 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  overflow: hidden;
+  cursor: default;
+  /* Legible at the All view's fit, as the name is: up to 1.3x below 80 %
+     zoom (the mid level's factor), so its 18px row still fits the bar. */
+  zoom: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+}
+/* Only the Run block pushes right (the ⋯ follows it); beats the ⋯'s
+   margin-left: auto below. */
+.skl-chainline.skl-frame > .skl-bar.skl-frame-bar .sky-ready + .skl-menu {
+  margin-left: 0;
+}
+.skl-frame-bar .sky-ready .sky-start-on {
+  min-width: 0;
 }
 
 .skl-chainline.skl-frame > .skl-bar.skl-frame-bar .skl-menu {
@@ -14746,13 +14873,77 @@ details.fl-group-waiting > summary {
   font-size: 12.5px;
 }
 
-/* Focus, selection, a grounded chain dropped on it: the frame lights. */
+/* --- Round 21: the frame's border is the route's STATE ----------------
+   (SkyLine.tsx `frameState` → `data-frame`). Screen-sized at any zoom.
+   Needs you: amber, 2px, a soft glow. Halted (or the session broken): red,
+   2px. Working: the accent, with a slow breathing ring (still under
+   prefers-reduced-motion). Done: the whole route at reduced emphasis, full
+   on hover / focus. Ready and idle: the neutral frame. */
+.skl-frame[data-frame="you"] > .skl-frame-box {
+  border: calc(2px / var(--sky-z, 1)) solid var(--tone-attention);
+  box-shadow: 0 0 calc(16px / var(--sky-z, 1)) calc(2px / var(--sky-z, 1)) color-mix(in srgb, var(--tone-attention) 38%, transparent);
+}
+.skl-frame:is([data-frame="halted"], [data-frame="broken"]) > .skl-frame-box {
+  border: calc(2px / var(--sky-z, 1)) solid var(--tone-broken);
+}
+.skl-frame[data-frame="working"] > .skl-frame-box {
+  border: calc(1.5px / var(--sky-z, 1)) solid color-mix(in srgb, var(--accent) 75%, transparent);
+}
+/* The working cue: a ring that breathes (opacity only: no repaint). */
+.skl-frame[data-frame="working"] > .skl-frame-box::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1.5px / var(--sky-z, 1));
+  border-radius: inherit;
+  box-shadow: 0 0 0 calc(3px / var(--sky-z, 1)) rgba(var(--accent-rgb), 0.28);
+  opacity: 0;
+  animation: skl-frame-breathe 2.8s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes skl-frame-breathe {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skl-frame[data-frame="working"] > .skl-frame-box::after {
+    animation: none;
+    opacity: 0;
+  }
+}
+/* Done: the route steps back (still readable); a hover, focus, selection
+   or an open card brings it to full. */
+.skl-frame[data-frame="done"] > :is(.skl-frame-box, .skl-chain-wrap, .skl-ruler, .skl-cards) {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.skl-frame[data-frame="done"] > .skl-frame-bar {
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+.skl-frame[data-frame="done"]:is(:hover, :focus-within, .is-focused, .is-selected, .is-open, .is-editing) > :is(.skl-frame-box, .skl-chain-wrap, .skl-ruler, .skl-cards, .skl-frame-bar) {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skl-frame[data-frame="done"] > * {
+    transition: none;
+  }
+}
+
+/* Focus, selection, a grounded chain dropped on it: the frame lights — as
+   an accent ring OUTSIDE the box, so the state's border still shows. */
 .skl-chainline.skl-frame.is-focused > .skl-frame-box,
 .skl-chainline.skl-frame:focus-visible > .skl-frame-box {
-  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  outline: calc(2px / var(--sky-z, 1)) solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: calc(3px / var(--sky-z, 1));
 }
 .skl-chainline.skl-frame.is-selected > .skl-frame-box {
-  border-color: var(--accent);
+  outline: calc(2px / var(--sky-z, 1)) solid var(--accent);
+  outline-offset: calc(3px / var(--sky-z, 1));
 }
 .skl.skl-chainline.skl-frame.is-merge-target {
   border: none;
@@ -15503,6 +15694,30 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   .sky-offscreen .sky-offscreen-chip {
     transition: none;
   }
+}
+
+/* Round 21: a route that needs you — its chip says so ("Needs you →") on
+   the Needs-you gold (the tone's own fill + ink pair, legible in both
+   themes), a little wider so the words and a short name fit. */
+.sky-offscreen .sky-offscreen-chip.is-needs {
+  max-width: 210px;
+  border-color: var(--tone-attention);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--tone-attention) 30%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.sky-offscreen .sky-offscreen-needs {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--tone-attention);
+  color: var(--tone-attention-ink);
+  font-weight: 600;
+}
+
+.sky-offscreen .sky-offscreen-chip.is-needs .sky-offscreen-dot {
+  display: none;
 }
 /* The zoom readout's menu (ZoomMenu.tsx). The button sits in the toolbar's
  * zoom group (`.sky-zoom`, Sky.css) and wears the readout's look; the menu
@@ -21884,6 +22099,13 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   align-self: start;
   padding: 1px 8px;
   font-size: 11px;
+}
+
+/* An answer strip with nothing to say — a dialog the provider couldn't read,
+   no question, no command, no buttons, no note — is an empty yellow box with
+   a lone ↗ (the row itself already opens the session): draw nothing. */
+.notif-attn .flock-answer.is-unparsed:not(:has(.fa-q, .fa-opt, .fa-note, .fa-hint, .fa-state)) {
+  display: none;
 }
 }
 
@@ -40289,6 +40511,18 @@ span.pr-open-ref.ob-ref {
   background: var(--panel);
   color: var(--text);
   font-size: 12px;
+}
+
+/* A halted route's reason, one or two lines under its chip (full on hover via
+   the chip's title). */
+.ob-flight_halted .ob-halt-reason {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--red);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 }
 
