@@ -236,6 +236,61 @@
   display: none;
 }
 
+/* Round 21: a stop that stops you keeps its NAME, says WHY in one line
+   under it (the whole text in the tile's tooltip), and puts its buttons
+   below that (SkyChain `stopWhy` / `stopTileBoxes`). Nothing under its tile
+   shrinks: the buttons used to squeeze the name out of the fixed box. */
+.sky-node.st-halted > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra),
+.sky-node.st-perched > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra) {
+  flex-shrink: 0;
+}
+
+.sky-node-reason {
+  margin-top: 1px;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 600;
+  color: var(--red, var(--tone-broken));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-node.st-perched .sky-node-reason {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Its buttons, in the tile: Retry · Skip on one row, Let the agent fix it
+   (the longest) on its own row under them; a Wait for me's Done · Skip. */
+.sky-node .fl-you-tile {
+  padding: 0;
+  gap: 4px;
+  align-items: center;
+}
+
+.sky-node .fl-you-tile .fl-you-items {
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.sky-node .fl-you-tile .fl-you-acts {
+  justify-content: center;
+  gap: 4px;
+}
+
+.sky-node .fl-you-tile .fl-btn {
+  font-size: 12px;
+  line-height: 18px;
+  padding: 2px 10px;
+}
+
+.sky-node .fl-you-tile .fl-fix {
+  order: 3;
+  flex-basis: 100%;
+}
+
 /* --- States on the tile ------------------------------------------------------ */
 
 .sky-node.st-current .sky-tile,

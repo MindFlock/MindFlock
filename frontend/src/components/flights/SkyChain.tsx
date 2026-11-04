@@ -31,7 +31,7 @@ import { createPortal } from "react-dom";
 import type { Instance, TestPlan } from "../../api/types";
 import type { BehaviorsMark, BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
 import { leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
-import { isLive, type Flight, type StepKindDef } from "../../lib/flights";
+import { isLive, youItems, type Flight, type StepKindDef } from "../../lib/flights";
 import { behaviorSummary, nextNeedingYou, planForSession } from "../../lib/behaviors";
 import { findPlan, useBehaviorsFocus, type BehaviorsTarget } from "../../lib/behaviorsFocus";
 import { removePlan } from "../../lib/verifyActions";
@@ -42,7 +42,7 @@ import { StopMenu, type SkyMenuItem } from "./StopMenu";
 import { agentName } from "../../lib/agentNames";
 import { firstLine } from "../../lib/format";
 import { windowName } from "../../lib/windowName";
-import { HEAD_ID, NODE_W, TILE, chainColor, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
+import { HEAD_ID, NODE_H, NODE_W, TILE, chainColor, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
 import type { Pos } from "../../lib/skyLayout";
 import { haltMark } from "../../lib/stopEditing";
 import { riskTitle } from "../../lib/stopRisk";
@@ -255,6 +255,44 @@ export function tileSub(n: DiagramNode): string {
   return n.sub;
 }
 
+/** Round 21: why a stop that stops you stopped — the one line under its
+ * name on the tile (its full text in the tile's tooltip). A halted stop:
+ * the failure, without the stop's own name in front ("CI checks failed: 2
+ * of 14 red" under "CI checks" says "Failed: 2 of 14 red"). A Wait for me
+ * stop: what it asks of you (its text). Else nothing. */
+export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "step">): string {
+  if (n.state === "halted") {
+    const r = String(n.reason || "").trim();
+    const t = String(n.title || "").trim();
+    if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
+      const rest = r.slice(t.length).trim();
+      return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
+    }
+    return r;
+  }
+  if (n.state === "perched") return String(n.step?.config?.text ?? "").trim();
+  return "";
+}
+
+/** Round 21: the room a stop that stops you takes on the Sky (by node id,
+ * for `ChainGraphOpts.big`): its name, its reason line, and under them the
+ * buttons (Retry · Skip, then Let the agent fix it; or a Wait for me's
+ * ticks and Done · Skip) — the current stop of a live flight only (the one
+ * that carries them, FlightStrip `liveBoxParts`). A Verify stop parked on
+ * you is the Behaviors tile (its own card), so it stays a tile; halted, it
+ * takes Retry / Let the agent fix it / Skip like any other. */
+export const STOP_TILE_W = 156;
+export function stopTileBoxes(d: Pick<Diagram, "nodes">, flight: Pick<Flight, "cursor" | "state"> | null | undefined): Record<string, { w: number; h: number }> {
+  const out: Record<string, { w: number; h: number }> = {};
+  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you")) return out;
+  for (const n of d.nodes) {
+    if (n.kind !== "stop" || n.index !== flight.cursor) continue;
+    if (n.state === "halted") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
+    else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 24 + 21 * youItems(n.step).length };
+  }
+  return out;
+}
+
 /** What a screen reader says for a tile. */
 export function tileLabel(n: DiagramNode, head = false): string {
   if (head) return (n.title || "Agent") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
@@ -298,6 +336,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
   const activate = (n: GraphNode) => {
     if (justDragged.current) return;
     if (n.id !== HEAD_ID && n.node.behaviors) p.onOpen?.(n.node);
+    // Round 21: a halted stop's click opens its Details (the right-click's
+    // Details) — what happened, and what to do, in one press.
+    else if (n.id !== HEAD_ID && n.node.state === "halted" && n.node.kind === "stop" && p.onEdit) p.onEdit(n.node);
     else if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
     else p.onOpen?.(n.node);
   };
@@ -415,7 +456,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
     // The Behaviors tile, or the Verify stop standing in for it (docs/behaviors.md §1).
     const bh = isHead ? undefined : dn.behaviors;
     const bhTile = !isHead && dn.kind === "behaviors";
-    const sub = isHead ? head.sub : bh ? bh.short : tileSub(dn);
+    // A stop that stops you says why under its name, in its sub's place.
+    const why = isHead || bh || sub_ ? "" : stopWhy(dn);
+    const sub = isHead ? head.sub : bh ? bh.short : why ? "" : tileSub(dn);
     const cls = [
       "sky-node",
       isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
@@ -465,7 +508,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         data-diagram-node={dn.id}
         aria-label={said}
         aria-current={isSel(n) ? "true" : undefined}
-        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title}
+        title={isHead ? undefined : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub ? dn.title + " — " + sub : dn.title}
         style={{
           transform: `translate(${n.x}px, ${n.y}px)`,
           width: n.w,
@@ -544,6 +587,11 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         </div>
         <div className="sky-node-title">{isHead ? head.title : sub_ ? frame?.agent || "Agent" : dn.title}</div>
         {sub && <div className="sky-node-sub">{sub}</div>}
+        {why && (
+          <div className="sky-node-reason" title={why}>
+            {why}
+          </div>
+        )}
         {!isHead && dn.by === "agent" && (
           // A Ship stop the agent did itself: who did it, under the receipt.
           <div className="sky-node-by" title="The agent did this itself — the route found it already done">
@@ -843,7 +891,8 @@ export interface BehaviorsTile {
   /** The diagram with the tile on it (lib/flightDiagram `withBehaviors`). */
   apply(d: Diagram): Diagram;
   /** The open card's (or question's) box, by node id — merge into
-   * `ChainGraphOpts.big` so the chain makes room. */
+   * `ChainGraphOpts.big` so the chain makes room. Round 21: also a halted /
+   * waiting stop's room (`stopTileBoxes`). */
   big(d: Diagram): Record<string, { w: number; h: number }>;
   /** Handle a tile's click (the tile, or the Verify stop standing in for
    * it): true when it was the Behaviors tile's. */
@@ -912,11 +961,14 @@ export function useBehaviorsTile(
   const apply = useCallback((d: Diagram) => withBehaviors(d, mark), [mark]);
   const big = useCallback(
     (d: Diagram): Record<string, { w: number; h: number }> => {
+      // Round 21: a halted / waiting stop's room rides along here, the box
+      // map every host already merges into the graph (`stopTileBoxes`).
+      const stops = stopTileBoxes(d, opts.flight);
       const host = mode && plan ? d.nodes.find((n) => !!n.behaviors) : undefined;
-      if (!host) return {};
-      return { [host.id]: mode === "ask" ? { w: BH_ASK_W, h: BH_ASK_H } : behaviorsCardBox(plan) };
+      if (!host) return stops;
+      return { ...stops, [host.id]: mode === "ask" ? { w: BH_ASK_W, h: BH_ASK_H } : behaviorsCardBox(plan) };
     },
-    [mode, plan]
+    [mode, plan, opts.flight]
   );
   const onOpen = (n: DiagramNode) => {
     if (!n.behaviors || !plan) return false;

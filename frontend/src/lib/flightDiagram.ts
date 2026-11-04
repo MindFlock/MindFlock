@@ -277,8 +277,13 @@ const num = (v: unknown, d: number) => {
   return Number.isFinite(n) && v !== "" && v !== null && v !== undefined ? n : d;
 };
 
+/** Who checks a Verify stop's behaviors, in words (round 21: never the
+ * internal `who: both`). */
+export const VERIFY_WHO: Readonly<Record<string, string>> = { both: "by the agent and you", agent: "by the agent", you: "by you" };
+
 /** A stop's config in one line, the way its box says it: "push", "10 min
- * quiet", "who: agent", "3 to tick". */
+ * quiet", "by the agent", "3 to tick". Never an internal id: a kind it has
+ * no words for says nothing (round 21: the judges saw "land"). */
 export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
   const c = step.config || {};
   switch (step.kind) {
@@ -291,7 +296,10 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
       return (lane === "leave" ? "off" : LANE_LABEL[lane].toLowerCase()) + (c.ask_first ? " · asks first" : "");
     }
     case "verify":
-      return "who: " + String(c.who || "both") + (c.wait_live ? " · once live" : "");
+      return (VERIFY_WHO[String(c.who || "both")] || VERIFY_WHO.both) + (c.wait_live ? " · once live" : "");
+    case "land":
+      // Finish (backend flight_kinds/land.py): once merged, the tidy-up.
+      return "once merged: " + (String(c.close || "delete") === "close" ? "closes" : "deletes") + " the session" + (c.delete_branch === false ? " · keeps the branch" : "");
     case "you": {
       const items = youItems(step as FlightStep);
       if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
@@ -339,8 +347,16 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     case "join":
       return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
     default:
-      return step.kind;
+      return "";
   }
+}
+
+/** A stop's second line under its title: `sub`, unless it only echoes the
+ * title ("Push / push", "Merge when green / merge when green") — then none
+ * (round 21). */
+export function stopSub(title: string, sub: string): string {
+  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return sub && norm(sub) !== norm(title) ? sub : "";
 }
 
 /** A duration in seconds the way a box says it: "45 s", "10 min", "1 min 30
@@ -760,7 +776,7 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     kind: "stop",
     row: "main",
     title: stopTitle(s, kinds),
-    sub: stopSummary(s),
+    sub: stopSub(stopTitle(s, kinds), stopSummary(s)),
     state: "edit",
     icon: s.kind,
     perch: stepActor(s, kinds) === "you",
@@ -820,7 +836,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
-      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSummary(s),
+      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), stopSummary(s)),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",
