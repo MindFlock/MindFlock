@@ -664,3 +664,13 @@ def test_cli_rename(monkeypatch, capsys):
     assert cli.main(["rename", "old-s", "new"]) == 0
     assert posted == [("/api/instances/old-session/rename", {"to": "new"})]
     assert "renamed old-session -> new" in capsys.readouterr().out
+
+
+def test_held_entry_is_registered_and_safe_without_the_module():
+    """core.held lands from another branch: its entry is declared now and is
+    a no-op while the module is absent (and moves the key once it exists)."""
+    assert "held.json" in rename.registered_files()
+    import importlib.util
+
+    if importlib.util.find_spec("backend.web.core.held") is None:
+        rename_stores._held("a", "b")  # must not raise

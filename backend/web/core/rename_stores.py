@@ -101,6 +101,32 @@ def _sleep(old: str, new: str) -> None:
             m._persist()
 
 
+def _held(old: str, new: str) -> None:
+    """``held.json`` (core.held, ``title -> record``) — guarded: the module
+    lands from another branch. Uses its own ``rename`` when it has one, else
+    its lock + load + persist/save the way the sibling stores do."""
+    try:
+        from backend.web.core import held as m  # type: ignore[attr-defined]
+    except ImportError:
+        return
+    if callable(getattr(m, "rename", None)):
+        m.rename(old, new)
+        return
+    lock = getattr(m, "_LOCK", None)
+    load = getattr(m, "_load", None)
+    save = getattr(m, "_persist", None) or getattr(m, "_save", None)
+    if lock is None or not callable(load) or not callable(save):
+        raise RuntimeError("core.held has no rename/_LOCK/_load/_persist to move a key")
+    with lock:
+        data = load()
+        data = data[0] if isinstance(data, tuple) else data
+        if isinstance(data, dict) and move_key(data, old, new):
+            try:
+                save()
+            except TypeError:
+                save(data)
+
+
 def _prompt_queue(old: str, new: str) -> None:
     from backend.web.core import prompt_queue as m
 
@@ -483,6 +509,7 @@ def install() -> None:
     )
     register("ownership", _ownership, files=("session_owner.json",))
     register("sleep", _sleep, files=("sleeping.json",))
+    register("held", _held, files=("held.json",))
     register("prompt queue", _prompt_queue, files=("prompt_queues.json",))
     register("autopilot", _autopilot, files=("autopilot.json",))
     register("ports", _ports, files=("ports.json",))
