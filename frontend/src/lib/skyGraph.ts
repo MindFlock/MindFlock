@@ -632,8 +632,10 @@ export function loopHits(o: Pos, i: Pos, y: number, boxes: readonly Pick<GraphNo
   return boxes.filter((n) => legs.some((l) => n.x < l.x1 && n.x + n.w > l.x0 && n.y < l.y1 && n.y + n.h > l.y0)).length;
 }
 
-/** A session's colour: one of 8 hues, stable per title; neutral for "". */
-export const CHAIN_HUES: readonly number[] = [265, 200, 150, 30, 330, 95, 180, 0];
+/** A session's colour: one of 6 hues, stable per title; neutral for "".
+ * No red or amber: on the Sky those mean a state (halted, Needs you), and an
+ * identity dot must never read as one (round 21). */
+export const CHAIN_HUES: readonly number[] = [265, 200, 150, 310, 95, 180];
 export function chainColor(session: string | null | undefined): string {
   if (!session || session === "new") return "var(--muted)";
   let h = 0;

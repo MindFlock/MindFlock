@@ -7,7 +7,7 @@
  * One plane, panned and zoomed as a whole — one `translate(x, y) scale(z)` on
  * one container, no library. The wheel or a trackpad pans it, so do the middle
  * button, a touch drag and Space+drag (from anywhere); Ctrl/⌘+wheel and a pinch
- * zoom it (40%–300%). The keyboard: arrows pan, + / − zoom, 0 fits every line,
+ * zoom it (40%–300%). The keyboard: arrows pan, + / − zoom, 0 fits every line (as Fit),
  * 1 fits the focused one, T tidies, Enter opens the focused line's box, Esc
  * closes it. A faint dot grid scales with it, the flock (SkyFlock) drifts
  * behind it.
@@ -117,8 +117,9 @@
  * stop's dashed wire to the chain it starts — are drawn on the plane
  * (SkyWires); a stops-only chain something hands off to wears a trigger head. */
 
+import { NEW_ROUTE_STARTS_ON } from "./useSessionLine";
 import { optimisticDelete } from "../../lib/flightOptimism";
-import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
+import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks, useTestPlans } from "../../state/queries";
 import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
 import type { Instance } from "../../api/types";
@@ -145,6 +146,9 @@ import {
 import { DeviceDock } from "./DeviceBlocks";
 import type { LandingStripProps } from "./LandingStrip";
 import { effectiveViewMode, useUi } from "../../state/store";
+import { useOutbox } from "../../state/runs";
+import { needsYouTitles } from "../../lib/needsYou";
+import { MINIMAP_H, MINIMAP_W } from "../../lib/minimap";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
@@ -203,6 +207,11 @@ import {
   rightColumn,
   skyDrawerOpen,
   skyLineTitles,
+  pickThisSession,
+  fitRoute,
+  ROUTE_FIT_MIN,
+  screenBoxCovers,
+  linePerched,
   spotNear,
   tidySkyLayout,
   closeSkyWindows,
@@ -269,6 +278,7 @@ import { QuickAdd } from "./QuickAdd";
 import { PlacePicker } from "./PlacePicker";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
+import { cardCamera, phoneRouteZoom, scrollToShow } from "../../lib/skyCamera";
 import { useAutoTour, useTourOnFirstSight } from "../onboarding/useAutoTour";
 import { behaviorsOnARoute } from "../../lib/behaviors";
 import { SkyEmpty } from "../onboarding/SkyEmpty";
@@ -432,7 +442,7 @@ const NO_PLANS: FlightPlan[] = [];
 
 /** The camera across a trip to the grid and back: where it was and which
  * view it was fitted for (the same view back: no refit). */
-let memo: { cam: SkyCamera; key: string } | null = null;
+let memo: { cam: SkyCamera; key: string; one: string; auto: boolean } | null = null;
 
 export function SkyView() {
   const instQ = useInstances();
@@ -495,6 +505,17 @@ export function SkyView() {
       setCamState(next);
     },
     [stopEase]
+  );
+  // This session's fit follows the route as it grows (round 21) until the
+  // owner moves the camera themselves (the wheel, a drag, a pinch, the zoom
+  // keys, the minimap); a new switch arms it again.
+  const autoFit = useRef(memo ? memo.auto : true);
+  const userCam: typeof setCamState = useCallback(
+    (next) => {
+      autoFit.current = false;
+      setCam(next);
+    },
+    [setCam]
   );
   const [vp, setVp] = useState({ w: 0, h: 0 });
   const vpRef = useRef<HTMLDivElement>(null);
@@ -600,7 +621,29 @@ export function SkyView() {
   // making shows at once, a loading box under its name), then the grounded
   // flights' — stops with no session yet — newest first. Not in This session
   // or Perched on you; Find matches their name.
-  const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: focused || "" }), [rows, mode, query, focused]);
+  // This session (the default) with nothing focused still shows a route —
+  // shown, never selected (round 21, lib/skyLayout `pickThisSession`): the
+  // first that needs you (the bell's order), else the latest working one,
+  // else the MRU head, else the rail's #1. The route already shown stays
+  // while it is still on the sky and either needs you or nothing else does,
+  // so a poll never swaps the picture under you for a busier session.
+  const mru = useUi((s) => s.mru);
+  const railOrder = useUi((s) => s.railOrder);
+  const outboxQ = useOutbox();
+  const needsYou = useMemo(() => needsYouTitles(rows, outboxQ.data?.groups?.waiting), [rows, outboxQ.data]);
+  const lastShown = useRef("");
+  const oneFocus = useMemo(() => {
+    if (focused || mode !== "one") return focused || "";
+    const best = pickThisSession(rows, { needsYou, mru, railOrder });
+    const cur = rows.find((r) => r.title === lastShown.current && inSky(r));
+    if (!cur || cur.title === best) return best;
+    const needs = (r: Instance | undefined) => !!r && (needsYou.includes(r.title) || linePerched(r));
+    return needs(cur) || !needs(rows.find((r) => r.title === best)) ? cur.title : best;
+  }, [focused, mode, rows, mru, railOrder, needsYou]);
+  useEffect(() => {
+    if (mode === "one" && oneFocus) lastShown.current = oneFocus;
+  }, [mode, oneFocus]);
+  const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: oneFocus }), [rows, mode, query, oneFocus]);
   // The Verify tour opens by itself once: the first time a Behaviors stop
   // shows on a route here (docs/behaviors.md §4).
   const testPlans = useTestPlans().data?.plans;
@@ -824,24 +867,46 @@ export function SkyView() {
   goToRef.current = goTo;
 
   useEffect(() => stopEase, [stopEase]);
-  /** Every line and the intake lane — legibly (`firstFit`: the width at no
-   * less than mid, top-left, when everything would need far), or, `whole`
-   * (the toolbar's Fit), all of it however small. Eased, unless `instant`
-   * (the first picture). */
-  const fitAll = useCallback((whole = false, instant = false) => {
-    const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
-    // The lane's width and its top (its height is its own scroll's).
+  /** What a fit of everything holds: every line, the intake lane's width
+   * and top (its height is its own scroll's), the right column's width and
+   * top, and the sticky notes whole (round 21: a fit never slices a note). */
+  const everyRect = useCallback((): Rect[] => {
+    const rects: Rect[] = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
     if (intakeOn) rects.push({ ...posOf(INTAKE_KEY), w: intakeBox.w, h: 1 });
-    // The right column's width and top, as the lane's.
     for (const o of objects) if (o.def.place === "right") rects.push({ ...posOf(o.key), w: objectBox(o).w, h: 1 });
-    goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
-  }, [lines, posOf, mode, intakeOn, intakeBox, vp.w, vp.h, objects, objectBox, goTo]);
-  /** The grid's "1": the focused line filling the window. */
+    for (const o of objects) if (o.def.kind === "note") rects.push({ ...posOf(o.key), ...objectBox(o) });
+    return rects;
+  }, [lines, posOf, intakeOn, intakeBox, objects, objectBox]);
+  /** Fit all (round 21b): ONE fit for `0`, Shift+1, the zoom menu's Fit all,
+   * the toolbar's Fit and the fit after a Tidy — everything on screen, notes
+   * included, however small (`fitCamera`: no legibility floor). Eased,
+   * unless `instant`. */
+  const fitAll = useCallback((instant = false) => {
+    goTo(fitCamera(boundsOf(everyRect()), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
+  }, [everyRect, mode, vp.w, vp.h, goTo]);
+  /** The first picture (a first visit, a new view) — legibly (`firstFit`:
+   * the width at no less than mid, top-left, when everything would need far).
+   * Only this automatic fit keeps the floor; Fit all never does. */
+  const firstPicture = useCallback(() => {
+    goTo(firstFit(boundsOf(everyRect()), vp.w, vp.h, mode === "one" ? 1.5 : 1), true);
+  }, [everyRect, mode, vp.w, vp.h, goTo]);
+  /** The line This session shows (focused or picked), else "". */
+  const oneLine = mode === "one" ? titles[0] || "" : "";
+  /** The grid's "1": the focused line filling the window. This session's
+   * route (focused or only shown) gets the route fit (`fitRoute`: 48 px a
+   * side, 60–150 %), and the re-fit as it grows is armed again. */
   const fitFocused = useCallback((instant = false) => {
+    if (oneLine) {
+      const r = rectOf(oneLine);
+      if (!r) return;
+      autoFit.current = true;
+      goTo(fitRoute(r, vp.w, vp.h), instant);
+      return;
+    }
     const r = focusLine ? rectOf(focusLine) : null;
-    if (!r) return fitAll(false, instant);
+    if (!r) return fitAll(instant);
     goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);
-  }, [focusLine, rectOf, fitAll, vp.w, vp.h, goTo]);
+  }, [oneLine, focusLine, rectOf, fitAll, vp.w, vp.h, goTo]);
 
   // Fit ONCE: on the first show of the sky, once the lines have their spots
   // (drawn and measured, or after a short wait), and again only when the view
@@ -850,7 +915,7 @@ export function SkyView() {
   // 0, 1 or Fit. The first fit follows the grid's view: "1" fits the focused
   // line, the rest fit all.
   const fitted = useRef(memo?.key || "");
-  const fitKey = mode + "\u0000" + (mode === "one" ? focused : "");
+  const fitKey = mode + "\u0000" + (mode === "one" ? oneFocus : "");
   useEffect(() => {
     if (instQ.data === undefined || waited) return;
     const t = setTimeout(() => setWaited(true), 900);
@@ -863,12 +928,34 @@ export function SkyView() {
     const first = !fitted.current;
     fitted.current = fitKey;
     // The first picture is not a glide: there is nothing to glide from.
+    // This session fits by its own effect below (it follows the route).
     if (first && gridOne && mode !== "one") fitFocused(true);
-    else fitAll(false, true);
+    else if (mode !== "one") firstPicture();
   }, [vp.w, vp.h, instQ.data, fitKey, settled]); // eslint-disable-line react-hooks/exhaustive-deps
+  // This session (round 21): every switch and the first load fit the route
+  // to the window (`fitRoute`), and fit it AGAIN whenever its box changes —
+  // the flights arriving after the first paint, a stop added, the box opened
+  // — until the owner moves the camera (`userCam`); a new route re-arms it.
+  // The first picture is instant, a switch or a growing route glides.
+  const oneFitted = useRef(memo ? memo.one : "");
+  const oneRect = oneLine ? rectOf(oneLine) : null;
+  const oneKey = oneRect ? [oneRect.x, oneRect.y, oneRect.w, oneRect.h].map(Math.round).join(",") : "";
+  useEffect(() => {
+    if (mode !== "one") {
+      oneFitted.current = "";
+      return;
+    }
+    if (!oneLine || !oneRect || !vp.w || !vp.h || instQ.data === undefined) return;
+    const first = !oneFitted.current;
+    if (oneFitted.current !== oneLine) autoFit.current = true;
+    oneFitted.current = oneLine;
+    if (!autoFit.current) return;
+    goTo(fitRoute(oneRect, vp.w, vp.h), first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the box
+  }, [mode, oneLine, oneKey, vp.w, vp.h, instQ.data === undefined]);
   useEffect(
     () => () => {
-      memo = { cam: camRef.current, key: fitted.current };
+      memo = { cam: camRef.current, key: fitted.current, one: oneFitted.current, auto: autoFit.current };
     },
     []
   );
@@ -902,26 +989,62 @@ export function SkyView() {
     // never "whole in view", so moving it would jolt every click.
     const pressed = pressedLine.current === focusLine;
     pressedLine.current = "";
-    // Picked from OUTSIDE the sky (the sidebar row, Alt+N, the palette): the
-    // owner wants the input area, so the line's box opens on its real pane
-    // (round 14: "when I click that I pretty much always want to see the
-    // input area"). A press inside the sky keeps the box as it was. Once per
-    // pick — a viewport resize re-runs this effect and must not reopen it.
-    if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
-      openedFor.current = focusLine;
-      if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
-    } else if (pressed) openedFor.current = focusLine;
+    // Switching session never opens its box on the terminal (the owner,
+    // 2026-11-03: "when we switch session in sky I don't want the text window
+    // to pop up"): a box stays as it was left; a click on its agent opens it.
     const c = camRef.current;
     const sx = c.x + r.x * c.z;
     const sy = c.y + r.y * c.z;
     const inView = sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h;
-    if (!inView && !pressed) {
+    if (!inView && !pressed && mode !== "one") {
       goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));
     }
     setFlash(focusLine);
     setTimeout(() => alive.current && setFlash((f) => (f === focusLine ? "" : f)), 1400);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- layout/onLayout/rows are read once per pick
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per pick
   }, [focusLine, rectOf, vp.w, vp.h]);
+
+  /** Enter opened a line's box on its terminal (round 21): once the card is
+   * drawn, the camera glides to it, centred, at no less than 100 % (round
+   * 21b: at the route's own fit its tabs were 8 px) — closer only if it was
+   * closer already. The route fit stands down for it: the owner asked to
+   * see the box. The camera it left is kept: Esc closing the box goes back
+   * to it (This session re-fits the route instead). */
+  const beforeEnter = useRef<{ id: string; cam: SkyCamera } | null>(null);
+  const revealOpened = (id: string) => {
+    autoFit.current = false;
+    beforeEnter.current = { id, cam: camRef.current };
+    let tries = 0;
+    const look = () => {
+      if (!alive.current) return;
+      const root = vpRef.current;
+      let slot: Element | null = null;
+      root?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
+        if (el.getAttribute("data-slot") === id) slot = el;
+      });
+      const card = (slot as Element | null)?.querySelector(".skl-card");
+      if (!root || !slot || !card) {
+        if (++tries < 12) setTimeout(look, 50);
+        return;
+      }
+      const v = root.getBoundingClientRect();
+      const c = card.getBoundingClientRect();
+      if (!c.width || !c.height) return;
+      goToRef.current(cardCamera(camRef.current, { x: c.left - v.left, y: c.top - v.top, w: c.width, h: c.height }, v.width, v.height));
+    };
+    setTimeout(look, 30);
+  };
+  /** Esc closed the box Enter opened: back to the view before it — This
+   * session's route fit, else the camera Enter left. */
+  const restoreAfterEnter = (id: string) => {
+    const was = beforeEnter.current;
+    beforeEnter.current = null;
+    if (!was || was.id !== id) return;
+    // This session: the route fit re-arms — the box closing changes the
+    // route's size, and the fit effect glides to the closed route.
+    if (mode === "one") autoFit.current = true;
+    else goTo(was.cam);
+  };
 
   // A line that leaves is gone at once (the owner: deletes must disappear
   // right away); round 18 dropped the fade, which drew the old row format.
@@ -930,8 +1053,6 @@ export function SkyView() {
    * press on the line itself is remembered, so the selection effect above
    * leaves the camera alone for it. */
   const pressedLine = useRef("");
-  /** The line whose box the last outside pick opened (once per pick). */
-  const openedFor = useRef<string>("");
   const focusOn = useCallback((id: string, pressed = false) => {
     pressedLine.current = pressed ? id : "";
     setGroundFocus("");
@@ -963,17 +1084,20 @@ export function SkyView() {
   useBehaviorsRequest(behaviors, { ready: narrow || (!!vp.w && !!vp.h && instQ.data !== undefined && settled), fly: flyToBehaviors });
 
   // A view switch never picks a line: This session with nothing focused
-  // says so ("Pick a line to show it alone").
+  // SHOWS one (`pickThisSession`), never selects it.
   const setMode = (m: SkyMode) => setSkyMode(m);
 
   const zoomBy = (k: number) => {
-    setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
+    userCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
   };
   const panBy = (dx: number, dy: number) => {
-    setCam((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
+    userCam((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
   };
   /** The zoom menu's presets and Shift+0: to `z` about the window's middle, eased. */
-  const zoomTo = (z: number) => goTo(zoomAt(camRef.current, z, vp.w / 2, vp.h / 2));
+  const zoomTo = (z: number) => {
+    autoFit.current = false;
+    goTo(zoomAt(camRef.current, z, vp.w / 2, vp.h / 2));
+  };
   /** A point in the middle of what is on screen (a card's top-left). */
   const middle = (): Pos => {
     const c = toPlane(camRef.current, vp.w / 2, vp.h / 3);
@@ -1037,7 +1161,7 @@ export function SkyView() {
     const spotted = (id: string) => mode === "one" || !!autoPos[id] || !!layout[id]?.pinned;
     if (!lines.every((l) => spotted(l.id)) || (intakeOn && !spotted(INTAKE_KEY))) return;
     tidyFit.current = false;
-    fitAll(true);
+    fitAll();
   }, [place, autoPos, layout, lines, intakeOn, mode, fitAll]);
   /** Tidy these (the selection bar): only their spots are forgotten, only
    * their windows minimised. */
@@ -1248,7 +1372,7 @@ export function SkyView() {
   const onFly = (plan: FlightPlan, title: string) => {
     const live = liveFlightOf(title);
     if (live) void tackOnPlan(live.id, plan.id);
-    else void startFlightOn(title, plan.id, "prompt");
+    else void startFlightOn(title, plan.id, NEW_ROUTE_STARTS_ON);
   };
   /** A grounded flight takes off on `title` (its ⋯ Fly on a session…). */
   const onAttach = (f: Flight, title: string) => {
@@ -1476,7 +1600,7 @@ export function SkyView() {
     const bare = steps.map(({ pos: _pos, ...st }) => st as FlightStep);
     let ok = false;
     // Round 19: wired / dropped onto a session it waits there, ready.
-    if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: "prompt" }));
+    if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: NEW_ROUTE_STARTS_ON }));
     else if (await tackOnSteps(live.id, bare, at !== undefined && at < live.steps.length ? at : undefined, name || undefined)) ok = await deleteFlight(f.id);
     if (!ok) return;
     const n = steps.length;
@@ -1825,11 +1949,11 @@ export function SkyView() {
       const [a, b] = [...pointers.current.values()];
       const r = vpRef.current?.getBoundingClientRect();
       const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-      setCam(zoomAt(camRef.current, (pn.z * d) / pn.d, (a.x + b.x) / 2 - (r?.left || 0), (a.y + b.y) / 2 - (r?.top || 0)));
+      userCam(zoomAt(camRef.current, (pn.z * d) / pn.d, (a.x + b.x) / 2 - (r?.left || 0), (a.y + b.y) / 2 - (r?.top || 0)));
       return;
     }
     const pa = pan.current;
-    if (pa && pa.id === e.pointerId) setCam({ ...camRef.current, x: pa.cx + (e.clientX - pa.x), y: pa.cy + (e.clientY - pa.y) });
+    if (pa && pa.id === e.pointerId) userCam({ ...camRef.current, x: pa.cx + (e.clientX - pa.x), y: pa.cy + (e.clientY - pa.y) });
   };
   const onUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (marquee.current?.id === e.pointerId) return endMarquee(e);
@@ -1959,9 +2083,9 @@ export function SkyView() {
       const dy = e.deltaY * unit;
       if (e.ctrlKey || e.metaKey) {
         const r = el.getBoundingClientRect();
-        setCam((c) => zoomAt(c, c.z * Math.exp(-dy * 0.0022), e.clientX - r.left, e.clientY - r.top));
-      } else if (e.shiftKey && !dx) setCam((c) => ({ ...c, x: c.x - dy }));
-      else setCam((c) => ({ ...c, x: c.x - dx, y: c.y - dy }));
+        userCam((c) => zoomAt(c, c.z * Math.exp(-dy * 0.0022), e.clientX - r.left, e.clientY - r.top));
+      } else if (e.shiftKey && !dx) userCam((c) => ({ ...c, x: c.x - dy }));
+      else userCam((c) => ({ ...c, x: c.x - dx, y: c.y - dy }));
     };
     el.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => el.removeEventListener("wheel", onWheel, { capture: true });
@@ -2008,6 +2132,10 @@ export function SkyView() {
         label: l.name,
         selected: sel.lines.has(l.id),
         focused: l.flight ? groundFocus === l.id : focusLine === l.id,
+        // Round 21: a route that needs you — its edge chip says so when a
+        // fit clips it, or it lies off screen.
+        // Not in This session: the one route shown is the one you are on.
+        needsYou: mode === "one" ? false : l.flight ? l.flight.state === "waiting_you" || l.flight.state === "halted" : !!row && (needsYou.includes(l.id) || linePerched(row)),
       };
     }),
     ...objects.flatMap((o): MinimapRect[] => {
@@ -2015,6 +2143,42 @@ export function SkyView() {
       return r ? [{ id: o.key, ...r, kind: o.def.kind as MinimapRect["kind"], tone: "", label: o.key === INTAKE_KEY ? "Intake" : o.key, selected: sel.lines.has(o.key) }] : [];
     }),
   ];
+  // Round 21: the open minimap folds to its glyph while it would sit over a
+  // route's box (its pref stays open; it opens again once the route is clear
+  // of it). Its glyph pressed then shows it anyway, until the view changes.
+  // Its box is measured where it last drew open (viewport px), else guessed.
+  // Round 21b: an open drawer drawn OVER the sky (not beside it) hides the
+  // viewport's right side; the edge chips keep inside what is visible.
+  const [drawerCover, setDrawerCover] = useState(0);
+  useLayoutEffect(() => {
+    const root = vpRef.current;
+    const d = drawerOpen && root ? root.closest("#sky-view")?.querySelector(".sky-drawer.open") : null;
+    let cover = 0;
+    if (root && d) {
+      const v = root.getBoundingClientRect();
+      const r = d.getBoundingClientRect();
+      if (r.width && r.left < v.right && r.right > v.left && r.top < v.bottom && r.bottom > v.top) cover = Math.round(v.right - Math.max(r.left, v.left));
+    }
+    setDrawerCover(cover);
+  }, [drawerOpen, vp.w, vp.h]);
+  const mmHost = useRef<HTMLDivElement>(null);
+  const [mmBox, setMmBox] = useState<Rect | null>(null);
+  const [mmPeek, setMmPeek] = useState(false);
+  useEffect(() => setMmPeek(false), [mode, oneLine]);
+  const mmAt: Rect = mmBox || { x: vp.w - 24 - (MINIMAP_W + 2), y: vp.h - 24 - (MINIMAP_H + 30), w: MINIMAP_W + 2, h: MINIMAP_H + 30 };
+  const mmCovers = minimapOpen && !mmPeek && screenBoxCovers(mmAt, mapRects.filter((r) => r.kind === "line" || r.kind === "grounded"), cam);
+  const mmShown = minimapOpen && !mmCovers;
+  useLayoutEffect(() => {
+    if (!mmShown) return;
+    const el = mmHost.current?.querySelector(".sky-minimap");
+    const root = vpRef.current;
+    if (!el || !root) return;
+    const v = root.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const box = { x: r.left - v.left, y: r.top - v.top, w: r.width, h: r.height };
+    setMmBox((b) => (b && Math.abs(b.x - box.x) < 1 && Math.abs(b.y - box.y) < 1 && Math.abs(b.w - box.w) < 1 && Math.abs(b.h - box.h) < 1 ? b : box));
+  });
   /** Focus mode: what is not selected is dimmed (`data-dim`). */
   const dimmed = (id: string) => focusMode && !sel.lines.has(id) && selOne?.line !== id;
 
@@ -2137,12 +2301,16 @@ export function SkyView() {
       handled();
       const d = PAN_STEP * (e.shiftKey ? 4 : 1);
       panBy(k === "ArrowLeft" ? d : k === "ArrowRight" ? -d : 0, k === "ArrowUp" ? d : k === "ArrowDown" ? -d : 0);
-    } else if (k === "Enter" && focusLine) {
+    } else if (k === "Enter" && (focusLine || oneLine)) {
       handled();
-      onLayout(focusLine, { open: true });
-    } else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
+      const id = focusLine || oneLine;
+      onLayout(id, { open: true });
+      revealOpened(id);
+    } else if (k === "Escape" && (focusLine || oneLine) && layout[focusLine || oneLine]?.open) {
       handled();
-      onLayout(focusLine, { open: false });
+      const id = focusLine || oneLine;
+      onLayout(id, { open: false });
+      restoreAfterEnter(id);
     } else if (k === "Escape" && catalogOpen && paletteOn) {
       // Opened by "All blocks…", nothing else to close: back to the shelf.
       handled();
@@ -2282,23 +2450,31 @@ export function SkyView() {
 
   // --- Drawing ----------------------------------------------------------------------
 
+  // This session with no session at all says what All says (and SkyEmpty's
+  // calm card shows instead); with sessions but none it can show, it points
+  // at where one is picked (round 21: never a dead end).
+  const noSessions = instQ.data !== undefined && instQ.data.length === 0;
   const empty =
     lines.length > 0
       ? ""
-      : mode === "one"
-        ? focused
-          ? "“" + windowName(focused) + "” isn't in the sky right now."
-          : "Pick a route to show it alone."
-        : query
-          ? "No route matches “" + query + "”."
-          : mode === "perched"
-            ? "Nothing needs you."
-            : instQ.data === undefined
-              ? ""
-              : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+      : mode === "one" && focused
+        ? "“" + windowName(focused) + "” isn't in the sky right now."
+        : mode === "one" && !noSessions
+          ? instQ.data === undefined
+            ? ""
+            : narrow
+              ? "Pick a session in the list to show its route here."
+              : "Pick a session on the left to show its route here."
+          : query
+            ? "No route matches “" + query + "”."
+            : mode === "perched"
+              ? "Nothing needs you."
+              : instQ.data === undefined
+                ? ""
+                : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
 
   // Nothing at all on an unfiltered sky: SkyEmpty's calm card instead of the line.
-  const blank = lines.length === 0 && !query && mode !== "one" && mode !== "perched" && instQ.data?.length === 0;
+  const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);
 
   const toolbar = (
     <div className="sky-toolbar" role="toolbar" aria-label="The sky">
@@ -2345,19 +2521,19 @@ export function SkyView() {
             onFitSelection={fitSel}
             onFitFocused={() => fitFocused()}
             canFitSelection={!selectionEmpty(sel)}
-            canFitFocused={!!focusLine}
+            canFitFocused={!!(focusLine || oneLine)}
           />
           <button type="button" className="sky-zoom-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={cam.z >= ZOOM_MAX - 0.001} onClick={() => zoomBy(1.2)}>
             +
           </button>
-          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused route — the grid's 1 (1)" disabled={!focusLine} onClick={() => fitFocused()}>
+          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused route — the grid's 1 (1)" disabled={!focusLine && !oneLine} onClick={() => fitFocused()}>
             1
           </button>
           <button
             type="button"
             className="sky-zoom-btn sky-fit"
-            title="See everything: every route in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
-            onClick={() => fitAll(true)}
+            title="Fit all: every route and note in the window, however small (0, Shift+1)"
+            onClick={() => fitAll()}
           >
             Fit
           </button>
@@ -2492,6 +2668,41 @@ export function SkyView() {
     />
   );
 
+  // A phone's This session (round 21b): each route fits the width (no
+  // closer than 100 %, no further than the route fit's floor), and the stop
+  // that needs you — a perched or halted stop, else an asking agent tile —
+  // is scrolled whole into view once per stop (the owner's own scroll stays).
+  const phoneList = useRef<HTMLDivElement>(null);
+  const [phoneFit, setPhoneFit] = useState<Record<string, number>>({});
+  const phoneFitRef = useRef(phoneFit);
+  phoneFitRef.current = phoneFit;
+  const phoneShown = useRef<Record<string, string>>({});
+  const phoneOne = narrow && mode === "one";
+  useLayoutEffect(() => {
+    const list = phoneList.current;
+    if (!phoneOne || !list) return;
+    const next: Record<string, number> = {};
+    list.querySelectorAll<HTMLElement>(".sky-phone-fit[data-fit]").forEach((outer) => {
+      const id = outer.dataset.fit || "";
+      const inner = outer.firstElementChild as HTMLElement | null;
+      if (!id || !inner) return;
+      const z0 = phoneFitRef.current[id] || 1;
+      next[id] = phoneRouteZoom(inner.getBoundingClientRect().width / z0, outer.clientWidth, ROUTE_FIT_MIN);
+      if (Math.abs(next[id] - z0) > 0.005) return; // the zoom moves first; the scroll follows on the next pass
+      const stop =
+        inner.querySelector(".sky-node-stop.st-perched, .sky-node-stop.st-halted, .sky-node-stop.st-failed, .sky-node-stop.st-waiting_you") ||
+        inner.querySelector(".sky-node.sky-head.tone-attention");
+      const key = stop ? (stop.getAttribute("data-node") || stop.className) + "@" + next[id].toFixed(3) : "";
+      if (!stop || phoneShown.current[id] === key) return;
+      phoneShown.current[id] = key;
+      const o = outer.getBoundingClientRect();
+      const r = stop.getBoundingClientRect();
+      const left = r.left - o.left + outer.scrollLeft;
+      outer.scrollLeft = scrollToShow(outer.scrollLeft, outer.clientWidth, left, left + r.width);
+    });
+    const cur = phoneFitRef.current;
+    if (Object.keys(next).length !== Object.keys(cur).length || Object.entries(next).some(([k, z]) => Math.abs((cur[k] || 0) - z) > 0.005)) setPhoneFit(next);
+  });
   const lineFor = (id: string, at?: Pos) => {
     const f = isGroundedKey(id) ? lines.find((l) => l.id === id)?.flight : null;
     if (f)
@@ -2720,9 +2931,17 @@ export function SkyView() {
         {pick}
         {drawer}
         {newBlock}
-        <div className="sky-list">
-          <SkyEmpty blank={blank} className="fl-empty muted">{empty}</SkyEmpty>
-          {lines.map((l) => lineFor(l.id))}
+        <div className="sky-list" ref={phoneList}>
+          <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="fl-empty muted">{empty}</SkyEmpty>
+          {phoneOne
+            ? lines.map((l) => (
+                <div key={l.id} className="sky-phone-fit" data-fit={l.id}>
+                  <div className="sky-phone-fit-in" style={phoneFit[l.id] && phoneFit[l.id] !== 1 ? { zoom: phoneFit[l.id] } : undefined}>
+                    {lineFor(l.id)}
+                  </div>
+                </div>
+              ))
+            : lines.map((l) => lineFor(l.id))}
         </div>
         {shelf}
       </main>
@@ -2856,24 +3075,31 @@ export function SkyView() {
                 and the off-screen hints, bottom-right above the shelf; the
                 shortcuts sheet over it all. The three are seams the
                 `minimap` and `zoom-shortcuts` tasks fill in. */}
-            <OffscreenHints rects={mapRects} cam={cam} viewport={vp} onJump={jumpTo} />
-            <div className="sky-minimap-host">
-              <Minimap
-                rects={mapRects}
-                cam={cam}
-                viewport={vp}
-                onCamera={(c) => setCam(c)}
-                onJump={jumpTo}
-                open={minimapOpen}
-                onToggle={() => {
-                  const v = !minimapOpen;
-                  setMinimapOpen(v);
-                  writePref(MINIMAP_KEY, v ? "1" : "0");
-                }}
-              />
-            </div>
+            <OffscreenHints rects={mapRects} cam={cam} viewport={vp} inset={drawerCover ? { right: drawerCover } : undefined} onJump={jumpTo} />
+            {/* Nothing on the sky (no session yet): no minimap — the empty
+                card is the one thing to look at. */}
+            {mapRects.length > 0 && (
+              <div className="sky-minimap-host" ref={mmHost} data-covering={mmCovers ? "" : undefined}>
+                <Minimap
+                  rects={mapRects}
+                  cam={cam}
+                  viewport={vp}
+                  onCamera={(c) => userCam(c)}
+                  onJump={jumpTo}
+                  open={mmShown}
+                  onToggle={() => {
+                    // Folded only because it was over a route: show it anyway.
+                    if (mmCovers) return setMmPeek(true);
+                    if (mmPeek) return setMmPeek(false);
+                    const v = !minimapOpen;
+                    setMinimapOpen(v);
+                    writePref(MINIMAP_KEY, v ? "1" : "0");
+                  }}
+                />
+              </div>
+            )}
             <SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={SKY_SHORTCUT_GROUPS} />
-            <SkyEmpty blank={blank} className="sky-empty muted">{empty}</SkyEmpty>
+            <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="sky-empty muted">{empty}</SkyEmpty>
           </div>
           {shelf}
         </div>

@@ -7815,6 +7815,22 @@ def _unique_title(base: str) -> str:
     return "%s-%d" % (base, i)
 
 
+def _copy_title(title: str, taken) -> str:
+    """A copy's title: the family name plus the lowest free ``-N`` (N >= 2).
+
+    ``sitecheck-bot`` copies to ``sitecheck-bot-2``; with ``sitecheck-bot`` and
+    ``sitecheck-bot-3`` open, copying either gives ``sitecheck-bot-2``. A
+    trailing ``-N`` names a family member only when the bare name is open too,
+    so a ticket session ``sc-25355`` copies to ``sc-25355-2``, never ``sc-2``.
+    """
+    m = re.match(r"^(.+)-(\d+)$", title)
+    base = m.group(1) if m and m.group(1) in taken else title
+    i = 2
+    while ("%s-%d" % (base, i)) in taken:
+        i += 1
+    return "%s-%d" % (base, i)
+
+
 @app.get("/api/ides")
 def list_ides() -> JSONResponse:
     """The known-IDE registry with per-host installed flags, plus the currently
@@ -7949,7 +7965,7 @@ async def copy_instance(title: str) -> JSONResponse:
         wt = ""
     if not wt or not os.path.isdir(wt):
         return JSONResponse({"error": "source workspace not ready"}, status_code=409)
-    new_title = _unique_title(title + "-copy")
+    new_title = _copy_title(title, ENGINE.instances)
     program = src.Program or ENGINE.default_program()
     inst = session.NewInstance(
         session.InstanceOptions(

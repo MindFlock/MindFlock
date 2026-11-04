@@ -77,8 +77,9 @@ describe("bell: Plan ready — review & Go", () => {
 
   it("is wired into the bell, opening the Map's Plan section", () => {
     const bell = src("components/NotificationsBell.tsx");
-    expect(bell).toContain(
-      "withPlanReady(needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances)), instances)"
+    expect(bell).toContain("const attn = useNeedsYou();");
+    expect(src("lib/needsYou.ts")).toContain(
+      "withPlanReady(\n    needsAttention(attentionItems(instances as Instance[]), withFlightRows(src.waiting, instances, src.flights)),\n    instances\n  )"
     );
     expect(bell).toContain('openMap(it.title, { section: "plan" })');
   });

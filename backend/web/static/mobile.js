@@ -468,8 +468,20 @@
     sub.className = "sess-sub";
     var word = document.createElement("span");
     word.className = "sess-state tone-" + ss.tone;
-    word.textContent = ss.label;
+    // A halted route's word names its stop here ("Halted at CI checks"); the
+    // full reason is its tooltip.
+    word.textContent = ss.reason === "flight_halted" ? haltedWords(inst) : ss.label;
+    if (ss.reason === "flight_halted") word.title = ss.hint;
     sub.appendChild(word);
+    if (needsYouKind(inst) === "halted" && ss.reason !== "flight_halted") {
+      // A halted route needs you whatever the agent does (lib/needsYou.ts) —
+      // said beside a state that outranks it (a failed setup).
+      var halt = document.createElement("span");
+      halt.className = "sess-state sess-halted tone-broken";
+      halt.textContent = haltedWords(inst);
+      sub.appendChild(document.createTextNode(" "));
+      sub.appendChild(halt);
+    }
     var rz = rzChip(inst);
     if (rz) {
       var chip = document.createElement("span");
@@ -939,9 +951,10 @@
   //   state      tone       label
   //   starting   muted      Starting
   //   working    working    Working
-  //   needs_you  attention  Question · Perch: <stop> (a flight perched on you,
-  //                         docs/flights.md) · Pre-commit failed · Checks failing ·
-  //                         Setup failed
+  //   needs_you  attention  Question · Wait for me: <stop> (a flight perched on
+  //                         you, docs/flights.md) · Halted (a route halted until
+  //                         you Retry or Skip — in the broken tone, red) ·
+  //                         Pre-commit failed · Checks failing · Setup failed
   //   idle       neutral    Idle
   //   limit      waiting    Waiting on limit[, resumes HH:MM]
   //   offline    broken     Offline (actions: Restart)
@@ -961,6 +974,7 @@
   var REASON_LABEL = {
     question: "Question",
     flight_you: "Wait for me",
+    flight_halted: "Halted",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
@@ -996,6 +1010,23 @@
     return !!fl && fl.state === "waiting_you" && !!fl.step && fl.step.actor === "you";
   }
 
+  // Why a route halted, without the stop's own name in front
+  // (sessionState.ts haltedWhy): "CI checks failed: 2 red" at "CI checks"
+  // says "Failed: 2 red".
+  function haltedWhy(stopTitle, reason) {
+    var r = String(reason || "").trim(), t = String(stopTitle || "").trim();
+    if (t && r.toLowerCase().indexOf(t.toLowerCase() + " ") === 0) {
+      var rest = r.slice(t.length).trim();
+      return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : r;
+    }
+    return r;
+  }
+  // The row's route is halted at a stop until you Retry or Skip it.
+  function flightHalted(inst) {
+    var fl = inst && inst.flight;
+    return !!fl && !!fl.id && fl.state === "halted";
+  }
+
   function sessionState(inst) {
     if (inst.workspace_missing)
       return st("offline", { label: "Missing", hint: "Workspace directory no longer exists — delete this session" });
@@ -1023,6 +1054,14 @@
       var you = youStepLabel(inst.flight.step.title);
       var flHint = you + " — route “" + (inst.flight.plan_name || "") + "” needs you; press Done";
       return st("needs_you", { reason: "flight_you", label: you, inBell: true, hint: flHint });
+    }
+    // A halted route: the same rank as Wait for me, in red (sessionState.ts).
+    if (flightHalted(inst)) {
+      var hfl = inst.flight, at = hfl.step ? String(hfl.step.title || "").trim() : "";
+      var why = haltedWhy(at, hfl.reason);
+      return st("needs_you", { reason: "flight_halted", label: REASON_LABEL.flight_halted, tone: "broken", inBell: true,
+                               hint: "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
+                                     " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip" });
     }
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
@@ -1053,17 +1092,67 @@
     return st("idle", { hint: "Agent is idle — waiting for input" });
   }
 
-  // O1: attention rank (lower = more urgent). The bell's order
-  // (sessionState.ts attentionPriority): a question, then whatever is broken,
-  // then failing checks; a pushed branch waiting for its PR comes after those,
-  // and everything else last. A plan waiting for Go ranks with the broken ones
-  // (the bell ranks it like an approval).
-  function attnRank(inst) {
+  // --- Needs you: THE one list, mirrored --------------------------------------
+  // The source of truth is frontend/src/lib/needsYou.ts (`needsYouRows`): the
+  // desktop's bell, the Sky's Needs you strip and every badge read it. This
+  // page can't import TS, so the same rule is copied here — the same kinds,
+  // in the same order (tests/unit/test_mobile_needs_you.py keeps the two lists
+  // in step). The phone reads the session rows only, so "approval" (the
+  // server's waiting rows) and "behaviors" have no row to come from here;
+  // they keep their place in the order all the same.
+  var NEEDS_YOU_KINDS = [
+    "asking",
+    "approval",
+    "wait_for_me",
+    "halted",
+    "plan",
+    "broken",
+    "checks",
+    "behaviors",
+    "ready",
+  ];
+  // The session's route, when the row carries one of its own (a worker's
+  // branch-only dto has no id).
+  function rowFlight(inst) {
+    var fl = inst && inst.flight;
+    return fl && fl.id ? fl : null;
+  }
+  // Which kind of Needs-you row a session is, or "" when nothing about it
+  // needs you — lib/needsYou.ts `kindOf`, one row per session, its most
+  // pressing reason first.
+  function needsYouKind(inst) {
+    if (!inst || inst.workspace_missing || inst.status === "paused") return "";
     var ss = sessionState(inst);
-    if (ss.inBell) return ss.reason === "question" ? 0 : ss.reason === "checks_failing" ? 2 : 1;
-    if (planPending(inst) && inst.status !== "paused" && !inst.workspace_missing) return 1;
-    if (inst.status !== "paused" && inst.stage === "pushed") return 3;
-    return 9;
+    if (ss.reason === "question") return "asking";
+    var fl = rowFlight(inst);
+    if (fl && fl.state === "waiting_you") return "wait_for_me";
+    if (fl && fl.state === "halted") return "halted";
+    if (planPending(inst)) return "plan";
+    if (ss.inBell) return ss.reason === "checks_failing" ? "checks" : "broken";
+    // A lane that STOPS at push is finished there (sidebar/ordering.ts).
+    var lane = inst.lane && inst.lane.target ? inst.lane.target : inst.autopilot && inst.autopilot.depth;
+    if (inst.stage === "pushed" && lane !== "push") return "ready";
+    return "";
+  }
+  // "Halted at CI checks" — what a halted route's row says beside its state.
+  function haltedWords(inst) {
+    var fl = rowFlight(inst);
+    var at = fl && fl.step ? String(fl.step.title || "") : "";
+    return "Halted" + (at ? " at " + at : "");
+  }
+
+  // O1: attention rank (lower = more urgent), by the session's Needs-you
+  // kind: rising in NEEDS_YOU_KINDS order — the bell's order — and 9 for
+  // everything that doesn't need you. The whole numbers are the rail's old
+  // ranks (a question 0, broken or a plan waiting for Go 1, failing checks 2,
+  // ready for its PR 3), so a plan and a broken session share 1.
+  var NEEDS_YOU_RANK = {
+    asking: 0, approval: 0.25, wait_for_me: 0.5, halted: 0.75,
+    plan: 1, broken: 1, checks: 2, behaviors: 2.5, ready: 3,
+  };
+  function attnRank(inst) {
+    var k = needsYouKind(inst);
+    return k ? NEEDS_YOU_RANK[k] : 9;
   }
   // The row's marker: its tone class — the same colour the rail's dot wears.
   function attnMark(inst) {
@@ -8471,11 +8560,17 @@
                      : name + " isn't asking anything.");
   }
   function voiceNeedsMe() {
-    var rows = instances.filter(function (i) { return sessionState(i).inBell; })
+    // The one Needs-you list (needsYouKind), in its order.
+    // (Every sessionState(i).inBell row has a kind; the kind adds halted
+    // routes, a plan waiting for Go and a branch ready for its PR.)
+    var rows = instances.filter(function (i) { return !!needsYouKind(i) || sessionState(i).inBell; })
       .sort(function (a, b) { return attnRank(a) - attnRank(b); }).slice(0, 3);
     var line = rows.length ? rows.map(function (i) {
-      var ss = sessionState(i), name = nameOf(i.title);
+      var ss = sessionState(i), name = nameOf(i.title), kind = needsYouKind(i);
       if (ss.reason === "question") return endSentence(name + " is asking: " + (i.last_say || "a question"));
+      if (kind === "halted") return endSentence(name + "'s route is " + haltedWords(i).toLowerCase());
+      if (kind === "plan") return endSentence(name + " has a plan waiting for Go");
+      if (kind === "ready") return endSentence(name + " is pushed and ready for its PR");
       return endSentence(name + " is " + voiceStateWord(ss));
     }).join(" ") : "Nothing needs you.";
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });

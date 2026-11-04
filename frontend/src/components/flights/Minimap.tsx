@@ -18,7 +18,6 @@ import {
   MINIMAP_W,
   centreAt,
   dragCamera,
-  edgeHints,
   fromMap,
   inside,
   mapBlocks,
@@ -28,6 +27,7 @@ import {
   shortLabel,
   toneVar,
   viewportRect,
+  type HintEdge,
   type MapBlock,
   type MapFit,
 } from "../../lib/minimap";
@@ -46,6 +46,9 @@ export interface MinimapRect {
   label?: string;
   selected?: boolean;
   focused?: boolean;
+  /** The route needs you (asking, waiting on you, halted): its edge chip
+   * reads "Needs you →", and shows even when a fit only CLIPS it. */
+  needsYou?: boolean;
 }
 
 export interface MinimapProps {
@@ -180,52 +183,134 @@ export function Minimap({ rects, cam, viewport, onCamera, onJump, open, onToggle
   );
 }
 
+/** The chip's words for a route that needs you, its arrow toward the edge. */
+export function needsYouWord(edge: HintEdge): string {
+  return edge === "right" ? "Needs you →" : edge === "left" ? "← Needs you" : edge === "top" ? "↑ Needs you" : "↓ Needs you";
+}
+
+/** A route with at least this share of its box on screen needs no chip. */
+export const CHIP_HIDE_SHARE = 0.5;
+
+/** One edge chip: the route, the edge its chip sits on, whether it needs you. */
+export interface EdgeChip {
+  id: string;
+  edge: HintEdge;
+  needs: boolean;
+}
+
+const EDGES: readonly HintEdge[] = ["top", "left", "right", "bottom"];
+
+/** Round 21b: which routes get an edge chip, on which edge, in stack order.
+ * A route gets one when less than `CHIP_HIDE_SHARE` of it is inside the
+ * visible sky (`view`, screen px, already less an open drawer): wholly off
+ * screen — any route (`edgeHints`' edge: the one it lies beyond, the further
+ * axis past a corner) — or mostly off and it needs you (the edge it runs
+ * past most). At most `max`, the ones that need you first, then the
+ * nearest; on each edge the ones that need you lead the stack, the rest in
+ * order along the edge. Pure. */
+export function edgeChips(rects: readonly MinimapRect[], cam: SkyCamera, view: { w: number; h: number }, max = HINT_MAX): EdgeChip[] {
+  const { w: vw, h: vh } = view;
+  if (vw <= 0 || vh <= 0 || max <= 0) return [];
+  const found: (EdgeChip & { dist: number; along: number })[] = [];
+  for (const r of rects) {
+    const sx = r.x * cam.z + cam.x;
+    const sy = r.y * cam.z + cam.y;
+    const sw = r.w * cam.z;
+    const sh = r.h * cam.z;
+    if (sw <= 0 || sh <= 0) continue;
+    const visW = Math.max(0, Math.min(sx + sw, vw) - Math.max(sx, 0));
+    const visH = Math.max(0, Math.min(sy + sh, vh) - Math.max(sy, 0));
+    const share = (visW * visH) / (sw * sh);
+    if (share >= CHIP_HIDE_SHARE) continue;
+    const needs = !!r.needsYou;
+    let edge: HintEdge;
+    let dist = 0;
+    if (share <= 0) {
+      const gx = Math.max(0, -(sx + sw), sx - vw);
+      const gy = Math.max(0, -(sy + sh), sy - vh);
+      edge = gx >= gy ? (sx + sw <= 0 ? "left" : "right") : sy + sh <= 0 ? "top" : "bottom";
+      dist = Math.hypot(gx, gy);
+    } else {
+      if (!needs) continue; // partly shown, and it doesn't need you: no chip
+      const over: [HintEdge, number][] = [
+        ["right", sx + sw - vw],
+        ["left", -sx],
+        ["bottom", sy + sh - vh],
+        ["top", -sy],
+      ];
+      edge = over.reduce((a, b) => (b[1] > a[1] ? b : a))[0];
+    }
+    const along = edge === "left" || edge === "right" ? sy + sh / 2 : sx + sw / 2;
+    found.push({ id: r.id, edge, needs, dist, along });
+  }
+  const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  found.sort((a, b) => Number(b.needs) - Number(a.needs) || a.dist - b.dist || byId(a, b));
+  const kept = found.slice(0, max);
+  return EDGES.flatMap((edge) =>
+    kept
+      .filter((c) => c.edge === edge)
+      .sort((a, b) => Number(b.needs) - Number(a.needs) || a.along - b.along || byId(a, b))
+      .map(({ id, needs }) => ({ id, edge, needs }))
+  );
+}
+
 export interface OffscreenHintsProps {
   rects: readonly MinimapRect[];
   cam: SkyCamera;
   viewport: { w: number; h: number };
+  /** What covers the viewport's edges (screen px): an open drawer drawn over
+   * its right side. The chips keep inside the visible sky. */
+  inset?: { right?: number; bottom?: number };
   onJump(id: string): void;
 }
 
-/** Edge markers for lines outside the view (a bird-coloured chip with the
- * name, pinned to the edge nearest the line, like a game's off-screen HUD).
- * None at lod far: everything is on screen then anyway. */
-export function OffscreenHints({ rects, cam, viewport, onJump }: OffscreenHintsProps): ReactElement | null {
-  if (lodFor(cam.z) === "far") return null;
+/** Edge markers for routes off screen (a bird-coloured chip with the name,
+ * like a game's off-screen HUD): `edgeChips` picks them. Each edge's chips
+ * stack in a gutter just inside the visible sky's edge (Minimap.css: 4 px
+ * apart, the ones that need you first and on top), never strewn over the
+ * routes. None at lod far — everything is on screen then anyway — except
+ * for a route that needs you, whose chip says "Needs you →" (round 21). */
+export function OffscreenHints({ rects, cam, viewport, inset, onJump }: OffscreenHintsProps): ReactElement | null {
   const lines = rects.filter((r) => LINE_KINDS.has(r.kind));
-  const hints = edgeHints(lines, cam, viewport, HINT_MAX);
-  if (!hints.length) return null;
+  const far = lodFor(cam.z) === "far";
+  const right = Math.max(0, inset?.right || 0);
+  const bottom = Math.max(0, inset?.bottom || 0);
+  const view = { w: viewport.w - right, h: viewport.h - bottom };
+  const chips = edgeChips(far ? lines.filter((r) => r.needsYou) : lines, cam, view);
+  if (!chips.length) return null;
   const byId = new Map(lines.map((r) => [r.id, r]));
   return (
-    <div className="sky-offscreen" data-no-drag="">
-      {hints.map((h) => {
-        const r = byId.get(h.id);
-        const name = r?.label || h.id;
-        const style: CSSProperties =
-          h.edge === "left"
-            ? { left: h.x, top: h.y }
-            : h.edge === "right"
-              ? { right: viewport.w - h.x, top: h.y }
-              : h.edge === "top"
-                ? { left: h.x, top: h.y }
-                : { left: h.x, bottom: viewport.h - h.y };
+    <div className="sky-offscreen" data-no-drag="" style={right || bottom ? { right, bottom } : undefined}>
+      {EDGES.map((edge) => {
+        const on = chips.filter((c) => c.edge === edge);
+        if (!on.length) return null;
         return (
-          <button
-            key={h.id}
-            type="button"
-            className={"sky-offscreen-chip fl-pick edge-" + h.edge}
-            style={{ ...style, "--mm-tone": toneVar(r?.tone) } as CSSProperties}
-            title={"Go to " + name}
-            aria-label={"Go to " + name}
-            data-id={h.id}
-            onClick={(e) => {
-              e.stopPropagation();
-              onJump(h.id);
-            }}
-          >
-            <span className="sky-offscreen-dot" aria-hidden="true" />
-            <span className="sky-offscreen-name">{shortLabel(name, 14)}</span>
-          </button>
+          <div key={edge} className={"sky-offscreen-gutter edge-" + edge}>
+            {on.map((h) => {
+              const r = byId.get(h.id);
+              const name = r?.label || h.id;
+              const needs = h.needs;
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  className={"sky-offscreen-chip fl-pick edge-" + h.edge + (needs ? " is-needs" : "")}
+                  style={{ "--mm-tone": toneVar(r?.tone) } as CSSProperties}
+                  title={"Go to " + name + (needs ? " — it needs you" : "")}
+                  aria-label={"Go to " + name + (needs ? " — it needs you" : "")}
+                  data-id={h.id}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onJump(h.id);
+                  }}
+                >
+                  <span className="sky-offscreen-dot" aria-hidden="true" />
+                  {needs ? <span className="sky-offscreen-needs">{needsYouWord(h.edge)}</span> : null}
+                  <span className="sky-offscreen-name">{shortLabel(name, needs ? 9 : 14)}</span>
+                </button>
+              );
+            })}
+          </div>
         );
       })}
     </div>

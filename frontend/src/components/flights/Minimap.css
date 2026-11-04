@@ -155,12 +155,70 @@
 
 /* --- Off-screen hints ----------------------------------------------------- */
 
+/* Round 21b: each edge's chips stack in a gutter just inside the visible
+   sky's edge (OffscreenHints sets `right` to keep clear of an open drawer
+   drawn over the sky): a grid whose middle stays empty, so the gutters never
+   reach over the routes in the middle and the chips never sit on each other. */
 .sky-offscreen {
   position: absolute;
   inset: 0;
   z-index: 7;
+  display: grid;
+  grid-template-areas:
+    "top top top"
+    "left mid right"
+    "bottom bottom bottom";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   pointer-events: none;
   overflow: hidden;
+}
+
+/* A gutter: a band of the sky's own colour along its edge, the chips on it
+   4 px apart; the routes pass under it as under the window's frame. */
+.sky-offscreen .sky-offscreen-gutter {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  padding: 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--sky-bg) 96%, transparent);
+  border: 0 solid color-mix(in srgb, var(--border) 75%, transparent);
+}
+
+.sky-offscreen .sky-offscreen-gutter.edge-right {
+  grid-area: right;
+  flex-direction: column;
+  align-items: flex-end;
+  border-left-width: 1px;
+  /* clear of the minimap's glyph in the corner */
+  padding-bottom: 64px;
+}
+
+.sky-offscreen .sky-offscreen-gutter.edge-left {
+  grid-area: left;
+  flex-direction: column;
+  align-items: flex-start;
+  border-right-width: 1px;
+}
+
+.sky-offscreen .sky-offscreen-gutter.edge-top {
+  grid-area: top;
+  flex-direction: row;
+  border-bottom-width: 1px;
+}
+
+.sky-offscreen .sky-offscreen-gutter.edge-bottom {
+  grid-area: bottom;
+  flex-direction: row;
+  border-top-width: 1px;
+  /* starts clear of the shelf's Stops tab over the bottom-left corner (the
+     band would paint over it), and keeps clear of the minimap's glyph */
+  margin-left: 112px;
+  border-left-width: 1px;
+  border-top-left-radius: 8px;
+  padding-right: 64px;
 }
 
 /* Any dialog or menu open anywhere on the page — Settings, New, a ⋯ menu, a
@@ -171,7 +229,8 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
 }
 
 .sky-offscreen .sky-offscreen-chip {
-  position: absolute;
+  position: relative;
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -194,16 +253,6 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   transition:
     box-shadow 120ms ease-out,
     outline-color 120ms ease-out;
-}
-
-.sky-offscreen .sky-offscreen-chip.edge-left,
-.sky-offscreen .sky-offscreen-chip.edge-right {
-  transform: translateY(-50%);
-}
-
-.sky-offscreen .sky-offscreen-chip.edge-top,
-.sky-offscreen .sky-offscreen-chip.edge-bottom {
-  transform: translateX(-50%);
 }
 
 .sky-offscreen .sky-offscreen-chip:hover,
@@ -265,4 +314,29 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
   .sky-offscreen .sky-offscreen-chip {
     transition: none;
   }
+}
+
+/* Round 21: a route that needs you — its chip says so ("Needs you →") on
+   the Needs-you gold (the tone's own fill + ink pair, legible in both
+   themes), a little wider so the words and a short name fit. */
+.sky-offscreen .sky-offscreen-chip.is-needs {
+  z-index: 1;
+  max-width: 210px;
+  border-color: var(--tone-attention);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--tone-attention) 30%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.sky-offscreen .sky-offscreen-needs {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--tone-attention);
+  color: var(--tone-attention-ink);
+  font-weight: 600;
+}
+
+.sky-offscreen .sky-offscreen-chip.is-needs .sky-offscreen-dot {
+  display: none;
 }

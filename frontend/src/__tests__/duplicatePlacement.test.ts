@@ -54,13 +54,13 @@ describe("copySession placement", () => {
     useUi.getState().setOrder(["alpha", "beta", "gamma"]);
     instApi.mockImplementation(async () => {
       // The server answers after its own row exists.
-      rows(["alpha", "beta", "gamma", "beta-copy"]);
-      return { title: "beta-copy" };
+      rows(["alpha", "beta", "gamma", "beta-2"]);
+      return { title: "beta-2" };
     });
 
     await copySession("beta");
 
-    expect(order()).toEqual(["alpha", "beta", "beta-copy", "gamma"]);
+    expect(order()).toEqual(["alpha", "beta", "beta-2", "gamma"]);
   });
 
   it("places the optimistic provisioning row immediately, before the server answers", async () => {
@@ -69,29 +69,29 @@ describe("copySession placement", () => {
     let midFlight: string[] = [];
     instApi.mockImplementation(async () => {
       midFlight = [...order()];
-      rows(["alpha", "beta", "gamma", "beta-copy"]);
-      return { title: "beta-copy" };
+      rows(["alpha", "beta", "gamma", "beta-2"]);
+      return { title: "beta-2" };
     });
 
     await copySession("beta");
 
     // No bottom-of-the-list stop-over on the way.
-    expect(midFlight).toEqual(["alpha", "beta", "beta-copy", "gamma"]);
+    expect(midFlight).toEqual(["alpha", "beta", "beta-2", "gamma"]);
   });
 
   it("places the title the SERVER chose when it differs from the guess", async () => {
     rows(["alpha", "beta", "gamma"]);
     useUi.getState().setOrder(["alpha", "beta", "gamma"]);
     instApi.mockImplementation(async () => {
-      rows(["alpha", "beta", "gamma", "beta-copy-2"]);
-      return { title: "beta-copy-2" };
+      rows(["alpha", "beta", "gamma", "beta-3"]);
+      return { title: "beta-3" };
     });
 
     await copySession("beta");
 
     // The optimistic guess is gone (it never became a session); the real one
     // sits under its source rather than at the bottom.
-    expect(order()).toEqual(["alpha", "beta", "beta-copy-2", "gamma"]);
+    expect(order()).toEqual(["alpha", "beta", "beta-3", "gamma"]);
   });
 
   it("materializes a sparse saved order rather than splicing into a stale one", async () => {
@@ -100,13 +100,13 @@ describe("copySession placement", () => {
     rows(["alpha", "beta", "gamma"]);
     useUi.getState().setOrder(["gamma"]);
     instApi.mockImplementation(async () => {
-      rows(["alpha", "beta", "gamma", "beta-copy"]);
-      return { title: "beta-copy" };
+      rows(["alpha", "beta", "gamma", "beta-2"]);
+      return { title: "beta-2" };
     });
 
     await copySession("beta");
 
-    expect(order()).toEqual(["gamma", "alpha", "beta", "beta-copy"]);
+    expect(order()).toEqual(["gamma", "alpha", "beta", "beta-2"]);
   });
 
   it("keeps saved slots for sessions missing from the current snapshot", async () => {
@@ -117,13 +117,13 @@ describe("copySession placement", () => {
     rows(["alpha", "beta"]);
     useUi.getState().setOrder(["lap::one", "alpha", "lap::two", "beta"]);
     instApi.mockImplementation(async () => {
-      rows(["alpha", "beta", "beta-copy"]);
-      return { title: "beta-copy" };
+      rows(["alpha", "beta", "beta-2"]);
+      return { title: "beta-2" };
     });
 
     await copySession("beta");
 
-    expect(order()).toEqual(["lap::one", "alpha", "lap::two", "beta", "beta-copy"]);
+    expect(order()).toEqual(["lap::one", "alpha", "lap::two", "beta", "beta-2"]);
   });
 
   it("does not place a title this browser has never seen", async () => {
@@ -152,6 +152,6 @@ describe("copySession placement", () => {
     expect(errorPop).toHaveBeenCalledWith("Copy failed", "nope");
 
     // The pending row is dropped, and no ghost title is left in the order.
-    expect(order()).not.toContain("beta-copy");
+    expect(order()).not.toContain("beta-2");
   });
 });

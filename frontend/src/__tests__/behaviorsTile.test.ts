@@ -379,6 +379,6 @@ describe("the Verify stop parked on you (docs/behaviors.md §5)", () => {
     const boxed = liveBoxParts(parked, true, () => {});
     expect(inPlace.sizeOf(node, { w: 132, h: 140 })).toEqual({ w: 132, h: 140 });
     expect(boxed.sizeOf(node, { w: 132, h: 140 }).w).toBeGreaterThanOrEqual(320);
-    expect(code("components/flights/useSessionLine.tsx")).toContain("liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true })");
+    expect(code("components/flights/useSessionLine.tsx")).toContain("liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true, inTile: true })");
   });
 });

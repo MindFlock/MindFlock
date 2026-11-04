@@ -1369,3 +1369,4 @@ html, body {
   color: var(--muted);
 }
 .sess-row.sess-peer .sess-main { border-style: dashed; }
+.sess-halted { font-weight: 600; }

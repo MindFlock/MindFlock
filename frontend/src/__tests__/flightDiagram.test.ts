@@ -86,7 +86,7 @@ describe("a stop in one line", () => {
     expect(stopSummary(step("a", "ship", "", { lane: "push" }))).toBe("push");
     expect(stopSummary(step("a", "ship", "", { lane: "pr", ask_first: true }))).toBe("open pr · asks first");
     expect(stopSummary(step("a", "reviews", "", { quiet_minutes: 10 }))).toBe("10 min quiet");
-    expect(stopSummary(step("a", "verify", "", { who: "agent" }))).toBe("who: agent");
+    expect(stopSummary(step("a", "verify", "", { who: "agent" }))).toBe("by the agent");
     expect(stopSummary(step("a", "wait", "", { minutes: 5 }))).toBe("5 min");
     expect(stopSummary(step("a", "wait", "", { minutes: 5, until: "18:00" }))).toBe("until 18:00");
     expect(stopSummary(step("a", "you", "", { items: ["x", "y", "z"] }))).toBe("3 items to tick");

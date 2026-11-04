@@ -28,17 +28,28 @@ export function skyEmptyShows(o: { blank: boolean; waiting: number }): boolean {
 
 export const SKY_EMPTY_TITLE = "Nothing in the Sky yet";
 
-export function SkyEmpty({ blank, className, children }: { blank: boolean; className: string; children?: ReactNode }) {
+/** `newSession`: there is no session at all (round 21) — when the plain line
+ * shows instead of the card (something is waiting in Intake), it still
+ * carries the New session button, so no empty view is a dead end. */
+export function SkyEmpty({ blank, className, children, newSession = false }: { blank: boolean; className: string; children?: ReactNode; newSession?: boolean }) {
   // fetch=false: the Intake lane (or App's warm-up) already reads the panels.
   const { waiting } = useWaiting(false);
+  const open = (d: "new-session" | "intake") => useUi.getState().openDialogFor(d);
   if (!skyEmptyShows({ blank, waiting: waiting.length })) {
-    return children ? (
+    if (!children) return null;
+    return newSession ? (
+      <div className={className + " sky-empty-plain"} role="status" data-no-drag="">
+        <p>{children}</p>
+        <button type="button" className="btn-primary sky-empty-new" onClick={() => open("new-session")}>
+          New session
+        </button>
+      </div>
+    ) : (
       <p className={className} role="status">
         {children}
       </p>
-    ) : null;
+    );
   }
-  const open = (d: "new-session" | "intake") => useUi.getState().openDialogFor(d);
   return (
     <div className="sky-empty-card" data-no-drag="" role="status" data-tour="sky-empty">
       <h2>{SKY_EMPTY_TITLE}</h2>

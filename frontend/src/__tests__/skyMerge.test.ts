@@ -59,7 +59,7 @@ describe("the sky wires it", () => {
 
   it("no flight on the session: attach; a flight: tack on as one group named after the line, then the grounded flight goes", () => {
     // Round 19: wired onto a session it waits there, ready (start_on "prompt").
-    expect(sky).toContain('if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: "prompt" }));');
+    expect(sky).toContain('if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: NEW_ROUTE_STARTS_ON }));');
     // Round 18: at a spot (a wire dropped after a tile), the stops' own spots
     // left behind (they were their chain's), onto a stops-only chain too.
     expect(sky).toContain("else if (await tackOnSteps(live.id, bare, at !== undefined && at < live.steps.length ? at : undefined, name || undefined)) ok = await deleteFlight(f.id);");

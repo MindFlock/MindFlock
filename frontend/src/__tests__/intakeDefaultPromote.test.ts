@@ -54,15 +54,15 @@ describe("the words", () => {
 
   it("label, tooltip and toast", () => {
     const w = L.promoteWords(src("tickets", "Tickets · Shortcut"));
-    expect(w.label).toBe("Use these stops for every ticket from Shortcut");
+    expect(w.label).toBe("Use this route for every ticket from Shortcut");
     expect(w.done).toBe("New tickets from Shortcut run this route");
     // It changes what NEW items fly; this one keeps running as it is.
     expect(w.title).toContain("NEW tickets from Shortcut");
     expect(w.title).toContain("This ticket keeps running as it is");
     const p = L.promoteWords(src("prs", "PRs · o/r"));
-    expect(p.label).toBe("Use these stops for every PR from o/r");
+    expect(p.label).toBe("Use this route for every PR from o/r");
     expect(p.done).toBe("New PRs from o/r run this route");
-    expect(L.promoteWords(src("issues", "Issues · a/b")).label).toBe("Use these stops for every issue from a/b");
+    expect(L.promoteWords(src("issues", "Issues · a/b")).label).toBe("Use this route for every issue from a/b");
   });
 });
 

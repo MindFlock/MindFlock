@@ -16,8 +16,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useUi } from "../state/store";
-import { useDoctor, useFlights, useTestPlans } from "../state/queries";
-import { perchBadge } from "../lib/flights";
+import { useDoctor, useTestPlans } from "../state/queries";
+import { needsYouBadge, useNeedsYou } from "../lib/needsYou";
 import { Bird } from "./flights/Bird";
 import { GridGlyph } from "./ViewGlyphs";
 import { rethemeAll } from "../lib/terminals";
@@ -109,9 +109,10 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // The Sky toggle's badge: the chains that need you (lib/flights perchBadge) —
-  // the sky is where they are drawn and its drawer lists them.
-  const perch = perchBadge(useFlights().data || []);
+  // The Sky toggle's badge: everything that needs you — THE one list
+  // (lib/needsYou), the bell's badge and the Sky's Needs you strip count the
+  // same rows; red while a route is halted.
+  const perch = needsYouBadge(useNeedsYou());
   // The calm first hour (lib/calm.ts topBarQuiet): Schedule is always on the
   // bar; while empty it is only drawn quiet until its first scheduled template.
   const quiet = topBarQuiet({

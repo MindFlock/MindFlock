@@ -24339,9 +24339,6 @@ function stepActor(step, kinds) {
 	if (def) return def.actor;
 	return step.kind === "you" ? "you" : "robot";
 }
-function needsYouFlights(flights) {
-	return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
-}
 function currentElapsed(f, now = Date.now()) {
 	const cur = f.steps[f.cursor];
 	const since = cur ? Number(f.step_states?.[cur.id]?.since) || 0 : 0;
@@ -24377,13 +24374,6 @@ function youItems(step) {
 function youText(f) {
 	const cur = f.steps[f.cursor];
 	return String(cur?.config?.text ?? "").trim() || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
-}
-function perchBadge(flights) {
-	const perched = needsYouFlights(flights);
-	return {
-		count: perched.length,
-		failing: perched.some((f) => f.state === "halted")
-	};
 }
 var WAITING_KIND_HEAD = {
 	tickets: "Tickets",
@@ -25222,6 +25212,7 @@ var STATE_LABEL = {
 var REASON_LABEL = {
 	question: "Question",
 	flight_you: "Wait for me",
+	flight_halted: "Halted",
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
 	setup_failed: "Setup failed",
@@ -25230,6 +25221,7 @@ var REASON_LABEL = {
 var NOTIFY_RULE = {
 	question: "needs_input",
 	flight_you: "flight_needs_you",
+	flight_halted: "flight_finished",
 	precommit_failed: "precommit_failed",
 	setup_failed: "setup_failed",
 	checks_failing: "checks_failing",
@@ -25278,6 +25270,26 @@ function needsYou(reason, hint) {
 }
 function flightYouLabel(stepTitle) {
 	return perchLabel(stepTitle);
+}
+function haltedWhy(stopTitle, reason) {
+	const r = String(reason || "").trim();
+	const t = String(stopTitle || "").trim();
+	if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
+		const rest = r.slice(t.length).trim();
+		return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
+	}
+	return r;
+}
+function haltedHint(fl) {
+	const at = String(fl.step?.title || "").trim();
+	const why = haltedWhy(at, fl.reason);
+	return "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") + "\nRoute “" + (fl.plan_name || "") + "” waits for Retry or Skip on its strip, the Sky or the bell";
+}
+function haltedState(fl) {
+	return {
+		...needsYou("flight_halted", haltedHint(fl)),
+		tone: "broken"
+	};
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
 var SLEEPING_LABEL = "Sleeping";
@@ -25349,6 +25361,7 @@ function deriveSessionState(inst, extras) {
 		...needsYou("flight_you", flightYouLabel(fl.step.title) + " — route “" + fl.plan_name + "” needs you; press Done on its strip, the Sky or the bell"),
 		label: flightYouLabel(fl.step.title)
 	};
+	if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
 	const bgHint = backgroundHint(inst);
 	if (act === "working") return {
 		state: "working",
@@ -25426,6 +25439,10 @@ function needsYouAction(ss, prUrl) {
 		case "flight_you": return {
 			act: "bell",
 			aria: ss.label + " — press Done in the bell"
+		};
+		case "flight_halted": return {
+			act: "bell",
+			aria: "Halted — Retry or Skip in the bell"
 		};
 		case "precommit_failed": return {
 			act: "terminal",
@@ -27117,8 +27134,8 @@ function installVerifyRedirect() {
 //#endregion
 //#region src/state/store.ts
 var loadSkyMode = () => {
-	const m = load$1("mf_sky_view", "mine", false);
-	return m === "all" || m === "perched" ? m : "mine";
+	const m = load$1("mf_sky_view", "one", false);
+	return m === "all" || m === "mine" || m === "perched" ? m : "one";
 };
 var SIDEBAR_MIN_W = 260;
 var SIDEBAR_MAX_W = 560;
@@ -27246,7 +27263,7 @@ var useUi = create((set, get) => ({
 		if (v === "grid" && f && _selectSession) _selectSession(f, { noKeyboard: true });
 	},
 	setSkyMode: (m) => {
-		if (m !== "one") save("mf_sky_view", m, false);
+		save("mf_sky_view", m, false);
 		set({ skyMode: m });
 	},
 	showSky: (focus = "") => {
@@ -27258,7 +27275,7 @@ var useUi = create((set, get) => ({
 			if (_selectSession) _selectSession(focus, { noKeyboard: true });
 			else get().setFocused(focus);
 			get().setSkyMode("one");
-		} else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
+		}
 		get().setView("sky");
 	},
 	showFlyways: (plan = "") => {
@@ -32047,9 +32064,16 @@ function placeAfter(title, after) {
 	const next = orderWithAfter(merged, title, after);
 	if (next !== merged) ui.setOrder(next);
 }
+function copyTitle(title, taken) {
+	const m = /^(.+)-(\d+)$/.exec(title);
+	const base = m && taken.has(m[1]) ? m[1] : title;
+	let i = 2;
+	while (taken.has(base + "-" + i)) i++;
+	return base + "-" + i;
+}
 async function copySession(title) {
 	if (!title) return;
-	const guess = addPendingSession(title + "-copy");
+	const guess = addPendingSession(copyTitle(title, new Set(instances$2().map((i) => i.title))));
 	placeAfter(guess, title);
 	try {
 		const inst = await instApi(title, "/copy", { method: "POST" });
@@ -33494,7 +33518,7 @@ function needsAttention(attn, waiting) {
 					attn: {
 						p: 0,
 						title: w.title,
-						reason: "Question",
+						reason: REASON_LABEL.question,
 						snippet: text,
 						question: text
 					}
@@ -33546,6 +33570,17 @@ function withPlanReady(rows, instances) {
 }
 //#endregion
 //#region src/lib/needsYou.ts
+var NEEDS_YOU_KINDS = [
+	"asking",
+	"approval",
+	"wait_for_me",
+	"halted",
+	"plan",
+	"broken",
+	"checks",
+	"behaviors",
+	"ready"
+];
 function withFlightYou(waiting, instances) {
 	const out = (waiting || []).slice();
 	const listed = new Set(out.filter((w) => w.kind === "flight_you").map((w) => w.title));
@@ -33567,10 +33602,145 @@ function withFlightYou(waiting, instances) {
 	}
 	return out;
 }
-function needsYouTitles(instances, waiting) {
+function flightRow(kind, title, f) {
+	const stepTitle = f.step?.title || "";
+	return {
+		key: "flight:" + f.id,
+		title,
+		kind,
+		reason: kind === "flight_you" ? perchedOnYou(stepTitle) : f.reason || "Halted" + (stepTitle ? " at " + stepTitle : ""),
+		text: f.plan_name,
+		actions: kind === "flight_you" ? [
+			"done",
+			"skip",
+			"open"
+		] : [
+			"retry",
+			"skip",
+			"open"
+		],
+		flight: {
+			id: f.id,
+			step_id: f.step?.id || "",
+			step_title: stepTitle
+		}
+	};
+}
+function withFlightRows(waiting, instances, flights) {
+	const out = withFlightYou(waiting, instances);
+	const live = new Set(instances.map((i) => i.title));
+	const hasFlight = new Set(out.filter((w) => w.kind === "flight_you" || w.kind === "flight_halted").map((w) => w.title));
+	const keys = new Set(out.map((w) => w.key));
+	const full = new Map((flights || []).map((f) => [f.id, f]));
+	const add = (w) => {
+		if (keys.has(w.key) || w.title && hasFlight.has(w.title)) return;
+		keys.add(w.key);
+		if (w.title) hasFlight.add(w.title);
+		out.push(w);
+	};
+	for (const inst of instances) {
+		const fl = inst.flight;
+		if (!fl || !fl.id) continue;
+		const f = full.get(fl.id);
+		if (fl.state === "waiting_you") add(flightRow("flight_you", inst.title, {
+			...fl,
+			reason: f?.reason
+		}));
+		else if (fl.state === "halted") add(flightRow("flight_halted", inst.title, {
+			...fl,
+			reason: f?.reason
+		}));
+	}
+	for (const f of flights || []) {
+		if (f.state !== "waiting_you" && f.state !== "halted") continue;
+		const step = f.steps[f.cursor];
+		add(flightRow(f.state === "halted" ? "flight_halted" : "flight_you", f.session && live.has(f.session) ? f.session : "", {
+			id: f.id,
+			plan_name: f.plan_name,
+			reason: f.reason,
+			step: step ? {
+				id: step.id,
+				title: step.title
+			} : null
+		}));
+	}
+	return out;
+}
+function kindOf$1(r, byTitle) {
+	if (r.plan) return "plan";
+	if (r.waiting) {
+		if (r.waiting.kind === "flight_you") return "wait_for_me";
+		if (r.waiting.kind === "flight_halted") return "halted";
+		return "approval";
+	}
+	const p = r.attn?.p ?? 1;
+	if (p === 0) return "asking";
+	if (p === 2) return "checks";
+	if (p >= 3) return "ready";
+	return rowWaitsOnYou(byTitle.get(r.title)?.flight) ? "wait_for_me" : "broken";
+}
+var ORDER = new Map(NEEDS_YOU_KINDS.map((k, i) => [k, i]));
+function needsYouRows(src) {
+	const instances = src.instances || [];
+	const byTitle = new Map(instances.map((i) => [i.title, i]));
+	const fullById = new Map((src.flights || []).map((f) => [f.id, f]));
+	const rows = withPlanReady(needsAttention(attentionItems(instances), withFlightRows(src.waiting, instances, src.flights)), instances).map((r) => {
+		const kind = kindOf$1(r, byTitle);
+		const fid = kind === "wait_for_me" || kind === "halted" ? r.waiting?.flight?.id || byTitle.get(r.title)?.flight?.id : void 0;
+		const flight = fid ? fullById.get(fid) : void 0;
+		return flight ? {
+			...r,
+			kind,
+			flight
+		} : {
+			...r,
+			kind
+		};
+	});
+	for (const p of src.testPlans || []) {
+		if (!isFailing(p) && !isWaitingOnYou(p)) continue;
+		rows.push({
+			key: "behaviors:" + p.id,
+			title: "",
+			rank: 3,
+			kind: "behaviors",
+			behaviors: p
+		});
+	}
+	return rows.map((r, i) => [r, i]).sort((a, b) => ORDER.get(a[0].kind) - ORDER.get(b[0].kind) || a[1] - b[1]).map(([r]) => r);
+}
+function needsYouBadge(rows) {
+	return {
+		count: rows.length,
+		failing: rows.some((r) => r.kind === "halted")
+	};
+}
+function useNeedsYou() {
+	const { data: instances } = useInstances();
+	const { data: outbox } = useOutbox();
+	const { data: flights } = useFlights();
+	const { data: plans } = useTestPlans();
+	return (0, import_react.useMemo)(() => needsYouRows({
+		instances: instances || [],
+		waiting: outbox?.groups?.waiting,
+		flights,
+		testPlans: plans?.plans
+	}), [
+		instances,
+		outbox,
+		flights,
+		plans
+	]);
+}
+function needsYouTitles(instances, waiting, flights, testPlans) {
 	const live = new Set(instances.map((i) => i.title));
 	const out = [];
-	for (const r of needsAttention(attentionItems(instances), withFlightYou(waiting, instances))) if (r.title && live.has(r.title) && !out.includes(r.title)) out.push(r.title);
+	for (const r of needsYouRows({
+		instances,
+		waiting,
+		flights,
+		testPlans
+	})) if (r.title && live.has(r.title) && !out.includes(r.title)) out.push(r.title);
 	return out;
 }
 function nextNeedsYou(order, current) {
@@ -33578,7 +33748,11 @@ function nextNeedsYou(order, current) {
 	return order[((current ? order.indexOf(current) : -1) + 1) % order.length];
 }
 function needsYouNow() {
-	return needsYouTitles(queryClient.getQueryData(["instances"]) || [], queryClient.getQueryData(["outbox"])?.groups?.waiting);
+	const rows = queryClient.getQueryData(["instances"]) || [];
+	const outbox = queryClient.getQueryData(["outbox"]);
+	const flights = queryClient.getQueryData(["flights"]);
+	const plans = queryClient.getQueryData(["test-plans"]);
+	return needsYouTitles(rows, outbox?.groups?.waiting, flights, plans?.plans);
 }
 function jumpToNeedsYou(current) {
 	const order = needsYouNow();
@@ -37464,6 +37638,7 @@ function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen, childr
 	const d = state.dialog;
 	if (!d) return null;
 	const q = questionText(d, variant);
+	if (!q && !d.command && !(d.parsed && d.options.length) && !state.note && !hint && !children) return null;
 	const busy = state.phase === "sending" || state.phase === "answered";
 	const prim = primaryIndex(d.options);
 	const shown = state.phase === "answered" ? d.options.filter((o) => o.key === state.picked) : d.options;
@@ -38273,6 +38448,11 @@ function WaitingRow$1({ w, row, shown, group, runInfo }) {
 		row,
 		shown
 	});
+	if (w.kind === "flight_halted") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightHaltedRow, {
+		w,
+		row,
+		shown
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind),
 		"data-outbox-row": w.title,
@@ -38544,9 +38724,26 @@ function ApprovePreview({ w, row }) {
 		})
 	});
 }
+function flightOf(w, row) {
+	const own = w.flight;
+	const fl = row?.flight;
+	if (fl && fl.id && (!own || own.id === fl.id)) return {
+		id: fl.id,
+		step: fl.step
+	};
+	if (own && own.id && own.step_id) return {
+		id: own.id,
+		step: {
+			id: own.step_id,
+			kind: "",
+			title: own.step_title
+		}
+	};
+	return null;
+}
 function FlightYouRow({ w, row, shown }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	const fl = row?.flight;
+	const fl = flightOf(w, row);
 	const run = async (fn) => {
 		setBusy(true);
 		try {
@@ -38560,9 +38757,9 @@ function FlightYouRow({ w, row, shown }) {
 		"data-outbox-row": w.title,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
-				title: w.title,
-				text: w.text,
-				shown,
+				title: w.title || w.text || "",
+				text: w.title ? w.text : "",
+				shown: w.title ? shown : (t) => t,
 				row
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -38570,7 +38767,7 @@ function FlightYouRow({ w, row, shown }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "pr-open-chip warn",
 					title: w.reason || void 0,
-					children: perchedOnYou(fl?.step?.title || w.flight?.step_title || "")
+					children: perchedOnYou(fl?.step?.title || "")
 				})
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -38595,6 +38792,71 @@ function FlightYouRow({ w, row, shown }) {
 						className: "test-btn",
 						disabled: busy,
 						title: "Skip “" + fl.step.title + "” — the route goes on without it",
+						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
+						children: "Skip"
+					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => openSession(w.title),
+						children: "Open ↗"
+					})]
+				})
+			})
+		]
+	});
+}
+function FlightHaltedRow({ w, row, shown }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const fl = flightOf(w, row);
+	const run = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	const at = fl?.step?.title || "";
+	const chip = "Halted" + (at ? " at " + at : "");
+	const why = haltedWhy(at, w.reason);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-flight_halted",
+		"data-outbox-row": w.title || w.key,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: w.title || w.text || "",
+				text: w.title ? w.text : "",
+				shown: w.title ? shown : (t) => t,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-open-meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-chip bad",
+					title: w.reason || void 0,
+					children: chip
+				})
+			}),
+			!!why && why !== chip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ob-halt-reason",
+				children: why
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ob-acts",
+					children: [fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary pr-review-btn",
+						disabled: busy,
+						title: "Run “" + (at || "this stop") + "” again",
+						onClick: () => void run(() => stepRetry(fl.id, fl.step.id)),
+						children: "Retry"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
 						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
 						children: "Skip"
 					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -39755,7 +40017,6 @@ function rowKey$1(e) {
 }
 function NotificationsBell() {
 	const { data: instances = [] } = useInstances();
-	const { data: outbox } = useOutbox();
 	const { data: runs } = useRuns();
 	const [notifs, setNotifs] = (0, import_react.useState)([]);
 	const [open, setOpen] = (0, import_react.useState)(false);
@@ -39813,7 +40074,7 @@ function NotificationsBell() {
 	}, [open]);
 	const families = (0, import_react.useMemo)(() => childrenByParent(instances), [instances]);
 	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
-	const attn = withPlanReady(needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances)), instances);
+	const attn = useNeedsYou();
 	const familyOf = (title) => {
 		const inst = byTitle.get(title);
 		if (!inst || inst.device) return null;
@@ -39948,6 +40209,32 @@ function NotificationsBell() {
 									runInfo: runId ? runs?.find((r) => r.id === runId) : void 0
 								})
 							}, "w:" + it.key);
+						}
+						if (it.behaviors) {
+							const plan = it.behaviors;
+							const failing = isFailing(plan);
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "attn-item p2" + (flashing ? " flash" : ""),
+								"data-needs": it.key,
+								role: "button",
+								tabIndex: 0,
+								onKeyDown: rowKey$1,
+								onClick: () => {
+									setOpen(false);
+									openBehaviors({ planId: plan.id });
+								},
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+										className: "attn-title",
+										children: ["Behaviors · ", plan.title || plan.id]
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "attn-reason",
+										children: failing ? "Failed" : "Needs you"
+									})
+								]
+							}, it.key);
 						}
 						if (it.plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "attn-item p1" + (flashing ? " flash" : ""),
@@ -49635,6 +49922,15 @@ function splitEntries(entries) {
 function knownAction(f, known) {
 	return f.action && known(f.action.run) ? f.action : void 0;
 }
+var WHATS_NEW_DECIDE_MS = 8e3;
+function popupTurn(q) {
+	if (q.whatsNew === "shown") return "whats-new";
+	if (q.askOpen) return "ask";
+	if (q.otherOpen) return null;
+	if (q.whatsNew === "due") return "whats-new";
+	if (q.whatsNew === "deciding" && q.sinceLoadMs < WHATS_NEW_DECIDE_MS) return null;
+	return q.askWaiting ? "ask" : null;
+}
 //#endregion
 //#region src/whatsNew/releases.ts
 var RELEASES = [{
@@ -49645,7 +49941,7 @@ var RELEASES = [{
 	features: [
 		{
 			title: "The Sky",
-			body: "A second view beside the Grid: every session's route drawn as a row of stops, with a bird on the stop where the work is now. What needs you stands out, so you can see the whole fleet at a glance. Ctrl+Y switches.",
+			body: "A second view beside the Grid: a session's route drawn as a row of stops, with a bird on the stop where the work is now. It opens on This session; All shows every route at once, and Needs you lists what is waiting on you. Ctrl+Y switches between the Grid and the Sky.",
 			action: {
 				label: "Show me",
 				run: "sky-tour"
@@ -49653,7 +49949,7 @@ var RELEASES = [{
 		},
 		{
 			title: "Saved routes",
-			body: "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf. Run it on a session, on its own, from a ticket or on a schedule.",
+			body: "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf as a saved route. Run it on a session, on its own in a folder, from an Intake source or on a schedule.",
 			action: {
 				label: "Show me",
 				run: "saved-routes"
@@ -49661,7 +49957,7 @@ var RELEASES = [{
 		},
 		{
 			title: "Behaviors on the route",
-			body: "What the work should do in real use now lives on the session's route, each behavior checked by the agent or by you. Verify is a stop on the route instead of a separate dialog.",
+			body: "What the work should do in real use is a list of behaviors, each checked by the agent or by you. Verify is now a stop on the session's route, and you answer them on its card there instead of in a separate dialog.",
 			action: {
 				label: "Show me",
 				run: "behaviors"
@@ -49669,19 +49965,19 @@ var RELEASES = [{
 		},
 		{
 			title: "Halt",
-			body: "A stop that fails halts the route and waits for you to Retry, Skip or Continue, so nothing ships past a failure. You can also set Halt here on any stop."
+			body: "A stop that fails halts the route, so nothing ships past a failure: Retry it, Skip it, or Let the agent fix it, right on the stop. Halt here on a stop ahead makes the route halt before it until you press Carry on."
 		},
 		{
-			title: "Loops and stops side by side",
-			body: "A route can loop back to the agent until the work is right, and stops can run side by side. Workers a session starts show up as their own rows, each with its own bird.",
+			title: "Loops, side-by-side stops and workers",
+			body: "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why (\"fixing 1/2\"). Stops can run side by side, and workers the session starts show up inside its route, as small outlines under its agent.",
 			action: {
 				label: "Show me",
 				run: "sky-guide"
 			}
 		},
 		{
-			title: "GitHub Copilot CLI",
-			body: "Copilot is now one of the agents MindFlock can run in a session, alongside Claude, Codex and the others.",
+			title: "Any agent, GitHub Copilot too",
+			body: "GitHub Copilot is now one of the agents a session can run, alongside Claude, Codex and the others. Setup's first step asks which agent you use, then installs and signs in to that one.",
 			action: {
 				label: "Choose agents",
 				run: "agents"
@@ -50807,9 +51103,13 @@ var useWhatsNew = create((set) => ({
 	shown: null,
 	running: "",
 	seen: null,
+	auto: "deciding",
 	open: (entries) => set({ shown: entries }),
 	close: () => set({ shown: null })
 }));
+function whatsNewStage(s) {
+	return s.shown && s.shown.length ? "shown" : s.auto;
+}
 //#endregion
 //#region src/components/whatsNew/WhatsNew.tsx
 function openWhatsNew() {
@@ -50825,13 +51125,15 @@ function closeWhatsNew() {
 		saveSeen(seen);
 		useWhatsNew.setState({ seen });
 	}
+	useWhatsNew.setState({ auto: "done" });
 	s.close();
 }
 function useAutoWhatsNew() {
 	const rawVersion = useDoctor().data?.version;
 	const { data: config } = useConfig();
 	const welcomeSeen = useUi((s) => s.welcomeTourSeen);
-	const busy = useUi((s) => s.tourOpen || !!s.coachTour || !!s.openDialog);
+	const touring = useUi((s) => s.tourOpen || !!s.coachTour);
+	const dialog = useUi((s) => s.openDialog);
 	const onboarded = welcomeSeen || config?.onboarded === true;
 	const running = isReleaseVersion(rawVersion) ? rawVersion.trim() : "";
 	const [pulled, setPulled] = (0, import_react.useState)(false);
@@ -50848,6 +51150,9 @@ function useAutoWhatsNew() {
 		if (running) useWhatsNew.setState({ running });
 	}, [running]);
 	(0, import_react.useEffect)(() => {
+		if (rawVersion !== void 0 && !running && !decided.current) useWhatsNew.setState({ auto: "done" });
+	}, [rawVersion, running]);
+	(0, import_react.useEffect)(() => {
 		if (decided.current || !pulled || !running || !config) return;
 		let live = true;
 		loadSeen().then((seen) => {
@@ -50862,15 +51167,20 @@ function useAutoWhatsNew() {
 			if (plan.markSeen) {
 				decided.current = true;
 				saveSeen(plan.markSeen);
-				useWhatsNew.setState({ seen: plan.markSeen });
+				useWhatsNew.setState({
+					seen: plan.markSeen,
+					auto: "done"
+				});
 				return;
 			}
 			if (!plan.pop) {
 				decided.current = true;
+				useWhatsNew.setState({ auto: "done" });
 				return;
 			}
 			if (!onboarded) return;
 			decided.current = true;
+			useWhatsNew.setState({ auto: "due" });
 			setPending(plan.entries);
 		});
 		return () => {
@@ -50883,10 +51193,26 @@ function useAutoWhatsNew() {
 		onboarded
 	]);
 	(0, import_react.useEffect)(() => {
-		if (!pending || busy || useWhatsNew.getState().shown) return;
-		useWhatsNew.getState().open(pending);
+		const st = useWhatsNew.getState();
+		if (!pending || st.shown || st.auto !== "due") {
+			if (pending && st.auto !== "due") setPending(null);
+			return;
+		}
+		if (popupTurn({
+			whatsNew: "due",
+			askOpen: dialog === "ask",
+			askWaiting: false,
+			otherOpen: touring || !!dialog && dialog !== "ask",
+			sinceLoadMs: 0
+		}) !== "whats-new") return;
+		st.open(pending);
+		useWhatsNew.setState({ auto: "done" });
 		setPending(null);
-	}, [pending, busy]);
+	}, [
+		pending,
+		touring,
+		dialog
+	]);
 }
 function FeatureRow({ f }) {
 	const action = knownAction(f, isKnownAction);
@@ -51018,7 +51344,7 @@ function TopBar() {
 	useTestPlans();
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
-	const perch = perchBadge(useFlights().data || []);
+	const perch = needsYouBadge(useNeedsYou());
 	const quiet = topBarQuiet({
 		calm: useCalm(),
 		templates: sched.templates.length
@@ -59635,7 +59961,7 @@ var VIEW_MODES = [
 ];
 function ViewRow({ calm }) {
 	const ui = useUi();
-	const perch = perchBadge(useFlights().data || []);
+	const perch = needsYouBadge(useNeedsYou());
 	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
 	const k = usableShortcuts("view");
 	const keys = k.length ? " (" + k.join(" / ") + ")" : "";
@@ -83866,6 +84192,11 @@ var num = (v, d) => {
 	const n = Number(v);
 	return Number.isFinite(n) && v !== "" && v !== null && v !== void 0 ? n : d;
 };
+var VERIFY_WHO = {
+	both: "by the agent and you",
+	agent: "by the agent",
+	you: "by you"
+};
 function stopSummary(step) {
 	const c = step.config || {};
 	switch (step.kind) {
@@ -83877,7 +84208,8 @@ function stopSummary(step) {
 			const lane = normalizeLane(String(c.lane ?? "push")) || "push";
 			return (lane === "leave" ? "off" : LANE_LABEL[lane].toLowerCase()) + (c.ask_first ? " · asks first" : "");
 		}
-		case "verify": return "who: " + String(c.who || "both") + (c.wait_live ? " · once live" : "");
+		case "verify": return (VERIFY_WHO[String(c.who || "both")] || VERIFY_WHO.both) + (c.wait_live ? " · once live" : "");
+		case "land": return "once merged: " + (String(c.close || "delete") === "close" ? "closes" : "deletes") + " the session" + (c.delete_branch === false ? " · keeps the branch" : "");
 		case "you": {
 			const items = youItems(step);
 			if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
@@ -83919,8 +84251,12 @@ function stopSummary(step) {
 			return parts.filter(Boolean).join(" · ");
 		}
 		case "join": return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
-		default: return step.kind;
+		default: return "";
 	}
+}
+function stopSub(title, sub) {
+	const norm = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+	return sub && norm(sub) !== norm(title) ? sub : "";
 }
 function durationWord(seconds) {
 	const n = Math.round(Math.max(0, seconds));
@@ -84254,7 +84590,7 @@ function flywayDiagram(steps, kinds) {
 		kind: "stop",
 		row: "main",
 		title: stopTitle(s, kinds),
-		sub: stopSummary(s),
+		sub: stopSub(stopTitle(s, kinds), stopSummary(s)),
 		state: "edit",
 		icon: s.kind,
 		perch: stepActor(s, kinds) === "you",
@@ -84308,7 +84644,7 @@ function flightStops(f, kinds) {
 			kind: "stop",
 			row: "main",
 			title: stopTitle(s, kinds),
-			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSummary(s),
+			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), stopSummary(s)),
 			state,
 			icon: s.kind,
 			perch: stepActor(s, kinds) === "you",
@@ -84798,6 +85134,16 @@ function collapseGroups(d, expanded) {
 		out = foldRun(out, run, groupNode(id, g, run));
 	}
 	return out;
+}
+var HALT_POINT_REASON = "halt point";
+function atHaltPoint(flight) {
+	if (!flight) return false;
+	const step = flight.steps[flight.cursor];
+	if (!step) return false;
+	if (flight.state === "paused") return flight.reason === HALT_POINT_REASON;
+	if (flight.state !== "halted" || !step.halt) return false;
+	const ss = flight.step_states?.[step.id];
+	return ss?.state !== "failed" && !ss?.detail?.failed_reason;
 }
 function nodeAtIndex(d, index) {
 	return d.nodes.find((n) => n.row === "main" && n.index !== void 0 && (n.kind === "stop" ? n.index === index : n.kind === "group" && index >= n.index && index < n.index + (n.group?.total || 1)));
@@ -85927,6 +86273,31 @@ function firstFit(b, vw, vh, maxZ = 1, pad = FIT_PAD) {
 		y: pad - b.y * z
 	};
 }
+var ROUTE_FIT_PAD = 48;
+var ROUTE_FIT_MIN = .6;
+var ROUTE_FIT_MAX = 1.5;
+function fitRoute(b, vw, vh) {
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	const pad = ROUTE_FIT_PAD;
+	const want = Math.min((vw - 96) / b.w, (vh - 96) / b.h);
+	const z = Math.min(ROUTE_FIT_MAX, Math.max(ROUTE_FIT_MIN, Number.isFinite(want) ? want : 1));
+	return {
+		x: b.w * z + 96 <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
+		y: b.h * z + 96 <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
+		z
+	};
+}
+function screenBoxCovers(box, rects, c) {
+	return rects.some((r) => {
+		const sx = c.x + r.x * c.z;
+		const sy = c.y + r.y * c.z;
+		return sx < box.x + box.w && sx + r.w * c.z > box.x && sy < box.y + box.h && sy + r.h * c.z > box.y;
+	});
+}
 function centerOn(r, vw, vh, z) {
 	const nz = clampZoom(z);
 	return {
@@ -86188,6 +86559,11 @@ function estimateLine(base, stored) {
 }
 var SKY_MODES = [
 	{
+		id: "one",
+		label: "This session",
+		title: "The session you're on: its route, filling the sky"
+	},
+	{
 		id: "all",
 		label: "All",
 		title: "Every session — a worker inside its lead's route"
@@ -86201,11 +86577,6 @@ var SKY_MODES = [
 		id: "perched",
 		label: "Needs you",
 		title: "Only the routes that need you"
-	},
-	{
-		id: "one",
-		label: "This session",
-		title: "One route, filling the sky"
 	}
 ];
 var inSky = (r) => !r.hidden_by;
@@ -86231,6 +86602,22 @@ function skyLineTitles(rows, mode, opts = {}) {
 		return out;
 	};
 	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
+}
+function pickThisSession(rows, o = {}) {
+	const shown = rows.filter(inSky);
+	if (!shown.length) return "";
+	const has = new Set(shown.map((r) => r.title));
+	const firstOf = (ts) => (ts || []).find((t) => has.has(t)) || "";
+	const needs = firstOf(o.needsYou) || shown.find(linePerched)?.title;
+	if (needs) return needs;
+	const mru = o.mru || [];
+	const recency = (r) => {
+		const at = mru.indexOf(r.title);
+		return at < 0 ? mru.length : at;
+	};
+	const working = shown.filter((r) => deriveSessionState(r).state === "working").sort((a, b) => recency(a) - recency(b) || (Number(b.activity_since) || 0) - (Number(a.activity_since) || 0));
+	if (working.length) return working[0].title;
+	return firstOf(mru) || firstOf(o.railOrder) || shown[shown.length - 1].title;
 }
 function withLiveFlights(rows, flights, kinds) {
 	if (!flights?.length) return rows;
@@ -86538,10 +86925,10 @@ function boxItems(n, ctx) {
 			label: "Retry",
 			title: "Run this stop again"
 		});
-		if (n.state === "halted" && verify) items.push({
+		if (n.state === "halted") items.push({
 			key: "fix",
 			label: "Let the agent fix it",
-			title: "Hand the failure to the agent — the behaviors are checked again after its fix"
+			title: verify ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — this stop runs again after its fix"
 		});
 		items.push({
 			key: "skip",
@@ -88029,12 +88416,30 @@ function VerifyStopActions({ flight, compact = false }) {
 		})
 	});
 }
-function YouStepActions({ flight, compact = false }) {
+function canFixStep(flight) {
+	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you") return false;
+	const step = flight.steps[flight.cursor];
+	const ss = step ? flight.step_states?.[step.id] : void 0;
+	if (!ss) return false;
+	if (ss.state === "failed") return !ss.detail?.moved_on;
+	return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
+}
+function nextIsHaltPoint(flight) {
+	for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
+		const s = flight.steps[k];
+		const ss = flight.step_states?.[s.id];
+		if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
+		return !!s.halt && !ss?.detail?.halt_hit;
+	}
+	return false;
+}
+function YouStepActions({ flight, compact = false, inTile = false }) {
 	const step = flight.steps[flight.cursor];
 	const items = youItems(step);
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
-	if (!step || flight.state !== "waiting_you" && flight.state !== "halted") return null;
+	const haltPoint = atHaltPoint(flight);
+	if (!step || flight.state !== "waiting_you" && flight.state !== "halted" && !haltPoint) return null;
 	if (step.kind === "verify" && flight.state === "waiting_you") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopActions, {
 		flight,
 		compact
@@ -88049,14 +88454,15 @@ function YouStepActions({ flight, compact = false }) {
 	};
 	const key = (i) => flight.id + ":" + step.id + ":" + i;
 	const allTicked = items.every((_, i) => ticked[key(i)]);
-	const halted = flight.state === "halted";
+	const halted = flight.state === "halted" || haltPoint;
+	const fix = !haltPoint && canFixStep(flight);
 	const text = youText(flight);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-you" + (compact ? " fl-you-compact" : ""),
+		className: "fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : ""),
 		onClick: stop,
 		"data-no-drag": true,
 		children: [
-			!compact && text && !halted && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			!compact && !inTile && text && !halted && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-you-text",
 				children: text
 			}),
@@ -88077,7 +88483,14 @@ function YouStepActions({ flight, compact = false }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-you-acts",
 				children: [
-					halted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					haltPoint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary fl-btn fl-carry",
+						disabled: busy,
+						title: "Carry on past the halt point — “" + step.title + "” runs, and the route goes on",
+						onClick: () => void run(() => controlFlight(flight.id, "resume")),
+						children: "Carry on"
+					}) : halted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary fl-btn",
 						disabled: busy,
@@ -88092,11 +88505,11 @@ function YouStepActions({ flight, compact = false }) {
 						onClick: () => void run(() => stepDone(flight.id, step.id)),
 						children: "Done"
 					}),
-					halted && step.kind === "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					fix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "test-btn fl-btn fl-fix",
 						disabled: busy,
-						title: "Hand the failure to the agent — the behaviors are checked again after its fix",
+						title: step.kind === "verify" ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix",
 						onClick: () => void run(() => stepFix(flight.id, step.id)),
 						children: "Let the agent fix it"
 					}),
@@ -88105,7 +88518,7 @@ function YouStepActions({ flight, compact = false }) {
 						className: "test-btn fl-btn fl-skip",
 						disabled: busy,
 						title: "Skip “" + step.title + "” — the route goes on without it",
-						onClick: () => void run(() => stepSkip(flight.id, step.id)),
+						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && haltPoint && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume")),
 						children: "Skip"
 					})
 				]
@@ -88163,7 +88576,7 @@ function stopMenuItems(flight, n, onCancelAsk) {
 		title: "Move the route to this stop",
 		onSelect: () => void jumpFlight(flight.id, step.id, step.title)
 	});
-	if (n.state === "halted" || n.state === "failed") items.push({
+	if ((n.state === "halted" || n.state === "failed") && !(atCursor && atHaltPoint(flight))) items.push({
 		key: "retry",
 		label: "Retry",
 		title: "Run this stop again",
@@ -88219,7 +88632,7 @@ function useCancelAsk(flight) {
 function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 	const cur = flight ? flight.steps[flight.cursor] : null;
 	const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
-	const expanded = (n) => !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted") && !(opts.verifyInPlace && verifyHere);
+	const expanded = (n) => !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted" || n.state === "paused" && atHaltPoint(flight)) && !(opts.verifyInPlace && verifyHere);
 	const renderInBox = (n) => {
 		if (!flight || n.kind !== "stop") return null;
 		const items = stopMenuItems(flight, n, onCancelAsk);
@@ -88231,7 +88644,10 @@ function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 				label: "Actions for " + n.title,
 				items
 			})
-		}), expanded(n) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, { flight })] });
+		}), expanded(n) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
+			flight,
+			inTile: opts.inTile
+		})] });
 	};
 	const sizeOf = (n, base) => {
 		if (!expanded(n)) return base;
@@ -88970,11 +89386,9 @@ var CHAIN_HUES = [
 	265,
 	200,
 	150,
-	30,
-	330,
+	310,
 	95,
-	180,
-	0
+	180
 ];
 function chainColor(session) {
 	if (!session || session === "new") return "var(--muted)";
@@ -89426,6 +89840,39 @@ function tileSub(n) {
 	if (n.receipt) return n.receipt;
 	return n.sub;
 }
+var HALT_POINT_LINE = "Your halt point";
+function stopWhy(n) {
+	if (n.state === "halted") {
+		const r = String(n.reason || "").trim();
+		const t = String(n.title || "").trim();
+		if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
+			const rest = r.slice(t.length).trim();
+			return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
+		}
+		return r;
+	}
+	if (n.state === "perched") return String(n.step?.config?.text ?? "").trim();
+	if (n.state === "paused" && n.step?.halt) return HALT_POINT_LINE;
+	return "";
+}
+var STOP_TILE_W = 156;
+function stopTileBoxes(d, flight) {
+	const out = {};
+	const haltPoint = !!flight?.steps && atHaltPoint(flight);
+	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you" && !haltPoint) return out;
+	for (const n of d.nodes) {
+		if (n.kind !== "stop" || n.index !== flight.cursor) continue;
+		if (n.state === "halted" || n.state === "paused" && haltPoint) out[n.id] = {
+			w: STOP_TILE_W,
+			h: NODE_H + 40
+		};
+		else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify") out[n.id] = {
+			w: STOP_TILE_W,
+			h: NODE_H + 24 + 21 * youItems(n.step).length
+		};
+	}
+	return out;
+}
 function tileLabel(n, head = false) {
 	if (head) return (n.title || "Agent") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
 	const word = STATE_WORD[n.state] ?? "";
@@ -89451,6 +89898,7 @@ function SkyChain(p) {
 	const activate = (n) => {
 		if (justDragged.current) return;
 		if (n.id !== HEAD_ID && n.node.behaviors) p.onOpen?.(n.node);
+		else if (n.id !== HEAD_ID && n.node.state === "halted" && n.node.kind === "stop" && p.onEdit) p.onEdit(n.node);
 		else if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
 		else p.onOpen?.(n.node);
 	};
@@ -89571,7 +90019,8 @@ function SkyChain(p) {
 		const halt = isHead ? null : haltMark(dn);
 		const bh = isHead ? void 0 : dn.behaviors;
 		const bhTile = !isHead && dn.kind === "behaviors";
-		const sub = isHead ? head.sub : bh ? bh.short : tileSub(dn);
+		const why = isHead || bh || sub_ ? "" : stopWhy(dn);
+		const sub = isHead ? head.sub : bh ? bh.short : why ? "" : tileSub(dn);
 		const cls = [
 			"sky-node",
 			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
@@ -89620,7 +90069,7 @@ function SkyChain(p) {
 			"data-diagram-node": dn.id,
 			"aria-label": said,
 			"aria-current": isSel(n) ? "true" : void 0,
-			title: isHead ? void 0 : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
+			title: isHead ? void 0 : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub ? dn.title + " — " + sub : dn.title,
 			style: {
 				transform: `translate(${n.x}px, ${n.y}px)`,
 				width: n.w,
@@ -89654,10 +90103,13 @@ function SkyChain(p) {
 				});
 			},
 			children: [
-				sub_ && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				sub_ && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-subframe-bar",
 					title: dn.title,
-					children: dn.title
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-sub-dot",
+						"aria-hidden": "true"
+					}), dn.title]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-tile",
@@ -89725,6 +90177,11 @@ function SkyChain(p) {
 				sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "sky-node-sub",
 					children: sub
+				}),
+				why && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-reason",
+					title: why,
+					children: why
 				}),
 				!isHead && dn.by === "agent" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-node-by",
@@ -89797,7 +90254,6 @@ function SkyChain(p) {
 			w.ret ? "sky-ret-" + w.ret.shown : ""
 		].filter(Boolean).join(" ");
 	};
-	const tinted = (w) => w.kind === "line" || w.kind === "head";
 	const b = g.bbox;
 	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
 	const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
@@ -89832,8 +90288,7 @@ function SkyChain(p) {
 						d: w.d,
 						"data-wire": w.kind,
 						"data-from": w.from,
-						"data-to": w.to,
-						style: tinted(w) ? { stroke: head.color } : void 0
+						"data-to": w.to
 					}, w.id)),
 					g.wires.map((w) => w.arrow ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
 						className: wireClass(w) + " sky-wire-arrow",
@@ -90109,13 +90564,21 @@ function useBehaviorsTile(title, row, opts = {}) {
 	const close = () => setMode(null);
 	const apply = (0, import_react.useCallback)((d) => withBehaviors(d, mark), [mark]);
 	const big = (0, import_react.useCallback)((d) => {
+		const stops = stopTileBoxes(d, opts.flight);
 		const host = mode && plan ? d.nodes.find((n) => !!n.behaviors) : void 0;
-		if (!host) return {};
-		return { [host.id]: mode === "ask" ? {
-			w: BH_ASK_W,
-			h: BH_ASK_H
-		} : behaviorsCardBox(plan) };
-	}, [mode, plan]);
+		if (!host) return stops;
+		return {
+			...stops,
+			[host.id]: mode === "ask" ? {
+				w: BH_ASK_W,
+				h: BH_ASK_H
+			} : behaviorsCardBox(plan)
+		};
+	}, [
+		mode,
+		plan,
+		opts.flight
+	]);
 	const onOpen = (n) => {
 		if (!n.behaviors || !plan) return false;
 		setMode((m) => m ? null : "card");
@@ -90287,6 +90750,18 @@ var HERE = /* @__PURE__ */ new Set([
 	"halted",
 	"paused"
 ]);
+function withFixItem(items, n) {
+	const out = [...items];
+	if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
+	const at = out.findIndex((i) => i.key === "retry");
+	if (at < 0) return out;
+	out.splice(at + 1, 0, {
+		key: "fix",
+		label: "Let the agent fix it",
+		title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix"
+	});
+	return out;
+}
 function useChainMenu(h, flightId, ctx) {
 	const [open, setOpen] = (0, import_react.useState)(null);
 	const onMenu = (n, at) => setOpen({
@@ -90300,7 +90775,7 @@ function useChainMenu(h, flightId, ctx) {
 	};
 	const n = open.n;
 	const live = !!flightId && (!!n.step || n.kind === "group");
-	const items = menuItemsFor(n, {
+	const items = withFixItem(menuItemsFor(n, {
 		can: {
 			edit: !!(h.onEdit || h.onSelect),
 			duplicate: !!h.onDuplicate,
@@ -90310,7 +90785,7 @@ function useChainMenu(h, flightId, ctx) {
 		},
 		live,
 		here: live && HERE.has(n.state)
-	});
+	}), n);
 	const st = n.step;
 	const steps = ctx?.steps || [];
 	const at = st ? steps.findIndex((x) => x.id === st.id) : -1;
@@ -93626,6 +94101,7 @@ function inspectorDef(def, step) {
 		fields: def.fields.filter((f) => f.name !== "count")
 	};
 }
+var NEW_ROUTE_STARTS_ON = "run";
 var orderedPlans = (plans) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
 var INTAKE_SUBJECTS = [
 	"ticket",
@@ -93648,15 +94124,15 @@ function intakeWords(kind) {
 	};
 }
 function intakeSourceName(src) {
-	const label = (src.label || "").trim();
+	const label = String(src.label ?? "").trim();
 	const m = /^(tickets|prs|pull requests|issues)\s*[·:—-]\s*(.+)$/i.exec(label);
-	return (m ? m[2].trim() : label) || src.target;
+	return (m ? m[2].trim() : label) || String(src.target ?? "").trim();
 }
 function promoteWords(src) {
 	const w = intakeWords(src.kind);
 	const name = intakeSourceName(src);
 	return {
-		label: "Use these stops for every " + w.one + " from " + name,
+		label: "Use this route for every " + w.one + " from " + name,
 		title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this route's stops. This " + w.one + " keeps running as it is.",
 		done: "New " + w.many + " from " + name + " run this route"
 	};
@@ -93687,7 +94163,7 @@ function usePromoteStops(flight) {
 		staleTime: Infinity
 	});
 	const src = intake ? q.data : null;
-	if (!src) return null;
+	if (!src || !intakeSourceName(src)) return null;
 	const words = promoteWords(src);
 	return {
 		label: words.label,
@@ -93841,7 +94317,10 @@ function useSessionLine(title, src, opts) {
 	});
 	const graphDiagram = (0, import_react.useMemo)(() => behaviors.apply(line), [behaviors.apply, line]);
 	const cancel = useCancelAsk(flight);
-	const parts = liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true });
+	const parts = liveBoxParts(flight, true, cancel.ask, {
+		verifyInPlace: true,
+		inTile: true
+	});
 	const kindOf = (0, import_react.useMemo)(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
 	const stops = line.nodes.filter((n) => n.kind === "stop");
 	const end = flight ? flight.steps.length : 0;
@@ -93879,9 +94358,9 @@ function useSessionLine(title, src, opts) {
 				const go = withStep ? () => tackOnParallel(fid, step, withStep) : () => tackOn(fid, step, where);
 				if (await optimistic(fid, withSteps([step], where), go) && openIt) setSelectIndex(where ?? end);
 			} else {
-				const f = await tackOnNew(title, [step], "prompt");
+				const f = await tackOnNew(title, [step], NEW_ROUTE_STARTS_ON);
 				if (f) {
-					toast("Ready: " + (f.plan_name || "a new route") + " — it runs on ▶ Run or your next prompt");
+					toast("Ready: " + (f.plan_name || "a new route") + " — it runs when you press ▶ Run");
 					if (openIt) setSelectIndex(f.steps.length - 1);
 				}
 			}
@@ -93902,7 +94381,7 @@ function useSessionLine(title, src, opts) {
 			} else await takeOff({
 				plan_id: plan.id,
 				title,
-				start_on: "prompt"
+				start_on: NEW_ROUTE_STARTS_ON
 			});
 		} finally {
 			setBusy(false);
@@ -94015,7 +94494,7 @@ function useSessionLine(title, src, opts) {
 			} else await takeOff({
 				plan_id: plan.id,
 				title,
-				start_on: "prompt"
+				start_on: NEW_ROUTE_STARTS_ON
 			});
 		} finally {
 			setBusy(false);
@@ -94242,7 +94721,7 @@ function useSessionLine(title, src, opts) {
 			doneLabel: open.step?.kind === "verify" ? "Behaviors" : void 0,
 			doneTitle: open.step?.kind === "verify" ? "Answer its behaviors — the route goes on once each one has an answer" : void 0,
 			onRetry: here && open.state === "halted" ? () => void act(() => stepRetry(flight.id, open.step.id)) : void 0,
-			onFix: here && open.state === "halted" && open.step?.kind === "verify" ? () => void act(() => stepFix(flight.id, open.step.id)) : void 0,
+			onFix: here && canFixStep(flight) ? () => void act(() => stepFix(flight.id, open.step.id)) : void 0,
 			onSkip: here ? () => void act(() => stepSkip(flight.id, open.step.id)) : void 0,
 			extra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				!editable && stopLog(open, flight, rec, row),
@@ -127346,6 +127825,8 @@ function AskDialog() {
 	const target = useUi((s) => s.openDialog === "ask" ? s.dialogTarget : null);
 	const focused = useUi((s) => s.focused);
 	const popupOn = useAskPopup();
+	const wnStage = useWhatsNew(whatsNewStage);
+	const touring = useUi((s) => s.tourOpen || !!s.coachTour);
 	const { data: instances } = useInstances();
 	const { data: outbox } = useOutbox();
 	const events = (0, import_react.useRef)([]);
@@ -127428,7 +127909,15 @@ function AskDialog() {
 				if (why === "typing") askMemory.handle(item, "typing");
 				else if (!why && !found) found = item;
 			}
-			return found;
+			if (!found) return null;
+			const ui = useUi.getState();
+			return popupTurn({
+				whatsNew: whatsNewStage(useWhatsNew.getState()),
+				askOpen: false,
+				askWaiting: true,
+				otherOpen: ui.tourOpen || !!ui.coachTour,
+				sinceLoadMs: typeof performance !== "undefined" ? performance.now() : Infinity
+			}) === "ask" ? found : null;
 		};
 		const attempt = () => {
 			if (!pick()) return;
@@ -127444,7 +127933,13 @@ function AskDialog() {
 			});
 		};
 		attempt();
-		const again = queueKey ? setInterval(bump, RECHECK_MS) : void 0;
+		const again = queueKey ? setInterval(() => {
+			bump();
+			clearTimeout(timer);
+			cancelIdle?.();
+			cancelIdle = null;
+			attempt();
+		}, RECHECK_MS) : void 0;
 		return () => {
 			clearTimeout(timer);
 			clearInterval(again);
@@ -127455,7 +127950,9 @@ function AskDialog() {
 		popupOn,
 		queueKey,
 		focused,
-		bump
+		bump,
+		wnStage,
+		touring
 	]);
 	const shown = (0, import_react.useRef)([]);
 	const flowing = !!target && selectFlows.active(target);
@@ -135034,6 +135531,148 @@ function objectClass(def, state) {
 	return def.className + (state.dragging ? " is-dragging" : "") + (state.selected ? " is-selected" : "") + (state.target ? " is-merge-target" : "");
 }
 //#endregion
+//#region src/lib/minimap.ts
+var MINIMAP_W = 180;
+var MINIMAP_H = 120;
+var MINIMAP_PAD = 8;
+function mapScale(rects, map, pad = MINIMAP_PAD) {
+	const b = boundsOf(rects);
+	if (!b) return {
+		scale: 1,
+		ox: pad,
+		oy: pad
+	};
+	const aw = Math.max(1, map.w - 2 * pad);
+	const ah = Math.max(1, map.h - 2 * pad);
+	const scale = Math.min(1, aw / Math.max(1, b.w), ah / Math.max(1, b.h));
+	return {
+		scale,
+		ox: (map.w - b.w * scale) / 2 - b.x * scale,
+		oy: (map.h - b.h * scale) / 2 - b.y * scale
+	};
+}
+var toMap = (fit, p) => ({
+	x: p.x * fit.scale + fit.ox,
+	y: p.y * fit.scale + fit.oy
+});
+var fromMap = (fit, p) => ({
+	x: (p.x - fit.ox) / fit.scale,
+	y: (p.y - fit.oy) / fit.scale
+});
+function rectToMap(fit, r) {
+	const a = toMap(fit, r);
+	return {
+		x: a.x,
+		y: a.y,
+		w: r.w * fit.scale,
+		h: r.h * fit.scale
+	};
+}
+function viewportRect(cam, viewport) {
+	const z = cam.z > 0 ? cam.z : 1;
+	return {
+		x: 0 - cam.x / z,
+		y: 0 - cam.y / z,
+		w: viewport.w / z,
+		h: viewport.h / z
+	};
+}
+function centreAt(p, viewport, z) {
+	const nz = clampZoom(z);
+	return {
+		z: nz,
+		x: viewport.w / 2 - p.x * nz,
+		y: viewport.h / 2 - p.y * nz
+	};
+}
+function dragCamera(cam0, fit, dx, dy) {
+	const k = cam0.z / (fit.scale || 1);
+	return {
+		z: cam0.z,
+		x: cam0.x - dx * k,
+		y: cam0.y - dy * k
+	};
+}
+var BAR_KINDS = /* @__PURE__ */ new Set(["intake", "landing"]);
+var LINE_KINDS = /* @__PURE__ */ new Set(["line", "grounded"]);
+var BAR_PX = 3;
+var MIN_BLOCK = 3;
+function mapBlocks(rects, fit) {
+	const out = rects.map((r) => {
+		const m = rectToMap(fit, r);
+		const bar = BAR_KINDS.has(r.kind);
+		if (bar) {
+			if (m.h >= m.w) return {
+				id: r.id,
+				kind: r.kind,
+				bar,
+				x: m.x + m.w / 2 - BAR_PX / 2,
+				y: m.y,
+				w: BAR_PX,
+				h: Math.max(MIN_BLOCK, m.h)
+			};
+			return {
+				id: r.id,
+				kind: r.kind,
+				bar,
+				x: m.x,
+				y: m.y + m.h / 2 - BAR_PX / 2,
+				w: Math.max(MIN_BLOCK, m.w),
+				h: BAR_PX
+			};
+		}
+		return {
+			id: r.id,
+			kind: r.kind,
+			bar,
+			x: m.x,
+			y: m.y,
+			w: Math.max(MIN_BLOCK, m.w),
+			h: Math.max(MIN_BLOCK, m.h)
+		};
+	});
+	const rank = (b) => LINE_KINDS.has(b.kind) ? 2 : b.bar ? 0 : 1;
+	return out.map((b, i) => ({
+		b,
+		i
+	})).sort((p, q) => rank(p.b) - rank(q.b) || p.i - q.i).map((p) => p.b);
+}
+function pickBlock(blocks, mx, my, slop = 2) {
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		const b = blocks[i];
+		if (mx >= b.x - slop && mx <= b.x + b.w + slop && my >= b.y - slop && my <= b.y + b.h + slop) return b.id;
+	}
+	return "";
+}
+var inside = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+function toneVar(tone) {
+	switch (tone || "") {
+		case "working":
+		case "running": return "var(--tone-working)";
+		case "asking":
+		case "waiting_you":
+		case "you":
+		case "attention":
+		case "needs_input": return "var(--tone-attention)";
+		case "waiting":
+		case "limited": return "var(--tone-waiting)";
+		case "halted":
+		case "broken":
+		case "failed":
+		case "error":
+		case "offline": return "var(--tone-broken)";
+		case "idle":
+		case "done":
+		case "neutral": return "var(--tone-neutral)";
+		default: return "var(--tone-muted)";
+	}
+}
+function shortLabel(label, n = 14) {
+	const s = (label || "").trim();
+	return [...s].length > n ? [...s].slice(0, n - 1).join("").trimEnd() + "…" : s;
+}
+var HINT_MAX = 8;
+//#endregion
 //#region src/lib/skySnap.ts
 var stations = (start, size) => [
 	start,
@@ -136153,9 +136792,55 @@ function PerchRow({ flight, kinds, onFocus }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-perch-step muted",
-				children: [step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "", halted && flight.reason ? " — " + flight.reason : ""]
+				children: [step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "", halted && flight.reason ? " — " + haltedWhy(step?.title, flight.reason) : ""]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, { flight })
+		]
+	});
+}
+function NeedsLine({ row, onFocus }) {
+	const { data: instances } = useInstances();
+	const inst = row.title ? instances?.find((i) => i.title === row.title) : void 0;
+	if (row.waiting) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "sky-perch sky-needs-wait",
+		"data-needs": row.key,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingRow$1, {
+			w: row.waiting,
+			row: inst,
+			shown: windowName,
+			group: row.waiting.run?.name || ""
+		})
+	});
+	const a = row.attn;
+	const what = row.plan ? "Plan ready — review & Go" : a?.reason || "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-perch sky-needs-" + row.kind,
+		"data-needs": row.key,
+		children: [
+			row.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "sky-perch-name",
+				title: "Show " + windowName(row.title) + "'s route",
+				onClick: () => onFocus(row.title),
+				children: windowName(row.title)
+			}) : null,
+			what && row.kind !== "asking" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-perch-step muted",
+				children: what
+			}),
+			row.kind === "asking" && a ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnswerStrip, {
+				title: row.title,
+				activity: a.question !== void 0 ? "idle" : "clarify",
+				question: a.question,
+				variant: "bell",
+				onOpen: () => onFocus(row.title),
+				onReply: () => openAsk(row.title)
+			}) : row.plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary fl-btn",
+				onClick: () => useUi.getState().openMap(row.title, { section: "plan" }),
+				children: "Review the plan"
+			}) : null
 		]
 	});
 }
@@ -136165,14 +136850,12 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 	const plans = useFlightPlans().data || [];
 	const kinds = useFlightKinds().data;
 	const settings = useSettingsDoc(true).data;
-	const testPlans = useTestPlans().data?.plans || [];
 	const { waiting, refresh } = useWaiting(true);
 	const [landedOpen, setLandedOpen] = (0, import_react.useState)(false);
 	const flights = flightsQ.data || [];
-	const needs = needsYouFlights(flights);
+	const needs = useNeedsYou();
 	const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
-	const dueChecklists = (0, import_react.useMemo)(() => testPlans.filter((p) => isFailing(p) || isWaitingOnYou(p)), [testPlans]);
-	const count = needs.length + dueChecklists.length;
+	const count = needs.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		className: "sky-drawer" + (open ? " open" : ""),
 		"aria-label": "Needs you",
@@ -136212,14 +136895,17 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 					}), count === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "fl-empty muted",
 						children: "Nothing needs you."
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [needs.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerchRow, {
-						flight: f,
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: needs.map((r) => r.flight ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerchRow, {
+						flight: r.flight,
 						kinds,
 						onFocus
-					}, f.id)), dueChecklists.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
-						plan: p,
+					}, r.key) : r.behaviors ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
+						plan: r.behaviors,
 						onOpen: (planId) => openBehaviors({ planId })
-					}, p.id))] })]
+					}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsLine, {
+						row: r,
+						onFocus
+					}, r.key)) })]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "fl-group fl-group-waiting",
@@ -136794,6 +137480,7 @@ function ageWord(activitySince, now = Date.now()) {
 }
 //#endregion
 //#region src/components/flights/SkyWires.tsx
+var HANDOFF_INK = "color-mix(in srgb, var(--text) 50%, transparent)";
 function nodeOfStep(g, stepId) {
 	for (const n of g.nodes) {
 		if (posStepOf(n.node)?.id === stepId) return n;
@@ -136820,7 +137507,7 @@ function handoffWires(links, chains) {
 		out.push({
 			id: l.fromFlight + ":" + l.fromStep,
 			d: wirePath(from, to),
-			color: chainColor(l.fromSession),
+			color: HANDOFF_INK,
 			started: l.started,
 			from,
 			to
@@ -136925,6 +137612,16 @@ var runningWord = (row) => row?.activity === "working" ? "is working" : "is aski
 async function closeLine(title) {
 	await closeSession(title);
 	if (!sessionOpen(title)) pushCloseUndo([title]);
+}
+function frameState(s) {
+	const f = s.flight || null;
+	if (f === "halted") return "halted";
+	if (s.tone === "broken") return "broken";
+	if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou) return "you";
+	if (f === "running" || s.tone === "working") return "working";
+	if (f === "done" || s.landed) return "done";
+	if (f === "ready") return "ready";
+	return "idle";
 }
 var PANE_W = 720;
 var PANE_H = 460;
@@ -137111,6 +137808,12 @@ function SkyLine(p) {
 	]);
 	const row = line.row;
 	const ss = deriveSessionState(row || {});
+	const frame = row ? frameState({
+		flight: line.flight?.state || row.flight?.state,
+		landed: !!line.landedId,
+		tone: ss.tone,
+		behaviorsYou: line.behaviors.mark?.tone === "you"
+	}) : "idle";
 	const rowOf = (t) => t ? p.rows.find((r) => r.title === t) : void 0;
 	const where = row ? lineWhere(line.diagram) : "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
@@ -137461,6 +138164,7 @@ function SkyLine(p) {
 		ref: rootRef,
 		className: "skl skl-chainline skl-frame" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : "") + (behaviors.frameClass ? " " + behaviors.frameClass : ""),
 		"data-line": p.title,
+		"data-frame": frame,
 		"data-lod": lod,
 		"data-age": age || void 0,
 		style: {
@@ -137500,6 +138204,10 @@ function SkyLine(p) {
 					startRename();
 				},
 				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-id-dot",
+						"aria-hidden": "true"
+					}),
 					naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-name",
 						children: name
@@ -137555,6 +138263,7 @@ function SkyLine(p) {
 						"aria-label": "Pinned",
 						children: "📌"
 					}),
+					line.flight?.state === "ready" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-menu",
 						"data-no-drag": true,
@@ -137617,7 +138326,7 @@ function SkyLine(p) {
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
 						renderOpen,
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
-						renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						renderHead: () => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
 							title: ss.hint,
 							children: ss.label
@@ -138691,218 +139400,6 @@ function GroundedLine(p) {
 	});
 }
 //#endregion
-//#region src/lib/minimap.ts
-var MINIMAP_W = 180;
-var MINIMAP_H = 120;
-var MINIMAP_PAD = 8;
-function mapScale(rects, map, pad = MINIMAP_PAD) {
-	const b = boundsOf(rects);
-	if (!b) return {
-		scale: 1,
-		ox: pad,
-		oy: pad
-	};
-	const aw = Math.max(1, map.w - 2 * pad);
-	const ah = Math.max(1, map.h - 2 * pad);
-	const scale = Math.min(1, aw / Math.max(1, b.w), ah / Math.max(1, b.h));
-	return {
-		scale,
-		ox: (map.w - b.w * scale) / 2 - b.x * scale,
-		oy: (map.h - b.h * scale) / 2 - b.y * scale
-	};
-}
-var toMap = (fit, p) => ({
-	x: p.x * fit.scale + fit.ox,
-	y: p.y * fit.scale + fit.oy
-});
-var fromMap = (fit, p) => ({
-	x: (p.x - fit.ox) / fit.scale,
-	y: (p.y - fit.oy) / fit.scale
-});
-function rectToMap(fit, r) {
-	const a = toMap(fit, r);
-	return {
-		x: a.x,
-		y: a.y,
-		w: r.w * fit.scale,
-		h: r.h * fit.scale
-	};
-}
-function viewportRect(cam, viewport) {
-	const z = cam.z > 0 ? cam.z : 1;
-	return {
-		x: 0 - cam.x / z,
-		y: 0 - cam.y / z,
-		w: viewport.w / z,
-		h: viewport.h / z
-	};
-}
-function centreAt(p, viewport, z) {
-	const nz = clampZoom(z);
-	return {
-		z: nz,
-		x: viewport.w / 2 - p.x * nz,
-		y: viewport.h / 2 - p.y * nz
-	};
-}
-function dragCamera(cam0, fit, dx, dy) {
-	const k = cam0.z / (fit.scale || 1);
-	return {
-		z: cam0.z,
-		x: cam0.x - dx * k,
-		y: cam0.y - dy * k
-	};
-}
-var BAR_KINDS = /* @__PURE__ */ new Set(["intake", "landing"]);
-var LINE_KINDS = /* @__PURE__ */ new Set(["line", "grounded"]);
-var BAR_PX = 3;
-var MIN_BLOCK = 3;
-function mapBlocks(rects, fit) {
-	const out = rects.map((r) => {
-		const m = rectToMap(fit, r);
-		const bar = BAR_KINDS.has(r.kind);
-		if (bar) {
-			if (m.h >= m.w) return {
-				id: r.id,
-				kind: r.kind,
-				bar,
-				x: m.x + m.w / 2 - BAR_PX / 2,
-				y: m.y,
-				w: BAR_PX,
-				h: Math.max(MIN_BLOCK, m.h)
-			};
-			return {
-				id: r.id,
-				kind: r.kind,
-				bar,
-				x: m.x,
-				y: m.y + m.h / 2 - BAR_PX / 2,
-				w: Math.max(MIN_BLOCK, m.w),
-				h: BAR_PX
-			};
-		}
-		return {
-			id: r.id,
-			kind: r.kind,
-			bar,
-			x: m.x,
-			y: m.y,
-			w: Math.max(MIN_BLOCK, m.w),
-			h: Math.max(MIN_BLOCK, m.h)
-		};
-	});
-	const rank = (b) => LINE_KINDS.has(b.kind) ? 2 : b.bar ? 0 : 1;
-	return out.map((b, i) => ({
-		b,
-		i
-	})).sort((p, q) => rank(p.b) - rank(q.b) || p.i - q.i).map((p) => p.b);
-}
-function pickBlock(blocks, mx, my, slop = 2) {
-	for (let i = blocks.length - 1; i >= 0; i--) {
-		const b = blocks[i];
-		if (mx >= b.x - slop && mx <= b.x + b.w + slop && my >= b.y - slop && my <= b.y + b.h + slop) return b.id;
-	}
-	return "";
-}
-var inside = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
-function toneVar(tone) {
-	switch (tone || "") {
-		case "working":
-		case "running": return "var(--tone-working)";
-		case "asking":
-		case "waiting_you":
-		case "you":
-		case "attention":
-		case "needs_input": return "var(--tone-attention)";
-		case "waiting":
-		case "limited": return "var(--tone-waiting)";
-		case "halted":
-		case "broken":
-		case "failed":
-		case "error":
-		case "offline": return "var(--tone-broken)";
-		case "idle":
-		case "done":
-		case "neutral": return "var(--tone-neutral)";
-		default: return "var(--tone-muted)";
-	}
-}
-function shortLabel(label, n = 14) {
-	const s = (label || "").trim();
-	return [...s].length > n ? [...s].slice(0, n - 1).join("").trimEnd() + "…" : s;
-}
-var HINT_H = 22;
-var HINT_INSET = 8;
-var HINT_MAX_W = 140;
-var HINT_MAX = 8;
-function edgeHints(rects, cam, viewport, max = HINT_MAX) {
-	const { w: vw, h: vh } = viewport;
-	if (vw <= 0 || vh <= 0 || max <= 0) return [];
-	const clamp = (v, lo, hi) => lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v));
-	const yLo = 19;
-	const yHi = vh - HINT_INSET - HINT_H / 2;
-	const xLo = 78;
-	const xHi = vw - HINT_INSET - HINT_MAX_W / 2;
-	const out = [];
-	for (const r of rects) {
-		const sx = r.x * cam.z + cam.x;
-		const sy = r.y * cam.z + cam.y;
-		const sw = r.w * cam.z;
-		const sh = r.h * cam.z;
-		const gapL = -(sx + sw);
-		const gapR = sx - vw;
-		const gapT = -(sy + sh);
-		const gapB = sy - vh;
-		const gx = Math.max(0, gapL, gapR);
-		const gy = Math.max(0, gapT, gapB);
-		if (gx <= 0 && gy <= 0) continue;
-		const cx = sx + sw / 2;
-		const cy = sy + sh / 2;
-		let h;
-		if (gx >= gy) {
-			const edge = gapL > 0 ? "left" : "right";
-			h = {
-				id: r.id,
-				edge,
-				x: edge === "left" ? HINT_INSET : vw - HINT_INSET,
-				y: clamp(cy, yLo, yHi),
-				dist: Math.hypot(gx, gy)
-			};
-		} else {
-			const edge = gapT > 0 ? "top" : "bottom";
-			h = {
-				id: r.id,
-				edge,
-				x: clamp(cx, xLo, xHi),
-				y: edge === "top" ? HINT_INSET : vh - HINT_INSET,
-				dist: Math.hypot(gx, gy)
-			};
-		}
-		out.push(h);
-	}
-	out.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-	const kept = out.slice(0, max);
-	for (const edge of [
-		"left",
-		"right",
-		"top",
-		"bottom"
-	]) {
-		const side = kept.filter((k) => k.edge === edge);
-		if (side.length < 2) continue;
-		const vertical = edge === "left" || edge === "right";
-		const key = vertical ? "y" : "x";
-		const gap = vertical ? 26 : 146;
-		const hi = vertical ? yHi : xHi;
-		const lo = vertical ? yLo : xLo;
-		side.sort((a, b) => a[key] - b[key]);
-		for (let i = 1; i < side.length; i++) side[i][key] = Math.max(side[i][key], side[i - 1][key] + gap);
-		const over = side[side.length - 1][key] - hi;
-		if (over > 0) for (const s of side) s[key] = Math.max(lo, s[key] - over);
-	}
-	return kept;
-}
-//#endregion
 //#region src/components/flights/Minimap.tsx
 var CLICK_SLOP = 3;
 var presses = /* @__PURE__ */ new WeakMap();
@@ -139046,53 +139543,119 @@ function Minimap({ rects, cam, viewport, onCamera, onJump, open, onToggle }) {
 		})]
 	});
 }
-function OffscreenHints({ rects, cam, viewport, onJump }) {
-	if (lodFor(cam.z) === "far") return null;
+function needsYouWord(edge) {
+	return edge === "right" ? "Needs you →" : edge === "left" ? "← Needs you" : edge === "top" ? "↑ Needs you" : "↓ Needs you";
+}
+var CHIP_HIDE_SHARE = .5;
+var EDGES = [
+	"top",
+	"left",
+	"right",
+	"bottom"
+];
+function edgeChips(rects, cam, view, max = HINT_MAX) {
+	const { w: vw, h: vh } = view;
+	if (vw <= 0 || vh <= 0 || max <= 0) return [];
+	const found = [];
+	for (const r of rects) {
+		const sx = r.x * cam.z + cam.x;
+		const sy = r.y * cam.z + cam.y;
+		const sw = r.w * cam.z;
+		const sh = r.h * cam.z;
+		if (sw <= 0 || sh <= 0) continue;
+		const share = Math.max(0, Math.min(sx + sw, vw) - Math.max(sx, 0)) * Math.max(0, Math.min(sy + sh, vh) - Math.max(sy, 0)) / (sw * sh);
+		if (share >= CHIP_HIDE_SHARE) continue;
+		const needs = !!r.needsYou;
+		let edge;
+		let dist = 0;
+		if (share <= 0) {
+			const gx = Math.max(0, -(sx + sw), sx - vw);
+			const gy = Math.max(0, -(sy + sh), sy - vh);
+			edge = gx >= gy ? sx + sw <= 0 ? "left" : "right" : sy + sh <= 0 ? "top" : "bottom";
+			dist = Math.hypot(gx, gy);
+		} else {
+			if (!needs) continue;
+			edge = [
+				["right", sx + sw - vw],
+				["left", -sx],
+				["bottom", sy + sh - vh],
+				["top", -sy]
+			].reduce((a, b) => b[1] > a[1] ? b : a)[0];
+		}
+		const along = edge === "left" || edge === "right" ? sy + sh / 2 : sx + sw / 2;
+		found.push({
+			id: r.id,
+			edge,
+			needs,
+			dist,
+			along
+		});
+	}
+	const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+	found.sort((a, b) => Number(b.needs) - Number(a.needs) || a.dist - b.dist || byId(a, b));
+	const kept = found.slice(0, max);
+	return EDGES.flatMap((edge) => kept.filter((c) => c.edge === edge).sort((a, b) => Number(b.needs) - Number(a.needs) || a.along - b.along || byId(a, b)).map(({ id, needs }) => ({
+		id,
+		edge,
+		needs
+	})));
+}
+function OffscreenHints({ rects, cam, viewport, inset, onJump }) {
 	const lines = rects.filter((r) => LINE_KINDS.has(r.kind));
-	const hints = edgeHints(lines, cam, viewport, HINT_MAX);
-	if (!hints.length) return null;
+	const far = lodFor(cam.z) === "far";
+	const right = Math.max(0, inset?.right || 0);
+	const bottom = Math.max(0, inset?.bottom || 0);
+	const view = {
+		w: viewport.w - right,
+		h: viewport.h - bottom
+	};
+	const chips = edgeChips(far ? lines.filter((r) => r.needsYou) : lines, cam, view);
+	if (!chips.length) return null;
 	const byId = new Map(lines.map((r) => [r.id, r]));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "sky-offscreen",
 		"data-no-drag": "",
-		children: hints.map((h) => {
-			const r = byId.get(h.id);
-			const name = r?.label || h.id;
-			const style = h.edge === "left" ? {
-				left: h.x,
-				top: h.y
-			} : h.edge === "right" ? {
-				right: viewport.w - h.x,
-				top: h.y
-			} : h.edge === "top" ? {
-				left: h.x,
-				top: h.y
-			} : {
-				left: h.x,
-				bottom: viewport.h - h.y
-			};
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "sky-offscreen-chip fl-pick edge-" + h.edge,
-				style: {
-					...style,
-					"--mm-tone": toneVar(r?.tone)
-				},
-				title: "Go to " + name,
-				"aria-label": "Go to " + name,
-				"data-id": h.id,
-				onClick: (e) => {
-					e.stopPropagation();
-					onJump(h.id);
-				},
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-offscreen-dot",
-					"aria-hidden": "true"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-offscreen-name",
-					children: shortLabel(name, 14)
-				})]
-			}, h.id);
+		style: right || bottom ? {
+			right,
+			bottom
+		} : void 0,
+		children: EDGES.map((edge) => {
+			const on = chips.filter((c) => c.edge === edge);
+			if (!on.length) return null;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-offscreen-gutter edge-" + edge,
+				children: on.map((h) => {
+					const r = byId.get(h.id);
+					const name = r?.label || h.id;
+					const needs = h.needs;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "sky-offscreen-chip fl-pick edge-" + h.edge + (needs ? " is-needs" : ""),
+						style: { "--mm-tone": toneVar(r?.tone) },
+						title: "Go to " + name + (needs ? " — it needs you" : ""),
+						"aria-label": "Go to " + name + (needs ? " — it needs you" : ""),
+						"data-id": h.id,
+						onClick: (e) => {
+							e.stopPropagation();
+							onJump(h.id);
+						},
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-offscreen-dot",
+								"aria-hidden": "true"
+							}),
+							needs ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-offscreen-needs",
+								children: needsYouWord(h.edge)
+							}) : null,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-offscreen-name",
+								children: shortLabel(name, needs ? 9 : 14)
+							})
+						]
+					}, h.id);
+				})
+			}, edge);
 		})
 	});
 }
@@ -140032,22 +140595,60 @@ function revealCamera(c, r, vw, vh, margin = .8) {
 	};
 }
 //#endregion
+//#region src/lib/skyCamera.ts
+var CARD_PAD = 24;
+function cardCamera(c, r, vw, vh) {
+	const z = clampZoom(Math.max(1, c.z));
+	const p = toPlane(c, r.x, r.y);
+	const w = r.w / c.z * z;
+	const h = r.h / c.z * z;
+	const sx = w + 48 <= vw ? (vw - w) / 2 : CARD_PAD;
+	const sy = h + 48 <= vh ? (vh - h) / 2 : CARD_PAD;
+	return {
+		z,
+		x: sx - p.x * z,
+		y: sy - p.y * z
+	};
+}
+function phoneRouteZoom(natural, avail, floor = .6) {
+	if (!(natural > 0) || !(avail > 0) || natural <= avail) return 1;
+	return Math.max(floor, avail / natural);
+}
+function scrollToShow(scroll, width, left, right, pad = 12) {
+	if (left - pad >= scroll && right + pad <= scroll + width) return scroll;
+	if (right - left + 2 * pad > width || left - pad < scroll) return Math.max(0, left - pad);
+	return Math.max(0, right + pad - width);
+}
+//#endregion
 //#region src/components/onboarding/SkyEmpty.tsx
 function skyEmptyShows(o) {
 	return o.blank && o.waiting === 0;
 }
 var SKY_EMPTY_TITLE = "Nothing in the Sky yet";
-function SkyEmpty({ blank, className, children }) {
+function SkyEmpty({ blank, className, children, newSession = false }) {
 	const { waiting } = useWaiting(false);
+	const open = (d) => useUi.getState().openDialogFor(d);
 	if (!skyEmptyShows({
 		blank,
 		waiting: waiting.length
-	})) return children ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className,
-		role: "status",
-		children
-	}) : null;
-	const open = (d) => useUi.getState().openDialogFor(d);
+	})) {
+		if (!children) return null;
+		return newSession ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: className + " sky-empty-plain",
+			role: "status",
+			"data-no-drag": "",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary sky-empty-new",
+				onClick: () => open("new-session"),
+				children: "New session"
+			})]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className,
+			role: "status",
+			children
+		});
+	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-empty-card",
 		"data-no-drag": "",
@@ -140221,6 +140822,11 @@ function SkyView() {
 		stopEase();
 		setCamState(next);
 	}, [stopEase]);
+	const autoFit = (0, import_react.useRef)(memo ? memo.auto : true);
+	const userCam = (0, import_react.useCallback)((next) => {
+		autoFit.current = false;
+		setCam(next);
+	}, [setCam]);
 	const [vp, setVp] = (0, import_react.useState)({
 		w: 0,
 		h: 0
@@ -140294,14 +140900,41 @@ function SkyView() {
 		setSelAsk("");
 		setFocusMode(false);
 	}, []);
+	const mru = useUi((s) => s.mru);
+	const railOrder = useUi((s) => s.railOrder);
+	const outboxQ = useOutbox();
+	const needsYou = (0, import_react.useMemo)(() => needsYouTitles(rows, outboxQ.data?.groups?.waiting), [rows, outboxQ.data]);
+	const lastShown = (0, import_react.useRef)("");
+	const oneFocus = (0, import_react.useMemo)(() => {
+		if (focused || mode !== "one") return focused || "";
+		const best = pickThisSession(rows, {
+			needsYou,
+			mru,
+			railOrder
+		});
+		const cur = rows.find((r) => r.title === lastShown.current && inSky(r));
+		if (!cur || cur.title === best) return best;
+		const needs = (r) => !!r && (needsYou.includes(r.title) || linePerched(r));
+		return needs(cur) || !needs(rows.find((r) => r.title === best)) ? cur.title : best;
+	}, [
+		focused,
+		mode,
+		rows,
+		mru,
+		railOrder,
+		needsYou
+	]);
+	(0, import_react.useEffect)(() => {
+		if (mode === "one" && oneFocus) lastShown.current = oneFocus;
+	}, [mode, oneFocus]);
 	const titles = (0, import_react.useMemo)(() => skyLineTitles(rows, mode, {
 		query,
-		focus: focused || ""
+		focus: oneFocus
 	}), [
 		rows,
 		mode,
 		query,
-		focused
+		oneFocus
 	]);
 	const testPlans = useTestPlans().data?.plans;
 	useTourOnFirstSight("verify", (0, import_react.useMemo)(() => behaviorsOnARoute(testPlans, rows, titles), [
@@ -140647,7 +141280,7 @@ function SkyView() {
 	const goToRef = (0, import_react.useRef)(goTo);
 	goToRef.current = goTo;
 	(0, import_react.useEffect)(() => stopEase, [stopEase]);
-	const fitAll = (0, import_react.useCallback)((whole = false, instant = false) => {
+	const everyRect = (0, import_react.useCallback)(() => {
 		const rects = lines.map((l) => ({
 			...posOf(l.id),
 			w: l.w,
@@ -140663,24 +141296,51 @@ function SkyView() {
 			w: objectBox(o).w,
 			h: 1
 		});
-		goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
+		for (const o of objects) if (o.def.kind === "note") rects.push({
+			...posOf(o.key),
+			...objectBox(o)
+		});
+		return rects;
 	}, [
 		lines,
 		posOf,
-		mode,
 		intakeOn,
 		intakeBox,
+		objects,
+		objectBox
+	]);
+	const fitAll = (0, import_react.useCallback)((instant = false) => {
+		goTo(fitCamera(boundsOf(everyRect()), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
+	}, [
+		everyRect,
+		mode,
 		vp.w,
 		vp.h,
-		objects,
-		objectBox,
 		goTo
 	]);
+	const firstPicture = (0, import_react.useCallback)(() => {
+		goTo(firstFit(boundsOf(everyRect()), vp.w, vp.h, mode === "one" ? 1.5 : 1), true);
+	}, [
+		everyRect,
+		mode,
+		vp.w,
+		vp.h,
+		goTo
+	]);
+	const oneLine = mode === "one" ? titles[0] || "" : "";
 	const fitFocused = (0, import_react.useCallback)((instant = false) => {
+		if (oneLine) {
+			const r = rectOf(oneLine);
+			if (!r) return;
+			autoFit.current = true;
+			goTo(fitRoute(r, vp.w, vp.h), instant);
+			return;
+		}
 		const r = focusLine ? rectOf(focusLine) : null;
-		if (!r) return fitAll(false, instant);
+		if (!r) return fitAll(instant);
 		goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);
 	}, [
+		oneLine,
 		focusLine,
 		rectOf,
 		fitAll,
@@ -140689,7 +141349,7 @@ function SkyView() {
 		goTo
 	]);
 	const fitted = (0, import_react.useRef)(memo?.key || "");
-	const fitKey = mode + "\0" + (mode === "one" ? focused : "");
+	const fitKey = mode + "\0" + (mode === "one" ? oneFocus : "");
 	(0, import_react.useEffect)(() => {
 		if (instQ.data === void 0 || waited) return;
 		const t = setTimeout(() => setWaited(true), 900);
@@ -140702,7 +141362,7 @@ function SkyView() {
 		const first = !fitted.current;
 		fitted.current = fitKey;
 		if (first && gridOne && mode !== "one") fitFocused(true);
-		else fitAll(false, true);
+		else if (mode !== "one") firstPicture();
 	}, [
 		vp.w,
 		vp.h,
@@ -140710,10 +141370,39 @@ function SkyView() {
 		fitKey,
 		settled
 	]);
+	const oneFitted = (0, import_react.useRef)(memo ? memo.one : "");
+	const oneRect = oneLine ? rectOf(oneLine) : null;
+	const oneKey = oneRect ? [
+		oneRect.x,
+		oneRect.y,
+		oneRect.w,
+		oneRect.h
+	].map(Math.round).join(",") : "";
+	(0, import_react.useEffect)(() => {
+		if (mode !== "one") {
+			oneFitted.current = "";
+			return;
+		}
+		if (!oneLine || !oneRect || !vp.w || !vp.h || instQ.data === void 0) return;
+		const first = !oneFitted.current;
+		if (oneFitted.current !== oneLine) autoFit.current = true;
+		oneFitted.current = oneLine;
+		if (!autoFit.current) return;
+		goTo(fitRoute(oneRect, vp.w, vp.h), first);
+	}, [
+		mode,
+		oneLine,
+		oneKey,
+		vp.w,
+		vp.h,
+		instQ.data === void 0
+	]);
 	(0, import_react.useEffect)(() => () => {
 		memo = {
 			cam: camRef.current,
-			key: fitted.current
+			key: fitted.current,
+			one: oneFitted.current,
+			auto: autoFit.current
 		};
 	}, []);
 	const alive = (0, import_react.useRef)(true);
@@ -140736,14 +141425,10 @@ function SkyView() {
 		if (!r) return;
 		const pressed = pressedLine.current === focusLine;
 		pressedLine.current = "";
-		if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
-			openedFor.current = focusLine;
-			if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
-		} else if (pressed) openedFor.current = focusLine;
 		const c = camRef.current;
 		const sx = c.x + r.x * c.z;
 		const sy = c.y + r.y * c.z;
-		if (!(sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h) && !pressed) goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, .85)));
+		if (!(sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h) && !pressed && mode !== "one") goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, .85)));
 		setFlash(focusLine);
 		setTimeout(() => alive.current && setFlash((f) => f === focusLine ? "" : f), 1400);
 	}, [
@@ -140752,8 +141437,46 @@ function SkyView() {
 		vp.w,
 		vp.h
 	]);
+	const beforeEnter = (0, import_react.useRef)(null);
+	const revealOpened = (id) => {
+		autoFit.current = false;
+		beforeEnter.current = {
+			id,
+			cam: camRef.current
+		};
+		let tries = 0;
+		const look = () => {
+			if (!alive.current) return;
+			const root = vpRef.current;
+			let slot = null;
+			root?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
+				if (el.getAttribute("data-slot") === id) slot = el;
+			});
+			const card = slot?.querySelector(".skl-card");
+			if (!root || !slot || !card) {
+				if (++tries < 12) setTimeout(look, 50);
+				return;
+			}
+			const v = root.getBoundingClientRect();
+			const c = card.getBoundingClientRect();
+			if (!c.width || !c.height) return;
+			goToRef.current(cardCamera(camRef.current, {
+				x: c.left - v.left,
+				y: c.top - v.top,
+				w: c.width,
+				h: c.height
+			}, v.width, v.height));
+		};
+		setTimeout(look, 30);
+	};
+	const restoreAfterEnter = (id) => {
+		const was = beforeEnter.current;
+		beforeEnter.current = null;
+		if (!was || was.id !== id) return;
+		if (mode === "one") autoFit.current = true;
+		else goTo(was.cam);
+	};
 	const pressedLine = (0, import_react.useRef)("");
-	const openedFor = (0, import_react.useRef)("");
 	const focusOn = (0, import_react.useCallback)((id, pressed = false) => {
 		pressedLine.current = pressed ? id : "";
 		setGroundFocus("");
@@ -140781,16 +141504,19 @@ function SkyView() {
 	});
 	const setMode = (m) => setSkyMode(m);
 	const zoomBy = (k) => {
-		setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
+		userCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
 	};
 	const panBy = (dx, dy) => {
-		setCam((c) => ({
+		userCam((c) => ({
 			...c,
 			x: c.x + dx,
 			y: c.y + dy
 		}));
 	};
-	const zoomTo = (z) => goTo(zoomAt(camRef.current, z, vp.w / 2, vp.h / 2));
+	const zoomTo = (z) => {
+		autoFit.current = false;
+		goTo(zoomAt(camRef.current, z, vp.w / 2, vp.h / 2));
+	};
 	const middle = () => {
 		const c = toPlane(camRef.current, vp.w / 2, vp.h / 3);
 		return {
@@ -140834,7 +141560,7 @@ function SkyView() {
 		const spotted = (id) => mode === "one" || !!autoPos[id] || !!layout[id]?.pinned;
 		if (!lines.every((l) => spotted(l.id)) || intakeOn && !spotted(INTAKE_KEY)) return;
 		tidyFit.current = false;
-		fitAll(true);
+		fitAll();
 	}, [
 		place,
 		autoPos,
@@ -141102,7 +141828,7 @@ function SkyView() {
 	const onFly = (plan, title) => {
 		const live = liveFlightOf(title);
 		if (live) tackOnPlan(live.id, plan.id);
-		else startFlightOn(title, plan.id, "prompt");
+		else startFlightOn(title, plan.id, NEW_ROUTE_STARTS_ON);
 	};
 	const onAttach = (f, title) => {
 		setAttachPick(null);
@@ -141330,7 +142056,7 @@ function SkyView() {
 		let ok = false;
 		if (!live) ok = !!await attachGrounded(f.id, {
 			title,
-			start_on: "prompt"
+			start_on: NEW_ROUTE_STARTS_ON
 		});
 		else if (await tackOnSteps(live.id, bare, at !== void 0 && at < live.steps.length ? at : void 0, name || void 0)) ok = await deleteFlight(f.id);
 		if (!ok) return;
@@ -141720,11 +142446,11 @@ function SkyView() {
 			const [a, b] = [...pointers.current.values()];
 			const r = vpRef.current?.getBoundingClientRect();
 			const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
-			setCam(zoomAt(camRef.current, pn.z * d / pn.d, (a.x + b.x) / 2 - (r?.left || 0), (a.y + b.y) / 2 - (r?.top || 0)));
+			userCam(zoomAt(camRef.current, pn.z * d / pn.d, (a.x + b.x) / 2 - (r?.left || 0), (a.y + b.y) / 2 - (r?.top || 0)));
 			return;
 		}
 		const pa = pan.current;
-		if (pa && pa.id === e.pointerId) setCam({
+		if (pa && pa.id === e.pointerId) userCam({
 			...camRef.current,
 			x: pa.cx + (e.clientX - pa.x),
 			y: pa.cy + (e.clientY - pa.y)
@@ -141854,12 +142580,12 @@ function SkyView() {
 			const dy = e.deltaY * unit;
 			if (e.ctrlKey || e.metaKey) {
 				const r = el.getBoundingClientRect();
-				setCam((c) => zoomAt(c, c.z * Math.exp(-dy * .0022), e.clientX - r.left, e.clientY - r.top));
-			} else if (e.shiftKey && !dx) setCam((c) => ({
+				userCam((c) => zoomAt(c, c.z * Math.exp(-dy * .0022), e.clientX - r.left, e.clientY - r.top));
+			} else if (e.shiftKey && !dx) userCam((c) => ({
 				...c,
 				x: c.x - dy
 			}));
-			else setCam((c) => ({
+			else userCam((c) => ({
 				...c,
 				x: c.x - dx,
 				y: c.y - dy
@@ -141904,7 +142630,8 @@ function SkyView() {
 			tone: l.flight ? l.flight.state : row ? deriveSessionState(row).state : "",
 			label: l.name,
 			selected: sel.lines.has(l.id),
-			focused: l.flight ? groundFocus === l.id : focusLine === l.id
+			focused: l.flight ? groundFocus === l.id : focusLine === l.id,
+			needsYou: mode === "one" ? false : l.flight ? l.flight.state === "waiting_you" || l.flight.state === "halted" : !!row && (needsYou.includes(l.id) || linePerched(row))
 		};
 	}), ...objects.flatMap((o) => {
 		const r = rectOf(o.key);
@@ -141917,6 +142644,50 @@ function SkyView() {
 			selected: sel.lines.has(o.key)
 		}] : [];
 	})];
+	const [drawerCover, setDrawerCover] = (0, import_react.useState)(0);
+	(0, import_react.useLayoutEffect)(() => {
+		const root = vpRef.current;
+		const d = drawerOpen && root ? root.closest("#sky-view")?.querySelector(".sky-drawer.open") : null;
+		let cover = 0;
+		if (root && d) {
+			const v = root.getBoundingClientRect();
+			const r = d.getBoundingClientRect();
+			if (r.width && r.left < v.right && r.right > v.left && r.top < v.bottom && r.bottom > v.top) cover = Math.round(v.right - Math.max(r.left, v.left));
+		}
+		setDrawerCover(cover);
+	}, [
+		drawerOpen,
+		vp.w,
+		vp.h
+	]);
+	const mmHost = (0, import_react.useRef)(null);
+	const [mmBox, setMmBox] = (0, import_react.useState)(null);
+	const [mmPeek, setMmPeek] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => setMmPeek(false), [mode, oneLine]);
+	const mmAt = mmBox || {
+		x: vp.w - 24 - (MINIMAP_W + 2),
+		y: vp.h - 24 - (MINIMAP_H + 30),
+		w: MINIMAP_W + 2,
+		h: MINIMAP_H + 30
+	};
+	const mmCovers = minimapOpen && !mmPeek && screenBoxCovers(mmAt, mapRects.filter((r) => r.kind === "line" || r.kind === "grounded"), cam);
+	const mmShown = minimapOpen && !mmCovers;
+	(0, import_react.useLayoutEffect)(() => {
+		if (!mmShown) return;
+		const el = mmHost.current?.querySelector(".sky-minimap");
+		const root = vpRef.current;
+		if (!el || !root) return;
+		const v = root.getBoundingClientRect();
+		const r = el.getBoundingClientRect();
+		if (!r.width || !r.height) return;
+		const box = {
+			x: r.left - v.left,
+			y: r.top - v.top,
+			w: r.width,
+			h: r.height
+		};
+		setMmBox((b) => b && Math.abs(b.x - box.x) < 1 && Math.abs(b.y - box.y) < 1 && Math.abs(b.w - box.w) < 1 && Math.abs(b.h - box.h) < 1 ? b : box);
+	});
 	const dimmed = (id) => focusMode && !sel.lines.has(id) && selOne?.line !== id;
 	const keys = (0, import_react.useRef)(() => {});
 	keys.current = (e) => {
@@ -142020,12 +142791,16 @@ function SkyView() {
 			handled();
 			const d = PAN_STEP * (e.shiftKey ? 4 : 1);
 			panBy(k === "ArrowLeft" ? d : k === "ArrowRight" ? -d : 0, k === "ArrowUp" ? d : k === "ArrowDown" ? -d : 0);
-		} else if (k === "Enter" && focusLine) {
+		} else if (k === "Enter" && (focusLine || oneLine)) {
 			handled();
-			onLayout(focusLine, { open: true });
-		} else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
+			const id = focusLine || oneLine;
+			onLayout(id, { open: true });
+			revealOpened(id);
+		} else if (k === "Escape" && (focusLine || oneLine) && layout[focusLine || oneLine]?.open) {
 			handled();
-			onLayout(focusLine, { open: false });
+			const id = focusLine || oneLine;
+			onLayout(id, { open: false });
+			restoreAfterEnter(id);
 		} else if (k === "Escape" && catalogOpen && paletteOn) {
 			handled();
 			setPaletteMode("shelf");
@@ -142143,8 +142918,9 @@ function SkyView() {
 			window.removeEventListener("keyup", up, true);
 		};
 	}, [narrow]);
-	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a route to show it alone." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
-	const blank = lines.length === 0 && !query && mode !== "one" && mode !== "perched" && instQ.data?.length === 0;
+	const noSessions = instQ.data !== void 0 && instQ.data.length === 0;
+	const empty = lines.length > 0 ? "" : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -142214,7 +142990,7 @@ function SkyView() {
 						onFitSelection: fitSel,
 						onFitFocused: () => fitFocused(),
 						canFitSelection: !selectionEmpty(sel),
-						canFitFocused: !!focusLine
+						canFitFocused: !!(focusLine || oneLine)
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -142229,15 +143005,15 @@ function SkyView() {
 						type: "button",
 						className: "sky-zoom-btn sky-fit-one",
 						title: "Fit the focused route — the grid's 1 (1)",
-						disabled: !focusLine,
+						disabled: !focusLine && !oneLine,
 						onClick: () => fitFocused(),
 						children: "1"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-fit",
-						title: "See everything: every route in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)",
-						onClick: () => fitAll(true),
+						title: "Fit all: every route and note in the window, however small (0, Shift+1)",
+						onClick: () => fitAll(),
 						children: "Fit"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -142396,6 +143172,35 @@ function SkyView() {
 			if (guess && guess !== title) setLayout((l) => tidySkyLayout(l, guess));
 			setNewAt(null);
 		}
+	});
+	const phoneList = (0, import_react.useRef)(null);
+	const [phoneFit, setPhoneFit] = (0, import_react.useState)({});
+	const phoneFitRef = (0, import_react.useRef)(phoneFit);
+	phoneFitRef.current = phoneFit;
+	const phoneShown = (0, import_react.useRef)({});
+	const phoneOne = narrow && mode === "one";
+	(0, import_react.useLayoutEffect)(() => {
+		const list = phoneList.current;
+		if (!phoneOne || !list) return;
+		const next = {};
+		list.querySelectorAll(".sky-phone-fit[data-fit]").forEach((outer) => {
+			const id = outer.dataset.fit || "";
+			const inner = outer.firstElementChild;
+			if (!id || !inner) return;
+			const z0 = phoneFitRef.current[id] || 1;
+			next[id] = phoneRouteZoom(inner.getBoundingClientRect().width / z0, outer.clientWidth, ROUTE_FIT_MIN);
+			if (Math.abs(next[id] - z0) > .005) return;
+			const stop = inner.querySelector(".sky-node-stop.st-perched, .sky-node-stop.st-halted, .sky-node-stop.st-failed, .sky-node-stop.st-waiting_you") || inner.querySelector(".sky-node.sky-head.tone-attention");
+			const key = stop ? (stop.getAttribute("data-node") || stop.className) + "@" + next[id].toFixed(3) : "";
+			if (!stop || phoneShown.current[id] === key) return;
+			phoneShown.current[id] = key;
+			const o = outer.getBoundingClientRect();
+			const r = stop.getBoundingClientRect();
+			const left = r.left - o.left + outer.scrollLeft;
+			outer.scrollLeft = scrollToShow(outer.scrollLeft, outer.clientWidth, left, left + r.width);
+		});
+		const cur = phoneFitRef.current;
+		if (Object.keys(next).length !== Object.keys(cur).length || Object.entries(next).some(([k, z]) => Math.abs((cur[k] || 0) - z) > .005)) setPhoneFit(next);
 	});
 	const lineFor = (id, at) => {
 		const f = isGroundedKey(id) ? lines.find((l) => l.id === id)?.flight : null;
@@ -142625,11 +143430,21 @@ function SkyView() {
 			newBlock,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-list",
+				ref: phoneList,
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
 					blank,
+					newSession: noSessions && !lines.length,
 					className: "fl-empty muted",
 					children: empty
-				}), lines.map((l) => lineFor(l.id))]
+				}), phoneOne ? lines.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-phone-fit",
+					"data-fit": l.id,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "sky-phone-fit-in",
+						style: phoneFit[l.id] && phoneFit[l.id] !== 1 ? { zoom: phoneFit[l.id] } : void 0,
+						children: lineFor(l.id)
+					})
+				}, l.id)) : lines.map((l) => lineFor(l.id))]
 			}),
 			shelf
 		]
@@ -142764,18 +143579,23 @@ function SkyView() {
 								rects: mapRects,
 								cam,
 								viewport: vp,
+								inset: drawerCover ? { right: drawerCover } : void 0,
 								onJump: jumpTo
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							mapRects.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 								className: "sky-minimap-host",
+								ref: mmHost,
+								"data-covering": mmCovers ? "" : void 0,
 								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Minimap, {
 									rects: mapRects,
 									cam,
 									viewport: vp,
-									onCamera: (c) => setCam(c),
+									onCamera: (c) => userCam(c),
 									onJump: jumpTo,
-									open: minimapOpen,
+									open: mmShown,
 									onToggle: () => {
+										if (mmCovers) return setMmPeek(true);
+										if (mmPeek) return setMmPeek(false);
 										const v = !minimapOpen;
 										setMinimapOpen(v);
 										writePref(MINIMAP_KEY, v ? "1" : "0");
@@ -142789,6 +143609,7 @@ function SkyView() {
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
 								blank,
+								newSession: noSessions && !lines.length,
 								className: "sky-empty muted",
 								children: empty
 							})

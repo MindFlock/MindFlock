@@ -35,7 +35,7 @@ import {
   type FlightRow,
   type StepKindDef,
 } from "../../lib/flights";
-import { flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { atHaltPoint, flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
 import { controlFlight, jumpFlight, stepDone, stepFix, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
@@ -118,16 +118,47 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
   );
 }
 
+/** Whether "Let the agent fix it" applies to the flight's current stop — the
+ * server's `op_fix` rule (backend/web/core/flights.py): the stop FAILED (and
+ * the route did not already move on past it), or its failure was handed to
+ * you (`on_fail: you` — waiting on you with `detail.failed_reason`). Any
+ * kind: the agent gets the failure, then the stop runs again. A halt point
+ * (paused, nothing failed) has nothing to fix. */
+export function canFixStep(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states"> | null | undefined): boolean {
+  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you")) return false;
+  const step = flight.steps[flight.cursor];
+  const ss = step ? flight.step_states?.[step.id] : undefined;
+  if (!ss) return false;
+  if (ss.state === "failed") return !ss.detail?.moved_on;
+  return ss.state === "waiting_you" && !!ss.detail?.failed_reason;
+}
+
+/** Whether the stop the route moves to after its current one (passing the
+ * ones already done or skipped) is a halt point not yet let through. */
+export function nextIsHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "step_states">): boolean {
+  for (let k = flight.cursor + 1; k < flight.steps.length; k++) {
+    const s = flight.steps[k];
+    const ss = flight.step_states?.[s.id];
+    if (ss && (ss.state === "done" || ss.state === "skipped")) continue;
+    return !!s.halt && !ss?.detail?.halt_hit;
+  }
+  return false;
+}
+
 /** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
- * what enables Done); Retry / Skip on a halted stop (+ Let the agent fix it on
- * a halted Verify stop). A Verify stop parked on you answers its behaviors
- * instead (`VerifyStopActions`). */
-export function YouStepActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
+ * what enables Done); Retry / Skip on a halted stop, and Let the agent fix it
+ * wherever the server takes it (`canFixStep`); Carry on / Skip at a reached
+ * halt point (`atHaltPoint`: nothing failed, so nothing to retry). A Verify stop parked on you
+ * answers its behaviors instead (`VerifyStopActions`). `inTile` (a stop on
+ * the Sky): its text is the tile's own line under its name, not a paragraph
+ * here. */
+export function YouStepActions({ flight, compact = false, inTile = false }: { flight: Flight; compact?: boolean; inTile?: boolean }) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
   const [ticked, setTicked] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
-  if (!step || (flight.state !== "waiting_you" && flight.state !== "halted")) return null;
+  const haltPoint = atHaltPoint(flight);
+  if (!step || (flight.state !== "waiting_you" && flight.state !== "halted" && !haltPoint)) return null;
   if (step.kind === "verify" && flight.state === "waiting_you") return <VerifyStopActions flight={flight} compact={compact} />;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -139,11 +170,12 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
   };
   const key = (i: number) => flight.id + ":" + step.id + ":" + i;
   const allTicked = items.every((_, i) => ticked[key(i)]);
-  const halted = flight.state === "halted";
+  const halted = flight.state === "halted" || haltPoint;
+  const fix = !haltPoint && canFixStep(flight);
   const text = youText(flight);
   return (
-    <div className={"fl-you" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
-      {!compact && text && !halted && <p className="fl-you-text">{text}</p>}
+    <div className={"fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : "")} onClick={stop} data-no-drag>
+      {!compact && !inTile && text && !halted && <p className="fl-you-text">{text}</p>}
       {!halted && items.length > 0 && (
         <ul className="fl-you-items">
           {items.map((it, i) => (
@@ -161,7 +193,17 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
         </ul>
       )}
       <div className="fl-you-acts">
-        {halted ? (
+        {haltPoint ? (
+          <button
+            type="button"
+            className="btn-primary fl-btn fl-carry"
+            disabled={busy}
+            title={"Carry on past the halt point — “" + step.title + "” runs, and the route goes on"}
+            onClick={() => void run(() => controlFlight(flight.id, "resume"))}
+          >
+            Carry on
+          </button>
+        ) : halted ? (
           <button
             type="button"
             className="btn-primary fl-btn"
@@ -182,12 +224,12 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
             Done
           </button>
         )}
-        {halted && step.kind === "verify" && (
+        {fix && (
           <button
             type="button"
             className="test-btn fl-btn fl-fix"
             disabled={busy}
-            title="Hand the failure to the agent — the behaviors are checked again after its fix"
+            title={step.kind === "verify" ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix"}
             onClick={() => void run(() => stepFix(flight.id, step.id))}
           >
             Let the agent fix it
@@ -198,7 +240,10 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
           className="test-btn fl-btn fl-skip"
           disabled={busy}
           title={"Skip “" + step.title + "” — the route goes on without it"}
-          onClick={() => void run(() => stepSkip(flight.id, step.id))}
+          // At a halt point the server keeps a paused route paused after a
+          // skip (`_advance_keeping_pause`): Skip carries on too, as it says
+          // — unless the next stop is a halt point itself (it halts there).
+          onClick={() => void run(async () => (await stepSkip(flight.id, step.id)) && haltPoint && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume"))}
         >
           Skip
         </button>
@@ -247,7 +292,8 @@ export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () =>
   const items: MenuItem[] = [];
   const atCursor = n.index === flight.cursor;
   if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the route to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
-  if (n.state === "halted" || n.state === "failed")
+  // A reached halt point failed nothing: Carry on (below), no Retry.
+  if ((n.state === "halted" || n.state === "failed") && !(atCursor && atHaltPoint(flight)))
     items.push({ key: "retry", label: "Retry", title: "Run this stop again", onSelect: () => void stepRetry(flight.id, step.id) });
   if (atCursor)
     items.push(
@@ -293,7 +339,7 @@ export function useCancelAsk(flight: Flight | null) {
  * current box, which is drawn bigger to hold them. `verifyInPlace` (a chain
  * drawn by SkyChain): a Verify stop parked on you stays a tile — its
  * Behaviors card opens in the tile's place (docs/behaviors.md §1). */
-export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void, opts: { verifyInPlace?: boolean } = {}) {
+export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void, opts: { verifyInPlace?: boolean; inTile?: boolean } = {}) {
   const cur = flight ? flight.steps[flight.cursor] : null;
   const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
   const expanded = (n: DiagramNode) =>
@@ -301,7 +347,7 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
     expand &&
     n.kind === "stop" &&
     n.index === flight.cursor &&
-    (n.state === "perched" || n.state === "halted") &&
+    (n.state === "perched" || n.state === "halted" || (n.state === "paused" && atHaltPoint(flight))) &&
     !(opts.verifyInPlace && verifyHere);
   const renderInBox = (n: DiagramNode): ReactNode => {
     if (!flight || n.kind !== "stop") return null;
@@ -313,7 +359,7 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
             <OverflowMenu label={"Actions for " + n.title} items={items} />
           </span>
         )}
-        {expanded(n) && <YouStepActions flight={flight} />}
+        {expanded(n) && <YouStepActions flight={flight} inTile={opts.inTile} />}
       </>
     );
   };

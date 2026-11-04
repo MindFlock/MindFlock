@@ -161,13 +161,28 @@ def test_session_state_reads_like_the_rail():
         "offline": {"activity": "offline"},
         "paused": {"status": "paused", "activity": "offline"},
         "missing": {"workspace_missing": True},
+        # A halted route says Halted (red) on a row whose git stage is Pushed
+        # and whose agent is idle — the rail's chip (sessionState.ts).
+        "halted": {
+            "activity": "idle",
+            "stage": "pushed",
+            "flight": {
+                "id": "f1",
+                "plan_name": "Ticket to merge",
+                "state": "halted",
+                "reason": "CI checks failed: 2 of 14 red",
+                "step": {"id": "s3", "title": "CI checks", "actor": "robot"},
+            },
+        },
+        # A worker's branch-only dto (no id) is not a route of its own.
+        "halted_noid": {"activity": "idle", "flight": {"id": "", "state": "halted"}},
     }
     script = (
         src
         + "\nvar rows = "
         + json.dumps(rows)
         + ";\nvar out = {};\nfor (var k in rows) { var s = sessionState(rows[k]);"
-        " out[k] = [s.label, s.tone, s.restartable, attnRank(rows[k])]; }\n"
+        " out[k] = [s.label, s.tone, s.restartable, attnRank(rows[k]), s.hint]; }\n"
         "console.log(JSON.stringify(out));\n"
     )
     res = subprocess.run(
@@ -185,10 +200,15 @@ def test_session_state_reads_like_the_rail():
     assert out["idle"][:2] == ["Idle", "neutral"] and out["idle"][3] == 9
     assert out["limit"][:2] == ["Waiting on limit", "waiting"]
     # Offline is the one with Restart, and it is in the bell (ranked).
-    assert out["offline"] == ["Offline", "broken", True, 1]
+    assert out["offline"][:4] == ["Offline", "broken", True, 1]
     # Outside the table, as on the rail.
     assert out["paused"][:3] == ["Paused", "muted", False]
     assert out["missing"][:3] == ["Missing", "broken", False]
+    # Halted: red, ranked with the halted Needs-you kind, and its tooltip says
+    # what failed without the stop's name twice.
+    assert out["halted"][:4] == ["Halted", "broken", False, 0.75]
+    assert out["halted"][4].startswith("Halted at CI checks — Failed: 2 of 14 red")
+    assert out["halted_noid"][:2] == ["Idle", "neutral"]
 
 
 # --------------------------------------------------------------------------- #

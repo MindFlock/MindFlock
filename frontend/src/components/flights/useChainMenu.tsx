@@ -88,6 +88,19 @@ export function loopMenuItems(choices: readonly LoopChoice[]): SkyMenuItem[] {
 
 const HERE: ReadonlySet<string> = new Set(["current", "perched", "halted", "paused"]);
 
+/** Round 21: "Let the agent fix it" on ANY halted stop, right after Retry
+ * (lib/stopEditing offers it on a Verify stop only). A stop is drawn halted
+ * only when it failed — a halt point pauses, it doesn't halt — which is what
+ * the server's fix op takes (FlightStrip `canFixStep`). */
+export function withFixItem(items: readonly SkyMenuItem[], n: Pick<DiagramNode, "state" | "title">): SkyMenuItem[] {
+  const out = [...items];
+  if (n.state !== "halted" || out.some((i) => i.key === "fix")) return out;
+  const at = out.findIndex((i) => i.key === "retry");
+  if (at < 0) return out;
+  out.splice(at + 1, 0, { key: "fix", label: "Let the agent fix it", title: "Hand the failure to the agent — “" + n.title + "” runs again after its fix" });
+  return out;
+}
+
 export function useChainMenu(
   h: ChainMenuHandlers,
   flightId: string,
@@ -100,11 +113,14 @@ export function useChainMenu(
   if (!open || typeof document === "undefined") return { onMenu, menu: null };
   const n = open.n;
   const live = !!flightId && (!!n.step || n.kind === "group");
-  const items = menuItemsFor(n, {
-    can: { edit: !!(h.onEdit || h.onSelect), duplicate: !!h.onDuplicate, remove: !!h.onRemove, open: !!h.onOpen, halt: !!h.onToggleHalt },
-    live,
-    here: live && HERE.has(n.state),
-  }) as SkyMenuItem[];
+  const items = withFixItem(
+    menuItemsFor(n, {
+      can: { edit: !!(h.onEdit || h.onSelect), duplicate: !!h.onDuplicate, remove: !!h.onRemove, open: !!h.onOpen, halt: !!h.onToggleHalt },
+      live,
+      here: live && HERE.has(n.state),
+    }) as SkyMenuItem[],
+    n
+  );
   // Round 20: side by side with the next stop, or out of its group again —
   // only for a stop still ahead whose kind may run in parallel.
   const st = n.step;

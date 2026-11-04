@@ -305,8 +305,13 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
           : { key: "done", label: "Done", title: "Mark this stop done — the bird flies on" }
       );
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
-    if (n.state === "halted" && verify)
-      items.push({ key: "fix", label: "Let the agent fix it", title: "Hand the failure to the agent — the behaviors are checked again after its fix" });
+    // Any halted stop (round 21; the server's op_fix takes every kind).
+    if (n.state === "halted")
+      items.push({
+        key: "fix",
+        label: "Let the agent fix it",
+        title: verify ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — this stop runs again after its fix",
+      });
     items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
   }
   if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));

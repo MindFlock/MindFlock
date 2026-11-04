@@ -46,7 +46,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
-import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
+import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightStartOn, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { LOOP_AGENT, drawnCanvas, findNode, firstStepOf, loopBackTo, loopChoices, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode, type LoopChoice } from "../../lib/flightDiagram";
 import {
   dropGroup,
@@ -78,7 +78,7 @@ import { removalNeedsAsk } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
-import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
+import { canFixStep, currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
 import { StopPalette, type PaletteSaved } from "./StopParts";
 import { StopDialog } from "./StopDialog";
 import { useBehaviorsTile } from "./SkyChain";
@@ -125,6 +125,10 @@ export function inspectorDef(def: StepKindDef | undefined, step: FlightStep): St
   return { ...def, fields: def.fields.filter((f) => f.name !== "count") };
 }
 
+/** How a route built on a session with none starts (round 21): only on
+ * ▶ Run — never silently on the session's next prompt. */
+export const NEW_ROUTE_STARTS_ON: FlightStartOn = "run";
+
 /** Built-ins first, then the owner's own. */
 export const orderedPlans = (plans: readonly FlightPlan[]) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
 
@@ -150,10 +154,10 @@ export function intakeWords(kind: IntakeSourceRef["kind"]): { one: string; many:
 /** The source's name for a sentence: the lane's label without its kind
  * prefix ("Tickets · Shortcut" → "Shortcut"), so "every ticket from
  * Shortcut" doesn't say the kind twice. A label with no such prefix stays. */
-export function intakeSourceName(src: Pick<IntakeDefault, "kind" | "label" | "target">): string {
-  const label = (src.label || "").trim();
+export function intakeSourceName(src: Partial<Pick<IntakeDefault, "kind" | "label" | "target">>): string {
+  const label = String(src.label ?? "").trim();
   const m = /^(tickets|prs|pull requests|issues)\s*[·:—-]\s*(.+)$/i.exec(label);
-  return (m ? m[2].trim() : label) || src.target;
+  return (m ? m[2].trim() : label) || String(src.target ?? "").trim();
 }
 
 /** The ⋯ item's label, its tooltip, and the toast once it is done. */
@@ -161,7 +165,7 @@ export function promoteWords(src: Pick<IntakeDefault, "kind" | "label" | "target
   const w = intakeWords(src.kind);
   const name = intakeSourceName(src);
   return {
-    label: "Use these stops for every " + w.one + " from " + name,
+    label: "Use this route for every " + w.one + " from " + name,
     title: "Changes what NEW " + w.many + " from " + name + " run: each one starts with this route's stops. This " + w.one + " keeps running as it is.",
     done: "New " + w.many + " from " + name + " run this route",
   };
@@ -181,8 +185,9 @@ export async function promoteStops(flightId: string): Promise<boolean> {
   return true;
 }
 
-/** The line's "Use these stops for every …" (null: not from intake, or its
- * source is gone). The source is fetched once per flight id, not per render. */
+/** The line's "Use this route for every …" (null: not from intake, its
+ * source is gone, or it has no name to say — never "from undefined"). The
+ * source is fetched once per flight id, not per render. */
 export function usePromoteStops(flight: Pick<Flight, "id" | "subject"> | null | undefined): { label: string; title: string; run(): Promise<boolean> } | null {
   const id = flight?.id || "";
   const intake = !!id && isIntakeSubject(flight?.subject?.kind);
@@ -193,7 +198,7 @@ export function usePromoteStops(flight: Pick<Flight, "id" | "subject"> | null | 
     staleTime: Infinity,
   });
   const src = intake ? q.data : null;
-  if (!src) return null;
+  if (!src || !intakeSourceName(src)) return null;
   const words = promoteWords(src);
   return { label: words.label, title: words.title, run: () => promoteStops(id) };
 }
@@ -333,8 +338,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const graphDiagram = useMemo(() => behaviors.apply(line), [behaviors.apply, line]);
   const cancel = useCancelAsk(flight);
   // Both homes draw SkyChain: a Verify stop parked on you is the Behaviors
-  // tile, whose card opens in its place (docs/behaviors.md §1).
-  const parts = liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true });
+  // tile, whose card opens in its place (docs/behaviors.md §1). The tile
+  // says why it stopped under its name (round 21), so the buttons don't.
+  const parts = liveBoxParts(flight, true, cancel.ask, { verifyInPlace: true, inTile: true });
   const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
   const stops = line.nodes.filter((n) => n.kind === "stop");
   const end = flight ? flight.steps.length : 0;
@@ -384,10 +390,12 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         if ((await optimistic(fid, withSteps([step], where), go)) && openIt) setSelectIndex(where ?? end);
       } else {
         // Round 19: building a chain on a session doesn't fly it — it waits,
-        // ready, for ▶ Run or the session's next prompt.
-        const f = await tackOnNew(title, [step], "prompt");
+        // ready. Round 21: for ▶ Run only (a half-built route must not start
+        // on the next thing typed to the agent); the head's "starts on…"
+        // chip (ReadyHead) is how to also start it on the next prompt.
+        const f = await tackOnNew(title, [step], NEW_ROUTE_STARTS_ON);
         if (f) {
-          toast("Ready: " + (f.plan_name || "a new route") + " — it runs on ▶ Run or your next prompt");
+          toast("Ready: " + (f.plan_name || "a new route") + " — it runs when you press ▶ Run");
           if (openIt) setSelectIndex(f.steps.length - 1);
         }
       }
@@ -408,7 +416,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         const fid = flight.id;
         const go = () => tackOnPlan(fid, plan.id, where);
         if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
-      } else await takeOff({ plan_id: plan.id, title, start_on: "prompt" });
+      } else await takeOff({ plan_id: plan.id, title, start_on: NEW_ROUTE_STARTS_ON });
     } finally {
       setBusy(false);
     }
@@ -541,7 +549,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         if (await tackOnPlan(flight.id, plan.id)) toast("Tacked on “" + plan.name + "” — " + plan.steps.length + " stops");
-      } else await takeOff({ plan_id: plan.id, title, start_on: "prompt" });
+      } else await takeOff({ plan_id: plan.id, title, start_on: NEW_ROUTE_STARTS_ON });
     } finally {
       setBusy(false);
     }
@@ -837,7 +845,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         doneLabel={open.step?.kind === "verify" ? "Behaviors" : undefined}
         doneTitle={open.step?.kind === "verify" ? "Answer its behaviors — the route goes on once each one has an answer" : undefined}
         onRetry={here && open.state === "halted" ? () => void act(() => stepRetry(flight!.id, open.step!.id)) : undefined}
-        onFix={here && open.state === "halted" && open.step?.kind === "verify" ? () => void act(() => stepFix(flight!.id, open.step!.id)) : undefined}
+        onFix={here && canFixStep(flight) ? () => void act(() => stepFix(flight!.id, open.step!.id)) : undefined}
         onSkip={here ? () => void act(() => stepSkip(flight!.id, open.step!.id)) : undefined}
         extra={
           <>

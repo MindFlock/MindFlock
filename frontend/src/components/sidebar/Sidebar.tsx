@@ -10,8 +10,8 @@ import { VIEWS, VIEW_BLURB, setView, viewLabel } from "../../lib/viewMode";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshInstances, useConfig, useDevices, useFlights, useInstances } from "../../state/queries";
-import { perchBadge } from "../../lib/flights";
+import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
+import { needsYouBadge, useNeedsYou } from "../../lib/needsYou";
 import { keymapVersion, subscribeKeymap } from "../../lib/keymap";
 import { usableShortcuts } from "../palette/ShortcutsSheet";
 import { Bird } from "../flights/Bird";
@@ -90,7 +90,9 @@ const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];
  * always shows, so the sky is never out of reach. */
 export function ViewRow({ calm }: { calm: boolean }) {
   const ui = useUi();
-  const perch = perchBadge(useFlights().data || []);
+  // The one Needs you list (lib/needsYou): the bell, the Sky strip and the
+  // top bar count the same rows.
+  const perch = needsYouBadge(useNeedsYou());
   // The tooltip's shortcut off the live keymap, rebinds included.
   useSyncExternalStore(subscribeKeymap, keymapVersion, keymapVersion);
   const k = usableShortcuts("view");

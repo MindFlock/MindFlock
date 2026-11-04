@@ -55,6 +55,26 @@
   }
 }
 
+/* --- The bird on a line, far out ----------------------------------------------- */
+
+/* Below ~60 % the Sky draws the bird bigger so it still reads (SkyLine.css's
+   far level of detail, `--sky-far-ui`). It must not do that with `zoom`: zoom
+   scales the marker's OWN left/top too, so a bird placed at plane x slid to
+   x × 1.4 at the 40 % floor — onto the next stop after zooming out or Tidy
+   (JUDGE-R21-1 #3). `scale` grows it about its layout origin instead, and
+   with transform-origin 0 0 the point its transform pins to left/top (the
+   disc's foot, translate(-50%, -78%); a branch bird's centre) stays on the
+   stop. `span` outranks SkyLine.css's `zoom` rule for the same marker. The
+   bird in hand keeps its own screen-sized transform. */
+.skl[data-lod="far"] span.fl-bird-marker {
+  zoom: 1;
+}
+
+.skl[data-lod="far"] span.fl-bird-marker:not(.fl-bird-dragging) {
+  transform-origin: 0 0;
+  scale: var(--sky-far-ui, 1);
+}
+
 /* --- The weather ---------------------------------------------------------------- */
 
 /* Quiet hours: the sky dims. Under the flock (it comes first), over the

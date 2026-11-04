@@ -405,3 +405,10 @@
   padding: 1px 8px;
   font-size: 11px;
 }
+
+/* An answer strip with nothing to say — a dialog the provider couldn't read,
+   no question, no command, no buttons, no note — is an empty yellow box with
+   a lone ↗ (the row itself already opens the session): draw nothing. */
+.notif-attn .flock-answer.is-unparsed:not(:has(.fa-q, .fa-opt, .fa-note, .fa-hint, .fa-state)) {
+  display: none;
+}

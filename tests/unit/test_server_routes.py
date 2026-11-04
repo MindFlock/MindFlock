@@ -536,17 +536,32 @@ def test_copy_registers_in_place_child(registered, monkeypatch, tmp_path):
         return _FakeInst(opts.title, wt=str(wt))
 
     monkeypatch.setattr(server.session, "NewInstance", _new_instance)
-    monkeypatch.setattr(server, "_unique_title", lambda base: base)
     monkeypatch.setattr(server, "_instance_json", lambda i, **k: {"title": i.Title})
     monkeypatch.setattr(server._events.BUS, "emit", lambda *a, **k: None)
     r = client.post("/api/instances/cp-2/copy")
     assert r.status_code == 202
-    assert r.json()["title"] == "cp-2-copy"
+    assert r.json()["title"] == "cp-2-2"
     # The copy is always in-place (shares the source's worktree, never deletes it).
     assert captured["opts"].in_place is True
     assert captured["opts"].path == str(wt)
-    assert "cp-2-copy" in server.ENGINE.instances
-    server.ENGINE.instances.pop("cp-2-copy", None)
+    assert "cp-2-2" in server.ENGINE.instances
+    server.ENGINE.instances.pop("cp-2-2", None)
+
+
+def test_copy_title_is_the_family_name_and_the_lowest_free_number():
+    t = server._copy_title
+    assert t("sitecheck-bot", {"sitecheck-bot"}) == "sitecheck-bot-2"
+    # A gap is filled first, whichever member is copied.
+    fam = {"sitecheck-bot", "sitecheck-bot-3"}
+    assert t("sitecheck-bot", fam) == "sitecheck-bot-2"
+    assert t("sitecheck-bot-3", fam) == "sitecheck-bot-2"
+    assert (
+        t("sitecheck-bot-2", {"sitecheck-bot", "sitecheck-bot-2", "sitecheck-bot-3"})
+        == "sitecheck-bot-4"
+    )
+    # A trailing number with no bare name open is part of the name.
+    assert t("sc-25355", {"sc-25355"}) == "sc-25355-2"
+    assert t("bot7", {"bot7"}) == "bot7-2"
 
 
 # --------------------------------------------------------------------------- #

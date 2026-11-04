@@ -30,11 +30,12 @@ export type ViewMode = "auto" | "2" | "4" | "9";
  * of panes, or the sky — every session a line on one pannable plane
  * (components/flights/SkyView.tsx). Per device, `mf_view`. */
 export type MainView = "grid" | "sky";
-/** Which lines the sky draws (lib/skyLayout SKY_MODES); "one" is the focused
- * session alone — never remembered, the `#sky/<title>` hash carries it. */
+/** Which lines the sky draws (lib/skyLayout SKY_MODES); "one" — This
+ * session, the focused session's route alone — is the default, and the pick
+ * is remembered per device (the `#sky/<title>` hash names the session). */
 const loadSkyMode = (): SkyMode => {
-  const m = load<string>("mf_sky_view", "mine", false);
-  return m === "all" || m === "perched" ? m : "mine";
+  const m = load<string>("mf_sky_view", "one", false);
+  return m === "all" || m === "mine" || m === "perched" ? m : "one";
 };
 
 /** Sidebar width bounds (px).
@@ -189,8 +190,8 @@ interface UiState {
   viewMode: ViewMode;
   /** The main area's view: the grid, or the sky (lib/viewMode.ts). */
   view: MainView;
-  /** The sky's lines: All · Mine · Perched on you · This session (the
-   * focused session alone). */
+  /** The sky's lines: This session (the focused session alone, the
+   * default) · All · Mine · Needs you. */
   skyMode: SkyMode;
   /** A request for the sky's flyway shelf (showFlyways): open it, and the
    * card of `plan` when one is named ("new" = a fresh card). The sky takes
@@ -601,7 +602,7 @@ export const useUi = create<UiState>((set, get) => ({
     if (v === "grid" && f && _selectSession) _selectSession(f, { noKeyboard: true });
   },
   setSkyMode: (m) => {
-    if (m !== "one") save("mf_sky_view", m, false);
+    save("mf_sky_view", m, false);
     set({ skyMode: m });
   },
   showSky: (focus = "") => {
@@ -610,7 +611,7 @@ export const useUi = create<UiState>((set, get) => ({
       if (_selectSession) _selectSession(focus, { noKeyboard: true });
       else get().setFocused(focus);
       get().setSkyMode("one");
-    } else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
+    }
     get().setView("sky");
   },
   showFlyways: (plan = "") => {

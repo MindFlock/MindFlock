@@ -442,6 +442,35 @@ export function firstFit(b: Rect | null, vw: number, vh: number, maxZ = 1, pad =
   return { z, x: pad - b.x * z, y: pad - b.y * z };
 }
 
+/** This session's fit (round 21): the focused route to the window's width
+ * less `ROUTE_FIT_PAD` a side (and its height), the zoom clamped to
+ * [ROUTE_FIT_MIN, ROUTE_FIT_MAX]. Centred; a route still wider (or taller)
+ * than the window at the floor starts at its left (top) edge, so its head —
+ * the session's name and agent — is never the part cut off. */
+export const ROUTE_FIT_PAD = 48;
+export const ROUTE_FIT_MIN = 0.6;
+export const ROUTE_FIT_MAX = 1.5;
+export function fitRoute(b: Rect | null, vw: number, vh: number): SkyCamera {
+  if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return { x: 0, y: 0, z: 1 };
+  const pad = ROUTE_FIT_PAD;
+  const want = Math.min((vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h);
+  const z = Math.min(ROUTE_FIT_MAX, Math.max(ROUTE_FIT_MIN, Number.isFinite(want) ? want : 1));
+  const x = b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z;
+  const y = b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z;
+  return { x, y, z };
+}
+
+/** Whether a screen box (the open minimap, viewport px) covers any of these
+ * plane rects under camera `c` — the minimap folds to its glyph while it
+ * would sit over a route (round 21). */
+export function screenBoxCovers(box: Rect, rects: readonly Rect[], c: SkyCamera): boolean {
+  return rects.some((r) => {
+    const sx = c.x + r.x * c.z;
+    const sy = c.y + r.y * c.z;
+    return sx < box.x + box.w && sx + r.w * c.z > box.x && sy < box.y + box.h && sy + r.h * c.z > box.y;
+  });
+}
+
 /** The camera that brings one rectangle to the middle of the window, at `z`. */
 export function centerOn(r: Rect, vw: number, vh: number, z: number): SkyCamera {
   const nz = clampZoom(z);
@@ -818,10 +847,10 @@ export function estimateLine(base: { w: number; h: number }, stored: StoredLine 
 export type SkyMode = "all" | "mine" | "perched" | "one";
 
 export const SKY_MODES: ReadonlyArray<{ id: SkyMode; label: string; title: string }> = [
+  { id: "one", label: "This session", title: "The session you're on: its route, filling the sky" },
   { id: "all", label: "All", title: "Every session — a worker inside its lead's route" },
   { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their route" },
   { id: "perched", label: "Needs you", title: "Only the routes that need you" },
-  { id: "one", label: "This session", title: "One route, filling the sky" },
 ];
 
 /** Drawn in the sky at all: not a hidden helper (a verify run). */
@@ -861,6 +890,35 @@ export function skyLineTitles(rows: readonly Instance[], mode: SkyMode, opts: { 
     return out;
   };
   return pick.filter((r) => lineOf(r, new Set())).map((r) => r.title).reverse();
+}
+
+/** What This session shows with NOTHING focused (round 21): shown, never
+ * selected. The first session that needs you, in the bell's own order
+ * (`needsYou`, lib/needsYou `needsYouTitles`: asking, waiting on you...),
+ * then any other route waiting on you or halted (`linePerched`); else the
+ * most recent WORKING session (the MRU's order, then the latest to start
+ * working); else the MRU head; else the rail's #1 (`railOrder`, useUi);
+ * else the newest row. Only rows the sky draws (`inSky`) count; "" for none. */
+export function pickThisSession(
+  rows: readonly Instance[],
+  o: { needsYou?: readonly string[]; mru?: readonly string[]; railOrder?: readonly string[] } = {}
+): string {
+  const shown = rows.filter(inSky);
+  if (!shown.length) return "";
+  const has = new Set(shown.map((r) => r.title));
+  const firstOf = (ts: readonly string[] | undefined) => (ts || []).find((t) => has.has(t)) || "";
+  const needs = firstOf(o.needsYou) || shown.find(linePerched)?.title;
+  if (needs) return needs;
+  const mru = o.mru || [];
+  const recency = (r: Instance) => {
+    const at = mru.indexOf(r.title);
+    return at < 0 ? mru.length : at;
+  };
+  const working = shown
+    .filter((r) => deriveSessionState(r).state === "working")
+    .sort((a, b) => recency(a) - recency(b) || (Number(b.activity_since) || 0) - (Number(a.activity_since) || 0));
+  if (working.length) return working[0].title;
+  return firstOf(mru) || firstOf(o.railOrder) || shown[shown.length - 1].title;
 }
 
 // --- Rows the sky draws ----------------------------------------------------------

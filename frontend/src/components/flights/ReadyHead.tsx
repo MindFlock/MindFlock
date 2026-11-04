@@ -1,9 +1,14 @@
 /** Round 19: a chain built on a session waits, ready, until ▶ Run or the
- * session's next prompt (docs/flights.md "Round 19"). On the session tile
- * (the Sky's chain and the Flight tab), under the tile's name: one row
- * "[Ready] [▶ Run]", then one small muted line saying how it starts — a press
- * flips it between "on your next prompt" and "only on ▶ Run". The tile's own
- * sub-line does NOT repeat any of this (SkyLine / FlightChain `headSub`).
+ * session's next prompt (docs/flights.md "Round 19"). "[Ready] [▶ Run]",
+ * then one small muted line saying how it starts — a press flips it between
+ * "on your next prompt" and "only on ▶ Run". The tile's own sub-line does
+ * NOT repeat any of this (SkyLine / FlightChain `headSub`).
+ *
+ * Where it sits: in the Sky, on the route's frame bar (round 21, JUDGE-R21-2
+ * #8: the agent tile scrolls off-screen on a long route; the bar is where
+ * the route's name is), laid out as one row there (SkyLine.css
+ * `.skl-frame-bar .sky-ready`) — the Sky's ONE ▶ Run per route. In the
+ * Flight tab, on the session tile under its name (FlightChain).
  *
  * The button's class is `sky-ready-run`, never `sky-run`: `.sky-chain
  * .sky-run` is the free chain's hover-only ▶ trigger circle (SkyChain.css,

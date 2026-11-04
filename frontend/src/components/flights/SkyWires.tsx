@@ -1,7 +1,8 @@
 /** Round 18 — what the Sky draws BETWEEN chains (docs/flights.md "Round
  * 18"), on one SVG layer in plane px over the lines: the rubber band of a
  * wire being drawn (useSkyWiring), and the HANDOFF wires — dashed, in the
- * source session's colour — from a Handoff stop's out port to the head of
+ * neutral ink (round 21b: colour on the Sky means state; a session's
+ * identity is only its dot) — from a Handoff stop's out port to the head of
  * the chain it starts (the stops-only chain it names; once started, the
  * started flight's chain). A chain's own wires are SkyChain's.
  *
@@ -9,10 +10,14 @@
  * it was opened from (or at the spot a wire was dropped), not under a row. */
 
 import type { JSX, ReactNode } from "react";
-import { chainColor, NODE_W, TILE, wirePath, type ChainGraph, type GraphNode } from "../../lib/skyGraph";
+import { NODE_W, TILE, wirePath, type ChainGraph, type GraphNode } from "../../lib/skyGraph";
 import type { HandoffLink } from "../../lib/groundedLines";
 import type { Pos } from "../../lib/skyLayout";
 import { chainNode, chainNodes, portOnPlane, posStepOf, type PlacedChain, type WireBand } from "./useSkyWiring";
+
+/** A handoff wire's ink: neutral, from the theme's text colour, so both
+ * themes follow (the layer sits outside `.sky-chain`'s tokens). */
+export const HANDOFF_INK = "color-mix(in srgb, var(--text) 50%, transparent)";
 
 /** One handoff wire, plane px. */
 export interface HandoffWire {
@@ -53,7 +58,7 @@ export function handoffWires(links: readonly HandoffLink[], chains: Iterable<Pla
     const to = entryOf(dst);
     if (!n || !to) continue;
     const from = portOnPlane(src, n, "out");
-    out.push({ id: l.fromFlight + ":" + l.fromStep, d: wirePath(from, to), color: chainColor(l.fromSession), started: l.started, from, to });
+    out.push({ id: l.fromFlight + ":" + l.fromStep, d: wirePath(from, to), color: HANDOFF_INK, started: l.started, from, to });
   }
   return out;
 }
