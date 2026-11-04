@@ -252,6 +252,11 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         # How soon THIS machine puts idle agents to sleep: it is about its
         # own memory, which differs per device.
         "sleep_idle_minutes",
+        # When THIS machine counts as short of memory, and how soon it puts
+        # idle agents to sleep then (backend.memory_pressure, core.sleep).
+        "memory_sleep_minutes",
+        "memory_low_pct",
+        "memory_critical_pct",
         # Names from THIS machine's Claude config, sharing THIS machine's RAM.
         "mcp_shared_servers",
     ),

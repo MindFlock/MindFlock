@@ -176,3 +176,40 @@ def test_the_pipeline_hold_is_capped(monkeypatch):
     monkeypatch.setattr(sr, "_MEMORY_POLL_SECONDS", 0)
     monkeypatch.setattr(sr, "_MEMORY_MAX_WAIT_SECONDS", 0)
     asyncio.run(asyncio.wait_for(sr._wait_for_memory("ticket sc-2"), 5))
+
+
+def test_the_share_lines_are_settings(machine, monkeypatch):
+    """``general.memory_low_pct`` / ``memory_critical_pct`` move the share
+    lines (absolute floors and PSI stay); recovery keeps its margin."""
+    monkeypatch.setattr(mp, "_share_settings", lambda: (25, 10))
+    assert machine(7.5) == "low"  # 23% of 32 GB: low at a 25% line
+    assert machine(3.0) == "critical"  # 9%
+    assert machine(4.0) == "critical"  # 12.5%: not past the 13% recovery
+    assert machine(4.5) == "low"  # 14%: out of critical, under 30%
+    assert machine(10) == "ok"  # 31%
+    th = mp.thresholds()
+    assert th["low"][0] == 0.25 and th["recover_low"][0] == 0.30
+    assert th["critical"][0] == 0.10 and th["recover_critical"][0] == 0.13
+
+
+def test_a_zero_share_drops_that_signal_only(machine, monkeypatch):
+    monkeypatch.setattr(mp, "_share_settings", lambda: (0, 0))
+    assert machine(3.0) == "ok"  # 9% free, but the share line is off
+    assert machine(1.5) == "low"  # under the 2 GB floor all the same
+    assert machine(16, some60=45.0) == "critical"  # PSI still counts
+
+
+def test_the_settings_are_read_clamped_and_cached(monkeypatch):
+    from backend.config import settings as S
+
+    mp._reset_for_tests()
+    assert mp._share_settings() == (15, 7)  # unset: the defaults
+    S.update_settings(general={"memory_low_pct": 30, "memory_critical_pct": 50})
+    assert mp._share_settings() == (15, 7)  # cached for _SETTINGS_SECONDS
+    mp._reset_for_tests()
+    assert mp._share_settings() == (30, 30)  # critical never above low
+    S.update_settings(general={"memory_low_pct": 400, "memory_critical_pct": 3})
+    mp._reset_for_tests()
+    assert mp._share_settings() == (90, 3)
+    S.update_settings(general={"memory_low_pct": "", "memory_critical_pct": ""})
+    mp._reset_for_tests()

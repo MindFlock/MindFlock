@@ -568,6 +568,23 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["zzz"],
     },
     {
+        # Memory read low, so the sleep sweep put the longest-idle agents to
+        # sleep (core.sleep): ONE notice per pass naming them and why — they
+        # wake on use, so nothing is lost, but the person should know where
+        # their agents went.
+        "id": "sessions_slept",
+        "label": "Idle agents are put to sleep to free memory",
+        "description": "When memory runs low, the longest-idle agents sleep; they wake when you use them.",
+        "event": "system.sessions_slept",
+        "old": None,
+        "new": None,
+        "title": "Agents put to sleep",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["zzz"],
+    },
+    {
         # A template's SCHEDULED run couldn't start (no folder any more, the
         # repo moved, no free name). It fired with nobody watching — at 21:00
         # or overnight — so without a push the failure waits on a card in the

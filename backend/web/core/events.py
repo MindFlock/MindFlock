@@ -407,6 +407,13 @@ EVENT_NAMES = (
     # count (data: {"count", "titles", "detail"} — ``detail`` is "N sessions
     # stayed offline after the restart — press Start on the ones you need.").
     "system.sessions_held",
+    # The sleep sweep put idle agents to sleep because memory read low
+    # (core.sleep.announce_memory_sleep): ONE per pass, never per agent.
+    # ``session`` is "", ``new`` the count (data: {"count", "titles",
+    # "reason": "memory", "memory", "detail"} — ``detail`` is "Memory is low
+    # (…), so 2 idle agents were put to sleep: a, b. They wake when you open
+    # or message them.").
+    "system.sessions_slept",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

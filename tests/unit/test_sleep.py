@@ -392,9 +392,16 @@ def test_threshold_default_off_and_memory_pressure():
     assert sleep.threshold_seconds("low") == 2 * 60  # never above the setting
     S.update_settings(general={"sleep_idle_minutes": 0})
     assert sleep.threshold_seconds("ok") is None
-    assert sleep.threshold_seconds("critical") is None  # off means off
-    S.update_settings(general={"sleep_idle_minutes": ""})
+    # Everyday sleeping off still sheds idle agents when memory runs out.
+    assert sleep.threshold_seconds("critical") == 5 * 60
+    S.update_settings(general={"memory_sleep_minutes": 0})
+    assert sleep.threshold_seconds("critical") is None  # both off means off
+    S.update_settings(general={"sleep_idle_minutes": 60, "memory_sleep_minutes": 10})
+    assert sleep.threshold_seconds("low") == 10 * 60
+    assert sleep.threshold_seconds("ok") == 60 * 60
+    S.update_settings(general={"sleep_idle_minutes": "", "memory_sleep_minutes": ""})
     assert sleep.idle_minutes() == 45
+    assert sleep.memory_sleep_minutes() == 5
 
 
 def test_the_settings_route_saves_it_and_the_sweep_reads_it():
@@ -411,8 +418,14 @@ def test_the_settings_route_saves_it_and_the_sweep_reads_it():
 def test_it_is_a_local_setting_never_synced():
     from backend.web.core import settings_sync
 
-    assert "sleep_idle_minutes" in settings_sync.LOCAL["general"]
-    assert "sleep_idle_minutes" not in settings_sync.SYNCED.get("general", ())
+    for key in (
+        "sleep_idle_minutes",
+        "memory_sleep_minutes",
+        "memory_low_pct",
+        "memory_critical_pct",
+    ):
+        assert key in settings_sync.LOCAL["general"]
+        assert key not in settings_sync.SYNCED.get("general", ())
 
 
 # --------------------------------------------------------------------------- #
@@ -484,11 +497,62 @@ def test_the_sweep_sleeps_sooner_under_memory_pressure_and_says_so(monkeypatch):
 
 
 def test_the_sweep_is_off_at_zero(monkeypatch):
-    S.update_settings(general={"sleep_idle_minutes": 0})
+    S.update_settings(general={"sleep_idle_minutes": 0, "memory_sleep_minutes": 0})
     srv = _tick_world(
         monkeypatch, [_row("a", activity_since=NOW - 10 * IDLE_S)], "critical"
     )
     assert sleep.tick(srv, NOW) == [] and srv.killed == []
+
+
+def test_everyday_sleep_off_still_sheds_for_memory_with_one_notice(monkeypatch):
+    S.update_settings(general={"sleep_idle_minutes": 0})
+    seen = []
+    monkeypatch.setattr(
+        events_mod.BUS, "emit", lambda kind, **kw: seen.append((kind, kw)) or kw
+    )
+    monkeypatch.setattr(
+        sleep.memory_pressure,
+        "snapshot",
+        lambda **kw: {
+            "level": "low",
+            "available": 2 * 1024**3,
+            "total": 20 * 1024**3,
+            "available_pct": 10.0,
+        },
+    )
+    rows = [
+        _row("a", activity_since=NOW - 30 * 60),
+        _row("b", activity_since=NOW - 9 * 60),
+        _row("c", activity_since=NOW - 60),  # idle 1 min: stays awake
+    ]
+    srv = _tick_world(monkeypatch, rows, level="low")
+    assert sleep.tick(srv, NOW) == ["a", "b"]  # longest idle first
+    assert sleep.info("a")["reason"] == "memory"
+    notices = [kw for kind, kw in seen if kind == "system.sessions_slept"]
+    assert len(notices) == 1  # ONE notice for the pass, not one per agent
+    detail = notices[0]["data"]["detail"]
+    assert notices[0]["data"]["titles"] == ["a", "b"]
+    assert detail.startswith("Memory is low: 2.0 GB free of 20.0 GB")
+    assert "2 idle agents were put to sleep: a, b." in detail
+    assert detail.endswith("They wake when you open or message them.")
+
+
+def test_an_everyday_idle_sleep_sends_no_memory_notice(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        events_mod.BUS, "emit", lambda kind, **kw: seen.append(kind) or kw
+    )
+    srv = _tick_world(monkeypatch, [_row("a", activity_since=NOW - 2 * IDLE_S)])
+    assert sleep.tick(srv, NOW) == ["a"]
+    assert "system.sessions_slept" not in seen
+
+
+def test_the_memory_notice_reads_for_one_agent():
+    text = sleep.memory_notice_text(["a"], "memory is critically low: 0.9 GB free")
+    assert text == (
+        "Memory is critically low: 0.9 GB free, so 1 idle agent was put to "
+        "sleep: a. It wakes when you open or message it."
+    )
 
 
 def test_the_sweep_never_touches_remote_rows(monkeypatch):
