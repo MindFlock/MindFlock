@@ -179,7 +179,8 @@ describe("no Outbox: the bell and the group header", () => {
   it("the bell still reads the waiting list from one response", () => {
     expect(has(normCode("state/runs.ts"), 'api<OutboxResponse>("/api/outbox?group=all")')).toBe(true);
     const bell = fn("components/NotificationsBell.tsx", "NotificationsBell");
-    expect(has(bell, "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))")).toBe(true);
+    expect(has(bell, "const attn = useNeedsYou();")).toBe(true);
+    expect(has(normCode("lib/needsYou.ts"), "waiting: outbox?.groups?.waiting,")).toBe(true);
     expect(has(bell, 'document.addEventListener("mf-open-bell", onOpen)')).toBe(true);
   });
 

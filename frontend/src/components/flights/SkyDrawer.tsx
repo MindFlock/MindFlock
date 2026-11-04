@@ -13,15 +13,19 @@
  *    lane at the sky's left edge draws them too.
  *  - Landed — finished flights, folded. */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { TestPlan } from "../../api/types";
-import { useFlightKinds, useFlightPlans, useFlights, useSettingsDoc, useTestPlans } from "../../state/queries";
+import { useFlightKinds, useFlightPlans, useFlights, useInstances, useSettingsDoc } from "../../state/queries";
 import { ageText } from "../intake/kit";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { windowName } from "../../lib/windowName";
-import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
+import { isFailing, planName } from "../dialogs/verify";
+import { useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
+import { openAsk } from "../../lib/ask";
+import { AnswerStrip } from "../AnswerStrip";
+import { WaitingRow as OutboxWaitingRow } from "../outbox/WaitingRow";
 import { FlightCard, YouStepActions, flightHeadline } from "./FlightStrip";
 import { useWaiting, type Waiting } from "./useWaiting";
 import {
@@ -29,7 +33,6 @@ import {
   WAITING_KIND_HEAD,
   builtinPlanFor,
   isLive,
-  needsYouFlights,
   perchLabel,
   planChoices,
   stepActor,
@@ -184,6 +187,49 @@ function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly
   );
 }
 
+/** Any other row of the one Needs-you list (lib/needsYou): a session asking
+ * you something (its question and the answer strip — the bell's own), an
+ * approval or escalation (the bell's waiting row), a plan waiting for Go, or
+ * a session that is broken, failing its checks or ready for its PR. A press
+ * on its name flies the sky to its route. */
+function NeedsLine({ row, onFocus }: { row: NeedsYouRow; onFocus(title: string): void }) {
+  const { data: instances } = useInstances();
+  const inst = row.title ? instances?.find((i) => i.title === row.title) : undefined;
+  if (row.waiting) {
+    return (
+      <div className="sky-perch sky-needs-wait" data-needs={row.key}>
+        <OutboxWaitingRow w={row.waiting} row={inst} shown={windowName} group={row.waiting.run?.name || ""} />
+      </div>
+    );
+  }
+  const a = row.attn;
+  const what = row.plan ? "Plan ready — review & Go" : a?.reason || "";
+  return (
+    <div className={"sky-perch sky-needs-" + row.kind} data-needs={row.key}>
+      {row.title ? (
+        <button type="button" className="sky-perch-name" title={"Show " + windowName(row.title) + "'s route"} onClick={() => onFocus(row.title)}>
+          {windowName(row.title)}
+        </button>
+      ) : null}
+      {what && row.kind !== "asking" && <div className="sky-perch-step muted">{what}</div>}
+      {row.kind === "asking" && a ? (
+        <AnswerStrip
+          title={row.title}
+          activity={a.question !== undefined ? "idle" : "clarify"}
+          question={a.question}
+          variant="bell"
+          onOpen={() => onFocus(row.title)}
+          onReply={() => openAsk(row.title)}
+        />
+      ) : row.plan ? (
+        <button type="button" className="btn-primary fl-btn" onClick={() => useUi.getState().openMap(row.title, { section: "plan" })}>
+          Review the plan
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export interface SkyDrawerProps {
   open: boolean;
   onToggle(): void;
@@ -198,15 +244,15 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
   const plans = useFlightPlans().data || [];
   const kinds = useFlightKinds().data;
   const settings = useSettingsDoc(true).data as Record<string, unknown> | undefined;
-  const testPlans = useTestPlans().data?.plans || [];
   const { waiting, refresh } = useWaiting(true);
   const [landedOpen, setLandedOpen] = useState(false);
 
   const flights: Flight[] = flightsQ.data || [];
-  const needs = needsYouFlights(flights);
+  // THE one Needs-you list (lib/needsYou) — the bell's rows, in the bell's
+  // order, so this strip's count and the bell's badge are one number.
+  const needs = useNeedsYou();
   const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
-  const dueChecklists = useMemo(() => testPlans.filter((p) => isFailing(p) || isWaitingOnYou(p)), [testPlans]);
-  const count = needs.length + dueChecklists.length;
+  const count = needs.length;
 
   return (
     <aside className={"sky-drawer" + (open ? " open" : "")} aria-label="Needs you" data-tour="flights-drawer">
@@ -236,12 +282,15 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
               <p className="fl-empty muted">Nothing needs you.</p>
             ) : (
               <>
-                {needs.map((f) => (
-                  <PerchRow key={f.id} flight={f} kinds={kinds} onFocus={onFocus} />
-                ))}
-                {dueChecklists.map((p) => (
-                  <ChecklistRow key={p.id} plan={p} onOpen={(planId) => openBehaviors({ planId })} />
-                ))}
+                {needs.map((r) =>
+                  r.flight ? (
+                    <PerchRow key={r.key} flight={r.flight} kinds={kinds} onFocus={onFocus} />
+                  ) : r.behaviors ? (
+                    <ChecklistRow key={r.key} plan={r.behaviors} onOpen={(planId) => openBehaviors({ planId })} />
+                  ) : (
+                    <NeedsLine key={r.key} row={r} onFocus={onFocus} />
+                  )
+                )}
               </>
             )}
           </section>

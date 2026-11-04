@@ -61,8 +61,8 @@ describe("the top bar is flat again", () => {
     expect(TOPBAR).toContain('"Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake")');
   });
 
-  it("the Sky half of the toggle counts the chains that need you", () => {
-    expect(TOPBAR).toContain("const perch = perchBadge(useFlights().data || []);");
+  it("the Sky half of the toggle counts what needs you — the bell's one list", () => {
+    expect(TOPBAR).toContain("const perch = needsYouBadge(useNeedsYou());");
     expect(TOPBAR).toMatch(/v === "sky" && perch\.count > 0 && \(\s*<span className=\{"tb-count" \+ \(perch\.failing \? " is-failing" : ""\)\}>\{perch\.count\}<\/span>/);
   });
 });
