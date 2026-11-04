@@ -1416,13 +1416,14 @@ export async function submitDraft(title: string, name: string, say: boolean): Pr
     return { ok: true, line: r?.queued ? "Queued for " + name + "." : "Sent to " + name + "." };
   } catch (err) {
     const body = (err instanceof ApiError ? err.body : null) as
-      | { in_dialog?: boolean; waking?: boolean; paused?: boolean }
+      | { in_dialog?: boolean; waking?: boolean; paused?: boolean; held?: boolean }
       | null;
     let line = "Couldn't submit: " + ((err as Error)?.message || "error") + " — the words are still in the field";
     if (err instanceof ApiError && err.status === 409) {
       if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
       else if (body?.waking) line = name + " is waking up — say over again in a moment";
       else if (body?.paused) line = name + " is paused — resume it first";
+      else if (body?.held) line = name + " is offline since a crash — press Start first";
     }
     return { ok: false, line };
   }
