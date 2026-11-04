@@ -759,6 +759,16 @@ class Backend:
     #: than hidden in the host's queue.
     serial: bool = False
 
+    def starts_cold(self) -> bool:
+        """Whether this engine may have STOPPED while idle and starts again
+        on the next request — a socket-activated host on this machine or
+        network (Voice Lab: its proxy exits after 10 idle minutes, then the
+        next connection starts it and the first synthesis loads its model).
+        :class:`TtsChain` then waits for that first answer
+        (:meth:`TtsChain.cold`) instead of giving the line to the fallback
+        after its budget or marking the host down."""
+        return False
+
     def engine_name(self) -> str:
         """The short name ``GET /api/voice`` reports for the engine that
         speaks (``server_ready.tts_engine``)."""
@@ -900,6 +910,14 @@ class OpenAITTS(_OpenAI):
 
     def health_key(self) -> str:
         return "openai " + self._cfg()[0]
+
+    def starts_cold(self) -> bool:
+        """A host on this machine or network may be one that stops while
+        idle (Voice Lab); a remote API never is."""
+        try:
+            return _local_host(self._cfg()[0])
+        except Exception:  # noqa: BLE001 — unreadable settings
+            return False
 
     def warm(self, prime: bool = True) -> str:  # noqa: ARG002 — no model here
         """Have a LOCAL host load its voice model: one short synthesis
@@ -1705,6 +1723,16 @@ HOST_BUDGET_PER_CHAR = 0.06
 #: ``GET /api/voice``) starts a background probe — the engine is healthy
 #: again only once the probe passes.
 HOST_DOWN_SECONDS = 45.0
+#: A host that :meth:`Backend.starts_cold` and has not answered for this
+#: long — or not yet since this server started — may have stopped (Voice
+#: Lab's socket proxy exits after 10 idle minutes): its next line is a COLD
+#: START (:meth:`TtsChain.cold`), as is every line asked while one is.
+COLD_AFTER_SECONDS = 600.0
+#: How long a cold start's line may wait for the host's first byte: the
+#: host starting (~4 s) and loading its model (Voice Lab's F5 on a CPU:
+#: ~40 s). It waits, in the configured voice, instead of going to the
+#: fallback after its budget; only past this is the host down.
+COLD_START_TIMEOUT = 90.0
 #: The probe: :data:`WARM_TEXT` has to come back within this. A model still
 #: loading, or running on the wrong device, stays down.
 PROBE_TIMEOUT = 3.0
@@ -1927,6 +1955,8 @@ class TtsChain:
         self._lanes: Dict[str, _Lane] = {}
         self._gen = 0  # bumped by reset(): an old orphan changes nothing
         self._real_at = 0.0  # _now(): a real line was last asked for / said
+        self._answered: Dict[str, float] = {}  # key → _now() of its last answer
+        self._starting: Dict[str, int] = {}  # key → cold-start lines in flight
 
     def reset(self) -> None:
         with self._lock:
@@ -1934,6 +1964,8 @@ class TtsChain:
             self._replies.clear()
             self._speed.clear()
             self._lanes.clear()
+            self._answered.clear()
+            self._starting.clear()
             self._gen += 1
             self._real_at = 0.0
             self._cond.notify_all()
@@ -2016,10 +2048,13 @@ class TtsChain:
             return None
         return sp.ratio * host_budget(text)
 
-    def too_slow(self, backend: Backend) -> str:
+    def too_slow(self, backend: Backend, probe: bool = True) -> str:
         """Why ``backend`` is too slow for now ("" when it keeps up or is
         unmeasured). When the recheck is due this starts the probe (once) —
-        the probe's answer, not the clock, ends the window."""
+        the probe's answer, not the clock, ends the window. ``probe=False``
+        (a status read: ``GET /api/voice?warm=0``) only reports: nothing is
+        sent to the host, so reading the status never wakes one that went
+        idle (Voice Lab)."""
         try:
             key = backend.health_key()
         except Exception:  # noqa: BLE001 — unreadable settings: no speed
@@ -2028,7 +2063,7 @@ class TtsChain:
             sp = self._speed.get(key)
             if sp is None or not sp.slow:
                 return ""
-            due = not sp.probing and _now() >= sp.recheck_at
+            due = probe and not sp.probing and _now() >= sp.recheck_at
             if due:
                 sp.probing = True
         if due:
@@ -2105,10 +2140,11 @@ class TtsChain:
             }
 
     # -- health ---------------------------------------------------------- #
-    def down_reason(self, backend: Backend) -> str:
+    def down_reason(self, backend: Backend, probe: bool = True) -> str:
         """Why ``backend`` is down ("" when healthy). Past its window this
         starts the background probe (once) and still answers "down" — the
-        probe, not the clock, brings it back."""
+        probe, not the clock, brings it back. ``probe=False`` (a status
+        read) only reports, as :meth:`too_slow`."""
         try:
             key = backend.health_key()
         except Exception:  # noqa: BLE001 — unreadable settings: no health
@@ -2118,7 +2154,7 @@ class TtsChain:
             if h is None:
                 return ""
             why = h.why
-            due = not h.probing and _now() >= h.retry_at
+            due = probe and not h.probing and _now() >= h.retry_at
             if due:
                 h.probing = True
         if due:
@@ -2324,6 +2360,8 @@ class TtsChain:
                     if lane.queue and lane.queue[0] is line:
                         lane.queue.pop(0)
                     line.took = time.monotonic() - line.sent_at
+                    if line.error is None:
+                        self._answered[lane.key] = _now()  # it is up (cold)
                     if line.learn and line.error is None and line.gen == self._gen:
                         self._learn(lane.key, line.text, line.took)
                     line.done = True
@@ -2367,16 +2405,16 @@ class TtsChain:
         return None
 
     def pick(
-        self, primary: Backend, listener: str = ""
+        self, primary: Backend, listener: str = "", probe: bool = True
     ) -> Tuple[Optional[Backend], bool, str]:
         """``(engine, fell_back, why)`` for ``listener``'s next line:
         ``primary``, or the fallback while ``primary`` is down (``why``, ""
         when it is healthy), too slow for now (:meth:`too_slow`) or a reply
         of this listener that began on the fallback is still going
         (:class:`TtsChain`). ``engine`` is None when ``primary`` is down and
-        no fallback is ready."""
-        why = self.down_reason(primary)
-        slow = "" if why else self.too_slow(primary)
+        no fallback is ready. ``probe``: as :meth:`down_reason`."""
+        why = self.down_reason(primary, probe)
+        slow = "" if why else self.too_slow(primary, probe)
         with self._lock:
             r = self._reply(listener)
             if why or slow:
@@ -2392,6 +2430,54 @@ class TtsChain:
         if fallback is None:
             return (None, False, why) if why else (primary, False, "")
         return fallback, True, why
+
+    # -- cold starts ----------------------------------------------------- #
+    def cold(self, engine: Backend) -> bool:
+        """Whether ``engine``'s next line is a COLD START: a serial engine
+        that :meth:`Backend.starts_cold`, with no answer from it in the last
+        :data:`COLD_AFTER_SECONDS` (or none yet), or a cold start of it
+        still in flight (the lines of the same reply wait with it)."""
+        try:
+            if not engine.serial or not engine.starts_cold():
+                return False
+            key = engine.health_key()
+        except Exception:  # noqa: BLE001 — unreadable settings: not cold
+            return False
+        with self._lock:
+            if self._starting.get(key):
+                return True
+            last = self._answered.get(key)
+        return last is None or _now() - last >= COLD_AFTER_SECONDS
+
+    def _cold_line(
+        self, engine: Backend, text: str, voice: str, listener: str
+    ) -> Tuple[bytes, str]:
+        """A cold start's line: in the lane, WAITED for (no budget, so no
+        fallback for being slow) up to :data:`COLD_START_TIMEOUT` for the
+        host's first byte, and not a speed sample (a model loading is not
+        the host's pace). A refused or reset connection still fails at once
+        (the host is down, not starting)."""
+        key = engine.health_key()
+        with self._lock:
+            self._starting[key] = self._starting.get(key, 0) + 1
+        _logger.info("voice: %s may be starting: waiting for it", key)
+        try:
+            return self.send(
+                engine,
+                text,
+                max(COLD_START_TIMEOUT, host_hung_after(text)),
+                voice,
+                None,
+                listener,
+                learn=False,
+            )
+        finally:
+            with self._lock:
+                left = self._starting.get(key, 0) - 1
+                if left > 0:
+                    self._starting[key] = left
+                else:
+                    self._starting.pop(key, None)
 
     # -- speaking -------------------------------------------------------- #
     def note_line(self, text: str, listener: str = "") -> None:
@@ -2424,7 +2510,11 @@ class TtsChain:
                 audio, mime = engine.speak(text, voice)
                 return audio, mime, engine, True
             try:
-                if engine.serial:
+                if engine.serial and self.cold(engine):
+                    # It may be starting (Voice Lab after its idle stop):
+                    # wait for it rather than say the line with the fallback.
+                    audio, mime = self._cold_line(engine, text, voice, listener)
+                elif engine.serial:
                     # No fallback ready: waiting for the host beats a 502.
                     budget = host_budget(text) if self.fallback_for(engine) else None
                     audio, mime = self.send(
@@ -2480,14 +2570,22 @@ class TtsChain:
             )
         return engine.speak(text, voice)
 
-    def status(self, primary: Backend, listener: str = "") -> dict:
+    def status(self, primary: Backend, listener: str = "", probe: bool = True) -> dict:
         """``GET /api/voice``'s view of the chain for ``primary``:
         ``{"engine": Backend|None, "fell_back": bool, "why": str, "slow":
-        str}`` — ``slow`` why it is too slow for now ("" when it keeps up
-        or is down)."""
-        engine, fell_back, why = self.pick(primary, listener)
-        slow = "" if why else self.too_slow(primary)
-        return {"engine": engine, "fell_back": fell_back, "why": why, "slow": slow}
+        str, "cold": bool}`` — ``slow`` why it is too slow for now ("" when
+        it keeps up or is down), ``cold`` whether its next line would be a
+        cold start (:meth:`cold`). ``probe=False``: a read only, nothing
+        sent to the host (:meth:`down_reason`)."""
+        engine, fell_back, why = self.pick(primary, listener, probe)
+        slow = "" if why else self.too_slow(primary, probe)
+        return {
+            "engine": engine,
+            "fell_back": fell_back,
+            "why": why,
+            "slow": slow,
+            "cold": self.cold(primary),
+        }
 
 
 #: The one voice chain (``POST /api/voice/speak``, :func:`describe`).
@@ -2626,22 +2724,35 @@ def warm_in_background(
         return t
 
 
-def _describe_tts(ready: dict, backend: Optional[Backend], detail: str) -> str:
+def _describe_tts(
+    ready: dict, backend: Optional[Backend], detail: str, probe: bool = True
+) -> str:
     """Fill ``server_ready``'s voice keys from :data:`TTS_CHAIN` and return
     the voice's detail: ``tts`` true while SOME engine will speak (the
     configured one, or the fallback while it is down), ``tts_engine`` the
     one that will (``"piper (fallback)"``), ``tts_fallback`` whether that is
-    the fallback, ``tts_down`` why the configured one is down ("" healthy).
-    ``tts_backend`` stays the configured id (Settings keys its rows on it)."""
+    the fallback, ``tts_down`` why the configured one is down ("" healthy),
+    ``tts_cold`` whether its next line would be a cold start
+    (:meth:`TtsChain.cold`: Voice Lab may have stopped while idle).
+    ``tts_backend`` stays the configured id (Settings keys its rows on it).
+    ``probe``: as :meth:`TtsChain.down_reason` (False: nothing is sent)."""
     ready["tts_engine"], ready["tts_fallback"], ready["tts_down"] = "", False, ""
+    ready["tts_cold"] = False
     if backend is None:
         return detail
     try:
-        st = TTS_CHAIN.status(backend)
+        st = TTS_CHAIN.status(backend, probe=probe)
     except Exception:  # noqa: BLE001 — a report, never a failure
-        st = {"engine": backend, "fell_back": False, "why": "", "slow": ""}
+        st = {
+            "engine": backend,
+            "fell_back": False,
+            "why": "",
+            "slow": "",
+            "cold": False,
+        }
     engine, why = st["engine"], st["why"]
     ready["tts_down"] = why
+    ready["tts_cold"] = bool(st.get("cold"))
     if engine is None:
         ready["tts"] = False
         return "%s is down (%s) and no fallback voice is ready" % (detail, why)
@@ -2664,7 +2775,7 @@ def _describe_tts(ready: dict, backend: Optional[Backend], detail: str) -> str:
     return "%s — speaking with %s %s" % (detail, fb_detail, until)
 
 
-def describe() -> dict:
+def describe(probe: bool = True) -> dict:
     """What ``GET /api/voice`` reports about the server side::
 
         {"backends": {"stt": [ids], "tts": [ids]},
@@ -2672,7 +2783,8 @@ def describe() -> dict:
                           "stt_backend": id|"", "stt_detail": str,
                           "tts_backend": id|"", "tts_detail": str,
                           "stt_stream": bool, "tts_engine": str,
-                          "tts_fallback": bool, "tts_down": str},
+                          "tts_fallback": bool, "tts_down": str,
+                          "tts_cold": bool},
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
@@ -2689,7 +2801,10 @@ def describe() -> dict:
     engine's own report (:func:`speech_system.describe`); ``warm`` is each
     kind's last warm-up — ``"loaded"``, ``"loading"``, ``"skipped: <why>"``,
     or ``""`` before the first. Offline and cheap: the built-in engine is
-    probed once per process, not per call.
+    probed once per process, not per call. ``probe=False``
+    (``GET /api/voice?warm=0``): a voice host that is down or too slow is
+    reported as it is, never re-checked — nothing is sent to it, so a page
+    reading the status never wakes a host that went idle (Voice Lab).
     """
     ready: dict = {}
     lines: List[str] = []
@@ -2699,7 +2814,7 @@ def describe() -> dict:
         ready[kind] = backend is not None
         ready[kind + "_backend"] = backend.id if backend else ""
         if kind == "tts":
-            detail = _describe_tts(ready, backend, detail)
+            detail = _describe_tts(ready, backend, detail, probe)
             backend = backend if ready["tts"] else None
         ready[kind + "_detail"] = detail
         if kind == "stt":

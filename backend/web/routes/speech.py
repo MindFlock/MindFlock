@@ -725,14 +725,18 @@ def voice_get(
         "final": _stream.final_stats(),
         "configure_allowed": bool(allowed),
     }
-    body.update(_speech.describe())
+    # Ready the voice — or, with ?warm=0, only READ: the status never sends
+    # the host anything then (no down/too-slow re-check: core.speech
+    # TtsChain.down_reason), so a page load never wakes Voice Lab.
+    warm_on = str(warm).strip().lower() not in ("0", "false", "no", "off")
+    body.update(_speech.describe(probe=warm_on))
     # The phone seeds its wait for /end's accurate pass from this.
     body["server_ready"]["final_ms"] = body["final"]["expect_ms"]
     # A voice client is here: have the recognition models resident and the
     # voice warm before its first use (no-ops unless there is something to
     # load: see core.speech.warm_in_background).
     _speech.warm_in_background("stt")
-    if str(warm).strip().lower() not in ("0", "false", "no", "off"):
+    if warm_on:
         _speech.warm_in_background("tts")
         # And the lines it will hear first — the session names a switch
         # says — pre-synthesised while the voice is idle (Prewarm; a thread

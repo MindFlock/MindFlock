@@ -23,7 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them and why, and they wake when you open or message them. Agents mid-turn
   are never touched. When memory counts as low or critical is now a setting
   (`general.memory_low_pct`, 15; `general.memory_critical_pct`, 7).
-
+- **Voice Lab stays off while you aren't using voice.** It starts on first
+  use and stops after 10 idle minutes, and now only speech wakes it:
+  dictating (recognition runs inside MindFlock) no longer does, nor does
+  opening the mic's menu, the phone page loading or coming back to the
+  front, or Settings → Voice (which now says a local voice "starts when you
+  use voice"; **Say a test sentence** still tries it). The first line after
+  it has been idle shows **Starting voice…** while it starts, and is said in
+  your chosen voice once it is up (the server waits up to 90 s for it)
+  instead of by the backup voice or as an error.
 - **A rename renames the session.** There is no hidden second name any more:
   renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
   `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,

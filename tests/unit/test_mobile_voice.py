@@ -193,7 +193,7 @@ def test_mobile_js_voice_state_machine_and_adapters():
     assert "voice.stt = PhoneSTT();" in v
     assert "voice.tts = PhoneTTS();" in v
     assert "window.mfVoice = voice;" in v
-    assert 'fetch("/api/voice")' in v
+    assert 'fetch(voiceWantsVoice() ? "/api/voice" : "/api/voice?warm=0")' in v
     # The PhoneSTT surface and its recognizer settings.
     stt = _fn(js, "PhoneSTT")
     assert "window.SpeechRecognition || window.webkitSpeechRecognition" in v
@@ -1300,7 +1300,7 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     assert "paused: paused," in stt
     paint = js.split("  function voiceStripPaint() {")[1].split("\n  }\n")[0]
     assert (
-        "!!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing);"
+        "!!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing,"
         in paint
     )
     assert "voiceStripWord(voice.state," in paint

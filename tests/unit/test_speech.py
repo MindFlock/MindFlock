@@ -33,6 +33,9 @@ def _isolate(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
     # Background lookups / probes run inline, from a clean slate.
     monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
+    # A loopback host here is a WARM one (its cold start, when Voice Lab
+    # stopped while idle, is test_speech_tts_budget.TestColdStart's).
+    monkeypatch.setattr(speech.OpenAITTS, "starts_cold", lambda self: False)
     speech.forget_ffmpeg()
     speech.TTS_CHAIN.reset()
     speech.unload_all()
