@@ -32073,7 +32073,8 @@ function copyTitle(title, taken) {
 }
 async function copySession(title) {
 	if (!title) return;
-	const guess = addPendingSession(copyTitle(title, new Set(instances$2().map((i) => i.title))));
+	const titles = instances$2().map((i) => i.title);
+	const guess = addPendingSession(copyTitle(displayName(title), /* @__PURE__ */ new Set([...titles, ...titles.map((t) => displayName(t))])));
 	placeAfter(guess, title);
 	try {
 		const inst = await instApi(title, "/copy", { method: "POST" });
