@@ -2001,7 +2001,18 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
 # call sites below (and the tests) reading the same as before.
 _pending_add = _pending.add
 _pending_drop = _pending.drop
-_pending_rows = _pending.rows
+
+
+def _pending_rows() -> list:
+    """:func:`core.pending.rows` (accepted starts with no session yet), each
+    with ``waiting_for_memory``: the launch gate's record while it is an
+    agent-spawned create waiting for memory (core.launch_gate), else None."""
+    out = _pending.rows()
+    for r in out:
+        r["waiting_for_memory"] = _launch_gate.waiting(str(r.get("title") or ""))
+    return out
+
+
 _pending_has = _pending.has
 _cached_session_title = _pending.cached_session_title
 
@@ -2973,6 +2984,7 @@ async def _queue_spawned_create(payload: dict, person: str) -> Optional[JSONResp
             )
         else:
             status, body = asyncio.run(coro)
+        _pending.drop(title)
         if status >= 400:
             err = str(body.get("error") or "create failed (%d)" % status)
             _note_create_failure(title, err)
@@ -2999,6 +3011,15 @@ async def _queue_spawned_create(payload: dict, person: str) -> Optional[JSONResp
         )
     if rec is None:
         return None
+    # Its row meanwhile: the provisioning placeholder force-starts use
+    # (core.pending), so the rail and the orchestrator's wait_for_session
+    # see the worker from now on, marked waiting_for_memory.
+    _pending.add(
+        title,
+        "spawn",
+        parent=str(payload.get("parent") or ""),
+        spawned=True,
+    )
     return JSONResponse(
         {
             "title": title,
@@ -3049,10 +3070,13 @@ async def post_launch_gate_cancel(title: str, request: Request) -> JSONResponse:
     when nothing by that name waits. → ``{"title", "cancelled": true}``."""
     if not await _auth.may_configure(request.scope):
         return _auth.configure_refused()
+    rec = _launch_gate.waiting(title)
     if not _launch_gate.cancel(title):
         return JSONResponse(
             {"error": "%s is not waiting for memory" % title}, status_code=404
         )
+    if rec and rec.get("creates"):
+        _pending.drop(title)
     if title in ENGINE.instances:
         _republish_session(title)
     return JSONResponse({"title": title, "cancelled": True})

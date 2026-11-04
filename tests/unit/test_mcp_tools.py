@@ -967,6 +967,50 @@ class TestSpawn:
         assert out["ready"] is False and out["status"] == "loading"
         assert "still starting" in out["hint"]
 
+    def test_low_memory_queues_the_worker_instead_of_failing(self):
+        """The server's launch gate queued the create (202 queued): the
+        orchestrator is told so plainly, and nothing waits or polls."""
+        clock = FakeClock()
+        box, api, _ = make_box(_tree(), clock=clock)
+        reason = "memory is low: 2.0 GB free of 20.0 GB (10%)"
+
+        def queued(payload, q):
+            # The pending placeholder row the server lists meanwhile.
+            api.rows.append(
+                row(
+                    payload["title"],
+                    status="loading",
+                    activity="offline",
+                    activity_since=0,
+                    parent="orch",
+                    spawned=True,
+                    pending=True,
+                    waiting_for_memory={"reason": reason, "position": 1},
+                )
+            )
+            return {
+                "title": payload["title"],
+                "queued": True,
+                "status": "queued: waiting for memory",
+                "reason": reason,
+                "position": 1,
+            }
+
+        api.top_routes[("POST", "/api/instances")] = queued
+        ctx = _ctx(clock)
+        out = box.spawn_session({"prompt": "p"}, ctx)
+        assert out["status"] == "queued: waiting for memory"
+        assert out["queued"] is True and out["ready"] is False
+        assert out["reason"] == reason and out["position"] == 1
+        assert "wait_for_session" in out["hint"]
+        assert "orch-w1" in box.policy.spawned_by_me
+        assert ctx.progress_total is None or ctx.progress_total == 0
+        # wait_for_session knows the queued worker and waits through it.
+        out = box.wait_for_session(
+            {"titles": ["orch-w1"], "timeout_s": 30}, _ctx(clock)
+        )
+        assert out["timed_out"] is True and out["still_running"] == ["orch-w1"]
+
     def test_vanished_while_loading_is_an_error(self):
         clock = FakeClock()
         box, api, _ = make_box(_tree(), clock=clock)
