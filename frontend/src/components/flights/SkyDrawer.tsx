@@ -1,12 +1,15 @@
 /** The sky view: the drawer at the sky's right edge — what the old Board
  * listed, so nothing it showed is lost now that the Sky replaced it:
  *
- *  - Perched on you — every flight perched on you (its perch's checklist and
- *    Done / Skip, the same block the line's box holds) or halted (Retry /
- *    Skip), and behaviors that need you or failed (a row that flies the sky
- *    to them: the session's Behaviors tile, else the Behaviors board —
- *    lib/behaviorsFocus `openBehaviors`). A press on a flight's name flies
- *    the sky to its line.
+ *  - Needs you — THE one list (lib/needsYou `useNeedsYou`, the bell's rows in
+ *    the bell's order, one count with the bell's badge): a session asking you
+ *    something (its answer strip), a route at a Wait for me stop (its
+ *    checklist and Done / Skip, the same block the route's stop holds) or
+ *    halted (Retry / Skip), approvals and escalations (the bell's waiting
+ *    row), a plan waiting for Go, broken / failing / ready sessions, and
+ *    behaviors that need you or failed (a row that flies the sky to them —
+ *    lib/behaviorsFocus `openBehaviors`). A press on a name flies the sky to
+ *    its route.
  *  - Waiting to fly — the tickets, pull requests and issues that are eligible
  *    and have no session, under their own sub-headings, a kind badge on every
  *    row, the saved stop as a chip row and one action: Fly. Folded: the intake
