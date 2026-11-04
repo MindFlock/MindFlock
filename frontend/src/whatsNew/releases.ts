@@ -68,7 +68,7 @@ export const RELEASES: WhatsNewRelease[] = [
       {
         title: "Loops, side-by-side stops and workers",
         body:
-          "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why and which round (\"fixing 1/2\"). Stops can run side by side, and a worker the session starts shows up inside its route as a small outline under the session's agent, with a bird on it while it works or needs you.",
+          "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why (\"fixing 1/2\"). Stops can run side by side, and workers the session starts show up inside its route, as small outlines under its agent.",
         action: { label: "Show me", run: "sky-guide" },
       },
       {
