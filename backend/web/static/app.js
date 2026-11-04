@@ -44305,6 +44305,15 @@ var VOICE_PREFS_KEY = "cs_voice_desktop";
 function voiceInUse(p) {
 	return p.replies !== "off" || !!p.wake;
 }
+function speaksOnServer(p, cfg, electron = isElectron()) {
+	if (ttsEngine(cfg, electron) !== "server") return false;
+	return voiceInUse(p) || p.confirm !== false || cfg.say_all === true;
+}
+var VOICE_STARTING_MS = 1e3;
+var VOICE_COLD_MS = 6e5;
+function voiceMayBeCold(lastOk, now) {
+	return !lastOk || now - lastOk >= VOICE_COLD_MS;
+}
 var REPLIES_CHOICES = [
 	{
 		value: "off",
@@ -44427,9 +44436,42 @@ var HUSH_CAPTION_MS = 1e3;
 var MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 function micPill(s) {
 	if (s.quiet) return HUSH_LINE;
-	if (s.listening) return "Listening…";
+	if (s.listening) return s.warming ? STARTING_MIC_LINE : "Listening…";
+	if (s.speaking && s.starting) return STARTING_VOICE_LINE;
 	return s.speaking ? "Speaking…" : "";
 }
+var STARTING_VOICE_LINE = "Starting voice…";
+var STARTING_MIC_LINE = "Starting the mic…";
+var LISTEN_RENEW_MS = 6e4;
+function listenLeaser(post = postListen) {
+	let on = false;
+	let timer;
+	const send = (want) => void post(want).catch(() => {});
+	return {
+		set(want) {
+			if (want === on) return;
+			on = want;
+			clearInterval(timer);
+			timer = void 0;
+			send(want);
+			if (want) timer = setInterval(() => send(true), LISTEN_RENEW_MS);
+		},
+		get on() {
+			return on;
+		}
+	};
+}
+function postListen(on) {
+	return apiRaw("/api/voice/listen", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			on,
+			client: VOICE_CLIENT_ID
+		})
+	});
+}
+var LISTEN_LEASE = listenLeaser();
 function retype(before, after) {
 	const a = Array.from(before);
 	const b = Array.from(after);
@@ -46471,6 +46513,32 @@ function serverSpeaker(fallback, opts = {}) {
 	const keyOf = (part) => (opts.voiceKey ? opts.voiceKey() : "") + "\n" + part;
 	const playing = /* @__PURE__ */ new Map();
 	let inflight = null;
+	const now = opts.now || (() => Date.now());
+	let lastOk = 0;
+	let startTimer;
+	let startShown = false;
+	const endStarting = () => {
+		clearTimeout(startTimer);
+		startTimer = void 0;
+		if (startShown) {
+			startShown = false;
+			self.onStarting?.(false);
+		}
+	};
+	const watchStart = (p) => {
+		if (!self.onStarting || !voiceMayBeCold(lastOk, now())) return;
+		endStarting();
+		const t = setTimeout(() => {
+			if (startTimer !== t) return;
+			startShown = true;
+			self.onStarting?.(true);
+		}, VOICE_STARTING_MS);
+		startTimer = t;
+		const done = () => {
+			if (startTimer === t || startShown) endStarting();
+		};
+		p.then(done, done);
+	};
 	const fetchAudio = async (ctx, part, ac) => {
 		const r = await apiRaw("/api/voice/speak", {
 			method: "POST",
@@ -46482,7 +46550,9 @@ function serverSpeaker(fallback, opts = {}) {
 			const j = await r.json().catch(() => ({}));
 			throw new Error(j.error || "HTTP " + r.status);
 		}
-		return ctx.decodeAudioData(await r.arrayBuffer());
+		const buf = await r.arrayBuffer();
+		lastOk = now();
+		return ctx.decodeAudioData(buf);
 	};
 	const remember = (part, p) => {
 		const key = keyOf(part);
@@ -46494,6 +46564,7 @@ function serverSpeaker(fallback, opts = {}) {
 	};
 	const self = {
 		lastError: "",
+		onStarting: opts.onStarting,
 		reportsAudible: true,
 		cached(part) {
 			return cache.has(keyOf(part));
@@ -46529,6 +46600,7 @@ function serverSpeaker(fallback, opts = {}) {
 					if (inflight === ac) inflight = null;
 				};
 				p.then(settled, settled);
+				if (i === 0) watchStart(p);
 				if (cacheable(parts[i])) remember(parts[i], p);
 				return p;
 			};
@@ -46560,6 +46632,7 @@ function serverSpeaker(fallback, opts = {}) {
 			gen++;
 			inflight?.abort();
 			inflight = null;
+			endStarting();
 			const cut = [...playing];
 			playing.clear();
 			for (const [s, finish] of cut) {
@@ -46822,6 +46895,12 @@ var VOICE_CLIENT_ID = (() => {
 })();
 function serverRecognizer(opts = {}) {
 	const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, void 0, runningAudioCtx);
+	let loading = false;
+	const setLoading = (on) => {
+		if (loading === on) return;
+		loading = on;
+		self.onLoading?.(on);
+	};
 	let holding = false;
 	let h = null;
 	let want = false;
@@ -46970,6 +47049,7 @@ function serverRecognizer(opts = {}) {
 	};
 	const fallBack = (c, line) => {
 		if (!c.stream) return;
+		setLoading(false);
 		streaming = false;
 		for (const p of /* @__PURE__ */ new Set([c, cur])) {
 			if (!p?.stream) continue;
@@ -47025,6 +47105,7 @@ function serverRecognizer(opts = {}) {
 					c.opened = Date.now();
 					open.add(id);
 					voiceMark("stream");
+					if (r.j.loading === true) setLoading(true);
 				} else if (r.status === 409) {
 					self.lastError = String(r.j.error || "the server can't stream");
 					fallBack(c, "");
@@ -47046,6 +47127,7 @@ function serverRecognizer(opts = {}) {
 			if (h !== hh || !hh || !c.stream) return;
 			if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 			self.lastError = "";
+			setLoading(false);
 			const ms = Number(r.j.ms);
 			if (ms > 0) {
 				self.passMs = ms;
@@ -47104,6 +47186,7 @@ function serverRecognizer(opts = {}) {
 			open.delete(sid);
 			try {
 				const r = await call(streamPath(sid, "/end"), { method: "POST" });
+				setLoading(false);
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 				c.stream = false;
@@ -47298,6 +47381,7 @@ function serverRecognizer(opts = {}) {
 	const self = {
 		name: "server",
 		lastError: "",
+		onLoading: void 0,
 		passMs: null,
 		finalMs: null,
 		mic,
@@ -47355,6 +47439,7 @@ function serverRecognizer(opts = {}) {
 			finishing = false;
 			h = null;
 			token = null;
+			setLoading(false);
 			clearTimeout(capTimer);
 			unlistenOver();
 			try {
@@ -47471,7 +47556,8 @@ var WAKE_TAIL_MS = 200;
 var WAKE_MIN_MS = 250;
 var WAKE_MAX_MS = 1600;
 var WAKE_LEAD_MS = 100;
-var WAKE_CHECK_GAP_MS = 1500;
+var WAKE_CHECK_GAP_MS = 400;
+var WAKE_PENDING_MS = 2500;
 var WAKE_AFTER_SPEECH_MS = 500;
 var WAKE_KEEP_S = 3;
 var WAKE_LISTEN_MS = 8e3;
@@ -47488,6 +47574,7 @@ var LoneUtterance = class {
 	start = -1;
 	lastLoud = 0;
 	long = false;
+	prev = -1;
 	feed(rms, blockMs) {
 		const at = this.t;
 		this.t += Math.max(0, blockMs);
@@ -47500,10 +47587,18 @@ var LoneUtterance = class {
 				return null;
 			}
 			if (this.quiet < WAKE_QUIET_MS) {
+				if (this.prev >= 0) {
+					this.start = this.prev;
+					this.prev = -1;
+					this.lastLoud = this.t;
+					this.long = this.lastLoud - this.start > WAKE_MAX_MS;
+					return null;
+				}
 				this.quiet = 0;
 				return null;
 			}
 			this.start = at;
+			this.prev = -1;
 			this.lastLoud = this.t;
 			this.long = false;
 			return null;
@@ -47518,6 +47613,7 @@ var LoneUtterance = class {
 		const loudMs = this.lastLoud - this.start;
 		const clipMs = WAKE_LEAD_MS + (this.t - this.start);
 		const long = this.long;
+		this.prev = long ? -1 : this.start;
 		this.start = -1;
 		this.quiet = gap;
 		return long || loudMs < WAKE_MIN_MS ? null : {
@@ -47617,6 +47713,7 @@ var WakeStandby = class {
 	lastSpoke = -Infinity;
 	lastCheck = -Infinity;
 	inFlight = false;
+	pending = null;
 	waiting = null;
 	line = "";
 	constructor(deps) {
@@ -47734,25 +47831,55 @@ var WakeStandby = class {
 		const speaking = this.deps.speaking();
 		if (speaking) this.lastSpoke = now;
 		const cand = this.det.feed(rms, ms);
-		if (!cand) return;
-		if (wakeGate({
+		if (!cand) {
+			this.flush(g);
+			return;
+		}
+		const gate = this.gate(now, cand.clipMs, speaking);
+		if (gate === "busy" || gate === "soon") {
+			this.pending = {
+				clip: rec.last(cand.clipMs / 1e3),
+				soundEnd: now - cand.tailMs,
+				clipMs: cand.clipMs
+			};
+			return;
+		}
+		if (gate !== "ok") return;
+		this.lastCheck = now;
+		this.check(g, rec.last(cand.clipMs / 1e3), now - cand.tailMs);
+	}
+	gate(now, clipMs, speaking = this.deps.speaking()) {
+		return wakeGate({
 			now,
-			clipMs: cand.clipMs,
+			clipMs,
 			visible: this.visible(),
 			recording: this.deps.recording(),
 			speaking,
 			lastSpoke: this.lastSpoke,
 			inFlight: this.inFlight,
 			lastCheck: this.lastCheck
-		}) !== "ok") return;
-		this.lastCheck = now;
-		this.check(g, rec, cand, now - cand.tailMs);
+		});
 	}
-	async check(g, rec, cand, soundEnd) {
+	flush(g) {
+		const p = this.pending;
+		if (!p || g !== this.gen) return;
+		const now = this.now();
+		if (now - p.soundEnd > WAKE_PENDING_MS) {
+			this.pending = null;
+			return;
+		}
+		const gate = this.gate(now, p.clipMs + (now - p.soundEnd));
+		if (gate === "busy" || gate === "soon") return;
+		this.pending = null;
+		if (gate !== "ok") return;
+		this.lastCheck = now;
+		this.check(g, p.clip, p.soundEnd);
+	}
+	async check(g, clipP, soundEnd) {
 		this.inFlight = true;
 		let v = null;
 		try {
-			const clip = await rec.last(cand.clipMs / 1e3);
+			const clip = await clipP;
 			if (clip && g === this.gen) v = await (this.deps.check || postWake)(clip);
 		} finally {
 			this.inFlight = false;
@@ -47760,9 +47887,12 @@ var WakeStandby = class {
 		if (!v || g !== this.gen) return;
 		if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
 		if (v.wake && !this.deps.recording()) {
+			this.pending = null;
 			this.deps.onWake(soundEnd);
 			this.sync();
+			return;
 		}
+		this.flush(g);
 	}
 	close() {
 		this.gen++;
@@ -47771,6 +47901,7 @@ var WakeStandby = class {
 		this.waiting = null;
 		const rec = this.rec;
 		this.rec = null;
+		this.pending = null;
 		rec?.cancel();
 		if (this.holding) {
 			this.holding = false;
@@ -48330,7 +48461,11 @@ var browserRec = browserRecognizer();
 var cfgNow = DEFAULT_VOICE_CFG;
 var serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream });
 var browserSp = browserSpeaker();
+var startingListeners = /* @__PURE__ */ new Set();
 var serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) });
+serverSp.onStarting = (on) => startingListeners.forEach((l) => l(on));
+var loadingListeners = /* @__PURE__ */ new Set();
+serverRec.onLoading = (on) => loadingListeners.forEach((l) => l(on));
 var tracker = new ReplyTracker();
 var heard = new HeardTurns();
 var clock = new HeardClock();
@@ -48521,6 +48656,16 @@ function TopBarMic() {
 	const [cfg, setCfg] = (0, import_react.useState)(null);
 	const [listening, setListening] = (0, import_react.useState)(false);
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
+	const [starting, setStarting] = (0, import_react.useState)(false);
+	const [warming, setWarming] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		startingListeners.add(setStarting);
+		loadingListeners.add(setWarming);
+		return () => {
+			startingListeners.delete(setStarting);
+			loadingListeners.delete(setWarming);
+		};
+	}, []);
 	const [sounding, setSounding] = (0, import_react.useState)(queue.audibleNow);
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
@@ -48785,7 +48930,7 @@ function TopBarMic() {
 	};
 	const start = (into, opts = {}) => {
 		if (live.current) return null;
-		if (cfgNow.tts === "server") refreshCfg(true);
+		if (speaksOnServer(prefsRef.current, cfgNow)) refreshCfg(true);
 		const ask = askVoice();
 		if (ask && !opts.title && (!into || into === ask.field())) {
 			into = null;
@@ -49214,6 +49359,9 @@ function TopBarMic() {
 		standby.current?.set(!!prefs.wake);
 	}, [prefs.wake]);
 	(0, import_react.useEffect)(() => {
+		LISTEN_LEASE.set(!!wake.on);
+	}, [wake.on]);
+	(0, import_react.useEffect)(() => {
 		standby.current?.sync();
 	}, [listening]);
 	(0, import_react.useEffect)(() => {
@@ -49236,7 +49384,7 @@ function TopBarMic() {
 	const openMenu = () => {
 		setMenuOpen(true);
 		warmMic(true);
-		refreshCfg(true);
+		refreshCfg();
 	};
 	const keyRef = (0, import_react.useRef)({
 		hold,
@@ -49307,7 +49455,9 @@ function TopBarMic() {
 	const pill = micPill({
 		listening,
 		speaking,
-		quiet
+		quiet,
+		starting,
+		warming
 	});
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
 	const popW = Math.min(POP_W, window.innerWidth - 32);
@@ -115051,6 +115201,7 @@ function voiceFields(kind, where, backend) {
 	};
 }
 var noDot = (s) => s.replace(/\.\s*$/, "");
+var VOICE_HOST_ON_USE = "starts when you use voice, stops when idle";
 function readinessLine(kind, view, where, backend = "") {
 	if (where !== "server") return {
 		ok: false,
@@ -115070,6 +115221,10 @@ function readinessLine(kind, view, where, backend = "") {
 		else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
 	}
 	detail = noDot(detail);
+	if (ok && kind === "tts" && id === "openai" && localVoice({
+		...DEFAULT_VOICE_CFG,
+		server_ready: sr
+	})) detail += (detail ? " — " : "") + VOICE_HOST_ON_USE;
 	if (ok) return {
 		ok,
 		text: `Server ${word} ready (${id || "server"})${detail ? ": " + detail : ""}.`
@@ -115208,7 +115363,7 @@ function VoiceSection({ active }) {
 	(0, import_react.useEffect)(() => {
 		if (!active) return;
 		let live = true;
-		api("/api/voice").then((v) => {
+		api("/api/voice?warm=0").then((v) => {
 			applyVoiceView(v);
 			if (live) setView(v);
 		}).catch((err) => {
