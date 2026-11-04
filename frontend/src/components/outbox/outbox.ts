@@ -14,6 +14,7 @@
 import type { OutboxResponse, OutboxSummary, OutboxWaiting } from "../../api/types";
 import { releaseChoices } from "../../lib/splitRun";
 import type { AttentionItem } from "../sidebar/ordering";
+import { REASON_LABEL } from "../../lib/sessionState";
 
 type Keyed = { key?: string; title?: string };
 
@@ -252,7 +253,7 @@ export function needsAttention(
           key: w.title,
           title: w.title,
           rank: 0,
-          attn: { p: 0, title: w.title, reason: "Question", snippet: text, question: text },
+          attn: { p: 0, title: w.title, reason: REASON_LABEL.question, snippet: text, question: text },
         });
       }
       continue;

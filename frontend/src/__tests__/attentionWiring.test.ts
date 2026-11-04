@@ -57,7 +57,10 @@ describe("O1: needs-attention, surfaced via the notification bell", () => {
     expect(bell).toContain('<div className="notif-attn-head">Needs you</div>');
     expect(has(bell, 'className={"notif-badge attn" + (attn.length === 0 ? " hidden" : "")} id="notif-badge"')).toBe(true);
     expect(has(bell, 'className={"attn-item p" + a.p')).toBe(true);
-    expect(has(bell, "attentionItems(instances)")).toBe(true);
+    // The bell reads THE one Needs-you list, which starts from the rail's
+    // attention items.
+    expect(has(bell, "const attn = useNeedsYou();")).toBe(true);
+    expect(has(normCode("lib/needsYou.ts"), "attentionItems(instances as Instance[])")).toBe(true);
     // Badge NUMBER is attention-only (auto-clears on resolve); unread history
     // is demoted to a dot shown only when nothing is actionable.
     expect(has(bell, '{attn.length > 99 ? "99+" : String(attn.length)}')).toBe(true);

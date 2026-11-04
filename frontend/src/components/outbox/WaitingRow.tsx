@@ -37,9 +37,10 @@ import {
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
 import { openBehaviors } from "../../lib/behaviorsFocus";
-import { stepDone, stepSkip } from "../../lib/flightsApi";
+import { stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { perchedOnYou } from "../../lib/flights";
 import type { RunInfo } from "../../lib/runs";
+import type { FlightWaiting } from "../../lib/needsYou";
 
 /** Take the user to a session's pane (optionally a tab of it), closing any
  * open dialog and the bell ("mf-close-bell") — the pane is where the thing
@@ -137,6 +138,7 @@ export function WaitingRow({
   const escalation = w.kind !== "prompt" && w.kind !== "approve";
   if (w.kind === "budget") return <BudgetRow w={w} runInfo={runInfo} />;
   if (w.kind === "flight_you") return <FlightYouRow w={w} row={row} shown={shown} />;
+  if (w.kind === "flight_halted") return <FlightHaltedRow w={w} row={row} shown={shown} />;
   return (
     <div className={"pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind)} data-outbox-row={w.title}>
       <RowMain title={w.title} text={w.text} shown={shown} row={row} />
@@ -429,9 +431,19 @@ function ApprovePreview({ w, row }: { w: OutboxWaiting; row?: Instance }) {
 /** A flight perched on you (a `you` stop, docs/flights.md): Done / Skip right here,
  * from the session row's `flight` (its id and the step's), and Open ↗ to go
  * look first. */
+/** The route and its current stop behind a flight row: the row's own (a
+ * route with no session has no session row), else the session row's. */
+function flightOf(w: OutboxWaiting, row?: Instance): { id: string; step: { id: string; kind: string; title: string } } | null {
+  const own = (w as FlightWaiting).flight;
+  const fl = row?.flight;
+  if (fl && fl.id && (!own || own.id === fl.id)) return { id: fl.id, step: fl.step };
+  if (own && own.id && own.step_id) return { id: own.id, step: { id: own.step_id, kind: "", title: own.step_title } };
+  return null;
+}
+
 function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
   const [busy, setBusy] = useState(false);
-  const fl = row?.flight;
+  const fl = flightOf(w, row);
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     try {
@@ -442,10 +454,10 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
   };
   return (
     <div className="pr-open-item ob-item ob-flight_you" data-outbox-row={w.title}>
-      <RowMain title={w.title} text={w.text} shown={shown} row={row} />
+      <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
       <div className="pr-open-meta">
         <span className="pr-open-chip warn" title={w.reason || undefined}>
-          {perchedOnYou(fl?.step?.title || (w as { flight?: { step_title?: string } }).flight?.step_title || "")}
+          {perchedOnYou(fl?.step?.title || "")}
         </span>
       </div>
       <div className="ik-item-start">
@@ -479,6 +491,65 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
                 className="test-btn"
                 disabled={busy}
                 title={"Skip “" + fl.step.title + "” — the route goes on without it"}
+                onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
+              >
+                Skip
+              </button>
+            </>
+          )}
+          {row && (
+            <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
+              Open ↗
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** A route halted at a stop (docs/vocabulary.md "Halt"): why, and Retry /
+ * Skip right here — the same two the stop itself and the Sky's Needs you
+ * panel offer — with Open ↗ to go look first. */
+function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
+  const [busy, setBusy] = useState(false);
+  const fl = flightOf(w, row);
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  const at = fl?.step?.title || "";
+  return (
+    <div className="pr-open-item ob-item ob-flight_halted" data-outbox-row={w.title || w.key}>
+      <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
+      <div className="pr-open-meta">
+        <span className="pr-open-chip bad" title={w.reason || undefined}>
+          {"Halted" + (at ? " at " + at : "")}
+        </span>
+      </div>
+      {!!w.reason && <div className="ob-halt-reason">{w.reason}</div>}
+      <div className="ik-item-start">
+        <div className="ob-acts">
+          {fl && (
+            <>
+              <button
+                type="button"
+                className="btn-primary pr-review-btn"
+                disabled={busy}
+                title={"Run “" + (at || "this stop") + "” again"}
+                onClick={() => void run(() => stepRetry(fl.id, fl.step.id))}
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                className="test-btn"
+                disabled={busy}
+                title={"Skip “" + (at || "this stop") + "” — the route goes on without it"}
                 onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
               >
                 Skip

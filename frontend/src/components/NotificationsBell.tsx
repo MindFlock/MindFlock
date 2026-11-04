@@ -23,18 +23,16 @@ import type { Instance } from "../api/types";
 import { displayName, useUi } from "../state/store";
 import { relTime } from "../lib/format";
 import { selectSession } from "../lib/sessionActions";
-import { attentionItems } from "./sidebar/ordering";
 import { slotNumber, windowName } from "../lib/windowName";
 import { childrenByParent, inFamily, messageNotif, workerOf, type MessageEventData } from "../lib/agentMessages";
 import { openThread } from "../lib/flockActions";
 import { openAsk } from "../lib/ask";
 import { AnswerStrip } from "./AnswerStrip";
 import { runNote } from "../lib/runs";
-import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../state/runs";
-import { needsAttention, withPlanReady } from "./outbox/outbox";
+import { ruleOn, runLookups, useNotifyConfig, useRuns } from "../state/runs";
 import { REASON_LABEL, STATE_LABEL } from "../lib/sessionState";
 import { WaitingRow } from "./outbox/WaitingRow";
-import { withFlightYou } from "../lib/needsYou";
+import { useNeedsYou } from "../lib/needsYou";
 import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { approveJoinRequest } from "../lib/deviceActions";
@@ -43,6 +41,7 @@ import { peerRowKey, peerSessionName, peerSessionNote, type PeerSessionEventData
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import { jobPastExpectedRow } from "../lib/jobExpectation";
 import { openBehaviors } from "../lib/behaviorsFocus";
+import { isFailing } from "./dialogs/verify";
 
 const NOTIF_CAP = 100;
 const NOTIF_SEEN_KEY = "mf_notif_seen_ts";
@@ -350,9 +349,6 @@ function rowKey(e: React.KeyboardEvent<HTMLElement>) {
 
 export function NotificationsBell() {
   const { data: instances = [] } = useInstances();
-  // The server's waiting rows (`GET /api/outbox`) are half of "Needs
-  // attention".
-  const { data: outbox } = useOutbox();
   const { data: runs } = useRuns();
   const [notifs, setNotifs] = useState<Notif[]>([]);
   const [open, setOpen] = useState(false);
@@ -423,11 +419,12 @@ export function NotificationsBell() {
 
   const families = useMemo(() => childrenByParent(instances), [instances]);
   const byTitle = useMemo(() => new Map(instances.map((i) => [i.title, i])), [instances]);
-  // ONE list: the sessions' own attention items and the server's waiting rows,
-  // one row per session (outbox.ts `needsAttention` says how they merge).
-  // A plan waiting for Go joins it (withPlanReady), so Plan first is seen
-  // with the Map closed.
-  const attn = withPlanReady(needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances)), instances);
+  // THE one Needs-you list (lib/needsYou `useNeedsYou`): the sessions' own
+  // attention items (asking first), the server's waiting rows, routes at a
+  // Wait for me stop or halted, a plan waiting for Go, behaviors that need
+  // you — the same rows, in the same order, as the Sky's Needs you panel and
+  // every badge, so their counts can never disagree.
+  const attn = useNeedsYou();
   // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
   // answer" item names whose worker it is, and its strip can redirect the
   // question to the lead's Thread — answerable from any screen, two clicks.
@@ -584,6 +581,29 @@ export function NotificationsBell() {
                           group={runId ? w.run?.name || runName(runId) : ""}
                           runInfo={runId ? runs?.find((r) => r.id === runId) : undefined}
                         />
+                      </div>
+                    );
+                  }
+                  if (it.behaviors) {
+                    // Behaviors that failed or wait on you: to them, on the route in the Sky.
+                    const plan = it.behaviors;
+                    const failing = isFailing(plan);
+                    return (
+                      <div
+                        key={it.key}
+                        className={"attn-item p2" + (flashing ? " flash" : "")}
+                        data-needs={it.key}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={rowKey}
+                        onClick={() => {
+                          setOpen(false);
+                          openBehaviors({ planId: plan.id });
+                        }}
+                      >
+                        <span className="attn-dot" />
+                        <span className="attn-title">Behaviors · {plan.title || plan.id}</span>
+                        <span className="attn-reason">{failing ? "Failed" : "Needs you"}</span>
                       </div>
                     );
                   }
