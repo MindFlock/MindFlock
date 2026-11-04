@@ -550,6 +550,7 @@ async def sweep(
                     kind="revive",
                     source=trigger,
                     reason=memory_pressure.describe() or "waiting for memory",
+                    args={"include_quit": include_quit, "release_held": release_held},
                 )
                 waiting.append(title)
             except launch_gate.QueueFull:
@@ -603,6 +604,27 @@ async def sweep(
             out["summary"] += "; %d waiting for memory" % len(waiting)
         _info("revive sweep (%s): %s", trigger, out["summary"])
         return out
+
+
+def _restore_revive(rec: dict):
+    """A saved revive after a restart (core.launch_gate): its launch, or None
+    (dropped) when the session is gone."""
+    title = str(rec.get("title") or "")
+    srv = _server()
+    if title not in srv.ENGINE.instances:
+        return None
+    args = rec.get("args") or {}
+    include_quit = bool(args.get("include_quit"))
+    release_held = bool(args.get("release_held"))
+
+    def _later() -> Optional[str]:
+        ok, why = _revive_one(srv, title, include_quit, release_held)
+        return None if ok else (why or "failed")
+
+    return _later
+
+
+launch_gate.register_kind("revive", _restore_revive)
 
 
 # --------------------------------------------------------------------------- #

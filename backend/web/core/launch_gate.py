@@ -73,6 +73,8 @@ __all__ = [
     "enqueue",
     "gate_auto",
     "admit_auto",
+    "register_kind",
+    "restore",
     "waiting",
     "items",
     "cancel",
@@ -122,9 +124,40 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+#: How long a settings read is reused.
+_SETTINGS_SECONDS = 30.0
+_SETTINGS_CACHE: Dict[str, object] = {"at": -1e18, "val": {}}
+
+
+def _setting(name: str) -> Optional[int]:
+    """``general.<name>`` (``max_live_agents`` / ``agent_warmup_mb``), None
+    when unset. Re-read at most every :data:`_SETTINGS_SECONDS`. Never
+    raises: a LOCAL import, so a process without the settings module (or an
+    unreadable store) reads None."""
+    now = time.monotonic()
+    if now - float(_SETTINGS_CACHE["at"]) >= _SETTINGS_SECONDS:  # type: ignore[arg-type]
+        val: Dict[str, Optional[int]] = {}
+        try:
+            from backend.config.settings import load_settings
+
+            g = load_settings().general
+            for k in ("max_live_agents", "agent_warmup_mb"):
+                v = getattr(g, k, None)
+                val[k] = (
+                    int(v) if isinstance(v, int) and not isinstance(v, bool) else None
+                )
+        except Exception:  # noqa: BLE001 — advisory: the defaults stand
+            val = {}
+        _SETTINGS_CACHE.update({"at": now, "val": val})
+    return (_SETTINGS_CACHE["val"] or {}).get(name)  # type: ignore[union-attr]
+
+
 def warmup_bytes() -> int:
-    """What one warming agent is still expected to take, in bytes."""
-    return int(_env_float("MINDFLOCK_AGENT_WARMUP_MB", DEFAULT_WARMUP_MB) * _MiB)
+    """What one warming agent is still expected to take, in bytes:
+    ``MINDFLOCK_AGENT_WARMUP_MB``, else ``general.agent_warmup_mb``, else 700."""
+    mb = _setting("agent_warmup_mb")
+    default = float(mb) if mb is not None else float(DEFAULT_WARMUP_MB)
+    return int(_env_float("MINDFLOCK_AGENT_WARMUP_MB", default) * _MiB)
 
 
 def auto_spacing() -> float:
@@ -137,14 +170,18 @@ def queue_max() -> int:
 
 def live_cap(total_bytes: float) -> int:
     """The most live agents automatic starts may bring the machine to; 0 =
-    no cap. ``MINDFLOCK_MAX_LIVE_AGENTS`` wins; otherwise one per
-    :data:`GB_PER_AGENT` GB of RAM (at least 2), and none when RAM is unknown."""
+    no cap. ``MINDFLOCK_MAX_LIVE_AGENTS`` wins, then
+    ``general.max_live_agents``; otherwise one per :data:`GB_PER_AGENT` GB of
+    RAM (at least 2), and none when RAM is unknown."""
     raw = os.environ.get("MINDFLOCK_MAX_LIVE_AGENTS", "").strip()
     if raw:
         try:
             return max(0, int(raw))
         except ValueError:
             pass
+    setting = _setting("max_live_agents")
+    if setting is not None:
+        return max(0, setting)
     if not total_bytes:
         return 0
     return max(2, int(float(total_bytes) / _GiB / GB_PER_AGENT))
@@ -315,8 +352,10 @@ def _memory_reason(a: dict) -> str:
 def decide(
     kind: str = "auto", *, now: Optional[float] = None, fresh: bool = False
 ) -> dict:
-    """Whether a launch may start now → ``{"decision", "reason", "level",
-    "assess"}``.
+    """Whether a launch may start now → ``{"decision", "reason", "why",
+    "level", "assess"}``. ``why`` names what holds an automatic start:
+    ``"memory"`` (the level now), ``"warming"`` (the level once the agents
+    still starting have grown), ``"cap"``, ``"spacing"``; ``""`` on go.
 
     ``kind="auto"``: ``"go"`` or ``"wait"`` (memory low/critical now or once
     the warming agents grow; the live cap reached; or within
@@ -327,7 +366,7 @@ def decide(
     now = time.time() if now is None else now
     a = assess(fresh=fresh, now=now)
     worst = _worst(a)
-    out = {"decision": "go", "reason": "", "level": worst, "assess": a}
+    out = {"decision": "go", "reason": "", "why": "", "level": worst, "assess": a}
     if kind == "person":
         if worst == "critical":
             out.update(decision="refuse", reason=_memory_reason(a))
@@ -335,12 +374,17 @@ def decide(
             out.update(decision="confirm", reason=_memory_reason(a))
         return out
     if worst in ("low", "critical"):
-        out.update(decision="wait", reason=_memory_reason(a))
+        out.update(
+            decision="wait",
+            reason=_memory_reason(a),
+            why="memory" if a["level"] in ("low", "critical") else "warming",
+        )
         return out
     cap, live = a["cap"], a["live"]
     if cap and live is not None and live >= cap:
         out.update(
             decision="wait",
+            why="cap",
             reason="%d agents are running; automatic starts stop at %d on this "
             "machine" % (live, cap),
         )
@@ -351,6 +395,7 @@ def decide(
     if spacing and last and now - last < spacing:
         out.update(
             decision="wait",
+            why="spacing",
             reason="the last agent started %ds ago; automatic starts are %ds apart"
             % (int(now - last), int(spacing)),
         )
@@ -466,11 +511,16 @@ def enqueue(
     reason: str = "",
     parent: str = "",
     creates: bool = False,
+    args: Optional[dict] = None,
+    since: Optional[float] = None,
 ) -> dict:
     """Queue ``title``'s launch (FIFO) → its public record (``position`` 1 =
     next). A title already queued keeps its place; the newer ``launch``
     replaces the older, so two relaunch paths don't double-launch.
     ``creates``: the launch creates the session (no row exists yet).
+    ``args``: what a restart needs to rebuild the launch (JSON); an item with
+    ``args`` is saved to disk and comes back on the next boot through its
+    kind's factory (:func:`register_kind`), one without is not.
     Raises :class:`QueueFull` past :func:`queue_max`."""
     with _LOCK:
         for i, it in enumerate(_QUEUE):
@@ -478,6 +528,8 @@ def enqueue(
                 it["launch"] = launch
                 if reason:
                     it["reason"] = reason
+                if args is not None:
+                    it["args"] = args
                 return _public(it, i + 1)
         cap = queue_max()
         if cap and len(_QUEUE) >= cap:
@@ -491,14 +543,16 @@ def enqueue(
             "kind": kind,
             "source": source,
             "parent": parent,
-            "since": time.time(),
+            "since": time.time() if since is None else since,
             "reason": reason,
             "launch": launch,
             "creates": creates,
+            "args": args,
         }
         _QUEUE.append(it)
         pub = _public(it, len(_QUEUE))
     _log("%s waits for memory (%s): %s", title, kind, reason or "queued")
+    _save()
     _ensure_drainer()
     _changed()
     return pub
@@ -532,6 +586,7 @@ def gate_auto(
     source: str = "",
     parent: str = "",
     creates: bool = False,
+    args: Optional[dict] = None,
 ) -> Optional[dict]:
     """An automatic start's one call: None means go (the start is noted and
     the caller launches inline now), else the queued record. Someone already
@@ -553,6 +608,7 @@ def gate_auto(
             reason=reason,
             parent=parent,
             creates=creates,
+            args=args,
         )
 
 
@@ -580,8 +636,12 @@ def _take(title: str) -> Optional[dict]:
     with _LOCK:
         for i, it in enumerate(_QUEUE):
             if it["title"] == title or it["id"] == title:
-                return _QUEUE.pop(i)
-    return None
+                it = _QUEUE.pop(i)
+                break
+        else:
+            return None
+    _save()
+    return it
 
 
 def cancel(title: str) -> bool:
@@ -652,6 +712,8 @@ def drain_once(now: Optional[float] = None) -> Optional[str]:
         else:
             head = _QUEUE.pop(0)
             changed = False
+    if head is not None:
+        _save()
     if head is None:
         if changed:
             _changed()
@@ -691,6 +753,133 @@ def _ensure_drainer() -> None:
     th.start()
 
 
+# --------------------------------------------------------------------------- #
+# Persistence: the queue survives a server restart
+# --------------------------------------------------------------------------- #
+#: Whether the queue is saved to disk. The server turns it on at boot
+#: (:func:`restore`); the ticket pipeline (another process, no queue) and the
+#: test suite leave it off.
+PERSIST = False
+#: ``kind -> factory(record) -> launch | None``: how a saved item becomes a
+#: launch again after a restart. Each module that queues a kind registers it.
+_FACTORIES: Dict[str, Callable[[dict], Optional[Launch]]] = {}
+_SAVE_LOCK = threading.Lock()
+
+
+def register_kind(kind: str, factory: Callable[[dict], Optional[Launch]]) -> None:
+    """How a saved ``kind`` comes back: ``factory(record)`` gets the saved
+    record (``title``, ``kind``, ``source``, ``parent``, ``since``,
+    ``creates``, ``args``) and returns its launch, or None to drop it (the
+    session is gone, say)."""
+    _FACTORIES[kind] = factory
+
+
+def queue_path() -> str:
+    """``$MINDFLOCK_LAUNCH_QUEUE_FILE``, else ``<config dir>/launch_queue.json``."""
+    env = os.environ.get("MINDFLOCK_LAUNCH_QUEUE_FILE", "")
+    if env:
+        return env
+    from backend import config
+
+    return os.path.join(config.GetConfigDir(), "launch_queue.json")
+
+
+def _saved(it: dict) -> dict:
+    return {
+        k: it.get(k)
+        for k in (
+            "title",
+            "kind",
+            "source",
+            "parent",
+            "since",
+            "reason",
+            "creates",
+            "args",
+        )
+    }
+
+
+def _save() -> None:
+    """Rewrite the saved queue (the items with ``args``), atomically. Never
+    raises."""
+    if not PERSIST:
+        return
+    with _LOCK:
+        doc = {
+            "v": 1,
+            "items": [_saved(it) for it in _QUEUE if it.get("args") is not None],
+        }
+    try:
+        from backend.web.core import title_store
+
+        with _SAVE_LOCK:
+            title_store.persist(queue_path, doc, "the launch queue")
+    except Exception:  # noqa: BLE001 — a failed save never breaks a launch
+        pass
+
+
+def _clean(doc: dict) -> Dict:
+    items = doc.get("items") if isinstance(doc, dict) else None
+    out = []
+    for it in items if isinstance(items, list) else []:
+        if (
+            isinstance(it, dict)
+            and isinstance(it.get("title"), str)
+            and it["title"]
+            and isinstance(it.get("kind"), str)
+            and isinstance(it.get("args"), dict)
+        ):
+            out.append(it)
+    return {"items": out}
+
+
+def restore() -> int:
+    """Boot: put every saved item back in the queue, in its old order, through
+    its kind's factory (an unknown kind, or a factory answering None, drops
+    it), and turn saving on. They are automatic starts, so they wait for the
+    gate like any other. → how many came back. Never raises."""
+    global PERSIST
+    PERSIST = True
+    try:
+        from backend.web.core import title_store
+
+        doc = title_store.load(queue_path, _clean)
+    except Exception:  # noqa: BLE001
+        doc = {}
+    back = 0
+    for rec in doc.get("items") or []:
+        factory = _FACTORIES.get(rec["kind"])
+        try:
+            launch = factory(dict(rec)) if factory else None
+        except Exception:  # noqa: BLE001 — one bad record never stops the boot
+            launch = None
+        if launch is None:
+            _log(
+                "%s: dropped from the launch queue at boot (%s)",
+                rec["title"],
+                rec["kind"],
+            )
+            continue
+        try:
+            enqueue(
+                rec["title"],
+                launch,
+                kind=rec["kind"],
+                source=str(rec.get("source") or ""),
+                reason=str(rec.get("reason") or "waiting since before the restart"),
+                parent=str(rec.get("parent") or ""),
+                creates=bool(rec.get("creates")),
+                args=rec["args"],
+                since=float(rec.get("since") or time.time()),
+            )
+            back += 1
+        except QueueFull:
+            break
+    _save()
+    return back
+
+
 def status() -> dict:
     """For the UI (``GET /api/system/memory`` → ``gate``): ``{"holding",
     "queued": [...], "reason", "live", "cap", "warming",
@@ -711,6 +900,9 @@ def status() -> dict:
 
 
 def _reset_for_tests() -> None:
+    global PERSIST
+    PERSIST = False
+    _SETTINGS_CACHE.update({"at": -1e18, "val": {}})
     with _LOCK:
         _QUEUE.clear()
         _DONE.clear()

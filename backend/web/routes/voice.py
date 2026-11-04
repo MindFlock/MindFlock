@@ -311,6 +311,28 @@ async def _create_session(payload: dict, person: str):
     return await _session_create.create_result(payload, person=person)
 
 
+def _memory_refusal_line() -> str:
+    """The spoken refusal of a new session while memory reads low, "" when the
+    launch gate says go: "Memory is low, 3.1 GB free, so I didn't start it.
+    Start it from the app with Start anyway, or put idle agents to sleep
+    first." Never raises."""
+    try:
+        from backend.web.core import launch_gate as _gate
+
+        verdict = _gate.decide("person")
+    except Exception:  # noqa: BLE001 — the gate is advisory here
+        return ""
+    if verdict.get("decision") == "go":
+        return ""
+    snap = (verdict.get("assess") or {}).get("memory") or {}
+    free = float(snap.get("available") or 0) / 1024**3
+    word = "critically low" if verdict.get("decision") == "refuse" else "low"
+    return (
+        "Memory is %s, %.1f GB free, so I didn't start it. Start it from the "
+        "app with Start anyway, or put idle agents to sleep first." % (word, free)
+    )
+
+
 def _failed(reason: str) -> dict:
     reason = " ".join(str(reason or "it failed").split()).rstrip(".")
     if len(reason) > NEW_REASON_MAX:
@@ -331,6 +353,11 @@ async def _start_new(text: str, session: str, rows: list, request) -> dict:
 async def _create_planned(plan: dict, request) -> dict:
     """Create the session a finished plan names (``core.voice_router``'s
     ``kind: "new"``) → ``started``, or ``new-failed``."""
+    # A person's start, but a spoken one has no dialog to ask in: while
+    # memory reads low (core.launch_gate) it says so instead of starting.
+    refusal = await asyncio.to_thread(_memory_refusal_line)
+    if refusal:
+        return {"kind": "new-failed", "say": refusal}
     title = await asyncio.to_thread(_session_create.free_title, plan["title_base"])
     payload = {"title": title, "repo_path": plan["repo_path"]}
     if plan["task"]:

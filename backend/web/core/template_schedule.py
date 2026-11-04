@@ -63,6 +63,7 @@ them; the run record (``template_runs.json``, with the last
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import datetime as _dt
 import os
 import re
@@ -502,9 +503,23 @@ def _payload(tpl: dict, title: str) -> dict:
     return body
 
 
+#: The trigger of the fire in progress (:func:`fire` sets it), read by
+#: :func:`_default_create`: a contextvar so the create keeps its one-argument
+#: shape (tests replace it).
+_TRIGGER: contextvars.ContextVar = contextvars.ContextVar(
+    "tpl_trigger", default="manual"
+)
+
+
 async def _default_create(payload: dict) -> Tuple[int, dict]:
+    """The create. A scheduled fire is an automatic start, so it asks the
+    launch gate (core.launch_gate): when memory is short it waits in the
+    gate's queue (202 ``queued``) and starts once there is room. A person's
+    Run now is not queued."""
     from backend.web.core import session_create
 
+    if _TRIGGER.get() == "schedule":
+        return await session_create.create_result(payload, auto="schedule")
     return await session_create.create_result(payload)
 
 
@@ -526,6 +541,7 @@ async def fire(
 
     now = time.time() if now is None else now
     create = create or _default_create
+    _TRIGGER.set(trigger)
     key = _key(tpl.get("name"))
     refusal = await asyncio.to_thread(_t.launch_refusal, tpl)
     if refusal:

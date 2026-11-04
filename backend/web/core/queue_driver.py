@@ -856,6 +856,7 @@ def _drain_one_queue(title: str) -> None:
                     lambda: _queue_relaunch(title, rec),
                     kind="queued prompt",
                     source="prompt queue",
+                    args={},
                 )
             except _launch_gate.QueueFull:
                 return
@@ -952,6 +953,22 @@ def _queue_relaunch(title: str, rec: dict, inst=None) -> Optional[str]:
         rec["rebooted_at"] = time.time()
         rec["armed"] = True
     return err
+
+
+def _restore_relaunch(rec: dict):
+    """A saved "queued prompt" relaunch after a restart (core.launch_gate):
+    its launch, or None (dropped) when the session is gone."""
+    title = str(rec.get("title") or "")
+    if not title or title not in _server().ENGINE.instances:
+        return None
+    state = _QUEUE_STATE.setdefault(
+        title,
+        {"armed": True, "sent_at": 0.0, "rebooted_at": 0.0, "idle_since": None},
+    )
+    return lambda: _queue_relaunch(title, state)
+
+
+_launch_gate.register_kind("queued prompt", _restore_relaunch)
 
 
 # --- Usage-limit watch: sessions parked on the limit screen with no queue --- #

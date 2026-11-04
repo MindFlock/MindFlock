@@ -801,7 +801,9 @@ def ensure_awake(
             return ensure_awake(cur, title, why, srv)[1]
 
         try:
-            queued = _gate.gate_auto(title, _later, kind="wake", source=why)
+            queued = _gate.gate_auto(
+                title, _later, kind="wake", source=why, args={"why": why}
+            )
         except _gate.QueueFull as err:
             _info("wake %s: not started (%s)", title, err)
             return False, str(err)
@@ -821,6 +823,34 @@ def ensure_awake(
     except Exception:  # noqa: BLE001
         pass
     return True, None
+
+
+def _restore_wake(rec: dict):
+    """A saved wake after a restart (core.launch_gate): its launch, or None
+    (dropped) when the session is gone or no longer asleep."""
+    title = str(rec.get("title") or "")
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None or not is_sleeping(title):
+        return None
+    why = str((rec.get("args") or {}).get("why") or "a queued wake")
+
+    def _later() -> Optional[str]:
+        cur = srv.ENGINE.instances.get(title)
+        if cur is None:
+            return "the session was closed"
+        return ensure_awake(cur, title, why, srv)[1]
+
+    return _later
+
+
+def _register_wake() -> None:
+    from backend.web.core import launch_gate as _gate
+
+    _gate.register_kind("wake", _restore_wake)
+
+
+_register_wake()
 
 
 def sleep_idle_now(srv=None, limit: int = 8) -> dict:

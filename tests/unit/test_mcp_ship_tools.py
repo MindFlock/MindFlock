@@ -922,6 +922,33 @@ class TestSpawnTicket:
         assert "sc-23588" in box.policy.spawned_by_me
         assert "sc-23588" in box.dispatched
 
+    def test_a_start_queued_for_memory_returns_at_once(self):
+        """The server's launch gate queued the start: the agent hears
+        "queued: waiting for memory" straight away — no ready wait."""
+
+        def queued(payload):
+            return {
+                "started": True,
+                "title": "sc-23588",
+                "queued": True,
+                "status": "queued: waiting for memory",
+                "memory_reason": "memory is low: 1.0 GB free of 16.0 GB (6%)",
+                "position": 2,
+                "parent": payload.get("parent", ""),
+                "spawned": True,
+                "report_back": True,
+            }
+
+        box, api, clock, _ = self._box(start=queued)
+        ctx = FakeCtx(clock)
+        out = box.spawn_ticket_session({"ticket": "SC-23588"}, ctx)
+        assert out["status"] == "queued: waiting for memory" and out["queued"] is True
+        assert out["memory_reason"].startswith("memory is low")
+        assert out["position"] == 2 and out["ready"] is False
+        assert "wait_for_session" in out["hint"]
+        assert ctx.progress_total is None
+        assert "sc-23588" in box.policy.spawned_by_me
+
     def test_autopilot_and_report_back_pass_through(self):
         box, api, clock, posted = self._box()
         box.spawn_ticket_session(

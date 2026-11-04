@@ -1263,6 +1263,15 @@ class GeneralSettings:
     critical. ``None`` = 15 / 7; ``0`` drops that signal (the absolute floors
     and the PSI stall readings still count).
 
+    ``max_live_agents`` / ``agent_warmup_mb``: the launch gate
+    (:mod:`backend.web.core.launch_gate`). The first is the most live agents
+    that automatic starts (an agent's spawned worker, a queued prompt, a
+    schedule, a flight, the ticket pipeline) bring the machine to. ``None`` =
+    one per 1.2 GB of RAM; ``0`` = no cap. The second is what one agent
+    started in the last 90 s is assumed to still take as it grows. ``None`` =
+    700. The ``MINDFLOCK_MAX_LIVE_AGENTS`` / ``MINDFLOCK_AGENT_WARMUP_MB`` env
+    vars win.
+
     ``agent_mcp``: whether every session's agent CLI is launched with the
     MindFlock MCP server attached (:mod:`backend.providers.mcp_attach`), so
     agents can list, message, spawn and steer each other. ``None`` (never set)
@@ -1333,6 +1342,8 @@ class GeneralSettings:
     memory_sleep_minutes: Optional[int] = None  # None = 5; 0 = off (see docstring)
     memory_low_pct: Optional[int] = None  # None = 15 (see docstring)
     memory_critical_pct: Optional[int] = None  # None = 7 (see docstring)
+    max_live_agents: Optional[int] = None  # None = RAM / 1.2 GB; 0 = no cap
+    agent_warmup_mb: Optional[int] = None  # None = 700 (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"
     agent_max_children: Optional[int] = None  # None = lineage default (8)
@@ -1384,7 +1395,13 @@ class GeneralSettings:
             d["revive_on_start"] = self.revive_on_start
         if self.sleep_idle_minutes is not None:
             d["sleep_idle_minutes"] = self.sleep_idle_minutes
-        for key in ("memory_sleep_minutes", "memory_low_pct", "memory_critical_pct"):
+        for key in (
+            "memory_sleep_minutes",
+            "memory_low_pct",
+            "memory_critical_pct",
+            "max_live_agents",
+            "agent_warmup_mb",
+        ):
             if getattr(self, key) is not None:
                 d[key] = getattr(self, key)
         if self.agent_mcp is not None:
@@ -1439,6 +1456,8 @@ class GeneralSettings:
             memory_sleep_minutes=_opt_nonneg_int(d.get("memory_sleep_minutes")),
             memory_low_pct=_opt_pct(d.get("memory_low_pct")),
             memory_critical_pct=_opt_pct(d.get("memory_critical_pct")),
+            max_live_agents=_opt_nonneg_int(d.get("max_live_agents")),
+            agent_warmup_mb=_opt_nonneg_int(d.get("agent_warmup_mb")),
             agent_mcp=_opt_bool(d.get("agent_mcp")),
             agent_mcp_scope=_agent_mcp_scope(d.get("agent_mcp_scope")),
             agent_max_children=_opt_nonneg_int(d.get("agent_max_children")),

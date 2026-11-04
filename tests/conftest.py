@@ -249,6 +249,9 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     # against its live cap: no agents, an empty queue, no spacing carried
     # over from the test before. Its tests feed it their own.
     monkeypatch.setenv("MINDFLOCK_AUTO_LAUNCH_SPACING", "0")
+    monkeypatch.setenv(
+        "MINDFLOCK_LAUNCH_QUEUE_FILE", str(tmp_path / "mindflock" / "launch_queue.json")
+    )
     try:
         from backend.web.core import launch_gate as _launch_gate
 

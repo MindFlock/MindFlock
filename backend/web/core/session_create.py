@@ -16,18 +16,22 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import Optional, Tuple
 
 from fastapi.responses import JSONResponse
 
 from backend.web.core import git_merge as _git_merge
 from backend.web.core import hidden_sessions as _hidden_sessions
+from backend.web.core import launch_gate as _launch_gate
+from backend.web.core import pending as _pending
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import plain_repo as _plain_repo
 from backend.web.core import shared_branch as _shared_branch
 
 __all__ = [
     "create",
+    "create_gated",
     "create_result",
     "free_title",
     "memory_refusal",
@@ -49,6 +53,7 @@ async def create(
     person: str = "",
     carry_ref: str = "",
     branched_from: str = "",
+    gated: bool = False,
 ) -> JSONResponse:
     """Create a session and Start it in the background (returns 202 immediately).
 
@@ -297,7 +302,10 @@ async def create(
     # run's own members are held by its planner instead (they stay queued
     # rather than failing here), and a person's create is never refused: the
     # memory banner already says what they are walking into.
-    if spawned and not payload.get("run_member"):
+    # ``gated``: the launch gate (core.launch_gate) already admitted this
+    # create — the route's, a queued create's (whose Start anyway is a
+    # person overriding memory), a flight's, a schedule's.
+    if spawned and not payload.get("run_member") and not gated:
         mem_refusal = await asyncio.to_thread(memory_refusal)
         if mem_refusal is not None:
             return JSONResponse(mem_refusal, status_code=409)
@@ -822,6 +830,8 @@ async def create(
 
     # Tracked in _BG_TASKS so lifespan teardown cancels it (an untracked task
     # can also be GC'd mid-flight).
+    # Counted as warming from now (core.launch_gate), before its tmux exists.
+    _launch_gate.note_start(title)
     srv._register_task(_bg_start())
     # Seed the *_changed diff snapshot with the initial state so the first real
     # transition (loading->running etc.) emits instead of being swallowed (F6).
@@ -988,13 +998,174 @@ def _peer_share_payload_error(payload: dict, peer_share: str, program: str) -> s
 
 
 async def create_result(
-    payload: dict, *, peer_share: str = "", person: str = ""
+    payload: dict, *, peer_share: str = "", person: str = "", auto: str = ""
 ) -> Tuple[int, dict]:
     """:func:`create` as ``(status_code, body)`` for in-process callers: 202
-    with the new row (plus ``prompt_delivery``), or 4xx with ``{"error"}``."""
-    resp = await create(payload, peer_share=peer_share, person=person)
+    with the new row (plus ``prompt_delivery``), or 4xx with ``{"error"}``.
+
+    ``auto`` (``"flight"``, ``"schedule"``, ``"spawn"``): an automatic start,
+    so it asks the launch gate first (:func:`create_gated`). When it has to
+    wait the answer is 202 ``{"title", "queued": true, "status": "queued:
+    waiting for memory", ...}`` and the session is created later. Its title is
+    listed as a pending row meanwhile, the way an intake start is."""
+    if auto:
+        held = await create_gated(payload, person=person, kind=auto)
+        if held is not None:
+            return _json_result(held)
+    resp = await create(payload, peer_share=peer_share, person=person, gated=bool(auto))
+    return _json_result(resp)
+
+
+def _json_result(resp: JSONResponse) -> Tuple[int, dict]:
     try:
         body = json.loads(resp.body)
     except Exception:  # noqa: BLE001 — every branch above answers JSON
         body = {}
     return resp.status_code, body if isinstance(body, dict) else {}
+
+
+# --------------------------------------------------------------------------- #
+# The launch gate's side of a create (core.launch_gate)
+# --------------------------------------------------------------------------- #
+#: The server's event loop, for a queued create (a coroutine) that the gate's
+#: drainer thread starts later.
+_LAUNCH_LOOP: dict = {"loop": None}
+
+#: The kinds of create the gate may queue (and bring back after a restart).
+QUEUED_CREATE_KINDS = ("spawn", "flight", "schedule")
+
+
+def queued_launch(title: str, payload: dict, person: str = ""):
+    """The gate's launch for a create that waited: make the session now →
+    the error, or None. Runs in the gate's drainer thread (or a Start anyway
+    route's worker thread), on the server's loop when it is running."""
+
+    async def _create() -> Tuple[int, dict]:
+        # gated: the gate admitted it (or a person chose Start anyway), so its
+        # own memory check doesn't refuse it a second time.
+        resp = await create(dict(payload, title=title), person=person, gated=True)
+        return _json_result(resp)
+
+    def _launch() -> Optional[str]:
+        coro = _create()
+        loop = _LAUNCH_LOOP.get("loop")
+        try:
+            if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
+                status, body = asyncio.run_coroutine_threadsafe(coro, loop).result(
+                    timeout=600
+                )
+            else:
+                # The loop is gone (a test client between requests).
+                status, body = asyncio.run(coro)
+        finally:
+            # Created (its real row replaces the placeholder) or failed.
+            _pending.drop(title)
+        if status >= 400:
+            err = str(body.get("error") or "create failed (%d)" % status)
+            try:
+                _server()._note_create_failure(title, err)
+            except Exception:  # noqa: BLE001
+                pass
+            return err
+        return None
+
+    return _launch
+
+
+def _restore_create(rec: dict):
+    """A saved queued create, after a restart: its placeholder row again, and
+    its launch. None (dropped) when its name was taken meanwhile."""
+    args = rec.get("args") or {}
+    title = str(rec.get("title") or "")
+    payload = args.get("payload")
+    if not title or not isinstance(payload, dict):
+        return None
+    try:
+        if title in _server().ENGINE.instances:
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+    _pending.add(
+        title,
+        str(rec.get("kind") or "spawn"),
+        parent=str(rec.get("parent") or ""),
+        spawned=bool(payload.get("spawned")),
+    )
+    return queued_launch(title, payload, str(args.get("person") or ""))
+
+
+for _kind in QUEUED_CREATE_KINDS:
+    _launch_gate.register_kind(_kind, _restore_create)
+
+
+async def create_gated(
+    payload: dict, *, person: str = "", kind: str = "spawn"
+) -> Optional[JSONResponse]:
+    """An automatic create (an agent's ``spawn_session``, a flight step, a
+    schedule) asks the launch gate. None = go: create it now (the start is
+    noted). Otherwise the **202** ``{"title", "queued": true, "status":
+    "queued: waiting for memory", "reason", "position",
+    "waiting_for_memory"}`` of a create that waits in the gate's queue. The
+    queue creates it when memory allows, one at a time. A full queue is
+    **409** ``{"memory_queue_full": true}``; a title already waiting is
+    **409** ``… already exists``. A blank title is named now, by the rule
+    create itself uses."""
+    title = str(payload.get("title") or "").strip()
+    if title and _launch_gate.waiting(title) is not None:
+        return JSONResponse(
+            {
+                "error": "a session named %s already exists (it is waiting for "
+                "memory)" % title,
+                "waiting_for_memory": _launch_gate.waiting(title),
+            },
+            status_code=409,
+        )
+    go, _why = await asyncio.to_thread(
+        _launch_gate.admit_auto, title or "%s-%d" % (kind, time.time_ns())
+    )
+    if go:
+        return None
+    if not title:
+        base = title_from_prompt(str(payload.get("prompt") or ""))
+        title = await asyncio.to_thread(free_title, base or "worker")
+    queued_payload = dict(payload, title=title)
+    _LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
+    parent = str(payload.get("parent") or "")
+    try:
+        rec = await asyncio.to_thread(
+            _launch_gate.gate_auto,
+            title,
+            queued_launch(title, queued_payload, person),
+            kind=kind,
+            source="agent" if kind == "spawn" else kind,
+            parent=parent,
+            creates=True,
+            args={"payload": queued_payload, "person": person},
+        )
+    except _launch_gate.QueueFull as err:
+        return JSONResponse(
+            {
+                "error": "%s — try again later, or finish/close some sessions" % err,
+                "memory_queue_full": True,
+            },
+            status_code=409,
+        )
+    if rec is None:
+        return None
+    # Its row meanwhile: the provisioning placeholder intake starts use
+    # (core.pending), so the rail, a flight and an orchestrator's
+    # wait_for_session see it from now on, marked waiting_for_memory.
+    _pending.add(title, kind, parent=parent, spawned=bool(payload.get("spawned")))
+    return JSONResponse(
+        {
+            "title": title,
+            "queued": True,
+            "status": "queued: waiting for memory",
+            "reason": rec["reason"],
+            "position": rec["position"],
+            "waiting_for_memory": rec,
+            "parent": parent,
+            "spawned": bool(payload.get("spawned")),
+        },
+        status_code=202,
+    )

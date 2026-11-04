@@ -257,6 +257,10 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "memory_sleep_minutes",
         "memory_low_pct",
         "memory_critical_pct",
+        # The launch gate's live-agent cap and per-agent warm-up size are
+        # THIS machine's RAM too (core.launch_gate).
+        "max_live_agents",
+        "agent_warmup_mb",
         # Names from THIS machine's Claude config, sharing THIS machine's RAM.
         "mcp_shared_servers",
         # Memory limits sized to THIS machine's RAM (providers.agent_limits).

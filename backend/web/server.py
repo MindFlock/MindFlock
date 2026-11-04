@@ -963,6 +963,16 @@ async def lifespan(app: FastAPI):
     if _sleep_loop_enabled():
         _register_task(_sleep.run_loop())
     _register_task(_memory_watch_loop())
+    # The launch gate's queue (core.launch_gate): what waited for memory when
+    # the server stopped waits again — automatic starts, so through the gate,
+    # one at a time. Off under pytest (ENGINE is the developer's real state).
+    if not _restart._under_pytest():
+        _session_create._LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
+        _back = await asyncio.to_thread(_launch_gate.restore)
+        if _back and log.InfoLog is not None:
+            log.InfoLog.Printf(
+                "launch gate: %d launch(es) wait for memory again", _back
+            )
     # Event-loop stall watchdog (core.loop_watchdog): a loop stuck for 10 s
     # appends every thread's stack + the memory reading to logs/stacks.log
     # by itself. Off under pytest (a slow CI box is no wedge).
@@ -2909,11 +2919,6 @@ def get_system_memory() -> JSONResponse:
 # --------------------------------------------------------------------------- #
 # The launch gate (core.launch_gate): every agent start asks it first.
 # --------------------------------------------------------------------------- #
-#: The server's event loop, for a queued create (a coroutine) that the gate's
-#: drainer thread starts later.
-_LAUNCH_LOOP: Dict[str, object] = {"loop": None}
-
-
 def _start_anyway(payload) -> bool:
     """Whether a person's request carries ``start_anyway: true`` (the memory
     confirm's Start anyway)."""
@@ -2941,101 +2946,6 @@ async def _body_dict(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
-async def _queue_spawned_create(payload: dict, person: str) -> Optional[JSONResponse]:
-    """An agent-spawned create (MCP ``spawn_session``) asks the launch gate:
-    None = go (create it now), else the **202** ``{"title", "queued": true,
-    "status": "queued: waiting for memory", "reason", "position",
-    "waiting_for_memory"}`` of a create that waits in the gate's queue. The
-    queue creates it when memory allows. A full queue is **409**
-    ``{"memory_queue_full": true}``."""
-    title = str(payload.get("title") or "").strip()
-    if title and _launch_gate.waiting(title) is not None:
-        return JSONResponse(
-            {
-                "error": "a session named %s already exists (it is waiting for "
-                "memory)" % title,
-                "waiting_for_memory": _launch_gate.waiting(title),
-            },
-            status_code=409,
-        )
-    go, _why = await asyncio.to_thread(
-        _launch_gate.admit_auto, title or "spawn-%d" % time.time_ns()
-    )
-    if go:
-        return None
-    if not title:
-        # Queued, so it needs its name now: the rule create itself uses.
-        base = _session_create.title_from_prompt(str(payload.get("prompt") or ""))
-        title = await asyncio.to_thread(_session_create.free_title, base or "worker")
-    queued_payload = dict(payload, title=title)
-    _LAUNCH_LOOP["loop"] = asyncio.get_running_loop()
-
-    def _launch() -> Optional[str]:
-        # On the server's loop (the create schedules its background start
-        # there). Only when that loop is gone (a test client between
-        # requests) on a loop of its own.
-        loop = _LAUNCH_LOOP["loop"]
-        coro = _session_create.create_result(queued_payload, person=person)
-        try:
-            if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
-                status, body = asyncio.run_coroutine_threadsafe(coro, loop).result(
-                    timeout=600
-                )
-            else:
-                status, body = asyncio.run(coro)
-        finally:
-            # Created (its real row replaces the placeholder) or failed.
-            _pending.drop(title)
-        if status >= 400:
-            err = str(body.get("error") or "create failed (%d)" % status)
-            _note_create_failure(title, err)
-            return err
-        return None
-
-    try:
-        rec = await asyncio.to_thread(
-            _launch_gate.gate_auto,
-            title,
-            _launch,
-            kind="spawn",
-            source="agent",
-            parent=str(payload.get("parent") or ""),
-            creates=True,
-        )
-    except _launch_gate.QueueFull as err:
-        return JSONResponse(
-            {
-                "error": "%s — try again later, or finish/close some sessions" % err,
-                "memory_queue_full": True,
-            },
-            status_code=409,
-        )
-    if rec is None:
-        return None
-    # Its row meanwhile: the provisioning placeholder force-starts use
-    # (core.pending), so the rail and the orchestrator's wait_for_session
-    # see the worker from now on, marked waiting_for_memory.
-    _pending.add(
-        title,
-        "spawn",
-        parent=str(payload.get("parent") or ""),
-        spawned=True,
-    )
-    return JSONResponse(
-        {
-            "title": title,
-            "queued": True,
-            "status": "queued: waiting for memory",
-            "reason": rec["reason"],
-            "position": rec["position"],
-            "waiting_for_memory": rec,
-            "parent": str(payload.get("parent") or ""),
-            "spawned": True,
-        },
-        status_code=202,
-    )
-
-
 @app.get("/api/launch-gate")
 def get_launch_gate() -> JSONResponse:
     """What the launch gate (core.launch_gate) is holding: ``{"holding",
@@ -3057,7 +2967,8 @@ async def post_launch_gate_start(title: str, request: Request) -> JSONResponse:
         return JSONResponse(
             {"error": "%s is not waiting for memory" % title}, status_code=404
         )
-    _LAUNCH_LOOP["loop"] = _LAUNCH_LOOP["loop"] or asyncio.get_running_loop()
+    loops = _session_create._LAUNCH_LOOP
+    loops["loop"] = loops["loop"] or asyncio.get_running_loop()
     _was, err = await asyncio.to_thread(_launch_gate.start_now, title)
     if title in ENGINE.instances:
         _republish_session(title)
@@ -4827,9 +4738,12 @@ async def create_instance(payload: dict, request: Request) -> JSONResponse:
     start_anyway = payload.pop("start_anyway", None) is True
     if not payload.get("run_member"):
         if payload.get("spawned") is True:
-            held = await _queue_spawned_create(payload, person)
+            held = await _session_create.create_gated(
+                payload, person=person, kind="spawn"
+            )
             if held is not None:
                 return held
+            return await _session_create.create(payload, person=person, gated=True)
         else:
             if not start_anyway:
                 refusal = await _person_memory_refusal()
