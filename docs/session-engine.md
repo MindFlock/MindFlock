@@ -779,6 +779,10 @@ prompt's relaunch, a wake, a revive. Each waits for the gate again. An entry
 whose session is gone (or no longer asleep) is dropped. An agent's queued
 ticket start is not saved: its pending row does not survive a restart
 either, so the orchestrator's `wait_for_session` reads it as `gone`.
+Renaming a session (`core.rename_stores`, `launch_gate.rename`) moves its
+waiting entry to the new name, rebuilt through the same factory (a launch
+closes over the title it was queued with), and re-parents any worker still
+waiting to be created under it, in the saved file too.
 
 **A person's start asks first.** That covers New session, Duplicate, Start
 (`/revive`), Start all (`/revive-all`), Resume and Wake. While the gate reads

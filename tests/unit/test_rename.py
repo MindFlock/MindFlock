@@ -694,3 +694,42 @@ def test_held_entry_is_registered_and_safe_without_the_module():
 
     if importlib.util.find_spec("backend.web.core.held") is None:
         rename_stores._held("a", "b")  # must not raise
+
+
+def test_a_queued_launch_follows_the_rename(monkeypatch, tmp_path):
+    """launch_queue.json (core.launch_gate): a session waiting for memory
+    keeps its place under the new name, and its launch is rebuilt for that
+    name (the queued one closed over the old title, so it would have found
+    "the session was closed"); a worker waiting to be created keeps the
+    renamed session as its parent, in the saved queue too."""
+    from backend.web.core import launch_gate as gate
+
+    monkeypatch.setenv("MINDFLOCK_LAUNCH_QUEUE_FILE", str(tmp_path / "q.json"))
+    monkeypatch.setattr(gate, "PERSIST", True)
+    ran = []
+    monkeypatch.setitem(
+        gate._FACTORIES, "test-wake", lambda rec: (lambda: ran.append(rec["title"]))
+    )
+    gate.enqueue("old", lambda: ran.append("stale"), kind="test-wake", args={})
+    payload = {"title": "w1", "parent": "old", "prompt": "go"}
+    gate.enqueue(
+        "w1",
+        lambda: None,
+        kind="test-create",
+        parent="old",
+        creates=True,
+        args={"payload": payload},
+    )
+
+    rename.rename_session(_srv(_Inst("old")), "old", "new")
+
+    assert gate.waiting("old") is None
+    assert [(i["title"], i["parent"]) for i in gate.items()] == [
+        ("new", ""),
+        ("w1", "new"),
+    ]
+    assert payload["parent"] == "new"  # what the queued create will send
+    saved = json.loads((tmp_path / "q.json").read_text())["items"]
+    assert [(i["title"], i["parent"]) for i in saved] == [("new", ""), ("w1", "new")]
+    assert saved[1]["args"]["payload"]["parent"] == "new"
+    assert gate.drain_once() == "new" and ran == ["new"]

@@ -906,6 +906,54 @@ def restore() -> int:
     return back
 
 
+def rename(old: str, new: str) -> None:
+    """A session was renamed ``old`` → ``new`` (core.rename_stores): its
+    queued launch keeps its place under the new title, a worker waiting to be
+    created keeps ``new`` as its parent, and the in-memory outcome and warming
+    entries move. A renamed item's launch is rebuilt through its kind's
+    factory (:func:`register_kind`), since a launch closes over the title it
+    was queued with and would look up a session that no longer has that name;
+    one with no factory, or whose factory declines, keeps the launch it had.
+    A create's own title is left alone: no session has it yet to rename.
+    Then the saved queue is rewritten."""
+    if not old or not new or old == new:
+        return
+    rebuild: List[dict] = []
+    changed = False
+    with _LOCK:
+        for it in _QUEUE:
+            if it.get("parent") == old:
+                it["parent"] = new
+                changed = True
+            payload = (it.get("args") or {}).get("payload")
+            if isinstance(payload, dict) and payload.get("parent") == old:
+                # In place: a queued create's launch reads this same dict.
+                payload["parent"] = new
+                changed = True
+            if it["title"] == old and not it.get("creates"):
+                it["title"] = new
+                rebuild.append(it)
+                changed = True
+        if old in _DONE:
+            rec = _DONE.pop(old)
+            _DONE[new] = dict(rec, title=new)
+        old_n = _tmux_name(old)
+        if old_n in _ADMITTED:
+            _ADMITTED[_tmux_name(new)] = _ADMITTED.pop(old_n)
+    for it in rebuild:
+        factory = _FACTORIES.get(it["kind"])
+        try:
+            launch = factory(_saved(it)) if factory else None
+        except Exception:  # noqa: BLE001 — keep the old launch, and its place
+            launch = None
+        if launch is not None:
+            with _LOCK:
+                it["launch"] = launch
+    if changed:
+        _save()
+        _changed()
+
+
 def status() -> dict:
     """For the UI (``GET /api/system/memory`` → ``gate``): ``{"holding",
     "queued": [...], "reason", "live", "cap", "warming",
