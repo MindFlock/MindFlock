@@ -171,3 +171,14 @@ describe("finding 7: the amber chip under the agent tile is readable in both the
     }
   });
 });
+
+describe("identity hues never read as a state", () => {
+  it("has no red or amber hue", async () => {
+    const { CHAIN_HUES } = await import("../lib/skyGraph");
+    for (const h of CHAIN_HUES) {
+      const d = Math.min(Math.abs(h - 0), Math.abs(h - 360));
+      expect(d).toBeGreaterThan(40); // not red
+      expect(Math.abs(h - 40)).toBeGreaterThan(30); // not amber
+    }
+  });
+});
