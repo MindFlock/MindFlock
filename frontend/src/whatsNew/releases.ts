@@ -45,35 +45,36 @@ export const RELEASES: WhatsNewRelease[] = [
       {
         title: "The Sky",
         body:
-          "A second view beside the Grid: every session's route drawn as a row of stops, with a bird on the stop where the work is now. What needs you stands out, so you can see the whole fleet at a glance. Ctrl+Y switches.",
+          "A second view beside the Grid: a session's route drawn as a row of stops, with a bird on the stop where the work is now. It opens on This session; All shows every route at once, and Needs you lists what is waiting on you. Ctrl+Y switches between the Grid and the Sky.",
         action: { label: "Show me", run: "sky-tour" },
       },
       {
         title: "Saved routes",
         body:
-          "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf. Run it on a session, on its own, from a ticket or on a schedule.",
+          "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf as a saved route. Run it on a session, on its own in a folder, from an Intake source or on a schedule.",
         action: { label: "Show me", run: "saved-routes" },
       },
       {
         title: "Behaviors on the route",
         body:
-          "What the work should do in real use now lives on the session's route, each behavior checked by the agent or by you. Verify is a stop on the route instead of a separate dialog.",
+          "What the work should do in real use is a list of behaviors, each checked by the agent or by you. Verify is now a stop on the session's route, and you answer them on its card there instead of in a separate dialog.",
         action: { label: "Show me", run: "behaviors" },
       },
       {
         title: "Halt",
         body:
-          "A stop that fails halts the route and waits for you to Retry, Skip or Continue, so nothing ships past a failure. You can also set Halt here on any stop.",
+          "A stop that fails halts the route, so nothing ships past a failure: Retry it, Skip it, or Let the agent fix it, right on the stop. Halt here on a stop ahead makes the route halt before it until you press Carry on.",
       },
       {
-        title: "Loops and stops side by side",
+        title: "Loops, side-by-side stops and workers",
         body:
-          "A route can loop back to the agent until the work is right, and stops can run side by side. Workers a session starts show up as their own rows, each with its own bird.",
+          "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why and which round (\"fixing 1/2\"). Stops can run side by side, and a worker the session starts shows up inside its route as a small outline under the session's agent, with a bird on it while it works or needs you.",
         action: { label: "Show me", run: "sky-guide" },
       },
       {
-        title: "GitHub Copilot CLI",
-        body: "Copilot is now one of the agents MindFlock can run in a session, alongside Claude, Codex and the others.",
+        title: "Any agent, GitHub Copilot too",
+        body:
+          "GitHub Copilot is now one of the agents a session can run, alongside Claude, Codex and the others. Setup's first step asks which agent you use, then installs and signs in to that one.",
         action: { label: "Choose agents", run: "agents" },
       },
     ],
