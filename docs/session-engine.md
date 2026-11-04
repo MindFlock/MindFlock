@@ -244,6 +244,23 @@ every stored tmux session as a side effect of changing one field.
 - Session name: `mindflock_` + title with whitespace stripped and `.`→`_`
   (`to_mindflock_tmux_name`). Killing all engine sessions matches the `mindflock_`
   prefix.
+- **One name.** A session has exactly one name, its title: what the rail
+  shows is what tmux, the MCP identity, messages, flights and the CLI use.
+  Renaming (`POST /api/instances/{title}/rename`, `core.rename`) renames the
+  title everywhere at once — the engine key and state.json (old title
+  tombstoned), `tmux rename-session` for the agent and its `_sh` shell (the
+  agent keeps running; its hooks resolve the tmux name at fire time), the
+  files named after the tmux name, and every store in the
+  `core.rename_stores` registry (`tests/unit/test_rename.py` fails when a new
+  JSON store is neither registered nor listed as not session-keyed). The
+  worktree folder and branch keep their names. A running agent still carries
+  the old title in its MCP config and exit-marker wrapper, so
+  `session_renamed_from.json` (old → new) routes old-title requests to the
+  renamed session and lets the MCP identity resolve (rows carry
+  `renamed_from`); an entry goes with its session or once the agent's pane pid
+  changes (a relaunch bakes the new name in). Aliases from before this are
+  migrated to titles once at start (`rename_migration.json`) and from each
+  browser's seed; one that is not a free, valid name stays a display alias.
 - `start()` runs `tmux new-session -d -s <name> -c <workdir> <launch>`, waits for
   the session with exponential backoff, then sets `history-limit 10000` and
   `mouse on`.
