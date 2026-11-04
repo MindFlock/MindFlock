@@ -1,5 +1,5 @@
-"""Dialog parsing for aider, opencode, Cline, goose and Antigravity, pinned
-against golden screens.
+"""Dialog parsing for aider, opencode, Cline, goose, Antigravity and GitHub
+Copilot CLI, pinned against golden screens.
 
 ``tests/unit/data/dialogs/<cli>_<what>_w<cols>.screen.txt`` — each file's
 first line is a ``#!`` header naming where the screen came from (stripped
@@ -13,6 +13,9 @@ by :func:`_screen`):
   one tool call. opencode, Cline and goose were captured with ``-e`` (the
   colour escapes ``/dialog`` reads): opencode marks its selected button by
   colour alone.
+* GitHub Copilot CLI screens are REAL captures (2026-11-03, 1.0.105) from a
+  MindFlock sandbox session launched without ``--yolo``, signed in with a
+  GitHub token.
 * Antigravity (agy) screens are RECONSTRUCTED from the live-captured
   snippets recorded in config.py and test_provider_activity_patterns.py —
   agy could not be run without writing into the owner's ~/.gemini store.
@@ -78,6 +81,31 @@ _AIDER_GROUP = [
     _o("D", "Don't ask again", "no", ["d", "Enter"]),
 ]
 _AIDER_YN = _AIDER_GROUP[:2]
+
+#: Copilot's file approval, about a file in the sandbox session's worktree
+#: (the path is drawn whole, hard-wrapped mid-token at the box's edge).
+_COPILOT_CREATE = (
+    "Do you want to create /tmp/claude-1000/-home-emandel2630--mindflock-worktrees-"
+    "emandel2630-vz-copilot-only-18e4a9002a8fef74/526ecab3-45f9-4fb6-a782-8c267e227162/"
+    "scratchpad/lab2/home/.mindflock/worktrees/emandel2630/"
+    "create-file-hello-py-prints_18e4a9a7b1220053/%s?"
+)
+_COPILOT_FILE_OPTIONS = [
+    _o("1", "Yes", "yes", ["Enter"]),
+    _o(
+        "2",
+        "Yes, and don't ask again for file operations when in this repo"
+        " (/tmp/claude-1000/.../repo)",
+        "always",
+        ["Down", "Enter"],
+    ),
+    _o(
+        "3",
+        "No, and tell Copilot what to do differently",
+        "no",
+        ["Down", "Down", "Enter"],
+    ),
+]
 _GOOSE_LABELS = [
     ("Allow", "yes"),
     ("Always Allow", "always"),
@@ -323,6 +351,66 @@ GOLDEN = {
         },
         None,
     ),
+    # agy 1.4.12 (captured live at the default 80 columns): the question is
+    # "Run this command?" now, and long labels wrap back to column 0.
+    "antigravity_command14_w80": (
+        {
+            "heading": "Requesting permission",
+            "question": "Run this command?",
+            "command": "pwd",
+            "detail": None,
+            "options": [
+                _o("1", "Yes, run command", "yes", ["Enter"]),
+                _o(
+                    "2",
+                    "Yes, and always allow in this conversation for commands"
+                    " that start with 'pwd'",
+                    "always",
+                    ["Down", "Enter"],
+                ),
+                _o(
+                    "3",
+                    "Yes, and always allow for commands that start with 'pwd'"
+                    " (Persist to settings.json)",
+                    "always",
+                    ["Down", "Down", "Enter"],
+                ),
+                _o("4", "No, cancel", "no", ["Down", "Down", "Down", "Enter"]),
+            ],
+        },
+        "Requesting permission. Run this command?",
+    ),
+    # agy 1.4.12's file-access prompt (captured live): the access over the
+    # path, which wraps mid-token at the pane edge.
+    "antigravity_file_access14_w80": (
+        {
+            "heading": "File access",
+            "question": "Allow access to this file?",
+            "command": "Read: /home/dev/.mindflock/worktrees/dev/"
+            "search-limiter_18e4aa65a512ed17/services/search/README.md",
+            "detail": None,
+            "options": [
+                _o("1", "Yes, allow access", "yes", ["Enter"]),
+                _o("2", "No, deny access", "no", ["Down", "Enter"]),
+            ],
+        },
+        "File access. Allow access to this file?",
+    ),
+    # agy 1.1.10 signed out (captured live): its login-method menu, held in
+    # front of the seeded task.
+    "antigravity_signin_w100": (
+        {
+            "heading": None,
+            "question": "Select login method:",
+            "command": None,
+            "detail": None,
+            "options": [
+                _o("1", "Google OAuth", "other", ["Enter"]),
+                _o("2", "Use a Google Cloud project", "other", ["Down", "Enter"]),
+            ],
+        },
+        None,
+    ),
     "antigravity_question_w100": (
         {
             "heading": None,
@@ -353,6 +441,66 @@ GOLDEN = {
         },
         "What kind of task are we working on today?",
     ),
+    "copilot_command_w80": (
+        {
+            "heading": "Run the requested shell command",
+            "question": "Do you want to run this command?",
+            "command": 'touch build.stamp && python3 -c "print(42)"',
+            "detail": None,
+            "options": [
+                _o("1", "Yes", "yes", ["Enter"]),
+                _o(
+                    "2",
+                    "Yes, and don't ask again for `touch` and `python3` in this repo"
+                    " (/tmp/claude-1000/.../repo)",
+                    "always",
+                    ["Down", "Enter"],
+                ),
+                _o(
+                    "3",
+                    "No, and tell Copilot what to do differently",
+                    "no",
+                    ["Down", "Down", "Enter"],
+                ),
+            ],
+        },
+        "Run the requested shell command. Do you want to run this command?",
+    ),
+    "copilot_create_w100": (
+        {
+            "heading": "Create file",
+            "question": _COPILOT_CREATE % "notes.txt",
+            "command": None,
+            "detail": "notes.txt +2 -0",
+            "options": _COPILOT_FILE_OPTIONS,
+        },
+        "Create file — notes.txt +2 -0. " + _COPILOT_CREATE % "notes.txt",
+    ),
+    "copilot_create_scrolled_w80": (
+        {
+            # The box's top (its "Create file" title) scrolled off.
+            "heading": None,
+            "question": _COPILOT_CREATE % "hello.py",
+            "command": None,
+            "detail": "hello.py +2 -0",
+            "options": _COPILOT_FILE_OPTIONS,
+        },
+        None,
+    ),
+    "copilot_ask_w80": (
+        {
+            "heading": None,
+            "question": "Which greeting should it be?",
+            "command": None,
+            "detail": "Greeting",
+            "options": [
+                _o("1", "hello", "other", ["Enter"]),
+                _o("2", "hi", "other", ["Down", "Enter"]),
+                _o("3", "Other (type your answer)", "other", ["Down", "Down", "Enter"]),
+            ],
+        },
+        "Which greeting should it be? Greeting",
+    ),
 }
 
 #: The same dialog at several widths / cursor positions / redraws.
@@ -370,18 +518,23 @@ SAME_DIALOG = [
     ("cline_command_w120", "cline_command_w80"),
     ("cline_question_w80", "cline_question_down_w120"),
     ("antigravity_permission_w120", "antigravity_permission_w60"),
+    ("copilot_command_w80", "copilot_command_down_w80"),
+    ("copilot_ask_w80", "copilot_ask_down_w120"),
 ]
 
 #: Screens that are NOT a live dialog: an answered prompt, a list the agent
 #: printed, the user's own numbered input.
 NOT_A_DIALOG = [
     "aider_answered_w60",
+    "aider_create_answered_w80",
+    "aider_docgate_answered_w80",
     "opencode_printed_list_w80",
     "opencode_idle_w80",
     "goose_denied_w80",
     "cline_denied_w80",
     "antigravity_input_numbered_w100",
     "antigravity_printed_list_w100",
+    "copilot_idle_w100",
 ]
 
 ALL_LIVE = sorted({n for group in SAME_DIALOG for n in group} | set(GOLDEN))
@@ -451,7 +604,13 @@ def test_not_a_live_dialog(name):
 
 
 @pytest.mark.parametrize(
-    "name", ["opencode_idle_w80", "cline_denied_w80", "antigravity_input_numbered_w100"]
+    "name",
+    [
+        "opencode_idle_w80",
+        "cline_denied_w80",
+        "antigravity_input_numbered_w100",
+        "copilot_idle_w100",
+    ],
 )
 def test_no_dialog_on_screen(name):
     assert _prov(name).dialog_on_screen(_screen(name)) is False
@@ -601,7 +760,9 @@ def test_cline_answered_prompt_with_the_input_box_under_it_is_no_parse():
 # --------------------------------------------------------------------------- #
 # Wiring: dialog_layout                                                        #
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("cli", ["aider", "opencode", "cline", "goose", "antigravity"])
+@pytest.mark.parametrize(
+    "cli", ["aider", "opencode", "cline", "goose", "antigravity", "copilot"]
+)
 def test_the_bundled_cli_reads_its_dialogs(cli):
     cfg = next(c for c in BUILTIN_CONFIGS if c.name == cli)
     assert cfg.dialog_layout == cli

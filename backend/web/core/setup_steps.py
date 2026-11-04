@@ -82,6 +82,8 @@ __all__ = [
     "note_doctor",
     "github_connected",
     "provider_logins",
+    "agent_choices",
+    "choose_agent",
     "set_first_run_report",
     "first_run_report",
     "is_required_check",
@@ -536,7 +538,7 @@ def provider_logins() -> List[dict]:
                 installed = bool(shutil.which(binary))
                 logged: Optional[bool] = None
                 if installed:
-                    if doctor._auth_evidence(p):
+                    if doctor._auth_evidence(p) or doctor._local_model_auth(p.name):
                         logged = True
                     elif doctor._declares_auth_sources(p):
                         logged = False
@@ -556,6 +558,72 @@ def provider_logins() -> List[dict]:
     except Exception:  # noqa: BLE001
         return out
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Step 1's agent picker: which agent this computer runs
+# --------------------------------------------------------------------------- #
+def _install_hint(provider) -> str:
+    try:
+        return str(provider.install_hint() or "")
+    except Exception:  # noqa: BLE001 — a provider quirk is "no installer"
+        return ""
+
+
+def agent_choices() -> List[dict]:
+    """``[{name, label, installed, installable}]`` — the agents step ① can be
+    pointed at: every registered agent that is installed or that names an
+    installer (picking one then makes ① "Install <it>"), the installed ones
+    first. Never raises."""
+    out: List[dict] = []
+    try:
+        from backend import doctor, providers
+        from backend.web.addons.connections import agent_product_name
+
+        for p in providers.all_providers():
+            if p.name == "generic":
+                continue
+            try:
+                installed = bool(shutil.which(doctor._resolve_agent_binary(p.name)))
+                hint = _install_hint(p)
+                if not (installed or hint):
+                    continue
+                out.append(
+                    {
+                        "name": p.name,
+                        "label": agent_product_name(p.name),
+                        "installed": installed,
+                        "installable": bool(hint),
+                    }
+                )
+            except Exception:  # noqa: BLE001 — one odd provider, not the list
+                continue
+    except Exception:  # noqa: BLE001
+        return out
+    # The agents already on this computer first (registration order kept
+    # within each group): the likely pick is the one you have.
+    return sorted(out, key=lambda c: not c["installed"])
+
+
+def choose_agent(name: str) -> str:
+    """Make ``name`` the default agent from first-run setup (step ①'s picker):
+    ``""`` on success, else why not. Unlike Settings → Agents (which only
+    takes an installed CLI, since a default must launch), setup may pick an
+    agent that is NOT installed yet as long as MindFlock can install it — that
+    is what step ① is for, and the registry default (``claude``) was in that
+    exact state anyway. Never raises."""
+    key = str(name or "").strip()
+    if not any(c["name"] == key for c in agent_choices()):
+        return "%s can't be set up from here — pick one of the listed agents" % (
+            key or "(no agent)"
+        )
+    try:
+        from backend.config import settings as settings_mod
+
+        settings_mod.update_settings(coding_cli={"default_provider": key})
+        return ""
+    except Exception as exc:  # noqa: BLE001 — report it, don't raise
+        return "couldn't save the default agent: %s" % exc
 
 
 # --------------------------------------------------------------------------- #
@@ -631,6 +699,7 @@ def status(doctor_payload: Optional[dict] = None) -> dict:
         ),
         "tailscale": tailscale,
         "logins": provider_logins(),
+        "agents": agent_choices(),
         "default_provider": default,
         "report": first_run_report(),
     }

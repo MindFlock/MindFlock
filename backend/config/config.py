@@ -275,8 +275,14 @@ def DefaultConfig() -> Config:
     try:
         program = GetClaudeCommand()
     except Exception as err:  # noqa: BLE001 - mirror Go's broad error handling
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf("failed to get claude command: %v", err)
+        # Not an error: a machine whose agent is Codex, Copilot, … has no
+        # claude, and the seed below yields to the installed agent at launch
+        # (config/program.resolve_default_program). Logged on every boot as an
+        # ERROR it read as a fault on exactly those machines.
+        if log.InfoLog is not None:
+            log.InfoLog.Printf(
+                "no claude command (%v); default agent resolves at launch", err
+            )
         program = DEFAULT_PROGRAM
     try:
         from backend import providers

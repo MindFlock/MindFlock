@@ -62,6 +62,18 @@ displayed/preselected one can differ — see [web-api.md](web-api.md).
 
 ## The default: `claude`
 
+**Which agent is the default.** `coding_cli.default_provider` when someone
+chose one (Settings → Agents, or the **Your agent** picker in Setup step ①,
+`POST /api/setup/agent`, which — unlike Settings — accepts an agent that is
+not installed yet as long as MindFlock can install it). Otherwise `claude` —
+unless `claude` is not installed and another agent is, in which case the
+first installed agent in registration order (a GitHub Copilot-only computer
+runs Copilot, not a missing `claude`). `config/program.py`
+(`default_provider_name`, `installed_fallback`) is the one place every
+surface asks: the doctor, Setup, Settings → Agents, Connections and the
+launch path (`resolve_default_program`, where config.json's seeded `claude`
+yields the same way; any other program written there stays).
+
 The Claude provider launches plain `claude` (Claude Code). It:
 
 - resumes a crashed session with `--resume <thread-id>` when this session's
@@ -366,6 +378,7 @@ args = ["--dangerously-skip-permissions"] # saved flags, appended on every start
 resume_flag = "--continue"       # omit if the CLI can't resume
 skip_perms_flag = "--yolo"       # appended when the session skips permissions
 resume_fallback = true           # emit "<cmd> --continue || <cmd>" (not after exit 137)
+git_excludes = [".mycli*"]        # its own work-tree files: put in info/exclude at launch
 effort_args = ["--brain", "{level}"]      # optional: reasoning-effort flag
 effort_levels = ["low", "high"]           # the level names it accepts, cheapest first
 effort_ultra_level = "galaxybrain"        # optional: flag value for the top rung
@@ -376,7 +389,8 @@ natural_codes = [0, 130]         # clean-quit codes (no auto-resume)
 
 [classify]
 trust_patterns = ["Do you trust"]  # pane substrings that mean a trust prompt
-trust_keystroke = "enter"          # enter | d_enter | y_enter
+trust_keystroke = "enter"          # enter | d_enter | y_enter | esc
+trust_tail_lines = 0               # >0: a gate counts only in the bottom N lines
 idle_pattern = "What next?"        # pane substring meaning "waiting, idle"
 working_patterns = ["(?i)esc to interrupt"]  # status line of a LIVE turn
 dialog_layout = "goose"            # optional: it draws a known CLI's dialogs
@@ -394,6 +408,18 @@ state = "working"
 red_zone_guard = false             # true = MindFlock manages a HARD block for this CLI
 tool_hook_events = { PreToolUse = "pre", PostToolUse = "post" }
 ```
+
+**A CLI that prints its gates into the scrollback needs `trust_tail_lines`.**
+Matched anywhere on the screen, an answered gate whose text is still visible
+reads as live, and its keystroke is typed into whatever prompt comes next
+(aider's `Open documentation url…` gate typed `D` + Enter as the session's
+task). With `trust_tail_lines = 3` the gate counts only while it sits on the
+last three non-blank lines. The same goes for `waiting_patterns`: anchor them to
+the end of the screen (`\s*\Z`) when the question stays in the scrollback once
+answered, or the session reads **Needs you** for good. `git_excludes` lists the
+files the CLI writes into the work tree for itself (aider's `.aider*`): they go
+into the repository's `info/exclude` before each launch, so a Commit stop never
+picks them up and the CLI never asks to edit the project's `.gitignore`.
 
 **Give your CLI a `working_patterns` regex if it shows an interrupt hint.** It
 is the one signal that proves a turn is live *from a single frame*, and that
@@ -550,13 +576,26 @@ the same name overrides the bundled config.
 MindFlock MCP server to a launch. `spec` is a
 `providers.mcp_attach.McpSpec`: interpreter, `-P -m backend.mcp`, the env with
 the session's title, the server port and the scope. The default is `()`, no
-auto-attach. Two providers override it:
+auto-attach. These providers attach:
 
 - **`claude`** writes a 0600 run file and returns
   `--mcp-config=<file>` and `--allowedTools=<the ten read, wait and report tools>`,
   both in the single-token form, since a spaced value would swallow the seed
   prompt.
 - **`codex`** returns `-c mcp_servers.mindflock={…}`, one TOML inline table.
+- **`copilot`** returns `--additional-mcp-config <json>` (the shape `copilot
+  mcp add` writes, every MindFlock tool allowed) plus
+  `--allow-all-mcp-server-instructions`. Copilot finds MCP tools through its
+  own server-side tool search and keeps a non-allowlisted server's
+  instructions out of the prompt; without MindFlock's instructions (its tool
+  map) in the prompt the agent missed `start_flight`, `flight_status` and
+  `list_sessions` in 3 of 5 runs, with them 0 of 4 (2026-11-03,
+  [vision/copilot-only.md](vision/copilot-only.md)).
+- A config-driven CLI attaches through its config's **`mcp_args`** templates
+  (TOML `[launch] mcp_args`, the same placeholders as the peer `mcp_args`):
+  **`goose`** gets `--with-extension "env K=V … <python> -P -m backend.mcp"`,
+  one more stdio extension next to the user's own (`env(1)`, because goose
+  filters `PYTHONPATH` out of an extension's env). No templates, no attach.
 
 The launch sites prepend these tokens to the effective launch args. They
 never go into `build_launch_command` or `write_launcher` themselves, so the
@@ -564,8 +603,8 @@ golden launcher scripts don't change. They are raw argv elements: every
 launch path shell-quotes launch args itself. A provisioned launcher bakes them
 in when it is written, so a relaunch from the web UI compares the baked tokens
 with what `mcp_launch_args` returns now (`mcp_attach.launcher_attach_stale`)
-and rewrites the launcher first when they differ. A TOML-only provider has no
-hook and is not attached; its users register `mindflock mcp` with that CLI by
+and rewrites the launcher first when they differ. A TOML provider without
+`mcp_args` is not attached; its users register `mindflock mcp` with that CLI by
 hand. See [mcp.md](mcp.md#how-it-gets-attached).
 
 Each launch site also records whether that launch carried the tokens
@@ -631,7 +670,14 @@ that opens the pane). The shared pieces and every layout live in
   2.1.311; see below) as a `kind: "select"` parse.
 - **`codex`** reads the approval overlay (`Would you like to run the
   following command?` / `…make the following edits?`, an optional `Reason:`,
-  the `$ command`) and the trust screen, with `› 1.` options.
+  the `$ command`) and the trust screen, with `› 1.` options. 0.164 draws an
+  `Environment: local` line above the `Reason:`; it is skipped, so the
+  reason stays the detail. Its folder-trust gate (`Do you trust the contents
+  of this directory?`, or 0.164's `Trust this folder? Codex can read, edit,
+  and run files here…` over `› 1. Trust and continue`) is in Codex's
+  `trust_patterns` and is accepted with Enter on the trusting option
+  (`accept_words` `trust`/`yes`, so a moved cursor is walked back first). A
+  fresh worktree, which every session is, opens on that gate.
 
 The other bundled CLIs are config providers: `GenericProvider.parse_dialog`
 dispatches on `ProviderConfig.dialog_layout` (a key of `dialogs.LAYOUTS`),
@@ -682,17 +728,51 @@ for the button ("1", "Y", "y"):
   closed by `└`. The selected choice's hint (`(Allow the tool call once)`)
   moves with the cursor and is cut from its label. Keys: Up/Down from the
   `●`, then Enter. Answered, the `◆` turns `◇` — no parse.
-- **`antigravity`** (agy 1.0) reads a `> 1.` numbered list under one of its
-  openers (`>` alone also starts agy's input line, so the opener is
+- **`antigravity`** (agy 1.0–1.4) reads a `> 1.` numbered list under one of
+  its openers (`>` alone also starts agy's input line, so the opener is
   required): `Requesting permission for:` (the indented lines under it are
-  the `command`, `Do you want to proceed?` the question), `Question N/N: …`,
-  `Do you trust the contents of this …?`. Keys: Up/Down from the cursor,
-  then Enter. A `Question N/N:` with no choices drawn and agy's `esc Skip`
-  hint under it is a free-text question: the parse has no options, and
-  `/dialog` serves it **unparsed with that question** (`parsed: false`) —
-  the UI offers a text field. These goldens are reconstructed from the
-  live-captured snippets in `config.py`, not a fresh capture (running agy
-  writes into the user's conversation store).
+  the `command`, the next line with a `?` the question: 1.0's `Do you want
+  to proceed?`, 1.4's `Run this command?`), `Question N/N: …`, `Do you trust
+  the contents of this …?`, the signed-out `Select login method:` menu, and
+  1.4's file-access prompt (`File access` heading; `Read:` and the path as
+  the `command`; `Allow access to this file?`). agy 1.4 wraps a long option
+  label back to **column 0**, so its parse reads a non-blank line between two
+  options as the upper option's wrap (`option_block(flush_wraps=True)`); the
+  arrow-keys hint (`↑/↓ Navigate`) counts as a footer. Keys: Up/Down from
+  the cursor, then Enter. A `Question N/N:` with no choices drawn and agy's
+  `esc Skip` hint under it is a free-text question: the parse has no
+  options, and `/dialog` serves it **unparsed with that question**
+  (`parsed: false`) — the UI offers a text field. The 1.0 goldens are
+  reconstructed from the live-captured snippets in `config.py`; the
+  `antigravity_command14_w80`, `antigravity_file_access14_w80` and
+  `antigravity_signin_w100` screens are live captures. agy's footer keeps
+  `esc to cancel` (a working pattern) under every menu, so each of these
+  dialogs also has a waiting pattern; without one the session read
+  *working* while agy waited for a person.
+
+- **`copilot`** (GitHub Copilot CLI 1.0.105, live captures) reads two
+  layouts. The **tool approval** is a rounded box: its title over a rule
+  (`Run the requested shell command`, `Create file` → `heading`), the shell
+  command in a box of its own (→ `command`) or a file's stat line
+  (`notes.txt +2 -0` → `detail`) and diff, the question (`Do you want to run
+  this command?` / `Do you want to create <path>?`, a path cut at the box's
+  edge joined back whole), a `❯ 1.` numbered menu whose wrapped labels are
+  indented under the number (not the label, so the shared option block can't
+  read it), and the `↑/↓ to navigate · enter to select · esc to cancel`
+  footer as the box's last line. `Yes, and don't ask again …` is `always`;
+  `No, and tell Copilot what to do differently (Esc to stop)` is `no`, its
+  hint cut. The same layout covers the folder-trust gate (`Do you trust the
+  files in this folder?`). The **question form** (the ask-user tool):
+  `Copilot needs information.`, the question, a field label (`Greeting:` →
+  `detail`), unnumbered choices with `❯` on the selected one, and the
+  `↑/↓ select · enter accept` footer; keys are Up/Down from the cursor then
+  Enter, and its `Other (type your answer)` choice opens Copilot's text box.
+  Neither dialog stays in the scrollback once answered. A session launches
+  without `--yolo` unless skip-permissions is on, so these come up on every
+  shell command and file write — before this layout they read **idle**
+  (a seconds timer above the box kept the pane from ever being "stable", so
+  the waiting patterns alone never fired) and an automated typer could have
+  answered them.
 
 A TOML provider whose CLI draws one of these layouts (a wrapper around
 goose, a fork of opencode) sets `dialog_layout` under `[classify]`; an
@@ -843,6 +923,17 @@ foreground.
 
 ## Connection: install detection and sign-in
 
+**GitHub Copilot's sign-in** is read from the account `copilot login`
+records — `loggedInUsers` / `lastLoggedInUser` in `$COPILOT_HOME/config.json`
+(default `~/.copilot`; the token itself is in the system keychain, or under
+`authTokens` there when there is none) — or a token in
+`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`
+(`CopilotProvider.auth_evidence`). Not the file's existence: Copilot writes
+`config.json` (`{"firstLaunchAt": …}`) on its very first run, signed in or
+not. Sign in runs `copilot login` in the in-app terminal (its browser flow
+with a loopback callback on this machine; a keychain-less Linux asks to
+store the token in plain text).
+
 Settings → **Custom agents** (key `providers`) shows one row per registered
 provider (built-in and custom), from `GET /api/providers/status`: its **agent
 card** — the same card Connections, Settings → Agents and the Setup checklist
@@ -947,6 +1038,13 @@ API: `price_per_token(model)`, `context_window(model)`, `estimate_cost(tok, mode
 **Estimates only — never billing.** Nothing in this module raises.
 
 ## Usage history (`usage_history.py`)
+
+Which agents get a tab in the overall usage panel: those whose provider opts in
+(`usage_panel_visible`: the bundled claude/codex/antigravity/aider, or a TOML's
+`[usage] visible = true`) **and** that this machine has: the default agent, a
+CLI that is installed, or one with usage on record. On a Codex-only machine
+there is no zero "Claude" tab, which as a windowed plan would also have turned
+the whole panel's wording to plan mode.
 
 Rolling day/week/month/year token+cost totals across **all** Claude Code sessions
 (powers `GET /api/usage` and the sidebar readout). One pass over every transcript

@@ -443,14 +443,14 @@ def _provider_view(p) -> dict:
 
 
 def _default_provider_name() -> str:
-    """The configured default provider (falls back to the registry default)."""
+    """The configured default provider (falls back to the registry default, or
+    to the first installed agent when that one's CLI is missing)."""
     try:
-        name = settings_store.load_settings().coding_cli.default_provider
-        if name:
-            return name
+        from backend.config.program import default_provider_name
+
+        return default_provider_name()
     except Exception:  # noqa: BLE001 — settings are optional
-        pass
-    return providers.DEFAULT_PROVIDER
+        return providers.DEFAULT_PROVIDER
 
 
 def _provider_status(p, default_name: str) -> dict:

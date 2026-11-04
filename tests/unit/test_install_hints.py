@@ -55,10 +55,20 @@ def _hints():
 HINTS = _hints()
 
 
-def test_every_default_cli_but_antigravity_has_an_installer():
-    # agy ships inside the Antigravity app; there is no CLI installer to run.
+def test_every_built_in_agent_has_an_installer():
+    # Any built-in agent can be picked at first run and installed from there
+    # (agy: Google's antigravity.google/cli/install.sh, since 2026-11-03).
     named = {n for n, _ in HINTS}
-    assert {"claude", "codex", "aider", "opencode", "cline", "goose"} <= named
+    assert {
+        "claude",
+        "codex",
+        "antigravity",
+        "aider",
+        "opencode",
+        "cline",
+        "goose",
+        "copilot",
+    } <= named
 
 
 @pytest.mark.parametrize("name,hint", HINTS)

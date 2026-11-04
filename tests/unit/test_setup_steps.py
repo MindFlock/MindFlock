@@ -594,3 +594,89 @@ class TestToolsTitle:
         tools = next(r for r in st["steps"] if r["id"] == "tools")
         assert tools["title"].startswith("Install ")
         assert setup_steps.TITLES["tools"] == "Install the tools"
+
+
+# --------------------------------------------------------------------------- #
+# Step ①'s agent picker: a GitHub Copilot-only machine picks Copilot before it
+# is installed, and step ① becomes "Install GitHub Copilot".
+# --------------------------------------------------------------------------- #
+class TestChooseAgent:
+    @staticmethod
+    def _nothing_installed(monkeypatch):
+        import shutil
+
+        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+
+    def test_choices_are_the_installable_or_installed_agents(self, monkeypatch):
+        self._nothing_installed(monkeypatch)
+        rows = {r["name"]: r for r in setup_steps.agent_choices()}
+        assert rows["copilot"] == {
+            "name": "copilot",
+            "label": "GitHub Copilot",
+            "installed": False,
+            "installable": True,
+        }
+        assert rows["claude"]["label"] == "Claude Code"
+        assert "generic" not in rows
+        # An agent MindFlock can't install (no installer named) and that isn't
+        # here is no choice: picking it would leave step ① with no button.
+        assert all(r["installed"] or r["installable"] for r in rows.values())
+
+    def test_picking_an_uninstalled_agent_makes_it_the_default(self, monkeypatch):
+        self._nothing_installed(monkeypatch)
+        assert setup_steps.choose_agent("copilot") == ""
+        assert S.load_settings().coding_cli.default_provider == "copilot"
+        assert doctor._default_provider_name() == "copilot"
+        title = setup_steps.tools_title(
+            [_check("agent-cli", "fail", provider="copilot")], "copilot"
+        )
+        assert title == "Install GitHub Copilot"
+
+    def test_an_unknown_agent_is_refused(self, monkeypatch):
+        self._nothing_installed(monkeypatch)
+        assert "can't be set up" in setup_steps.choose_agent("not-an-agent")
+        assert "can't be set up" in setup_steps.choose_agent("")
+        assert S.load_settings().coding_cli.default_provider == ""
+
+    def test_the_route(self, client, monkeypatch):
+        self._nothing_installed(monkeypatch)
+        r = client.post("/api/setup/agent", json={"provider": "copilot"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["default_provider"] == "copilot"
+        assert any(a["name"] == "copilot" for a in body["agents"])
+        r = client.post("/api/setup/agent", json={"provider": "nope"})
+        assert r.status_code == 400 and "nope" in r.json()["error"]
+
+
+class TestLocalModelAndOrder:
+    def test_installed_agents_come_first(self, monkeypatch):
+        import shutil
+
+        monkeypatch.setattr(
+            shutil, "which", lambda b, *a, **k: "/x/copilot" if b == "copilot" else None
+        )
+        rows = setup_steps.agent_choices()
+        assert rows[0]["name"] == "copilot" and rows[0]["installed"] is True
+        assert all(not r["installed"] for r in rows[1:])
+
+    def test_a_local_model_counts_as_signed_in(self, monkeypatch):
+        """aider / goose against a local model need no account: the doctor's
+        sign-in row is ok, so step ② can tick."""
+        from backend.providers import local_models
+
+        monkeypatch.setattr(
+            local_models,
+            "launch_overlay",
+            lambda name: (
+                ({"OPENAI_API_BASE": "http://127.0.0.1:11434/v1"}, ())
+                if name == "aider"
+                else ({}, ())
+            ),
+        )
+        assert "local model" in doctor._local_model_auth("aider")
+        assert doctor._local_model_auth("codex") == ""
+        monkeypatch.setattr(doctor, "_auth_evidence", lambda p: "")
+        monkeypatch.setattr(doctor.shutil, "which", lambda b, *a, **k: "/x/" + b)
+        c = doctor._agent_auth_check("agent-auth", "aider", "agent auth (aider)")
+        assert c.status == "ok" and "local model" in c.detail

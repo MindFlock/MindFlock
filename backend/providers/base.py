@@ -69,6 +69,27 @@ class TrustSpec:
     patterns: Sequence[str] = ()
     keystroke: bytes = b"\r"
     accept_words: Sequence[str] = ()
+    #: Look for ``patterns`` only in the bottom N non-blank lines (0 = the
+    #: whole screen). For a CLI that prints its gates into the scrollback, where
+    #: an answered gate's text stays on screen (aider) — see :meth:`on_screen`.
+    tail_lines: int = 0
+
+    def on_screen(self, content: str) -> bool:
+        """Whether the gate is showing on the pane text ``content`` — what
+        every dismisser checks before it types :attr:`keystroke`. With
+        :attr:`tail_lines`, only the live bottom of the screen counts: an
+        answered gate still visible above it must not be answered again (the
+        keystroke would land in whatever prompt is live now)."""
+        if not content or not self.patterns:
+            return False
+        text = str(content)
+        if self.tail_lines > 0:
+            lines = [ln for ln in text.replace("\r\n", "\n").split("\n") if ln.strip()]
+            text = "\n".join(lines[-self.tail_lines :])
+            # A gate wrapped at a narrow width: its phrase may straddle lines.
+            joined = " ".join(ln.strip() for ln in lines[-self.tail_lines :])
+            return any(p and (p in text or p in joined) for p in self.patterns)
+        return any(p and p in text for p in self.patterns)
 
     def nav_keys_for(self, content: str) -> Sequence[str]:
         """The tmux key names (``"Down"`` / ``"Up"``, repeated) that move the
@@ -115,11 +136,11 @@ class TrustSpec:
 
 
 #: A select-menu cursor line: optional box border, the cursor glyph (``❯`` as
-#: Claude Code draws it, ``>`` as plain terminals and test fixtures do), then
-#: the option text.
-_TRUST_CURSOR_RE = re.compile(r"^\s*(?:│\s*)?[❯>]\s+\S")
+#: Claude Code draws it, ``›`` as Codex does, ``>`` as plain terminals and
+#: test fixtures do), then the option text.
+_TRUST_CURSOR_RE = re.compile(r"^\s*(?:│\s*)?[❯›>]\s+\S")
 #: What precedes an option's words: the cursor glyph and/or a ``1.`` number.
-_TRUST_OPTION_LABEL_RE = re.compile(r"^(?:[❯>]\s*)?(?:\d+[.)]\s*)?")
+_TRUST_OPTION_LABEL_RE = re.compile(r"^(?:[❯›>]\s*)?(?:\d+[.)]\s*)?")
 
 
 _NATURAL_EXIT_CODES = (0, 130)
@@ -532,7 +553,13 @@ class BaseProvider:
             waiting = ()
         try:
             spec = self.trust_prompt()
-            trust = tuple(spec.patterns) if spec else ()
+            # A gate scoped to the live bottom lines (aider) counts only while
+            # it is there — an answered one still on screen holds nothing.
+            trust = (
+                tuple(spec.patterns)
+                if spec and (not spec.tail_lines or spec.on_screen(screen_text))
+                else ()
+            )
         except Exception:  # noqa: BLE001
             trust = ()
         try:

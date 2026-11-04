@@ -98,7 +98,7 @@ def test_detect_auth_miss_is_empty_not_false():
         ("opencode", "opencode auth login", True),
         ("goose", "goose configure", True),
         ("aider", "aider", True),
-        ("antigravity", "agy", False),
+        ("antigravity", "agy", True),
     ],
 )
 def test_login_and_install_hints(name, login, has_install):

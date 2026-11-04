@@ -295,7 +295,7 @@ def _agent_row(st: dict) -> dict:
     every new session runs, so it missing reads as needs attention, not off."""
     name = str(st.get("name") or "")
     default = bool(st.get("is_default"))
-    label = _agent_label(name)
+    label = agent_product_name(name)
     installed = bool(st.get("installed"))
     has_login = bool(st.get("has_login"))
     probe = bool(st.get("auth_probe"))

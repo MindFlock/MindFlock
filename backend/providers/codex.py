@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from .base import TrustSpec
 from .generic import GenericProvider
 
 
@@ -56,6 +57,20 @@ class CodexProvider(GenericProvider):
         return "/new"
 
     # --- terminal classification ------------------------------------------ #
+    def trust_prompt(self) -> Optional[TrustSpec]:
+        """The folder-trust gate (both wordings, see the config), accepted with
+        Enter on the option naming "trust" (0.164: "Trust and continue") or
+        "yes" (older: "Yes, continue") — walked onto first if the cursor moved,
+        so the Enter can never land on "Quit"."""
+        spec = super().trust_prompt()
+        if spec is None:
+            return None
+        return TrustSpec(
+            patterns=spec.patterns,
+            keystroke=spec.keystroke,
+            accept_words=("trust", "yes"),
+        )
+
     def parse_dialog(self, screen_text: str) -> Optional[dict]:
         """The approval overlay (run a command / make edits / grant
         permissions), a request for input or the folder-trust screen: the

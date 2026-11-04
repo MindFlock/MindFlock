@@ -469,3 +469,58 @@ class TestSettingsRoundTrip:
         from backend.config.settings import CodingCliSettings
 
         assert "assistant_provider" not in CodingCliSettings().to_dict()
+
+
+class TestAnInstalledAgentBeatsAMissingSeed:
+    """A GitHub Copilot-only machine: nothing chosen, ``claude`` (the registry
+    default and config.json's first-run seed) not installed, ``copilot`` is.
+    New sessions, Setup and the doctor all run Copilot instead of a CLI that
+    isn't there."""
+
+    @staticmethod
+    def _only(monkeypatch, *installed):
+        monkeypatch.setattr(P, "_cli_installed", lambda name: name in installed)
+
+    @pytest.fixture(autouse=True)
+    def _settings_module_follows(self, monkeypatch):
+        """default_provider_name reads the settings MODULE at call time; keep
+        it in step with the resolver's patched ``P.load_settings``."""
+        import backend.config.settings as settings_mod
+
+        monkeypatch.setattr(settings_mod, "load_settings", lambda: P.load_settings())
+
+    def test_the_seed_yields_to_the_installed_agent(self, monkeypatch):
+        self._only(monkeypatch, "copilot")
+        monkeypatch.setattr(P, "load_settings", lambda: _settings(""))
+        monkeypatch.setattr(P, "LoadConfig", lambda: _Cfg("claude"))
+        assert P.resolve_default_program() == "copilot"
+        assert P.default_provider_name() == "copilot"
+
+    def test_an_installed_claude_stays_the_default(self, monkeypatch):
+        self._only(monkeypatch, "claude", "copilot")
+        monkeypatch.setattr(P, "load_settings", lambda: _settings(""))
+        monkeypatch.setattr(P, "LoadConfig", lambda: _Cfg("claude"))
+        assert P.resolve_default_program() == "claude"
+        assert P.default_provider_name() == "claude"
+
+    def test_nothing_installed_keeps_claude_for_setup_to_install(self, monkeypatch):
+        self._only(monkeypatch)
+        monkeypatch.setattr(P, "load_settings", lambda: _settings(""))
+        assert P.default_provider_name() == "claude"
+
+    def test_a_choice_or_a_deliberate_config_is_never_replaced(self, monkeypatch):
+        self._only(monkeypatch, "copilot")
+        monkeypatch.setattr(P, "load_settings", lambda: _settings("codex"))
+        assert P.resolve_default_program() == "codex"
+        assert P.default_provider_name() == "codex"
+        monkeypatch.setattr(P, "load_settings", lambda: _settings(""))
+        monkeypatch.setattr(P, "LoadConfig", lambda: _Cfg("goose"))
+        assert P.resolve_default_program() == "goose"
+
+    def test_the_doctor_and_settings_read_the_same_default(self, monkeypatch):
+        from backend import doctor
+        from backend.web.addons import settings as settings_addon
+
+        monkeypatch.setattr(P, "default_provider_name", lambda: "copilot")
+        assert doctor._default_provider_name() == "copilot"
+        assert settings_addon._default_provider_name() == "copilot"

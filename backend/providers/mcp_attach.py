@@ -456,13 +456,20 @@ def supported_providers() -> list:
     :meth:`~backend.providers.base.BaseProvider.mcp_launch_args`)."""
     from backend import providers as _providers
     from .base import BaseProvider
+    from .generic import GenericProvider
 
     names: list = []
     for prov in _providers.all_providers():
         impl = getattr(type(prov), "mcp_launch_args", None)
-        if impl is not None and impl is not BaseProvider.mcp_launch_args:
-            if prov.name not in names:
-                names.append(prov.name)
+        # A config-driven CLI attaches through its ``mcp_args`` templates; the
+        # GenericProvider method alone (no templates) attaches nothing.
+        if impl is GenericProvider.mcp_launch_args:
+            if not getattr(getattr(prov, "cfg", None), "mcp_args", ()):
+                continue
+        elif impl is None or impl is BaseProvider.mcp_launch_args:
+            continue
+        if prov.name not in names:
+            names.append(prov.name)
     return names
 
 

@@ -204,6 +204,39 @@ GOLDEN = {
         },
         "Do you trust the contents of this directory?",
     ),
+    # Codex 0.164 (captured live): an "Environment: local" line now sits
+    # above the Reason — it never takes the reason's place.
+    "codex164_exec": (
+        _codex,
+        {
+            "heading": None,
+            "question": "Would you like to run the following command?",
+            "command": "uv add redis",
+            "detail": "Reason: add the redis client the shared search limiter needs",
+            "options": _opts(
+                ("Yes, proceed", "yes"),
+                (
+                    "Yes, and don't ask again for commands that start with `uv add`",
+                    "always",
+                ),
+                ("No, and tell Codex what to do differently", "no"),
+            ),
+        },
+        "Would you like to run the following command? Reason: add the redis "
+        "client the shared search limiter needs",
+    ),
+    # Codex 0.164's folder-trust gate (captured live in a fresh worktree).
+    "codex164_trust_folder": (
+        _codex,
+        {
+            "heading": None,
+            "question": "Trust this folder?",
+            "command": None,
+            "detail": None,
+            "options": _opts(("Trust and continue", "yes"), ("Quit", "no")),
+        },
+        "Trust this folder?",
+    ),
     "codex_update": (
         _codex,
         {
@@ -298,8 +331,11 @@ def test_the_fixtures_use_the_providers_own_wording():
         assert waiting(claude, _screen(name)), name
     trust = claude.trust_prompt().patterns
     assert any(p in _screen("claude_trust_folder") for p in trust)
-    for name in ("codex_exec", "codex_edits", "codex_update"):
+    for name in ("codex_exec", "codex164_exec", "codex_edits", "codex_update"):
         assert waiting(codex, _screen(name)), name
+    codex_trust = codex.trust_prompt().patterns
+    for name in ("codex_trust", "codex164_trust_folder"):
+        assert any(p in _screen(name) for p in codex_trust), name
     assert not waiting(claude, _screen("claude_printed_list"))
 
 
@@ -1404,7 +1440,7 @@ def test_parses_dialogs_is_the_parser_capability():
     assert BaseProvider().parses_dialogs() is False
     # Every built-in CLI now has a layout (providers/dialogs.py); only a plain
     # custom provider without `dialog_layout` keeps the no-parser default.
-    for name in ("aider", "opencode", "cline", "goose", "antigravity"):
+    for name in ("aider", "opencode", "cline", "goose", "antigravity", "copilot"):
         assert providers.resolve(name).parses_dialogs() is True, name
     from backend.providers.config import ProviderConfig
     from backend.providers.generic import GenericProvider

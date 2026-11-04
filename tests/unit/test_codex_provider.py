@@ -235,3 +235,22 @@ def test_activity_state_reads_marker(provider, tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_ACTIVITY_MARKER_DIR", str(tmp_path / "act"))
     assert provider.activity_state("mindflock_none") is None
     assert provider.activity_state_age("mindflock_none") is None
+
+
+def test_trust_gate_is_auto_accepted_on_the_trusting_option(provider):
+    # Codex 0.164 opens a fresh worktree (every MindFlock session) on a
+    # "Trust this folder?" gate; without a trust spec it sat on "Needs you".
+    from pathlib import Path
+
+    data = Path(__file__).parent / "data" / "dialogs"
+    spec = provider.trust_prompt()
+    for name in ("codex_trust", "codex164_trust_folder"):
+        screen = (data / ("%s.screen.txt" % name)).read_text(encoding="utf-8")
+        assert any(p in screen for p in spec.patterns), name
+        assert spec.nav_keys_for(screen) == ()  # accept is preselected
+    assert spec.keystroke == b"\r"
+    # A cursor resting on "Quit" is walked back onto "Trust and continue".
+    screen = (data / "codex164_trust_folder.screen.txt").read_text(encoding="utf-8")
+    moved = screen.replace("› 1. Trust", "  1. Trust").replace("  2. Quit", "› 2. Quit")
+    assert any(p in moved for p in spec.patterns)
+    assert tuple(spec.nav_keys_for(moved)) == ("Up",)

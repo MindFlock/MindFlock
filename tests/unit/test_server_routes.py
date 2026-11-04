@@ -1554,6 +1554,40 @@ def test_usage_windows_flags_an_estimated_year(monkeypatch):
     assert "year_estimated_before" not in client.get("/api/usage").json()
 
 
+def test_usage_panel_drops_an_agent_this_machine_never_had(monkeypatch):
+    """A Codex-only machine: no zero "Claude" tab (a windowed plan, which
+    also flipped the panel's wording to plan mode) — only the default, an
+    installed CLI, or one with usage on record keeps its tab."""
+    from backend.web.core import settings_hooks
+
+    monkeypatch.setattr(server.ENGINE, "default_program", lambda: "codex")
+    monkeypatch.setattr(
+        settings_hooks, "provider_installed", lambda name: name == "codex"
+    )
+    empty = {k: 0 for k in ("in", "out", "cache_read", "cache_write", "cost")}
+    used = dict(empty, **{"in": 5})
+
+    def entry(p):
+        periods = {
+            k: dict(used if p.name == "aider" else empty)
+            for k in ("day", "week", "month", "year")
+        }
+        return {
+            "name": p.name,
+            "label": p.name,
+            "mode": "windowed",
+            "window": None,
+            "window_note": "",
+            "periods": periods,
+        }
+
+    monkeypatch.setattr(server, "_provider_usage_entry", entry)
+    names = [p["name"] for p in client.get("/api/usage").json()["providers"]]
+    assert names[0] == "codex"
+    assert "claude" not in names and "antigravity" not in names
+    assert "aider" in names  # not installed, but it has usage on record
+
+
 # --------------------------------------------------------------------------- #
 # pane history                                                                 #
 # --------------------------------------------------------------------------- #

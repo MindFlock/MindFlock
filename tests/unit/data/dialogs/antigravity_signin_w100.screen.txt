@@ -1,0 +1,15 @@
+#! LIVE capture: agy 1.1.10 started by MindFlock in a fresh worktree with a scratch HOME (no login, nothing under the real ~/.gemini read or written), width 100
+
+     ▄▀▀▄
+    ▀▀▀▀▀▀
+   ▀▀▀▀▀▀▀▀
+  ▄▀▀    ▀▀▄
+ ▄▀▀      ▀▀▄
+
+ Welcome to the Antigravity CLI. You are currently not signed in.
+
+ Select login method:
+ > 1. Google OAuth
+   2. Use a Google Cloud project
+
+ [Use arrow keys to navigate, Enter to select]

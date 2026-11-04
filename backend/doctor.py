@@ -363,21 +363,14 @@ def check_gh() -> Check:
 
 
 def _default_provider_name() -> str:
-    """The configured default coding-CLI provider ("claude" unless overridden)."""
-    name = ""
+    """The configured default coding-CLI provider: the chosen one, else
+    "claude" — or, when claude is not installed, the first agent that is
+    (:func:`backend.config.program.default_provider_name`)."""
     try:
-        from backend.config.settings import load_settings
+        from backend.config.program import default_provider_name
 
-        name = load_settings().coding_cli.default_provider
+        return default_provider_name()
     except Exception:  # noqa: BLE001 — settings are optional
-        name = ""
-    if name:
-        return name
-    try:
-        from backend import providers
-
-        return providers.DEFAULT_PROVIDER
-    except Exception:  # noqa: BLE001
         return "claude"
 
 
@@ -648,6 +641,19 @@ def _auth_evidence(provider) -> str:
         return ""
 
 
+def _local_model_auth(name: str) -> str:
+    """``"runs on your local model"`` when the user's local-model config gives
+    agent ``name`` its endpoint (aider, goose… against ollama / LM Studio /
+    a custom server need no account), else ``""``. Never raises."""
+    try:
+        from backend.providers import local_models
+
+        env, args = local_models.launch_overlay(name)
+        return "runs on your local model — no sign-in needed" if (env or args) else ""
+    except Exception:  # noqa: BLE001 — no local model is no evidence
+        return ""
+
+
 def _declared_login_command(provider) -> str:
     """The login command ``provider`` EXPLICITLY declares, or ``""``.
 
@@ -714,7 +720,7 @@ def _agent_auth_check(cid: str, name: str, label: str) -> Check:
             "info",
             f"`{name}` is not a registered provider — no login probe",
         )
-    evidence = _auth_evidence(provider)
+    evidence = _auth_evidence(provider) or _local_model_auth(name)
     if evidence:
         return Check(cid, label, "ok", evidence, provider=name)
     if not _declares_auth_sources(provider):

@@ -209,7 +209,7 @@ def test_oneshot_command_none_when_unsupported(args, prompt):
         ),
         ("antigravity", ["agy", "--print", "P"]),
         ("opencode", ["opencode", "run", "P"]),
-        ("goose", ["goose", "run", "-t", "P"]),
+        ("goose", ["goose", "run", "-q", "-t", "P"]),
         ("cline", ["cline", "--auto-approve", "false", "P"]),
     ],
 )
