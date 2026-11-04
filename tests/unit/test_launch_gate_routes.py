@@ -9,6 +9,7 @@ Nothing here touches tmux or launches an agent.
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -265,6 +266,24 @@ def test_the_phone_shows_waiting_for_memory():
     assert '"Waiting for memory"' in js[at : at + 600]
     # Before the provisioning row: a queued worker IS a pending row.
     assert at < js.index('return st("starting", { hint: "Provisioning workspace" })')
+
+
+def test_the_phone_asks_before_a_start_while_memory_is_low():
+    """Restart, Wake, Resume and New session on the phone: a 409
+    memory_confirm opens the page's own ask sheet with Start anyway, which
+    sends the start again with start_anyway (confirm() is a silent no)."""
+    from pathlib import Path
+
+    js = (Path(server.__file__).parent / "static" / "mobile.js").read_text()
+    at = js.index("function memoryConfirm(err, again)")
+    body = js[at : at + 900]
+    assert "b.memory_confirm !== true" in body and '"Start anyway"' in body
+    call = js[js.index("function sessionCall(") :][:900]
+    assert "memoryConfirm(err" in call and "{ start_anyway: true }" in call
+    start = js[js.index("function startSession(startAnyway)") :][:6000]
+    assert "startAnyway === true ? { start_anyway: true } : {}" in start
+    assert "memoryConfirm(err, function () { startSession(true); })" in start
+    assert not re.search(r"\bconfirm\(", body)
 
 
 def test_a_client_without_the_dialog_reads_a_plain_sentence(monkeypatch):

@@ -244,7 +244,8 @@ def test_actions_hit_the_rails_routes():
     assert 'sessionCall(title, "resume",' in js
     assert 'sessionCall(title, "revive",' in js
     call = js.split("  function sessionCall(")[1].split("\n  }\n")[0]
-    assert "postFor(title, route, {})" in call
+    # The body is {} — or {start_anyway: true} after the memory confirm.
+    assert "postFor(title, route, body || {})" in call
     post = js.split("  function postFor(")[1].split("\n  }\n")[0]
     assert '"/api/instances/" + encodeURIComponent(title) + "/" + action' in post
     assert 'method: "POST"' in post

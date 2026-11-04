@@ -2262,7 +2262,7 @@
     return "";
   }
 
-  function startSession() {
+  function startSession(startAnyway) {
     if (startBusy) return;
     harvestPlan();
     var blocked = startBlockReason(newPlan);
@@ -2281,17 +2281,18 @@
       // purpose: an absent key inherits whatever the user configured on the
       // desktop, which is the entire reason the phone never has to ask about
       // any of them.
-      body: JSON.stringify({
+      // (…plus start_anyway, only when the memory confirm said so.)
+      body: JSON.stringify(Object.assign({
         title: p.title,
         repo_path: p.repo_path,
         prompt: p.prompt,
         in_place: !!p.in_place,
         init_repo: !!p.init_repo,
-      }),
+      }, startAnyway === true ? { start_anyway: true } : {})),
     })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (j) {
-          if (!r.ok) throw new Error((j && j.error) || "create failed (" + r.status + ")");
+          if (!r.ok) throw apiError((j && j.error) || "create failed (" + r.status + ")", r.status, j);
           return j;
         });
       })
@@ -2329,6 +2330,10 @@
         // the freshly reopened sheet.
         if (seq !== startSeq) return;
         resetStartBtn();
+        if (memoryConfirm(err, function () { startSession(true); })) {
+          newError("Not started yet: memory is low.");
+          return;
+        }
         newError((err && err.message) || "could not start the session");
       });
   }
@@ -2581,10 +2586,10 @@
 
   // Resume / Restart / Wake: one POST each, the sheet closes on success and
   // stays open (with the server's sentence) on a refusal.
-  function sessionCall(title, route, okMsg, failWord) {
+  function sessionCall(title, route, okMsg, failWord, body) {
     actBusy = true;
     actError("");
-    postFor(title, route, {})
+    postFor(title, route, body || {})
       .then(function () {
         actBusy = false;
         closeActSheet();
@@ -2593,8 +2598,31 @@
       })
       .catch(function (err) {
         actBusy = false;
+        // Memory is low: a start of yours asks first (the ask sheet), and
+        // Start anyway sends it again.
+        if (memoryConfirm(err, function () {
+          sessionCall(title, route, okMsg, failWord, { start_anyway: true });
+        })) return;
         actError(failWord + ": " + err.message);
       });
+  }
+
+  // "Memory is low" (backend core/launch_gate.py): the server answers a
+  // person's start (Restart, Wake, Resume, New session) 409
+  // {memory_confirm: true, level, message} while the machine is short of
+  // memory. Asked in the ask sheet — confirm() is a silent "no" here — with
+  // Start anyway as its one action. True when it asked.
+  function memoryConfirm(err, again) {
+    var b = err && err.status === 409 ? err.body : null;
+    if (!b || b.memory_confirm !== true) return false;
+    askSheet(
+      b.level === "critical" ? "Memory is critically low" : "Memory is low",
+      (b.message || "") +
+        " Putting idle agents to sleep (on the desktop) frees memory and keeps their conversations.",
+      "Start anyway",
+      again
+    );
+    return true;
   }
 
   function closeSession(title) {
