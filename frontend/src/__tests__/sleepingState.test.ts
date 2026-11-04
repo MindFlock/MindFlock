@@ -1,7 +1,7 @@
 /** Sleeping agents on the rail (backend/web/core/sleep.py): a session whose
  * agent was stopped on purpose, idle, to give its memory back. Its activity
  * reads "offline", but it is not broken — the row says Sleeping (calm, muted,
- * a Wake action), it is outside the "N agents offline · Restart all" bar,
+ * a Wake action), it is outside the "N agents offline · Start all" bar,
  * and it never lands in the bell. Rendered like sidebarRowState.test.ts. */
 
 import { createElement } from "react";
@@ -154,7 +154,7 @@ describe("the rail row", () => {
   });
 });
 
-describe("offlineRows — the Restart all bar", () => {
+describe("offlineRows — the Start all bar", () => {
   it("counts crashed agents and never a sleeping one", () => {
     const rows = [
       row({ title: "dead1", activity: "offline" }),

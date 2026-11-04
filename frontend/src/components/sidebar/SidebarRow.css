@@ -176,6 +176,11 @@
   opacity: 1;
 }
 
+/* Held offline after a crash: "Offline · Start" — the dot is quiet. */
+.inst .stagechip.chip-held .chip-sep {
+  opacity: 0.6;
+}
+
 .inst .stagechip.chip-restart:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

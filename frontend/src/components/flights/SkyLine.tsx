@@ -72,7 +72,9 @@ import { queryClient, useFlightKinds, useFlights } from "../../state/queries";
 import { closeSession, selectSession, undoLastClose } from "../../lib/sessionActions";
 import { nodeById, nodeSession, removableBox, removalNeedsAsk } from "../../lib/skySelect";
 import { pushUndo } from "../../lib/skyUndo";
-import { deriveSessionState, type SessionTone } from "../../lib/sessionState";
+import { deriveSessionState, type SessionState, type SessionTone } from "../../lib/sessionState";
+import { HELD_CHIP } from "../../lib/heldOffline";
+import { startSession } from "../../lib/revive";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
@@ -369,6 +371,38 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
         onPointerCancel={up}
       />
     </div>
+  );
+}
+
+/** The agent tile's state chip. A session held offline after a crash
+ * (lib/heldOffline) says its remedy — "Offline · Start" — and pressing it
+ * starts the agent (the rail chip's Start); every other state is a label. */
+export function SkyStateChip({ ss, title, className }: { ss: SessionState; title: string; className: string }) {
+  const [busy, setBusy] = useState(false);
+  if (!ss.held)
+    return (
+      <span className={className} title={ss.hint}>
+        {ss.label}
+      </span>
+    );
+  return (
+    <button
+      type="button"
+      className={className + " sky-held-start"}
+      title={ss.hint}
+      aria-label="Offline since a crash — start the agent"
+      disabled={busy}
+      // The tile drags and opens on the pointer: the chip is its own button.
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        setBusy(true);
+        void startSession(title).finally(() => setBusy(false));
+      }}
+    >
+      {busy ? "Starting…" : HELD_CHIP}
+    </button>
   );
 }
 
@@ -742,9 +776,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           </span>
         )}
         {row && (
-          <span className={"skl-chip fl-box-chip skl-state-chip tone-" + ss.tone} title={ss.hint}>
-            {ss.label}
-          </span>
+          <SkyStateChip ss={ss} title={row.title} className={"skl-chip fl-box-chip skl-state-chip tone-" + ss.tone} />
         )}
         {behaviors.mark?.tone === "you" && ss.tone !== "attention" && (
           // The Needs-you mark: a behavior waits on you (docs/behaviors.md §1).
@@ -825,9 +857,13 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             renderOpen={renderOpen}
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
             renderHead={() => (
-              <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
-                {ss.label}
-              </span>
+              row ? (
+                <SkyStateChip ss={ss} title={row.title} className={"sky-head-chip fl-box-chip tone-" + ss.tone} />
+              ) : (
+                <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
+                  {ss.label}
+                </span>
+              )
             )}
           />
           {chainMenu.menu}

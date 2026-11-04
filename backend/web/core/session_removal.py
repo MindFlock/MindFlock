@@ -29,6 +29,7 @@ from backend.session import tmux
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import finished_children as _finished_children
+from backend.web.core import held as _held
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import mailbox as _mailbox
 from backend.web.core import ownership as _ownership
@@ -353,6 +354,8 @@ def _forget_session_state(title: str) -> None:
     _ownership.drop(title)
     # …nor asleep.
     _sleep.drop(title)
+    # …nor held offline.
+    _held.drop(title)
     # …nor described by the dead session's last task.
     _task_headlines.drop(title)
     # Keyed by TMUX SESSION NAME, not by title (see agent_state._maybe_record_
@@ -382,6 +385,7 @@ def _prune_session_state(live_titles) -> None:
     for dead in [n for n in list(srv._THREAD_RECORD_AT) if n not in live_names]:
         srv._THREAD_RECORD_AT.pop(dead, None)
     _sleep.prune(live)
+    _held.prune(live)
     _task_headlines.prune(live)
     # Old names whose session went, or whose agent relaunched under the new
     # one (core.rename; throttled — it asks tmux for each entry's pane pid).

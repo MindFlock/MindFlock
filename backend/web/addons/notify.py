@@ -551,6 +551,23 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["bird"],
     },
     {
+        # Sessions stayed offline after a restart (core.held): their agents
+        # died with the server and nothing restarts them by itself, so a crash
+        # can't refill memory. ONE notice per boot (core.revive.announce_held,
+        # after the quiet window) instead of an Offline alarm per session.
+        "id": "sessions_held",
+        "label": "Sessions stay offline after a crash",
+        "description": "After a restart, sessions whose agent died wait for you to press Start.",
+        "event": "system.sessions_held",
+        "old": None,
+        "new": None,
+        "title": "Sessions stayed offline",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["zzz"],
+    },
+    {
         # A template's SCHEDULED run couldn't start (no folder any more, the
         # repo moved, no free name). It fired with nobody watching — at 21:00
         # or overnight — so without a push the failure waits on a card in the

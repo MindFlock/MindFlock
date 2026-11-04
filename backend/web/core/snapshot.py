@@ -28,6 +28,7 @@ from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import ownership as _ownership
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
+from backend.web.core import held as _held
 from backend.web.core import sleep as _sleep
 
 
@@ -489,6 +490,12 @@ def _instance_json(inst: session.Instance, cheap: bool = False) -> dict:
         # UI paints it Sleeping, not Offline. Opening it or sending it
         # anything wakes it.
         "sleeping": _sleep.info(inst.Title),
+        # Held offline (core.held): its agent died in a crash and nothing
+        # but a person's Start brings it back — ``held_offline: true``,
+        # ``held_since`` (epoch s) and ``held_reason`` ("the server
+        # restarted" | "out of memory (killed)" | "the agent crashed").
+        # Omitted when not held.
+        **_held.row_fields(inst.Title),
         # L2: whether the workspace has an `origin` remote (cached ~30s) — the
         # guided Push step is a dead end without one.
         "has_origin": bool(

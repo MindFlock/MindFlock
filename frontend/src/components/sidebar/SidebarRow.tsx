@@ -28,7 +28,7 @@ import {
 } from "../../lib/sessionState";
 import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
-import { reviveSession } from "../../lib/revive";
+import { reviveSession, startSession } from "../../lib/revive";
 import { wakeSession } from "../../lib/wake";
 import { backgroundChip, backgroundJobs } from "../../lib/backgroundJobs";
 import { expectBackgroundJob, stopBackgroundJob } from "../../lib/stopBackgroundJob";
@@ -825,6 +825,25 @@ export const SidebarRow = memo(function SidebarRow({
             </span>
           ) : noAgent ? (
             <AgentBlockedChip block={noAgent} title={title} className={"stagechip chip-restart " + chip.cls} hint={ss.hint} />
+          ) : ss.held && !paused ? (
+            // Held offline after a crash (lib/heldOffline): nothing starts it
+            // by itself, so the chip says its one remedy — "Offline · Start".
+            <button
+              type="button"
+              className={"stagechip chip-restart chip-held " + chip.cls}
+              title={chip.title}
+              aria-label={"Offline since a crash — start the agent"}
+              onClick={(e) => act(() => void startSession(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {chip.label}
+              <span className="chip-sep" aria-hidden="true">
+                ·
+              </span>
+              <span className="chip-act" aria-hidden="true">
+                Start
+              </span>
+            </button>
           ) : ss.state === "offline" && ss.restartable && !paused ? (
             // Offline carries its remedy: Restart relaunches the agent (the same
             // lazy revive a terminal attach or a sent prompt does).

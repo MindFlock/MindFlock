@@ -23,6 +23,7 @@ import { effectiveActivity, stageMeta } from "../../lib/stage";
 import { errMsg, relTime } from "../../lib/format";
 import { selectSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
+import { isHeldRefusal } from "../../lib/heldOffline";
 import { fetchDialog } from "../../lib/flockActions";
 import { flockAvailable, openWorkersMenu } from "../../lib/workersRequest";
 import { forkBlockReason, runPlaybook } from "../../lib/playbooks";
@@ -280,8 +281,13 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
     // to the page — give it back to the box, where Delete edits text.
     setTimeout(() => box.current?.focus(), 0);
     const who = [...plannedNow, ...plannedLater];
+    // Held offline after a crash (lib/heldOffline): the server queued it,
+    // sent after Start — not a failure.
+    const held = results.flatMap((r, i) => (r.status === "rejected" && isHeldRefusal(r.reason) ? [who[i]] : []));
     const failed = results
-      .map((r, i) => (r.status === "rejected" ? nameOf(who[i]) + ": " + errMsg(r.reason) : ""))
+      .map((r, i) =>
+        r.status === "rejected" && !isHeldRefusal(r.reason) ? nameOf(who[i]) + ": " + errMsg(r.reason) : ""
+      )
       .filter(Boolean);
     if (failed.length === results.length) {
       toast("Couldn't send: " + failed.join("; "), { duration: 6000 });
@@ -304,6 +310,13 @@ export function ThreadTab({ title, active }: { title: string; active: boolean })
         (now.length ? "queued for " : "Queued for ") +
           names(later) +
           (mode === "now" ? " — it gets it when it's free" : " — it runs when idle")
+      );
+    if (held.length)
+      said.push(
+        (said.length ? "queued" : "Queued") +
+          " — " +
+          names(held) +
+          (held.length === 1 ? " is offline; press Start to send it" : " are offline; press Start to send them")
       );
     toast(said.join("; ") + (failed.length ? ". Failed: " + failed.join("; ") : ""), {
       duration: failed.length ? 6000 : 3000,

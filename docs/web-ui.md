@@ -1080,8 +1080,23 @@ off…* when it was mid-turn, with the memory reason appended when memory is low
 or *Couldn't restart <name> — <why>*). Rows proxied from another device are
 read-only and offer no Restart.
 
-**Restart all.** From two Offline rows up, a strip above the list reads *N
-agents offline · ↻ Restart all*: `POST /api/server/revive-all` with exactly
+**Held offline: Start.** A session whose agent died in a crash is **held
+offline** (`held_offline` on its row — see
+[session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)):
+nothing starts it by itself, so it uses no memory. Its Offline chip reads
+*Offline · Start* (tooltip: `held_reason`) and its pane shows a placeholder
+instead of a terminal — *Offline since <held_reason>. It won't start by
+itself, so it uses no memory.* — with a **Start** button; both call
+`POST /api/instances/{title}/revive` (showing its `memory_warning` if any),
+and the pane reconnects on success. The terminal socket closes with 4424
+for a held session and is never retried on its own. A prompt sent to it is
+queued (409 `held: true`), toasting *Queued — <name> is offline; press Start
+to send it.* While at least one session is held, a calm, dismissible one-line
+notice says *3 sessions stayed offline after a crash, so they use no memory.
+Start the ones you need.* with **Start all**.
+
+**Start all.** From two Offline rows up, a strip above the list reads *N
+agents offline · Start all*: `POST /api/server/revive-all` with exactly
 those titles — two at a time, waiting for memory between launches — and a toast
 of what happened (*Restarted 4 agents — 2 told to continue where they left off;
 1 held back: memory is low*). The toast counts only the rows the strip offered,
@@ -1096,13 +1111,17 @@ share of the last minute spent stalled) and what MindFlock is holding back
 adds a line for them (*Heavy jobs: fix-auth running · 2 waiting for a slot*).
 **Hide** lasts until the level worsens or clears and returns.
 
-**After a server restart, Offline fixes itself.** Once the server has booted
-(past its 30 s quiet window) it relaunches in the background every session
-whose agent was running when it went down — two at a time, oldest first,
-through the same path as Restart — so the rail comes back to Working / Idle
-without a click each. Paused, provisioning, peer-shared, workspace-missing and
-usage-limited sessions are left alone, and so are sleeping ones (below). Settings → General → **Revive sessions
-after a restart** (`general.revive_on_start`, on by default) turns it off;
+**After a server restart, sessions stay offline until you start them.** By
+default the sessions whose agents died with the server are held offline
+(above), so a crash can't refill the memory that just ran out; one
+notification says how many (*N sessions stayed offline after the restart —
+press Start on the ones you need.*). Settings → General → **Bring agents back
+by themselves after a crash** (`general.revive_on_start`, **off by default**)
+opts in to the old behaviour: once the server has booted (past its 30 s quiet
+window) it relaunches in the background every session whose agent was running
+when it went down — two at a time, oldest first, through the same path as
+Restart. Paused, provisioning, peer-shared, workspace-missing and
+usage-limited sessions are left alone, and so are sleeping ones (below).
 `POST /api/server/revive-all` runs it on demand. The same switch brings back
 an agent the system killed for memory, once memory recovers (at most 3 times
 an hour per session — see
@@ -6226,12 +6245,14 @@ labels above the inputs.
   [Send a message / prompt queue](#send-a-message--prompt-queue--per-pane) for
   the gate it shares with `wait_for_limit`). Off leaves it parked; the "Usage comes back"
   notification fires either way.
-- **General → Revive sessions after a restart** (`general.revive_on_start`,
-  **default on**) — whether the server relaunches, in the background after it
-  boots, every session whose agent was running when it went down (see
+- **General → Bring agents back by themselves after a crash**
+  (`general.revive_on_start`, **default off**; note: *Off: sessions whose
+  agent died stay Offline until you press Start, so a crash can't refill
+  memory.*) — on, the server relaunches, in the background after it boots,
+  every session whose agent was running when it went down (see
   [One session state](#one-session-state)), and an agent the system killed
-  for memory once memory recovers. Off leaves them **Offline** until you press
-  their **↻ Restart**.
+  for memory once memory recovers. Off (the default) holds them **Offline**
+  until you press **Start**.
 - **General → Put idle agents to sleep after** (`general.sleep_idle_minutes`,
   **45** when empty, **0 = never**) — how long an agent must have sat idle,
   its turn over, unwatched and with nothing waiting for it, before its CLI and

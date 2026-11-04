@@ -8,7 +8,9 @@ agent. Pins:
 * who counts: only an agent this process saw live, dying to SIGKILL (exit
   marker 137, or no marker and its hooks last said ``working``) — never a
   person's quit, never a session that was already Offline at boot, a paused
-  one, or with ``general.revive_on_start`` off;
+  one, or with ``general.revive_on_start`` off (its default since the
+  held-offline change: these tests opt in; with it off the agent is HELD —
+  ``tests/unit/test_held_offline.py``);
 * the memory gate (held while low, without spending the agent's budget);
 * one at a time, :data:`GAP_SECONDS` apart;
 * the rate limit: :data:`AUTO_MAX_PER_WINDOW` an hour, then left Offline with
@@ -92,6 +94,8 @@ def _fresh(monkeypatch):
     revive._auto_reset_for_tests()
     monkeypatch.setattr(revive, "AUTO_ENABLED", True)
     monkeypatch.setattr(revive.memory_pressure, "is_low", lambda **kw: False)
+    # The auto-revive is the opt-in old behaviour (unset = held offline).
+    S.update_settings(general={"revive_on_start": True})
     yield
     revive._auto_reset_for_tests()
 
@@ -172,6 +176,12 @@ def test_paused_or_setting_off_is_not_queued(wt):
     S.update_settings(general={"revive_on_start": False})
     _kill(srv, "a")
     assert not revive.holds_offline("a")
+    # …held offline instead (core.held), so nothing relaunches it.
+    from backend.web.core import held
+
+    assert held.info("a")["reason"] == held.REASON_KILLED
+    assert revive.auto_tick(srv, start=_sync) is None
+    assert srv.launched == []
 
 
 def test_off_under_pytest_by_default(wt, monkeypatch):

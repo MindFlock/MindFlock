@@ -33,6 +33,8 @@ import { DiffTab } from "./DiffTab";
 import { HistoryOverlay } from "./HistoryOverlay";
 import { PaneFindBar, type FindMode } from "./PaneFindBar";
 import { PausedBody } from "./PausedBody";
+import { HeldBody } from "./HeldBody";
+import { isHeldOffline } from "../../lib/heldOffline";
 import { QueueTab } from "./QueueTab";
 import { ThreadTab } from "./ThreadTab";
 import { CodeMapTab, prefetchCodeMap } from "./CodeMapTab";
@@ -244,6 +246,17 @@ export function Pane({
   const [booted, setBooted] = useState(false);
   const [wsState, setWsState] = useState("connecting");
   const [shellStarted, setShellStarted] = useState(savedTab === "shell");
+  // Held offline after a crash (lib/heldOffline, backend core/held.py): the
+  // row says so, or the agent socket was refused with 4424 ("held"). Like
+  // Paused, the Agent tab is a placeholder (HeldBody) and NO agent socket is
+  // opened; its Start mounts the terminal again. `started` bridges the poll
+  // between a taken Start and the row no longer saying held.
+  const heldRow = !paused && isHeldOffline(inst);
+  const [started, setStarted] = useState(false);
+  useEffect(() => {
+    if (!heldRow) setStarted(false);
+  }, [heldRow]);
+  const heldOff = !paused && ((heldRow && !started) || wsState === "held");
   // Which pane's full-history overlay is open (null = closed). Opened by the
   // header history button or Ctrl+↑/↓ (dragSel null), or by drag-selecting
   // past a terminal edge — dragSel then carries the terminal's in-progress
@@ -342,6 +355,7 @@ export function Pane({
   const adopt = useCallback(
     (kind: "agent" | "shell") => (el: HTMLDivElement | null) => {
       if (!el || missing || loading || (kind === "agent" && paused)) return;
+      if (kind === "agent" && heldOff) return;
       if (held) return;
       const handle = getTerm(title, kind);
       if (!el.contains(handle.container)) el.appendChild(handle.container);
@@ -369,7 +383,7 @@ export function Pane({
       }
       requestAnimationFrame(() => handle.doFit());
     },
-    [title, missing, loading, paused, held]
+    [title, missing, loading, paused, held, heldOff]
   );
 
   // Pausing with the pane open: drop the agent terminal (its socket would
@@ -380,6 +394,16 @@ export function Pane({
     setBooted(false);
     setWsState("paused");
   }, [paused, title]);
+
+  // Held with the pane open (the agent died and the server holds it): drop
+  // the agent terminal so Start begins a fresh one — never a reconnect.
+  const heldNow = heldRow && !started;
+  useEffect(() => {
+    if (!heldNow) return;
+    releaseTerm(title, "agent");
+    setBooted(false);
+    setWsState("held");
+  }, [heldNow, title]);
 
   const fitSoon = useCallback(() => {
     clearTimeout(fitTimer.current);
@@ -1298,7 +1322,7 @@ export function Pane({
           {/* The person's buttons, in their order (Customize → Pane header). */}
           {items.buttons.map((id) => buttonEls[id])}
         </div>
-        <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState}</span>
+        <span className={"state" + (wsState !== "connected" ? " state-bad" : "")}>{wsState === "held" ? "offline" : wsState}</span>
         {/* Pinned right even when the header scrolls: ▶ Resume and ⋯ — always
             the last thing in the row — stay reachable without scrolling. */}
         <div className="head-tail">
@@ -1356,6 +1380,20 @@ export function Pane({
       <div className="pane-body" ref={bodyRef}>
         {paused ? (
           <PausedBody key="paused" title={title} hidden={tab !== "agent"} />
+        ) : heldOff ? (
+          <HeldBody
+            key="held"
+            title={title}
+            reason={inst.held_reason}
+            hidden={tab !== "agent"}
+            onStarted={() => {
+              // The hold is released: the agent-term div mounts again and
+              // adopt() builds a fresh terminal (getTerm drops the refused one).
+              setStarted(true);
+              setBooted(false);
+              setWsState("connecting");
+            }}
+          />
         ) : (
         <div
           key="agent-term"

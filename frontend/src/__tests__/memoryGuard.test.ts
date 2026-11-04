@@ -1,4 +1,4 @@
-/** The memory notice's detail line and the rail's "Restart all" toast
+/** The memory notice's detail line and the rail's "Start all" toast
  * (components/MemoryNotice.tsx, components/sidebar/OfflineBar.tsx). */
 
 import { describe, expect, it } from "vitest";
@@ -62,14 +62,14 @@ describe("slotsLine", () => {
 describe("sweepToast", () => {
   it("counts restarts and the agents told to continue", () => {
     expect(sweepToast({ revived: ["a", "b", "c"], continued: ["b"], skipped: {} }, ["a", "b", "c"])).toBe(
-      "Restarted 3 agents — 1 told to continue where it left off"
+      "Started 3 agents — 1 told to continue where it left off"
     );
   });
 
   it("says when memory held the rest back", () => {
     expect(
       sweepToast({ revived: ["a"], continued: [], skipped: { b: "low memory", c: "low memory" } }, ["a", "b", "c"])
-    ).toBe("Restarted 1 agent; 2 held back: memory is low");
+    ).toBe("Started 1 agent; 2 not started: memory is low");
   });
 
   it("reports only the rows the bar offered, not every session the sweep passed over", () => {
@@ -78,6 +78,6 @@ describe("sweepToast", () => {
         { revived: [], skipped: { a: "workspace missing", paused1: "paused", other: "usage limit" } },
         ["a", "b"]
       )
-    ).toBe("No agents restarted; 1 couldn't restart (workspace missing)");
+    ).toBe("No agents started; 1 couldn't start (workspace missing)");
   });
 });

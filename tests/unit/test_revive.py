@@ -6,7 +6,7 @@ The sweep runs against a fake server namespace — fake instances, a fake
 Pins: who is skipped and why (paused / provisioning / peer-shared / workspace
 missing / usage limit / already running), oldest-first order, the cap of two
 launches in flight, the summary line, the ``general.revive_on_start`` setting
-(default on), ``POST /api/server/revive-all`` and its 403, and the load-time
+(default OFF since the held-offline change — ``test_held_offline.py``), ``POST /api/server/revive-all`` and its 403, and the load-time
 Recently closed record with ``reason`` + ``branch_exists``.
 """
 
@@ -373,15 +373,17 @@ def test_live_meter_limit_skips(wt, monkeypatch):
 # --------------------------------------------------------------------------- #
 # the setting + startup gate
 # --------------------------------------------------------------------------- #
-def test_revive_on_start_defaults_on_and_round_trips():
+def test_revive_on_start_defaults_off_and_round_trips():
+    """Unset = OFF: after a crash, sessions whose agent died stay held offline
+    (core.held) until someone presses Start. True opts in to the old sweep."""
     assert S.load_settings().general.revive_on_start is None
-    assert revive.enabled() is True
-    S.update_settings(general={"revive_on_start": False})
-    S.invalidate()
-    assert S.load_settings().general.revive_on_start is False
     assert revive.enabled() is False
     S.update_settings(general={"revive_on_start": True})
+    S.invalidate()
+    assert S.load_settings().general.revive_on_start is True
     assert revive.enabled() is True
+    S.update_settings(general={"revive_on_start": False})
+    assert revive.enabled() is False
 
 
 def test_run_on_start_respects_the_setting(wt):
@@ -431,6 +433,8 @@ def test_revive_all_route_returns_the_summary(monkeypatch):
     assert r.status_code == 200
     assert r.json()["revived"] == ["a"]
     assert seen.get("trigger") == "on demand"
+    # A person's Start all: sessions held offline are started too.
+    assert seen.get("release_held") is True
 
 
 def test_revive_all_route_is_owner_only(monkeypatch):
