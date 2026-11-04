@@ -315,7 +315,7 @@ describe("Settings → Voice → Voice words", () => {
   it("is on the Voice screen after This computer's mic; GET /api/voice is re-read after a save and its words applied", () => {
     const voice = src("components/settings/screens/Voice.tsx");
     expect(voice).toMatch(/<MicPrefs \/>\s*<VoiceWordsBlock model=\{model\} view=\{view\} \/>/);
-    expect(voice).toMatch(/api<VoiceView>\("\/api\/voice"\)\s*\.then\(\(v\) => \{[\s\S]*?applyVoiceView\(v\);/);
+    expect(voice).toMatch(/api<VoiceView>\("\/api\/voice\?warm=0"\)\s*\.then\(\(v\) => \{[\s\S]*?applyVoiceView\(v\);/);
     // The re-read follows the settings document — which every save replaces.
     expect(voice).toContain("}, [active, doc, reread]);");
     expect(src("components/settings/screens/VoiceWords.tsx")).toContain('model.saveField("voice", "words", next as unknown as Json)');
