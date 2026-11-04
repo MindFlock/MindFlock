@@ -287,7 +287,7 @@ export function stopTileBoxes(d: Pick<Diagram, "nodes">, flight: Pick<Flight, "c
   if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you")) return out;
   for (const n of d.nodes) {
     if (n.kind !== "stop" || n.index !== flight.cursor) continue;
-    if (n.state === "halted") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 52 };
+    if (n.state === "halted") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
     else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 24 + 21 * youItems(n.step).length };
   }
   return out;

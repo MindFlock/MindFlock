@@ -105,7 +105,7 @@ describe("a halted stop keeps its name, says why, then the buttons", () => {
   it("the tile's tooltip carries the whole reason; the graph gives it room for all of it", () => {
     expect(t).toContain('title="CI checks — CI checks failed: 2 of 14 checks red: test-unit, lint"');
     const n = g.nodes.find((x) => x.node.id === "stop:s3")!;
-    expect(n.h).toBe(NODE_H + 52);
+    expect(n.h).toBe(NODE_H + 40);
     expect(n.w).toBe(C.STOP_TILE_W);
     // The other stops keep the plain box.
     expect(g.nodes.find((x) => x.node.id === "stop:s1")!.h).toBe(NODE_H);
