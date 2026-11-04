@@ -347,6 +347,10 @@ export interface Instance {
    * a live local session (the server validates lazily). Optional: an older
    * server doesn't send it. */
   parent?: string;
+  /** The titles this session had before it was renamed (POST
+   * /api/instances/{title}/rename), oldest first. Optional: absent when it
+   * never was, or on an older server. */
+  renamed_from?: string[];
   /** True when an agent created this session (the MCP's spawn_session), as
    * opposed to a human. Set once at create time, never afterwards. */
   spawned?: boolean;

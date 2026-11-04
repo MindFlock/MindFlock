@@ -65,6 +65,7 @@ import { setView, showInSky } from "../../lib/viewMode";
 import { BOX_PRESETS, boxScale, clampBox, lodFor, nearLines } from "../../lib/skyLayout";
 import { nameTakenBy, windowName } from "../../lib/windowName";
 import { toast } from "../../lib/toast";
+import { renameSession } from "../../lib/renameSession";
 import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
 import { queryClient, useFlightKinds, useFlights } from "../../state/queries";
@@ -497,8 +498,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   };
 
   // Round 20: the frame's bar renames on a double-click (as the rail's row
-  // does: an alias, refused when another session already has that name).
-  const setAlias = useUi((s) => s.setAlias);
+  // does: the session itself, refused when another session already has
+  // that name).
   const [naming, setNaming] = useState<string | null>(null);
   const named = useRef(false);
   const startRename = () => {
@@ -517,8 +518,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       toast("Another session is already named “" + next + "”");
       return;
     }
-    setAlias(p.title, next === p.title ? "" : next);
-    toast("Renamed to “" + next + "”");
+    void renameSession(p.title, next);
   };
 
   const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {

@@ -241,12 +241,13 @@ describe("a session is a frame", () => {
     expect(html).toMatch(/class="skl-bar skl-label skl-frame-bar"[^]*class="sky-ready"[^]*class="skl-menu"/);
   });
 
-  it("double-click on the bar renames (an alias; a taken name is refused)", () => {
+  it("double-click on the bar renames (the session itself; a taken name is refused)", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain("onDoubleClick={(e) => {");
     expect(src).toContain("startRename();");
     expect(src).toContain("const taken = nameTakenBy(p.title, next);");
-    expect(src).toContain('setAlias(p.title, next === p.title ? "" : next);');
+    expect(src).toContain("void renameSession(p.title, next);");
+    expect(src).not.toContain("setAlias(");
     expect(src).toContain('className="fl-input skl-name-input"');
   });
 

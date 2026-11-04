@@ -1,19 +1,19 @@
 /** Rename dialog (port of renameSession/submitRename, section 8) — Electron
- * has no window.prompt(), hence a real modal. The new name is the session's
- * name everywhere (rail, phone, pushes), so it must be one no other session
- * has: refused inline here, and by the server (409) for what this can't see. */
+ * has no window.prompt(), hence a real modal. A rename renames the SESSION
+ * (its title, on the server — lib/renameSession), so the new name must be one
+ * no other session has: refused inline here, and by the server (409) for what
+ * this can't see. A blank name just cancels. */
 
 import { useEffect, useRef, useState } from "react";
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
-import { toast } from "../../lib/toast";
+import { renameSession } from "../../lib/renameSession";
 import { nameTakenBy, windowName } from "../../lib/windowName";
 
 export function RenameDialog() {
   const open = useUi((s) => s.openDialog === "rename");
   const target = useUi((s) => s.dialogTarget);
   const closeDialog = useUi((s) => s.closeDialog);
-  const setAlias = useUi((s) => s.setAlias);
   const [value, setValue] = useState("");
   const [shown, setShown] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -41,9 +41,8 @@ export function RenameDialog() {
       closeDialog();
       return;
     }
-    setAlias(target, next);
     closeDialog();
-    toast(`Renamed to “${next}”`);
+    void renameSession(target, next);
   };
 
   return (

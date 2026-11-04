@@ -23,6 +23,21 @@ export function loadNodePos(chain: string): Record<string, Pos> {
   return { ...(read()[chain] || {}) };
 }
 
+/** A session's chain is keyed by its title: a rename (lib/renameSession)
+ * moves its spots to the new title. Idempotent. */
+export function renameNodePos(from: string, to: string): void {
+  if (!from || !to || from === to) return;
+  try {
+    const all = read();
+    if (!(from in all)) return;
+    if (!(to in all)) all[to] = all[from];
+    delete all[from];
+    localStorage.setItem(KEY, JSON.stringify(all));
+  } catch {
+    /* not remembered */
+  }
+}
+
 export function saveNodePos(chain: string, spots: Record<string, Pos>): void {
   try {
     const all = read();

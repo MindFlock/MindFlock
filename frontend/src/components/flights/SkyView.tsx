@@ -157,6 +157,7 @@ import { attachGrounded, DEFAULT_SESSION, deleteFlight, startFlightOn, startGrou
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
 import { toast } from "../../lib/toast";
+import { onSessionRenamed } from "../../lib/renameSession";
 import { popRedo, popUndo, pushUndo, undoAction } from "../../lib/skyUndo";
 import { snapBox, snapThreshold, type SnapGuide } from "../../lib/skySnap";
 import { deriveSessionState } from "../../lib/sessionState";
@@ -203,6 +204,7 @@ import {
   loadSkyLayout,
   paletteFrame,
   patchSkyLine,
+  renameSkyLine,
   pinnedPositions,
   rightColumn,
   skyDrawerOpen,
@@ -468,6 +470,20 @@ export function SkyView() {
   // The spots lines were given when they first appeared (`assignSpots`): kept
   // however a line grows, freed when its session goes, cleared by Tidy.
   const [autoPos, setAutoPos] = useState<Record<string, Pos>>({});
+  // A renamed session keeps its line where it was: lib/renameSession moved
+  // the stored layout, this moves the copies in hand.
+  useEffect(
+    () =>
+      onSessionRenamed((from, to) => {
+        setLayout((l) => renameSkyLine(l, from, to));
+        setAutoPos((a) => {
+          if (!(from in a)) return a;
+          const { [from]: at, ...rest } = a;
+          return to in rest ? rest : { ...rest, [to]: at };
+        });
+      }),
+    []
+  );
   const [tidying, setTidying] = useState(false);
   const [newOver, setNewOver] = useState(false);
   // A line being dragged by its bar — with every other selected line when it
