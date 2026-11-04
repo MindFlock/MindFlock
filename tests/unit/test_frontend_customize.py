@@ -131,11 +131,9 @@ def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
 def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     src = _code("components/NotificationsBell.tsx")
     assert 'import { WaitingRow } from "./outbox/WaitingRow";' in src
-    # Flights parked on a you step join the waiting rows (lib/needsYou).
-    assert (
-        "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))"
-        in src
-    )
+    # The bell reads THE one Needs-you list (lib/needsYou), flights parked on
+    # a you step and halted routes included (round 21).
+    assert "const attn = useNeedsYou();" in src
     assert "NotifToggle" not in src and "mf-notify-state" not in src
     assert '"mf-open-bell"' in src and '"mf-close-bell"' in src
     # The badge counts the merged list; the heading keeps its name.
