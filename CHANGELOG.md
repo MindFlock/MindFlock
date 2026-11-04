@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Agents wait their turn for memory instead of piling on.** Every way an
+  agent starts now asks one gate first. It counts the agents started in the
+  last 90 seconds as still growing (~700 MB each, read from tmux, so the
+  ticket pipeline's and every other path's starts count too), and caps how
+  many agents may run at once (one per 1.2 GB of RAM by default, 16 on
+  20 GB; `MINDFLOCK_MAX_LIVE_AGENTS`). Starts nobody asked for wait in a
+  queue and start one at a time as memory allows: a worker an agent spawns
+  (it is told "queued: waiting for memory", not failed), a queued prompt or
+  message relaunching or waking its agent, what Start all couldn't fit. Their
+  rows say **Waiting for memory**, with **Start anyway** on hover, and the
+  rail says **Memory low — new agents wait** until the queue clears. Your own
+  New session, Duplicate, Start, Start all, Resume and Wake still go, but
+  while memory is low they ask first: *Memory is low: 3.1 GB free. Starting
+  another agent may freeze the machine*, with **Start anyway**, **Put idle
+  agents to sleep first** or **Cancel**.
 - **Running low on memory no longer wedges the server.** The background
   ticks have their own small thread pool, so a tick stuck on a slow git, tmux
   or gh call can't hold up the app's requests. While memory reads low the

@@ -584,7 +584,10 @@ Notes on individual keys:
   starts at least 60 s after the previous one came up, and the memory guard
   reads the machine only after that, so a burst can't pass the guard on a
   reading taken before the sessions it just started had grown (env
-  `MINDFLOCK_LAUNCH_SPACING`, seconds, `0` = off).
+  `MINDFLOCK_LAUNCH_SPACING`, seconds, `0` = off). The hold also asks the
+  server's [launch gate](session-engine.md#launch-gate): agents any path
+  started in the last 90 s count as still growing, and the machine-wide
+  live-agent cap (`MINDFLOCK_MAX_LIVE_AGENTS`) applies.
 
 ## `~/.mindflock/` — engine config and state
 
@@ -735,6 +738,10 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
 | `MINDFLOCK_LOOP_WATCHDOG` | on | `0` turns off the event-loop stall watchdog ([session-engine.md](session-engine.md#memory-guard)): a loop stuck past `MINDFLOCK_LOOP_STALL_S` (default `10`) seconds appends a header and every thread's stack to `logs/stacks.log`. |
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
+| `MINDFLOCK_MAX_LIVE_AGENTS` | RAM ÷ 1.2 GB (16 on 20 GB) | The launch gate's machine-wide cap on live agents that **automatic** starts respect (an agent's spawned worker, a queued prompt relaunching its agent, the revive sweep, the ticket pipeline); a person's own starts are never capped. `0` = no cap ([session-engine.md](session-engine.md#launch-gate)) |
+| `MINDFLOCK_AGENT_WARMUP_MB` | `700` | What one agent started in the last 90 s is assumed to still take as it grows; the launch gate subtracts it per warming agent from available memory before deciding |
+| `MINDFLOCK_AUTO_LAUNCH_SPACING` | `20` | Seconds between two automatic launches the launch gate lets through (its queue drains one at a time). `0` = no spacing |
+| `MINDFLOCK_LAUNCH_QUEUE_MAX` | `32` | Launches that may wait in the launch gate's queue; past it a new automatic start is refused (`memory_queue_full`). `0` = no limit |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
 | `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
 | `MINDFLOCK_SLOT_HELD` | — | **Internal**: set by `mindflock slot` on the command it runs (the pools held, comma-separated), so a nested `mindflock slot` for the same pool runs straight through |

@@ -705,10 +705,12 @@ the defaults), so a box hovering at the line doesn't flap. A reading is cached f
 pipeline keeps its own, so it and the server can briefly disagree near a line.
 While the level is `low` or `critical`:
 
-- **Agent spawns are refused** — `POST /api/instances` with `spawned: true`
-  (the MCP's `spawn_session`) and an agent's `POST /api/tickets/start` answer
-  **409** with `memory` in the body. A person's New and Intake starts, and a
-  team run's own members, are never refused here.
+- **Agent spawns wait** — `POST /api/instances` with `spawned: true` (the
+  MCP's `spawn_session`) is queued in the [launch gate](#launch-gate) and
+  answered 202 `queued: waiting for memory`. An agent's `POST
+  /api/tickets/start` still answers **409** with `memory` in the body. A
+  person's New asks first (below); a team run's own members are paced by
+  the run's planner.
 - **Team runs start no new lines** — the planner holds queued tasks exactly
   as it does for a usage limit (a task marked `start_now` still starts); the
   run's `waiting_for_memory` puts a *memory* badge on its rail header.
@@ -720,8 +722,8 @@ While the level is `low` or `critical`:
   full size, so a reading right after a launch says nothing about it. On
   2026-11-04 one PR scan launched a review per PR back to back, every one past
   an `ok` reading, and ran WSL out of memory.
-- **The revive sweep waits**, as above. A person's single Restart is never
-  held; its response carries `memory_warning` instead.
+- **The revive sweep waits**, as above, and hands what it can't start to the
+  launch gate's queue. A person's single Start asks first (below).
 - **Idle agents sleep sooner** — after `general.memory_sleep_minutes` (5)
   idle instead of `general.sleep_idle_minutes` ([Sleeping agents](#sleeping-agents)),
   longest idle first, giving back their CLI's and MCP servers' memory, with
@@ -736,6 +738,67 @@ While the level is `low` or `critical`:
   whisper models too, ~1 GB of the server's own memory, then `malloc_trim`).
   Model loads are refused while the level is low, so nothing reloads until it
   recovers.
+
+### Launch gate
+
+Every reading above is of memory *now*. An agent reads near zero the second
+it starts and 350-800 MB a minute later, so a burst of starts passes every
+check before any of them has grown. On 2026-11-04 that happened three ways:
+Start all over 18 held sessions, an orchestrator fanning out a dozen workers,
+and a PR scan launching a review per PR. The OOM killer fired three times and
+WSL wedged. `backend/web/core/launch_gate.py` is the one admission gate every
+agent start asks first. It answers **go / wait / refuse** from:
+
+- **memory** (the level above);
+- **agents still warming up** — every MindFlock agent tmux session created
+  in the last 90 s (read from tmux's own `session_created`, so starts from
+  any path and any process count), plus starts this server admitted that
+  have no tmux session yet. Each is assumed to still take ~700 MB
+  (`MINDFLOCK_AGENT_WARMUP_MB`). The gate works out what memory would read
+  once they have grown, and that projection counts like the level;
+- **live agents** against a machine-wide cap (`MINDFLOCK_MAX_LIVE_AGENTS`;
+  default one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap). The cap applies
+  to automatic starts only.
+
+**Automatic starts wait in a FIFO queue.** That means an agent-spawned
+create, a queued prompt relaunching or waking its agent, a mailbox wake, a
+revive sweep's rest, and auto-revive after a kill. A newcomer never jumps the
+queue. The queue drains by itself, one launch at a time, at least 20 s apart
+(`MINDFLOCK_AUTO_LAUNCH_SPACING`), as the gate allows. Past 32 waiting
+(`MINDFLOCK_LAUNCH_QUEUE_MAX`) a new one is refused. A waiting session's row
+carries `waiting_for_memory` (`{id, title, kind, source, parent, since,
+reason, position, creates}`); the rail says **Waiting for memory** on it, with
+**Start anyway** on hover. An agent-spawned create that waits has no session
+yet. It is listed as a provisioning placeholder row (`pending`, the one
+force-starts use), so the orchestrator's `wait_for_session` and the rail both
+see it. The queue lives in the server's memory, so a restart drops it (held
+offline covers the sessions that existed).
+
+**A person's start asks first.** That covers New session, Duplicate, Start
+(`/revive`), Start all (`/revive-all`), Resume and Wake. While the gate reads
+low (now or projected), these answer **409** `{memory_confirm: true, level,
+message, free, warming, live}`. The app shows its own dialog: *Start anyway*
+(resend with `start_anyway: true`), *Put idle agents to sleep first* (`POST
+/api/server/sleep-idle`, then try again), *Cancel*. Critical is the same
+dialog with stronger words. A person is never queued and never capped. Start
+all still paces its launches through the gate after the confirm.
+
+**Paths.** Every place that launches an agent CLI, and how it is gated:
+
+| Path | Gate |
+|---|---|
+| New session (`POST /api/instances`, person) | confirm |
+| MCP `spawn_session` (`POST /api/instances` `spawned: true`) | queue (202 `queued`) |
+| Duplicate (`/copy`), Start (`/revive`), Resume, Wake, Start all | confirm |
+| Revive sweep (boot / Start all's rest) | paced by warming; the rest queued |
+| Auto-revive after a kill (`revive.auto_tick`) | holds while the gate says wait |
+| Prompt-queue drain relaunching or waking its agent | queue |
+| Mailbox delivery waking a sleeper | queue |
+| Ticket pipeline (`ticket_ingestion.session_runner`, another process) | its own wait loop on `launch_gate.decide` (memory, warming, cap), capped at 30 min |
+| Team runs | the run's planner (`memory_low`), not yet the warming/cap |
+| MCP `spawn_ticket_session` (`/api/tickets/start`) | 409 `memory` (not queued yet) |
+| Flights starting a session, scheduled sessions, voice-created sessions | not gated yet (they call `session_create` in-process) |
+| A terminal attach / Send waking a sleeper | not gated (a person's action) |
 
 **A squeeze must not wedge the server.** On 2026-11-04 the server twice kept
 its listen sockets but answered nothing for minutes (the accept backlog full,
