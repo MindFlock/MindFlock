@@ -37,6 +37,40 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.12.0",
+    date: "2026-11-04",
+    big: true,
+    headline: "Steadier with many agents: they wait for memory instead of freezing the machine.",
+    features: [
+      {
+        title: "Agents wait their turn for memory",
+        body:
+          "When memory is getting low, agents that start by themselves (workers, Intake, schedules, routes) wait in line and show \"Waiting for memory\", and starting one yourself asks first. Each agent also has its own memory limit, so one that runs away is stopped on its own instead of freezing everything.",
+      },
+      {
+        title: "After a crash, sessions stay offline",
+        body:
+          "A session whose agent died stays Offline until you press Start, so a restart can't refill memory and crash again. Prompts sent to it wait on its queue.",
+      },
+      {
+        title: "One name per session",
+        body:
+          "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (sitecheck-bot-2).",
+      },
+      {
+        title: "Quieter, quicker voice",
+        body:
+          "Voice Lab starts only when something is spoken and stops when idle; dictation never wakes it, and speech recognition loads only while you listen. \"MindFlock\" wakes the mic faster and more reliably.",
+      },
+      {
+        title: "The Sky opens on This session",
+        body:
+          "The Sky starts on the session you're on, fits its route to the window on every switch, and never pops the terminal open. Frames show their state at a glance: amber needs you, red halted.",
+        action: { label: "Show me", run: "sky-tour" },
+      },
+    ],
+  },
+  {
     version: "0.11.0",
     date: "2026-11-03",
     big: true,
