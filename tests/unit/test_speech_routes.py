@@ -232,6 +232,29 @@ class TestGet:
         for key in ("server_ready", "words", "warm", "configure_allowed"):
             assert key in cold
 
+    def test_warm_0_reads_the_status_without_probing_the_host(self, fakes, monkeypatch):
+        """The status in the body is a READ with ``warm=0``: a voice host
+        marked down or too slow is reported, never re-checked from here (a
+        probe would wake Voice Lab after its idle stop on every page load);
+        a warm read may re-check it, as a line does."""
+        from backend.web.routes import speech as speech_routes
+
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: None
+        )
+        monkeypatch.setattr(speech_routes.PREWARM, "kick", lambda: None)
+        real = speech.describe
+        probes: list = []
+
+        def describe(probe=True):
+            probes.append(probe)
+            return real(probe=probe)
+
+        monkeypatch.setattr(speech, "describe", describe)
+        assert client.get("/api/voice?warm=0").status_code == 200
+        assert client.get("/api/voice").status_code == 200
+        assert probes == [False, True]
+
     def test_a_cold_read_still_self_heals_the_install(self, fakes, monkeypatch):
         from backend.web.core import speech_install
 

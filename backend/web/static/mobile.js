@@ -5056,17 +5056,19 @@
     }
     var aborts = [];      // the requests on their way (cancel() aborts them)
     // One sentence's clip → {audio, backend, ms} or {error}; never rejects,
-    // never waits past VOICE_SPEAK_FETCH_MAX_MS (aborted: {error, timeout}).
+    // never waits past maxMs (default VOICE_SPEAK_FETCH_MAX_MS; aborted:
+    // {error, timeout}).
     // keep: from the cache when it is there, into it when it is made. A clip
     // made lately comes from memory (recent).
-    function fetchClip(ctx, part, keep) {
+    function fetchClip(ctx, part, keep, maxMs) {
+      var cap = maxMs || VOICE_SPEAK_FETCH_MAX_MS;
       var key = voiceTtsKey() + "|" + part;
       if (keep && cache.has(key)) return Promise.resolve({ audio: cache.get(key), backend: "cache", ms: 0, cached: true });
       if (recent.has(key)) return Promise.resolve({ audio: recent.get(key), backend: "memory", ms: 0, cached: true });
       var t0 = Date.now(), backend = "server", late = false;
       var a = window.AbortController ? new AbortController() : null;
       if (a) aborts.push(a);
-      var timer = a ? setTimeout(function () { late = true; try { a.abort(); } catch (e) {} }, VOICE_SPEAK_FETCH_MAX_MS) : null;
+      var timer = a ? setTimeout(function () { late = true; try { a.abort(); } catch (e) {} }, cap) : null;
       function done(x) { clearTimeout(timer); var i = aborts.indexOf(a); if (i >= 0) aborts.splice(i, 1); x.ms = Date.now() - t0; return x; }
       return fetch("/api/voice/speak", {
         method: "POST",
@@ -5095,7 +5097,7 @@
         }
         return x;
       }, function (err) {
-        return done(late ? { error: "the server's voice took over " + VOICE_SPEAK_FETCH_MAX_MS / 1000 + " s", timeout: true }
+        return done(late ? { error: "the server's voice took over " + cap / 1000 + " s", timeout: true }
                          : { error: String((err && err.message) || err) });
       });
     }
@@ -5137,12 +5139,13 @@
     function said(ctx, parts, keep, g) {
       var i = 0, t0 = Date.now(), first = 0, ahead = [], asked = 0;
       var cold = voiceTtsMayBeCold(voice.rec.speakOkAt, t0);
+      var cap = cold ? VOICE_SPEAK_COLD_MAX_MS : VOICE_SPEAK_FETCH_MAX_MS;   // every clip of a cold line queues behind the start
       // The clips are asked for VOICE_SPEAK_AHEAD ahead of the one playing:
       // a voice that makes one at a time (the owner's Voice Lab: ~1.1 s a
       // request before the words) is never idle between sentences — the
       // next is made while this one plays, the one after queues behind it —
       // and a cancel wastes at most that many.
-      function fill() { while (asked < parts.length && ahead.length < VOICE_SPEAK_AHEAD) ahead.push(fetchClip(ctx, parts[asked++], keep)); }
+      function fill() { while (asked < parts.length && ahead.length < VOICE_SPEAK_AHEAD) ahead.push(fetchClip(ctx, parts[asked++], keep, cap)); }
       fill();
       return new Promise(function (resolve) {
         function next() {
@@ -5154,7 +5157,7 @@
           var starting = cold && i === 1;
           var wait = new Promise(function (res) {
             waitT = setTimeout(function () { res({ error: "the server's voice took too long", late: true }); },
-                               starting ? VOICE_SPEAK_FETCH_MAX_MS : voiceSpeakWaitMs(part.length, voice.rec.speakMsPerChar));
+                               starting ? cap : voiceSpeakWaitMs(part.length, voice.rec.speakMsPerChar));
           });
           if (starting) startingSoon(g);
           Promise.race([got, wait]).then(function (x) {
@@ -5308,10 +5311,12 @@
   var VOICE_SPEAK_WAIT_MAX_MS = 20000;    // ...and at most
   var VOICE_STARTING_MS = 1000;           // a cold voice's first clip not back in this: "Starting voice…" on the strip
   var VOICE_COLD_MS = 10 * 60 * 1000;     // a local voice host (Voice Lab) stops after this long without a request
+  var VOICE_SPEAK_COLD_MAX_MS = 100000;   // a cold line's request cap: the server waits up to 90 s for a starting host (COLD_START_TIMEOUT)
   // Whether the server's voice may have to start for the next line: none made
   // on this page yet (lastOk 0), or the last one VOICE_COLD_MS ago or more —
-  // then its first clip is waited for up to VOICE_SPEAK_FETCH_MAX_MS (Voice
-  // Lab starting and loading its model), not voiceSpeakWaitMs. Pure.
+  // then its clips may take VOICE_SPEAK_COLD_MAX_MS (Voice Lab starting and
+  // loading its model: the server waits for it) and the first is waited
+  // for that long, not voiceSpeakWaitMs. Pure.
   function voiceTtsMayBeCold(lastOk, now) {
     return !lastOk || now - lastOk >= VOICE_COLD_MS;
   }

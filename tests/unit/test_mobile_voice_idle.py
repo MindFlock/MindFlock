@@ -140,10 +140,19 @@ def test_a_cold_voices_first_clip_is_waited_for_and_marked_starting():
     assert "var cold = voiceTtsMayBeCold(voice.rec.speakOkAt, t0);" in said
     # Only the line's first clip, and only on a voice that may be cold.
     assert "var starting = cold && i === 1;" in said
+    # Every clip of a cold line may take as long as the server waits for a
+    # starting host (COLD_START_TIMEOUT 90 s), past the usual 30 s cap.
+    assert (
+        "var cap = cold ? VOICE_SPEAK_COLD_MAX_MS : VOICE_SPEAK_FETCH_MAX_MS;" in said
+    )
+    assert "fetchClip(ctx, parts[asked++], keep, cap)" in said
+    assert _var(js, "VOICE_SPEAK_COLD_MAX_MS").startswith(
+        "  var VOICE_SPEAK_COLD_MAX_MS = 100000;"
+    )
     # It may take as long as the request may (the host starting, its model
     # loading) before the phone's voice takes the line over.
     assert (
-        "starting ? VOICE_SPEAK_FETCH_MAX_MS : voiceSpeakWaitMs(part.length, voice.rec.speakMsPerChar)"
+        "starting ? cap : voiceSpeakWaitMs(part.length, voice.rec.speakMsPerChar)"
         in said
     )
     assert "if (starting) startingSoon(g);" in said

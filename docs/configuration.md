@@ -1333,8 +1333,12 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     runs inside the server. The first line after an idle stop takes as
     long as the host needs to start and load its model: the desktop pill
     and the phone's strip say **Starting voice…** once it has taken over a
-    second, and the phone waits for that first clip up to its 30 s request
-    cap instead of handing the line to the phone's own voice. Only `local` recognition **streams**
+    second. The server waits up to 90 s for a starting host, in its own
+    voice, instead of saying the line with piper or marking the host down
+    (a refused connection is still down at once), and the phone lets that
+    line's clips take up to 100 s instead of handing it to its own voice.
+    Reading the status with `?warm=0` never re-checks a host marked down
+    or too slow, so it sends Voice Lab nothing. Only `local` recognition **streams**
     (words appear while the person speaks: `POST /api/voice/stream`,
     `GET /api/voice`'s `server_ready.stt_stream`); with `system` or
     `openai` the mic sends one clip per phrase. The built-in Windows recognizer is

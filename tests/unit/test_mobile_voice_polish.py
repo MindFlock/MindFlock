@@ -239,7 +239,7 @@ def test_the_server_voice_speaks_one_sentence_ahead():
     said = _inner(tts, "said")
     assert "return said(ctx, parts, keep, g);" in speak
     assert (
-        "function fill() { while (asked < parts.length && ahead.length < VOICE_SPEAK_AHEAD) ahead.push(fetchClip(ctx, parts[asked++], keep)); }"
+        "function fill() { while (asked < parts.length && ahead.length < VOICE_SPEAK_AHEAD) ahead.push(fetchClip(ctx, parts[asked++], keep, cap)); }"
         in said
     )
     assert "var part = parts[i++], got = ahead.shift(), waitT = null;" in said

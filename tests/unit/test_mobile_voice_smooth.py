@@ -278,7 +278,7 @@ def test_the_server_voice_never_hangs_never_doubles_and_keeps_its_clips():
 _TTS_PRELUDE = r"""
 var window = { AudioContext: function () {}, AbortController: AbortController, fetch: true };
 var VOICE_SPEAK_AHEAD = 2, VOICE_SPEAK_KEEP = 8, VOICE_CHUNK_GRACE_MS = 20;
-var VOICE_SPEAK_FETCH_MAX_MS = 150, VOICE_SPEAK_RESUME_MS = 50;
+var VOICE_SPEAK_FETCH_MAX_MS = 150, VOICE_SPEAK_RESUME_MS = 50, VOICE_SPEAK_COLD_MAX_MS = 600;
 var VOICE_SPEAK_WAIT_MIN_MS = 60, VOICE_SPEAK_WAIT_MAX_MS = 200;
 var VOICE_CLIENT_ID = "m-test-page";
 var voice = { prefs: { rate: 1 }, rec: {}, cfg: {} };
@@ -408,12 +408,13 @@ out.error = voice.rec.lastSpeak.error;
 @needs_node
 def test_a_cold_voice_is_waited_for_and_the_strip_says_it_is_starting():
     # Voice Lab stopped while idle: the first clip takes as long as the host
-    # takes to start (here 120 ms; a warm voice that slow loses the line) —
+    # takes to start (here 250 ms: past a warm voice's wait AND its 150 ms
+    # request cap — a cold line's cap is VOICE_SPEAK_COLD_MAX_MS) —
     # the line is the server's, not handed to the phone's voice, and past
     # VOICE_STARTING_MS (30 ms here) the strip said "Starting voice…".
     out = _tts_run("""
 cold = true;
-delay["Cold start."] = 120;
+delay["Cold start."] = 250;
 await tts.speak("Cold start. Then warm.");
 out.phone = phoneSaid.slice();
 out.played = plays.map(function (p) { return p.text; });
