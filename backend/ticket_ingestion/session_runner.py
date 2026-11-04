@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import time
@@ -94,6 +95,79 @@ async def _wait_for_memory(what: str) -> None:
             )
             logged = now
         await asyncio.sleep(_MEMORY_POLL_SECONDS)
+
+
+# Back-to-back automatic launches. A launch returns as soon as the session is
+# live, but the agent and its MCP servers take most of a minute to reach full
+# size (~0.8-1.3 GB a window), so a memory reading taken right after one launch
+# says nothing about it. One PR scan that found six PRs with review comments
+# passed _wait_for_memory six times on readings taken before any of them had
+# grown, and the machine ran out (WSL 2026-11-04). So each automatic launch
+# starts at least _LAUNCH_SPACING_SECONDS after the previous one came up, and
+# only then reads memory. ``MINDFLOCK_LAUNCH_SPACING`` (seconds, 0 = off)
+# overrides the default.
+_LAUNCH_SPACING_SECONDS = 60.0
+_SPACING_POLL_SECONDS = 5.0
+#: monotonic time the previous automatic launch passed the gate or came up,
+#: whichever is later; 0.0 = none yet in this process.
+_last_launch = 0.0
+#: (event loop, lock) — one gate at a time per loop: the ticket, PR and issue
+#: loops run concurrently, and two of them must not read the same clear
+#: spacing and memory and both go. Keyed by loop because an asyncio.Lock is
+#: bound to the loop it first waits on.
+_launch_gate: tuple = (None, None)
+
+
+def _launch_spacing() -> float:
+    raw = os.environ.get("MINDFLOCK_LAUNCH_SPACING", "").strip()
+    if not raw:
+        return _LAUNCH_SPACING_SECONDS
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return _LAUNCH_SPACING_SECONDS
+
+
+def _note_launch() -> None:
+    """Stamp a launch: the next one is spaced from now."""
+    global _last_launch
+    _last_launch = time.monotonic()
+
+
+def _gate_lock() -> asyncio.Lock:
+    global _launch_gate
+    loop = asyncio.get_running_loop()
+    if _launch_gate[0] is not loop:
+        _launch_gate = (loop, asyncio.Lock())
+    return _launch_gate[1]
+
+
+async def _wait_for_launch_room(what: str) -> None:
+    """Hold an automatic launch until the previous one has had
+    _LAUNCH_SPACING_SECONDS to grow, then until memory has headroom
+    (:func:`_wait_for_memory`), and stamp it. The spacing is re-checked after
+    the memory wait: the previous session coming up meanwhile restarts it."""
+    async with _gate_lock():
+        logged = False
+        while True:
+            spacing = _launch_spacing()
+            wait = (_last_launch + spacing - time.monotonic()) if _last_launch else 0.0
+            if wait > 0:
+                if not logged:
+                    logger.info(
+                        "Holding %s ~%ds so the session started before it "
+                        "settles and memory can be read honestly",
+                        what,
+                        int(wait) or 1,
+                    )
+                    logged = True
+                await asyncio.sleep(min(wait, _SPACING_POLL_SECONDS))
+                continue
+            await _wait_for_memory(what)
+            wait = (_last_launch + spacing - time.monotonic()) if _last_launch else 0.0
+            if wait <= 0:
+                break
+        _note_launch()
 
 
 def _ensure_engine_on_path() -> None:
@@ -275,7 +349,7 @@ class SessionRunner:
                 "as part of the ticket context.\n"
             )
 
-        await _wait_for_memory("ticket %s" % story.slug)
+        await _wait_for_launch_room("ticket %s" % story.slug)
         branch = _branch_name_for(story)
         title = story.slug
         agent = self._agent_for(story)
@@ -334,6 +408,10 @@ class SessionRunner:
         except Exception as err:
             _cancel_flight(title, "the session could not be created: %s" % err)
             raise
+        finally:
+            # Spaced from when it came up (or gave up), not from the gate:
+            # provisioning a PR's clone can take most of the spacing itself.
+            _note_launch()
 
         # Best-effort post-launch: drop attachments into the live workspace, and
         # move the ticket into its source's start state so the board stops
@@ -361,7 +439,7 @@ class SessionRunner:
         session driven by one consolidated prompt — instead of a tmux tab per
         comment. Cursor launch is skipped; the CS web terminal is the surface.
         """
-        await _wait_for_memory("PR #%s" % pr.number)
+        await _wait_for_launch_room("PR #%s" % pr.number)
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
         title = f"pr-{pr_slug(pr)}"
@@ -409,6 +487,10 @@ class SessionRunner:
         except Exception as err:
             _cancel_flight(title, "the session could not be created: %s" % err)
             raise
+        finally:
+            # Spaced from when it came up (or gave up), not from the gate:
+            # provisioning a PR's clone can take most of the spacing itself.
+            _note_launch()
         logger.info(
             "PR #%d is live in MindFlock session 'mindflock_%s'.",
             pr.number,
