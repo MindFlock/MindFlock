@@ -400,6 +400,13 @@ EVENT_NAMES = (
     # "ok" | "low" | "critical"; while low or critical, agent spawns, team-run
     # starts and the revive sweep hold back (data: {"message", "memory"}).
     "system.memory_changed",
+    # Sessions stayed HELD OFFLINE after the server restarted (core.held:
+    # their agents died with it, and general.revive_on_start is off, so none
+    # comes back until a person presses Start). Once per boot, after the
+    # quiet window, only when there are any; ``session`` is "", ``new`` the
+    # count (data: {"count", "titles", "detail"} — ``detail`` is "N sessions
+    # stayed offline after the restart — press Start on the ones you need.").
+    "system.sessions_held",
 )
 
 _HISTORY = 100  # envelopes kept for ?since= replay

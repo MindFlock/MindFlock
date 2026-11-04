@@ -24,6 +24,7 @@ const TIERS: Record<string, string> = {
   "fl-chip": "chip (Sky.css .sky-flypick)",
   "fl-toggle": "chip, a switch",
   "sky-ready-run": "chip, a ready chain's ▶ Run pill (SkyChain.css)",
+  "sky-held-start": "chip, a held session's Offline · Start state chip (SkyLine.css)",
   // quiet-icon — .fl-icon-btn (StopParts.css), the top bar's .tb-item
   "fl-icon-btn": "quiet",
   "fl-gap-add": "quiet, accent-edged (FlywayCanvas.css)",

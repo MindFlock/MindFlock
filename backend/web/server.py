@@ -49,6 +49,8 @@ modules under
     flight_describe  Flights: describe a step/plan with the one-shot CLI
     events           the event bus behind /api/events
     git_ops          git primitives (branch/sha/dirty/origin probes, caches)
+    held             held offline: a session whose agent died stays down
+                     until a person presses Start (held.json)
     ide_launch       launching the configured IDE on a folder
     lanes            ship lanes: how far a session is carried (the /fast-track
                      body, /lane, /ship-now), the row's lane, copy windows
@@ -315,6 +317,7 @@ from backend.web.core.cursor_windows import (
     _win_title_condition,
 )
 from backend.web.core.agent_sessions import (
+    HELD_REFUSED,
     PAUSED_REFUSED,
     _ensure_agent_session,
     _ensure_shell_session,
@@ -400,6 +403,7 @@ from backend.web.core.engine import (
 )
 from backend.web.core import mobile_announce
 from backend.web.core import restart as _restart
+from backend.web.core import held as _held
 from backend.web.core import revive as _revive
 from backend.web.core import sleep as _sleep
 from backend.web.core import self_update as _self_update
@@ -917,10 +921,20 @@ async def lifespan(app: FastAPI):
         await mobile_announce.announce(mobile_announce.REASON_STARTUP)
 
     _register_task(_startup_warmups())
-    # Background revive (core.revive): after the boot quiet window, relaunch
-    # every session whose agent was running at shutdown, so nothing waits on
-    # Offline until someone clicks it. Off under pytest — ENGINE is the
-    # developer's real state there, and this LAUNCHES agents.
+    # Held offline (core.held): with general.revive_on_start off (the
+    # default) every session whose agent died with the last server is held
+    # until a person presses Start — decided HERE, before the first request,
+    # so a pane reattaching right after boot is already refused (4424). One
+    # notice after the quiet window says how many. Off under pytest — ENGINE
+    # is the developer's real state there.
+    if _hold_on_start_enabled():
+        _boot_hold = await asyncio.to_thread(_revive.hold_on_boot)
+        if _boot_hold.get("total"):
+            _register_task(_revive.announce_held())
+    # Background revive (core.revive): the opt-in old behaviour — after the
+    # boot quiet window, relaunch every session whose agent was running at
+    # shutdown. Off under pytest — ENGINE is the developer's real state
+    # there, and this LAUNCHES agents.
     if _revive_on_start_loop_enabled():
         _register_task(_revive.run_on_start())
     # Sleeping agents (core.sleep): stop the CLI (and its MCP servers) of an
@@ -2126,6 +2140,10 @@ def _instances_tick() -> None:
             # unannounced while it does.
             _revive.observe(sys.modules[__name__], title, inst, d["activity"])
             d["auto_revive"] = _revive.auto_state(title)
+            # …or is now held offline (core.held), or no longer is.
+            for _k in ("held_offline", "held_since", "held_reason"):
+                d.pop(_k, None)
+            d.update(_held.row_fields(title))
             _emit_state_changes(title, d["status"], d["activity"], d["stage"])
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
@@ -2698,6 +2716,20 @@ def _revive_on_start_loop_enabled() -> bool:
     return not _restart._under_pytest()
 
 
+#: None = automatic: on in a real server, OFF under pytest (the boot hold
+#: reads every session in ENGINE, the developer's real state, and its tmux).
+_HOLD_ON_START_ENABLED: Optional[bool] = None
+
+
+def _hold_on_start_enabled() -> bool:
+    """Whether the lifespan runs :func:`core.revive.hold_on_boot`. Unlike the
+    sweep it launches nothing, so ``MINDFLOCK_REVIVE_ON_START=0`` leaves it on
+    (a sandboxed server holds its dead agents too)."""
+    if _HOLD_ON_START_ENABLED is not None:
+        return bool(_HOLD_ON_START_ENABLED)
+    return not _restart._under_pytest()
+
+
 #: None = automatic: on in a real server, OFF under pytest (the sleep sweep
 #: stops agents of sessions in ENGINE, the developer's real state).
 _SLEEP_LOOP_ENABLED: Optional[bool] = None
@@ -2721,9 +2753,11 @@ async def post_server_revive_all(request: Request) -> JSONResponse:
     only (``auth.may_configure``, 403) — it launches agents. Waits for the
     sweep and returns ``{"revived": [...], "continued": [...], "skipped":
     {title: reason}, "already_running": n, "summary": "revived N, skipped M:
-    ..."}``. Body ``{"titles": [...]}`` (the rail's "Restart all") sweeps
+    ..."}``. Body ``{"titles": [...]}`` (the rail's "Start all") sweeps
     just those sessions, including agents the user quit — every row it names
-    showed a Restart chip — which the plain sweep leaves alone."""
+    showed a Restart chip — which the plain sweep leaves alone. Either way it
+    is a person's Start: sessions held offline (core.held) are released and
+    started too."""
     if not await _auth.may_configure(request.scope):
         return _auth.configure_refused()
     try:
@@ -2738,7 +2772,9 @@ async def post_server_revive_all(request: Request) -> JSONResponse:
                 {"error": "titles must be a list of session titles"}, status_code=400
             )
         only = titles
-    return JSONResponse(await _revive.sweep(trigger="on demand", only=only))
+    return JSONResponse(
+        await _revive.sweep(trigger="on demand", only=only, release_held=True)
+    )
 
 
 @app.get("/api/system/memory")
@@ -4759,8 +4795,10 @@ async def instance_pause(title: str) -> JSONResponse:
     except Exception as err:  # noqa: BLE001
         return JSONResponse({"error": str(err)}, status_code=400)
     # Paused outranks asleep: Resume relaunches through the engine, which
-    # never reads a sleep record, so none may outlive the pause.
+    # never reads a sleep record, so none may outlive the pause — nor a hold
+    # (core.held): Resume is a person's start.
     _sleep.drop(title)
+    _held.drop(title)
     ENGINE.save()
     _events.BUS.emit(
         "session.paused",
@@ -4973,6 +5011,8 @@ async def instance_revive(title: str) -> JSONResponse:
     An agent that died mid-turn also gets a "continue where you left off" at
     the front of its prompt queue (:func:`core.revive.relaunch`). A person's
     Restart is never held for memory, but the answer says when it is low.
+    It is also the Start of a session HELD OFFLINE (core.held): the hold is
+    released, then the agent launched (a failed launch keeps it held).
     → ``{"title", "revived": true, "continued": bool, "memory_warning": str}``."""
     inst, err = _inst_or_404(title)
     if err is not None:
@@ -4981,7 +5021,9 @@ async def instance_revive(title: str) -> JSONResponse:
         return JSONResponse(
             {"error": "session is paused — resume it instead"}, status_code=409
         )
-    _, rerr, continued = await asyncio.to_thread(_revive.relaunch, inst, title)
+    _, rerr, continued = await asyncio.to_thread(
+        lambda: _revive.relaunch(inst, title, release=True)
+    )
     if rerr is not None:
         return JSONResponse({"error": rerr}, status_code=409)
     from backend import memory_pressure as _mem
@@ -6406,6 +6448,11 @@ def _deliver_to_agent(
     A PAUSED session is never typed into nor relaunched, either way:
     ``(False, PAUSED_REFUSED)`` — Resume starts its agent again.
 
+    A session HELD OFFLINE (core.held) is never relaunched either: a
+    submitted text is QUEUED (``("queued", None)`` — the drain sends it once
+    a person's Start brings the agent back; ``/send`` answers that with 409
+    ``{"held": true}``), anything else is ``(False, HELD_REFUSED)``.
+
     ``say`` (``/send``'s, for a submitted text) asks for THIS reply's
     ``Say:`` line (:func:`_voice_say`) at the last moment — right before the
     keystrokes, after every dialog/queue decision; a queued text carries it
@@ -6417,6 +6464,15 @@ def _deliver_to_agent(
     if getattr(inst, "Status", None) == Paused:
         return False, PAUSED_REFUSED
     say = bool(say and submit)
+    if _held_down(title):
+        if not submit or not str(text or "").strip():
+            return False, HELD_REFUSED
+        try:
+            _prompt_queue.enqueue(title, text, **_say_kw(say))
+        except ValueError as err:
+            return False, str(err)
+        _emit_queue_changed(title)
+        return "queued", None
     if _sleep.is_sleeping(title):
         if not boot and _budget_locked(title):
             return False, "over budget"
@@ -6475,6 +6531,16 @@ def _deliver_to_agent(
     return "sent", None
 
 
+def _held_down(title: str) -> bool:
+    """Whether ``title`` is held offline (core.held) with no live agent — an
+    agent that is up after all is typed into as usual (its hold is stale;
+    ``_ensure_agent_session`` drops it). Blocking (one tmux read, only for a
+    held session)."""
+    if not _held.is_held(title):
+        return False
+    return _live_session_name(tmux.to_mindflock_tmux_name(title)) is None
+
+
 #: ``_enter_on_agent``'s reason for a sleeping session: an Enter has no text
 #: to queue, and the draft it would submit was typed into a CLI that is gone.
 _ENTER_ASLEEP = "It is asleep — open it, then dictate again"
@@ -6506,7 +6572,7 @@ def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
         return False, _ENTER_ASLEEP
     name = _live_session_name(tmux.to_mindflock_tmux_name(title))
     if name is None:
-        return False, _ENTER_NOT_RUNNING
+        return False, HELD_REFUSED if _held.is_held(title) else _ENTER_NOT_RUNNING
     try:
         activity = _agent_activity(inst, title)
     except Exception:  # noqa: BLE001 — unknown reads as "don't press blind"
@@ -6569,7 +6635,7 @@ def _dictate_on_agent(inst, title: str, text: str, erase: int):
         return False, _ENTER_ASLEEP
     name = _live_session_name(tmux.to_mindflock_tmux_name(title))
     if name is None:
-        return False, _ENTER_NOT_RUNNING
+        return False, HELD_REFUSED if _held.is_held(title) else _ENTER_NOT_RUNNING
     # The reading is the memoized one (≤ _PROBE_TTL old): a fresh probe asks
     # Claude's `claude agents --json` (0.3-1 s), which stalled every other
     # dictation batch. What a fresh reading would add is caught by the
@@ -6869,6 +6935,7 @@ async def instance_send(
             status_code=409,
         )
     asleep = _sleep.is_sleeping(title)
+    held = await asyncio.to_thread(_held_down, title)
     if enter:
         told, reason = await asyncio.to_thread(
             lambda: _enter_on_agent(inst, title, say=say, extra=extra)
@@ -6897,7 +6964,16 @@ async def instance_send(
             body["waking"] = True
         if reason == PAUSED_REFUSED:
             body["paused"] = True
+        if reason == HELD_REFUSED:
+            body["held"] = True
+            body["queued"] = False
         return JSONResponse(body, status_code=502 if reason == _SEND_FAILED else 409)
+    if told == "queued" and held:
+        # Held offline (core.held): the prompt waits on the queue, and only a
+        # person's Start brings the agent back to take it.
+        return JSONResponse(
+            {"error": HELD_REFUSED, "held": True, "queued": True}, status_code=409
+        )
     if told == "queued":
         body = {"sent": False, "queued": True, "submitted": False}
         if asleep:
@@ -7086,6 +7162,10 @@ async def post_queue_send_now(
         # Pause stopped the agent on purpose: Send now neither types into it
         # nor relaunches it (the item stays queued for after Resume).
         return JSONResponse({"error": PAUSED_REFUSED, "paused": True}, status_code=409)
+    if await asyncio.to_thread(_held_down, title):
+        # Held offline (core.held): Send now does not start it either; the
+        # item stays queued and goes once a person presses Start.
+        return JSONResponse({"error": HELD_REFUSED, "held": True}, status_code=409)
     if _budget_locked(title):
         return JSONResponse(
             {
@@ -13151,14 +13231,20 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # does not: both helpers refuse to relaunch it (PAUSED_REFUSED), and the
     # socket closes with 4423 so the pane shows its Paused placeholder and
     # does not reconnect. (Its agent still alive somehow → just attached.)
+    # A session HELD OFFLINE after a crash (core.held) closes with 4424 the
+    # same way: the pane shows its Start placeholder and never retries.
     name, err = await asyncio.to_thread(ensure_terminal_session, inst, title)
     if err is not None:
         paused = err == PAUSED_REFUSED
+        held = err == HELD_REFUSED
         frame = {"type": "error", "message": err}
         if paused:
             frame["paused"] = True
+        if held:
+            frame["held"] = True
+            frame.update(_held.row_fields(title))
         await ws.send_text(json.dumps(frame))
-        await ws.close(code=4423 if paused else 4409)
+        await ws.close(code=4423 if paused else 4424 if held else 4409)
         return
     # tmux mouse stays ON (wheel scroll / copy-mode). Browser selection is via
     # Shift+drag (xterm.js shouldForceSelection), copied by copy-on-select.

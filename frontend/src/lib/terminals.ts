@@ -18,7 +18,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { toast } from "./toast";
 import { attachFileDrop, copyText, pasteClipboard } from "./clipboard";
 import { agentCopyText } from "./agentCopy";
-import { controlNotice, PAUSED_CLOSE, showTermNotice } from "./wsTerm";
+import { controlNotice, HELD_CLOSE, PAUSED_CLOSE, showTermNotice } from "./wsTerm";
 
 export type TermKind = "agent" | "shell";
 
@@ -44,6 +44,8 @@ export interface TermHandle {
    * "paused" = the server refused the agent socket because the session is
    * paused (close code 4423): final, like "gone" — the pane shows its Paused
    * placeholder, and getTerm builds a fresh terminal once it is resumed.
+   * "held" = the same for a session held offline after a crash (close code
+   * 4424): the pane shows its Held placeholder (Start), never a retry.
    * "connecting" is only the pre-first-open state; reconnects stay
    * "disconnected" so status UIs keep signalling a real outage. */
   readonly state: string;
@@ -628,9 +630,10 @@ function makeTerm(
       sock.onclose = (ev) => {
         handle._setState("disconnected");
         if (closed) return;
-        // 4404 = instance gone, 4409 = workspace gone, 4423 = paused -> stop
-        // retrying. Paused is never retried: a reconnect is exactly what used
-        // to relaunch the agent Pause had just stopped.
+        // 4404 = instance gone, 4409 = workspace gone, 4423 = paused, 4424 =
+        // held offline after a crash -> stop retrying. Paused and held are
+        // never retried: a reconnect is exactly what used to relaunch the
+        // agent Pause had just stopped (or a crash had just taken down).
         const action = closeAction(ev?.code);
         if (action !== "retry") {
           closed = true;
@@ -681,11 +684,14 @@ function makeTerm(
 /** What a terminal does when its socket closes with `code`: stop for good
  * ("gone": 4404 instance gone, 4409 workspace gone), stop because the session
  * is paused ("paused": 4423 — the server will not relaunch a paused agent, and
- * Resume is the way back), or reconnect with backoff ("retry": anything else,
- * e.g. a server restart or the agent rebooting). Pure, for the node tests. */
-export function closeAction(code: number | undefined): "gone" | "paused" | "retry" {
+ * Resume is the way back), stop because it is held offline after a crash
+ * ("held": 4424 — nothing starts it by itself; the pane's Start does), or
+ * reconnect with backoff ("retry": anything else, e.g. a server restart or
+ * the agent rebooting). Pure, for the node tests. */
+export function closeAction(code: number | undefined): "gone" | "paused" | "held" | "retry" {
   if (code === 4404 || code === 4409) return "gone";
   if (code === PAUSED_CLOSE) return "paused";
+  if (code === HELD_CLOSE) return "held";
   return "retry";
 }
 
@@ -720,9 +726,10 @@ export function getTerm(title: string, kind: TermKind): TermHandle {
     registry.set(title, entry);
   }
   let h = entry[kind];
-  if (h && h.state === "paused") {
-    // Refused while paused: that socket is done. The session was resumed
-    // since (the pane mounts the terminal again only then), so start over.
+  if (h && (h.state === "paused" || h.state === "held")) {
+    // Refused while paused (or held offline): that socket is done. The
+    // session was resumed / started since (the pane mounts the terminal
+    // again only then), so start over.
     h.dispose();
     h = undefined;
   }

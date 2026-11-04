@@ -1350,3 +1350,27 @@
   padding-top: 6px;
   padding-bottom: 6px;
 }
+
+/* A session held offline after a crash: its state chip is the Start button
+   ("Offline · Start", lib/heldOffline) — the chip's own look, a pointer and
+   an underline on hover say it acts. */
+button.sky-held-start {
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+button.sky-held-start:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button.sky-held-start:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button.sky-held-start:disabled {
+  cursor: progress;
+  opacity: 0.75;
+}

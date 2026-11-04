@@ -38,6 +38,12 @@ const NOT_READY = 4409;
  * would just be refused again. */
 export const PAUSED_CLOSE = 4423;
 
+/** ...and when the session is HELD offline after a crash (backend
+ * core/held.py): its agent died and nothing starts it but a person's Start.
+ * Final like Paused — a retry is exactly the relaunch-on-touch the hold
+ * exists to stop. */
+export const HELD_CLOSE = 4424;
+
 /** Backoff between attempts, in ms. Flat after the third: the thing being waited
  * on is a worktree checkout, which takes as long as it takes, and a doubling
  * curve would be checking every two minutes by the time it finished. */
@@ -67,7 +73,7 @@ export function retryAfter(
   attempts: number,
   reconnect: boolean,
 ): number | null {
-  if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE) return null;
+  if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE || code === HELD_CLOSE) return null;
   // The session is not up YET — the normal path for the first seconds of every
   // run, and never a failure.
   if (code === NOT_YET || code === NOT_READY)
@@ -239,7 +245,7 @@ export function useWsTerm(
         if (dead) return;
         const wait = retryAfter(ev.code, attempts, reconnect);
         if (wait === null) {
-          setState(ev.code === PAUSED_CLOSE ? "paused" : "disconnected");
+          setState(ev.code === PAUSED_CLOSE ? "paused" : ev.code === HELD_CLOSE ? "held" : "disconnected");
           return;
         }
         const transient = isStarting(ev.code);

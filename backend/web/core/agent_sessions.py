@@ -71,6 +71,16 @@ def _live_session_name(name: str):
 #: routes answer it with 409 (the terminal socket with close code 4423).
 PAUSED_REFUSED = "session is paused — resume it first"
 
+#: ``_ensure_agent_session``'s error for a session HELD OFFLINE
+#: (:mod:`backend.web.core.held`): its agent died in a crash, and with
+#: ``general.revive_on_start`` off nothing but a person's Start brings it back
+#: — so a crash can't refill the memory that just ran out. Refused exactly
+#: like :data:`PAUSED_REFUSED` on every relaunch-on-touch path (the terminal
+#: socket closes with 4424; ``/send`` queues the prompt and answers 409
+#: ``{"held": true}``). ``POST /api/instances/{title}/revive`` and ``POST
+#: /api/server/revive-all`` release the hold, then launch.
+HELD_REFUSED = "offline since a crash — press Start to bring it back"
+
 
 def _is_paused(inst) -> bool:
     """Whether ``inst`` is Paused. An unreadable status is not paused (the
@@ -205,7 +215,12 @@ def _ensure_agent_session(inst, title: str):
 
     A PAUSED session is never relaunched here: with no live agent it is
     :data:`PAUSED_REFUSED`. (One whose agent is somehow still alive is just
-    attached — nothing is started.) Resume goes through the engine instead."""
+    attached — nothing is started.) Resume goes through the engine instead.
+
+    A session HELD OFFLINE (:mod:`backend.web.core.held`) is never relaunched
+    here either: :data:`HELD_REFUSED` until a person's Start releases it. One
+    whose agent is alive after all is attached, and its stale hold dropped."""
+    from backend.web.core import held as _held
     from backend.web.core import sleep as _sleep
 
     srv = _server()
@@ -217,9 +232,12 @@ def _ensure_agent_session(inst, title: str):
     if live is not None:
         if asleep:
             _sleep.woke(title)  # someone relaunched it meanwhile
+        _held.release(title)  # it is running: nothing to hold
         return live, None
     if _is_paused(inst):
         return name, PAUSED_REFUSED
+    if _held.is_held(title):
+        return name, HELD_REFUSED
     wt = inst.GetWorktreePath()
     if not wt or not os.path.isdir(wt):
         return name, "workspace no longer exists"

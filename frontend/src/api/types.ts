@@ -221,6 +221,16 @@ export interface Instance {
    * it or sending it anything wakes it, resuming the conversation. Optional:
    * an older server (or a remote device on one) never sends it. */
   sleeping?: SleepInfo | null;
+  /** Held offline (backend core/held.py): its agent DIED (a crash, the
+   * server restarting, the OOM killer) and nothing starts it by itself —
+   * no tmux, no agent, no memory — until a person presses Start (POST
+   * /api/instances/{title}/revive). The terminal socket closes with 4424 and
+   * /send answers 409 `{"error", "held": true}` (the prompt is queued).
+   * Omitted when not held. `held_since` is epoch seconds; `held_reason` is
+   * "the server restarted" | "out of memory (killed)" | "the agent crashed". */
+  held_offline?: boolean;
+  held_since?: number;
+  held_reason?: string;
   has_origin: boolean;
   /** Auth profile: the stored pin ("" = inherit the global default,
    * "default" = the CLI's own login), its resolution, and the resolved
