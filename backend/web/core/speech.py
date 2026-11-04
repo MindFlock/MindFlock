@@ -105,12 +105,15 @@ __all__ = [
     "describe",
     "get",
     "ids",
+    "listen",
+    "listening",
     "loaded",
     "mime_of",
     "recognition_hints",
     "select",
     "session_titles",
     "speech_form",
+    "stt_loaded",
     "sweep_idle",
     "unload_all",
     "voice_dir",
@@ -121,11 +124,12 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 #: A cached local model is dropped after this long without a call (never
-#: local recognition's while it is configured: :func:`_resident`). Half an
+#: local recognition's while a client listens: :func:`_resident`). Half an
 #: hour: a model unloaded between two sentences costs the next press ~7 s
 #: (faster-whisper ``small`` loading), which read as "the mic is slow to
-#: start"; :func:`warm` reloads it ahead of use whenever a voice client shows
-#: up, and :func:`_memory_block` still refuses a load on a starved box.
+#: start"; :func:`warm` loads it ahead of use when a listening mode starts
+#: (the standby's :func:`listen`, a phrase's stream opening), and
+#: :func:`_memory_block` still refuses a load on a starved box.
 IDLE_SECONDS = 1800.0
 #: Where ``openai`` goes when ``voice.stt_url`` / ``voice.tts_url`` are blank.
 OPENAI_URL = "https://api.openai.com/v1"
@@ -384,11 +388,64 @@ def _cached(key: str, loader: Callable[[], object]) -> object:
         return obj
 
 
-def _resident() -> frozenset:
-    """The cache keys :func:`sweep_idle` never drops: the whisper models of
-    ``local`` recognition while it is the configured backend."""
+#: How long one "I am listening" from a client (:func:`listen`: the wake-word
+#: standby, renewed while it is on) keeps recognition resident. The clients
+#: renew well inside it; a page that goes away simply lets it lapse.
+LISTEN_LEASE_SECONDS = 180.0
+#: client key → ``_now()`` its listening lease runs out (:func:`listen`).
+_LISTENING: Dict[str, float] = {}
+
+
+def listen(client: str, on: bool = True) -> bool:
+    """A client's listening mode — the wake-word standby — is on (renewed
+    for :data:`LISTEN_LEASE_SECONDS`) or off; returns whether ANY client is
+    listening now (:func:`listening`). Only while one is are the ``local``
+    recognition models resident (:func:`_resident`); otherwise they load on
+    the first phrase and are idle-unloaded like anything else — ~1.1 GB
+    that nobody pays for when nobody listens."""
+    key = str(client or "")[:64] or "-"
+    with _LOCK:
+        if on:
+            _LISTENING[key] = _now() + LISTEN_LEASE_SECONDS
+        else:
+            _LISTENING.pop(key, None)
+    return listening()
+
+
+def listening() -> bool:
+    """Whether some client's listening lease (:func:`listen`) is live."""
+    now = _now()
+    with _LOCK:
+        for key, until in list(_LISTENING.items()):
+            if until <= now:
+                _LISTENING.pop(key, None)
+        return bool(_LISTENING)
+
+
+def stt_loaded() -> bool:
+    """Whether ``local`` recognition's models are in memory now (``False``
+    for any other backend): a first phrase does not wait for a load."""
     try:
         if _configured("stt") != "local":
+            return False
+        backend = get("stt", "local")
+        keys = getattr(backend, "warm_keys", None)
+        if keys is None:
+            return False
+        want = list(keys())
+    except Exception:  # noqa: BLE001 — unreadable settings: not loaded
+        return False
+    with _LOCK:
+        return bool(want) and all(k in _CACHE for k in want)
+
+
+def _resident() -> frozenset:
+    """The cache keys :func:`sweep_idle` never drops: the whisper models of
+    ``local`` recognition while it is the configured backend AND a client is
+    listening (:func:`listening`: the wake-word standby is on somewhere).
+    With nobody listening they unload after :data:`IDLE_SECONDS` unused."""
+    try:
+        if _configured("stt") != "local" or not listening():
             return frozenset()
         backend = get("stt", "local")
         keys = getattr(backend, "resident_keys", None)
@@ -430,6 +487,7 @@ def unload_all() -> None:
         _CACHE.clear()
         _USED.clear()
         _WARMED.clear()
+        _LISTENING.clear()
         if _TIMER is not None:
             _TIMER.cancel()
             _TIMER = None
@@ -2751,7 +2809,7 @@ def describe(probe: bool = True) -> dict:
                           "tts_backend": id|"", "tts_detail": str,
                           "stt_stream": bool, "tts_engine": str,
                           "tts_fallback": bool, "tts_down": str,
-                          "tts_cold": bool},
+                          "tts_cold": bool, "stt_loaded": bool},
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
@@ -2799,6 +2857,9 @@ def describe(probe: bool = True) -> dict:
             else "Server %s not ready: %s" % (word, detail)
         )
     ready["detail"] = ". ".join(lines) + "."
+    # Whether a first phrase waits for local recognition to load (it is
+    # loaded only while someone listens, or after a recent phrase).
+    ready["stt_loaded"] = stt_loaded()
     return {
         "backends": {k: ids(k) for k in ("stt", "tts")},
         "server_ready": ready,

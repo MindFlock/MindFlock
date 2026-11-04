@@ -1594,10 +1594,21 @@ def clock(monkeypatch):
 
 
 class TestResident:
-    """While recognition is ``local`` its whisper models are never idle-
-    unloaded; piper voices (and everything else) still are."""
+    """While recognition is ``local`` AND a page listens (the wake-word
+    standby's lease, :func:`speech.listen`) its whisper models are never
+    idle-unloaded; with nobody listening they unload like everything else
+    (piper voices always do)."""
 
     WHISPERS = ["whisper:base.en", "whisper:small"]
+
+    @pytest.fixture(autouse=True)
+    def _listening(self, clock):
+        # A page in standby the whole test (its lease renewed: the clock
+        # jumps past it in these tests).
+        speech.listen("standby-page")
+        speech._LISTENING["standby-page"] = float("inf")
+        yield
+        speech._LISTENING.clear()
 
     def test_local_recognition_stays_voices_unload(self, both, clock):
         _set(stt_backend="local", tts_backend="local")
@@ -1644,6 +1655,47 @@ class TestResident:
         assert speech.loaded() == self.WHISPERS and armed == [1]
         speech.unload_all()
         assert speech.loaded() == []
+
+    def test_nobody_listening_unloads_it(self, both, clock):
+        speech._LISTENING.clear()
+        _set(stt_backend="local")
+        speech.warm("stt")
+        clock[0] += speech.IDLE_SECONDS - 1
+        assert speech.sweep_idle() == []  # a recent phrase keeps it a while
+        clock[0] += 2
+        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.loaded() == []
+
+    def test_a_lapsed_lease_unloads_it(self, both, clock):
+        speech._LISTENING.clear()
+        _set(stt_backend="local")
+        assert speech.listen("page") is True
+        speech.warm("stt")
+        assert speech.stt_loaded() is True
+        clock[0] += speech.LISTEN_LEASE_SECONDS - 1
+        assert speech.listening() is True
+        clock[0] += speech.IDLE_SECONDS  # the page went away long ago
+        assert speech.listening() is False
+        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.stt_loaded() is False
+
+    def test_a_lease_ends_on_off_and_on_unload_all(self, both):
+        speech._LISTENING.clear()
+        assert speech.listen("a") is True
+        assert speech.listen("b") is True
+        assert speech.listen("a", on=False) is True
+        assert speech.listen("b", on=False) is False
+        speech.listen("c")
+        speech.unload_all()
+        assert speech.listening() is False
+
+    def test_stt_loaded_only_for_local(self, both):
+        _set(stt_backend="system")
+        assert speech.stt_loaded() is False
+        _set(stt_backend="local")
+        assert speech.stt_loaded() is False
+        speech.warm("stt")
+        assert speech.stt_loaded() is True
 
     def test_the_memory_guard_still_refuses_a_load(self, both, monkeypatch):
         _set(stt_backend="local")

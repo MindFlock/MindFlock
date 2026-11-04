@@ -1311,10 +1311,15 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     low). With `stt_backend = "local"` the whisper models (`stt_model` for a
     phrase sent whole and the accurate pass, `stt_stream_model` for the live
     transcript and the wake word, `stt_final` when it names a third) are
-    **resident**: loaded 3 s after boot and whenever a voice client fetches
-    `GET /api/voice`, and never idle-unloaded while `local` stays configured,
-    so a mic press never waits for a model; a piper voice is unloaded after
-    30 idle minutes. **The voice warms when voice is in use**: at boot (6 s
+    **loaded only while a listening mode is on** (~1.1 GB): never at boot
+    nor by a status read, but when the wake-word standby turns on (it holds
+    a listening lease, `POST /api/voice/listen`, renewed every minute —
+    while any page holds one the models stay resident, so a wake is answered
+    at once) or when a phrase's stream opens. With nobody listening they are
+    idle-unloaded after 30 unused minutes like any model, so the first
+    dictation after that waits a few seconds for them: the mic's pill and
+    the phone's strip say **Starting the mic…** until the first words come
+    back. A piper voice is unloaded after 30 idle minutes. **The voice warms when voice is in use**: at boot (6 s
     after start) only while "Read everything" is on, and on
     `GET /api/voice` unless it carries `?warm=0`. A `local` piper voice is
     loaded, an `openai` host on this machine or network (Voice Lab at

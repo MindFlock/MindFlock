@@ -193,9 +193,10 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `…/clear-key`): an `openai`-compatible host or lazily imported local
   models (faster-whisper, piper; `uv sync --group voice`) behind the memory
   guard — local recognition's two whisper models (one-shot `small`, a faster
-  streaming `base.en`) resident while configured, a piper voice unloaded
-  after 30 idle minutes — recognition warmed at boot and on every
-  `GET /api/voice`, the voice at boot only with "Read everything" on and on
+  streaming `base.en`) loaded only while a listening mode is on (the
+  standby's lease, `POST /api/voice/listen`, or a phrase's stream) and
+  resident while a lease lasts, a piper voice unloaded after 30 idle
+  minutes — the voice at boot only with "Read everything" on and on
   fetches without `?warm=0` (every client sends `warm=0` unless something
   will be said soon — Voice Lab starts on first use and stops after 10 idle
   minutes; dictation never wakes it) (`speech.warm_in_background`; a local OpenAI-compatible voice

@@ -4604,7 +4604,9 @@
           mine = mine || g.mine || null;
           var id = x.r.ok && x.j.id ? String(x.j.id) : "";
           if (g.dead) { streamDelete(id); return; }
-          if (id) { g.sid = id; g.mode = "stream"; if (mine) { voiceTraceMark(g, "open"); streamPump(g, mine); } return; }
+          // loading: nobody was listening, so the server's recognition is
+          // loading now — the first words wait for it ("Starting the mic…").
+          if (id) { g.sid = id; g.mode = "stream"; voiceSttLoading(x.j.loading === true); if (mine) { voiceTraceMark(g, "open"); streamPump(g, mine); } return; }
           if (x.r.status === 409 && voiceStreamFull(x.j)) {
             voice.rec.streamFull = { at: Date.now(), n: ((voice.rec.streamFull && voice.rec.streamFull.n) || 0) + 1 };
             if (Date.now() - t0 + VOICE_STREAM_FULL_RETRY_MS <= VOICE_STREAM_FULL_MAX_MS) {
@@ -4670,6 +4672,7 @@
         if (!x || g.dead) return;
         g.busy = false;
         if (!x.r.ok) { streamFail(g, mine, streamWhy(x)); return; }
+        voiceSttLoading(false);   // a pass came back: the model is up
         g.blocks.splice(0, n);
         g.queued -= frames;
         var ms = Number(x.j.ms) || 0;   // 0: a quiet chunk ran no pass
@@ -4775,6 +4778,7 @@
       var t0 = Date.now();
       g.busy = true;
       streamReq(g, streamUrl(g.sid, "end"), { method: "POST" }).then(function (x) {
+        voiceSttLoading(false);
         if (g.dead) return;
         clearTimeout(g.endTimer);
         g.busy = false;
@@ -4798,6 +4802,7 @@
     // words it settled stay (in the box, or g.lead with the unstable tail);
     // the audio it had not answered is the clip.
     function streamFail(g, mine, why) {
+      voiceSttLoading(false);
       voice.rec.chunk = { ms: 0, audio: 0, error: why, at: Date.now() };
       var sid = g.sid;
       g.sid = "";
@@ -5570,18 +5575,27 @@
   // heard), else "". `paused`: the microphone is muted under the listen (a
   // call, Siri, another app: ServerSTT's paused()) — "Mic paused…", never
   // "Listening…" over a mic that hears nothing.
-  function voiceStripWord(state, speaking, note, paused, holding, starting) {
+  function voiceStripWord(state, speaking, note, paused, holding, starting, warming) {
     if (note) return String(note);
     if (holding) return "Waiting for you…";   // a line held for the owner's pause (voiceSpeakWhenQuiet)
     if (speaking) return starting ? "Starting voice…" : "Speaking…";   // starting: a cold voice host on its first clip
-    if (state === "listening" || state === "awaiting" || state === "dialog") return paused ? "Mic paused…" : "Listening…";
+    // warming: the server's recognition is loading for this phrase (nobody was listening: voiceSttLoading)
+    if (state === "listening" || state === "awaiting" || state === "dialog") return paused ? "Mic paused…" : warming ? "Starting the mic…" : "Listening…";
     if (state === "sending") return "Sending…";
     return "";
+  }
+  // The server's recognition loading for the phrase being heard (its stream
+  // opened with `loading`) — until a pass, the end, or a failure answers.
+  function voiceSttLoading(on) {
+    on = !!on;
+    if (!!voice.sttLoading === on) return;
+    voice.sttLoading = on;
+    voiceStripPaint();
   }
   function voiceStripPaint() {
     var w = voiceStripWord(voice.state, !!voiceSpeech.playing || voice.state === "speaking", Date.now() < voice.quietUntil ? voice.quietWord : "",
                            !!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing,
-                           !!voice.ttsStarting);
+                           !!voice.ttsStarting, !!voice.sttLoading);
     if (voiceCaptionEl.textContent !== w) voiceCaptionEl.textContent = w;
   }
   // A moment's word on the strip, VOICE_QUIET_CAPTION_MS long: the cue
@@ -8953,9 +8967,31 @@
   }
   // The standby follows the gate: it runs unless the gate is shut for more
   // than the check itself (in flight, the rate limit: the detector goes on).
+  // This page's listening lease (POST /api/voice/listen {on, client}): the
+  // server keeps its recognition in memory only while some page listens, so
+  // the standby holds one — renewed every VOICE_LISTEN_RENEW_MS, well inside
+  // the server's 180 s — and gives it back the moment it stops.
+  var VOICE_LISTEN_RENEW_MS = 60000;
+  var voiceLease = { on: false, timer: null };
+  function voiceListenLease(on) {
+    on = !!on;
+    if (voiceLease.on === on) return;
+    voiceLease.on = on;
+    clearInterval(voiceLease.timer);
+    voiceLease.timer = null;
+    function post(v) {
+      try {
+        fetch("/api/voice/listen", { method: "POST", headers: { "Content-Type": "application/json" },
+                                     body: JSON.stringify({ on: v, client: VOICE_CLIENT_ID }) }).catch(function () {});
+      } catch (e) {}
+    }
+    post(on);
+    if (on) voiceLease.timer = setInterval(function () { post(true); }, VOICE_LISTEN_RENEW_MS);
+  }
   function voiceWakeSync() {
     var A = voiceAdapters.serverStt, W = voiceWake_;
     var want = !!voice.prefs.wake && voice.state !== "off" && !document.hidden;
+    voiceListenLease(want && A.available() && (voice.cfg.server_ready || {}).stt !== false);
     if (want && !A.available()) { voiceWakeOff("No microphone for a web page here — listening for “" + voiceWakeName() + "” is off."); return; }
     var ready = voice.cfg.server_ready || {};
     if (want && ready.stt === false) {

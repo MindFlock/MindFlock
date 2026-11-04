@@ -1462,6 +1462,7 @@ function streamDelete() {}
 function streamFail(g, mine, why) { fails.push({ at: clock, why: why }); }
 function streamWhy(x) { return (x && x.j && x.j.error) || "?"; }
 function voiceTraceMark() {}
+function voiceSttLoading() {}
 function streamPump() {}
 function cap() { return { r: { ok: false, status: 409 }, j: { error: "4 voice streams are already open: end one first" } }; }
 """
@@ -1951,6 +1952,7 @@ def _rec_run(body: str):
         + "function micMuted() { return false; }\n"
         + "function voiceMicMuted() { return false; }\n"
         + "function voiceTraceMark() {}\n"
+        + "function voiceSttLoading() {}\n"
         + "function recStatus() {}\n"
         + "function finish() { ended.push(clock - g.lastLoud); g.heard = false; }\n"
         + "function controlFire() { fired.push(clock - g.lastLoud); g.ctl = null; g.heard = false; }\n"
