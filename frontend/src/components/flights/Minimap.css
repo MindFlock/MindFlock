@@ -266,3 +266,27 @@ body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], 
     transition: none;
   }
 }
+
+/* Round 21: a route that needs you — its chip says so ("Needs you →") on
+   the Needs-you gold (the tone's own fill + ink pair, legible in both
+   themes), a little wider so the words and a short name fit. */
+.sky-offscreen .sky-offscreen-chip.is-needs {
+  max-width: 210px;
+  border-color: var(--tone-attention);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--tone-attention) 30%, transparent),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.sky-offscreen .sky-offscreen-needs {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--tone-attention);
+  color: var(--tone-attention-ink);
+  font-weight: 600;
+}
+
+.sky-offscreen .sky-offscreen-chip.is-needs .sky-offscreen-dot {
+  display: none;
+}

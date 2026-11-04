@@ -75,7 +75,7 @@ describe("the eased camera", () => {
     expect(v).toContain("goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
     expect(v).toContain("goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);");
     expect(v).toContain("goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
-    expect(v).toContain("const zoomTo = (z: number) => goTo(zoomAt(camRef.current, z, vp.w / 2, vp.h / 2));");
+    expect(v).toMatch(/const zoomTo = \(z: number\) => \{\s*autoFit\.current = false;\s*goTo\(zoomAt\(camRef\.current, z, vp\.w \/ 2, vp\.h \/ 2\)\);/);
     // No FLIP ghosts: the glide is the plane's transform alone.
     expect(v).not.toMatch(/flyGhosts|FLIP_MS/);
   });
@@ -207,7 +207,8 @@ describe("the seams are mounted", () => {
     expect(v).toContain('const MINIMAP_KEY = "mf_sky_minimap";');
     expect(v).toContain('const [minimapOpen, setMinimapOpen] = useState(() => readPref(MINIMAP_KEY) !== "0");');
     expect(v).toContain("<OffscreenHints rects={mapRects} cam={cam} viewport={vp} onJump={jumpTo} />");
-    expect(v).toMatch(/<div className="sky-minimap-host">\s*<Minimap\s+rects=\{mapRects\}\s+cam=\{cam\}\s+viewport=\{vp\}\s+onCamera=\{\(c\) => setCam\(c\)\}\s+onJump=\{jumpTo\}\s+open=\{minimapOpen\}/);
+    // Round 21: folded while it would cover a route (mmShown), a move on it is the owner's (userCam).
+    expect(v).toMatch(/<div className="sky-minimap-host" ref=\{mmHost\}[^>]*>\s*<Minimap\s+rects=\{mapRects\}\s+cam=\{cam\}\s+viewport=\{vp\}\s+onCamera=\{\(c\) => userCam\(c\)\}\s+onJump=\{jumpTo\}\s+open=\{mmShown\}/);
     expect(v).toContain('kind: l.flight ? "grounded" : "line",');
     expect(v).toContain('tone: l.flight ? l.flight.state : row ? deriveSessionState(row).state : "",');
     expect(v).toContain("focused: l.flight ? groundFocus === l.id : focusLine === l.id,");
@@ -219,7 +220,7 @@ describe("the seams are mounted", () => {
 
   it("ZoomMenu replaces the readout with min / max / the fits; SkyShortcuts opens on ? and closes on Esc, with the real groups", () => {
     expect(v).not.toContain('<span className="sky-zoom-read"');
-    expect(v).toMatch(/<ZoomMenu\s+zoom=\{cam\.z\}\s+min=\{ZOOM_MIN\}\s+max=\{ZOOM_MAX\}\s+onZoomTo=\{zoomTo\}\s+onFitAll=\{\(\) => fitAll\(\)\}\s+onFitSelection=\{fitSel\}\s+onFitFocused=\{\(\) => fitFocused\(\)\}\s+canFitSelection=\{!selectionEmpty\(sel\)\}\s+canFitFocused=\{!!focusLine\}/);
+    expect(v).toMatch(/<ZoomMenu\s+zoom=\{cam\.z\}\s+min=\{ZOOM_MIN\}\s+max=\{ZOOM_MAX\}\s+onZoomTo=\{zoomTo\}\s+onFitAll=\{\(\) => fitAll\(\)\}\s+onFitSelection=\{fitSel\}\s+onFitFocused=\{\(\) => fitFocused\(\)\}\s+canFitSelection=\{!selectionEmpty\(sel\)\}\s+canFitFocused=\{!!\(focusLine \|\| oneLine\)\}/);
     expect(ZOOM_MIN).toBe(0.1);
     expect(ZOOM_MAX).toBe(3);
     expect(v).toMatch(/k === "\?"\) \{\s*handled\(\);\s*setShortcutsOpen\(true\);/);
