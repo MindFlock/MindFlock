@@ -259,7 +259,7 @@ every stored tmux session as a side effect of changing one field.
   renamed session and lets the MCP identity resolve (rows carry
   `renamed_from`); an entry goes with its session or once the agent's pane pid
   changes (a relaunch bakes the new name in). Aliases from before this are
-  migrated to titles once at start (`rename_migration.json`) and from each
+  migrated to titles at server start, except sessions whose agent is running (their MCP server holds the old name; they migrate at a later start with the agent down; `rename_migration.json`) and from each
   browser's seed; one that is not a free, valid name stays a display alias.
 - `start()` runs `tmux new-session -d -s <name> -c <workdir> <launch>`, waits for
   the session with exponential backoff, then sets `history-limit 10000` and

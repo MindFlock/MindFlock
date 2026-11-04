@@ -30,8 +30,8 @@ session's agent has relaunched (its pane pid moved on) — a relaunch bakes the
 new name in.
 
 Migration (:func:`migrate_aliases`): the aliases recorded before this existed
-become real titles — once per server (``<config dir>/rename_migration.json``)
-and again for every alias map a browser seeds (``POST /api/aliases``). An alias
+become real titles — at every server start, skipping sessions whose agent is
+running (``<config dir>/rename_migration.json`` records the last run), and again for every alias map a browser seeds (``POST /api/aliases``). An alias
 that is not a free, valid name stays an alias; :func:`core.aliases.display_name`
 keeps showing it.
 """
@@ -630,6 +630,13 @@ def migrate_aliases(srv, aliases: Optional[Dict[str, str]] = None) -> Dict[str, 
         title, alias = str(title or ""), str(alias or "").strip()
         if not alias or alias == title or title not in srv.ENGINE.instances:
             continue
+        if _agent_live(srv, title):
+            # A running agent's MCP server was started with the old title and
+            # may predate rename support (an upgrade restarts the server, not
+            # the agents): renaming under it strands its identity (readonly
+            # tools). It keeps its alias and migrates at a start when its
+            # agent is down — after a crash, or once it was quit.
+            continue
         res = rename_session(srv, title, alias)
         if res.status == 200 and not res.body.get("unchanged"):
             done[title] = res.body["title"]
@@ -643,14 +650,25 @@ def migrate_aliases(srv, aliases: Optional[Dict[str, str]] = None) -> Dict[str, 
     return done
 
 
+def _agent_live(srv, title: str) -> bool:
+    """Whether ``title``'s agent tmux session is running now. An unreadable
+    answer counts as live (never rename under an agent we can't see)."""
+    try:
+        return srv._live_session_name(tmux.to_mindflock_tmux_name(title)) is not None
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def migrate_once(srv) -> Dict[str, str]:
-    """:func:`migrate_aliases` for the server's alias store, once per config
-    dir (``rename_migration.json`` records it). Never raises."""
+    """:func:`migrate_aliases` for the server's alias store at every server
+    start (``rename_migration.json`` records the last run). Sessions whose
+    agent is running are skipped and migrate at a later start, so the name
+    is only taken over while no MCP server holds the old one. Never raises."""
     path = os.path.join(config.GetConfigDir(), _MIGRATION_FILE)
     try:
-        if os.path.exists(path):
-            return {}
         done = migrate_aliases(srv)
+        if not done and os.path.exists(path):
+            return {}
         title_store.persist(
             lambda: path,
             {"migrated_at": time.time(), "renamed": done},

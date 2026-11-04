@@ -97,6 +97,8 @@ def _srv(*insts):
         _session_branches=lambda: {
             t: getattr(i, "Branch", "") for t, i in eng.instances.items()
         },
+        # No agent tmux is running in the stand-in (the migration skips live ones).
+        _live_session_name=lambda name: None,
     )
     return srv
 
@@ -544,7 +546,7 @@ def test_memory_dicts_still_exist():
 # --------------------------------------------------------------------------- #
 # Migration
 # --------------------------------------------------------------------------- #
-def test_migration_renames_free_valid_aliases_once(tmp_path):
+def test_migration_renames_free_valid_aliases(tmp_path):
     srv = _srv(_Inst("t1"), _Inst("t2"), _Inst("t3"), _Inst("taken"))
     aliases.set_alias("t1", "Login fix")
     aliases.set_alias("t2", "bad/name")
@@ -558,9 +560,27 @@ def test_migration_renames_free_valid_aliases_once(tmp_path):
         "t3": "taken",
         "gone": "Whatever",
     }
-    # Recorded: a second start does nothing.
+    # Every start retries what is left: an alias that became valid moves.
     aliases.set_alias("t2", "fine-now")
+    assert rename.migrate_once(srv) == {"t2": "fine-now"}
     assert rename.migrate_once(srv) == {}
+
+
+def test_migration_leaves_a_running_agent_alone_until_it_is_down(tmp_path):
+    """A running agent's MCP server holds the old title (and may predate rename
+    support): renaming under it strands its identity. It migrates at a start
+    when its agent is down."""
+    srv = _srv(_Inst("busy"), _Inst("idle"))
+    live = {"busy"}
+    srv._live_session_name = lambda name: (
+        name if any(name.endswith(t) for t in live) else None
+    )
+    aliases.set_alias("busy", "Busy one")
+    aliases.set_alias("idle", "Idle one")
+    assert rename.migrate_once(srv) == {"idle": "Idle one"}
+    assert "busy" in srv.ENGINE.instances
+    live.clear()
+    assert rename.migrate_once(srv) == {"busy": "Busy one"}
 
 
 # --------------------------------------------------------------------------- #
