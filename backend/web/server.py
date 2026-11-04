@@ -8046,7 +8046,19 @@ async def copy_instance(title: str) -> JSONResponse:
         wt = ""
     if not wt or not os.path.isdir(wt):
         return JSONResponse({"error": "source workspace not ready"}, status_code=409)
-    new_title = _copy_title(title, ENGINE.instances)
+    # Named after what the source SHOWS (a rename is its name everywhere):
+    # "sitecheck-bot7-2" (really make-sure-runs-…-copy) copies to
+    # "sitecheck-bot7-3", free both as a title and as a shown name.
+    branches = _session_branches()
+    shown = _aliases.display_name(title, branches.get(title, "")) or title
+
+    class _Taken:
+        def __contains__(self, name: object) -> bool:
+            return name in ENGINE.instances or bool(
+                _aliases.owner_of(str(name), branches)
+            )
+
+    new_title = _copy_title(shown, _Taken())
     program = src.Program or ENGINE.default_program()
     inst = session.NewInstance(
         session.InstanceOptions(

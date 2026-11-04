@@ -569,7 +569,10 @@ export function copyTitle(title: string, taken: ReadonlySet<string>): string {
 
 export async function copySession(title: string) {
   if (!title) return;
-  const guess = addPendingSession(copyTitle(title, new Set(instances().map((i) => i.title))));
+  // Named after what it shows (a rename is its name), free as a title and as
+  // a shown name — the server's copy_instance does the same.
+  const titles = instances().map((i) => i.title);
+  const guess = addPendingSession(copyTitle(displayName(title), new Set([...titles, ...titles.map((t) => displayName(t))])));
   placeAfter(guess, title);
   try {
     const inst = await instApi<Instance>(title, "/copy", { method: "POST" });
