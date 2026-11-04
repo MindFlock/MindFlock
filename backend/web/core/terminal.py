@@ -257,8 +257,13 @@ def _wrap_launch_cmd(cmd: str, session_name: str) -> str:
     The wrapper shell also raises its own ``oom_score_adj`` first
     (:data:`backend.providers.launch_script.OOM_SCORE_ADJ`), so the agent and
     everything it runs are the OOM killer's pick before the server. A CLI that
-    dies to it records 137, which the server's auto-revive keys on."""
-    from backend.providers import launch_script
+    dies to it records 137, which the server's auto-revive keys on.
+
+    The command itself runs inside the agent guards of
+    :mod:`backend.providers.agent_limits` — its own memory-limited systemd
+    user scope and the ``gitnexus analyze`` gate on ``PATH`` — wherever they
+    apply; elsewhere it is ``cmd`` unchanged."""
+    from backend.providers import agent_limits, launch_script
 
     marker = _exit_marker_path(session_name)
     try:
@@ -269,7 +274,7 @@ def _wrap_launch_cmd(cmd: str, session_name: str) -> str:
     return "rm -f %s; %s%s; echo $? > %s" % (
         q,
         launch_script.oom_score_prefix(),
-        cmd,
+        agent_limits.wrap_launch(cmd, session_name),
         q,
     )
 

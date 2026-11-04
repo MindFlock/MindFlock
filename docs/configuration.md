@@ -743,6 +743,9 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_AUTO_LAUNCH_SPACING` | `20` | Seconds between two automatic launches the launch gate lets through (its queue drains one at a time). `0` = no spacing |
 | `MINDFLOCK_LAUNCH_QUEUE_MAX` | `32` | Launches that may wait in the launch gate's queue; past it a new automatic start is refused (`memory_queue_full`). `0` = no limit |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
+| `MINDFLOCK_AGENT_SCOPE` | unset | `0` launches agents without their memory-limited systemd scope (`general.agent_memory`) |
+| `MINDFLOCK_GITNEXUS_GATE` | unset | `0` leaves the `gitnexus` shim off agents' `PATH` (and makes an existing shim pass `analyze` straight through) |
+| `MINDFLOCK_SERVER_OOM_PROTECT` | unset | `0` stops the server lowering its own `oom_score_adj` at boot |
 | `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
 | `MINDFLOCK_SLOT_HELD` | — | **Internal**: set by `mindflock slot` on the command it runs (the pools held, comma-separated), so a nested `mindflock slot` for the same pool runs straight through |
 | `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep or the auto-revive of agents the OOM killer took (sandboxed or scratch servers), whatever `general.revive_on_start` says. Agents that died are still **held offline** (that launches nothing) |
@@ -1190,6 +1193,19 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   reports the effective count and its source. Written through
   `POST /api/settings` (`{"general": {"heavy_slots": 2}}`, owner only); no
   Settings screen shows it yet.
+- **Agent memory limits** (`general.agent_memory`): the memory-limited
+  systemd user scope every agent launch runs in, and the `gitnexus analyze`
+  gate (see [session-engine.md](session-engine.md#before-the-oom-killer-each-agent-in-its-own-memory-limited-scope)).
+  Keys, all optional: `enabled` (`false` = neither), per agent `high` /
+  `max` / `swap` (default `"30%"` / `"40%"` / `"15%"` of RAM), all agents
+  together `fleet_high` / `fleet_max` / `fleet_swap` (`"65%"` / `"75%"` /
+  `"40%"`), `gitnexus_heap_mb` (4096; `0` = no gate) and `gitnexus_at_once`
+  (1). Sizes are a share of RAM, bytes with a K/M/G/T suffix, or `"off"`;
+  anything unreadable reads as the default and is dropped on save. Per
+  device, so settings sync never carries it. Read at each launch. Linux
+  with a systemd user manager only — elsewhere launches are unchanged.
+  `MINDFLOCK_AGENT_SCOPE=0` / `MINDFLOCK_GITNEXUS_GATE=0` turn the two
+  halves off. No Settings screen shows it yet.
 - **Notification rules** (`notifications.muted_rules` / `enabled_rules`,
   Settings → Notifications) — which session events notify you. Default-on rules
   are opt-*out* (their id lands in `muted_rules`), noisier ones are opt-*in*

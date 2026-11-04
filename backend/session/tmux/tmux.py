@@ -191,9 +191,15 @@ class TmuxSession:
         # The agent's tree volunteers for the OOM killer ahead of the server
         # (launch_script.OOM_SCORE_ADJ): the shell tmux runs this through
         # raises its own score first, and the program inherits it.
+        # It also runs in its own memory-limited systemd user scope, with the
+        # gitnexus-analyze gate on PATH, where those apply
+        # (backend.providers.agent_limits; unchanged elsewhere).
+        from backend.providers import agent_limits as _agent_limits
         from backend.providers import launch_script as _launch_script
 
-        launch = _launch_script.oom_score_prefix() + launch
+        launch = _launch_script.oom_score_prefix() + _agent_limits.wrap_launch(
+            launch, self.sanitized_name
+        )
         c = cmd_pkg.command(
             "tmux",
             "new-session",

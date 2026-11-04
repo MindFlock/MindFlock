@@ -259,6 +259,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "memory_critical_pct",
         # Names from THIS machine's Claude config, sharing THIS machine's RAM.
         "mcp_shared_servers",
+        # Memory limits sized to THIS machine's RAM (providers.agent_limits).
+        "agent_memory",
     ),
     "notifications": ("ntfy_click_url",),
     # Which speech backends THIS machine runs or is keyed for.

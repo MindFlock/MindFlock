@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while memory is low they ask first: *Memory is low: 3.1 GB free. Starting
   another agent may freeze the machine*, with **Start anyway**, **Put idle
   agents to sleep first** or **Cancel**.
+- **One agent can no longer take the whole machine down.** Each agent now
+  runs in its own systemd user scope with a memory ceiling (throttled above
+  30% of RAM, stopped above 40%, swap capped), and all agents together are
+  capped at 75% of RAM, so a runaway test run or indexer loses a process
+  instead of pushing WSL into a swap thrash. `gitnexus analyze` from any
+  repo's commit hook now runs one at a time on the machine with a 4 GB heap
+  (it used to size itself to 0.75x RAM — 16 GB — once per committing agent).
+  Tunable as `general.agent_memory`; Linux with systemd only, unchanged
+  elsewhere.
 - **Running low on memory no longer wedges the server.** The background
   ticks have their own small thread pool, so a tick stuck on a slow git, tmux
   or gh call can't hold up the app's requests. While memory reads low the
