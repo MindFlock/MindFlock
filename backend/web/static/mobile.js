@@ -3773,7 +3773,12 @@
   // than that, the stop in "mind·flock", are inside the word) — short, so
   // the clip goes the moment the word is over; after it the detector waits
   // for VOICE_WAKE_QUIET_MS of quiet again. Shorter is a
-  // click or a cough, longer a sentence: both dropped, nothing sent. The
+  // click or a cough, longer a sentence: both dropped, nothing sent. A pause
+  // inside a lone utterance ("Hey, | MindFlock", "Mind… | flock" said slowly)
+  // is longer than the tail, so its first part goes alone — and speech that
+  // resumes within VOICE_WAKE_QUIET_MS of a stretch that started after quiet
+  // (and was not a sentence) carries that stretch on (d.prev): the next clip
+  // holds both parts, under the same VOICE_WAKE_MAX_MS. The
   // noise floor and "loud" are the recorder's (scaled to the block's length:
   // its rule is per 85 ms block).
   var VOICE_WAKE_BLOCK = 2048;           // the standby's ScriptProcessor block (~43 ms at 48 kHz)
@@ -3783,7 +3788,7 @@
   var VOICE_WAKE_MAX_MS = 1600;          // ...and at most this (longer is a sentence: never a wake)
   var VOICE_WAKE_LEAD_MS = 100;          // audio kept from before its first loud block (the word's soft start)
   function voiceWakeNew() {
-    return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0 };
+    return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0, prev: -1 };
   }
   // One block: d's clock moves on by ms. → null, or what just ended:
   // {kind: "clip", from, to, ms, end} — from..to on d's clock (ms), the
@@ -3801,7 +3806,7 @@
       if (loud) {
         d.last = d.t;
         d.tail = 0;
-        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; return { kind: "long" }; }
+        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; d.prev = -1; return { kind: "long" }; }
         return null;
       }
       d.tail += ms;
@@ -3809,12 +3814,17 @@
       // Its quiet tail counts toward the quiet before the next one.
       d.phase = d.tail >= VOICE_WAKE_QUIET_MS ? "ready" : "wait";
       d.quiet = d.tail;
+      d.prev = d.from;   // speech resuming before the quiet is over carries it on
       var span = d.last - d.from;
       if (span < VOICE_WAKE_MIN_MS) return { kind: "short", ms: span };
       return { kind: "clip", from: Math.max(0, d.from - VOICE_WAKE_LEAD_MS), to: d.t, ms: span, end: d.last };
     }
     if (loud) {
-      if (d.phase === "ready") { d.phase = "word"; d.from = at; d.last = d.t; d.tail = 0; }
+      if (d.phase === "ready") { d.phase = "word"; d.from = at; d.last = d.t; d.tail = 0; d.prev = -1; }
+      else if (d.prev >= 0) {   // straight on from a lone stretch: its second part
+        d.phase = "word"; d.from = d.prev; d.last = d.t; d.tail = 0; d.prev = -1;
+        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; return { kind: "long" }; }
+      }
       else d.quiet = 0;   // no quiet before it: part of something longer
       return null;
     }
@@ -8916,7 +8926,11 @@
   // utterance — quiet before it, VOICE_WAKE_MIN_MS..VOICE_WAKE_MAX_MS of
   // sound, quiet after — is cut out (+VOICE_WAKE_LEAD_MS of lead-in) and sent
   // as a 16 kHz WAV to POST /api/voice/wake: one in flight, one per
-  // VOICE_WAKE_GAP_MS. The server says whether it was the word alone (a
+  // VOICE_WAKE_GAP_MS — one that comes meanwhile is KEPT (the newest) and
+  // goes the moment that check says no, if its word ended at most
+  // VOICE_WAKE_PENDING_MS before (voiceWakeFlush): a cough or a key click
+  // checked just before the word never swallows the word. The server says
+  // whether it was the word alone (a
   // sentence never is). wake → the chime (voiceWakeChime), "Yes?", a tick,
   // then listening exactly as a tap does (toggle); anything else → nothing.
   // 409 (no recognizer) / 404 (an older server) / the mic refused → the pref
@@ -8927,7 +8941,8 @@
   // browser will not resume outside a gesture (iOS) waits for one tap
   // anywhere. While the phone's own recognizer listens, the stream is given
   // back: that recognizer needs the mic to itself.
-  var VOICE_WAKE_GAP_MS = 1500;           // one check per this long
+  var VOICE_WAKE_GAP_MS = 400;            // one check per this long (the detector needs ~0.8 s between two anyway)
+  var VOICE_WAKE_PENDING_MS = 2500;       // a word kept while a check was in flight still goes this long after it ended
   var VOICE_WAKE_AFTER_SPEECH_MS = 500;   // no standby while the page speaks and this long after
   var VOICE_WAKE_CHIME_MS = 130;          // the chime's length: the recorder skips it
   var VOICE_WAKE_SKIP_PAD_MS = 100;       // ...and this much more (the audio engine's latency)
@@ -8935,7 +8950,8 @@
   var VOICE_WAKE_GESTURE_MS = 5000;       // a refused mic this long after a tap is a refusal, else "tap once"
   var voiceWake_ = { inflight: false, at: 0, speaking: false, spokeAt: 0, timer: null, needTap: false,
                      tapArmed: false, gestureAt: 0, checks: 0, wakes: 0, chimes: 0, last: null, note: "",
-                     endAt: 0, wakeMs: -1 };   // the last word's end (wall clock), and its end → listening (ms)
+                     endAt: 0, wakeMs: -1,     // the last word's end (wall clock), and its end → listening (ms)
+                     pending: null, pendTimer: null };   // the word kept while a check was in flight: {blob, r}
   voice.wakeState = voiceWake_;   // tests read it
   // Any tap: a refused microphone right after one is the person's answer.
   document.addEventListener("click", function () { voiceWake_.gestureAt = Date.now(); }, true);
@@ -9016,7 +9032,8 @@
   }
   var voiceWakeHandlers = {
     onLevel: function (v) { if (!voiceIsListening()) voiceLevel(v, true); },
-    wanted: function () { return voiceWakeLive() === ""; },
+    // A clip is cut while a check is in flight too: voiceWakeCheck keeps it.
+    wanted: function () { var why = voiceWakeLive(); return why === "" || why === "inflight" || why === "rate"; },
     onClip: function (blob, r) { voiceWakeCheck(blob, r); },
     onReady: function (ctx) { voiceWakeCtxCheck(ctx); },
     onError: function (code) {
@@ -9075,8 +9092,14 @@
     voiceWakeSync();
   }
   function voiceWakeCheck(blob, r) {
-    var W = voiceWake_;
-    if (voiceWakeLive()) return;   // something took over while the clip was encoded
+    var W = voiceWake_, why = voiceWakeLive();
+    if (why === "inflight" || why === "rate") {
+      W.pending = { blob: blob, r: r };   // the newest; it goes on the no (voiceWakeFlush)
+      clearTimeout(W.pendTimer);
+      if (why === "rate") W.pendTimer = setTimeout(voiceWakeFlush, Math.max(0, VOICE_WAKE_GAP_MS - (Date.now() - W.at)) + 5);
+      return;
+    }
+    if (why) return;   // something took over while the clip was encoded
     W.endAt = r && r.endAt ? r.endAt : Date.now();
     W.inflight = true;
     W.at = Date.now();
@@ -9102,12 +9125,24 @@
       }
       if (!x.r.ok) { W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() }; return; }
       W.last = { text: String(x.j.text || ""), wake: !!x.j.wake, ms: Number(x.j.ms) || (Date.now() - t0), error: "", at: Date.now() };
-      if (x.j.wake) voiceWoke();
+      if (x.j.wake) { W.pending = null; voiceWoke(); }
+      else voiceWakeFlush();
     }).catch(function (err) {
       clearTimeout(timer);
       W.inflight = false;
       W.last = { error: err && err.name === "AbortError" ? "the server took too long" : String((err && err.message) || err), at: Date.now() };
+      voiceWakeFlush();
     });
+  }
+  // The kept word goes once the gate opens again — if it is still fresh and
+  // nothing (listening, a line said, a hidden page) shut the gate meanwhile.
+  function voiceWakeFlush() {
+    var W = voiceWake_, p = W.pending, why = voiceWakeLive();
+    if (!p || why === "inflight" || why === "rate") return;
+    W.pending = null;
+    clearTimeout(W.pendTimer);
+    if (why || Date.now() - ((p.r && p.r.endAt) || 0) > VOICE_WAKE_PENDING_MS) return;
+    voiceWakeCheck(p.blob, p.r);
   }
   // The word: listening at once, as a tap in toggle mode (a line being
   // said is cut first; the microphone is warm, so the dictation's stream

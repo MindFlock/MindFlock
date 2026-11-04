@@ -120,6 +120,11 @@ def test_the_hint():
         ("Minh Flock", "form"),
         ("Mend clock", "sound"),
         ("Mindflopping", "sound"),
+        # A "my"-like start with a flock-like vowel (wake_stream_bench: SAPI
+        # David's fast "MindFlock" decodes as "My clock." on both passes).
+        ("My clock.", "sound"),
+        ("Mai flock", "sound"),
+        ("Myclock", "sound"),
     ],
 )
 def test_ours_wakes_with_a_lead_a_repeat_or_its_sound(heard, reason):
@@ -137,6 +142,10 @@ def test_ours_wakes_with_a_lead_a_repeat_or_its_sound(heard, reason):
         "Mind the gap",
         "Mind fog.",
         "Line clock.",
+        "My flag.",  # a "my" start takes only a flock-like vowel
+        "My plan.",
+        "My phone.",
+        "My clock is slow",
         "mindflock now",  # the sound shape is the word whole, not a start
         "Hey",
         "Hey hey",
@@ -211,3 +220,26 @@ def test_the_veto_turns_down_another_word(plain):
 )
 def test_the_veto_keeps_the_word_and_a_plain_miss(plain):
     assert wake.veto(plain) == ""
+
+
+# --- how the passes decode ------------------------------------------------------
+def test_the_decode_options():
+    """A lone word on a short window, greedy, ONCE (no temperature
+    fallback), no no-speech filter, a token cap — wake_stream_bench's
+    "fast" (docs/voice-wake.md); the hint only on the hinted pass."""
+    assert wake.PAD_SECONDS == 10.0 and wake.MAX_TOKENS == 12
+    plain = wake.decode_options()
+    assert plain == {
+        "beam_size": 1,
+        "vad_filter": False,
+        "temperature": 0.0,
+        "no_speech_threshold": None,
+        "condition_on_previous_text": False,
+        "max_new_tokens": 12,
+    }
+    hinted = wake.decode_options("MindFlock")
+    assert hinted == dict(plain, initial_prompt="MindFlock")
+    # Never word timestamps (they loop the prompted decoder); a fresh dict.
+    assert "word_timestamps" not in hinted
+    hinted["beam_size"] = 5
+    assert wake.decode_options()["beam_size"] == 1
