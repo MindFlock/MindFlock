@@ -5,6 +5,7 @@
  * caller that reaches postCreate from a several-renders-old closure (page 1's
  * immediate start, after a model turn) still sees that render's form. */
 
+import { withMemoryConfirm } from "./memoryConfirm";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { Instance } from "../api/types";
 import { refreshInstances } from "../state/queries";
@@ -237,7 +238,12 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // On another device the create is answered there, and the session joins
       // this rail under its namespaced title (the server refreshes that
       // device's list before answering, so the row is already in the poll).
-      const made = await deviceApi(target)<Instance>("/api/instances", { json: body });
+      // A person's create: while memory is low the server asks first, and
+      // Start anyway resends it (lib/memoryConfirm). Cancel lands back on the
+      // form, which says why.
+      const made = await withMemoryConfirm("a new agent", (anyway) =>
+        deviceApi(target)<Instance>("/api/instances", { json: anyway ? { ...body, start_anyway: true } : body })
+      );
       const inst = { ...made, title: deviceTitle(target, made.title) };
       // The create came back 200, so the plan's folder is on disk now — and the
       // question about making it goes with it. A reopen deliberately KEEPS the

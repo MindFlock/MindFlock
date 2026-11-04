@@ -125,6 +125,9 @@ export interface SessionState {
   /** Held offline after a crash (lib/heldOffline): its remedy is Start, and
    * nothing else will bring it back. */
   held?: boolean;
+  /** Waiting for memory (lib/launchGate): it starts by itself once memory
+   * allows; its remedy is Start anyway. */
+  waiting?: boolean;
 }
 
 export interface SessionStateExtras {
@@ -261,6 +264,18 @@ function haltedState(fl: NonNullable<Instance["flight"]>): SessionState {
  * not a needs-you one — whoever paused it resumes it. */
 export const PAUSED_FLIGHT_LABEL = "Paused route";
 
+/** The rail's word for a session whose start waits for memory. */
+export const WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
+
+function waitingState(w: NonNullable<Instance["waiting_for_memory"]>): SessionState {
+  const hint =
+    "Waiting for memory" +
+    (w.reason ? " — " + w.reason : "") +
+    (w.position > 1 ? " (" + w.position + " in line)" : "") +
+    ". It starts by itself once there is room; Start anyway starts it now.";
+  return { state: "starting", label: WAITING_FOR_MEMORY_LABEL, tone: "muted", inBell: false, restartable: false, waiting: true, hint };
+}
+
 /** The rail's word for a sleeping session. */
 export const SLEEPING_LABEL = "Sleeping";
 
@@ -293,6 +308,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   // agent is paused while its folder travels; it resumes there by itself.
   if ((inst as Instance & { moving?: boolean }).moving)
     return { state: "starting", label: "Moving…", tone: "muted", inBell: false, restartable: false, hint: "Moving the session's folder — it resumes there when the move is done" };
+  if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory);
   if (inst.pending || inst.status === "loading")
     return { state: "starting", label: STATE_LABEL.starting, tone: "muted", inBell: false, restartable: false, hint: "Provisioning workspace" };
   if (inst.sleeping) return sleepingState(inst.sleeping, now);

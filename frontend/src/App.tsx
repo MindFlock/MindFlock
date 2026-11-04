@@ -37,6 +37,7 @@ import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { PeerSessionViewer } from "./components/PeerSessionViewer";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { AskDialog } from "./components/dialogs/AskDialog";
+import { MemoryConfirm } from "./components/MemoryConfirm";
 import { ChatPanel } from "./components/chat/ChatPanel";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
 import { MoveSessionDialog } from "./components/dialogs/MoveSessionDialog";
@@ -347,6 +348,8 @@ export default function App() {
       <ExtensionDialog />
       {/* A session asking you something: opens by itself (lib/ask.ts). */}
       <AskDialog />
+      {/* "Memory is low": a person's start asks first (lib/memoryConfirm). */}
+      <MemoryConfirm />
       {/* The people on a session talking (lib/chat.ts): pops up by itself. */}
       <ChatPanel />
       <CommandPalette host={host} />

@@ -9,11 +9,18 @@ import { errMsg } from "./format";
 import { toast } from "./toast";
 import { displayName } from "../state/store";
 import { forceActivity } from "./sessionState";
+import { isMemoryCancel, sleptLine, withMemoryConfirm } from "./memoryConfirm";
 
 export async function wakeSession(title: string): Promise<boolean> {
   try {
-    await instApi<{ title: string; woke: boolean }>(title, "/wake", { method: "POST" });
+    await withMemoryConfirm(
+      displayName(title),
+      (anyway) =>
+        instApi<{ title: string; woke: boolean }>(title, "/wake", anyway ? { json: { start_anyway: true } } : { method: "POST" }),
+      (a) => toast(sleptLine(a))
+    );
   } catch (e) {
+    if (isMemoryCancel(e)) return false;
     toast("Couldn't wake " + displayName(title) + " — " + errMsg(e));
     return false;
   }

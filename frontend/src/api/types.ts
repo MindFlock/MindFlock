@@ -221,6 +221,12 @@ export interface Instance {
    * it or sending it anything wakes it, resuming the conversation. Optional:
    * an older server (or a remote device on one) never sends it. */
   sleeping?: SleepInfo | null;
+  /** Waiting for memory (backend core/launch_gate.py): an automatic start of
+   * this session (an agent-spawned create, a queued prompt relaunching its
+   * agent, a mailbox wake, a revive sweep's rest) is queued until memory
+   * allows. null when nothing waits. Its Start anyway is `POST
+   * /api/launch-gate/{title}/start`. */
+  waiting_for_memory?: LaunchWait | null;
   /** Held offline (backend core/held.py): its agent DIED (a crash, the
    * server restarting, the OOM killer) and nothing starts it by itself —
    * no tmux, no agent, no memory — until a person presses Start (POST
@@ -2257,6 +2263,38 @@ export interface MindflockStatus {
   held_for_slot?: { live: number; max: number } | null;
 }
 
+/** One launch waiting in the launch gate's queue (backend
+ * core/launch_gate.py). */
+export interface LaunchWait {
+  id: string;
+  title: string;
+  /** "spawn" | "queued prompt" | "wake" | "revive" … */
+  kind: string;
+  source?: string;
+  parent?: string;
+  /** Epoch seconds it started waiting. */
+  since: number;
+  /** Why it is waiting now ("memory is low: …", "16 agents are running …"). */
+  reason: string;
+  /** 1 = next. */
+  position: number;
+  /** The launch creates the session (no row of its own until then). */
+  creates?: boolean;
+}
+
+/** What the launch gate is holding back (`gate` in `GET /api/system/memory`,
+ * and `GET /api/launch-gate`). */
+export interface LaunchGateStatus {
+  holding: boolean;
+  queued: LaunchWait[];
+  reason: string;
+  live: number | null;
+  cap: number;
+  warming: number;
+  projected_available: number | null;
+  projected_level: "ok" | "low" | "critical" | "unknown";
+}
+
 /** `GET /api/system/memory` — the machine's memory headroom
  * (backend/memory_pressure.py). While `level` is low or critical, agent-
  * spawned sessions are refused, team runs start no new lines and the revive
@@ -2272,6 +2310,8 @@ export interface MemoryReading {
   at?: number;
   /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
   message?: string;
+  /** The launch gate: what waits for memory (absent on an older server). */
+  gate?: LaunchGateStatus;
 }
 
 /** One holder or waiter of a heavy-job slot (`mindflock slot`). */

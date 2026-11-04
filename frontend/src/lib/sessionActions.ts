@@ -4,6 +4,7 @@
  * Dialog-opening actions (commit/rename/device) go through the UI store; the
  * dialog components own their submit logic. */
 
+import { isMemoryCancel, withMemoryConfirm } from "./memoryConfirm";
 import { ApiError, api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
@@ -575,7 +576,11 @@ export async function copySession(title: string) {
   const guess = addPendingSession(copyTitle(displayName(title), new Set([...titles, ...titles.map((t) => displayName(t))])));
   placeAfter(guess, title);
   try {
-    const inst = await instApi<Instance>(title, "/copy", { method: "POST" });
+    // A person's start: while memory is low the server asks first
+    // (lib/memoryConfirm), and Start anyway resends it.
+    const inst = await withMemoryConfirm(displayName(title) + "'s copy", (anyway) =>
+      instApi<Instance>(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" })
+    );
     // The server picks the real title (_copy_title), which can differ from
     // the optimistic guess — so clear that one's alias too.
     if (inst?.title) clearStaleAlias(inst.title);
@@ -590,7 +595,7 @@ export async function copySession(title: string) {
     }
   } catch (err) {
     failPendingSession(guess);
-    errorPop("Copy failed", errMsg(err));
+    if (!isMemoryCancel(err)) errorPop("Copy failed", errMsg(err));
   }
 }
 
@@ -1066,9 +1071,11 @@ export async function pauseSession(title: string) {
 export async function resumeSession(title: string) {
   if (!title) return;
   try {
-    await instApi(title, "/resume", { method: "POST" });
+    await withMemoryConfirm(displayName(title), (anyway) =>
+      instApi(title, "/resume", anyway ? { json: { start_anyway: true } } : { method: "POST" })
+    );
   } catch (err) {
-    errorPop("Resume failed", errMsg(err));
+    if (!isMemoryCancel(err)) errorPop("Resume failed", errMsg(err));
   }
   await refreshInstances();
 }

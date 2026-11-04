@@ -14,22 +14,29 @@ import { errMsg } from "./format";
 import { toast } from "./toast";
 import { displayName } from "../state/store";
 import { forceActivity } from "./sessionState";
+import { isMemoryCancel, sleptLine, withMemoryConfirm } from "./memoryConfirm";
 
 /** The server's answer to a revive. */
 export interface ReviveAnswer {
   title: string;
   revived: boolean;
   continued?: boolean;
-  /** The machine's memory is low ("" / absent when it is fine): a person's
-   * Start is never refused for it, but it is said. */
+  /** The machine's memory is low ("" / absent when it is fine). While it is,
+   * the server asks first (409 memory_confirm, lib/memoryConfirm) and this
+   * says it once the person chose Start anyway. */
   memory_warning?: string;
 }
 
 async function revive(title: string, verb: "Restart" | "Start"): Promise<ReviveAnswer | null> {
   let r: ReviveAnswer;
   try {
-    r = await instApi<ReviveAnswer>(title, "/revive", { method: "POST" });
+    r = await withMemoryConfirm(
+      displayName(title),
+      (anyway) => instApi<ReviveAnswer>(title, "/revive", anyway ? { json: { start_anyway: true } } : { method: "POST" }),
+      (a) => toast(sleptLine(a))
+    );
   } catch (e) {
+    if (isMemoryCancel(e)) return null;
     toast("Couldn't " + verb.toLowerCase() + " " + displayName(title) + " — " + errMsg(e));
     return null;
   }

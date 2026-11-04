@@ -30,6 +30,7 @@ import { AgentBlockedChip } from "../setup/AgentBlocked";
 import { useSetup } from "../setup/useSetup";
 import { reviveSession, startSession } from "../../lib/revive";
 import { wakeSession } from "../../lib/wake";
+import { startWaiting } from "../../lib/launchGate";
 import { backgroundChip, backgroundJobs } from "../../lib/backgroundJobs";
 import { expectBackgroundJob, stopBackgroundJob } from "../../lib/stopBackgroundJob";
 import { EXPECT_PRESETS, expectOf, formatSpan, parseDuration } from "../../lib/jobExpectation";
@@ -797,7 +798,23 @@ export const SidebarRow = memo(function SidebarRow({
               </span>
             )}
           </span>
-          {lchip ? (
+          {ss.waiting && !inst.device ? (
+            // Waiting for memory (lib/launchGate): it starts by itself once
+            // there is room; the chip's remedy is Start anyway.
+            <button
+              type="button"
+              className={"stagechip chip-restart chip-waitmem " + chip.cls}
+              title={chip.title}
+              aria-label={"Waiting for memory — start it anyway"}
+              onClick={(e) => act(() => void startWaiting(title), e)}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              {chip.label}
+              <span className="chip-act" aria-hidden="true">
+                Start anyway
+              </span>
+            </button>
+          ) : lchip ? (
             <button
               type="button"
               className="stagechip wrapchip leadchip"

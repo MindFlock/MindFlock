@@ -3,8 +3,9 @@
  * can start agents faster than the machine holds them; once RAM runs out the
  * box swaps and the OOM killer takes agents down mid-turn. This says so
  * BEFORE that happens, and says what MindFlock is already doing about it:
- * agent-spawned sessions are refused, team runs start no new lines and the
- * revive sweep waits — a person's own New and Restart still go through.
+ * automatic starts wait in the launch gate's queue (backend
+ * core/launch_gate.py), team runs start no new lines, and a person's own
+ * New / Start asks first (lib/memoryConfirm).
  *
  * While the card is up it also says what `mindflock slot` is holding back
  * (GET /api/system/slots): heavy commands — test suites, builds — queued for
@@ -81,8 +82,9 @@ export function MemoryNotice() {
       <div className="mn-detail">{memoryDetail(data)}</div>
       {heavy && <div className="mn-detail mn-slots">{heavy}</div>}
       <div className="mn-detail mn-what">
-        MindFlock is holding new agent-spawned sessions, team-run lines and auto-restarts until it
-        recovers. Closing idle sessions frees memory fastest
+        Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait
+        until it recovers, one at a time; a start of yours asks first. Putting idle agents to sleep or
+        closing sessions frees memory fastest
         {critical ? " — the system may start killing agents soon." : "."}
       </div>
       <div className="mn-foot">

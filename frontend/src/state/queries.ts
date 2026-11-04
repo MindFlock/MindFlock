@@ -282,7 +282,9 @@ export function useMemory() {
   return useQuery({
     queryKey: ["system-memory"],
     queryFn: () => api<MemoryReading>("/api/system/memory"),
-    refetchInterval: 15_000,
+    // Faster while the launch gate holds starts back, so the rail's
+    // "new agents wait" line clears soon after the queue drains.
+    refetchInterval: (q) => (q.state.data?.gate?.holding ? 5_000 : 15_000),
     retry: false,
   });
 }

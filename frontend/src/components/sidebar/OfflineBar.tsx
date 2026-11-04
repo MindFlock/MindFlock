@@ -17,6 +17,7 @@
  * held (a later crash); the plain bar comes back underneath when two or more
  * are still offline. */
 
+import { isMemoryCancel, sleptLine, withMemoryConfirm } from "../../lib/memoryConfirm";
 import { useState } from "react";
 import { api } from "../../api/client";
 import { refreshInstances, useInstances, useMemory } from "../../state/queries";
@@ -30,6 +31,9 @@ interface SweepResult {
   revived?: string[];
   continued?: string[];
   skipped?: Record<string, string>;
+  /** Handed to the launch gate's queue (backend core/launch_gate): they
+   * start by themselves once memory allows. */
+  waiting?: string[];
   summary?: string;
 }
 
@@ -41,9 +45,12 @@ export function sweepToast(r: SweepResult, offline: string[]): string {
   const continued = r.continued?.length || 0;
   const skipped = r.skipped || {};
   const mine = offline.filter((t) => skipped[t] !== undefined);
-  const memory = mine.filter((t) => skipped[t] === "low memory").length;
+  const queued = new Set(r.waiting || []);
+  const memory = mine.filter((t) => skipped[t] === "low memory" && !queued.has(t)).length;
+  const waits = mine.filter((t) => queued.has(t)).length;
   let line = revived ? "Started " + revived + (revived === 1 ? " agent" : " agents") : "No agents started";
   if (continued) line += " — " + continued + " told to continue where " + (continued === 1 ? "it" : "they") + " left off";
+  if (waits) line += "; " + waits + " waiting for memory — " + (waits === 1 ? "it starts" : "they start") + (waits === 1 ? " by itself" : " by themselves") + " once there is room";
   if (memory) line += "; " + memory + " not started: memory is low";
   const other = mine.filter((t) => skipped[t] !== "low memory");
   if (other.length) {
@@ -105,13 +112,22 @@ export function OfflineBar() {
     if (busy) return;
     setBusy(true);
     try {
-      const r = await api<SweepResult>("/api/server/revive-all", {
-        method: "POST",
-        json: { titles },
-      });
+      // A person's Start all: while memory is low the server asks first
+      // (lib/memoryConfirm). Either way it paces the starts itself, and what
+      // it can't start yet waits for memory.
+      const r = await withMemoryConfirm(
+        titles.length + " offline agent" + (titles.length === 1 ? "" : "s"),
+        (anyway) =>
+          api<SweepResult>("/api/server/revive-all", {
+            method: "POST",
+            json: anyway ? { titles, start_anyway: true } : { titles },
+          }),
+        (a) => toast(sleptLine(a))
+      );
       for (const t of r.revived || []) forceActivity(t, "idle");
       toast(sweepToast(r, titles));
     } catch (e) {
+      if (isMemoryCancel(e)) return;
       toast("Couldn't start the offline agents — " + errMsg(e));
     } finally {
       setBusy(false);
@@ -126,7 +142,7 @@ export function OfflineBar() {
       title={
         "Start every offline agent, two at a time, resuming its conversation; " +
         "an agent that died mid-task is told to continue where it left off." +
-        (low ? " Memory is low: starts wait for headroom, and the rest stay offline if none comes." : "")
+        (low ? " Memory is low: it asks first, and starts that can't fit yet wait for memory." : "")
       }
       onClick={() => void run()}
     >
