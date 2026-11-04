@@ -249,3 +249,96 @@ def test_gate_auto_marks_a_queued_create(monkeypatch):
     _memory(monkeypatch, level="low", available=3 * GiB)
     rec = gate.gate_auto("w1", lambda: None, kind="spawn", creates=True)
     assert rec["creates"] is True and gate.waiting("w1")["creates"] is True
+
+
+def test_room_counts_memory_warming_and_the_cap(monkeypatch):
+    # 10 GB free of 20, the low line at 3 GB (15%): 7 GB of room = 10 agents
+    # of 700 MB; 2 warming take ~1.4 GB of it.
+    _memory(monkeypatch, available=10 * GiB)
+    assert gate.room() == 10
+    _agents(2, created=time.time() - 5)
+    assert gate.room() == 8
+    monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "4")
+    assert gate.room() == 2
+    _memory(monkeypatch, level="low", available=3 * GiB)
+    assert gate.room() == 0
+    monkeypatch.setattr(
+        memory_pressure, "snapshot", lambda fresh=False: {"level": "unknown"}
+    )
+    monkeypatch.delenv("MINDFLOCK_MAX_LIVE_AGENTS")
+    assert gate.room() is None
+
+
+def test_the_cap_and_warmup_are_settings_the_env_beats(monkeypatch):
+    _memory(monkeypatch)
+    vals = {"max_live_agents": 5, "agent_warmup_mb": 500}
+    monkeypatch.setattr(gate, "_setting", lambda name: vals.get(name))
+    assert gate.assess()["cap"] == 5
+    assert gate.warmup_bytes() == 500 * 1024**2
+    vals["max_live_agents"] = 0
+    assert gate.assess()["cap"] == 0
+    monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "9")
+    monkeypatch.setenv("MINDFLOCK_AGENT_WARMUP_MB", "800")
+    assert gate.assess()["cap"] == 9 and gate.warmup_bytes() == 800 * 1024**2
+
+
+def test_the_settings_fields_round_trip(tmp_path, monkeypatch):
+    from backend.config import settings as S
+
+    monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "s.json"))
+    S.update_settings(general={"max_live_agents": 12, "agent_warmup_mb": 650})
+    g = S.load_settings().general
+    assert (g.max_live_agents, g.agent_warmup_mb) == (12, 650)
+    gate._SETTINGS_CACHE.update({"at": -1e18})
+    assert gate._setting("max_live_agents") == 12
+    S.update_settings(general={"max_live_agents": -3})
+    assert S.load_settings().general.max_live_agents is None
+    from backend.web.core import settings_sync
+
+    # Sized to THIS machine's RAM: never synced to the person's other devices.
+    assert {"max_live_agents", "agent_warmup_mb"} <= set(settings_sync.LOCAL["general"])
+    assert "max_live_agents" not in settings_sync.SYNCED.get("general", ())
+
+
+def test_the_queue_survives_a_restart(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setenv("MINDFLOCK_LAUNCH_QUEUE_FILE", str(tmp_path / "q.json"))
+    _memory(monkeypatch, level="low", available=3 * GiB)
+    monkeypatch.setattr(gate, "PERSIST", True)
+    ran = []
+    monkeypatch.setitem(
+        gate._FACTORIES, "test-kind", lambda rec: (lambda: ran.append(rec["args"]["n"]))
+    )
+    gate.enqueue("a", lambda: None, kind="test-kind", args={"n": 1}, parent="orch")
+    gate.enqueue("b", lambda: None, kind="test-kind", args={"n": 2})
+    gate.enqueue("c", lambda: None, kind="test-kind")  # no args: not saved
+    gate.enqueue("d", lambda: None, kind="nobody-restores-me", args={})
+    doc = json.loads((tmp_path / "q.json").read_text())
+    assert [i["title"] for i in doc["items"]] == ["a", "b", "d"]
+    # The server stops; the next one boots.
+    since = gate.waiting("a")["since"]
+    gate._reset_for_tests()
+    assert gate.items() == []
+    assert gate.restore() == 2
+    assert [i["title"] for i in gate.items()] == ["a", "b"]
+    assert gate.waiting("a")["since"] == since and gate.waiting("a")["parent"] == "orch"
+    _memory(monkeypatch)
+    assert gate.drain_once() == "a" and ran == [1]
+    # Each change rewrites the file.
+    doc = json.loads((tmp_path / "q.json").read_text())
+    assert [i["title"] for i in doc["items"]] == ["b"]
+    gate.cancel("b")
+    assert json.loads((tmp_path / "q.json").read_text())["items"] == []
+
+
+def test_decide_names_what_holds_it(monkeypatch):
+    _memory(monkeypatch, level="low", available=3 * GiB)
+    assert gate.decide("auto")["why"] == "memory"
+    _memory(monkeypatch, available=4 * GiB)
+    _agents(4, created=time.time() - 5)
+    assert gate.decide("auto", fresh=True)["why"] == "warming"
+    _agents(0)
+    monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "1")
+    gate.note_start("x")
+    assert gate.decide("auto", fresh=True)["why"] == "cap"

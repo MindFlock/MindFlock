@@ -73,6 +73,7 @@ __all__ = [
     "enqueue",
     "gate_auto",
     "admit_auto",
+    "room",
     "register_kind",
     "restore",
     "waiting",
@@ -399,6 +400,31 @@ def decide(
             reason="the last agent started %ds ago; automatic starts are %ds apart"
             % (int(now - last), int(spacing)),
         )
+    return out
+
+
+def room(now: Optional[float] = None) -> Optional[int]:
+    """How many more agents automatic starts may begin now before memory
+    would read low once they (and the agents still warming) have grown, or
+    the live cap is reached. None = no limit known (memory unknown, no cap).
+    For a caller that starts several at once (a team run's pass). Never
+    raises."""
+    a = assess(now=now)
+    snap = a["memory"]
+    out: Optional[int] = None
+    total = float(snap.get("total") or 0)
+    if total and snap.get("level") in ("ok", "low", "critical"):
+        if a["level"] in ("low", "critical"):
+            return 0
+        th = memory_pressure.thresholds()["low"]
+        line = max(th[0] * total, float(th[1]))
+        projected = float(a["projected_available"] or 0)
+        wb = a["warmup_bytes"] or 1
+        out = max(0, int((projected - line) // wb))
+    cap, live = a["cap"], a["live"]
+    if cap and live is not None:
+        left = max(0, cap - live)
+        out = left if out is None else min(out, left)
     return out
 
 

@@ -272,3 +272,52 @@ def test_a_client_without_the_dialog_reads_a_plain_sentence(monkeypatch):
     body = gate.person_refusal(gate.decide("person"))
     assert body["error"].startswith("Memory is low: 3.0 GB free.")
     assert "start_anyway: true" in body["error"]
+
+
+def test_a_scheduled_fire_asks_the_gate_and_run_now_does_not(monkeypatch):
+    import asyncio
+
+    from backend.web.core import session_create, template_schedule as ts
+
+    seen = []
+
+    async def fake(payload, **kw):
+        seen.append(kw.get("auto", ""))
+        return 202, {"title": payload["title"]}
+
+    monkeypatch.setattr(session_create, "create_result", fake)
+
+    async def go(trigger):
+        ts._TRIGGER.set(trigger)
+        return await ts._default_create({"title": "t"})
+
+    asyncio.run(go("schedule"))
+    asyncio.run(go("manual"))
+    assert seen == ["schedule", ""]
+
+
+def test_a_spoken_new_session_says_why_it_did_not_start(monkeypatch):
+    from backend.web.routes import voice
+
+    _memory(monkeypatch, "low", available=int(3.1 * GiB))
+    line = voice._memory_refusal_line()
+    assert line.startswith("Memory is low, 3.1 GB free, so I didn't start it.")
+    _memory(monkeypatch, "critical", available=1 * GiB)
+    assert voice._memory_refusal_line().startswith("Memory is critically low")
+    _memory(monkeypatch, "ok", available=12 * GiB)
+    assert voice._memory_refusal_line() == ""
+
+
+def test_a_team_run_holds_on_warming_and_the_cap_not_spacing(monkeypatch):
+    from backend.web.core import team_run_driver as trd
+
+    _memory(monkeypatch, "ok", available=12 * GiB)
+    assert trd._gate_holds() is False
+    monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "1")
+    gate.note_start("a1")
+    assert trd._gate_holds() is True and trd._gate_room() == 0
+    monkeypatch.delenv("MINDFLOCK_MAX_LIVE_AGENTS")
+    gate._reset_for_tests()
+    monkeypatch.setenv("MINDFLOCK_AUTO_LAUNCH_SPACING", "600")
+    gate.note_start("a2", auto=True)  # spacing alone never holds a run
+    assert trd._gate_holds() is False

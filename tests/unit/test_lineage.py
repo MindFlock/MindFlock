@@ -856,6 +856,46 @@ def test_low_memory_queues_an_agents_spawn(create, monkeypatch):
     assert launch_gate.waiting("w1") is None
 
 
+@pytest.mark.parametrize("auto", ["flight", "schedule"])
+def test_a_flight_or_scheduled_create_waits_like_a_spawn(
+    create, monkeypatch, tmp_path, auto
+):
+    """A flight step's or a schedule's new session is an automatic start:
+    queued (a pending row the flight reads as provisioning), created once
+    memory allows, with no second memory check refusing it then."""
+    import asyncio
+
+    from backend.web.core import launch_gate, pending
+
+    _memory(monkeypatch, "low")
+    payload = {"title": "f1", "program": "bash", "repo_path": str(tmp_path)}
+    status, body = asyncio.run(server._session_create.create_result(payload, auto=auto))
+    try:
+        assert status == 202 and body["queued"] is True and body["title"] == "f1"
+        assert pending.has("f1") and launch_gate.waiting("f1")["kind"] == auto
+        assert create.captured == []
+        _memory(monkeypatch, "ok")
+        assert launch_gate.drain_once() == "f1"
+        assert [o.title for o in create.captured] == ["f1"]
+        assert not pending.has("f1")
+    finally:
+        pending.drop("f1")
+
+
+def test_start_anyway_on_a_queued_spawn_is_not_refused_again(create, monkeypatch):
+    """Memory still low: Start anyway is the person's override, and the
+    create's own memory check no longer refuses it."""
+    from backend.web.core import launch_gate
+
+    _memory(monkeypatch, "low")
+    create.reg.add("orch")
+    assert create.post(title="w5", parent="orch", spawned=True).json()["queued"]
+    r = client.post("/api/launch-gate/w5/start")
+    assert r.json() == {"title": "w5", "started": True, "error": ""}
+    assert [o.title for o in create.captured] == ["w5"]
+    assert launch_gate.items() == []
+
+
 def test_a_queued_spawn_is_listed_until_cancelled(create, monkeypatch):
     """While it waits the worker is a pending placeholder row marked
     waiting_for_memory; cancelling it drops the row and creates nothing."""
