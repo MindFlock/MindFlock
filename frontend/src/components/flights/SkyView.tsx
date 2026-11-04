@@ -277,6 +277,7 @@ import { QuickAdd } from "./QuickAdd";
 import { PlacePicker } from "./PlacePicker";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
+import { cardCamera } from "../../lib/skyCamera";
 import { useAutoTour, useTourOnFirstSight } from "../onboarding/useAutoTour";
 import { behaviorsOnARoute } from "../../lib/behaviors";
 import { SkyEmpty } from "../onboarding/SkyEmpty";
@@ -1003,11 +1004,15 @@ export function SkyView() {
   }, [focusLine, rectOf, vp.w, vp.h]);
 
   /** Enter opened a line's box on its terminal (round 21): once the card is
-   * drawn, the camera glides so the card — and the route's head just above
-   * it — is in view (zoomed out only as far as it needs, never in). The
-   * route fit stands down for it: the owner asked to see the box. */
+   * drawn, the camera glides to it, centred, at no less than 100 % (round
+   * 21b: at the route's own fit its tabs were 8 px) — closer only if it was
+   * closer already. The route fit stands down for it: the owner asked to
+   * see the box. The camera it left is kept: Esc closing the box goes back
+   * to it (This session re-fits the route instead). */
+  const beforeEnter = useRef<{ id: string; cam: SkyCamera } | null>(null);
   const revealOpened = (id: string) => {
     autoFit.current = false;
+    beforeEnter.current = { id, cam: camRef.current };
     let tries = 0;
     const look = () => {
       if (!alive.current) return;
@@ -1023,12 +1028,21 @@ export function SkyView() {
       }
       const v = root.getBoundingClientRect();
       const c = card.getBoundingClientRect();
-      const top = Math.min(c.top, (slot as Element).getBoundingClientRect().top);
-      const r = { x: c.left - v.left, y: top - v.top, w: c.width, h: c.bottom - top };
-      if (r.x >= 0 && r.y >= 0 && r.x + r.w <= v.width && r.y + r.h <= v.height) return;
-      goToRef.current(revealCamera(camRef.current, r, v.width, v.height, 0.92));
+      if (!c.width || !c.height) return;
+      goToRef.current(cardCamera(camRef.current, { x: c.left - v.left, y: c.top - v.top, w: c.width, h: c.height }, v.width, v.height));
     };
     setTimeout(look, 30);
+  };
+  /** Esc closed the box Enter opened: back to the view before it — This
+   * session's route fit, else the camera Enter left. */
+  const restoreAfterEnter = (id: string) => {
+    const was = beforeEnter.current;
+    beforeEnter.current = null;
+    if (!was || was.id !== id) return;
+    // This session: the route fit re-arms — the box closing changes the
+    // route's size, and the fit effect glides to the closed route.
+    if (mode === "one") autoFit.current = true;
+    else goTo(was.cam);
   };
 
   // A line that leaves is gone at once (the owner: deletes must disappear
@@ -2291,9 +2305,11 @@ export function SkyView() {
       const id = focusLine || oneLine;
       onLayout(id, { open: true });
       revealOpened(id);
-    } else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
+    } else if (k === "Escape" && (focusLine || oneLine) && layout[focusLine || oneLine]?.open) {
       handled();
-      onLayout(focusLine, { open: false });
+      const id = focusLine || oneLine;
+      onLayout(id, { open: false });
+      restoreAfterEnter(id);
     } else if (k === "Escape" && catalogOpen && paletteOn) {
       // Opened by "All blocks…", nothing else to close: back to the shelf.
       handled();

@@ -7,6 +7,7 @@ import { code, css, cssRule } from "./sourceText";
 
 import { boundsOf, fitCamera, firstFit, type Rect } from "../lib/skyLayout";
 import { OffscreenHints, edgeChips, type MinimapRect } from "../components/flights/Minimap";
+import { CARD_PAD, cardCamera } from "../lib/skyCamera";
 
 const sky = code("components/flights/SkyView.tsx");
 
@@ -108,5 +109,35 @@ describe("finding 2: the edge chips stack in a gutter inside the visible sky", (
     expect(cssRule(text, ".sky-offscreen .sky-offscreen-chip")).toMatch(/position:\s*relative/);
     expect(text).not.toMatch(/sky-offscreen-chip\.edge-(left|right|top|bottom)\s*\{[^}]*transform/);
     expect(cssRule(text, ".sky-offscreen .sky-offscreen-chip.is-needs")).toMatch(/z-index:\s*1/);
+  });
+});
+
+describe("finding 6 (brief 3): Enter zooms to at least 100 % centred on the open card; Esc goes back", () => {
+  it("from the route's 75 % fit: 100 %, the card's centre at the window's centre", () => {
+    const c = { x: 60, y: 300, z: 0.75 };
+    // The judge's card: 541 × 368 at 75 % (viewport px).
+    const r = { x: 60, y: 331, w: 541, h: 368 };
+    const to = cardCamera(c, r, 1143, 780);
+    expect(to.z).toBe(1);
+    // The card's plane centre lands on the window's centre.
+    const px = (r.x + r.w / 2 - c.x) / c.z;
+    const py = (r.y + r.h / 2 - c.y) / c.z;
+    expect(px * to.z + to.x).toBeCloseTo(1143 / 2, 6);
+    expect(py * to.z + to.y).toBeCloseTo(780 / 2, 6);
+  });
+
+  it("already closer than 100 %: the zoom stays; a card bigger than the window starts top-left, CARD_PAD in", () => {
+    expect(cardCamera({ x: 0, y: 0, z: 1.4 }, { x: 100, y: 100, w: 400, h: 300 }, 1143, 780).z).toBe(1.4);
+    const big = cardCamera({ x: 0, y: 0, z: 0.5 }, { x: 200, y: 100, w: 700, h: 500 }, 1143, 780);
+    expect(big.z).toBe(1);
+    expect((200 / 0.5) * big.z + big.x).toBeCloseTo(CARD_PAD, 6);
+    expect((100 / 0.5) * big.z + big.y).toBeCloseTo(CARD_PAD, 6);
+  });
+
+  it("the sky wires it: Enter keeps the camera it leaves and glides by cardCamera; Esc (focused or This session) closes and restores", () => {
+    expect(sky).toMatch(/beforeEnter\.current = \{ id, cam: camRef\.current \};/);
+    expect(sky).toContain("goToRef.current(cardCamera(camRef.current, { x: c.left - v.left, y: c.top - v.top, w: c.width, h: c.height }, v.width, v.height));");
+    expect(sky).toMatch(/k === "Escape" && \(focusLine \|\| oneLine\) && layout\[focusLine \|\| oneLine\]\?\.open\) \{\s*handled\(\);\s*const id = focusLine \|\| oneLine;\s*onLayout\(id, \{ open: false \}\);\s*restoreAfterEnter\(id\);/);
+    expect(sky).toMatch(/if \(mode === "one"\) autoFit\.current = true;\s*else goTo\(was\.cam\);/);
   });
 });
