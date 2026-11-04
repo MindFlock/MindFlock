@@ -11059,6 +11059,54 @@ details.fl-group-waiting > summary {
   flex-direction: column;
   gap: 10px;
 }
+/* The "Memory is low" confirm (components/MemoryConfirm.tsx). */
+#memory-confirm .mc-card {
+  width: 440px;
+  max-width: calc(100vw - 32px);
+  padding: 16px 18px 14px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--yellow, #d6a53c);
+  border-radius: 10px;
+}
+
+#memory-confirm .mc-card.critical {
+  border-left-color: var(--red);
+}
+
+#memory-confirm h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+#memory-confirm .mc-message {
+  margin: 0 0 6px;
+  line-height: 1.45;
+}
+
+#memory-confirm .mc-what {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+#memory-confirm .modal-actions {
+  flex-wrap: wrap;
+}
+
+#memory-confirm .mc-start {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#memory-confirm .mc-danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
 /* The session chat's floating windows (ChatPanel.tsx). Above the grid and
    the sidebar, under the folder picker (900) and every notice/toast. */
 .chat-dock {
@@ -20257,6 +20305,18 @@ p.set-hint {
   display: inline;
 }
 
+/* Waiting for memory (backend core/launch_gate.py) is calm too: it starts
+   by itself, so "Start anyway" shows only on hover / keyboard focus. */
+.inst .stagechip.chip-waitmem .chip-act {
+  display: none;
+  margin-left: 4px;
+}
+
+.inst .stagechip.chip-waitmem:hover .chip-act,
+.inst .stagechip.chip-waitmem:focus-visible .chip-act {
+  display: inline;
+}
+
 /* The session's actions (⋮), at the row's right end beside the ✕. Quiet
    until it's wanted: drawn on hover, on keyboard focus anywhere in the row,
    on the selected row and while its menu is open. Hidden by opacity, never
@@ -22977,6 +23037,42 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 #offline-bar .ob-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* --- "Memory low — new agents wait" (MemoryWaitBar): calm, like the
+   offline bar; it clears by itself once the queue drains. --- */
+#memory-wait-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 10px;
+  margin: 0 0 2px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+
+#memory-wait-bar .mw-text {
+  flex: 1 1 160px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+#memory-wait-bar .ob-btn {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+#memory-wait-bar .ob-btn:hover {
+  border-color: var(--accent);
 }
 }
 

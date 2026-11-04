@@ -24727,7 +24727,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$8 = /* @__PURE__ */ new Set();
+var listeners$9 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24751,7 +24751,7 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$8) l();
+	for (const l of listeners$9) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
@@ -25337,6 +25337,18 @@ function haltedState(fl) {
 	};
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
+var WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
+function waitingState(w) {
+	return {
+		state: "starting",
+		label: WAITING_FOR_MEMORY_LABEL,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		waiting: true,
+		hint: "Waiting for memory" + (w.reason ? " — " + w.reason : "") + (w.position > 1 ? " (" + w.position + " in line)" : "") + ". It starts by itself once there is room; Start anyway starts it now."
+	};
+}
 var SLEEPING_LABEL = "Sleeping";
 function sleepingState(info, now) {
 	const since = Number(info.since) || 0;
@@ -25381,6 +25393,7 @@ function deriveSessionState(inst, extras) {
 		restartable: false,
 		hint: "Moving the session's folder — it resumes there when the move is done"
 	};
+	if (inst.waiting_for_memory) return waitingState(inst.waiting_for_memory);
 	if (inst.pending || inst.status === "loading") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -26729,7 +26742,7 @@ var DEBOUNCE_MS = 500;
 var RETRY_MIN_MS = 5e3;
 var RETRY_MAX_MS$1 = 12e4;
 var DIRTY_KEY = "mf_prefs_dirty";
-var pending$3 = /* @__PURE__ */ new Set();
+var pending$4 = /* @__PURE__ */ new Set();
 var gen = /* @__PURE__ */ new Map();
 var timer = null;
 var retryMs = 0;
@@ -26817,7 +26830,7 @@ function settleFields(fields, sentGen = null, kv = storage$3()) {
 	let changed = false;
 	for (const f of fields) {
 		if (sentGen && (gen.get(f) || 0) !== (sentGen.get(f) || 0)) continue;
-		if (pending$3.has(f)) continue;
+		if (pending$4.has(f)) continue;
 		if (d.delete(f)) changed = true;
 	}
 	if (changed) saveDirty(d, kv);
@@ -26837,13 +26850,13 @@ function withoutEcho(fn) {
 }
 function pendingFields(kv = storage$3()) {
 	const out = dirtyFields(kv);
-	for (const f of pending$3) out.add(f);
+	for (const f of pending$4) out.add(f);
 	return out;
 }
 function notePrefWrite(lsKey, kv = storage$3()) {
 	const field = prefFieldFor(lsKey);
 	if (!field || suspended) return;
-	pending$3.add(field);
+	pending$4.add(field);
 	gen.set(field, (gen.get(field) || 0) + 1);
 	markDirty(field, kv);
 	retryMs = 0;
@@ -26865,8 +26878,8 @@ function bodyFor(fields, kv) {
 async function flushPrefWrites(kv = storage$3()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
-	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
-	pending$3.clear();
+	const fields = /* @__PURE__ */ new Set([...pending$4, ...dirtyFields(kv)]);
+	pending$4.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
 	let res;
@@ -26898,8 +26911,8 @@ function settleExcept(fields, refused, sentGen, kv, resOrErr) {
 function flushPrefsOnHide(kv = storage$3()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
-	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
-	pending$3.clear();
+	const fields = /* @__PURE__ */ new Set([...pending$4, ...dirtyFields(kv)]);
+	pending$4.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
 	beacon(bodyFor(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
@@ -27999,7 +28012,7 @@ function useMemory() {
 	return useQuery({
 		queryKey: ["system-memory"],
 		queryFn: () => api("/api/system/memory"),
-		refetchInterval: 15e3,
+		refetchInterval: (q) => q.state.data?.gate?.holding ? 5e3 : 15e3,
 		retry: false
 	});
 }
@@ -30259,6 +30272,88 @@ function IdleFlockRow() {
 	});
 }
 //#endregion
+//#region src/lib/memoryConfirm.ts
+function memoryConfirmOf(e) {
+	const err = e;
+	if (!err || typeof err !== "object" || err.status !== 409) return null;
+	const b = err.body;
+	if (!b || typeof b !== "object" || b.memory_confirm !== true) return null;
+	return {
+		memory_confirm: true,
+		level: b.level === "critical" ? "critical" : "low",
+		message: typeof b.message === "string" && b.message ? b.message : "Memory is low.",
+		error: b.error,
+		free: b.free,
+		total: b.total,
+		warming: b.warming,
+		live: b.live
+	};
+}
+var pending$3 = null;
+var listeners$8 = /* @__PURE__ */ new Set();
+function emit$1() {
+	for (const l of listeners$8) l();
+}
+function subscribeMemoryConfirm(fn) {
+	listeners$8.add(fn);
+	return () => listeners$8.delete(fn);
+}
+function currentMemoryConfirm() {
+	return pending$3;
+}
+function askMemoryConfirm(body, what, canSleep = true) {
+	return new Promise((resolve) => {
+		if (pending$3) pending$3.resolve("cancel");
+		const me = {
+			body,
+			what,
+			canSleep,
+			resolve(choice) {
+				if (pending$3 === me) {
+					pending$3 = null;
+					emit$1();
+				}
+				resolve(choice);
+			}
+		};
+		pending$3 = me;
+		emit$1();
+	});
+}
+var memoryConfirmDeps = {
+	ask: askMemoryConfirm,
+	sleepIdle: () => api("/api/server/sleep-idle", { json: {} })
+};
+var MemoryCancelled = class extends Error {
+	constructor() {
+		super("Not started: memory is low");
+	}
+};
+function isMemoryCancel(e) {
+	return e instanceof MemoryCancelled;
+}
+async function withMemoryConfirm(what, send, onSlept) {
+	let slept = false;
+	for (;;) try {
+		return await send(false);
+	} catch (e) {
+		const body = memoryConfirmOf(e);
+		if (!body) throw e;
+		const choice = await memoryConfirmDeps.ask(body, what, !slept);
+		if (choice === "start") return await send(true);
+		if (choice === "cancel" || slept) throw new MemoryCancelled();
+		slept = true;
+		const a = await memoryConfirmDeps.sleepIdle();
+		onSlept?.(a);
+	}
+}
+function sleptLine(a) {
+	const n = a.slept.length;
+	if (!n) return "No agent was idle and unwatched, so none was put to sleep.";
+	const freed = a.freed_mb >= 1024 ? (a.freed_mb / 1024).toFixed(1) + " GB" : a.freed_mb + " MB";
+	return "Put " + n + " idle agent" + (n === 1 ? "" : "s") + " to sleep (freed ~" + freed + ").";
+}
+//#endregion
 //#region src/components/grid/layout.ts
 var MAX_VISIBLE = 9;
 var DROP_PH = "\0drop";
@@ -32133,7 +32228,7 @@ async function copySession(title) {
 	const guess = addPendingSession(copyTitle(displayName(title), /* @__PURE__ */ new Set([...titles, ...titles.map((t) => displayName(t))])));
 	placeAfter(guess, title);
 	try {
-		const inst = await instApi(title, "/copy", { method: "POST" });
+		const inst = await withMemoryConfirm(displayName(title) + "'s copy", (anyway) => instApi(title, "/copy", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
 		if (inst?.title) clearStaleAlias(inst.title);
 		landPendingSession(guess, inst);
 		await refreshInstances();
@@ -32144,7 +32239,7 @@ async function copySession(title) {
 		}
 	} catch (err) {
 		failPendingSession(guess);
-		errorPop("Copy failed", errMsg(err));
+		if (!isMemoryCancel(err)) errorPop("Copy failed", errMsg(err));
 	}
 }
 async function branchSession(title) {
@@ -32428,9 +32523,9 @@ async function pauseSession(title) {
 async function resumeSession(title) {
 	if (!title) return;
 	try {
-		await instApi(title, "/resume", { method: "POST" });
+		await withMemoryConfirm(displayName(title), (anyway) => instApi(title, "/resume", anyway ? { json: { start_anyway: true } } : { method: "POST" }));
 	} catch (err) {
-		errorPop("Resume failed", errMsg(err));
+		if (!isMemoryCancel(err)) errorPop("Resume failed", errMsg(err));
 	}
 	await refreshInstances();
 }
@@ -49895,8 +49990,9 @@ function pushFailedNote(session, data) {
 async function revive(title, verb) {
 	let r;
 	try {
-		r = await instApi(title, "/revive", { method: "POST" });
+		r = await withMemoryConfirm(displayName(title), (anyway) => instApi(title, "/revive", anyway ? { json: { start_anyway: true } } : { method: "POST" }), (a) => toast(sleptLine(a)));
 	} catch (e) {
+		if (isMemoryCancel(e)) return null;
 		toast("Couldn't " + verb.toLowerCase() + " " + displayName(title) + " — " + errMsg(e));
 		return null;
 	}
@@ -53213,7 +53309,7 @@ function MemoryNotice() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-detail mn-what",
-				children: ["MindFlock is holding new agent-spawned sessions, team-run lines and auto-restarts until it recovers. Closing idle sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
+				children: ["Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait until it recovers, one at a time; a start of yours asks first. Putting idle agents to sleep or closing sessions frees memory fastest", critical ? " — the system may start killing agents soon." : "."]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-foot",
@@ -53280,6 +53376,57 @@ function StateNotice() {
 				})
 			})
 		]
+	});
+}
+//#endregion
+//#region src/lib/launchGate.ts
+function gatePath(title, act) {
+	return "/api/launch-gate/" + encodeURIComponent(title) + "/" + act;
+}
+async function startWaiting(title) {
+	try {
+		const r = await api(gatePath(title, "start"), { method: "POST" });
+		if (!r.started) {
+			toast("Couldn't start " + displayName(title) + " — " + (r.error || "it failed to start"));
+			return false;
+		}
+		toast("Starting " + displayName(title) + " now…");
+		return true;
+	} catch (e) {
+		toast("Couldn't start " + displayName(title) + " — " + errMsg(e));
+		return false;
+	} finally {
+		refreshInstances();
+	}
+}
+function holdingLine(g) {
+	if (!g || !g.holding || !g.queued.length) return "";
+	const n = g.queued.length;
+	return (/automatic starts stop at/.test(g.reason || "") ? "Agent limit reached" : "Memory low") + " — new agents wait (" + n + " waiting)";
+}
+//#endregion
+//#region src/components/sidebar/MemoryWaitBar.tsx
+function MemoryWaitBar() {
+	const { data } = useMemory();
+	const g = data?.gate;
+	const line = holdingLine(g);
+	if (!g || !line) return null;
+	const next = g.queued[0];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "memory-wait-bar",
+		role: "status",
+		"aria-label": "Agents waiting for memory",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "mw-text",
+			title: (g.reason || "") + " — they start one at a time once there is room",
+			children: line
+		}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "ob-btn",
+			title: "Start " + next.title + " now, past the memory gate",
+			onClick: () => void startWaiting(next.title),
+			children: "Start next anyway"
+		})]
 	});
 }
 //#endregion
@@ -55389,8 +55536,9 @@ function Banner({ block, title }) {
 //#region src/lib/wake.ts
 async function wakeSession(title) {
 	try {
-		await instApi(title, "/wake", { method: "POST" });
+		await withMemoryConfirm(displayName(title), (anyway) => instApi(title, "/wake", anyway ? { json: { start_anyway: true } } : { method: "POST" }), (a) => toast(sleptLine(a)));
 	} catch (e) {
+		if (isMemoryCancel(e)) return false;
 		toast("Couldn't wake " + displayName(title) + " — " + errMsg(e));
 		return false;
 	}
@@ -57413,7 +57561,19 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							})
 						]
 					}),
-					lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					ss.waiting && !inst.device ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "stagechip chip-restart chip-waitmem " + chip.cls,
+						title: chip.title,
+						"aria-label": "Waiting for memory — start it anyway",
+						onClick: (e) => act(() => void startWaiting(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: [chip.label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chip-act",
+							"aria-hidden": "true",
+							children: "Start anyway"
+						})]
+					}) : lchip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "stagechip wrapchip leadchip",
 						title: lchip.title,
@@ -58775,9 +58935,12 @@ function sweepToast(r, offline) {
 	const continued = r.continued?.length || 0;
 	const skipped = r.skipped || {};
 	const mine = offline.filter((t) => skipped[t] !== void 0);
-	const memory = mine.filter((t) => skipped[t] === "low memory").length;
+	const queued = new Set(r.waiting || []);
+	const memory = mine.filter((t) => skipped[t] === "low memory" && !queued.has(t)).length;
+	const waits = mine.filter((t) => queued.has(t)).length;
 	let line = revived ? "Started " + revived + (revived === 1 ? " agent" : " agents") : "No agents started";
 	if (continued) line += " — " + continued + " told to continue where " + (continued === 1 ? "it" : "they") + " left off";
+	if (waits) line += "; " + waits + " waiting for memory — " + (waits === 1 ? "it starts" : "they start") + (waits === 1 ? " by itself" : " by themselves") + " once there is room";
 	if (memory) line += "; " + memory + " not started: memory is low";
 	const other = mine.filter((t) => skipped[t] !== "low memory");
 	if (other.length) {
@@ -58823,13 +58986,17 @@ function OfflineBar() {
 		if (busy) return;
 		setBusy(true);
 		try {
-			const r = await api("/api/server/revive-all", {
+			const r = await withMemoryConfirm(titles.length + " offline agent" + (titles.length === 1 ? "" : "s"), (anyway) => api("/api/server/revive-all", {
 				method: "POST",
-				json: { titles }
-			});
+				json: anyway ? {
+					titles,
+					start_anyway: true
+				} : { titles }
+			}), (a) => toast(sleptLine(a)));
 			for (const t of r.revived || []) forceActivity(t, "idle");
 			toast(sweepToast(r, titles));
 		} catch (e) {
+			if (isMemoryCancel(e)) return;
 			toast("Couldn't start the offline agents — " + errMsg(e));
 		} finally {
 			setBusy(false);
@@ -58840,7 +59007,7 @@ function OfflineBar() {
 		type: "button",
 		className: "ob-btn",
 		disabled: busy || !titles.length,
-		title: "Start every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: starts wait for headroom, and the rest stay offline if none comes." : ""),
+		title: "Start every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: it asks first, and starts that can't fit yet wait for memory." : ""),
 		onClick: () => void run(),
 		children: "▶ Start all"
 	});
@@ -61557,6 +61724,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						}),
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryWaitBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSharedRows, {}),
@@ -104488,7 +104656,10 @@ function newSessionSubmit(ctx) {
 		const guess = addPendingSession(body.title || "untitled", target);
 		closeDialog();
 		try {
-			const made = await deviceApi(target)("/api/instances", { json: body });
+			const made = await withMemoryConfirm("a new agent", (anyway) => deviceApi(target)("/api/instances", { json: anyway ? {
+				...body,
+				start_anyway: true
+			} : body }));
 			const inst = {
 				...made,
 				title: deviceTitle(target, made.title)
@@ -129236,6 +129407,60 @@ function AskMicRow({ title }) {
 	});
 }
 //#endregion
+//#region src/components/MemoryConfirm.tsx
+function MemoryConfirm() {
+	const p = (0, import_react.useSyncExternalStore)(subscribeMemoryConfirm, currentMemoryConfirm, currentMemoryConfirm);
+	if (!p) return null;
+	const critical = p.body.level === "critical";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "memory-confirm",
+		role: "alertdialog",
+		"aria-labelledby": "memory-confirm-head",
+		onClose: () => p.resolve("cancel"),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mc-card" + (critical ? " critical" : ""),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					id: "memory-confirm-head",
+					children: critical ? "Memory is critically low" : "Memory is low"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mc-message",
+					children: p.body.message
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "mc-what",
+					children: critical ? "MindFlock won't start " + p.what + " unless you say so. Putting idle agents to sleep frees their memory and keeps their conversations." : "Agents that start by themselves are waiting until memory recovers. Putting idle agents to sleep frees their memory and keeps their conversations."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "modal-actions",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "memory-confirm-cancel",
+							onClick: () => p.resolve("cancel"),
+							children: "Cancel"
+						}),
+						p.canSleep && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "memory-confirm-sleep",
+							onClick: () => p.resolve("sleep"),
+							children: "Put idle agents to sleep first"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "memory-confirm-start",
+							className: critical ? "mc-danger" : "mc-start",
+							onClick: () => p.resolve("start"),
+							children: "Start anyway"
+						})
+					]
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/chat/ChatPanel.tsx
 function ChatPanel() {
 	const { data: config } = useConfig();
@@ -137209,7 +137434,10 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 }
 async function postInstance(body, device) {
 	if (device) return deviceTitle(device, (await deviceApi(device)("/api/instances", { json: body })).title);
-	return (await api("/api/instances", { json: body })).title;
+	return (await withMemoryConfirm("a new agent", async (anyway) => anyway ? await api("/api/instances", { json: {
+		...body,
+		start_anyway: true
+	} }) : await api("/api/instances", { json: body }))).title;
 }
 //#endregion
 //#region src/components/flights/SkyDrawer.tsx
@@ -144412,6 +144640,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MemoryConfirm, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
