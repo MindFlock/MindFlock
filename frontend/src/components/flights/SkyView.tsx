@@ -117,6 +117,7 @@
  * stop's dashed wire to the chain it starts — are drawn on the plane
  * (SkyWires); a stops-only chain something hands off to wears a trigger head. */
 
+import { NEW_ROUTE_STARTS_ON } from "./useSessionLine";
 import { optimisticDelete } from "../../lib/flightOptimism";
 import { cloneElement, Fragment, isValidElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks, useTestPlans } from "../../state/queries";
@@ -1347,7 +1348,7 @@ export function SkyView() {
   const onFly = (plan: FlightPlan, title: string) => {
     const live = liveFlightOf(title);
     if (live) void tackOnPlan(live.id, plan.id);
-    else void startFlightOn(title, plan.id, "prompt");
+    else void startFlightOn(title, plan.id, NEW_ROUTE_STARTS_ON);
   };
   /** A grounded flight takes off on `title` (its ⋯ Fly on a session…). */
   const onAttach = (f: Flight, title: string) => {
@@ -1575,7 +1576,7 @@ export function SkyView() {
     const bare = steps.map(({ pos: _pos, ...st }) => st as FlightStep);
     let ok = false;
     // Round 19: wired / dropped onto a session it waits there, ready.
-    if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: "prompt" }));
+    if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: NEW_ROUTE_STARTS_ON }));
     else if (await tackOnSteps(live.id, bare, at !== undefined && at < live.steps.length ? at : undefined, name || undefined)) ok = await deleteFlight(f.id);
     if (!ok) return;
     const n = steps.length;
