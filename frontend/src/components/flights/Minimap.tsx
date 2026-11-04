@@ -11,7 +11,10 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactElement } f
 import "./Minimap.css";
 import { lodFor, type SkyCamera } from "../../lib/skyLayout";
 import {
+  HINT_H,
+  HINT_INSET,
   HINT_MAX,
+  HINT_MAX_W,
   LINE_KINDS,
   MINIMAP_H,
   MINIMAP_PAD,
@@ -28,6 +31,8 @@ import {
   shortLabel,
   toneVar,
   viewportRect,
+  type EdgeHint,
+  type HintEdge,
   type MapBlock,
   type MapFit,
 } from "../../lib/minimap";
@@ -46,6 +51,9 @@ export interface MinimapRect {
   label?: string;
   selected?: boolean;
   focused?: boolean;
+  /** The route needs you (asking, waiting on you, halted): its edge chip
+   * reads "Needs you →", and shows even when a fit only CLIPS it. */
+  needsYou?: boolean;
 }
 
 export interface MinimapProps {
@@ -180,6 +188,54 @@ export function Minimap({ rects, cam, viewport, onCamera, onJump, open, onToggle
   );
 }
 
+/** A route past an edge by more than this (screen px) is clipped. */
+export const NEEDS_CLIP = 24;
+
+/** The chip's words for a route that needs you, its arrow toward the edge. */
+export function needsYouWord(edge: HintEdge): string {
+  return edge === "right" ? "Needs you →" : edge === "left" ? "← Needs you" : edge === "top" ? "↑ Needs you" : "↓ Needs you";
+}
+
+/** Round 21: the routes that need you and that a fit CLIPS — some of the
+ * route on screen, more than `NEEDS_CLIP` px of it past an edge (Fit all's
+ * floor, a long route) — each a chip on the edge it runs past most, at the
+ * middle of what is visible along that edge. A route wholly off screen is
+ * `edgeHints`' own. Pure. */
+export function needsYouHints(rects: readonly MinimapRect[], cam: SkyCamera, viewport: { w: number; h: number }): EdgeHint[] {
+  const { w: vw, h: vh } = viewport;
+  if (vw <= 0 || vh <= 0) return [];
+  const clamp = (v: number, lo: number, hi: number) => (lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v)));
+  const out: EdgeHint[] = [];
+  for (const r of rects) {
+    if (!r.needsYou) continue;
+    const sx = r.x * cam.z + cam.x;
+    const sy = r.y * cam.z + cam.y;
+    const sw = r.w * cam.z;
+    const sh = r.h * cam.z;
+    if (sx + sw <= 0 || sx >= vw || sy + sh <= 0 || sy >= vh) continue; // wholly off: edgeHints
+    const over: [HintEdge, number][] = [
+      ["right", sx + sw - vw],
+      ["left", -sx],
+      ["bottom", sy + sh - vh],
+      ["top", -sy],
+    ];
+    const [edge, by] = over.reduce((a, b) => (b[1] > a[1] ? b : a));
+    if (by <= NEEDS_CLIP) continue;
+    const midY = (Math.max(sy, 0) + Math.min(sy + sh, vh)) / 2;
+    const midX = (Math.max(sx, 0) + Math.min(sx + sw, vw)) / 2;
+    const yLo = HINT_INSET + HINT_H / 2;
+    const yHi = vh - HINT_INSET - HINT_H / 2;
+    const xLo = HINT_INSET + HINT_MAX_W / 2;
+    const xHi = vw - HINT_INSET - HINT_MAX_W / 2;
+    out.push(
+      edge === "left" || edge === "right"
+        ? { id: r.id, edge, x: edge === "left" ? HINT_INSET : vw - HINT_INSET, y: clamp(midY, yLo, yHi), dist: 0 }
+        : { id: r.id, edge, x: clamp(midX, xLo, xHi), y: edge === "top" ? HINT_INSET : vh - HINT_INSET, dist: 0 }
+    );
+  }
+  return out;
+}
+
 export interface OffscreenHintsProps {
   rects: readonly MinimapRect[];
   cam: SkyCamera;
@@ -189,11 +245,14 @@ export interface OffscreenHintsProps {
 
 /** Edge markers for lines outside the view (a bird-coloured chip with the
  * name, pinned to the edge nearest the line, like a game's off-screen HUD).
- * None at lod far: everything is on screen then anyway. */
+ * None at lod far — everything is on screen then anyway — except for a route
+ * that needs you. A route that needs you also gets one when a fit only clips
+ * it (`needsYouHints`), and its chip says "Needs you →" (round 21). */
 export function OffscreenHints({ rects, cam, viewport, onJump }: OffscreenHintsProps): ReactElement | null {
-  if (lodFor(cam.z) === "far") return null;
   const lines = rects.filter((r) => LINE_KINDS.has(r.kind));
-  const hints = edgeHints(lines, cam, viewport, HINT_MAX);
+  const far = lodFor(cam.z) === "far";
+  const off = edgeHints(far ? lines.filter((r) => r.needsYou) : lines, cam, viewport, HINT_MAX);
+  const hints = [...off, ...needsYouHints(lines, cam, viewport).filter((h) => !off.some((o) => o.id === h.id))];
   if (!hints.length) return null;
   const byId = new Map(lines.map((r) => [r.id, r]));
   return (
@@ -201,6 +260,7 @@ export function OffscreenHints({ rects, cam, viewport, onJump }: OffscreenHintsP
       {hints.map((h) => {
         const r = byId.get(h.id);
         const name = r?.label || h.id;
+        const needs = !!r?.needsYou;
         const style: CSSProperties =
           h.edge === "left"
             ? { left: h.x, top: h.y }
@@ -213,10 +273,10 @@ export function OffscreenHints({ rects, cam, viewport, onJump }: OffscreenHintsP
           <button
             key={h.id}
             type="button"
-            className={"sky-offscreen-chip fl-pick edge-" + h.edge}
+            className={"sky-offscreen-chip fl-pick edge-" + h.edge + (needs ? " is-needs" : "")}
             style={{ ...style, "--mm-tone": toneVar(r?.tone) } as CSSProperties}
-            title={"Go to " + name}
-            aria-label={"Go to " + name}
+            title={"Go to " + name + (needs ? " — it needs you" : "")}
+            aria-label={"Go to " + name + (needs ? " — it needs you" : "")}
             data-id={h.id}
             onClick={(e) => {
               e.stopPropagation();
@@ -224,7 +284,8 @@ export function OffscreenHints({ rects, cam, viewport, onJump }: OffscreenHintsP
             }}
           >
             <span className="sky-offscreen-dot" aria-hidden="true" />
-            <span className="sky-offscreen-name">{shortLabel(name, 14)}</span>
+            {needs ? <span className="sky-offscreen-needs">{needsYouWord(h.edge)}</span> : null}
+            <span className="sky-offscreen-name">{shortLabel(name, needs ? 9 : 14)}</span>
           </button>
         );
       })}

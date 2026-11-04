@@ -119,7 +119,7 @@ describe("the first picture", () => {
     const sky = code("components/flights/SkyView.tsx");
     // Round 17: through the eased camera (`goTo`), instant only for the first picture.
     expect(sky).toContain("goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
-    expect(sky).toContain("else fitAll(false, true);");
+    expect(sky).toContain('else if (mode !== "one") fitAll(false, true);');
     expect(sky).toContain("onClick={() => fitAll(true)}");
     expect(sky).toMatch(/k === "0"\) \{\s*handled\(\);\s*fitAll\(\);/);
     expect(sky).toMatch(/title="See everything: every route in the window, however small/);

@@ -1137,3 +1137,13 @@ details.fl-group-waiting > summary {
   display: flex;
   justify-content: flex-end;
 }
+
+/* Round 21: no session at all, with something waiting in Intake (the calm
+   card stands down for the plain line): the line keeps a New session button. */
+.sky-empty.sky-empty-plain p {
+  margin: 0 0 10px;
+}
+
+.sky-empty.sky-empty-plain .sky-empty-new {
+  pointer-events: auto;
+}

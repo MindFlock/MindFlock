@@ -107,7 +107,8 @@ describe("the isomorphism", () => {
     // Round 17: eased (goTo), the same target.
     expect(v).toContain("goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
     // A press on the line itself never moves the camera (a wide line is never whole in view).
-    expect(v).toContain("if (!inView && !pressed) {");
+    // This session's route fit moves the camera there instead (round 21).
+    expect(v).toContain('if (!inView && !pressed && mode !== "one") {');
     expect(v).toContain("onFocus={() => focusOn(id, true)}");
     // The browser's scroll-into-view on a focused box becomes a pan, never a slide of the plane.
     expect(v).toContain("onScroll={onViewportScroll}");
@@ -444,10 +445,12 @@ describe("round 13: nothing focused, place don't tack, the floating palette", ()
     expect(v).toContain("onFly={flashLine}");
     // A drop on empty sky makes its line, unfocused.
     expect(v).not.toMatch(/pinned: true \}\)\);\s*setGroundFocus\(id\);/);
-    // This session with nothing focused says what to do.
-    expect(v).toContain('"Pick a route to show it alone."');
-    // Enter opens only the focused line's box.
-    expect(v).toContain('} else if (k === "Enter" && focusLine) {');
+    // This session with nothing it can show points at where a session is
+    // picked (round 21); with no session at all, SkyEmpty's card shows.
+    expect(v).toContain('"Pick a session on the left to show its route here."');
+    expect(v).not.toContain('"Pick a route to show it alone."');
+    // Enter opens the focused line's box, or This session's shown route's.
+    expect(v).toContain('} else if (k === "Enter" && (focusLine || oneLine)) {');
   });
 
   it("a palette click places its block on the Sky, near the palette; chips never tack onto the focused line", () => {
@@ -562,12 +565,12 @@ describe("switching session in the sky never opens its box on the terminal", () 
     const src = code("components/flights/SkyView.tsx");
     expect(src).not.toContain("openedFor");
     // Only Enter (asked for) opens the focused box.
-    expect(src.match(/onLayout\(focusLine, \{ open: true \}\)/g)?.length).toBe(1);
-    expect(src).toContain('} else if (k === "Enter" && focusLine) {');
+    expect(src.match(/onLayout\([a-zA-Z]+, \{ open: true \}\)/g)?.length).toBe(1);
+    expect(src).toContain('} else if (k === "Enter" && (focusLine || oneLine)) {');
   });
-  it("This session with nothing focused shows the last session you were on", () => {
+  it("This session with nothing focused shows the session that needs you first (round 21, pickThisSession)", () => {
     const src = code("components/flights/SkyView.tsx");
-    expect(src).toContain("return mru.find((t) => shown.has(t))");
+    expect(src).toContain("const best = pickThisSession(rows, { needsYou, mru, railOrder });");
     expect(src).toContain("skyLineTitles(rows, mode, { query, focus: oneFocus })");
   });
 });
