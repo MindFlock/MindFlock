@@ -32047,9 +32047,16 @@ function placeAfter(title, after) {
 	const next = orderWithAfter(merged, title, after);
 	if (next !== merged) ui.setOrder(next);
 }
+function copyTitle(title, taken) {
+	const m = /^(.+)-(\d+)$/.exec(title);
+	const base = m && taken.has(m[1]) ? m[1] : title;
+	let i = 2;
+	while (taken.has(base + "-" + i)) i++;
+	return base + "-" + i;
+}
 async function copySession(title) {
 	if (!title) return;
-	const guess = addPendingSession(title + "-copy");
+	const guess = addPendingSession(copyTitle(title, new Set(instances$2().map((i) => i.title))));
 	placeAfter(guess, title);
 	try {
 		const inst = await instApi(title, "/copy", { method: "POST" });

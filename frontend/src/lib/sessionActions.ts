@@ -555,14 +555,26 @@ function placeAfter(title: string, after: string) {
  * The copy lands directly under its source, twice: once for the optimistic
  * provisioning row, so it doesn't appear at the bottom and then jump, and
  * again for the real title the server picked, which can differ from the guess. */
+/** A copy's title, the server's `_copy_title`: the family name plus the
+ * lowest free `-N` (N ≥ 2). `bot` → `bot-2`; with `bot` and `bot-3` open,
+ * copying either → `bot-2`. A trailing `-N` names a family member only when
+ * the bare name is open too (`sc-25355` → `sc-25355-2`, never `sc-2`). */
+export function copyTitle(title: string, taken: ReadonlySet<string>): string {
+  const m = /^(.+)-(\d+)$/.exec(title);
+  const base = m && taken.has(m[1]) ? m[1] : title;
+  let i = 2;
+  while (taken.has(base + "-" + i)) i++;
+  return base + "-" + i;
+}
+
 export async function copySession(title: string) {
   if (!title) return;
-  const guess = addPendingSession(title + "-copy");
+  const guess = addPendingSession(copyTitle(title, new Set(instances().map((i) => i.title))));
   placeAfter(guess, title);
   try {
     const inst = await instApi<Instance>(title, "/copy", { method: "POST" });
-    // The server picks the real title (its own -copy/-copy-2 numbering), which
-    // can differ from the optimistic guess — so clear that one's alias too.
+    // The server picks the real title (_copy_title), which can differ from
+    // the optimistic guess — so clear that one's alias too.
     if (inst?.title) clearStaleAlias(inst.title);
     landPendingSession(guess, inst);
     await refreshInstances();
