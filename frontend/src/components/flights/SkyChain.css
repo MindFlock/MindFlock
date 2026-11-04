@@ -575,9 +575,14 @@
   color: var(--fl-ink-working, var(--tone-working));
 }
 
+/* Asking / Wait for me: the rail chip's colours — SOLID amber, near-black
+   ink (--tone-attention-ink) — in both themes (round 21b, JUDGE-R21-3 #7:
+   the 20% wash under that ink was ~1.5:1 on the dark sky; solid is ~12:1
+   dark, ~9:1 light). */
 .sky-head-chip.tone-attention {
-  background: color-mix(in srgb, var(--tone-attention) 20%, transparent);
-  color: var(--tone-attention-ink, var(--text));
+  background: var(--tone-attention);
+  border-color: var(--tone-attention);
+  color: var(--tone-attention-ink, #1a1a1a);
 }
 
 .sky-head-chip.tone-broken {

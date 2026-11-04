@@ -136,3 +136,38 @@ describe("finding 5: a reached halt point says Carry on, not Retry", () => {
     expect(nextIsHaltPoint({ ...twoHalts, step_states: { ...twoHalts.step_states, s4: rec("skipped") } } as unknown as Flight)).toBe(false);
   });
 });
+
+// --- finding 7 ---------------------------------------------------------------
+
+/** WCAG relative luminance of a #rrggbb colour. */
+const lum = (hex: string): number => {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+};
+const contrast = (a: string, b: string) => {
+  const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p);
+  return (x + 0.05) / (y + 0.05);
+};
+/** A token's value in the dark (`:root`) or `.light` block of tokens.css. */
+const token = (block: ":root" | ".light", name: string): string => {
+  const sheet = css("styles/tokens.css");
+  const body = rule(sheet, block);
+  const m = body.match(new RegExp(name + ":\\s*(#[0-9a-fA-F]{6})"));
+  if (!m) throw new Error(name + " not in " + block);
+  return m[1];
+};
+
+describe("finding 7: the amber chip under the agent tile is readable in both themes", () => {
+  it("is the rail chip's solid amber with the near-black attention ink (not a wash under dark ink)", () => {
+    const r = rule(SKY, ".sky-head-chip.tone-attention");
+    expect(r).toMatch(/background: var\(--tone-attention\);/);
+    expect(r).toMatch(/color: var\(--tone-attention-ink/);
+    expect(r).not.toContain("color-mix");
+  });
+
+  it("clears 4.5:1 in dark and in light", () => {
+    for (const block of [":root", ".light"] as const) {
+      expect(contrast(token(block, "--tone-attention"), token(block, "--tone-attention-ink"))).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
