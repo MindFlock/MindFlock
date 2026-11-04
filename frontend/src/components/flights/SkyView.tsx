@@ -2132,6 +2132,20 @@ export function SkyView() {
   // route's box (its pref stays open; it opens again once the route is clear
   // of it). Its glyph pressed then shows it anyway, until the view changes.
   // Its box is measured where it last drew open (viewport px), else guessed.
+  // Round 21b: an open drawer drawn OVER the sky (not beside it) hides the
+  // viewport's right side; the edge chips keep inside what is visible.
+  const [drawerCover, setDrawerCover] = useState(0);
+  useLayoutEffect(() => {
+    const root = vpRef.current;
+    const d = drawerOpen && root ? root.closest("#sky-view")?.querySelector(".sky-drawer.open") : null;
+    let cover = 0;
+    if (root && d) {
+      const v = root.getBoundingClientRect();
+      const r = d.getBoundingClientRect();
+      if (r.width && r.left < v.right && r.right > v.left && r.top < v.bottom && r.bottom > v.top) cover = Math.round(v.right - Math.max(r.left, v.left));
+    }
+    setDrawerCover(cover);
+  }, [drawerOpen, vp.w, vp.h]);
   const mmHost = useRef<HTMLDivElement>(null);
   const [mmBox, setMmBox] = useState<Rect | null>(null);
   const [mmPeek, setMmPeek] = useState(false);
@@ -3001,7 +3015,7 @@ export function SkyView() {
                 and the off-screen hints, bottom-right above the shelf; the
                 shortcuts sheet over it all. The three are seams the
                 `minimap` and `zoom-shortcuts` tasks fill in. */}
-            <OffscreenHints rects={mapRects} cam={cam} viewport={vp} onJump={jumpTo} />
+            <OffscreenHints rects={mapRects} cam={cam} viewport={vp} inset={drawerCover ? { right: drawerCover } : undefined} onJump={jumpTo} />
             {/* Nothing on the sky (no session yet): no minimap — the empty
                 card is the one thing to look at. */}
             {mapRects.length > 0 && (

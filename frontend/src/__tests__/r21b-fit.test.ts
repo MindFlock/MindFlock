@@ -1,9 +1,12 @@
 /** Round 21b "fit": the judge's pass-2 findings 1, 2, 6 and 8 (ux-lab
  * round21/JUDGE-R21-3.md). */
 import { describe, expect, it } from "vitest";
-import { code } from "./sourceText";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+import { code, css, cssRule } from "./sourceText";
 
 import { boundsOf, fitCamera, firstFit, type Rect } from "../lib/skyLayout";
+import { OffscreenHints, edgeChips, type MinimapRect } from "../components/flights/Minimap";
 
 const sky = code("components/flights/SkyView.tsx");
 
@@ -50,5 +53,60 @@ describe("finding 1: 0, Shift+1, the zoom menu's Fit all and the Fit button are 
   it("only the automatic first picture keeps the legibility floor", () => {
     expect(sky.match(/firstFit\(/g)).toHaveLength(1);
     expect(sky).toContain('else if (mode !== "one") firstPicture();');
+  });
+});
+
+describe("finding 2: the edge chips stack in a gutter inside the visible sky", () => {
+  const VIEW = { w: 1000, h: 700 };
+  const cam = { x: 0, y: 0, z: 1 };
+  const line = (id: string, x: number, y: number, w = 400, needsYou = false): MinimapRect => ({ id, x, y, w, h: 100, kind: "line", label: id, needsYou });
+
+  it("a route at least half on screen gets no chip — needing you or not; mostly off and needing you gets one", () => {
+    // 60 % on screen (600 of 1000 px wide inside a 1000 px window from x=400).
+    expect(edgeChips([line("pay", 400, 100, 1000, true)], cam, VIEW)).toEqual([]);
+    // 40 % on screen.
+    expect(edgeChips([line("pay", 600, 100, 1000, true)], cam, VIEW)).toEqual([{ id: "pay", edge: "right", needs: true }]);
+    // Mostly off, but it doesn't need you: no chip (only wholly-off routes get a plain one).
+    expect(edgeChips([line("idle", 600, 100, 1000)], cam, VIEW)).toEqual([]);
+    expect(edgeChips([line("idle", 1100, 100)], cam, VIEW)).toEqual([{ id: "idle", edge: "right", needs: false }]);
+  });
+
+  it("each edge's stack puts the ones that need you first, then the rest along the edge; the cap keeps them", () => {
+    const rects = [line("b", 1100, 500), line("a", 1100, 100), line("pay", 1100, 600, 400, true), line("down", 300, 900)];
+    expect(edgeChips(rects, cam, VIEW).map((c) => c.edge + ":" + c.id)).toEqual(["right:pay", "right:a", "right:b", "bottom:down"]);
+    const many = [...Array.from({ length: 10 }, (_, i) => line("x" + i, 1100 + i * 10, 100)), line("far-pay", 9000, 100, 400, true)];
+    const kept = edgeChips(many, cam, VIEW, 8);
+    expect(kept).toHaveLength(8);
+    expect(kept[0]).toMatchObject({ id: "far-pay", needs: true });
+  });
+
+  it("an open drawer over the sky narrows what is visible: a route under it gets its chip, the gutter keeps left of it", () => {
+    const rects = [line("under", 750, 100, 200, true)];
+    expect(edgeChips(rects, cam, VIEW)).toEqual([]);
+    expect(edgeChips(rects, cam, { w: 700, h: 700 })).toEqual([{ id: "under", edge: "right", needs: true }]);
+    const html = renderToStaticMarkup(createElement(OffscreenHints, { rects, cam, viewport: VIEW, inset: { right: 300 }, onJump: () => {} }));
+    expect(html).toMatch(/class="sky-offscreen"[^>]*style="right:300px;bottom:0"/);
+  });
+
+  it("OffscreenHints draws one gutter per edge, the chips inside it in stack order, no per-chip coordinates", () => {
+    const rects = [line("b", 1100, 500), line("pay", 1100, 600, 400, true), line("down", 300, 900)];
+    const html = renderToStaticMarkup(createElement(OffscreenHints, { rects, cam, viewport: VIEW, onJump: () => {} }));
+    const right = html.slice(html.indexOf('class="sky-offscreen-gutter edge-right"'), html.indexOf('class="sky-offscreen-gutter edge-bottom"'));
+    expect(right.indexOf('data-id="pay"')).toBeGreaterThan(-1);
+    expect(right.indexOf('data-id="pay"')).toBeLessThan(right.indexOf('data-id="b"'));
+    expect(html).toContain('class="sky-offscreen-gutter edge-bottom"');
+    expect(html).not.toMatch(/sky-offscreen-chip[^>]*style="[^"]*(left|top|right|bottom):/);
+  });
+
+  it("Minimap.css: a grid of edge gutters, chips 4 px apart in flow, the ones that need you on top", () => {
+    const text = css("components/flights/Minimap.css");
+    expect(cssRule(text, ".sky-offscreen")).toMatch(/display:\s*grid/);
+    expect(cssRule(text, ".sky-offscreen")).toContain('"left mid right"');
+    expect(cssRule(text, ".sky-offscreen .sky-offscreen-gutter")).toMatch(/gap:\s*4px/);
+    expect(cssRule(text, ".sky-offscreen .sky-offscreen-gutter.edge-right")).toMatch(/grid-area:\s*right/);
+    expect(cssRule(text, ".sky-offscreen .sky-offscreen-gutter.edge-bottom")).toMatch(/grid-area:\s*bottom/);
+    expect(cssRule(text, ".sky-offscreen .sky-offscreen-chip")).toMatch(/position:\s*relative/);
+    expect(text).not.toMatch(/sky-offscreen-chip\.edge-(left|right|top|bottom)\s*\{[^}]*transform/);
+    expect(cssRule(text, ".sky-offscreen .sky-offscreen-chip.is-needs")).toMatch(/z-index:\s*1/);
   });
 });

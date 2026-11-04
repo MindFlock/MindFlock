@@ -206,7 +206,7 @@ describe("the seams are mounted", () => {
     expect(v).toContain('import { Minimap, OffscreenHints, type MinimapRect } from "./Minimap";');
     expect(v).toContain('const MINIMAP_KEY = "mf_sky_minimap";');
     expect(v).toContain('const [minimapOpen, setMinimapOpen] = useState(() => readPref(MINIMAP_KEY) !== "0");');
-    expect(v).toContain("<OffscreenHints rects={mapRects} cam={cam} viewport={vp} onJump={jumpTo} />");
+    expect(v).toContain("<OffscreenHints rects={mapRects} cam={cam} viewport={vp} inset={drawerCover ? { right: drawerCover } : undefined} onJump={jumpTo} />");
     // Round 21: folded while it would cover a route (mmShown), a move on it is the owner's (userCam).
     expect(v).toMatch(/<div className="sky-minimap-host" ref=\{mmHost\}[^>]*>\s*<Minimap\s+rects=\{mapRects\}\s+cam=\{cam\}\s+viewport=\{vp\}\s+onCamera=\{\(c\) => userCam\(c\)\}\s+onJump=\{jumpTo\}\s+open=\{mmShown\}/);
     expect(v).toContain('kind: l.flight ? "grounded" : "line",');

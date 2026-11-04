@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import type { Instance } from "../api/types";
 import { ROUTE_FIT_MAX, ROUTE_FIT_MIN, ROUTE_FIT_PAD, fitRoute, pickThisSession, screenBoxCovers } from "../lib/skyLayout";
-import { NEEDS_CLIP, OffscreenHints, needsYouHints, needsYouWord, type MinimapRect } from "../components/flights/Minimap";
+import { CHIP_HIDE_SHARE, OffscreenHints, edgeChips, needsYouWord, type MinimapRect } from "../components/flights/Minimap";
 
 const row = (title: string, o: Partial<Instance> = {}): Instance =>
   ({
@@ -97,15 +97,16 @@ describe("the Needs you edge chip", () => {
   const VIEW = { w: 1000, h: 700 };
   const line = (id: string, x: number, y: number, w: number, needsYou = false): MinimapRect => ({ id, x, y, w, h: 120, kind: "line", label: id, needsYou });
   it("a route that needs you and runs past the right edge gets a chip there; one that doesn't, none", () => {
-    const hints = needsYouHints([line("pay", 700, 200, 600, true), line("other", 700, 400, 600)], { x: 0, y: 0, z: 1 }, VIEW);
+    const hints = edgeChips([line("pay", 800, 200, 600, true), line("other", 800, 400, 600)], { x: 0, y: 0, z: 1 }, VIEW);
     expect(hints).toHaveLength(1);
-    expect(hints[0]).toMatchObject({ id: "pay", edge: "right" });
+    expect(hints[0]).toMatchObject({ id: "pay", edge: "right", needs: true });
     expect(needsYouWord("right")).toBe("Needs you →");
     expect(needsYouWord("left")).toBe("← Needs you");
   });
-  it("a little clipping (≤ NEEDS_CLIP px) is not clipped; wholly off screen is edgeHints' own", () => {
-    expect(needsYouHints([line("pay", 1000 - 500 + NEEDS_CLIP - 1, 0, 500, true)], { x: 0, y: 0, z: 1 }, VIEW)).toHaveLength(0);
-    expect(needsYouHints([line("pay", 1200, 0, 500, true)], { x: 0, y: 0, z: 1 }, VIEW)).toHaveLength(0);
+  it("round 21b: at least half on screen is on screen (no chip); wholly off screen gets one too", () => {
+    expect(CHIP_HIDE_SHARE).toBe(0.5);
+    expect(edgeChips([line("pay", 1000 - 250, 0, 500, true)], { x: 0, y: 0, z: 1 }, VIEW)).toHaveLength(0);
+    expect(edgeChips([line("pay", 1200, 0, 500, true)], { x: 0, y: 0, z: 1 }, VIEW)).toMatchObject([{ id: "pay", edge: "right" }]);
   });
   it("OffscreenHints draws it with the words, even at the far zoom where other chips hide", () => {
     const tree = OffscreenHints({ rects: [line("pay", 3000, 100, 500, true), line("idle", 3000, 300, 500)], cam: { x: 0, y: 0, z: 0.4 }, viewport: VIEW, onJump: () => {} });
