@@ -236,8 +236,9 @@ describe("a session is a frame", () => {
     );
     expect(html).toContain('class="skl-frame-box" aria-hidden="true" style="left:-200px;top:-60px"');
     expect(html).toMatch(/class="skl-bar skl-label skl-frame-bar"[^>]*style="margin-left:-200px;transform:translateY\(-60px\)"/);
-    // Round 19's Ready + ▶ Run still rides the agent tile.
-    expect(html).toContain('class="sky-ready"');
+    // Round 19's Ready + ▶ Run: round 21 moved it to the frame's bar, once.
+    expect(html.match(/class="sky-ready"/g)?.length).toBe(1);
+    expect(html).toMatch(/class="skl-bar skl-label skl-frame-bar"[^]*class="sky-ready"[^]*class="skl-menu"/);
   });
 
   it("double-click on the bar renames (an alias; a taken name is refused)", () => {

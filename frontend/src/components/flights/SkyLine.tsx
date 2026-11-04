@@ -71,12 +71,12 @@ import { queryClient, useFlightKinds, useFlights } from "../../state/queries";
 import { closeSession, selectSession, undoLastClose } from "../../lib/sessionActions";
 import { nodeById, nodeSession, removableBox, removalNeedsAsk } from "../../lib/skySelect";
 import { pushUndo } from "../../lib/skyUndo";
-import { deriveSessionState } from "../../lib/sessionState";
+import { deriveSessionState, type SessionTone } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
-import type { FlightPlan, StepKindDef } from "../../lib/flights";
+import type { FlightPlan, FlightRow, FlightState, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
@@ -176,6 +176,32 @@ export const runningWord = (row: { activity?: string } | undefined) => (row?.act
 export async function closeLine(title: string): Promise<void> {
   await closeSession(title);
   if (!sessionOpen(title)) pushCloseUndo([title]);
+}
+
+/** Round 21 (JUDGE-R21-1 #5): what a session's FRAME says at a glance. The
+ * frame box is neutral (theme surfaces); this state drives its border
+ * (SkyLine.css `.skl-frame[data-frame=…]`): `you` amber + a soft glow,
+ * `halted` / `broken` red, `working` the accent with a slow breathing cue,
+ * `done` the whole route at reduced emphasis (full on hover / focus),
+ * `ready` and `idle` the plain neutral frame. The session's identity colour
+ * is only the small dot by its name.
+ *
+ * Read from what the line already knows, first match wins: the route halted
+ * → `halted`; the session broken (offline, setup failed) → `broken`; a route
+ * parked on you, the session's Needs-you state (a question, failing checks,
+ * idle on unfinished work) or a behavior waiting on you → `you`; the route
+ * running or the agent working → `working`; the route finished (still drawn,
+ * or `landed`) → `done`; built and waiting for ▶ Run → `ready`; else `idle`. */
+export type FrameState = "you" | "halted" | "broken" | "working" | "done" | "ready" | "idle";
+export function frameState(s: { flight?: FlightState | null; landed?: boolean; tone?: SessionTone | null; behaviorsYou?: boolean }): FrameState {
+  const f = s.flight || null;
+  if (f === "halted") return "halted";
+  if (s.tone === "broken") return "broken";
+  if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou) return "you";
+  if (f === "running" || s.tone === "working") return "working";
+  if (f === "done" || s.landed) return "done";
+  if (f === "ready") return "ready";
+  return "idle";
 }
 
 /** An open card's pane, in plane px: its default and its floor. */
@@ -397,6 +423,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
 
   const row = line.row;
   const ss = deriveSessionState(row || {});
+  // Round 21: the frame's state (its border), from the route and the session.
+  const frame = row
+    ? frameState({ flight: line.flight?.state || (row.flight as FlightRow | null | undefined)?.state, landed: !!line.landedId, tone: ss.tone, behaviorsYou: line.behaviors.mark?.tone === "you" })
+    : "idle";
   const rowOf = (t: string | undefined) => (t ? p.rows.find((r) => r.title === t) : undefined);
 
   // Round 18: the line is a CHAIN (lib/skyGraph): the session tile heads it
@@ -408,7 +438,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // The head is the session's AGENT (round 20): its name, what it is doing
   // now; where the flight is goes on the frame's bar.
   const agent = agentTitle(row?.provider || row?.program, row?.program);
-  // While ready, ReadyHead says so; the sub never repeats it
+  // While ready, ReadyHead (on the frame's bar) says so; the sub never repeats it
   // (the task headline — read from its newest meaningful prompt — else the
   // create task, else the last prompt).
   const headSub = row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";
@@ -647,6 +677,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         (behaviors.frameClass ? " " + behaviors.frameClass : "")
       }
       data-line={p.title}
+      data-frame={frame}
       data-lod={lod}
       data-age={age || undefined}
       // The sky's zoom, for CSS that counter-scales (a pill, the level of
@@ -678,6 +709,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           startRename();
         }}
       >
+        {/* Round 21: the session's identity colour, only as this dot. */}
+        <span className="skl-id-dot" aria-hidden="true" />
         {naming === null ? (
           <span className="skl-name">{name}</span>
         ) : (
@@ -734,6 +767,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             📌
           </span>
         )}
+        {/* Round 21 (JUDGE-R21-2 #8): a ready route's ONE ▶ Run lives here,
+            on the bar, visible wherever the camera is — not on the agent tile. */}
+        {line.flight?.state === "ready" && <ReadyHead flight={line.flight} />}
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
@@ -788,10 +824,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
             renderOpen={renderOpen}
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
-            renderHead={() =>
-              line.flight?.state === "ready" ? (
-                <ReadyHead flight={line.flight} />
-              ) : (
+            renderHead={() => (
               <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
                 {ss.label}
               </span>
