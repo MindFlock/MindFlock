@@ -7,6 +7,7 @@ import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from backend.ticket_ingestion.backfill import BackfillScanner
 from backend.ticket_ingestion.providers import get_provider
@@ -39,6 +40,8 @@ from backend.ticket_ingestion.models import (
     ProcessingRecord,
     Ticket,
     WebhookEvent,
+    issue_slug,
+    pr_slug,
 )
 from backend.ticket_ingestion.pr_comments import (
     PRCommentsFetchError,
@@ -57,6 +60,8 @@ from backend.ticket_ingestion.state import (
     clear_pr_attempts,
     ledger_started,
     load_pending_stories,
+    load_processed_issues,
+    load_processed_prs,
     load_processed_story_ids,
     load_processed_story_statuses,
     mark_automation_here,
@@ -148,15 +153,28 @@ def live_ticket_sessions(state_dir: Path | str = _STATE_DIR) -> int | None:
     tickets never got one. Force-started tickets (Intake → Start now) write the
     same ledger entry, so they count against the cap too. None when tmux can't
     be probed.
+
+    PR reviews (``pr-<repo>-<n>``) and GitHub issues (``issue-<repo>-<n>``)
+    count too: they are agents on the same machine, and a PR scan that finds
+    several PRs with review comments used to launch one session per PR back
+    to back with no cap at all — the burst that ran WSL out of memory. Their
+    ledgers (``processed_prs`` / ``processed_issues``) list every PR / issue
+    handled, launched or not; only the ones whose session is alive count.
     """
     names = _live_tmux_sessions()
     if names is None:
         return None
+    slugs = [
+        str(slug)
+        for slug, status in load_processed_story_statuses(state_dir).items()
+        if status in ("in_flight", "completed")
+    ]
+    for repo, number in load_processed_prs(state_dir):
+        slugs.append("pr-" + pr_slug(SimpleNamespace(repo=repo, number=number)))
+    for repo, number in load_processed_issues(state_dir):
+        slugs.append("issue-" + issue_slug(SimpleNamespace(repo=repo, number=number)))
     count = 0
-    for slug, status in load_processed_story_statuses(state_dir).items():
-        if status not in ("in_flight", "completed"):
-            continue
-        slug = str(slug)
+    for slug in set(slugs):
         if f"mindflock_{slug.replace('.', '_')}" in names or slug in names:
             count += 1
     return count
@@ -544,8 +562,9 @@ class PipelineOrchestrator:
                     e,
                 )
 
-    async def _wait_for_slot(self) -> None:
-        """Block until fewer ticket sessions are alive than the configured cap.
+    async def _wait_for_slot(self, what: str = "the next ticket") -> None:
+        """Block until fewer ingested sessions (tickets, PR reviews, issues —
+        :func:`live_ticket_sessions`) are alive than the configured cap.
 
         The cap is re-read every check, so raising it (or setting 0 = no limit)
         in Intake releases the queue without a restart. An unprobeable tmux
@@ -569,9 +588,10 @@ class PipelineOrchestrator:
                     self._write_activity()
                 if not logged:
                     _logger.info(
-                        "Holding the next ticket: %d of %d ticket sessions are "
+                        "Holding %s: %d of %d ingested sessions are "
                         "running (Intake → Auto-start → max sessions). It will "
                         "start when one ends.",
+                        what,
                         live,
                         cap,
                     )
@@ -738,6 +758,7 @@ class PipelineOrchestrator:
             lambda c: c.issue_agent(getattr(issue, "repo", "")),
             self.config.issue_agent(getattr(issue, "repo", "")),
         )
+        await self._wait_for_slot("issue #%d" % issue.number)
         try:
             if self._cs_runner is not None:
                 await self._cs_runner.run(story)
@@ -815,6 +836,10 @@ class PipelineOrchestrator:
                 ),
             )
             return
+        # The cap the ticket queue waits on holds PR reviews too: one scan can
+        # find several PRs with review comments, and this loop used to launch a
+        # session for each back to back (live_ticket_sessions).
+        await self._wait_for_slot("PR #%d" % pr.number)
         try:
             if self._cs_runner is not None:
                 # One consolidated session per PR via MindFlock (all comments

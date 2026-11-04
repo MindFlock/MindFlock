@@ -619,7 +619,12 @@ While the level is `low` or `critical`:
   run's `waiting_for_memory` puts a *memory* badge on its rail header.
 - **The ticket pipeline holds its next launch** (`session_runner`), logging why
   every 5 minutes; after 30 minutes it starts anyway with a warning, so a
-  misreading can never stall intake for good.
+  misreading can never stall intake for good. The reading is taken only after
+  the launch spacing (60 s from the previous automatic launch coming up,
+  `MINDFLOCK_LAUNCH_SPACING`): a new session takes most of a minute to reach
+  full size, so a reading right after a launch says nothing about it. On
+  2026-11-04 one PR scan launched a review per PR back to back, every one past
+  an `ok` reading, and ran WSL out of memory.
 - **The revive sweep waits**, as above. A person's single Restart is never
   held; its response carries `memory_warning` instead.
 - **Idle agents sleep sooner** — after 5 minutes idle instead of

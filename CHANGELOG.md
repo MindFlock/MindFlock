@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A burst of PR reviews no longer runs the machine out of memory.** PR
+  reviews and GitHub issues now count toward Intake's *max sessions* cap and
+  wait for a slot like tickets (they used to launch one per PR, back to back,
+  with no cap), and the pipeline's automatic launches are spaced a minute apart
+  so the memory guard reads each new session at full size
+  (`MINDFLOCK_LAUNCH_SPACING`, `0` = off).
+
 ## [0.11.0] - 2026-11-03
 
 ### Added
