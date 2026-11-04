@@ -28,6 +28,10 @@
  *   (stuck)                                    work (reason "stuck")
  *   limit      waiting    nobody     no        Waiting on limit[, resumes HH:MM]
  *   offline    broken     you        yes       Offline (the chip's Restart action)
+ *   offline    broken     you        no        Offline — HELD after a crash
+ *   (held)                                     (lib/heldOffline): the chip says
+ *                                              "Offline · Start"; one rail
+ *                                              notice instead of the bell
  *
  * Three rows outside the table — a paused session, one whose folder is gone,
  * and one whose agent is asleep — keep their own words ("Paused", "Missing",
@@ -45,6 +49,7 @@ import type { Instance } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
 import { perchLabel } from "./flights";
+import { heldHint, isHeldOffline } from "./heldOffline";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -117,6 +122,9 @@ export interface SessionState {
   restartable: boolean;
   /** Tooltip detail: the hook that failed, how long it has been idle. */
   hint?: string;
+  /** Held offline after a crash (lib/heldOffline): its remedy is Start, and
+   * nothing else will bring it back. */
+  held?: boolean;
 }
 
 export interface SessionStateExtras {
@@ -288,6 +296,11 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   if (inst.pending || inst.status === "loading")
     return { state: "starting", label: STATE_LABEL.starting, tone: "muted", inBell: false, restartable: false, hint: "Provisioning workspace" };
   if (inst.sleeping) return sleepingState(inst.sleeping, now);
+  // Held offline after a crash (backend core/held.py): no agent, no memory,
+  // and nothing starts it but a person's Start. Out of the bell — after a
+  // crash that would be every session at once; the rail's one notice says it.
+  if (isHeldOffline(inst))
+    return { state: "offline", label: STATE_LABEL.offline, tone: "broken", inBell: false, restartable: true, held: true, hint: heldHint(inst.held_reason) };
   if (inst.setup && inst.setup.state === "running")
     return {
       state: "starting",

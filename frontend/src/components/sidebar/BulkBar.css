@@ -146,7 +146,7 @@
   color: var(--text);
 }
 
-/* --- "N agents offline · Restart all" (OfflineBar) --- */
+/* --- "N agents offline · Start all" (OfflineBar) --- */
 #offline-bar {
   display: flex;
   align-items: center;
@@ -182,4 +182,49 @@
 #offline-bar .ob-btn:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* Held offline after a crash: the calm notice form of the bar — one
+   sentence, then Start all and ×. It wraps; the sentence never truncates. */
+#offline-bar {
+  flex-wrap: wrap;
+}
+
+#offline-bar .ob-text {
+  flex: 1 1 160px;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+#offline-bar .ob-low {
+  flex: 1 0 100%;
+  order: 3;
+  color: var(--tone-attention, var(--muted));
+}
+
+#offline-bar .ob-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#offline-bar .ob-x {
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+#offline-bar .ob-x:hover {
+  color: var(--text);
+}
+
+#offline-bar .ob-x:focus-visible,
+#offline-bar .ob-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }

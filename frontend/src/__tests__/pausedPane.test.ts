@@ -41,7 +41,7 @@ describe("the paused close code", () => {
     expect(src).toContain('const action = closeAction(ev?.code);');
     expect(src).toContain('if (action !== "retry") {');
     // A terminal refused while paused is rebuilt (not revived) after Resume.
-    expect(src).toContain('if (h && h.state === "paused") {');
+    expect(src).toContain('if (h && (h.state === "paused" || h.state === "held")) {');
   });
 });
 

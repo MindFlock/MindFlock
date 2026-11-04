@@ -99,26 +99,33 @@ function ResumeOnUsageResetRow() {
   );
 }
 
-/** Revive after a restart: once the server has booted (past its quiet
- * window) it relaunches, two at a time, every session whose agent was running
- * when it went down — the Offline chip's Restart, for all of them
- * (backend/web/core/revive.py). The same switch covers an agent the system
- * killed for memory: it comes back once memory recovers, a few times an hour
- * at most. Unset reads as on. */
+/** Bring agents back after a crash (backend/web/core/revive.py,
+ * core/held.py). OFF by default (unset reads as off): a session whose agent
+ * died — the server restarting, the OOM killer — is HELD offline and starts
+ * only when you press Start, so a crash under memory pressure can't relaunch
+ * everything into the same pressure and crash again. ON is the old
+ * behaviour: once the server has booted it relaunches, two at a time, every
+ * session whose agent was running, and an agent killed for memory comes back
+ * once memory recovers (a few times an hour at most). */
+/** The switch's words (exported for tests). */
+export const REVIVE_LABEL = "Bring agents back by themselves after a crash";
+export const REVIVE_NOTE =
+  "Off: sessions whose agent died stay Offline until you press Start, so a crash can't refill memory.";
+
 function ReviveOnStartRow() {
   const s = useSettings();
-  const on = s.get("general", "revive_on_start") !== false;
+  const on = s.get("general", "revive_on_start") === true;
   return (
     <div className="set-row set-switch-row" id="general-revive-on-start">
       <span className="notif-rule-text">
-        <span className="set-label">Revive sessions after a restart</span>
+        <span className="set-label">{REVIVE_LABEL}</span>
         <span className="set-hint notif-rule-desc">
-          Restart running agents on their own after MindFlock restarts, or after
-          the system kills one for memory.
+          {REVIVE_NOTE}
           <InfoTip>
-            Without this, they wait as Offline until you click Restart. An agent killed
-            for running out of memory comes back once memory recovers, at most 3 times an
-            hour. Paused sessions and sessions out of usage are left alone.
+            On: after MindFlock restarts, agents that were running start again by themselves,
+            two at a time, and an agent the system killed for memory comes back once memory
+            recovers, at most 3 times an hour. Paused sessions and sessions out of usage are
+            left alone either way.
           </InfoTip>
         </span>
       </span>
