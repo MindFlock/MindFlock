@@ -30,6 +30,7 @@ jobs:
     # Nothing to publish on a dry run; the desktop matrix still runs.
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
@@ -98,7 +99,9 @@ jobs:
             artifacts: dist/*.exe
           - os: macos-latest       # dmg (downloads) + zip (what auto-update swaps in)
             artifacts: dist/*.dmg dist/*.zip
+    # Builds take 1-5 min; a stuck signing/notarize step fails here, not at 6 h.
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: electron
