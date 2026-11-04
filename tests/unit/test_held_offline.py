@@ -607,3 +607,19 @@ def test_the_lifespan_holds_before_serving_and_announces_once(
     with TestClient(server.app):
         assert calls == ["hold"]  # done before the first request is served
     assert any("_announce" in q for q in registered) is announced
+
+
+def test_the_server_can_dump_its_stacks_on_sigusr1(tmp_path, monkeypatch):
+    """A wedged server is read with `kill -USR1`, not "Restart WSL"."""
+    import faulthandler
+    import signal
+
+    from backend import config
+    from backend.web import run
+
+    monkeypatch.setattr(config, "GetConfigDir", lambda: str(tmp_path))
+    try:
+        run._install_stack_dump()
+        assert (tmp_path / "logs" / "stacks.log").exists()
+    finally:
+        faulthandler.unregister(signal.SIGUSR1)

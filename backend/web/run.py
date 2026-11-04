@@ -162,12 +162,40 @@ def _settings_serve_mode() -> str:
         return ""
 
 
+#: Kept open for the life of the process (faulthandler writes to its fd).
+_STACKS_FH = None
+
+
+def _install_stack_dump() -> None:
+    """``kill -USR1 <server pid>`` appends every thread's Python stack to
+    ``<config dir>/logs/stacks.log``. A wedged server (listening, answering
+    nothing, every thread on a futex — seen twice on 2026-11-04) can then be
+    read without root: py-spy needs ptrace, which ``ptrace_scope=1`` refuses,
+    and the only other way out was "Restart WSL". Never raises."""
+    global _STACKS_FH
+    try:
+        import faulthandler
+        import signal
+
+        from backend import config
+
+        logs = os.path.join(config.GetConfigDir(), "logs")
+        os.makedirs(logs, exist_ok=True)
+        _STACKS_FH = open(os.path.join(logs, "stacks.log"), "a", buffering=1)
+        faulthandler.register(
+            signal.SIGUSR1, file=_STACKS_FH, all_threads=True, chain=False
+        )
+    except Exception:  # noqa: BLE001 — a diagnostic, never a boot blocker
+        pass
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     # Before any thread exists: two malloc arenas instead of one per worker
     # thread (see core/malloc_arenas — the bulk of the server's RSS).
     from backend.web.core.malloc_arenas import cap_arenas
 
     cap_arenas()
+    _install_stack_dump()
     try:
         import uvicorn
         from backend.web.server import (
