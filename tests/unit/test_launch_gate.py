@@ -221,3 +221,31 @@ def test_tmux_probe_skips_shells_and_other_sessions(monkeypatch):
     assert gate._tmux_agents() == [("mindflock_a", 100.0), ("mindflock_b", 0.0)]
     R.returncode = 1
     assert gate._tmux_agents() == []
+
+
+def test_admit_auto_checks_and_notes_in_one_step(monkeypatch):
+    """Two automatic starts racing: the first is noted before the lock is let
+    go, so the second sees it (spacing, warming) and waits."""
+    import threading
+
+    _memory(monkeypatch)
+    results = []
+    barrier = threading.Barrier(2)
+
+    def go(key):
+        barrier.wait()
+        results.append(gate.admit_auto(key)[0])
+
+    threads = [threading.Thread(target=go, args=(k,)) for k in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [False, True]
+    assert gate.assess()["warming"] == 1
+
+
+def test_gate_auto_marks_a_queued_create(monkeypatch):
+    _memory(monkeypatch, level="low", available=3 * GiB)
+    rec = gate.gate_auto("w1", lambda: None, kind="spawn", creates=True)
+    assert rec["creates"] is True and gate.waiting("w1")["creates"] is True

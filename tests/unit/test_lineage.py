@@ -856,6 +856,26 @@ def test_low_memory_queues_an_agents_spawn(create, monkeypatch):
     assert launch_gate.waiting("w1") is None
 
 
+def test_a_queued_spawn_is_listed_until_cancelled(create, monkeypatch):
+    """While it waits the worker is a pending placeholder row marked
+    waiting_for_memory; cancelling it drops the row and creates nothing."""
+    from backend.web.core import launch_gate, pending
+
+    _memory(monkeypatch, "critical")
+    create.reg.add("orch")
+    assert create.post(title="w9", parent="orch", spawned=True).status_code == 202
+    try:
+        (row,) = [r for r in server._pending_rows() if r["title"] == "w9"]
+        assert row["pending"] is True and row["parent"] == "orch"
+        assert row["waiting_for_memory"]["creates"] is True
+        r = client.post("/api/launch-gate/w9/cancel")
+        assert r.json() == {"title": "w9", "cancelled": True}
+        assert not pending.has("w9") and launch_gate.items() == []
+        assert create.captured == []
+    finally:
+        pending.drop("w9")
+
+
 def test_low_memory_asks_a_person_and_never_gates_a_run_member(create, monkeypatch):
     """A person's New while memory is critical is a 409 the app turns into a
     confirm (memory_confirm), and goes through with start_anyway; a team

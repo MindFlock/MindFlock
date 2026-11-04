@@ -72,6 +72,7 @@ __all__ = [
     "note_start",
     "enqueue",
     "gate_auto",
+    "admit_auto",
     "waiting",
     "items",
     "cancel",
@@ -503,6 +504,26 @@ def enqueue(
     return pub
 
 
+def admit_auto(key: str) -> Tuple[bool, str]:
+    """Check and note in one step → ``(go, reason)``. Go only when nothing
+    waits ahead (FIFO) and :func:`decide` says go; the start is then noted
+    (``key``: the title, or a placeholder) before the lock is let go, so two
+    concurrent automatic starts can't both pass on the same reading."""
+    # Warm the two cached reads first, so the lock is never held across a
+    # tmux call or a /proc read (every row's waiting() takes it too).
+    _agents()
+    memory_pressure.snapshot()
+    with _LOCK:
+        if _QUEUE:
+            head = _QUEUE[0]
+            return False, head.get("reason") or "others are waiting ahead of it"
+        verdict = decide("auto")
+        if verdict["decision"] != "go":
+            return False, verdict["reason"]
+        note_start(key, auto=True)
+        return True, ""
+
+
 def gate_auto(
     title: str,
     launch: Launch,
@@ -514,21 +535,25 @@ def gate_auto(
 ) -> Optional[dict]:
     """An automatic start's one call: None means go (the start is noted and
     the caller launches inline now), else the queued record. Someone already
-    waiting goes first (FIFO): a launch never jumps the queue."""
+    waiting goes first (FIFO): a launch never jumps the queue, and one
+    already queued keeps its place."""
     with _LOCK:
         queued = next((it for it in _QUEUE if it["title"] == title), None)
-        ahead = bool(_QUEUE)
-    if queued is None and not ahead:
-        verdict = decide("auto")
-        if verdict["decision"] == "go":
-            note_start(title, auto=True)
-            return None
-        reason = verdict["reason"]
-    else:
-        reason = (queued or {}).get("reason") or "others are waiting ahead of it"
-    return enqueue(
-        title, launch, kind=kind, source=source, reason=reason, parent=parent
-    )
+        if queued is None:
+            go, reason = admit_auto(title)
+            if go:
+                return None
+        else:
+            reason = queued.get("reason") or ""
+        return enqueue(
+            title,
+            launch,
+            kind=kind,
+            source=source,
+            reason=reason,
+            parent=parent,
+            creates=creates,
+        )
 
 
 def waiting(title: str) -> Optional[dict]:

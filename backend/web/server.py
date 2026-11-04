@@ -2958,13 +2958,11 @@ async def _queue_spawned_create(payload: dict, person: str) -> Optional[JSONResp
             },
             status_code=409,
         )
-    with _launch_gate._LOCK:
-        busy = bool(_launch_gate._QUEUE)
-    if not busy:
-        verdict = await asyncio.to_thread(_launch_gate.decide, "auto")
-        if verdict["decision"] == "go":
-            _launch_gate.note_start(title or "spawn-%d" % time.time_ns(), auto=True)
-            return None
+    go, _why = await asyncio.to_thread(
+        _launch_gate.admit_auto, title or "spawn-%d" % time.time_ns()
+    )
+    if go:
+        return None
     if not title:
         # Queued, so it needs its name now: the rule create itself uses.
         base = _session_create.title_from_prompt(str(payload.get("prompt") or ""))
@@ -2978,13 +2976,16 @@ async def _queue_spawned_create(payload: dict, person: str) -> Optional[JSONResp
         # requests) on a loop of its own.
         loop = _LAUNCH_LOOP["loop"]
         coro = _session_create.create_result(queued_payload, person=person)
-        if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
-            status, body = asyncio.run_coroutine_threadsafe(coro, loop).result(
-                timeout=600
-            )
-        else:
-            status, body = asyncio.run(coro)
-        _pending.drop(title)
+        try:
+            if isinstance(loop, asyncio.AbstractEventLoop) and loop.is_running():
+                status, body = asyncio.run_coroutine_threadsafe(coro, loop).result(
+                    timeout=600
+                )
+            else:
+                status, body = asyncio.run(coro)
+        finally:
+            # Created (its real row replaces the placeholder) or failed.
+            _pending.drop(title)
         if status >= 400:
             err = str(body.get("error") or "create failed (%d)" % status)
             _note_create_failure(title, err)
