@@ -12,7 +12,7 @@ import { loopChoices, type DiagramNode, type LoopChoice } from "../../lib/flight
 import { errMsg } from "../../lib/format";
 import { pauseSession, resumeSession } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
-import { heldQueuedText, isHeldRefusal } from "../../lib/heldOffline";
+import { heldQueuedText, heldWasQueued, isHeldRefusal } from "../../lib/heldOffline";
 import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
@@ -299,7 +299,7 @@ export async function sendPrompt(title: string, text: string): Promise<boolean> 
   } catch (err) {
     // Held offline after a crash: the server queued it, sent after Start.
     if (isHeldRefusal(err)) {
-      toast(heldQueuedText(windowName(title)));
+      toast(heldQueuedText(windowName(title), heldWasQueued(err)));
       return true;
     }
     toast("Couldn't send: " + errMsg(err));

@@ -16,7 +16,7 @@
 
 import { api } from "../api/client";
 import { childrenOf } from "./agentMessages";
-import { heldQueuedText, isHeldRefusal } from "./heldOffline";
+import { heldQueuedText, heldWasQueued, isHeldRefusal } from "./heldOffline";
 import type { Caps, Instance, Playbook, PlaybooksResponse } from "../api/types";
 import { displayName, useUi } from "../state/store";
 import { errMsg } from "./format";
@@ -209,7 +209,7 @@ async function pasteNow(
   } catch (err) {
     // Held offline after a crash: the server queued it, sent after Start.
     if (isHeldRefusal(err)) {
-      toast(heldQueuedText(name), { duration: 5000 });
+      toast(heldQueuedText(name, heldWasQueued(err)), { duration: 5000 });
       return true;
     }
     toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6000 });

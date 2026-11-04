@@ -7,7 +7,7 @@ import { instApi } from "../../api/client";
 import { fmtDurationShort } from "../../lib/format";
 import { displayName } from "../../state/store";
 import { toast } from "../../lib/toast";
-import { heldQueuedText, isHeldRefusal } from "../../lib/heldOffline";
+import { heldQueuedText, heldWasQueued, isHeldRefusal } from "../../lib/heldOffline";
 import { dropIndex, hoverSlot, reorderItems } from "./queueDnd";
 import { promptsFromFile } from "./queueImport";
 
@@ -148,7 +148,7 @@ export function QueueTab({ title, active }: { title: string; active: boolean }) 
       // Held offline after a crash: the server queued it, sent after Start.
       if (isHeldRefusal(err)) {
         setDraft("");
-        toast(heldQueuedText(displayName(title)));
+        toast(heldQueuedText(displayName(title), heldWasQueued(err)));
         reload();
         return;
       }

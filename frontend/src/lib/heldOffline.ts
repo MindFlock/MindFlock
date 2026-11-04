@@ -55,9 +55,17 @@ export function isHeldRefusal(err: unknown): boolean {
   return !!b && typeof b === "object" && b.held === true;
 }
 
-/** The toast for a send to a held session. */
-export function heldQueuedText(name: string): string {
-  return "Queued — " + name + " is offline; press Start to send it.";
+/** Whether the held refusal KEPT the prompt: /send answers `queued: true`
+ * (or no `queued` at all — Send now keeps its queue item); an unsubmitted
+ * paste, an Enter or dictation is `queued: false`, nothing kept. */
+export function heldWasQueued(err: unknown): boolean {
+  const b = err instanceof ApiError ? (err.body as { queued?: unknown } | null) : null;
+  return !(b && typeof b === "object" && b.queued === false);
+}
+
+/** The toast for a send to a held session (`queued`: the server kept it). */
+export function heldQueuedText(name: string, queued = true): string {
+  return queued ? "Queued — " + name + " is offline; press Start to send it." : name + " is offline since a crash — press Start, then send it again.";
 }
 
 /** The rows the rail's notice counts (this device's held sessions). */

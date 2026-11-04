@@ -248,3 +248,16 @@ describe("Settings → General", () => {
     );
   });
 });
+
+describe("the Queued toast only when the server kept the prompt", () => {
+  it("queued:false (a paste, Enter, dictation) says send it again; queued or absent says Queued", async () => {
+    const { ApiError } = await import("../api/client");
+    const { heldWasQueued, heldQueuedText } = await import("../lib/heldOffline");
+    const mk = (body: unknown) => new ApiError(409, "held", body as never);
+    expect(heldWasQueued(mk({ held: true, queued: false }))).toBe(false);
+    expect(heldWasQueued(mk({ held: true, queued: true }))).toBe(true);
+    expect(heldWasQueued(mk({ held: true }))).toBe(true);
+    expect(heldQueuedText("bot", false)).toContain("send it again");
+    expect(heldQueuedText("bot")).toMatch(/^Queued/);
+  });
+});
