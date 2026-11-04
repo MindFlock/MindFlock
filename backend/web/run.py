@@ -189,6 +189,42 @@ def _install_stack_dump() -> None:
         pass
 
 
+#: What the server tries for its own ``oom_score_adj``, lowest first — never
+#: below 0. An unprivileged process can only go back down to the floor a
+#: privileged ancestor left it: 0 for a server started from a shell or WSL's
+#: init (nothing to do), 100 under a systemd user manager, which starts its
+#: units at 200. Going below 0 would need CAP_SYS_RESOURCE, and a negative
+#: score would be inherited by everything the server starts that doesn't raise
+#: its own (git, the pipeline child) — see docs/session-engine.md. Agents run
+#: at 500 (launch_script.OOM_SCORE_ADJ) and indexers at 800; the tmux server
+#: the server starts inherits this value.
+SERVER_OOM_TRIES = (0, 100)
+
+
+def protect_from_oom(path: str = "/proc/self/oom_score_adj") -> Optional[int]:
+    """Lower this process's ``oom_score_adj`` as far as the kernel allows (see
+    :data:`SERVER_OOM_TRIES`); never raises it. The value it ends at, or None
+    without ``/proc``. ``MINDFLOCK_SERVER_OOM_PROTECT=0`` turns it off (the
+    test suite does: its runner must stay as killable as any test run)."""
+    if (os.environ.get("MINDFLOCK_SERVER_OOM_PROTECT") or "").strip() == "0":
+        return None
+    try:
+        with open(path, encoding="ascii") as fh:
+            current = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        return None
+    for value in SERVER_OOM_TRIES:
+        if value >= current:
+            break
+        try:
+            with open(path, "w", encoding="ascii") as fh:
+                fh.write(str(value))
+            return value
+        except OSError:
+            continue
+    return current
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     # Before any thread exists: two malloc arenas instead of one per worker
     # thread (see core/malloc_arenas — the bulk of the server's RSS).
@@ -196,6 +232,7 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     cap_arenas()
     _install_stack_dump()
+    protect_from_oom()
     try:
         import uvicorn
         from backend.web.server import (

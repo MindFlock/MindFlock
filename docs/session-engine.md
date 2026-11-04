@@ -800,11 +800,64 @@ the ticket pipeline's standalone launch (`launch_script.launch_command`, used
 by `AgentCliRunner` and `PRClaudeRunner`), a session's shell tab, and the
 usage-refresh windows. `MINDFLOCK_OOM_SCORE_ADJ` overrides the value (`0`
 turns it off; the launch strings are then byte-identical to before). The tmux
-server keeps its own score. The server does **not** lower its own: going below
-0 needs `CAP_SYS_RESOURCE`, which a normal install never has, and if it did
-run privileged the lowered score would be inherited by everything it starts
-that doesn't raise its own (the tmux server, git, the pipeline child) —
-raising the agents already puts the server behind them.
+server keeps its own score. The server never goes **below 0**: that needs
+`CAP_SYS_RESOURCE`, which a normal install never has, and if it did run
+privileged the lowered score would be inherited by everything it starts that
+doesn't raise its own (the tmux server, git, the pipeline child) — raising the
+agents already puts the server behind them. At boot it does come back *down*
+to the lowest non-negative value the kernel allows (`run.protect_from_oom`):
+nothing to do when started from a shell or WSL's init (0), 100 instead of 200
+under a systemd user manager. `MINDFLOCK_SERVER_OOM_PROTECT=0` skips it.
+
+#### Before the OOM killer: each agent in its own memory-limited scope
+
+**What crashed WSL on 2026-11-04 was the swap, not the victim choice.** The
+kernel log of the dead boot (`journalctl -k -b -1`) shows RAM and all 16 GB of
+swap full (~35 GB of anonymous memory across ~18 agent trees) before the OOM
+killer fired; it did take agent-tree processes (score 500), but only after
+minutes of swap thrash, and WSL never recovered. The biggest processes were
+`gitnexus analyze --force` runs from a repo's pre-commit hook — 3.8, 4.3 and
+4.6 GB each, several at once (every agent that commits starts one, and
+GitNexus sizes its V8 heap to 0.75x RAM: `--max-old-space-size=16384`) —
+then `pytest -n 8` suites (8 workers x ~0.7 GB) in other sessions.
+
+So every agent launch (the exit-marker wrapper and `TmuxSession.start`) now
+runs inside `systemd-run --user --scope` (`backend.providers.agent_limits`):
+
+- **Per agent**: `MemoryHigh` 30% of RAM (the kernel throttles and reclaims
+  that tree above it), `MemoryMax` 40% (above it the OOM killer acts *inside
+  that agent's cgroup* — its biggest process, the test worker or the indexer —
+  long before the machine is out), `MemorySwapMax` 15%.
+- **All agents together**: every scope sits in `app-mindflock.slice`, which
+  gets `MemoryHigh` 65% / `MemoryMax` 75% / `MemorySwapMax` 40%
+  (`systemctl --user set-property --runtime`, applied by the first launch
+  after a reboot), so the server, the tmux server, the editor and the OS keep
+  the rest whatever the agents do.
+- The scope is named `mindflock-<session>-<ms>.scope`
+  (`systemctl --user status 'mindflock-*'` shows each agent's memory). The
+  pane's terminal, environment, cwd and exit status are the agent's own:
+  `systemd-run --scope` execs `sh -c <launch>` in place.
+- Availability is probed with a throwaway scope (cached 10 min, a "no" for
+  1 min — WSL starts the user manager lazily, so a boot-time "no" is picked up
+  a minute later). No `systemd-run`, no user bus, macOS: the launch string is
+  exactly what it was.
+
+**`gitnexus analyze` takes turns.** When GitNexus is installed, launches put
+`<run dir>/bin` first on the agent's `PATH`; its `gitnexus` shim runs
+`analyze` through `mindflock slot --pool gitnexus --max 1 --timeout 1800`
+(one at a time machine-wide, first come first served, waits for memory) with
+`NODE_OPTIONS=--max-old-space-size=4096` (GitNexus honours a user heap instead
+of its 0.75x RAM default; a heap already in `NODE_OPTIONS` is kept) and
+`oom_score_adj` 800. Everything else (`gitnexus mcp`, `augment`, `status`…)
+execs the real binary untouched. That covers a pre-commit `gitnexus analyze`,
+`node .gitnexus/run.cjs analyze` (it looks `gitnexus` up on `PATH`) and an
+agent running the command itself; `npx gitnexus` bypasses it.
+
+All of it is `general.agent_memory` in settings.json (see
+[configuration.md](configuration.md)); `MINDFLOCK_AGENT_SCOPE=0` turns the
+scopes off and `MINDFLOCK_GITNEXUS_GATE=0` the shim (the test suite sets
+both). It applies to agents launched after the change; running ones keep
+the cgroup they started in.
 
 **A SIGKILL is not a failed resume.** A resume chain's fallbacks (`claude
 --continue || { sleep 3; retry } || fresh`, a generic CLI's `resume || fresh`,

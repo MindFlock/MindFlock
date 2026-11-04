@@ -10,6 +10,14 @@ from pathlib import Path
 # No boot-time model warm-up under the suite: a daemon thread left by one
 # app's lifespan would load a model into a later test's cache.
 os.environ.setdefault("MINDFLOCK_VOICE_WARM", "0")
+# No agent scopes (systemd-run) and no gitnexus shim in launch strings: tests
+# pin those strings, and must never start a real systemd scope. The tests of
+# backend.providers.agent_limits turn them back on with fakes.
+os.environ.setdefault("MINDFLOCK_AGENT_SCOPE", "0")
+os.environ.setdefault("MINDFLOCK_GITNEXUS_GATE", "0")
+# run.main() lowers the SERVER's oom_score_adj; under pytest that process is
+# the test runner, which must stay killable.
+os.environ.setdefault("MINDFLOCK_SERVER_OOM_PROTECT", "0")
 
 import pytest
 
