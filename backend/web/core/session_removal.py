@@ -242,6 +242,18 @@ def _release_tracker_claim(title: str) -> None:
 _SESSION_REMOVED_HOOKS.append(_release_tracker_claim)
 
 
+def _forget_former_titles(title: str) -> None:
+    """A removed session's old names (core.rename) go with it: a request for
+    one must not reach a namesake, and its leftover run file / exit-marker link
+    are deleted."""
+    from backend.web.core import rename as _rename
+
+    _rename.forget(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_forget_former_titles)
+
+
 def _orphan_children(title: str) -> list:
     """Clear ``Parent`` on every instance whose parent is ``title``; persist
     when any changed. Returns the orphaned titles.
@@ -371,3 +383,8 @@ def _prune_session_state(live_titles) -> None:
         srv._THREAD_RECORD_AT.pop(dead, None)
     _sleep.prune(live)
     _task_headlines.prune(live)
+    # Old names whose session went, or whose agent relaunched under the new
+    # one (core.rename; throttled — it asks tmux for each entry's pane pid).
+    from backend.web.core import rename as _rename
+
+    _rename.prune_soon(live)

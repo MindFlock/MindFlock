@@ -709,3 +709,23 @@ class RenamedTitleMiddleware:
                 except Exception:  # noqa: BLE001 — never break a request
                     pass
         await self.app(scope, receive, send)
+
+
+_PRUNE_EVERY_S = 30.0
+_PRUNED_AT = [0.0]
+
+
+def prune_soon(live_titles) -> None:
+    """:func:`prune` at most every :data:`_PRUNE_EVERY_S` (the instances tick
+    calls this; an empty map costs nothing). Never raises."""
+    try:
+        now = time.monotonic()
+        if now - _PRUNED_AT[0] < _PRUNE_EVERY_S:
+            return
+        _PRUNED_AT[0] = now
+        with _MAP_LOCK:
+            empty = not _map()
+        if not empty:
+            prune(live_titles)
+    except Exception:  # noqa: BLE001 — housekeeping
+        pass
