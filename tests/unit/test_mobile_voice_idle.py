@@ -167,3 +167,77 @@ def test_a_cold_voices_first_clip_is_waited_for_and_marked_starting():
     assert "startingEnd();" in _inner(tts, "cancel")
     assert "!!voice.ttsStarting" in _whole(js, "voiceStripPaint")
     assert _var(js, "VOICE_STARTING_MS").startswith("  var VOICE_STARTING_MS = 1000;")
+
+
+# --------------------------------------------------------------------------- #
+# Recognition loads only while someone listens
+# --------------------------------------------------------------------------- #
+@needs_node
+def test_the_standby_holds_a_listening_lease_renewed_and_given_back():
+    js = _js()
+    script = (
+        _var(js, "VOICE_LISTEN_RENEW_MS")
+        + _var(js, "voiceLease")
+        + _whole(js, "voiceListenLease")
+        + """
+var VOICE_CLIENT_ID = "m-page", posts = [], ticks = [], cleared = 0;
+fetch = function (url, o) { posts.push([url, JSON.parse(o.body)]); return Promise.resolve({}); };
+setInterval = function (fn, ms) { ticks.push([fn, ms]); return ticks.length; };
+clearInterval = function () { cleared++; };
+voiceListenLease(true);
+voiceListenLease(true);   // idempotent: the standby syncs often
+ticks[0][0]();            // the renewal
+voiceListenLease(false);
+voiceListenLease(false);
+console.log(JSON.stringify({ posts: posts, every: ticks.map(function (t) { return t[1]; }), on: voiceLease.on }));
+"""
+    )
+    out = _run(script)
+    assert out["posts"] == [
+        ["/api/voice/listen", {"on": True, "client": "m-page"}],
+        ["/api/voice/listen", {"on": True, "client": "m-page"}],
+        ["/api/voice/listen", {"on": False, "client": "m-page"}],
+    ]
+    assert out["every"] == [60000]  # well inside the server's 180 s lease
+    assert out["on"] is False
+
+
+def test_the_lease_follows_the_standby():
+    sync = _whole(_js(), "voiceWakeSync")
+    # Wanted (the pref on, voice on, the page in front), a mic here and the
+    # server able to recognise: the lease is on; anything else gives it back.
+    assert (
+        "voiceListenLease(want && A.available() && (voice.cfg.server_ready || {}).stt !== false);"
+        in sync
+    )
+    assert sync.index("voiceListenLease(") < sync.index("A.hold(want);")
+
+
+@needs_node
+def test_the_strip_says_starting_the_mic_while_recognition_loads():
+    script = _whole(_js(), "voiceStripWord") + """
+console.log(JSON.stringify([
+  voiceStripWord("listening", false, "", false, false, false, true),
+  voiceStripWord("listening", false, "", false, false, false, false),
+  voiceStripWord("listening", false, "", true, false, false, true),
+  voiceStripWord("idle", false, "", false, false, false, true),
+  voiceStripWord("listening", true, "", false, false, false, true),
+]));
+"""
+    assert _run(script) == [
+        "Starting the mic…",
+        "Listening…",
+        "Mic paused…",
+        "",
+        "Speaking…",
+    ]
+
+
+def test_a_streams_loading_shows_until_recognition_answers():
+    js = _js()
+    stt = js[js.index("  function ServerSTT(") :]
+    assert "voiceSttLoading(x.j.loading === true);" in _inner(stt, "streamOpen")
+    assert "voiceSttLoading(false);   // a pass came back" in _inner(stt, "streamChunk")
+    assert "voiceSttLoading(false);" in _inner(stt, "streamEnd")
+    assert "voiceSttLoading(false);" in _inner(stt, "streamFail")
+    assert "!!voice.sttLoading);" in _whole(js, "voiceStripPaint")

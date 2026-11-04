@@ -14,7 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
+  LISTEN_RENEW_MS,
+  STARTING_MIC_LINE,
   STARTING_VOICE_LINE,
+  listenLeaser,
   VOICE_COLD_MS,
   VOICE_STARTING_MS,
   micPill,
@@ -188,5 +191,46 @@ describe("the first line after the voice went idle", () => {
       sp2.cancel();
       expect(seen).toEqual([true, false]);
     });
+  });
+});
+
+describe("recognition is in memory only while someone listens", () => {
+  it("the standby's lease: on once, renewed every minute, given back once", () => {
+    vi.useFakeTimers();
+    const posts: boolean[] = [];
+    const lease = listenLeaser(async (on) => void posts.push(on));
+    lease.set(true);
+    lease.set(true); // the mic renders twice on a Mac: idempotent
+    expect(posts).toEqual([true]);
+    vi.advanceTimersByTime(LISTEN_RENEW_MS * 2);
+    expect(posts).toEqual([true, true, true]);
+    lease.set(false);
+    lease.set(false);
+    vi.advanceTimersByTime(LISTEN_RENEW_MS * 3);
+    expect(posts).toEqual([true, true, true, false]);
+    expect(lease.on).toBe(false);
+    expect(LISTEN_RENEW_MS).toBeLessThan(180_000); // inside the server's lease
+  });
+
+  it("a failing post never throws", async () => {
+    const lease = listenLeaser(() => Promise.reject(new Error("offline")));
+    expect(() => lease.set(true)).not.toThrow();
+    lease.set(false);
+  });
+
+  it("the pill says Starting the mic… while recognition loads for the phrase", () => {
+    expect(micPill({ listening: true, speaking: false, quiet: false, warming: true })).toBe(STARTING_MIC_LINE);
+    expect(micPill({ listening: true, speaking: false, quiet: false, warming: false })).toBe("Listening…");
+    expect(micPill({ listening: false, speaking: false, quiet: false, warming: true })).toBe("");
+  });
+
+  it("the mic follows the standby with the lease and the recognizer's loading", () => {
+    const mic = code("components/TopBarMic.tsx");
+    expect(mic).toContain("LISTEN_LEASE.set(!!wake.on);");
+    expect(mic).toContain("serverRec.onLoading = (on) => loadingListeners.forEach((l) => l(on));");
+    const rec = code("lib/voiceDesktop.ts");
+    expect(rec).toContain("if (r.j.loading === true) setLoading(true);");
+    // Ended by a pass, the phrase's end, a fall back to clips and a stop.
+    expect(rec.split("setLoading(false);").length - 1).toBe(4);
   });
 });

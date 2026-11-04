@@ -706,9 +706,15 @@ export const MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
  * is open, "Speaking…" while a line plays, else nothing. Never the words
  * heard, typed or said (they are in the terminal; the options show them),
  * and never "Hearing you…" in words — that is the ring's colour. */
-export function micPill(s: { listening: boolean; speaking: boolean; quiet: boolean; starting?: boolean }): string {
+export function micPill(s: {
+  listening: boolean;
+  speaking: boolean;
+  quiet: boolean;
+  starting?: boolean;
+  warming?: boolean;
+}): string {
   if (s.quiet) return HUSH_LINE;
-  if (s.listening) return "Listening…";
+  if (s.listening) return s.warming ? STARTING_MIC_LINE : "Listening…";
   if (s.speaking && s.starting) return STARTING_VOICE_LINE;
   return s.speaking ? "Speaking…" : "";
 }
@@ -717,6 +723,54 @@ export function micPill(s: { listening: boolean; speaking: boolean; quiet: boole
  * `onStarting`): a local voice host (Voice Lab) that went idle starts on the
  * first line asked of it and loads its model, which takes a while. */
 export const STARTING_VOICE_LINE = "Starting voice…";
+
+/** The pill while the server's recognition loads for the first phrase
+ * (`serverRecognizer`'s `onLoading`): local recognition is kept in memory
+ * only while someone listens (the standby), so a press after a while idle
+ * waits a few seconds for it. */
+export const STARTING_MIC_LINE = "Starting the mic…";
+
+/** How often a page renews its listening lease (POST /api/voice/listen) while
+ * the standby is on: well inside the server's 180 s lease. */
+export const LISTEN_RENEW_MS = 60_000;
+
+/** The page's one listening lease: on while the wake-word standby is on —
+ * the server keeps local recognition in memory only while some page holds
+ * one — renewed every {@link LISTEN_RENEW_MS}, ended at once when it goes
+ * off. Idempotent (the mic renders twice on a Mac). `post` is the request
+ * (a seam); it never throws. */
+export function listenLeaser(post: (on: boolean) => Promise<unknown> = postListen): {
+  set(on: boolean): void;
+  readonly on: boolean;
+} {
+  let on = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const send = (want: boolean) => void post(want).catch(() => {});
+  return {
+    set(want: boolean) {
+      if (want === on) return;
+      on = want;
+      clearInterval(timer);
+      timer = undefined;
+      send(want);
+      if (want) timer = setInterval(() => send(true), LISTEN_RENEW_MS);
+    },
+    get on() {
+      return on;
+    },
+  };
+}
+
+function postListen(on: boolean): Promise<unknown> {
+  return apiRaw("/api/voice/listen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ on, client: VOICE_CLIENT_ID }),
+  });
+}
+
+/** This page's lease ({@link listenLeaser}), driven by the standby. */
+export const LISTEN_LEASE = listenLeaser();
 
 /** The keys that turn `before` (typed) into `after`: `erase` — the tail of
  * `before` past the start they share, taken back one backspace per
@@ -4602,8 +4656,18 @@ export function serverRecognizer(
   finalMs: number | null;
   readonly streaming: boolean;
   readonly spokeAt: number;
+  /** Local recognition is loading for this phrase (true: the stream opened
+   * with `loading`), then it answered, failed or stopped (false). */
+  onLoading?: (on: boolean) => void;
 } {
   const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, undefined, runningAudioCtx);
+  /** The server said the stream's model is loading, and nothing came back yet. */
+  let loading = false;
+  const setLoading = (on: boolean) => {
+    if (loading === on) return;
+    loading = on;
+    self.onLoading?.(on);
+  };
   /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
   let holding = false;
   let h: RecognizerHandlers | null = null;
@@ -4780,6 +4844,7 @@ export function serverRecognizer(
    * in the caption ("" for a 409: the server just can't stream now). */
   const fallBack = (c: Phrase, line: string) => {
     if (!c.stream) return;
+    setLoading(false);
     streaming = false;
     for (const p of new Set([c, cur])) {
       if (!p?.stream) continue;
@@ -4836,6 +4901,8 @@ export function serverRecognizer(
           c.opened = Date.now();
           open.add(id);
           voiceMark("stream");
+          // Nobody was listening: the model loads now, the first words wait.
+          if (r.j.loading === true) setLoading(true);
         } else if (r.status === 409) {
           self.lastError = String(r.j.error || "the server can't stream");
           fallBack(c, "");
@@ -4859,6 +4926,7 @@ export function serverRecognizer(
       if (h !== hh || !hh || !c.stream) return;
       if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
       self.lastError = "";
+      setLoading(false); // a pass came back: the model is up
       const ms = Number(r.j.ms);
       if (ms > 0) {
         self.passMs = ms;
@@ -4929,6 +4997,7 @@ export function serverRecognizer(
       open.delete(sid);
       try {
         const r = await call(streamPath(sid, "/end"), { method: "POST" });
+        setLoading(false);
         if (h !== hh) return;
         if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
         c.stream = false;
@@ -5173,6 +5242,7 @@ export function serverRecognizer(
   const self = {
     name: "server" as const,
     lastError: "",
+    onLoading: undefined as ((on: boolean) => void) | undefined,
     /** The server's last streaming pass, in ms (null before one). */
     passMs: null as number | null,
     /** The last phrase's accurate re-transcription (/end `final_ms`), in ms. */
@@ -5239,6 +5309,7 @@ export function serverRecognizer(
       finishing = false;
       h = null;
       token = null;
+      setLoading(false);
       clearTimeout(capTimer);
       unlistenOver();
       try {

@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it has been idle shows **Starting voice…** while it starts, and is said in
   your chosen voice once it is up (the server waits up to 90 s for it)
   instead of by the backup voice or as an error.
+- **Speech recognition is loaded only while you listen.** The local
+  recognition models (about 1.1 GB) are no longer loaded at startup or
+  whenever a page opens: they load when the wake-word standby turns on (and
+  stay loaded while it is on, so "MindFlock" is answered at once) or when you
+  start dictating, and unload after 30 unused minutes otherwise. The first
+  dictation after that shows **Starting the mic…** for the few seconds the
+  models take to load.
 - **A rename renames the session.** There is no hidden second name any more:
   renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
   `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,
