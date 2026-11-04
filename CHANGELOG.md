@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **After a crash, sessions stay offline until you press Start.** A session
+  whose agent died (the server restarted, the OOM killer took it, it crashed)
+  is held offline: no pane, sent prompt, queue, wake or sweep starts it, so a
+  crash can't refill memory and loop the machine. Prompts sent to it wait on
+  its queue. Start (the Offline chip, the pane, Start all) brings it back, and
+  one notice per restart says how many stayed offline. **Bring agents back by
+  themselves after a crash** (`general.revive_on_start`) is now off by
+  default; turning it on restores the old relaunch-everything behaviour.
 - **The Sky opens on This session.** The view picker (This session · All ·
   Mine · Needs you) defaults to This session and remembers your pick. With
   nothing selected it shows the route that needs you, else a working one, and
