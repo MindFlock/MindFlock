@@ -14,7 +14,7 @@ first — there's no CLA, but every commit in a PR needs a `Signed-off-by` line
 (`git commit -s`), checked automatically by the DCO workflow.
 
 Dependency groups (`pyproject.toml`): base (`aiohttp`, `tomli`), `dev` (pytest,
-pytest-asyncio, hypothesis, httpx), `engine` (pyperclip, ptyprocess), `web`
+pytest-asyncio, pytest-xdist, pytest-timeout, hypothesis, httpx), `engine` (pyperclip, ptyprocess), `web`
 (engine + fastapi, uvicorn, segno).
 
 `segno` (pure-Python QR codes) is imported **lazily and optionally**: it renders
@@ -339,6 +339,79 @@ Pytest config lives in `pyproject.toml` (`testpaths=["tests"]`,
 redirects `tempfile` + `MINDFLOCK_ASSISTANT_DIR` into pytest's tmp dir so tests
 never touch your real caches — important because the pipeline's testmon
 refresher re-runs suites automatically.
+
+### Parallel runs (what CI does)
+
+A plain `uv run pytest` is **serial** — that is what the run-tests hook and
+most quick local runs use, and it stays that way. The `dev` group also ships
+`pytest-xdist` and `pytest-timeout`, which do nothing until you pass their
+flags:
+
+```bash
+uv run pytest -n 4 --dist worksteal              # the suite on 4 workers
+uv run pytest -n auto --dist worksteal --timeout=300   # exactly what CI runs
+```
+
+`-n auto` is one worker per core (4 on `ubuntu-latest`, 3 on
+`macos-latest`); `PYTEST_XDIST_AUTO_NUM_WORKERS` caps it on a memory-tight
+machine (each worker imports the whole server: a few hundred MB apiece). `worksteal`
+lets idle workers take queued tests from busy ones, so the slowest module
+(`tests/integration/test_fleet_e2e.py`, ~70 s) doesn't leave three workers
+idle at the end. Measured on an 8-core WSL box: serial ~820 s, `-n 4` ~205 s.
+
+Parallel-safety rules the suite already follows, which a new test must too:
+
+- **Parametrize ids must be deterministic.** Every xdist worker collects the
+  suite itself and they must agree on every node id. A `bytes`/`str` param's
+  default id is its value, so a param built from `os.urandom`, a random
+  websocket mask or a timestamp needs explicit `ids=` (see
+  `tests/unit/peer/test_relay.py`). Check with two collections under different
+  hash seeds: `PYTHONHASHSEED=1 uv run pytest --collect-only -q` vs `=2`.
+- **Everything on disk goes under `tmp_path`** (the autouse fixtures in
+  `tests/conftest.py` already point every `~/.mindflock` store there).
+- **A real tmux server gets its own socket** — `-L mf-<uuid>`, or a short
+  `-S` path / `TMUX_TMPDIR` under `/tmp` named per test or per pid (macOS
+  `tmp_path` is too long for a unix socket) — and never `kill-server` on the
+  default one.
+- **Ports come from the kernel** (`bind(("127.0.0.1", 0))`), never a fixed
+  number.
+
+### How CI runs the suite
+
+`.github/workflows/ci.yml`, job `test` (checks named `test (ubuntu-latest)`
+and `test (macos-latest)`):
+
+| Event | Ubuntu | macOS |
+|---|---|---|
+| pull request | full suite, `-n auto` | the platform-sensitive slice in `tests/macos_pr_tests.txt` |
+| push to `main`, tag | full suite | full suite |
+| nightly (07:17 UTC), `workflow_dispatch` | full suite | full suite |
+
+Serially, the Ubuntu job took ~14 min and macOS ~23 min — and hosted macOS
+runners are scarce enough that a PR's macOS job often sat queued until GitHub
+gave up ("not acquired") and showed it cancelled. Almost all of the suite is
+platform-neutral Python, so a PR now runs on macOS only the tests whose
+behaviour can differ there (real tmux, PTYs, `sys.platform` branches, sockets
+and the seatbelt sandbox, process spawning, git worktree paths, installers,
+and every file that has ever failed on macOS alone); `main`, the nightly run
+and a manual dispatch still run all of it. Add a test file to
+`tests/macos_pr_tests.txt` when it touches any of that. Run the slice locally
+with:
+
+```bash
+uv run pytest -n 4 $(sed 's/#.*//' tests/macos_pr_tests.txt | sort)
+```
+
+Keep each directory's paths together in that file (CI sorts it anyway):
+pytest 9 drops a directory's `conftest.py` for a file passed after another
+directory's file that itself followed one from the first, so
+`peer/a.py unit/b.py peer/c.py` runs `c.py` without the peer fixtures.
+
+Every CI job has a `timeout-minutes`, and the test step passes
+`--timeout=300`, so a hang fails with the stuck test's traceback rather than
+burning a runner for hours. A new push to a PR cancels that PR's
+still-running checks (the workflow's `concurrency` group); pushes to `main`
+are never cancelled.
 
 The reply-watch loop (`server._reply_watch_loop`) is off under pytest:
 `server._REPLY_WATCH_LOOP_ENABLED` defaults to `None`, meaning "on except

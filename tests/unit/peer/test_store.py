@@ -97,6 +97,20 @@ def test_loose_mode_is_tightened(tmp_path):
         ).encode(),
         b"[" * 100000,
     ],
+    # Explicit ids: _link() stamps the current time, and a bytes param's
+    # default id is its value — xdist workers must all name the cases alike.
+    ids=[
+        "not-json",
+        "list",
+        "version-2",
+        "links-list",
+        "not-utf8",
+        "link-missing-fields",
+        "bad-peer-pub",
+        "bad-perms",
+        "bad-share-id",
+        "deep-nesting",
+    ],
 )
 def test_corrupt_file_loads_empty_and_is_backed_up(tmp_path, content):
     path = tmp_path / "links.json"

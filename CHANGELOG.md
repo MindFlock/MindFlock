@@ -42,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`sitecheck-bot` → `sitecheck-bot-2`), not `name-copy`.
 - **A new route waits for ▶ Run** instead of starting on your next prompt,
   including a saved route dropped or wired onto a session.
+- **CI runs the test suite in parallel.** `test (ubuntu-latest)` runs the
+  whole suite on every core (`pytest -n auto`, pytest-xdist): ~3.5 min of
+  tests instead of ~14. On a pull request, `test (macos-latest)` runs only the
+  platform-sensitive slice listed in `tests/macos_pr_tests.txt` (tmux, PTYs,
+  platform branches, sockets, the session engine — ~2 min); the full macOS
+  suite runs on every push to main, nightly and on demand. Every CI job has a
+  timeout, a hung test fails with its traceback (`--timeout=300`), and a new
+  push to a PR cancels that PR's superseded run. A plain `uv run pytest` is
+  still serial (docs/development.md, "Parallel runs").
 
 ### Fixed
 

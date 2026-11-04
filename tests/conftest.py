@@ -353,6 +353,30 @@ def _no_pending_pipeline_reconcile():
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_usage_sampler(monkeypatch):
+    """Every ``with TestClient(server.app)`` starts the lifespan, and the Usage
+    Optimizer addon registers ``sampler.loop`` there — whose first pass parses
+    every transcript under the developer's REAL ``~/.claude*/projects`` (via
+    usage_history.current_window). On a dev machine that is ~10 s of JSON in
+    a background thread that the lifespan's shutdown then waits out (the first
+    TestClient teardown in each process took 10-15 s), and it reads real user
+    data in the middle of a test. No test drives the loop itself — the
+    sampler tests call ``sample_once``/``collect`` directly — so start a
+    dormant one instead."""
+    try:
+        from backend.web.addons.optimizer import sampler as _sampler
+    except Exception:  # noqa: BLE001 — addon import is best-effort here
+        return
+
+    async def _dormant():
+        import asyncio
+
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(_sampler, "loop", _dormant)
+
+
+@pytest.fixture(autouse=True)
 def _no_boot_quiet(monkeypatch):
     """Tests run within seconds of importing the server module, which is
     exactly the post-launch quiet window that swallows *_changed events and the

@@ -16,11 +16,25 @@ name: CI
 # main (so a direct push is still checked, which is why `format` covers the
 # whole tree) and tags (the `versions` job asserts the tag matches the
 # manifests, and that only has a tag to read on a tag push).
+#
+# The nightly schedule (and workflow_dispatch) exist for macOS: a pull request
+# runs only its platform-sensitive tests there (see the `test` job), so the
+# full macOS suite runs on main pushes, every night, and on demand.
 on:
   push:
     branches: [main]
     tags: ["v*"]
   pull_request:
+  schedule:
+    - cron: "17 7 * * *" # 07:17 UTC daily, off the top of the hour
+  workflow_dispatch:
+
+# A new push to a PR supersedes its running checks: cancel them instead of
+# letting both hold (scarce) macOS runners. Every other event (main pushes,
+# tags, nightly, dispatch) is its own group, so each merge is checked in full.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   format:
@@ -32,6 +46,7 @@ jobs:
     # (and the dependency on github.base_ref, which a push doesn't have).
     name: format (black)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - name: Install uv
@@ -49,6 +64,7 @@ jobs:
     # Stdlib-only, so plain python3 — no uv/deps needed.
     name: version consistency
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
       - name: Manifests agree (and match tag on tagged builds)
@@ -76,6 +92,7 @@ jobs:
     # which at least makes that one rebuild per week rather than one per bump.
     name: frontend bundle is current
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -98,12 +115,29 @@ jobs:
         run: ./scripts/check-bundle-fresh.sh
 
   test:
+    # The whole suite, in parallel across the runner's cores (pytest-xdist:
+    # -n auto is 4 workers on ubuntu-latest, 3 on macos-latest). Serially it
+    # was ~14 min on Ubuntu and ~23 min on macOS; see docs/development.md
+    # ("How CI runs the suite") for the numbers and how to reproduce locally.
+    #
+    # macOS policy: hosted macOS runners are scarce (jobs regularly sat
+    # queued until "not acquired" and showed up cancelled) and 3x the Linux
+    # wall time, while nearly everything the suite checks is platform-neutral
+    # Python. So a pull request runs macOS only over the platform-sensitive
+    # tests listed in tests/macos_pr_tests.txt (real tmux, PTYs, sys.platform
+    # branches, sockets/sandbox, process spawning, git worktree paths, and
+    # every file that has ever failed on macOS alone), and the FULL macOS
+    # suite runs on every push to main, nightly, and on demand
+    # (workflow_dispatch). The job name stays "test (macos-latest)" either way.
     name: test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # Parallel runs take ~4 min (Ubuntu) / ~9 min (full macOS); a wedged
+    # runner or a hang pytest-timeout cannot interrupt fails here, not at 6 h.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
 
@@ -111,14 +145,22 @@ jobs:
         uses: astral-sh/setup-uv@v10.3.2
         with:
           python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
+      # ubuntu-latest already ships tmux; only fetch the apt index (~8 s)
+      # when an image ever stops doing so.
       - name: Install tmux (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: command -v tmux || (sudo apt-get update && sudo apt-get install -y tmux)
 
       - name: Install tmux (macOS)
         if: runner.os == 'macOS'
-        run: brew install tmux
+        run: command -v tmux || brew install tmux
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_ENV_HINTS: "1"
 
       - name: Sync dependencies
         run: uv sync --group web --group dev
@@ -126,8 +168,27 @@ jobs:
       # Includes the Phase-2 failure-path tests (tests/unit/test_preflight.py):
       # mid-rebase/merge/cherry-pick/bisect blocks, ctrl-C worktree rollback,
       # doctor version gates, per-distro fix commands.
+      #
+      # worksteal: idle workers take queued tests from busy ones, so one slow
+      # module (tests/integration/test_fleet_e2e.py, ~70 s) cannot leave the
+      # other workers idle at the end. --timeout: one hung test fails with
+      # its stack instead of eating the job's timeout-minutes.
       - name: Run test suite
-        run: uv run pytest -q
+        shell: bash
+        run: |
+          args=(-q -n auto --dist worksteal --timeout=300 --durations=25)
+          if [ "$RUNNER_OS" = macOS ] && [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            echo "macOS on a pull request: platform-sensitive tests only (tests/macos_pr_tests.txt)"
+            # One path per line, no spaces: strip comments, sort (pytest loses a
+            # directory's conftest when its files are interleaved with another
+            # directory's — see the file's header), plain word-splitting (bash
+            # 3.2 on macOS has no mapfile). A listed path that no longer exists
+            # makes pytest exit non-zero, so a rename cannot drop coverage.
+            # shellcheck disable=SC2046
+            uv run pytest "${args[@]}" $(sed 's/#.*//' tests/macos_pr_tests.txt | sort)
+          else
+            uv run pytest "${args[@]}"
+          fi
 
   e2e:
     # Journey tests (tests/e2e): the committed bundle, served by a real
@@ -143,6 +204,7 @@ jobs:
     # + the server log per failed journey).
     name: e2e journeys (headless Chrome)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
@@ -185,6 +247,7 @@ jobs:
   cold-install:
     name: cold install + quickstart (bare container)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # A bare Debian container: no dev setup, no Python tooling — the installer
     # must bring everything except the OS packages a stranger is told to have.
     #

@@ -726,10 +726,23 @@ class TestAdoptInheritedSkips:
         import sys
 
         dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(4)"])
+
         # Wait for it to exit WITHOUT reaping it: a zombie child of ours.
-        assert TestInheritedPipeline._until(
-            lambda: os.waitid(os.P_PID, dead.pid, os.WEXITED | os.WNOWAIT) is not None
-        )
+        # macOS has no os.waitid, so there ps reports the zombie ("Z") state.
+        def exited():
+            if hasattr(os, "waitid"):
+                return (
+                    os.waitid(os.P_PID, dead.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                    is not None
+                )
+            stat = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(dead.pid)],
+                capture_output=True,
+                text=True,
+            ).stdout
+            return "Z" in stat
+
+        assert TestInheritedPipeline._until(exited)
         fh = self._hold(ctrl, "%d\n%s\n" % (dead.pid, json.dumps({"owner": "server"})))
         try:
             self._assert_not_adopted(ctrl, external=True)
