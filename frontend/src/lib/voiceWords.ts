@@ -203,7 +203,7 @@ export function applyVoiceView(j: unknown): void {
 /** Re-read the words from GET /api/voice (unreachable: they stay). */
 export async function refreshVoiceWords(): Promise<VoiceWords> {
   try {
-    applyVoiceView(await api<unknown>("/api/voice"));
+    applyVoiceView(await api<unknown>("/api/voice?warm=0")); // words only: never wakes the voice host
   } catch {
     /* the words stay */
   }

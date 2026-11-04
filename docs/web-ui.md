@@ -257,7 +257,10 @@ a session first*).
   server cache hits, near-instant even on a slow neural host, because the
   server prewarms them ([web-api.md](web-api.md), *Names are pre-said*) —
   so keep their exact wording in sync with `PREWARM_FIXED` in
-  `backend/web/routes/speech.py`. They go to
+  `backend/web/routes/speech.py`. An idle desktop does not wake the server's
+  voice: it starts warming (and prewarming) only once replies are on, standby
+  is on, the mic menu is opened, or the mic is pressed with server TTS, so a
+  cold local host may take a moment on the first line after a long idle. They go to
   the front of the one speech queue (after other confirmations, never behind
   a reply), are said even while the person is mid-sentence, are
   dropped when more than 5 s late, and the recorder drops its audio while one

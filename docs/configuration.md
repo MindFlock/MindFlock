@@ -687,6 +687,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `providers/*.toml` | User-defined coding-agent providers, including their launch/classify/activity and `[connect]` install-and-login hints ([providers.md](providers.md)) |
 | `pricing.json` | Cached model-pricing feed (24 h TTL) |
 | `usage-history.json` | Durable daily token/cost ledger |
+| `usage-parse-cache.json` | Each transcript's parsed usage turns, keyed on (mtime, size, inode) and the byte offset read to: a restart re-reads only what changed, a grown transcript only its new lines. Safe to delete (the next scan rebuilds it) |
 | `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
 | `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
 | `.activity-markers/<session>.json`, `<session>.reply.json` | The per-session `{state, ts}` activity marker the CLI's lifecycle hooks write ([providers.md](providers.md#activity-signal-activity_markerspy)), and beside it the reply the `Stop` hook files — `{"ts", "text"}`, the payload's `last_assistant_message` cut at 8000 chars — which is where a session's spoken `Say:` line is read from (the `last_say` row field, the `say` event data, `GET …/voice`). Both keyed by tmux session name; the reply file goes with the session. The server watches this directory to publish a reply the moment it lands. Override the directory with `MINDFLOCK_ACTIVITY_MARKER_DIR` (below) — on a network or coarse-mtime filesystem replies fall back to the 1 s rescan |
@@ -1313,11 +1314,17 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     **resident**: loaded 3 s after boot and whenever a voice client fetches
     `GET /api/voice`, and never idle-unloaded while `local` stays configured,
     so a mic press never waits for a model; a piper voice is unloaded after
-    30 idle minutes. **The voice warms at boot** (6 s after start, and again
-    on `GET /api/voice`): a `local` piper voice is loaded, an `openai` host
-    on this machine or network (Voice Lab at `http://127.0.0.1:8770/v1`) is
-    asked to say one word with `tts_voice` so it loads its model — a remote,
-    paid host never is — and the `system` engine is probed. Only `local` recognition **streams**
+    30 idle minutes. **The voice warms when voice is in use**: at boot (6 s
+    after start) only while "Read everything" is on, and on
+    `GET /api/voice` unless it carries `?warm=0`. A `local` piper voice is
+    loaded, an `openai` host on this machine or network (Voice Lab at
+    `http://127.0.0.1:8770/v1`) is asked to say one word with `tts_voice` so
+    it loads its model — a remote, paid host never is — and the `system`
+    engine is probed. The desktop app sends `warm=0` on load and focus until
+    voice is in use there (replies read out, wake-word standby on, the mic
+    pressed or its menu opened), so an idle desktop never keeps a local
+    voice host up: Voice Lab's own idle timeout (30 min) can stop it. The
+    phone's voice page and Settings → Voice warm as before. Only `local` recognition **streams**
     (words appear while the person speaks: `POST /api/voice/stream`,
     `GET /api/voice`'s `server_ready.stt_stream`); with `system` or
     `openai` the mic sends one clip per phrase. The built-in Windows recognizer is

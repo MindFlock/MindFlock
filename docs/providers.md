@@ -1056,8 +1056,15 @@ several lines (one per content block, each repeating `message.usage`), and a
 resumed/forked conversation copies earlier lines into a new file, so turns are
 **deduplicated by `(message.id, requestId)`** across every file (the copy with
 the most output tokens wins) before they are summed and priced per-turn by their
-own model. Parsed files are memoized on (mtime, size), so the 60 s refresh only
-re-reads files that changed.
+own model. Parsed files are memoized on (mtime, size, inode) with the byte
+offset read to, so the 60 s refresh never re-reads an unchanged file and reads a
+grown one (transcripts are append-only) only from where it stopped; a line still
+being written is read again once complete. The memo is saved beside the ledger
+(`usage-parse-cache.json`, at most every 5 min — `_MEMO_SAVE_EVERY`; a corrupt
+file or another `MEMO_VERSION` is ignored and rebuilt) so a restarted server reads
+only what changed meanwhile: measured 2026-11-04 on 3.5k transcripts (6.2 GB),
+41 s and 6.2 GB read per boot before, 1.2 s and 18 MB after. A turn without a
+message id is keyed by a stable line hash (it outlives the process now).
 
 Per-day totals are folded into a durable ledger
 (`~/.mindflock-assistant/usage-history.json`, `"version": 2`, atomic writes) so

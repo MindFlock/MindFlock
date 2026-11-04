@@ -75,7 +75,10 @@ interface so the engine and web server can't drift. `claude` is the default;
 (codex/antigravity with dedicated subclasses for live usage telemetry, the rest
 as data-only configs); new CLIs can be added with a TOML file, zero Python.
 Also home to `pricing.py` (model $ rates, cached daily), `usage_history.py`
-(rolling day/week/month/year token+cost totals scanned from agent transcripts),
+(rolling day/week/month/year token+cost totals scanned from agent transcripts;
+its per-transcript parse memo — mtime, size, inode, offset — is saved to
+`usage-parse-cache.json`, so a restart and a grown transcript re-read only new
+bytes, see [providers.md](providers.md)),
 `usage_limits.py`, and the per-provider live usage-window clients
 (`claude_usage_api.py`, `codex_usage_api.py`, `antigravity_usage_api.py`).
 `claude_background.py` is a `/proc` sub-probe of Claude's activity: when the
@@ -191,9 +194,11 @@ FastAPI app `backend.web.server:app`. Key pieces:
   models (faster-whisper, piper; `uv sync --group voice`) behind the memory
   guard — local recognition's two whisper models (one-shot `small`, a faster
   streaming `base.en`) resident while configured, a piper voice unloaded
-  after 30 idle minutes — and both kinds warmed at boot and whenever a voice
-  client fetches `GET /api/voice` (`speech.warm_in_background`; a local
-  OpenAI-compatible voice host gets one throwaway synthesis). A line the
+  after 30 idle minutes — recognition warmed at boot and on every
+  `GET /api/voice`, the voice at boot only with "Read everything" on and on
+  fetches without `?warm=0` (the desktop app sends `warm=0` until voice is in
+  use there) (`speech.warm_in_background`; a local OpenAI-compatible voice
+  host gets one throwaway synthesis). A line the
   voice host cannot say in its queue-aware budget falls back to piper, one
   voice per reply (`speech.TtsChain`); only a DEAD host (refused, reset,
   5xx, no audio, hung) is marked down and re-checked by a background probe,
@@ -639,7 +644,7 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/red_zones.json` | config (`backend/config/red_zones.py`) + web | keep-out (red) and only-here (green) zones per repo ([web-ui.md → Zones](web-ui.md#zones-keep-out-red-and-only-here-green)); read by the agent tool hook too |
 | `~/.mindflock/peer/` | peer (`backend/peer/paths.py`) | `identity/` (this install's peer key), `links.json`, `shares/<id>/` (one shared folder each), `relay/` (the relay ingress) |
 | `~/.mindflock/hooks/` | user | shell hooks run on session events ([extensions.md](extensions.md)) |
-| `~/.mindflock-assistant/` | providers/web | assistant instructions + todos, `providers/*.toml`, `pricing.json`, `usage-history.json`, `scroll-speed`, `.exit-markers/`, `prompts/`, `.activity-markers/` (the hooks' `{state, ts}` markers and, per session, the `Stop` hook's `<session>.reply.json` the spoken line is read from), `.voice/<session>.on` (a phone is in a voice conversation with the session) and the one-shot `.voice/<session>.next` (a `/send {say: true}` prompt's request for a `Say:` line, consumed by the `UserPromptSubmit` hook) |
+| `~/.mindflock-assistant/` | providers/web | assistant instructions + todos, `providers/*.toml`, `pricing.json`, `usage-history.json`, `usage-parse-cache.json`, `scroll-speed`, `.exit-markers/`, `prompts/`, `.activity-markers/` (the hooks' `{state, ts}` markers and, per session, the `Stop` hook's `<session>.reply.json` the spoken line is read from), `.voice/<session>.on` (a phone is in a voice conversation with the session) and the one-shot `.voice/<session>.next` (a `/send {say: true}` prompt's request for a `Say:` line, consumed by the `UserPromptSubmit` hook) |
 | `~/.mindflock/voice/` | web (`core/speech.py`) | the local speech backend's downloaded models (`whisper/`, `piper/`), only when a server backend is `local` |
 | `./config.toml` | pipeline + provisioning | all configuration (gitignored — holds tokens) |
 | `./state.json` | pipeline | `last_run_timestamp`, `processed_stories`, `processed_prs` |
