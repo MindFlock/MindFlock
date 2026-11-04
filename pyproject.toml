@@ -46,6 +46,13 @@ dev = [
     "hypothesis",
     "pytest",
     "pytest-asyncio",
+    # CI runs the suite across every runner core (`pytest -n auto`, see
+    # docs/development.md); a plain `pytest` stays serial for developers and
+    # the run-tests hook — xdist only acts when -n is passed.
+    "pytest-xdist",
+    # CI passes --timeout so one hung test fails with its traceback instead of
+    # silently eating the job's timeout-minutes; inert without the flag.
+    "pytest-timeout",
     # Shared git hooks (.pre-commit-config.yaml): workspace auto-setup runs
     # `uv run --all-groups pre-commit install`, so it must be a real dependency.
     "pre-commit",

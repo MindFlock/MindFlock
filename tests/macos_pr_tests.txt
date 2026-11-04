@@ -1,0 +1,101 @@
+# The macOS slice of CI on a pull request: test (macos-latest) runs ONLY these
+# paths on a PR. The full suite still runs on macOS on every push to main,
+# nightly, and via workflow_dispatch (see .github/workflows/ci.yml).
+#
+# One path per line (no spaces); `#` comments, trailing `# ...` notes and
+# blank lines are ignored. A path that no longer exists fails the job, so a
+# rename can't silently drop it.
+#
+# KEEP EACH DIRECTORY'S PATHS TOGETHER (CI also sorts the list): pytest 9
+# loses a directory's conftest.py for a file passed after a file from another
+# directory that itself followed one from the first — `peer/a.py unit/b.py
+# peer/c.py` runs c.py without tests/unit/peer/conftest.py's fixtures.
+#
+# What belongs here — anything whose behaviour can differ on macOS:
+#   * a real tmux server (shutil.which("tmux"), its own -L/-S socket), PTYs
+#   * sys.platform / platform.system() / Darwin branches, the seatbelt
+#     sandbox, unix sockets (macOS caps AF_UNIX paths at 104 bytes and its
+#     tmp dir is a /private/var symlink)
+#   * process spawning, signals, zombies, file locks
+#   * the session engine's git worktree / tmux / state plumbing
+#   * launch parity, installers and install hints, self-update
+#   * every file that has ever failed on macOS but not on Ubuntu (marked)
+# The peer modules tests/unit/peer/conftest.py marks Linux-only (bubblewrap,
+# /proc, memfd) skip on macOS, so they are not listed.
+#
+# Run it locally with:
+#   uv run pytest -n 4 $(sed 's/#.*//' tests/macos_pr_tests.txt | sort)
+
+# Integration: real servers and MCP stdio.
+tests/integration/test_fleet_e2e.py
+tests/integration/test_mcp_stdio.py  # failed on macOS alone before
+tests/integration/test_mobile_smoke.py
+
+# Peer links: sockets, TLS, the macOS seatbelt sandbox.
+tests/unit/peer/test_invite.py  # failed on macOS alone before
+tests/unit/peer/test_mcp_peer_mode.py
+tests/unit/peer/test_mirror.py  # failed on macOS alone before
+tests/unit/peer/test_seatbelt.py
+tests/unit/peer/test_sessions_bridge.py
+tests/unit/peer/test_transport.py
+tests/unit/peer/test_tunnel.py
+
+# Session engine: git worktrees, tmux naming/sessions, state, launch, preflight.
+tests/unit/test_git_merge.py
+tests/unit/test_git_ops.py
+tests/unit/test_git_util.py
+tests/unit/test_gitutil.py
+tests/unit/test_instance_lifecycle.py
+tests/unit/test_launch_args_defaults.py
+tests/unit/test_launch_parity.py
+tests/unit/test_osenv.py
+tests/unit/test_preflight.py
+tests/unit/test_provision_forge_base.py
+tests/unit/test_provision_generalization.py
+tests/unit/test_state_persistence.py
+tests/unit/test_storage_contract.py
+tests/unit/test_tmux_naming.py
+tests/unit/test_tmux_session.py
+tests/unit/test_worktree_base_ref.py
+tests/unit/test_worktree_git_mixin.py
+tests/unit/test_worktree_ops.py
+tests/unit/test_worktree_reclaim.py
+tests/unit/test_worktree_setup.py
+
+# Real tmux / PTY / platform branches / sockets / process spawning.
+tests/unit/test_agent_sessions.py  # failed on macOS alone before
+tests/unit/test_claude_background.py
+tests/unit/test_claude_usage_api.py
+tests/unit/test_dialog_detect_fast.py  # failed on macOS alone before
+tests/unit/test_doctor.py
+tests/unit/test_fleet_update.py  # failed on macOS alone before
+tests/unit/test_guest_links.py
+tests/unit/test_guest_terminal.py
+tests/unit/test_held_offline.py
+tests/unit/test_ide_launch.py
+tests/unit/test_ingestion_addon.py  # failed on macOS alone before
+tests/unit/test_install_hints.py  # failed on macOS alone before
+tests/unit/test_mac_titlebar.py
+tests/unit/test_malloc_arenas.py
+tests/unit/test_mcp_api.py
+tests/unit/test_mobile_voice.py
+tests/unit/test_mobile_voice_browser.py
+tests/unit/test_ownership.py
+tests/unit/test_pane_agent_evidence.py
+tests/unit/test_pane_find.py
+tests/unit/test_pane_scroll_find.py
+tests/unit/test_pause_sticks.py
+tests/unit/test_prefs.py  # failed on macOS alone before
+tests/unit/test_repo_picker.py
+tests/unit/test_self_update.py
+tests/unit/test_slot.py
+tests/unit/test_speech.py
+tests/unit/test_speech_system.py
+tests/unit/test_speech_tts_budget.py  # failed on macOS alone before
+tests/unit/test_streamline_fixups.py  # failed on macOS alone before
+tests/unit/test_tailnet_bind.py
+tests/unit/test_tailnet_mtu.py
+tests/unit/test_tailnet_trust.py
+tests/unit/test_terminal_extras.py
+tests/unit/test_voice_send_gate.py
+tests/unit/test_voice_typed_answer.py
