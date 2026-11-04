@@ -644,3 +644,23 @@ def test_alias_seed_migrates_and_reports(monkeypatch):
     assert r.json()["renamed"] == {"t1": "Pretty"}
     assert r.json()["aliases"] == {"t2": "a/b"}
     assert set(eng.instances) == {"Pretty", "t2"}
+
+
+# --------------------------------------------------------------------------- #
+# The CLI
+# --------------------------------------------------------------------------- #
+def test_cli_rename(monkeypatch, capsys):
+    from backend import cli, client
+
+    posted = []
+    monkeypatch.setattr(client, "discover", lambda host, port: "http://x")
+    monkeypatch.setattr(client, "get", lambda base, path: [{"title": "old-session"}])
+    monkeypatch.setattr(
+        client,
+        "post",
+        lambda base, path, payload=None: posted.append((path, payload))
+        or {"title": "new", "from": "old-session"},
+    )
+    assert cli.main(["rename", "old-s", "new"]) == 0
+    assert posted == [("/api/instances/old-session/rename", {"to": "new"})]
+    assert "renamed old-session -> new" in capsys.readouterr().out

@@ -355,6 +355,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     wake.add_argument("title", metavar="TITLE", nargs="+")
 
+    rename_ = sub.add_parser(
+        "rename",
+        parents=[server_opts],
+        help="rename a session: the new name is its title everywhere",
+        description="Rename a session on the running server. The new name IS "
+        "the session's title: the sidebar, tmux, its MCP identity, messages and "
+        "every command use it from then on (a running agent keeps working). "
+        "The worktree folder and branch keep their names. OLD may be any "
+        "unambiguous prefix.",
+    )
+    rename_.add_argument("old", metavar="OLD")
+    rename_.add_argument("new", metavar="NEW")
+
     open_ = sub.add_parser(
         "open",
         parents=[server_opts],
@@ -976,6 +989,7 @@ _HELP_GROUPS = (
             "resume",
             "sleep",
             "wake",
+            "rename",
             "close",
             "delete",
             "rm",
@@ -1741,6 +1755,29 @@ def _cmd_sleep_wake(args: argparse.Namespace) -> int:
         else:
             print("%s was not asleep" % title)
     return rc
+
+
+def _cmd_rename(args: argparse.Namespace) -> int:
+    """``rename OLD NEW``: ``POST /api/instances/{title}/rename``."""
+    base = client.discover(args.host, args.port)
+    title = str(
+        _resolve_title(client.get(base, "/api/instances") or [], args.old)["title"]
+    )
+    try:
+        res = (
+            client.post(
+                base, "/api/instances/%s/rename" % _quote_title(title), {"to": args.new}
+            )
+            or {}
+        )
+    except client.ApiError as err:
+        print("error: could not rename %r: %s" % (title, err.message), file=sys.stderr)
+        return 1
+    if res.get("unchanged"):
+        print("%s is already called that" % title)
+    else:
+        print("renamed %s -> %s" % (title, res.get("title", args.new)))
+    return 0
 
 
 def _cmd_open(args: argparse.Namespace) -> int:
@@ -3730,6 +3767,7 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "resume": _cmd_pause_resume,
     "sleep": _cmd_sleep_wake,
     "wake": _cmd_sleep_wake,
+    "rename": _cmd_rename,
     "open": _cmd_open,
     "events": _cmd_events,
     "msg": _cmd_msg,
