@@ -416,11 +416,39 @@ def relaunch(
     return name, None, continued
 
 
-def _wait_for_memory(srv, deadline: float) -> bool:
-    """Block until memory reads ok (True) or ``deadline`` (monotonic) passes
-    (False). Unknown reads as ok."""
+#: What one just-launched agent is still going to take as it warms up (the
+#: CLI, its MCP servers, the first turn) — an agent measures ~350-800 MB a
+#: minute in, but reads near zero the second it starts. A sweep counts this
+#: for every agent it started in the last :data:`WARMUP_SECONDS`, so "Start
+#: all" on 18 held sessions can't pass 18 memory checks before any of them
+#: has grown (2026-11-04: that filled the machine within a minute of a boot).
+AGENT_WARMUP_BYTES = 700 * 1024 * 1024
+WARMUP_SECONDS = 90.0
+
+
+def _headroom_ok(warming: int) -> bool:
+    """Memory reads ok AND would still read ok once ``warming`` agents that
+    were just started have grown. Unknown reads as ok."""
+    if memory_pressure.is_low(fresh=True):
+        return False
+    if warming <= 0:
+        return True
+    snap = memory_pressure.snapshot()
+    total = float(snap.get("total") or 0)
+    if not total:
+        return True
+    low_share = float(memory_pressure.thresholds().get("low", (0.15,))[0] or 0.0)
+    projected = float(snap.get("available") or 0) - warming * AGENT_WARMUP_BYTES
+    return projected / total > low_share
+
+
+def _wait_for_memory(srv, deadline: float, warming=None) -> bool:
+    """Block until memory reads ok — counting the agents still warming up
+    (``warming()`` → how many were started in the last
+    :data:`WARMUP_SECONDS`) — (True) or ``deadline`` (monotonic) passes
+    (False)."""
     while True:
-        if not memory_pressure.is_low():
+        if _headroom_ok(warming() if warming else 0):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -484,6 +512,12 @@ async def sweep(
         revived: List[str] = []
         continued: List[str] = []
         out_of_memory = False
+        started_at: List[float] = []
+
+        def _warming() -> int:
+            now = time.monotonic()
+            return sum(1 for t in started_at if now - t < WARMUP_SECONDS)
+
         queue: "asyncio.Queue[str]" = asyncio.Queue()
         for t in todo:
             queue.put_nowait(t)
@@ -496,7 +530,7 @@ async def sweep(
                 except asyncio.QueueEmpty:
                     return
                 if out_of_memory or not await asyncio.to_thread(
-                    _wait_for_memory, srv, time.monotonic() + memory_wait
+                    _wait_for_memory, srv, time.monotonic() + memory_wait, _warming
                 ):
                     if not out_of_memory:
                         _info(
@@ -507,6 +541,7 @@ async def sweep(
                     out_of_memory = True
                     skipped[title] = SKIP_MEMORY
                     continue
+                started_at.append(time.monotonic())
                 try:
                     ok, why = await asyncio.to_thread(
                         _revive_one, srv, title, include_quit, release_held
