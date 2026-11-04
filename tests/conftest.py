@@ -77,6 +77,11 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     # Peer links (``~/.mindflock/peer``): identity key, links, shared folders.
     # The engine and the shell pane consult the peer root on every launch.
     monkeypatch.setenv("MINDFLOCK_PEER_HOME", str(tmp_path / "mindflock" / "peer"))
+    # The ticket pipeline spaces its automatic launches a minute apart
+    # (session_runner._wait_for_launch_room); a suite launching many sessions
+    # in one process would sit out that minute between tests. The pacing tests
+    # set it themselves.
+    monkeypatch.setenv("MINDFLOCK_LAUNCH_SPACING", "0")
     # Point the Verify test-plan store (``~/.mindflock/test_plans.json``) at a
     # per-test tmp file. This one is not merely hygiene: the lifespan registers
     # ``_test_plans_due_loop``, which does its first pass *immediately* (work

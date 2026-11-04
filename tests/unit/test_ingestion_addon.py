@@ -437,6 +437,395 @@ class TestExternalLockPid:
             fh.close()
 
 
+class TestInheritedPipeline:
+    """The server restarts itself in place (``os.execv``: Tailscale coming up,
+    an update). The pipeline it started survives, still its child, but the
+    new image has no ``Popen`` for it — it read as someone else's, and every
+    switch flipped afterwards was silently not applied (PR review stayed off
+    with its switch on). The controller now takes such a child back."""
+
+    _HOLDER = (
+        "import fcntl, json, os, sys, time\n"
+        "fh = open(sys.argv[1], 'a+')\n"
+        "fcntl.flock(fh.fileno(), fcntl.LOCK_EX)\n"
+        "fh.seek(0); fh.truncate()\n"
+        "fh.write('%d\\n%s\\n' % (os.getpid(), json.dumps({'owner': sys.argv[2]})))\n"
+        "fh.flush()\n"
+        # Hold it until told to go (the file argv[3] appears), then exit
+        # with code argv[4]: the flock is released as the process ends.
+        "end = time.time() + 60\n"
+        "while time.time() < end and not os.path.exists(sys.argv[3]):\n"
+        "    time.sleep(0.02)\n"
+        "sys.exit(int(sys.argv[4]))\n"
+    )
+
+    #: Generous: a loaded full run can take seconds to start an interpreter.
+    _SPAWN_BUDGET = 30.0
+
+    def _spawn(self, ctrl, owner="server", code=0):
+        import subprocess
+        import sys
+        import time
+
+        go = ctrl._repo_root / ("go-%s" % owner)
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                self._HOLDER,
+                str(ctrl._lock_path()),
+                owner,
+                str(go),
+                str(code),
+            ],
+            start_new_session=True,
+        )
+        proc.go = go
+        self._until(lambda: ctrl._external_lock_pid() == proc.pid)
+        assert ctrl._external_lock_pid() == proc.pid
+        return proc
+
+    @classmethod
+    def _until(cls, cond, budget=None):
+        import time
+
+        deadline = time.monotonic() + (budget or cls._SPAWN_BUDGET)
+        while not cond() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return cond()
+
+    def _release(self, ctrl, proc):
+        """Let the holder exit and wait until its lock is free (the process
+        stays a zombie until someone reaps it)."""
+        proc.go.write_text("")
+        assert self._until(lambda: ctrl._external_lock_pid() is None)
+
+    @staticmethod
+    def _reap(proc):
+        import signal
+
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001 — already reaped by the controller
+            pass
+
+    def test_a_child_from_before_the_reexec_is_ours_again(self, ctrl):
+        proc = self._spawn(ctrl)
+        try:
+            # A fresh controller: what the server's new image starts with.
+            assert ctrl._proc is None
+            assert ctrl._own_running() is True
+            st = ctrl.status()
+            assert st["running"] is True and st["pid"] == proc.pid
+            assert st["since"]  # it says when, as for a child it started
+            # …so a switch flipped now restarts it: stop() ends AND reaps it.
+            assert ctrl.stop() is True
+            assert ctrl._own_running() is False
+            assert ctrl.is_running() is False
+        finally:
+            self._reap(proc)
+
+    def test_a_standalone_run_stays_external(self, ctrl, monkeypatch):
+        proc = self._spawn(ctrl, owner="cli")
+        try:
+            assert ctrl._own_running() is False
+            assert ctrl._proc is None
+            assert ctrl.is_running() is True
+            # A settings change never touches it: the reconcile leaves an
+            # external pipeline alone (stop() itself would end it by pid).
+            addon = ti.TicketIngestionAddon()
+            addon.ctrl = ctrl
+            calls = []
+            monkeypatch.setattr(addon, "_process_wanted", staticmethod(lambda: True))
+            monkeypatch.setattr(ctrl, "start", lambda: calls.append("start"))
+            monkeypatch.setattr(ctrl, "stop", lambda: calls.append("stop"))
+            addon._reconcile_process(["github.enabled"])
+            assert calls == []
+            assert proc.poll() is None
+        finally:
+            self._reap(proc)
+
+    def test_a_holder_gone_before_the_controller_looks_is_not_adopted(self, ctrl):
+        proc = self._spawn(ctrl, code=3)
+        try:
+            self._release(ctrl, proc)  # exited (unreaped) — lock released
+            assert ctrl._own_running() is False
+            assert ctrl._proc is None
+            st = ctrl.status()
+            assert st["running"] is False and st["pid"] is None
+            assert st["exit_reason"] is None and st["last_error"] is None
+        finally:
+            self._reap(proc)
+
+    def test_an_adopted_child_that_exits_reports_why(self, ctrl):
+        proc = self._spawn(ctrl, code=3)
+        try:
+            assert ctrl._own_running() is True
+            adopted = ctrl._proc
+            self._release(ctrl, proc)
+            assert ctrl._own_running() is False
+            st = ctrl.status()
+            assert st["running"] is False
+            assert st["exit_reason"] == "exited with code 3"
+            assert st["last_error"]["kind"] == "crash"
+            # The dead pid is not taken back again: same (reaped) child.
+            assert ctrl._own_running() is False
+            assert ctrl._proc is adopted and adopted.returncode == 3
+        finally:
+            self._reap(proc)
+
+    def test_after_stopping_an_adopted_child_a_fresh_one_starts(
+        self, ctrl, monkeypatch
+    ):
+        spawned = []
+
+        class FakePopen:
+            pid = 424242
+
+            def __init__(self, argv, **kw):
+                spawned.append(argv)
+
+            def poll(self):
+                return None
+
+        proc = self._spawn(ctrl)
+        try:
+            assert ctrl._own_running() is True
+            assert ctrl.stop() is True
+            monkeypatch.setattr(ti.subprocess, "Popen", FakePopen)
+            assert ctrl.start() is True  # not "another pipeline holds it"
+            assert len(spawned) == 1 and isinstance(ctrl._proc, FakePopen)
+            assert ctrl.status()["pid"] == FakePopen.pid
+        finally:
+            ctrl._proc = None
+            self._reap(proc)
+
+    def test_since_is_the_lock_files_mtime(self, ctrl):
+        proc = self._spawn(ctrl)
+        try:
+            os.utime(ctrl._lock_path(), (1_700_000_000, 1_700_000_000))
+            assert ctrl._own_running() is True
+            assert ctrl._started_at == 1_700_000_000
+            want = _dt.datetime.fromtimestamp(1_700_000_000).astimezone().isoformat()
+            assert ctrl.status()["since"] == want
+        finally:
+            self._reap(proc)
+
+    def test_since_is_unknown_when_the_lock_cannot_be_stat_ed(self, ctrl, monkeypatch):
+        proc = self._spawn(ctrl)
+        try:
+            lock = ctrl._lock_path()
+            monkeypatch.setattr(
+                ctrl, "_lock_holder", lambda: (proc.pid, {"owner": "server"})
+            )
+            real_stat = pathlib.Path.stat
+
+            def stat(self, *a, **k):
+                if self == lock:
+                    raise OSError("gone")
+                return real_stat(self, *a, **k)
+
+            monkeypatch.setattr(pathlib.Path, "stat", stat)
+            assert ctrl._own_running() is True
+            st = ctrl.status()
+            assert st["running"] is True and st["pid"] == proc.pid
+            assert st["since"] is None
+        finally:
+            monkeypatch.undo()
+            self._reap(proc)
+
+    def test_a_settings_change_restarts_an_adopted_pipeline(self, ctrl, monkeypatch):
+        """The user-visible bug: after a re-exec, flipping PR review (a
+        pipeline_signature change → reconcile) was skipped as "external"."""
+        proc = self._spawn(ctrl)
+        try:
+            addon = ti.TicketIngestionAddon()
+            addon.ctrl = ctrl
+            started = []
+            monkeypatch.setattr(addon, "_process_wanted", staticmethod(lambda: True))
+            monkeypatch.setattr(ctrl, "start", lambda: started.append(1) or True)
+            addon._reconcile_process(["github.enabled"])
+            assert started == [1]  # restarted: stopped, then started fresh
+            assert ctrl._proc is None  # the old child was stopped and reaped
+            with pytest.raises(ProcessLookupError):
+                os.kill(proc.pid, 0)
+        finally:
+            self._reap(proc)
+
+    def test_a_server_pipeline_that_is_not_our_child_stays_external(self, ctrl):
+        # Another server's: the lock says owner server, but waitpid can't
+        # answer for a pid that isn't this process's child.
+        p = ctrl._lock_path()
+        p.write_text("%d\n%s\n" % (os.getppid(), json.dumps({"owner": "server"})))
+        fh = open(p, "a+")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            assert ctrl._own_running() is False
+            assert ctrl.is_running() is True
+        finally:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            fh.close()
+
+
+class TestAdoptInheritedSkips:
+    """When the lock does NOT name a live child of ours, nothing is taken."""
+
+    @staticmethod
+    def _hold(ctrl, text):
+        p = ctrl._lock_path()
+        p.write_text(text)
+        fh = open(p, "a+")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        return fh
+
+    @staticmethod
+    def _unhold(fh):
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+    def _assert_not_adopted(self, ctrl, *, external):
+        ctrl._adopt_inherited()
+        assert ctrl._proc is None
+        assert ctrl._own_running() is False
+        assert ctrl._proc is None
+        assert ctrl.status()["running"] is external
+
+    def test_no_lock_file(self, ctrl):
+        self._assert_not_adopted(ctrl, external=False)
+
+    def test_a_stale_lock(self, ctrl):
+        ctrl._lock_path().write_text(
+            "%d\n%s\n" % (os.getpid(), json.dumps({"owner": "server"}))
+        )
+        self._assert_not_adopted(ctrl, external=False)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "%d\n" % os.getpid(),  # an old pipeline: no line 2
+            "%d\n%s\n" % (os.getpid(), json.dumps({"owner": "standalone"})),
+            "0\n%s\n" % json.dumps({"owner": "server"}),
+            "-5\n%s\n" % json.dumps({"owner": "server"}),
+            "junk\n%s\n" % json.dumps({"owner": "server"}),
+        ],
+        ids=["no-meta", "standalone", "pid-0", "pid-negative", "pid-unreadable"],
+    )
+    def test_a_held_lock_that_is_not_the_servers_child(self, ctrl, text):
+        fh = self._hold(ctrl, text)
+        try:
+            self._assert_not_adopted(ctrl, external=True)
+        finally:
+            self._unhold(fh)
+
+    def test_a_server_lock_whose_holder_already_exited(self, ctrl):
+        import subprocess
+        import sys
+
+        dead = subprocess.Popen([sys.executable, "-c", "raise SystemExit(4)"])
+        # Wait for it to exit WITHOUT reaping it: a zombie child of ours.
+        assert TestInheritedPipeline._until(
+            lambda: os.waitid(os.P_PID, dead.pid, os.WEXITED | os.WNOWAIT) is not None
+        )
+        fh = self._hold(ctrl, "%d\n%s\n" % (dead.pid, json.dumps({"owner": "server"})))
+        try:
+            self._assert_not_adopted(ctrl, external=True)
+        finally:
+            self._unhold(fh)
+            dead.wait(timeout=5)
+
+
+class TestInheritedChild:
+    """The Popen surface over a child spawned before the re-exec. Spawned
+    here with ``os.posix_spawn`` so no Popen object ever waits on it."""
+
+    @staticmethod
+    def _spawn(code="import time; time.sleep(60)"):
+        import sys
+
+        return os.posix_spawn(sys.executable, [sys.executable, "-c", code], os.environ)
+
+    @staticmethod
+    def _gone(pid):
+        import signal
+
+        try:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+        except (OSError, ChildProcessError):
+            pass
+
+    @pytest.mark.parametrize("code,want", [(0, 0), (7, 7)])
+    def test_poll_reads_the_exit_code(self, code, want):
+        child = ti._InheritedChild(self._spawn("raise SystemExit(%d)" % code))
+        try:
+            assert child.wait(timeout=TestInheritedPipeline._SPAWN_BUDGET) == want
+            assert child.poll() == want and child.returncode == want
+        finally:
+            self._gone(child.pid)
+
+    def test_poll_is_none_while_it_runs_then_minus_the_signal(self):
+        import signal
+
+        child = ti._InheritedChild(self._spawn())
+        try:
+            assert child.poll() is None
+            os.kill(child.pid, signal.SIGKILL)
+            assert child.wait(timeout=TestInheritedPipeline._SPAWN_BUDGET) == -9
+        finally:
+            self._gone(child.pid)
+
+    def test_a_pid_that_is_not_our_child_is_minus_one(self):
+        child = ti._InheritedChild(os.getppid())
+        assert child.poll() == -1
+        assert child.wait(timeout=0.1) == -1
+
+    def test_an_exit_code_is_read_once(self, monkeypatch):
+        child = ti._InheritedChild(self._spawn("raise SystemExit(2)"))
+        try:
+            assert child.wait(timeout=TestInheritedPipeline._SPAWN_BUDGET) == 2
+
+            def no_more(*a):
+                raise AssertionError("waitpid after the child was reaped")
+
+            monkeypatch.setattr(ti.os, "waitpid", no_more)
+            assert child.poll() == 2
+            assert child.wait() == 2
+        finally:
+            monkeypatch.undo()
+            self._gone(child.pid)
+
+    def test_wait_times_out_on_a_running_child(self):
+        import signal
+        import subprocess
+
+        child = ti._InheritedChild(self._spawn())
+        try:
+            with pytest.raises(subprocess.TimeoutExpired):
+                child.wait(timeout=0.2)
+            assert child.returncode is None
+            child.terminate()
+            assert (
+                child.wait(timeout=TestInheritedPipeline._SPAWN_BUDGET)
+                == -signal.SIGTERM
+            )
+        finally:
+            self._gone(child.pid)
+
+    def test_terminate_and_kill_signal_the_pid(self, monkeypatch):
+        import signal
+
+        sent = []
+        monkeypatch.setattr(ti.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+        child = ti._InheritedChild(4321)
+        child.terminate()
+        child.kill()
+        assert sent == [(4321, signal.SIGTERM), (4321, signal.SIGKILL)]
+
+
 # --------------------------------------------------------------------------- #
 # Controller env / python resolution / start-guard
 # --------------------------------------------------------------------------- #

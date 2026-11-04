@@ -114,14 +114,31 @@ def automation_here() -> bool:
     return bool(me) and automation_runner(live) == me
 
 
+def automation_known() -> bool:
+    """Whether this device can tell which member of its group it is — and so
+    whether :func:`automation_here` is an answer or a guess.
+
+    In a group, the self key comes from the tailnet; until Tailscale is up it
+    falls back to the OS hostname, which isn't a member key (the roster keys
+    a device by its tailnet name). :func:`automation_here` then says "not
+    here" — the safe default, nothing double-reviews — but it is not a fact
+    worth recording: noted as "runs on <runner>", it named THIS machine as
+    another device, and the next pipeline marked every open PR as handled
+    over there. A lone device always knows. Never raises."""
+    live = _live_members()
+    return len(live) < 2 or _self_key() in live
+
+
 def automation_device() -> str:
     """The name of the OTHER device that runs PR review and issue handling
-    (:func:`automation_runner`, by its host), or ``""`` when it is this one
-    or there's no group — what Intake names ("runs on <device>") where this
-    one doesn't. Never raises."""
+    (:func:`automation_runner`, by its host), or ``""`` when it is this one,
+    there's no group, or this device can't yet tell which member it is
+    (:func:`automation_known`) — what Intake names ("runs on <device>")
+    where this one doesn't. Never raises."""
     live = _live_members()
     key = automation_runner(live)
-    if not key or key == _self_key():
+    me = _self_key()
+    if not key or key == me or me not in live:
         return ""
     host = str((live.get(key) or {}).get("host") or "")
     if not host:
