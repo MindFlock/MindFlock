@@ -7819,12 +7819,13 @@ def _copy_title(title: str, taken) -> str:
     """A copy's title: the family name plus the lowest free ``-N`` (N >= 2).
 
     ``sitecheck-bot`` copies to ``sitecheck-bot-2``; with ``sitecheck-bot`` and
-    ``sitecheck-bot-3`` open, copying either gives ``sitecheck-bot-2``. A
-    trailing ``-N`` names a family member only when the bare name is open too,
-    so a ticket session ``sc-25355`` copies to ``sc-25355-2``, never ``sc-2``.
+    ``sitecheck-bot-3`` open, copying either gives ``sitecheck-bot-2``, and
+    copying ``sitecheck-bot7-2`` gives ``sitecheck-bot7-3``. A trailing ``-2`` …
+    ``-99`` is a copy number; a longer one is part of the name, so a ticket
+    session ``sc-25355`` copies to ``sc-25355-2``, never ``sc-2``.
     """
-    m = re.match(r"^(.+)-(\d+)$", title)
-    base = m.group(1) if m and m.group(1) in taken else title
+    m = re.match(r"^(.+)-([2-9]|[1-9]\d)$", title)
+    base = m.group(1) if m else title
     i = 2
     while ("%s-%d" % (base, i)) in taken:
         i += 1
