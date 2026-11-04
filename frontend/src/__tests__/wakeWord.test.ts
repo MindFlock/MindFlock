@@ -137,6 +137,28 @@ describe("LoneUtterance: level sequence → candidate windows", () => {
     expect(got[0].loudMs).toBe(750);
   });
 
+  it("a pause inside a lone utterance (\"Hey, | MindFlock\", \"Mind… | flock\"): the first part alone, then one clip of both", () => {
+    // "Hey" (300 ms), a 250 ms comma pause, "MindFlock" (600 ms).
+    const got = detect([...quiet(1000), ...loud(300), ...quiet(250), ...loud(600), ...quiet(1000)]);
+    expect(got).toHaveLength(2);
+    expect(got[0].loudMs).toBe(300);
+    // The second covers both parts, from the first one's onset.
+    expect(got[1].loudMs).toBe(300 + 250 + 600);
+    expect(got[1].clipMs).toBe(WAKE_LEAD_MS + 300 + 250 + 600 + WAKE_TAIL_MS);
+    // A first part too short to be sent ("hey" said quickly) still carries on.
+    const quick = detect([...quiet(1000), ...loud(150), ...quiet(250), ...loud(600), ...quiet(1000)]);
+    expect(quick).toHaveLength(1);
+    expect(quick[0].loudMs).toBe(150 + 250 + 600);
+    // Both parts together still under the sentence limit, or nothing.
+    expect(detect([...quiet(1000), ...loud(800), ...quiet(250), ...loud(800), ...quiet(1000)])).toHaveLength(1);
+    // A third part straight on: one stretch still (it outgrows the limit: a sentence).
+    const three = detect([...quiet(1000), ...loud(500), ...quiet(250), ...loud(500), ...quiet(250), ...loud(700), ...quiet(1000)]);
+    expect(three.map((c) => c.loudMs)).toEqual([500, 1250]);
+    // Enough quiet in between: two lone words, each on its own.
+    const two = detect([...quiet(1000), ...loud(400), ...quiet(500), ...loud(600), ...quiet(1000)]);
+    expect(two.map((c) => c.loudMs)).toEqual([400, 600]);
+  });
+
   it("works on a real block length (4096 frames at 48 kHz)", () => {
     const ms = (4096 / 48000) * 1000;
     const n = (t: number) => Math.round(t / ms);

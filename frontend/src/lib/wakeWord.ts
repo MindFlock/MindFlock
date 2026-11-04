@@ -97,7 +97,15 @@ const RELEARN_MS = 5000;
  * 5% a block) — except that it does not creep during a stretch of speech
  * (under {@link RELEARN_MS}): a steady voice would otherwise turn "quiet"
  * and a sentence end early as a word. A block is speech by voiceMic's
- * {@link isLoud}. */
+ * {@link isLoud}.
+ *
+ * A pause inside a lone utterance ("Hey, MindFlock", "Mind… flock" said
+ * slowly) is longer than the tail, so its first part goes alone ("Hey") —
+ * and its second part, starting less than {@link WAKE_QUIET_MS} after,
+ * would be "speech straight on from speech" and never go. So speech that
+ * resumes that soon after a stretch that STARTED after quiet (and was not a
+ * sentence) carries that stretch on: the next candidate's clip holds both
+ * parts, under the same {@link WAKE_MAX_MS}. */
 export class LoneUtterance {
   private floor = 0;
   /** The end of the last block fed (ms since the detector began). */
@@ -110,6 +118,10 @@ export class LoneUtterance {
   private lastLoud = 0;
   /** The stretch outran {@link WAKE_MAX_MS}: a sentence. */
   private long = false;
+  /** The onset of the stretch that just ended (it started after quiet and
+   * was not a sentence), -1 for none: speech resuming within
+   * {@link WAKE_QUIET_MS} carries it on. */
+  private prev = -1;
 
   feed(rms: number, blockMs: number): WakeCandidate | null {
     const at = this.t;
@@ -122,13 +134,22 @@ export class LoneUtterance {
         this.quiet += blockMs;
         return null;
       }
-      // Speech straight on from speech (or from the moment standby began):
-      // the middle of something, never a word on its own.
       if (this.quiet < WAKE_QUIET_MS) {
+        // Straight on from a lone stretch: its second part ("Hey, | MindFlock").
+        if (this.prev >= 0) {
+          this.start = this.prev;
+          this.prev = -1;
+          this.lastLoud = this.t;
+          this.long = this.lastLoud - this.start > WAKE_MAX_MS;
+          return null;
+        }
+        // Speech straight on from speech (or from the moment standby began):
+        // the middle of something, never a word on its own.
         this.quiet = 0;
         return null;
       }
       this.start = at;
+      this.prev = -1;
       this.lastLoud = this.t;
       this.long = false;
       return null;
@@ -143,6 +164,7 @@ export class LoneUtterance {
     const loudMs = this.lastLoud - this.start;
     const clipMs = WAKE_LEAD_MS + (this.t - this.start);
     const long = this.long;
+    this.prev = long ? -1 : this.start;
     this.start = -1;
     this.quiet = gap;
     return long || loudMs < WAKE_MIN_MS ? null : { loudMs, clipMs, tailMs: gap };

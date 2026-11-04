@@ -3773,7 +3773,12 @@
   // than that, the stop in "mind·flock", are inside the word) — short, so
   // the clip goes the moment the word is over; after it the detector waits
   // for VOICE_WAKE_QUIET_MS of quiet again. Shorter is a
-  // click or a cough, longer a sentence: both dropped, nothing sent. The
+  // click or a cough, longer a sentence: both dropped, nothing sent. A pause
+  // inside a lone utterance ("Hey, | MindFlock", "Mind… | flock" said slowly)
+  // is longer than the tail, so its first part goes alone — and speech that
+  // resumes within VOICE_WAKE_QUIET_MS of a stretch that started after quiet
+  // (and was not a sentence) carries that stretch on (d.prev): the next clip
+  // holds both parts, under the same VOICE_WAKE_MAX_MS. The
   // noise floor and "loud" are the recorder's (scaled to the block's length:
   // its rule is per 85 ms block).
   var VOICE_WAKE_BLOCK = 2048;           // the standby's ScriptProcessor block (~43 ms at 48 kHz)
@@ -3783,7 +3788,7 @@
   var VOICE_WAKE_MAX_MS = 1600;          // ...and at most this (longer is a sentence: never a wake)
   var VOICE_WAKE_LEAD_MS = 100;          // audio kept from before its first loud block (the word's soft start)
   function voiceWakeNew() {
-    return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0 };
+    return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0, prev: -1 };
   }
   // One block: d's clock moves on by ms. → null, or what just ended:
   // {kind: "clip", from, to, ms, end} — from..to on d's clock (ms), the
@@ -3801,7 +3806,7 @@
       if (loud) {
         d.last = d.t;
         d.tail = 0;
-        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; return { kind: "long" }; }
+        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; d.prev = -1; return { kind: "long" }; }
         return null;
       }
       d.tail += ms;
@@ -3809,12 +3814,17 @@
       // Its quiet tail counts toward the quiet before the next one.
       d.phase = d.tail >= VOICE_WAKE_QUIET_MS ? "ready" : "wait";
       d.quiet = d.tail;
+      d.prev = d.from;   // speech resuming before the quiet is over carries it on
       var span = d.last - d.from;
       if (span < VOICE_WAKE_MIN_MS) return { kind: "short", ms: span };
       return { kind: "clip", from: Math.max(0, d.from - VOICE_WAKE_LEAD_MS), to: d.t, ms: span, end: d.last };
     }
     if (loud) {
-      if (d.phase === "ready") { d.phase = "word"; d.from = at; d.last = d.t; d.tail = 0; }
+      if (d.phase === "ready") { d.phase = "word"; d.from = at; d.last = d.t; d.tail = 0; d.prev = -1; }
+      else if (d.prev >= 0) {   // straight on from a lone stretch: its second part
+        d.phase = "word"; d.from = d.prev; d.last = d.t; d.tail = 0; d.prev = -1;
+        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; return { kind: "long" }; }
+      }
       else d.quiet = 0;   // no quiet before it: part of something longer
       return null;
     }

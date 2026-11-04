@@ -73,8 +73,9 @@ def test_wake_detector_takes_only_a_lone_utterance():
     quiet tail reached 200 ms (the clip goes then, ``end`` = the sound's
     end); shorter is "short", longer "long" (never a clip, however it ends);
     a dip shorter than the tail is inside the word; sound with no quiet
-    before it (the start, or less than 350 ms after a clip) is part of
-    something longer; a steady hum above the absolute threshold is the
+    before it is part of something longer — unless it resumes less than
+    350 ms after a lone stretch, which it carries on (one clip of both
+    parts); a steady hum above the absolute threshold is the
     floor, not a word."""
     script = (
         _detector(_js()) + "\n"
@@ -91,6 +92,7 @@ def test_wake_detector_takes_only_a_lone_utterance():
         "out.dip = run([[Q, 20], [L, 10], [Q, 4], [L, 10], [Q, 12]]);\n"
         "out.openTail = run([[Q, 20], [L, 15], [Q, 4]]);\n"
         "out.followOn = run([[Q, 20], [L, 10], [Q, 6], [L, 10], [Q, 12]]);\n"
+        "out.threeParts = run([[Q, 20], [L, 10], [Q, 6], [L, 10], [Q, 6], [L, 15], [Q, 12]]);\n"
         "out.noQuietBefore = run([[L, 10], [Q, 12]]);\n"
         "out.afterSentence = run([[Q, 20], [L, 45], [Q, 9], [L, 10], [Q, 12]]);\n"
         "out.shortGap = run([[Q, 20], [L, 10], [Q, 12], [L, 5], [Q, 4], [L, 10], [Q, 12]]);\n"
@@ -121,9 +123,15 @@ def test_wake_detector_takes_only_a_lone_utterance():
     assert [(r["kind"], r["ms"]) for r in out["dip"]] == [("clip", 960)]
     # The quiet tail not yet 200 ms: nothing yet.
     assert out["openTail"] == []
-    # Sound 240 ms after a clip went had no 350 ms of quiet before it: the
-    # first was the start of something longer, the second is never a clip.
-    assert [r["kind"] for r in out["followOn"]] == ["clip"]
+    # Sound 240 ms after a clip went had no 350 ms of quiet before it: a
+    # pause inside one utterance ("Hey, | MindFlock") — the first part goes
+    # alone, then one clip of both (from the first part's onset).
+    assert [(r["kind"], r["ms"], r["from"]) for r in out["followOn"]] == [
+        ("clip", 400, 700),
+        ("clip", 1040, 700),
+    ]
+    # A third part straight on outgrows the sentence limit: "long".
+    assert [r["kind"] for r in out["threeParts"]] == ["clip", "clip", "long"]
     # Sound from the first block on had no quiet before it.
     assert out["noQuietBefore"] == []
     # Right after a sentence, a word with only 360 ms of quiet between is
