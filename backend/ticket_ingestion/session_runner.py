@@ -69,30 +69,46 @@ _MEMORY_LOG_SECONDS = 300.0
 _MEMORY_MAX_WAIT_SECONDS = 1800.0
 
 
-async def _wait_for_memory(what: str) -> None:
-    """Return once memory headroom is back (at once when it never left, or
-    the probe has nothing to read), or after _MEMORY_MAX_WAIT_SECONDS.
-    ``is_low`` is a cached /proc read — cheap enough to call inline."""
+def _held_reason() -> str:
+    """Why an automatic launch must wait now ("" = go): memory reads low, or
+    the server's launch gate (backend.web.core.launch_gate) says wait. The
+    gate counts every MindFlock agent started in the last 90 s as still
+    growing (tmux creation times, so the server's launches count too) and
+    the machine-wide live-agent cap. Cached reads — cheap to call inline.
+    Never raises."""
     from backend import memory_pressure
 
+    if memory_pressure.is_low():
+        return memory_pressure.describe() or "memory is low"
+    try:
+        from backend.web.core import launch_gate
+
+        verdict = launch_gate.decide("auto")
+    except Exception:  # noqa: BLE001 — the gate is advisory here
+        return ""
+    return "" if verdict.get("decision") == "go" else str(verdict.get("reason") or "")
+
+
+async def _wait_for_memory(what: str) -> None:
+    """Return once memory headroom is back (at once when it never left, or
+    the probe has nothing to read), or after _MEMORY_MAX_WAIT_SECONDS."""
     start = time.monotonic()
     logged = 0.0
-    while memory_pressure.is_low():
+    while True:
+        why = _held_reason()
+        if not why:
+            return
         now = time.monotonic()
         if now - start >= _MEMORY_MAX_WAIT_SECONDS:
             logger.warning(
                 "Starting %s anyway after %d minutes held for memory: %s",
                 what,
                 int(_MEMORY_MAX_WAIT_SECONDS // 60),
-                memory_pressure.describe(),
+                why,
             )
             return
         if now - logged >= _MEMORY_LOG_SECONDS:
-            logger.warning(
-                "Holding %s: %s — it starts once memory recovers",
-                what,
-                memory_pressure.describe(),
-            )
+            logger.warning("Holding %s: %s — it starts once that clears", what, why)
             logged = now
         await asyncio.sleep(_MEMORY_POLL_SECONDS)
 

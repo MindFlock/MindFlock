@@ -178,6 +178,34 @@ def test_the_pipeline_hold_is_capped(monkeypatch):
     asyncio.run(asyncio.wait_for(sr._wait_for_memory("ticket sc-2"), 5))
 
 
+def test_the_pipeline_also_waits_on_the_launch_gate(monkeypatch):
+    """Memory reads ok, but the machine already runs as many agents as the
+    launch gate's live cap allows: the pipeline's launch waits for that too,
+    and goes once an agent stops."""
+    import asyncio
+
+    from backend.ticket_ingestion import session_runner as sr
+    from backend.web.core import launch_gate
+
+    monkeypatch.setattr(mp, "is_low", lambda **kw: False)
+    monkeypatch.setattr(sr, "_MEMORY_POLL_SECONDS", 0)
+    monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "2")
+    agents = [[("mindflock_a", 0.0), ("mindflock_b", 0.0)]]
+    polls = []
+
+    def probe():
+        polls.append(1)
+        if len(polls) >= 3:
+            agents[0] = agents[0][:1]  # one of them stopped
+        return list(agents[0])
+
+    launch_gate.set_probe(probe)
+    monkeypatch.setattr(launch_gate, "_PROBE_SECONDS", 0.0)
+    assert "automatic starts stop at 2" in sr._held_reason()
+    asyncio.run(asyncio.wait_for(sr._wait_for_memory("ticket sc-3"), 5))
+    assert sr._held_reason() == ""
+
+
 def test_the_share_lines_are_settings(machine, monkeypatch):
     """``general.memory_low_pct`` / ``memory_critical_pct`` move the share
     lines (absolute floors and PSI stay); recovery keeps its margin."""
