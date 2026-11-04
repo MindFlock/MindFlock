@@ -258,9 +258,14 @@ a session first*).
   server prewarms them ([web-api.md](web-api.md), *Names are pre-said*) —
   so keep their exact wording in sync with `PREWARM_FIXED` in
   `backend/web/routes/speech.py`. An idle desktop does not wake the server's
-  voice: it starts warming (and prewarming) only once replies are on, standby
-  is on, the mic menu is opened, or the mic is pressed with server TTS, so a
-  cold local host may take a moment on the first line after a long idle. They go to
+  voice (Voice Lab starts on first use and stops after 10 idle minutes): it
+  starts warming (and prewarming) only once replies or standby are on, or on
+  a mic press that a reply, a spoken confirmation or "Read everything" will
+  follow — dictation alone never does — so a cold local host may take a
+  moment on the first line after a long idle: past a second the mic's pill
+  says **Starting voice…** (the phone's strip too). Settings → Voice never
+  wakes it either: it reads `?warm=0` and shows a local host as "starts when
+  you use voice". They go to
   the front of the one speech queue (after other confirmations, never behind
   a reply), are said even while the person is mid-sentence, are
   dropped when more than 5 s late, and the recorder drops its audio while one

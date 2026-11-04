@@ -24,7 +24,7 @@
  * label and hint left, button right), their progress and results in the hint.
  *
  * The fields save through the regular settings model (POST /api/settings
- * {voice}); GET /api/voice — the server's offline verdict on the saved
+ * {voice}); GET /api/voice?warm=0 — the server's offline verdict on the saved
  * fields, plus what the built-in engine has (`system`, absent on an older
  * server) — is re-read after every save. This used to be the bottom of the
  * phone screen (Mobile.tsx keeps a one-line pointer, `#mobile-voice`). */
@@ -34,6 +34,7 @@ import { api, apiRaw } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
 import { dictHint, loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { DEFAULT_VOICE_CFG, localVoice } from "../../../lib/voiceDesktop";
 import { micDiagnostics, talkHotkey } from "../../TopBarMic";
 import { MIC_CONSTRAINTS } from "../../../lib/voiceMic";
 import { onWakeStatus, wakeStatus, wakeSwitchHint, wakeSwitchLabel } from "../../../lib/wakeWord";
@@ -127,6 +128,9 @@ export function voiceFields(
 
 const noDot = (s: string) => s.replace(/\.\s*$/, "");
 
+/** What the readiness line adds for a local voice host: it is not probed. */
+export const VOICE_HOST_ON_USE = "starts when you use voice, stops when idle";
+
 /** The line under a kind's fields: the server's verdict from GET /api/voice
  * (text "" while that kind runs on the phone — nothing to report). With the
  * built-in engine picked, its own sentence ("Windows via WSL — recognizer
@@ -150,6 +154,11 @@ export function readinessLine(
     else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
   }
   detail = noDot(detail);
+  // A voice host on this machine or network (Voice Lab) is never asked from
+  // here — it may be stopped while idle, and asking would start it: it
+  // starts on its own with the first line said ("Say a test sentence" tries it).
+  if (ok && kind === "tts" && id === "openai" && localVoice({ ...DEFAULT_VOICE_CFG, server_ready: sr }))
+    detail += (detail ? " — " : "") + VOICE_HOST_ON_USE;
   if (ok) return { ok, text: `Server ${word} ready (${id || "server"})${detail ? ": " + detail : ""}.` };
   return { ok, text: `Server ${word} not ready${detail ? ": " + detail : ""}.` };
 }
@@ -272,7 +281,9 @@ export function VoiceSection({ active }: { active: boolean }) {
   useEffect(() => {
     if (!active) return;
     let live = true;
-    api<VoiceView>("/api/voice")
+    // `warm=0`: reading the verdict never wakes the voice (a local host
+    // such as Voice Lab starts only when a line is said).
+    api<VoiceView>("/api/voice?warm=0")
       .then((v) => {
         // The words saved here work at once: the mic's matchers and hints.
         applyVoiceView(v);

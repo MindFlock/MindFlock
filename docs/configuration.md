@@ -1320,11 +1320,21 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     loaded, an `openai` host on this machine or network (Voice Lab at
     `http://127.0.0.1:8770/v1`) is asked to say one word with `tts_voice` so
     it loads its model — a remote, paid host never is — and the `system`
-    engine is probed. The desktop app sends `warm=0` on load and focus until
-    voice is in use there (replies read out, wake-word standby on, the mic
-    pressed or its menu opened), so an idle desktop never keeps a local
-    voice host up: Voice Lab's own idle timeout (30 min) can stop it. The
-    phone's voice page and Settings → Voice warm as before. Only `local` recognition **streams**
+    engine is probed. **Voice Lab starts on first use and stops after 10
+    idle minutes** (its socket-activated proxy exits after 10 min with no
+    connection), so nothing but speech may reach it: every client reads
+    `GET /api/voice?warm=0` unless something will be SAID soon — the
+    desktop while replies are read out or standby is on, and on a mic press
+    only when a reply, a spoken confirmation or "Read everything" will
+    follow; the phone page while voice is on with replies or confirmations,
+    on Everything, or with standby on; Settings → Voice never (it shows a
+    local host as "starts when you use voice", and **Say a test sentence**
+    is the one explicit try). Dictation alone never wakes it: recognition
+    runs inside the server. The first line after an idle stop takes as
+    long as the host needs to start and load its model: the desktop pill
+    and the phone's strip say **Starting voice…** once it has taken over a
+    second, and the phone waits for that first clip up to its 30 s request
+    cap instead of handing the line to the phone's own voice. Only `local` recognition **streams**
     (words appear while the person speaks: `POST /api/voice/stream`,
     `GET /api/voice`'s `server_ready.stt_stream`); with `system` or
     `openai` the mic sends one clip per phrase. The built-in Windows recognizer is

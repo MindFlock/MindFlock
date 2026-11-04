@@ -420,6 +420,33 @@ export function voiceInUse(p: VoicePrefs): boolean {
   return p.replies !== "off" || !!p.wake;
 }
 
+/** Whether something said on this desktop goes to the SERVER's voice: replies
+ * read out (or standby, whose switch says the session's name), spoken
+ * confirmations, or "Read everything" on the server — with the server's voice
+ * the one speaking. Only then does pressing the mic ready that voice:
+ * dictation alone never wakes a local voice host (Voice Lab), recognition
+ * runs inside the server itself. */
+export function speaksOnServer(p: VoicePrefs, cfg: VoiceCfg, electron = isElectron()): boolean {
+  if (ttsEngine(cfg, electron) !== "server") return false;
+  return voiceInUse(p) || p.confirm !== false || cfg.say_all === true;
+}
+
+/** A line the server's voice has not answered within this shows
+ * {@link STARTING_VOICE_LINE} — when the voice may be cold
+ * ({@link voiceMayBeCold}). A warm neural host takes ~1.4 s per line anyway,
+ * so a warm voice never says it is starting. */
+export const VOICE_STARTING_MS = 1000;
+/** A local voice host stops after this long without a request (Voice Lab's
+ * socket proxy: `--exit-idle-time=10min`). */
+export const VOICE_COLD_MS = 10 * 60_000;
+
+/** Whether the server's voice may have to start for the next line: nothing
+ * said with it on this page yet (`lastOk` 0), or the last line it said was
+ * {@link VOICE_COLD_MS} ago or more. */
+export function voiceMayBeCold(lastOk: number, now: number): boolean {
+  return !lastOk || now - lastOk >= VOICE_COLD_MS;
+}
+
 /** The three choices as the mic's popover and Settings → Voice show them. */
 export const REPLIES_CHOICES: ReadonlyArray<{ value: RepliesMode; label: string }> = [
   { value: "off", label: "Off" },
@@ -679,11 +706,17 @@ export const MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
  * is open, "Speaking…" while a line plays, else nothing. Never the words
  * heard, typed or said (they are in the terminal; the options show them),
  * and never "Hearing you…" in words — that is the ring's colour. */
-export function micPill(s: { listening: boolean; speaking: boolean; quiet: boolean }): string {
+export function micPill(s: { listening: boolean; speaking: boolean; quiet: boolean; starting?: boolean }): string {
   if (s.quiet) return HUSH_LINE;
   if (s.listening) return "Listening…";
+  if (s.speaking && s.starting) return STARTING_VOICE_LINE;
   return s.speaking ? "Speaking…" : "";
 }
+
+/** The pill while the server's voice is starting ({@link serverSpeaker}'s
+ * `onStarting`): a local voice host (Voice Lab) that went idle starts on the
+ * first line asked of it and loads its model, which takes a while. */
+export const STARTING_VOICE_LINE = "Starting voice…";
 
 /** The keys that turn `before` (typed) into `after`: `erase` — the tail of
  * `before` past the start they share, taken back one backspace per
@@ -3865,9 +3898,19 @@ export function runningAudioCtx(): AudioContext | null {
  * confirmation must not — and {@link prefetch} fills that ahead. */
 export function serverSpeaker(
   fallback: Speaker,
-  opts: { voiceKey?: () => string; cacheable?: (part: string) => boolean } = {}
+  opts: {
+    voiceKey?: () => string;
+    cacheable?: (part: string) => boolean;
+    /** The first {@link serverSpeaker} `onStarting` (it can be set later). */
+    onStarting?: (on: boolean) => void;
+    now?: () => number;
+  } = {}
 ): Speaker & {
   lastError: string;
+  /** The voice may be starting (true: a line's first sentence has waited
+   * {@link VOICE_STARTING_MS} on a voice that may be cold), then has
+   * answered, failed or been cut (false). */
+  onStarting?: (on: boolean) => void;
   readonly reportsAudible: true;
   prefetch(lines: readonly string[]): Promise<void>;
   cached(part: string): boolean;
@@ -3881,6 +3924,36 @@ export function serverSpeaker(
    * after it), each with what ends its promise. */
   const playing = new Map<AudioBufferSourceNode, () => void>();
   let inflight: AbortController | null = null;
+  const now = opts.now || (() => Date.now());
+  /** When the server's voice last answered (0: not on this page yet). */
+  let lastOk = 0;
+  /** The pending "starting" note: its timer, and whether it showed. */
+  let startTimer: ReturnType<typeof setTimeout> | undefined;
+  let startShown = false;
+  const endStarting = () => {
+    clearTimeout(startTimer);
+    startTimer = undefined;
+    if (startShown) {
+      startShown = false;
+      self.onStarting?.(false);
+    }
+  };
+  /** Watch `p` (a line's first request): past {@link VOICE_STARTING_MS} on a
+   * voice that may be cold, say it is starting until `p` settles. */
+  const watchStart = (p: Promise<unknown>) => {
+    if (!self.onStarting || !voiceMayBeCold(lastOk, now())) return;
+    endStarting();
+    const t = setTimeout(() => {
+      if (startTimer !== t) return;
+      startShown = true;
+      self.onStarting?.(true);
+    }, VOICE_STARTING_MS);
+    startTimer = t;
+    const done = () => {
+      if (startTimer === t || startShown) endStarting();
+    };
+    p.then(done, done);
+  };
 
   const fetchAudio = async (ctx: AudioContext, part: string, ac: AbortController): Promise<AudioBuffer> => {
     const r = await apiRaw("/api/voice/speak", {
@@ -3893,7 +3966,9 @@ export function serverSpeaker(
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       throw new Error(j.error || "HTTP " + r.status);
     }
-    return ctx.decodeAudioData(await r.arrayBuffer());
+    const buf = await r.arrayBuffer();
+    lastOk = now();
+    return ctx.decodeAudioData(buf);
   };
 
   /** Keep `p` as `part`'s audio once it decodes (a failure is forgotten). */
@@ -3908,6 +3983,7 @@ export function serverSpeaker(
 
   const self = {
     lastError: "",
+    onStarting: opts.onStarting as ((on: boolean) => void) | undefined,
     /** speak() calls its `audible` as the first sentence starts playing. */
     reportsAudible: true as const,
     /** The audio of `part` is in memory for the current voice. */
@@ -3952,6 +4028,7 @@ export function serverSpeaker(
           if (inflight === ac) inflight = null;
         };
         p.then(settled, settled);
+        if (i === 0) watchStart(p);
         if (cacheable(parts[i])) remember(parts[i], p);
         return p;
       };
@@ -3987,6 +4064,7 @@ export function serverSpeaker(
       gen++;
       inflight?.abort();
       inflight = null;
+      endStarting();
       const cut = [...playing];
       playing.clear();
       for (const [s, finish] of cut) {

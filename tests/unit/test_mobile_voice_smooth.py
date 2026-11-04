@@ -286,6 +286,9 @@ var clipEnds = 0;
 function voiceClipEnded() { clipEnds++; }
 function voiceNodPrefetch() {}
 function voiceTtsKey() { return "lab|v"; }
+// The voice is warm unless a scenario says it may be cold (voiceTtsMayBeCold).
+var cold = false, VOICE_STARTING_MS = 30, startingSeen = [];
+function voiceTtsMayBeCold() { return cold; }
 function voiceSpeakSentences(t) { return String(t).split(/(?<=\.)\s+/).filter(Boolean); }
 var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 // The server: a request per POST /api/voice/speak; delay[text] ms (Infinity: never answers).
@@ -323,7 +326,7 @@ function voiceAudioCtx() { return ctx; }
 // The owner talking over the listen (voiceSpeakHeld): until heldUntil.
 var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000, VOICE_HOLD_REPLY_MS = 3000;
 var voiceSpeech = { playing: null };
-function voiceStripPaint() {}
+function voiceStripPaint() { if (startingSeen[startingSeen.length - 1] !== !!voice.ttsStarting) startingSeen.push(!!voice.ttsStarting); }
 function voiceSpeakHeld() { return Date.now() < heldUntil; }
 // The phone's voice: what it was asked to say, in calls.
 var phoneSaid = [], phoneCancels = 0;
@@ -400,6 +403,34 @@ out.error = voice.rec.lastSpeak.error;
     # The sentence after the timeout is not waited for a second time.
     assert out["phone"] == ["Slow one. After."] and out["played"] == 0
     assert 90 <= out["took"] < 200, out["took"]
+
+
+@needs_node
+def test_a_cold_voice_is_waited_for_and_the_strip_says_it_is_starting():
+    # Voice Lab stopped while idle: the first clip takes as long as the host
+    # takes to start (here 120 ms; a warm voice that slow loses the line) —
+    # the line is the server's, not handed to the phone's voice, and past
+    # VOICE_STARTING_MS (30 ms here) the strip said "Starting voice…".
+    out = _tts_run("""
+cold = true;
+delay["Cold start."] = 120;
+await tts.speak("Cold start. Then warm.");
+out.phone = phoneSaid.slice();
+out.played = plays.map(function (p) { return p.text; });
+out.starting = startingSeen.slice();
+out.ok = voice.rec.speakOkAt > 0;
+// A warm voice that slow: its wait (at most 200 ms here) ends first, the phone says it.
+cold = false; startingSeen.length = 0; phoneSaid.length = 0; delay["Warm slow."] = 250;
+await tts.speak("Warm slow.");
+out.warmPhone = phoneSaid.slice();
+out.warmStarting = startingSeen.slice();
+""")
+    assert out["phone"] == []
+    assert out["played"] == ["Cold start.", "Then warm."]
+    assert out["starting"] == [True, False]
+    assert out["ok"] is True
+    assert out["warmPhone"] == ["Warm slow."]
+    assert out["warmStarting"] == []
 
 
 @needs_node

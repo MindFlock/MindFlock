@@ -5086,6 +5086,7 @@
       }).then(function (audio) {
         if (keep && audio) cache.set(key, audio);
         if (audio) remember(key, audio);
+        if (audio) voice.rec.speakOkAt = Date.now();   // the voice is up (voiceTtsMayBeCold)
         var x = done({ audio: audio, backend: backend });
         // How long this voice takes per character: the next wait's budget (voiceSpeakWaitMs).
         if (audio && part.length) {
@@ -5135,6 +5136,7 @@
     // their way are not aborted: they land in memory (recent).
     function said(ctx, parts, keep, g) {
       var i = 0, t0 = Date.now(), first = 0, ahead = [], asked = 0;
+      var cold = voiceTtsMayBeCold(voice.rec.speakOkAt, t0);
       // The clips are asked for VOICE_SPEAK_AHEAD ahead of the one playing:
       // a voice that makes one at a time (the owner's Voice Lab: ~1.1 s a
       // request before the words) is never idle between sentences — the
@@ -5146,12 +5148,18 @@
         function next() {
           if (g !== gen || i >= parts.length) { resolve(); return; }
           var part = parts[i++], got = ahead.shift(), waitT = null;
+          // A voice that may be cold (Voice Lab stopped while idle) starts on
+          // this first clip: it is waited for as long as the request may
+          // take, and past VOICE_STARTING_MS the strip says so.
+          var starting = cold && i === 1;
           var wait = new Promise(function (res) {
             waitT = setTimeout(function () { res({ error: "the server's voice took too long", late: true }); },
-                               voiceSpeakWaitMs(part.length, voice.rec.speakMsPerChar));
+                               starting ? VOICE_SPEAK_FETCH_MAX_MS : voiceSpeakWaitMs(part.length, voice.rec.speakMsPerChar));
           });
+          if (starting) startingSoon(g);
           Promise.race([got, wait]).then(function (x) {
             clearTimeout(waitT);
+            if (starting) startingEnd();
             if (g !== gen) { resolve(); return; }
             if (!first) first = Date.now() - t0;
             // 409 (turned off meanwhile), 502 (the backend), the network, a
@@ -5180,9 +5188,28 @@
         next();
       });
     }
+    // "Starting voice…" on the strip once the first clip of line `g` has
+    // waited VOICE_STARTING_MS (a cached clip is back before then).
+    var startT = null;
+    function startingSoon(g) {
+      clearTimeout(startT);
+      startT = setTimeout(function () {
+        if (g !== gen) return;
+        voice.ttsStarting = true;
+        voiceStripPaint();
+      }, VOICE_STARTING_MS);
+    }
+    function startingEnd() {
+      clearTimeout(startT);
+      startT = null;
+      if (!voice.ttsStarting) return;
+      voice.ttsStarting = false;
+      voiceStripPaint();
+    }
     function cancel() {
       gen++;
       owner = null;
+      startingEnd();
       aborts.splice(0).forEach(function (a) { try { a.abort(); } catch (e) {} });
       hush();
       phone.cancel();
@@ -5279,6 +5306,15 @@
   var VOICE_SPEAK_RESUME_MS = 400;        // a suspended / interrupted AudioContext: waited for this long to resume
   var VOICE_SPEAK_WAIT_MIN_MS = 4000;     // voiceSpeakWaitMs: the silence a clip may cost while it is waited for, at least...
   var VOICE_SPEAK_WAIT_MAX_MS = 20000;    // ...and at most
+  var VOICE_STARTING_MS = 1000;           // a cold voice's first clip not back in this: "Starting voice…" on the strip
+  var VOICE_COLD_MS = 10 * 60 * 1000;     // a local voice host (Voice Lab) stops after this long without a request
+  // Whether the server's voice may have to start for the next line: none made
+  // on this page yet (lastOk 0), or the last one VOICE_COLD_MS ago or more —
+  // then its first clip is waited for up to VOICE_SPEAK_FETCH_MAX_MS (Voice
+  // Lab starting and loading its model), not voiceSpeakWaitMs. Pure.
+  function voiceTtsMayBeCold(lastOk, now) {
+    return !lastOk || now - lastOk >= VOICE_COLD_MS;
+  }
   // How long a sentence's clip may be waited for (ms) before the phone's
   // voice says the rest of the line: 3× what this voice has taken per
   // character (msPerChar: ServerTTS learns it) plus a second, or — nothing
@@ -5372,7 +5408,7 @@
            server_ready: {}, backends: { stt: [], tts: [] }, system: null, say_all: null },
     sayAll: { synced: false, denied: false },   // the say-all marker: set from the pref once this load; a 403 said once
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
-    rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null, trace: null, passMs: 0, endMs: 0 },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk, last start-up trace, the stream's last pass (ms), /end's running mean (ms: the "over" budget)
+    rec: { mime: "", last: null, lastSpeak: null, speakOkAt: 0, resampler: "", chunk: null, trace: null, passMs: 0, endMs: 0 },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk, last start-up trace, the stream's last pass (ms), /end's running mean (ms: the "over" budget)
     keepMs: VOICE_KEEP_STREAM_MS,   // how long the server recognizer keeps the microphone warm (tests shorten it)
     buzzAt: 0,                   // the last haptic cue (the listening buzz, the first-word tick)
     sttHinted: false,            // "server recognition isn't ready" said once
@@ -5529,17 +5565,18 @@
   // heard), else "". `paused`: the microphone is muted under the listen (a
   // call, Siri, another app: ServerSTT's paused()) — "Mic paused…", never
   // "Listening…" over a mic that hears nothing.
-  function voiceStripWord(state, speaking, note, paused, holding) {
+  function voiceStripWord(state, speaking, note, paused, holding, starting) {
     if (note) return String(note);
     if (holding) return "Waiting for you…";   // a line held for the owner's pause (voiceSpeakWhenQuiet)
-    if (speaking) return "Speaking…";
+    if (speaking) return starting ? "Starting voice…" : "Speaking…";   // starting: a cold voice host on its first clip
     if (state === "listening" || state === "awaiting" || state === "dialog") return paused ? "Mic paused…" : "Listening…";
     if (state === "sending") return "Sending…";
     return "";
   }
   function voiceStripPaint() {
     var w = voiceStripWord(voice.state, !!voiceSpeech.playing || voice.state === "speaking", Date.now() < voice.quietUntil ? voice.quietWord : "",
-                           !!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing);
+                           !!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing,
+                           !!voice.ttsStarting);
     if (voiceCaptionEl.textContent !== w) voiceCaptionEl.textContent = w;
   }
   // A moment's word on the strip, VOICE_QUIET_CAPTION_MS long: the cue
@@ -8619,8 +8656,18 @@
       body: JSON.stringify({ on: !!on }),
     }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
   }
+  // Whether this page will SAY something with the server's voice soon: voice
+  // on with replies (or spoken confirmations), Everything, or the wake-word
+  // standby (its switch says the session's name). Only then may reading the
+  // config ready that voice: a local host (Voice Lab, gigabytes) stops when
+  // idle and must not be woken by a page load, a refocus or the sheet —
+  // nor by dictation alone (recognition runs in the server itself).
+  function voiceWantsVoice() {
+    var p = voice.prefs;
+    return p.replies === "all" || !!p.wake || (voice.state !== "off" && (p.replies !== "off" || !!p.confirm));
+  }
   function voiceLoadCfg() {
-    return fetch("/api/voice")
+    return fetch(voiceWantsVoice() ? "/api/voice" : "/api/voice?warm=0")
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; })
       .then(function (j) {

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Voice Lab stays off while you aren't using voice.** It starts on first
+  use and stops after 10 idle minutes, and now only speech wakes it:
+  dictating (recognition runs inside MindFlock) no longer does, nor does
+  opening the mic's menu, the phone page loading or coming back to the
+  front, or Settings → Voice (which now says a local voice "starts when you
+  use voice"; **Say a test sentence** still tries it). The first line after
+  it has been idle shows **Starting voice…** while it starts, and the phone
+  waits for it instead of switching to its own voice after a few seconds.
 - **A rename renames the session.** There is no hidden second name any more:
   renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
   `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,

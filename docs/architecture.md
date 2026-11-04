@@ -196,8 +196,9 @@ FastAPI app `backend.web.server:app`. Key pieces:
   streaming `base.en`) resident while configured, a piper voice unloaded
   after 30 idle minutes — recognition warmed at boot and on every
   `GET /api/voice`, the voice at boot only with "Read everything" on and on
-  fetches without `?warm=0` (the desktop app sends `warm=0` until voice is in
-  use there) (`speech.warm_in_background`; a local OpenAI-compatible voice
+  fetches without `?warm=0` (every client sends `warm=0` unless something
+  will be said soon — Voice Lab starts on first use and stops after 10 idle
+  minutes; dictation never wakes it) (`speech.warm_in_background`; a local OpenAI-compatible voice
   host gets one throwaway synthesis). A line the
   voice host cannot say in its queue-aware budget falls back to piper, one
   voice per reply (`speech.TtsChain`); only a DEAD host (refused, reset,
