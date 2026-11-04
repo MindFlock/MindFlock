@@ -30,7 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type Keybo
 import { createPortal } from "react-dom";
 import type { Instance, TestPlan } from "../../api/types";
 import type { BehaviorsMark, BirdPerch, Diagram, DiagramEdge, DiagramNode } from "../../lib/flightDiagram";
-import { leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
+import { atHaltPoint, leftWord, loopIdlePill, loopPill, loopPillTitle, sessionDiagram, withBehaviors } from "../../lib/flightDiagram";
 import { isLive, youItems, type Flight, type StepKindDef } from "../../lib/flights";
 import { behaviorSummary, nextNeedingYou, planForSession } from "../../lib/behaviors";
 import { findPlan, useBehaviorsFocus, type BehaviorsTarget } from "../../lib/behaviorsFocus";
@@ -259,7 +259,10 @@ export function tileSub(n: DiagramNode): string {
  * name on the tile (its full text in the tile's tooltip). A halted stop:
  * the failure, without the stop's own name in front ("CI checks failed: 2
  * of 14 red" under "CI checks" says "Failed: 2 of 14 red"). A Wait for me
- * stop: what it asks of you (its text). Else nothing. */
+ * stop: what it asks of you (its text). A stop the route paused at because
+ * it is a halt point (round 21b): says so, plainly — nothing failed. Else
+ * nothing. */
+export const HALT_POINT_LINE = "Your halt point";
 export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "step">): string {
   if (n.state === "halted") {
     const r = String(n.reason || "").trim();
@@ -271,6 +274,7 @@ export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "ste
     return r;
   }
   if (n.state === "perched") return String(n.step?.config?.text ?? "").trim();
+  if (n.state === "paused" && n.step?.halt) return HALT_POINT_LINE;
   return "";
 }
 
@@ -280,14 +284,20 @@ export function stopWhy(n: Pick<DiagramNode, "state" | "title" | "reason" | "ste
  * ticks and Done · Skip) — the current stop of a live flight only (the one
  * that carries them, FlightStrip `liveBoxParts`). A Verify stop parked on
  * you is the Behaviors tile (its own card), so it stays a tile; halted, it
- * takes Retry / Let the agent fix it / Skip like any other. */
+ * takes Retry / Let the agent fix it / Skip like any other. A reached halt
+ * point (round 21b, `atHaltPoint`: the route paused there, nothing failed)
+ * takes the same room for its "Your halt point" line and Carry on · Skip. */
 export const STOP_TILE_W = 156;
-export function stopTileBoxes(d: Pick<Diagram, "nodes">, flight: Pick<Flight, "cursor" | "state"> | null | undefined): Record<string, { w: number; h: number }> {
+export function stopTileBoxes(
+  d: Pick<Diagram, "nodes">,
+  flight: (Pick<Flight, "cursor" | "state"> & Partial<Pick<Flight, "steps" | "reason" | "step_states">>) | null | undefined
+): Record<string, { w: number; h: number }> {
   const out: Record<string, { w: number; h: number }> = {};
-  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you")) return out;
+  const haltPoint = !!flight?.steps && atHaltPoint(flight as Pick<Flight, "steps" | "cursor" | "state" | "reason" | "step_states">);
+  if (!flight || (flight.state !== "halted" && flight.state !== "waiting_you" && !haltPoint)) return out;
   for (const n of d.nodes) {
     if (n.kind !== "stop" || n.index !== flight.cursor) continue;
-    if (n.state === "halted") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
+    if (n.state === "halted" || (n.state === "paused" && haltPoint)) out[n.id] = { w: STOP_TILE_W, h: NODE_H + 40 };
     else if (n.state === "perched" && !n.behaviors && n.step?.kind !== "verify") out[n.id] = { w: STOP_TILE_W, h: NODE_H + 24 + 21 * youItems(n.step).length };
   }
   return out;

@@ -250,7 +250,8 @@
    below that (SkyChain `stopWhy` / `stopTileBoxes`). Nothing under its tile
    shrinks: the buttons used to squeeze the name out of the fixed box. */
 .sky-node.st-halted > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra),
-.sky-node.st-perched > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra) {
+.sky-node.st-perched > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra),
+.sky-node.st-paused > :is(.sky-node-title, .sky-node-sub, .sky-node-reason, .sky-node-extra) {
   flex-shrink: 0;
 }
 
@@ -269,6 +270,13 @@
 .sky-node.st-perched .sky-node-reason {
   font-weight: 500;
   color: var(--text);
+}
+
+/* A halt point the route reached (round 21b): nothing failed, so its line
+   is not the red of a failure. */
+.sky-node.st-paused .sky-node-reason {
+  font-weight: 500;
+  color: var(--muted);
 }
 
 /* Its buttons, in the tile: Retry · Skip on one row, Let the agent fix it

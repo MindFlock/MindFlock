@@ -1331,6 +1331,27 @@ export function collapseGroups(d: Diagram, expanded?: ReadonlySet<string> | null
   return out;
 }
 
+/** The `reason` the server gives a flight paused at a halt point
+ * (backend/web/core/flights.py `HALT_POINT`). */
+export const HALT_POINT_REASON = "halt point";
+
+/** Round 21b (JUDGE-R21-3 #5): whether the flight stopped at its current
+ * stop because the owner set a halt point there ("Halt here"), NOT because a
+ * stop failed. The server parks it `paused` with reason `halt point`
+ * (`_hit_halt_point`); a halted flight whose current stop is a halt point
+ * and never failed is read the same way. Nothing failed, so there is
+ * nothing to retry: its buttons are Carry on (`POST …/resume`,
+ * `op_resume`, which lets the halt point through) and Skip. */
+export function atHaltPoint(flight: Pick<Flight, "steps" | "cursor" | "state" | "reason" | "step_states"> | null | undefined): boolean {
+  if (!flight) return false;
+  const step = flight.steps[flight.cursor];
+  if (!step) return false;
+  if (flight.state === "paused") return flight.reason === HALT_POINT_REASON;
+  if (flight.state !== "halted" || !step.halt) return false;
+  const ss = flight.step_states?.[step.id];
+  return ss?.state !== "failed" && !ss?.detail?.failed_reason;
+}
+
 /** The group box (or stop) the flight's step `index` is drawn in. */
 export function nodeAtIndex(d: Pick<Diagram, "nodes">, index: number): DiagramNode | undefined {
   return d.nodes.find(
