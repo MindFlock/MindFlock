@@ -184,6 +184,9 @@ describe("the old #flights links land where they belong now", () => {
   ];
 
   it.each(TABLE)("%s", (hash, dialog, view, shelf, after, behaviors = null) => {
+    // Each link from a whole-sky pick (a This session pick would keep its
+    // session's #sky/<title> address).
+    useUi.setState({ skyMode: "mine", focused: null } as never);
     const w = fakeWin(hash);
     const off = installSurfaceHash(w.win);
     const s = useUi.getState();

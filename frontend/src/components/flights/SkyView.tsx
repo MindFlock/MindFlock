@@ -600,7 +600,15 @@ export function SkyView() {
   // making shows at once, a loading box under its name), then the grounded
   // flights' — stops with no session yet — newest first. Not in This session
   // or Perched on you; Find matches their name.
-  const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: focused || "" }), [rows, mode, query, focused]);
+  // This session (the default) with nothing focused still shows a route:
+  // the last session you were on, else the newest — shown, not selected.
+  const mru = useUi((s) => s.mru);
+  const oneFocus = useMemo(() => {
+    if (focused || mode !== "one") return focused || "";
+    const shown = new Set(rows.filter(inSky).map((r) => r.title));
+    return mru.find((t) => shown.has(t)) || [...rows].reverse().find((r) => shown.has(r.title))?.title || "";
+  }, [focused, mode, rows, mru]);
+  const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: oneFocus }), [rows, mode, query, oneFocus]);
   // The Verify tour opens by itself once: the first time a Behaviors stop
   // shows on a route here (docs/behaviors.md §4).
   const testPlans = useTestPlans().data?.plans;
@@ -850,7 +858,7 @@ export function SkyView() {
   // 0, 1 or Fit. The first fit follows the grid's view: "1" fits the focused
   // line, the rest fit all.
   const fitted = useRef(memo?.key || "");
-  const fitKey = mode + "\u0000" + (mode === "one" ? focused : "");
+  const fitKey = mode + "\u0000" + (mode === "one" ? oneFocus : "");
   useEffect(() => {
     if (instQ.data === undefined || waited) return;
     const t = setTimeout(() => setWaited(true), 900);
@@ -902,15 +910,9 @@ export function SkyView() {
     // never "whole in view", so moving it would jolt every click.
     const pressed = pressedLine.current === focusLine;
     pressedLine.current = "";
-    // Picked from OUTSIDE the sky (the sidebar row, Alt+N, the palette): the
-    // owner wants the input area, so the line's box opens on its real pane
-    // (round 14: "when I click that I pretty much always want to see the
-    // input area"). A press inside the sky keeps the box as it was. Once per
-    // pick — a viewport resize re-runs this effect and must not reopen it.
-    if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
-      openedFor.current = focusLine;
-      if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
-    } else if (pressed) openedFor.current = focusLine;
+    // Switching session never opens its box on the terminal (the owner,
+    // 2026-11-03: "when we switch session in sky I don't want the text window
+    // to pop up"): a box stays as it was left; a click on its agent opens it.
     const c = camRef.current;
     const sx = c.x + r.x * c.z;
     const sy = c.y + r.y * c.z;
@@ -920,7 +922,7 @@ export function SkyView() {
     }
     setFlash(focusLine);
     setTimeout(() => alive.current && setFlash((f) => (f === focusLine ? "" : f)), 1400);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- layout/onLayout/rows are read once per pick
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per pick
   }, [focusLine, rectOf, vp.w, vp.h]);
 
   // A line that leaves is gone at once (the owner: deletes must disappear
@@ -930,8 +932,6 @@ export function SkyView() {
    * press on the line itself is remembered, so the selection effect above
    * leaves the camera alone for it. */
   const pressedLine = useRef("");
-  /** The line whose box the last outside pick opened (once per pick). */
-  const openedFor = useRef<string>("");
   const focusOn = useCallback((id: string, pressed = false) => {
     pressedLine.current = pressed ? id : "";
     setGroundFocus("");

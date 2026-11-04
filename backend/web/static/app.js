@@ -27117,8 +27117,8 @@ function installVerifyRedirect() {
 //#endregion
 //#region src/state/store.ts
 var loadSkyMode = () => {
-	const m = load$1("mf_sky_view", "mine", false);
-	return m === "all" || m === "perched" ? m : "mine";
+	const m = load$1("mf_sky_view", "one", false);
+	return m === "all" || m === "mine" || m === "perched" ? m : "one";
 };
 var SIDEBAR_MIN_W = 260;
 var SIDEBAR_MAX_W = 560;
@@ -27246,7 +27246,7 @@ var useUi = create((set, get) => ({
 		if (v === "grid" && f && _selectSession) _selectSession(f, { noKeyboard: true });
 	},
 	setSkyMode: (m) => {
-		if (m !== "one") save("mf_sky_view", m, false);
+		save("mf_sky_view", m, false);
 		set({ skyMode: m });
 	},
 	showSky: (focus = "") => {
@@ -27258,7 +27258,7 @@ var useUi = create((set, get) => ({
 			if (_selectSession) _selectSession(focus, { noKeyboard: true });
 			else get().setFocused(focus);
 			get().setSkyMode("one");
-		} else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
+		}
 		get().setView("sky");
 	},
 	showFlyways: (plan = "") => {
@@ -86188,6 +86188,11 @@ function estimateLine(base, stored) {
 }
 var SKY_MODES = [
 	{
+		id: "one",
+		label: "This session",
+		title: "The session you're on: its route, filling the sky"
+	},
+	{
 		id: "all",
 		label: "All",
 		title: "Every session — a worker inside its lead's route"
@@ -86201,11 +86206,6 @@ var SKY_MODES = [
 		id: "perched",
 		label: "Needs you",
 		title: "Only the routes that need you"
-	},
-	{
-		id: "one",
-		label: "This session",
-		title: "One route, filling the sky"
 	}
 ];
 var inSky = (r) => !r.hidden_by;
@@ -140294,14 +140294,25 @@ function SkyView() {
 		setSelAsk("");
 		setFocusMode(false);
 	}, []);
+	const mru = useUi((s) => s.mru);
+	const oneFocus = (0, import_react.useMemo)(() => {
+		if (focused || mode !== "one") return focused || "";
+		const shown = new Set(rows.filter(inSky).map((r) => r.title));
+		return mru.find((t) => shown.has(t)) || [...rows].reverse().find((r) => shown.has(r.title))?.title || "";
+	}, [
+		focused,
+		mode,
+		rows,
+		mru
+	]);
 	const titles = (0, import_react.useMemo)(() => skyLineTitles(rows, mode, {
 		query,
-		focus: focused || ""
+		focus: oneFocus
 	}), [
 		rows,
 		mode,
 		query,
-		focused
+		oneFocus
 	]);
 	const testPlans = useTestPlans().data?.plans;
 	useTourOnFirstSight("verify", (0, import_react.useMemo)(() => behaviorsOnARoute(testPlans, rows, titles), [
@@ -140689,7 +140700,7 @@ function SkyView() {
 		goTo
 	]);
 	const fitted = (0, import_react.useRef)(memo?.key || "");
-	const fitKey = mode + "\0" + (mode === "one" ? focused : "");
+	const fitKey = mode + "\0" + (mode === "one" ? oneFocus : "");
 	(0, import_react.useEffect)(() => {
 		if (instQ.data === void 0 || waited) return;
 		const t = setTimeout(() => setWaited(true), 900);
@@ -140736,10 +140747,6 @@ function SkyView() {
 		if (!r) return;
 		const pressed = pressedLine.current === focusLine;
 		pressedLine.current = "";
-		if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
-			openedFor.current = focusLine;
-			if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
-		} else if (pressed) openedFor.current = focusLine;
 		const c = camRef.current;
 		const sx = c.x + r.x * c.z;
 		const sy = c.y + r.y * c.z;
@@ -140753,7 +140760,6 @@ function SkyView() {
 		vp.h
 	]);
 	const pressedLine = (0, import_react.useRef)("");
-	const openedFor = (0, import_react.useRef)("");
 	const focusOn = (0, import_react.useCallback)((id, pressed = false) => {
 		pressedLine.current = pressed ? id : "";
 		setGroundFocus("");

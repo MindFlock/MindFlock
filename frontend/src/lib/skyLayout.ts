@@ -818,10 +818,10 @@ export function estimateLine(base: { w: number; h: number }, stored: StoredLine 
 export type SkyMode = "all" | "mine" | "perched" | "one";
 
 export const SKY_MODES: ReadonlyArray<{ id: SkyMode; label: string; title: string }> = [
+  { id: "one", label: "This session", title: "The session you're on: its route, filling the sky" },
   { id: "all", label: "All", title: "Every session — a worker inside its lead's route" },
   { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their route" },
   { id: "perched", label: "Needs you", title: "Only the routes that need you" },
-  { id: "one", label: "This session", title: "One route, filling the sky" },
 ];
 
 /** Drawn in the sky at all: not a hidden helper (a verify run). */

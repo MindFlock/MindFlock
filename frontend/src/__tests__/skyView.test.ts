@@ -43,11 +43,16 @@ describe("the view store", () => {
     expect([viewLabel("grid"), viewLabel("sky")]).toEqual(["Grid", "Sky"]);
   });
 
-  it("the sky's lines are remembered too — except This session, which the hash carries", () => {
+  it("the sky's lines default to This session and every pick is remembered", () => {
+    expect(code("state/store.ts")).toContain('load<string>("mf_sky_view", "one", false)');
+    expect(sky.SKY_MODES[0].id).toBe("one");
     useUi.getState().setSkyMode("all");
     expect(storage.get("mf_sky_view")).toBe("all");
     useUi.getState().setSkyMode("one");
-    expect(storage.get("mf_sky_view")).toBe("all");
+    expect(storage.get("mf_sky_view")).toBe("one");
+    expect(useUi.getState().skyMode).toBe("one");
+    // A plain #sky (no title) keeps the pick rather than leaving This session.
+    useUi.getState().showSky();
     expect(useUi.getState().skyMode).toBe("one");
   });
 });
@@ -78,11 +83,11 @@ describe("the isomorphism", () => {
     const s = useUi.getState();
     expect([s.view, s.skyMode, s.focused]).toEqual(["sky", "one", "worker-2"]);
     expect(picked).toEqual(["worker-2:quiet"]);
-    // The whole sky again: the remembered pick, not "one".
+    // A plain #sky keeps the pick (This session is the default now).
     useUi.getState().showSky();
-    expect(useUi.getState().skyMode).not.toBe("one");
+    expect(useUi.getState().skyMode).toBe("one");
     // The sky's This session is skyLineTitles' "one" on the focused title.
-    expect(code("components/flights/SkyView.tsx")).toContain("skyLineTitles(rows, mode, { query, focus: focused || \"\" })");
+    expect(code("components/flights/SkyView.tsx")).toContain("skyLineTitles(rows, mode, { query, focus: oneFocus })");
   });
 
   it("the pane's open tab is the line's open box: the box IS the session's Pane, which reads lastTab per title", () => {
@@ -552,11 +557,17 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the Sky", 
   });
 });
 
-describe("a session picked from outside the sky opens its box", () => {
-  it("the sidebar's pick (not a press on the sky) opens the line on its pane, once per pick", () => {
+describe("switching session in the sky never opens its box on the terminal", () => {
+  it("the pick effect moves the camera and flashes; it never opens a box", () => {
     const src = code("components/flights/SkyView.tsx");
-    expect(src).toContain('const openedFor = useRef<string>("");');
-    expect(src).toContain("if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {");
-    expect(src).toContain("if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });");
+    expect(src).not.toContain("openedFor");
+    // Only Enter (asked for) opens the focused box.
+    expect(src.match(/onLayout\(focusLine, \{ open: true \}\)/g)?.length).toBe(1);
+    expect(src).toContain('} else if (k === "Enter" && focusLine) {');
+  });
+  it("This session with nothing focused shows the last session you were on", () => {
+    const src = code("components/flights/SkyView.tsx");
+    expect(src).toContain("return mru.find((t) => shown.has(t))");
+    expect(src).toContain("skyLineTitles(rows, mode, { query, focus: oneFocus })");
   });
 });
