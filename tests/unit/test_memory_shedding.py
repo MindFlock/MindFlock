@@ -136,19 +136,28 @@ def test_find_indexing_skips_its_pass_while_memory_is_low(monkeypatch):
     assert touched == []
 
 
-def test_shedding_drops_idle_speech_models_resident_ones_too(monkeypatch):
+def test_shedding_drops_idle_speech_models_but_not_a_listening_lease(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(speech, "_now", lambda: clock[0])
     monkeypatch.setattr(speech, "_CACHE", {})
     monkeypatch.setattr(speech, "_USED", {})
     monkeypatch.setattr(speech, "_WARMED", {"stt": ("loaded", "small", 0.0)})
+    # Wake-word standby is on (a live listening lease pins whisper): kept,
+    # so the next "MindFlock" doesn't wait for a reload.
     monkeypatch.setattr(speech, "_resident", lambda: frozenset({"whisper:small"}))
-    speech._CACHE.update({"whisper:small": object(), "piper:amy": object()})
-    speech._USED.update({"whisper:small": 700.0, "piper:amy": 990.0})
-    assert speech.sweep_idle() == []  # the everyday sweep keeps the resident one
-    assert speech.shed_for_memory() == ["whisper:small"]  # piper used 10 s ago
-    assert "whisper:small" not in speech._CACHE and "piper:amy" in speech._CACHE
-    assert "stt" not in speech._WARMED  # the next warm loads it again
+    speech._CACHE.update(
+        {"whisper:small": object(), "piper:amy": object(), "piper:old": object()}
+    )
+    speech._USED.update(
+        {"whisper:small": 700.0, "piper:amy": 990.0, "piper:old": 700.0}
+    )
+    assert speech.sweep_idle() == []
+    assert speech.shed_for_memory() == ["piper:old"]  # piper:amy used 10 s ago
+    assert "whisper:small" in speech._CACHE and "stt" in speech._WARMED
+    # Nobody listening: the idle whisper goes too, and the next warm reloads.
+    monkeypatch.setattr(speech, "_resident", lambda: frozenset())
+    assert speech.shed_for_memory() == ["whisper:small"]
+    assert "whisper:small" not in speech._CACHE and "stt" not in speech._WARMED
 
 
 def test_the_memory_watch_sheds_what_the_server_holds(monkeypatch):

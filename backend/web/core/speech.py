@@ -483,9 +483,15 @@ def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:
     :func:`_memory_block` lets it. → the keys dropped. Never raises."""
     stamp = _now()
     dropped: List[str] = []
+    # A live listening lease (wake-word standby) keeps its models: dropping
+    # them would turn the next "MindFlock" into a multi-second reload, and low
+    # memory already puts idle agents to sleep first (core.sleep).
+    keep = _resident()
     try:
         with _LOCK:
             for key in list(_CACHE):
+                if key in keep:
+                    continue
                 if stamp - _USED.get(key, stamp) >= min_idle_s:
                     _CACHE.pop(key, None)
                     _USED.pop(key, None)
