@@ -10,6 +10,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from fastapi.responses import JSONResponse
 
 from backend.mcp import gitlocal as _gitlocal
 from backend.mcp import tools as mcp_tools
@@ -524,19 +525,23 @@ def srv(monkeypatch):
 
 
 class Created(list):
-    """The create payloads, in order; ``refuse[n]`` answers the n-th."""
+    """The create payloads, in order; ``refuse[n]`` answers the n-th;
+    ``autos`` the ``auto=`` each create passed (the launch gate's kind)."""
 
     refuse: dict
+    autos: list
 
 
 @pytest.fixture
 def created(srv, monkeypatch):
     got = Created()
     got.refuse = {}
+    got.autos = []
     refuse = got.refuse
 
-    async def fake(payload):
+    async def fake(payload, *, peer_share="", person="", auto=""):
         got.append(dict(payload))
+        got.autos.append(auto)
         if len(got) in refuse:
             return refuse[len(got)]
         srv.ENGINE.instances[payload["title"]] = FakeInst(parent=payload["parent"])
@@ -568,6 +573,9 @@ def test_split_spawns_one_worker_per_prompt_forked_from_the_session(srv, created
     )
     got = drive(f)
     assert [p["title"] for p in created] == ["s-w1", "s-w2"]
+    # Each worker is an automatic start: it asks the launch gate (which, with
+    # memory fine, lets it go at once — the fake stands in for that answer).
+    assert created.autos == ["flight", "flight"]
     first = created[0]
     assert first["parent"] == "s" and first["spawned"] is True
     assert first["repo_path"] == "/repo"
@@ -581,6 +589,28 @@ def test_split_spawns_one_worker_per_prompt_forked_from_the_session(srv, created
     assert ss["state"] == "done" and ss["detail"]["children"] == ["s-w1", "s-w2"]
     assert ss["note"] == "spawned 2 workers"
     assert got["cursor"] == 1  # on to the next stop in the same pass
+
+
+def test_a_split_goes_through_the_real_launch_gate_when_memory_is_fine(
+    srv, monkeypatch
+):
+    """Not the faked create_result: the split's creates ask the real launch
+    gate (``auto="flight"``), which with memory fine (or unknown) and nothing
+    queued lets each go at once — a split never sits waiting for nothing."""
+    from backend.web.core import launch_gate as _gate
+
+    made = []
+
+    async def fake_create(payload, **kw):
+        made.append((payload["title"], kw.get("gated")))
+        srv.ENGINE.instances[payload["title"]] = FakeInst(parent=payload["parent"])
+        return JSONResponse({"title": payload["title"]}, status_code=202)
+
+    monkeypatch.setattr(_session_create, "create", fake_create)
+    got = drive(driver_fly(step("split", prompts="a\nb")))
+    assert made == [("s-w1", True), ("s-w2", True)]
+    assert _gate.items() == []
+    assert got["step_states"]["s1"]["state"] == "done"
 
 
 def test_split_without_report_back_or_attach_has_no_footer(srv, created):

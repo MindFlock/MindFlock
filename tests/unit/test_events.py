@@ -160,6 +160,7 @@ def test_event_names_vocabulary_is_complete():
         "peer.session_unshared",
         "system.memory_changed",
         "system.sessions_held",
+        "system.sessions_slept",
     }
 
 
