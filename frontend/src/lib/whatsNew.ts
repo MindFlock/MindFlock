@@ -137,3 +137,41 @@ export function splitEntries(entries: readonly WhatsNewRelease[]): { big: WhatsN
 export function knownAction<T extends { action?: { run: string } }>(f: T, known: (id: string) => boolean): T["action"] | undefined {
   return f.action && known(f.action.run) ? f.action : undefined;
 }
+
+// --- One pop-up at a time: What's new and the ask pop-up ------------------- //
+
+/** Where What's new stands for the pop-up queue: `deciding` — page load, the
+ * versions and prefs not read yet; `due` — it will open as soon as nothing
+ * else is on screen; `shown` — it is open; `done` — nothing more to show. */
+export type WhatsNewStage = "deciding" | "due" | "shown" | "done";
+
+/** The ask pop-up waits at most this long (ms after page load) for What's new
+ * to decide; past it, a decision that never comes (a server that never says
+ * its version) doesn't hold a session's question back for good. */
+export const WHATS_NEW_DECIDE_MS = 8000;
+
+export interface PopupQueue {
+  whatsNew: WhatsNewStage;
+  /** The ask pop-up ("a session is asking you something") is open. */
+  askOpen: boolean;
+  /** A session's ask would open the pop-up by itself now. */
+  askWaiting: boolean;
+  /** Something else holds the screen: a tour, another dialog. */
+  otherOpen: boolean;
+  /** ms since the page loaded. */
+  sinceLoadMs: number;
+}
+
+/** Which of the two automatic pop-ups may be on screen now (pure). Whichever
+ * opened first stays and the other waits for it to close; at page load What's
+ * new goes first — the ask waits while it is deciding (up to
+ * WHATS_NEW_DECIDE_MS) or due. Neither is dropped: the one that waits opens
+ * when this names it. */
+export function popupTurn(q: PopupQueue): "whats-new" | "ask" | null {
+  if (q.whatsNew === "shown") return "whats-new";
+  if (q.askOpen) return "ask";
+  if (q.otherOpen) return null;
+  if (q.whatsNew === "due") return "whats-new";
+  if (q.whatsNew === "deciding" && q.sinceLoadMs < WHATS_NEW_DECIDE_MS) return null;
+  return q.askWaiting ? "ask" : null;
+}
