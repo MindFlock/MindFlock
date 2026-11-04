@@ -706,11 +706,10 @@ pipeline keeps its own, so it and the server can briefly disagree near a line.
 While the level is `low` or `critical`:
 
 - **Agent spawns wait** — `POST /api/instances` with `spawned: true` (the
-  MCP's `spawn_session`) is queued in the [launch gate](#launch-gate) and
-  answered 202 `queued: waiting for memory`. An agent's `POST
-  /api/tickets/start` still answers **409** with `memory` in the body. A
-  person's New asks first (below); a team run's own members are paced by
-  the run's planner.
+  MCP's `spawn_session`) and an agent's `POST /api/tickets/start` (the MCP's
+  `spawn_ticket_session`) are queued in the [launch gate](#launch-gate) and
+  answered 202 `queued: waiting for memory`. A person's New asks first
+  (below); a team run's own members are paced by the run's planner.
 - **Team runs start no new lines** — the planner holds queued tasks exactly
   as it does for a usage limit (a task marked `start_now` still starts); the
   run's `waiting_for_memory` puts a *memory* badge on its rail header.
@@ -754,11 +753,12 @@ agent start asks first. It answers **go / wait / refuse** from:
   in the last 90 s (read from tmux's own `session_created`, so starts from
   any path and any process count), plus starts this server admitted that
   have no tmux session yet. Each is assumed to still take ~700 MB
-  (`MINDFLOCK_AGENT_WARMUP_MB`). The gate works out what memory would read
+  (`general.agent_warmup_mb`; the `MINDFLOCK_AGENT_WARMUP_MB` env var wins). The gate works out what memory would read
   once they have grown, and that projection counts like the level;
-- **live agents** against a machine-wide cap (`MINDFLOCK_MAX_LIVE_AGENTS`;
-  default one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap). The cap applies
-  to automatic starts only.
+- **live agents** against a machine-wide cap (`general.max_live_agents`,
+  the `MINDFLOCK_MAX_LIVE_AGENTS` env var wins; default one per 1.2 GB of
+  RAM, 16 on 20 GB; `0` = no cap). The cap applies to automatic starts only.
+  Both settings are per device and never synced.
 
 **Automatic starts wait in a FIFO queue.** That means an agent-spawned
 create, a queued prompt relaunching or waking its agent, a mailbox wake, a
@@ -771,8 +771,14 @@ reason, position, creates}`); the rail says **Waiting for memory** on it, with
 **Start anyway** on hover. An agent-spawned create that waits has no session
 yet. It is listed as a provisioning placeholder row (`pending`, the one
 force-starts use), so the orchestrator's `wait_for_session` and the rail both
-see it. The queue lives in the server's memory, so a restart drops it (held
-offline covers the sessions that existed).
+see it. The queue is saved to `<config dir>/launch_queue.json`
+(`MINDFLOCK_LAUNCH_QUEUE_FILE`) on every change. At boot each saved entry
+comes back through its kind's factory (`launch_gate.register_kind`): a queued
+create (`spawn` / `flight` / `schedule`, with its placeholder row), a queued
+prompt's relaunch, a wake, a revive. Each waits for the gate again. An entry
+whose session is gone (or no longer asleep) is dropped. An agent's queued
+ticket start is not saved: its pending row does not survive a restart
+either, so the orchestrator's `wait_for_session` reads it as `gone`.
 
 **A person's start asks first.** That covers New session, Duplicate, Start
 (`/revive`), Start all (`/revive-all`), Resume and Wake. While the gate reads
@@ -789,16 +795,23 @@ all still paces its launches through the gate after the confirm.
 |---|---|
 | New session (`POST /api/instances`, person) | confirm |
 | MCP `spawn_session` (`POST /api/instances` `spawned: true`) | queue (202 `queued`) |
+| MCP `spawn_ticket_session` (an agent's `/api/tickets/start`) | queue (202 `queued`, `memory_reason`; its launch waits its turn) |
+| A flight step starting a session (`create_result(auto="flight")`) | queue (the flight reads the pending row as provisioning) |
+| A scheduled template fire (`auto="schedule"`) | queue. A person's Run now is not queued |
 | Duplicate (`/copy`), Start (`/revive`), Resume, Wake, Start all | confirm |
+| A spoken "new session" (voice) | says why instead of starting while memory is low |
 | Revive sweep (boot / Start all's rest) | paced by warming; the rest queued |
 | Auto-revive after a kill (`revive.auto_tick`) | holds while the gate says wait |
 | Prompt-queue drain relaunching or waking its agent | queue |
 | Mailbox delivery waking a sleeper | queue |
+| Team runs | the planner holds new lines on memory, warming or the cap (`decide(...)["why"]`), and a pass starts at most `launch_gate.room()` new ones |
 | Ticket pipeline (`ticket_ingestion.session_runner`, another process) | its own wait loop on `launch_gate.decide` (memory, warming, cap), capped at 30 min |
-| Team runs | the run's planner (`memory_low`), not yet the warming/cap |
-| MCP `spawn_ticket_session` (`/api/tickets/start`) | 409 `memory` (not queued yet) |
-| Flights starting a session, scheduled sessions, voice-created sessions | not gated yet (they call `session_create` in-process) |
+| The phone (`/m`): Restart, Wake, Resume, New session | confirm (its ask sheet, Start anyway) |
 | A terminal attach / Send waking a sleeper | not gated (a person's action) |
+
+A queued create runs *gated*: its own older memory check
+(`session_create.memory_refusal`) is skipped, so **Start anyway** on a queued
+worker starts it even while memory still reads low.
 
 **A squeeze must not wedge the server.** On 2026-11-04 the server twice kept
 its listen sockets but answered nothing for minutes (the accept backlog full,

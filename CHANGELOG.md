@@ -23,7 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   New session, Duplicate, Start, Start all, Resume and Wake still go, but
   while memory is low they ask first: *Memory is low: 3.1 GB free. Starting
   another agent may freeze the machine*, with **Start anyway**, **Put idle
-  agents to sleep first** or **Cancel**.
+  agents to sleep first** or **Cancel** (on the phone too). Flights,
+  scheduled templates, team runs and tickets an agent starts wait their turn
+  the same way, a spoken "new session" says why it didn't start, and what is
+  waiting survives a server restart. The cap and the per-agent size are
+  settings (`general.max_live_agents`, `general.agent_warmup_mb`), per device.
 - **One agent can no longer take the whole machine down.** Each agent now
   runs in its own systemd user scope with a memory ceiling (throttled above
   30% of RAM, stopped above 40%, swap capped), and all agents together are

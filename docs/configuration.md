@@ -738,8 +738,9 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
 | `MINDFLOCK_LOOP_WATCHDOG` | on | `0` turns off the event-loop stall watchdog ([session-engine.md](session-engine.md#memory-guard)): a loop stuck past `MINDFLOCK_LOOP_STALL_S` (default `10`) seconds appends a header and every thread's stack to `logs/stacks.log`. |
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
-| `MINDFLOCK_MAX_LIVE_AGENTS` | RAM ÷ 1.2 GB (16 on 20 GB) | The launch gate's machine-wide cap on live agents that **automatic** starts respect (an agent's spawned worker, a queued prompt relaunching its agent, the revive sweep, the ticket pipeline); a person's own starts are never capped. `0` = no cap ([session-engine.md](session-engine.md#launch-gate)) |
-| `MINDFLOCK_AGENT_WARMUP_MB` | `700` | What one agent started in the last 90 s is assumed to still take as it grows; the launch gate subtracts it per warming agent from available memory before deciding |
+| `MINDFLOCK_LAUNCH_QUEUE_FILE` | `~/.mindflock/launch_queue.json` | Where the launch gate saves what waits for memory, so a restart keeps it |
+| `MINDFLOCK_MAX_LIVE_AGENTS` | `general.max_live_agents`, else RAM ÷ 1.2 GB (16 on 20 GB) | The launch gate's machine-wide cap on live agents that **automatic** starts respect (an agent's spawned worker, a queued prompt relaunching its agent, the revive sweep, the ticket pipeline); a person's own starts are never capped. `0` = no cap ([session-engine.md](session-engine.md#launch-gate)) |
+| `MINDFLOCK_AGENT_WARMUP_MB` | `general.agent_warmup_mb`, else `700` | What one agent started in the last 90 s is assumed to still take as it grows; the launch gate subtracts it per warming agent from available memory before deciding |
 | `MINDFLOCK_AUTO_LAUNCH_SPACING` | `20` | Seconds between two automatic launches the launch gate lets through (its queue drains one at a time). `0` = no spacing |
 | `MINDFLOCK_LAUNCH_QUEUE_MAX` | `32` | Launches that may wait in the launch gate's queue; past it a new automatic start is refused (`memory_queue_full`). `0` = no limit |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
@@ -1118,6 +1119,14 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   5; `0` = never sleep for memory). The memory sleep applies even with
   `sleep_idle_minutes` 0, and each pass that sleeps any sends one notice.
   Per device, never synced; re-read within 30 s.
+- **Launch gate** (`general.max_live_agents`, `general.agent_warmup_mb`; JSON /
+  `PUT /api/settings`): the most live agents that automatic starts bring this
+  machine to (unset = one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap), and
+  what one agent started in the last 90 s is assumed to still take as it
+  grows (unset = 700 MB) — see
+  [session-engine.md](session-engine.md#launch-gate). A person's own starts
+  are never capped. `MINDFLOCK_MAX_LIVE_AGENTS` / `MINDFLOCK_AGENT_WARMUP_MB`
+  win over them. Per device, never synced; re-read within 30 s.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether
