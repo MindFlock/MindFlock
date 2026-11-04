@@ -25159,6 +25159,51 @@ function agentName(provider) {
 	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
 }
 //#endregion
+//#region src/lib/heldOffline.ts
+var HELD_CHIP = "Offline · Start";
+function isHeldOffline(inst) {
+	if (!inst || !inst.held_offline) return false;
+	if (inst.device || inst.status === "paused" || inst.workspace_missing) return false;
+	return true;
+}
+function heldSince(reason) {
+	return "Offline since " + (String(reason || "").trim().replace(/[.\s]+$/, "") || "a crash") + ".";
+}
+function heldLine(reason) {
+	return heldSince(reason) + " It won't start by itself, so it uses no memory.";
+}
+function heldHint(reason) {
+	return heldSince(reason) + " It won't start by itself, so it uses no memory. Press Start to bring it back.";
+}
+function isHeldRefusal(err) {
+	if (!(err instanceof ApiError) || err.status !== 409) return false;
+	const b = err.body;
+	return !!b && typeof b === "object" && b.held === true;
+}
+function heldWasQueued(err) {
+	const b = err instanceof ApiError ? err.body : null;
+	return !(b && typeof b === "object" && b.queued === false);
+}
+function heldQueuedText(name, queued = true) {
+	return queued ? "Queued — " + name + " is offline; press Start to send it." : name + " is offline since a crash — press Start, then send it again.";
+}
+function heldRows(instances) {
+	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i));
+}
+function heldNoticeText(n) {
+	const who = n === 1 ? "1 session stayed" : n + " sessions stayed";
+	const them = n === 1 ? "it uses" : "they use";
+	return who + " offline after a crash, so " + them + " no memory. Start the ones you need.";
+}
+function heldNoticeKey(rows) {
+	return rows.map((r) => r.title).sort().join("\n");
+}
+function heldNoticeHidden(dismissed, current) {
+	if (!dismissed || !current) return !current;
+	const seen = new Set(dismissed.split("\n"));
+	return current.split("\n").every((t) => seen.has(t));
+}
+//#endregion
 //#region src/lib/sessionState.ts
 var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
@@ -25345,6 +25390,15 @@ function deriveSessionState(inst, extras) {
 		hint: "Provisioning workspace"
 	};
 	if (inst.sleeping) return sleepingState(inst.sleeping, now);
+	if (isHeldOffline(inst)) return {
+		state: "offline",
+		label: STATE_LABEL.offline,
+		tone: "broken",
+		inBell: false,
+		restartable: true,
+		held: true,
+		hint: heldHint(inst.held_reason)
+	};
 	if (inst.setup && inst.setup.state === "running") return {
 		state: "starting",
 		label: STATE_LABEL.starting,
@@ -28755,6 +28809,7 @@ function agentCopyText(text, session, cols, startCol = 0) {
 var NOT_YET = 4404;
 var NOT_READY = 4409;
 var PAUSED_CLOSE = 4423;
+var HELD_CLOSE = 4424;
 var RETRY_MS$1 = [
 	700,
 	1500,
@@ -28763,7 +28818,7 @@ var RETRY_MS$1 = [
 var RETRY_MAX_MS = 3e3;
 var RETRY_LIMIT = 100;
 function retryAfter(code, attempts, reconnect) {
-	if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE) return null;
+	if (!reconnect || attempts >= RETRY_LIMIT || code === PAUSED_CLOSE || code === HELD_CLOSE) return null;
 	if (code === NOT_YET || code === NOT_READY) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
 	if (code === 1006 || code === 1001 || attempts === 0) return RETRY_MS$1[attempts] ?? RETRY_MAX_MS;
 	return null;
@@ -28863,7 +28918,7 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 				if (dead) return;
 				const wait = retryAfter(ev.code, attempts, reconnect);
 				if (wait === null) {
-					setState(ev.code === PAUSED_CLOSE ? "paused" : "disconnected");
+					setState(ev.code === PAUSED_CLOSE ? "paused" : ev.code === HELD_CLOSE ? "held" : "disconnected");
 					return;
 				}
 				const transient = isStarting(ev.code);
@@ -29354,6 +29409,7 @@ function makeTerm(title, wsPath, interactive) {
 function closeAction(code) {
 	if (code === 4404 || code === 4409) return "gone";
 	if (code === PAUSED_CLOSE) return "paused";
+	if (code === HELD_CLOSE) return "held";
 	return "retry";
 }
 var registry = /* @__PURE__ */ new Map();
@@ -29374,7 +29430,7 @@ function getTerm(title, kind) {
 		registry.set(title, entry);
 	}
 	let h = entry[kind];
-	if (h && h.state === "paused") {
+	if (h && (h.state === "paused" || h.state === "held")) {
 		h.dispose();
 		h = void 0;
 	}
@@ -32475,6 +32531,10 @@ async function pasteNow(title, pb, args) {
 		toast(/:\s*$/.test(text) ? `Typed “${label}” into ${name} — add the task, then press Enter` : `Typed “${label}” into ${name} — press Enter to run it`, { duration: 4e3 });
 		return true;
 	} catch (err) {
+		if (isHeldRefusal(err)) {
+			toast(heldQueuedText(name, heldWasQueued(err)), { duration: 5e3 });
+			return true;
+		}
 		toast(`Couldn't type “${pb.label}” into ${name}: ${errMsg(err)}`, { duration: 6e3 });
 		return false;
 	}
@@ -43798,6 +43858,7 @@ async function submitDraft(title, name, say) {
 			if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
 			else if (body?.waking) line = name + " is waking up — say over again in a moment";
 			else if (body?.paused) line = name + " is paused — resume it first";
+			else if (body?.held) line = name + " is offline since a crash — press Start first";
 		}
 		return {
 			ok: false,
@@ -48651,20 +48712,29 @@ function pushFailedNote(session, data) {
 }
 //#endregion
 //#region src/lib/revive.ts
-async function reviveSession(title) {
+async function revive(title, verb) {
 	let r;
 	try {
 		r = await instApi(title, "/revive", { method: "POST" });
 	} catch (e) {
-		toast("Couldn't restart " + displayName(title) + " — " + errMsg(e));
-		return false;
+		toast("Couldn't " + verb.toLowerCase() + " " + displayName(title) + " — " + errMsg(e));
+		return null;
 	}
 	forceActivity(title, "idle");
-	let line = "Restarting " + displayName(title) + (r?.continued ? " — it will continue where it left off" : "") + "…";
+	let line = (verb === "Start" ? "Starting " : "Restarting ") + displayName(title) + (r?.continued ? " — it will continue where it left off" : "") + "…";
 	if (r?.memory_warning) line += " (" + r.memory_warning + ")";
 	toast(line);
 	refreshInstances();
-	return true;
+	return r || {
+		title,
+		revived: true
+	};
+}
+async function reviveSession(title) {
+	return await revive(title, "Restart") !== null;
+}
+function startSession(title) {
+	return revive(title, "Start");
 }
 //#endregion
 //#region src/lib/presence.ts
@@ -56280,6 +56350,26 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						title,
 						className: "stagechip chip-restart " + chip.cls,
 						hint: ss.hint
+					}) : ss.held && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "stagechip chip-restart chip-held " + chip.cls,
+						title: chip.title,
+						"aria-label": "Offline since a crash — start the agent",
+						onClick: (e) => act(() => void startSession(title), e),
+						onDoubleClick: (e) => e.stopPropagation(),
+						children: [
+							chip.label,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "chip-sep",
+								"aria-hidden": "true",
+								children: "·"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "chip-act",
+								"aria-hidden": "true",
+								children: "Start"
+							})
+						]
 					}) : ss.state === "offline" && ss.restartable && !paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "stagechip chip-restart " + chip.cls,
@@ -57598,13 +57688,13 @@ function sweepToast(r, offline) {
 	const skipped = r.skipped || {};
 	const mine = offline.filter((t) => skipped[t] !== void 0);
 	const memory = mine.filter((t) => skipped[t] === "low memory").length;
-	let line = revived ? "Restarted " + revived + (revived === 1 ? " agent" : " agents") : "No agents restarted";
+	let line = revived ? "Started " + revived + (revived === 1 ? " agent" : " agents") : "No agents started";
 	if (continued) line += " — " + continued + " told to continue where " + (continued === 1 ? "it" : "they") + " left off";
-	if (memory) line += "; " + memory + " held back: memory is low";
+	if (memory) line += "; " + memory + " not started: memory is low";
 	const other = mine.filter((t) => skipped[t] !== "low memory");
 	if (other.length) {
 		const why = Array.from(new Set(other.map((t) => skipped[t]))).join(", ");
-		line += "; " + other.length + " couldn't restart (" + why + ")";
+		line += "; " + other.length + " couldn't start (" + why + ")";
 	}
 	return line;
 }
@@ -57615,12 +57705,30 @@ function offlineRows(instances) {
 		return ss.state === "offline" && ss.restartable && i.status !== "paused";
 	});
 }
+var LOW_MEMORY_LINE = "Memory is low — starting them all may fill it again.";
+var DISMISS_KEY = "mf.heldNotice.dismissed";
+function readDismissed() {
+	try {
+		return localStorage.getItem(DISMISS_KEY) || "";
+	} catch {
+		return "";
+	}
+}
+function writeDismissed(v) {
+	try {
+		localStorage.setItem(DISMISS_KEY, v);
+	} catch {}
+}
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [dismissed, setDismissed] = (0, import_react.useState)(readDismissed);
 	const offline = offlineRows(instances);
-	if (offline.length < 2 && !busy) return null;
+	const held = heldRows(instances);
+	const heldKey = heldNoticeKey(held);
+	const notice = held.length > 0 && !heldNoticeHidden(dismissed, heldKey);
+	if (!notice && offline.length < 2 && !busy) return null;
 	const titles = offline.map((i) => i.title);
 	const low = memory?.level === "low" || memory?.level === "critical";
 	const run = async () => {
@@ -57634,27 +57742,64 @@ function OfflineBar() {
 			for (const t of r.revived || []) forceActivity(t, "idle");
 			toast(sweepToast(r, titles));
 		} catch (e) {
-			toast("Couldn't restart the offline agents — " + errMsg(e));
+			toast("Couldn't start the offline agents — " + errMsg(e));
 		} finally {
 			setBusy(false);
 			refreshInstances();
 		}
 	};
+	const startAll = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "ob-btn",
+		disabled: busy || !titles.length,
+		title: "Start every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: starts wait for headroom, and the rest stay offline if none comes." : ""),
+		onClick: () => void run(),
+		children: "▶ Start all"
+	});
+	const lowLine = low ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "ob-low",
+		role: "note",
+		children: LOW_MEMORY_LINE
+	}) : null;
+	if (notice) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "offline-bar",
+		className: "ob-held",
+		role: "status",
+		"aria-label": "Sessions offline after a crash",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ob-text",
+				children: busy ? "Starting offline agents…" : heldNoticeText(held.length)
+			}),
+			lowLine,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "ob-acts",
+				children: [startAll, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "ob-x",
+					title: "Hide this notice — the sessions stay offline until you press Start",
+					"aria-label": "Hide this notice",
+					onClick: () => {
+						writeDismissed(heldKey);
+						setDismissed(heldKey);
+					},
+					children: "×"
+				})]
+			})
+		]
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "offline-bar",
 		role: "group",
 		"aria-label": "Offline agents",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "ob-count",
-			children: busy ? "Restarting offline agents…" : offline.length + " agents offline"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "ob-btn",
-			disabled: busy,
-			title: "Relaunch every offline agent, two at a time, resuming its conversation; an agent that died mid-task is told to continue where it left off." + (low ? " Memory is low: restarts wait for headroom, and the rest are held back if none comes." : ""),
-			onClick: () => void run(),
-			children: "↻ Restart all"
-		})]
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "ob-count",
+				children: busy ? "Starting offline agents…" : offline.length + " agents offline"
+			}),
+			lowLine,
+			startAll
+		]
 	});
 }
 //#endregion
@@ -62333,6 +62478,43 @@ function PausedBody({ title, hidden }) {
 	});
 }
 //#endregion
+//#region src/components/grid/HeldBody.tsx
+function HeldBody({ title, reason, hidden, onStarted }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "pane-term agent-term pane-paused pane-held" + (hidden ? " hidden" : ""),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "paused-body held-body",
+			role: "status",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "paused-head",
+					children: "Offline"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "paused-text",
+					children: heldLine(reason)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					className: "paused-resume held-start",
+					type: "button",
+					disabled: busy,
+					title: "Start the agent again in the same worktree, resuming its conversation",
+					onClick: (e) => {
+						e.stopPropagation();
+						setBusy(true);
+						startSession(title).then((r) => {
+							setBusy(false);
+							if (r) onStarted?.();
+						});
+					},
+					children: busy ? "Starting…" : "▶ Start"
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/grid/queueDnd.ts
 function hoverSlot(rowIndex, offsetY, rowHeight) {
 	return offsetY < rowHeight / 2 ? rowIndex : rowIndex + 1;
@@ -62495,6 +62677,12 @@ function QueueTab$1({ title, active }) {
 			toast("Sent to " + displayName(title));
 			reload();
 		} catch (err) {
+			if (isHeldRefusal(err)) {
+				setDraft("");
+				toast(heldQueuedText(displayName(title), heldWasQueued(err)));
+				reload();
+				return;
+			}
 			toast("Send failed: " + (err.message || ""));
 		}
 	};
@@ -64435,7 +64623,8 @@ function ThreadTab({ title, active }) {
 		setSending(false);
 		setTimeout(() => box.current?.focus(), 0);
 		const who = [...plannedNow, ...plannedLater];
-		const failed = results.map((r, i) => r.status === "rejected" ? nameOf(who[i]) + ": " + errMsg(r.reason) : "").filter(Boolean);
+		const held = results.flatMap((r, i) => r.status === "rejected" && isHeldRefusal(r.reason) ? [who[i]] : []);
+		const failed = results.map((r, i) => r.status === "rejected" && !isHeldRefusal(r.reason) ? nameOf(who[i]) + ": " + errMsg(r.reason) : "").filter(Boolean);
 		if (failed.length === results.length) {
 			toast("Couldn't send: " + failed.join("; "), { duration: 6e3 });
 			return;
@@ -64452,6 +64641,7 @@ function ThreadTab({ title, active }) {
 		const said = [];
 		if (now.length) said.push("Sent to " + names(now));
 		if (later.length) said.push((now.length ? "queued for " : "Queued for ") + names(later) + (mode === "now" ? " — it gets it when it's free" : " — it runs when idle"));
+		if (held.length) said.push((said.length ? "queued" : "Queued") + " — " + names(held) + (held.length === 1 ? " is offline; press Start to send it" : " are offline; press Start to send them"));
 		toast(said.join("; ") + (failed.length ? ". Failed: " + failed.join("; ") : ""), { duration: failed.length ? 6e3 : 3e3 });
 	};
 	const decide = async (worker) => {
@@ -90981,6 +91171,10 @@ async function sendPrompt(title, text) {
 		toast("Sent to " + windowName(title));
 		return true;
 	} catch (err) {
+		if (isHeldRefusal(err)) {
+			toast(heldQueuedText(windowName(title), heldWasQueued(err)));
+			return true;
+		}
 		toast("Couldn't send: " + errMsg(err));
 		return false;
 	}
@@ -95241,6 +95435,12 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const [booted, setBooted] = (0, import_react.useState)(false);
 	const [wsState, setWsState] = (0, import_react.useState)("connecting");
 	const [shellStarted, setShellStarted] = (0, import_react.useState)(savedTab === "shell");
+	const heldRow = !paused && isHeldOffline(inst);
+	const [started, setStarted] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!heldRow) setStarted(false);
+	}, [heldRow]);
+	const heldOff = !paused && (heldRow && !started || wsState === "held");
 	const [histPane, setHistPane] = (0, import_react.useState)(null);
 	const [paneFind, setPaneFind] = (0, import_react.useState)(null);
 	(0, import_react.useEffect)(() => {
@@ -95283,6 +95483,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: displayName.slice(kindTag.length) })] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MidName, { text: displayName });
 	const adopt = (0, import_react.useCallback)((kind) => (el) => {
 		if (!el || missing || loading || kind === "agent" && paused) return;
+		if (kind === "agent" && heldOff) return;
 		if (held) return;
 		const handle = getTerm(title, kind);
 		if (!el.contains(handle.container)) el.appendChild(handle.container);
@@ -95311,7 +95512,8 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		missing,
 		loading,
 		paused,
-		held
+		held,
+		heldOff
 	]);
 	(0, import_react.useEffect)(() => {
 		if (!paused) return;
@@ -95319,6 +95521,13 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		setBooted(false);
 		setWsState("paused");
 	}, [paused, title]);
+	const heldNow = heldRow && !started;
+	(0, import_react.useEffect)(() => {
+		if (!heldNow) return;
+		releaseTerm(title, "agent");
+		setBooted(false);
+		setWsState("held");
+	}, [heldNow, title]);
 	const fitSoon = (0, import_react.useCallback)(() => {
 		clearTimeout(fitTimer.current);
 		fitTimer.current = setTimeout(() => {
@@ -96107,7 +96316,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "state" + (wsState !== "connected" ? " state-bad" : ""),
-						children: wsState
+						children: wsState === "held" ? "offline" : wsState
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "head-tail",
@@ -96157,7 +96366,16 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 					paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PausedBody, {
 						title,
 						hidden: tab !== "agent"
-					}, "paused") : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					}, "paused") : heldOff ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HeldBody, {
+						title,
+						reason: inst.held_reason,
+						hidden: tab !== "agent",
+						onStarted: () => {
+							setStarted(true);
+							setBooted(false);
+							setWsState("connecting");
+						}
+					}, "held") : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "pane-term agent-term" + (tab !== "agent" ? " hidden" : ""),
 						ref: adopt("agent"),
 						children: [pinLine ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -113307,9 +113525,11 @@ function ResumeOnUsageResetRow() {
 		})]
 	});
 }
+var REVIVE_LABEL = "Bring agents back by themselves after a crash";
+var REVIVE_NOTE = "Off: sessions whose agent died stay Offline until you press Start, so a crash can't refill memory.";
 function ReviveOnStartRow() {
 	const s = useSettings();
-	const on = s.get("general", "revive_on_start") !== false;
+	const on = s.get("general", "revive_on_start") === true;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row set-switch-row",
 		id: "general-revive-on-start",
@@ -113317,10 +113537,10 @@ function ReviveOnStartRow() {
 			className: "notif-rule-text",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-label",
-				children: "Revive sessions after a restart"
+				children: REVIVE_LABEL
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "set-hint notif-rule-desc",
-				children: ["Restart running agents on their own after MindFlock restarts, or after the system kills one for memory.", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "Without this, they wait as Offline until you click Restart. An agent killed for running out of memory comes back once memory recovers, at most 3 times an hour. Paused sessions and sessions out of usage are left alone." })]
+				children: [REVIVE_NOTE, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, { children: "On: after MindFlock restarts, agents that were running start again by themselves, two at a time, and an agent the system killed for memory comes back once memory recovers, at most 3 times an hour. Paused sessions and sessions out of usage are left alone either way." })]
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 			className: "ca-switch",
@@ -137741,6 +137961,29 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 		]
 	});
 }
+function SkyStateChip({ ss, title, className }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	if (!ss.held) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className,
+		title: ss.hint,
+		children: ss.label
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: className + " sky-held-start",
+		title: ss.hint,
+		"aria-label": "Offline since a crash — start the agent",
+		disabled: busy,
+		onPointerDown: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		onClick: (e) => {
+			e.stopPropagation();
+			setBusy(true);
+			startSession(title).finally(() => setBusy(false));
+		},
+		children: busy ? "Starting…" : HELD_CHIP
+	});
+}
 function SkyLine(p) {
 	const flights = useFlights().data;
 	const kinds = useFlightKinds().data;
@@ -138237,10 +138480,10 @@ function SkyLine(p) {
 						title: "Branch " + row.branch,
 						children: row.branch
 					}),
-					row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "skl-chip fl-box-chip skl-state-chip tone-" + ss.tone,
-						title: ss.hint,
-						children: ss.label
+					row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyStateChip, {
+						ss,
+						title: row.title,
+						className: "skl-chip fl-box-chip skl-state-chip tone-" + ss.tone
 					}),
 					behaviors.mark?.tone === "you" && ss.tone !== "attention" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-chip fl-box-chip skl-state-chip tone-attention skl-bh-needs",
@@ -138326,7 +138569,11 @@ function SkyLine(p) {
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
 						renderOpen,
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
-						renderHead: () => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						renderHead: () => row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyStateChip, {
+							ss,
+							title: row.title,
+							className: "sky-head-chip fl-box-chip tone-" + ss.tone
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
 							title: ss.hint,
 							children: ss.label
