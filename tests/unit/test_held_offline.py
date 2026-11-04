@@ -579,3 +579,31 @@ def test_the_notice_rides_a_default_on_notify_rule():
     assert rule["event"] == "system.sessions_held"
     assert rule["default_enabled"] is True and rule["body"] == "{detail}"
     assert held.notice_text(1).startswith("1 session stayed offline")
+
+
+@pytest.mark.parametrize("total,announced", [(2, True), (0, False)])
+def test_the_lifespan_holds_before_serving_and_announces_once(
+    monkeypatch, total, announced
+):
+    """Wiring only: the real hold reads ENGINE (the developer's live state),
+    so it is faked here; its logic is pinned against fakes above."""
+    calls = []
+    monkeypatch.setattr(server, "_HOLD_ON_START_ENABLED", True)
+    monkeypatch.setattr(
+        revive, "hold_on_boot", lambda: calls.append("hold") or {"total": total}
+    )
+
+    async def _announce():
+        return None
+
+    monkeypatch.setattr(revive, "announce_held", _announce)
+    registered = []
+
+    def _register(coro):
+        registered.append(getattr(coro, "__qualname__", ""))
+        coro.close()
+
+    monkeypatch.setattr(server, "_register_task", _register)
+    with TestClient(server.app):
+        assert calls == ["hold"]  # done before the first request is served
+    assert any("_announce" in q for q in registered) is announced
