@@ -694,7 +694,12 @@ GARBAGE_FRAMES = [
 ]
 
 
-@pytest.mark.parametrize("frames", GARBAGE_FRAMES)
+# Positional ids: the frames carry random mask keys (and os.urandom), and a
+# bytes param's default id is its value — so each process would name the
+# cases differently and xdist workers would refuse to share the collection.
+@pytest.mark.parametrize(
+    "frames", GARBAGE_FRAMES, ids=["frame%d" % i for i in range(len(GARBAGE_FRAMES))]
+)
 async def test_garbage_frames_close_the_connection(make_node, ingresses, frames):
     a, b = make_node("alice"), make_node("bob", relay_edge_ssl=None)
     ing = await open_ingress(a, ingresses)
@@ -837,6 +842,7 @@ async def test_dialer_rejects_extensions_even_with_valid_accept():
         relay.encode_frame(relay.OP_TEXT, b"hi", mask=False),
         b"\xff" * 64,
     ],
+    ids=["masked-tls", "text", "ff"],  # masks are random: keep ids stable
 )
 async def test_pairing_through_a_garbage_relay_fails_closed(make_node, after):
     async def cb(reader, writer):
