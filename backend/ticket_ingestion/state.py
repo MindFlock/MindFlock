@@ -754,7 +754,30 @@ def automation_handover(state_dir: Path | str) -> Optional[str]:
     mark = load_automation_mark(state_dir)
     if mark is None or mark["here"]:
         return None
+    if _names_this_machine(mark["runner"]):
+        # A mark the server wrote while it couldn't yet tell which device of
+        # the group it is (before Tailscale was up) — "runs elsewhere, on
+        # <this machine's own hostname>". Nothing ran anywhere else, and
+        # seeding the ledger from it would mark every open PR handled.
+        _logger.warning(
+            "Ignoring an automation hand-over from %r: that is this machine",
+            mark["runner"],
+        )
+        return None
     return mark["runner"] or "another device"
+
+
+def _names_this_machine(runner: str) -> bool:
+    """Whether a recorded runner name is this machine's own hostname."""
+    name = (runner or "").strip().lower()
+    if not name:
+        return False
+    try:
+        import socket
+
+        return name == socket.gethostname().strip().lower()
+    except OSError:
+        return False
 
 
 def mark_automation_here(state_dir: Path | str) -> None:

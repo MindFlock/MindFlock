@@ -286,3 +286,60 @@ def test_automation_device_names_the_member_that_runs_it(monkeypatch):
     _fleet_of(monkeypatch, 0)
     assert settings_hooks.automation_device() == ""
     assert settings_hooks.automation_runner() == ""
+
+
+@pytest.mark.parametrize("members,me", [(0, "d0"), (0, ""), (1, "d0"), (1, "other")])
+def test_a_lone_device_always_knows_which_it_is(monkeypatch, members, me):
+    _fleet_of(monkeypatch, members, me)
+    assert settings_hooks.automation_known() is True
+
+
+def test_a_grouped_device_knows_once_its_key_is_a_member(monkeypatch):
+    _fleet_of(monkeypatch, ["laptopwsl", "mac"], "laptopwsl")
+    assert settings_hooks.automation_known() is True
+    # Before Tailscale is up: the OS hostname, which isn't a member key.
+    _fleet_of(monkeypatch, ["laptopwsl", "mac"], "laptop")
+    assert settings_hooks.automation_known() is False
+    _fleet_of(monkeypatch, ["laptopwsl", "mac"], "")
+    assert settings_hooks.automation_known() is False
+
+
+def test_automation_device_names_nobody_while_this_device_is_unknown(monkeypatch):
+    """Even a runner that really is ANOTHER member isn't named while this
+    device can't tell which member it is: Intake says neither."""
+    _fleet_of(monkeypatch, ["laptopwsl", "mac"], "laptop")
+    store.update_settings(github={"automation_device": "mac"})
+    assert settings_hooks.automation_runner() == "mac"
+    assert settings_hooks.automation_device() == ""
+    _fleet_of(monkeypatch, ["laptopwsl", "mac"], "laptopwsl")  # Tailscale up
+    assert settings_hooks.automation_device() == "MAC"
+
+
+def test_automation_device_falls_back_to_the_key_without_a_host(monkeypatch):
+    from backend.web.core import fleet, remote
+
+    monkeypatch.setattr(fleet, "in_fleet", lambda: True)
+    monkeypatch.setattr(
+        fleet, "live_members", lambda: {"laptop": {"host": "LAPTOP"}, "mac": {}}
+    )
+    monkeypatch.setattr(remote, "self_identity", lambda: {"key": "laptop"})
+    monkeypatch.setattr(remote, "fleet_devices", lambda: [])
+    store.update_settings(github={"automation_device": "mac"})
+    assert settings_hooks.automation_device() == "mac"
+
+
+def test_automation_known_never_raises(monkeypatch):
+    from backend.web.core import fleet, remote
+
+    def boom():
+        raise RuntimeError("store unreadable")
+
+    monkeypatch.setattr(fleet, "in_fleet", lambda: True)
+    monkeypatch.setattr(fleet, "live_members", boom)
+    monkeypatch.setattr(remote, "self_identity", boom)
+    assert settings_hooks.automation_known() is True  # no roster = a lone device
+    monkeypatch.setattr(
+        fleet, "live_members", lambda: {"a": {"host": "A"}, "b": {"host": "B"}}
+    )
+    assert settings_hooks.automation_known() is False  # no self key = unknown
+    assert settings_hooks.automation_device() == ""
