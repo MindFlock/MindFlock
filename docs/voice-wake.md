@@ -10,10 +10,15 @@ and how to tune it to a real voice.
 ## How a clip is judged
 
 1. **Hinted decode.** `Backend.wake_transcribe` (local faster-whisper: the
-   fast streaming model, `base.en` for English, greedy, no VAD) decodes the
-   clip with the word as `initial_prompt` (`"MindFlock"`). Never with
-   `word_timestamps`: it turns the prompted decode into "MindFlock MindFlock
-   MindFlock" loops.
+   fast streaming model, `base.en` for English) decodes the clip with the
+   word as `initial_prompt` (`"MindFlock"`), the way `core/wake.py`
+   `decode_options()` says: greedy, **once** (`temperature` 0 — no
+   fallback), no VAD, **no no-speech filter**, at most `MAX_TOKENS` (12)
+   tokens, on a `PAD_SECONDS` (10 s) encoder input instead of Whisper's
+   30 s (`core/speech.py`'s short padding, as the streaming passes have).
+   Never with `word_timestamps`: it turns the prompted decode into
+   "MindFlock MindFlock MindFlock" loops. Why each one: see "Measured
+   (2026-11-04)" below.
 2. **The judge** (`core/wake.py` `judge(text, word)` → `(wake, reason)`;
    `is_wake` is its yes/no):
    - a greeting in front is dropped (`LEADS`: hey, hi, ok, okay, yo, hello,
@@ -26,9 +31,11 @@ and how to tune it to a real voice.
      (`form`: "mind flock", "my flock", "mind flunk", "minh flock" …) or
      its sound shape (`sound`: a mind-like first part — mind, mine, min,
      minh, mint, mend, men, myn … — then an fl/cl/bl/pl/fr onset, a vowel
-     and at most five letters, as one token or as "mind" + "flap"). There
-     is no generic letter slack: two edits let "Windlock" and "Mild block"
-     in. "mindful" is excluded by name;
+     and at most five letters, as one token or as "mind" + "flap"; or a
+     my-like first part — my, mi, mai — with only an fl/cl/kl onset and an
+     o/u vowel: "My clock.", "Mai flock", never "My flag" or "my block").
+     There is no generic letter slack: two edits let "Windlock" and "Mild
+     block" in. "mindful" is excluded by name;
    - a **custom** word (`voice.words.wake`) keeps the letter slack (two
      edits for 8+ letters, one for 5–7, none below: `near`).
 3. **The veto** (ours only, and only on a yes). The hint makes whisper write
@@ -50,6 +57,81 @@ A no never pays for the second pass. On the bench the plain pass ran on 41%
 of all checks (every prompted yes, look-alikes included); in real use the
 standby sends mostly non-wake speech and the prompted pass says no to most
 of it.
+
+## The standby (both clients)
+
+`frontend/src/lib/wakeWord.ts` (desktop) and `backend/web/static/mobile.js`
+(phone, `voiceWakeStep` / `voiceWakeCheck`) follow the same rules:
+
+- **A lone utterance**: speech after 350 ms of quiet, 250 ms–1.6 s of it,
+  then 200 ms of quiet (the tail: the clip goes in that block — on the
+  desktop's 85 ms blocks, ~256 ms after the word ends). Longer is a
+  sentence, shorter a click; both are never sent.
+- **A pause inside it** ("Hey, MindFlock", or "Mind… flock" said slowly)
+  is longer than the tail, so its first part goes alone. Speech that
+  resumes less than 350 ms after a stretch that started after quiet (and
+  was not a sentence) carries that stretch on: the next clip holds both
+  parts, under the same 1.6 s. Before, the second part read as "speech
+  straight on from speech" and was never sent.
+- **One check in flight, one per 0.4 s** — and a candidate that comes
+  meanwhile is **kept** (the newest; its clip taken when it came) and goes
+  the moment that check says no, if its word ended at most 2.5 s before;
+  a yes drops it. Before, it was dropped, with a 1.5 s gap: with the
+  server's check taking 1.5–8 s on a loaded CPU, a cough, a key click or a
+  first try just before "MindFlock" swallowed the word itself.
+- Nothing while the page talks (and 500 ms after), records, or is hidden.
+
+While standby is on, each client holds a listening lease (`POST
+/api/voice/listen`), which keeps the local whisper models — the wake
+check's `base.en` among them — loaded.
+
+## Measured (2026-11-04): what the owner hit, and the fix
+
+The owner: "MindFlock" is rarely heard while "stop listening" is, and a
+wake sometimes takes 5 s. "Stop listening" is said while listening: the
+streaming recognizer hears it in context (two common words, the
+vocabulary as hints on the accurate pass). "MindFlock" goes through the
+standby: one made-up word, cut out by the level detector, judged alone.
+
+The live server's `GET /api/voice/wake/recent` (14 checks, 13:21–13:24,
+the owner trying again and again): **no wake**; 10 hinted decodes came back
+**empty**, the rest "I'm sorry.", "Both eyes.", "of"; a single pass took
+**0.8–8.4 s** (median ~1.5 s), and a yes would have paid a second one.
+
+Where the time went, per check: the 30 s encoder input (a lone word's
+pass ~0.8 s on the fast tier's two threads, idle), faster-whisper's
+temperature fallback (an uncertain lone word re-decoded at up to five
+temperatures, then — with its no-speech filter — often dropped: the
+empty texts), twice for a yes (the veto's plain pass), on a CPU shared
+with agents; plus the standby dropping every word said while a check was
+in flight. The client side is ~0.26 s (the tail) and a round trip.
+
+`tests/bench/wake_stream_bench.py` (below) on clips cut by the clients'
+detector out of a simulated microphone stream — piper `lessac` and
+Windows SAPI David/Zira, room noise RMS 0.002 and 0.008, mic gains 0.06
+and 0.18, every 4th of 2064 streams (72 "MindFlock" streams, 205
+look-alikes, 193 ordinary short phrases — "Stop listening.", "Okay.",
+"Thanks." … — and 12 non-speech: cough, key clicks, hum, knock):
+
+| Decode | Recall | False wakes (look-alike / ordinary / noise) | Hinted pass median / p90 | Plain pass median / p90 |
+|---|---|---|---|---|
+| Before: 30 s, fallback, no-speech filter | 67/72 93% | 5 / 0 / 0 | 813 / 1285 ms | 842 / 1977 ms |
+| **10 s, once, no filter, 12 tokens** | 65/72 90% | **0 / 0 / 0** | **88 / 112 ms** | **86 / 108 ms** |
+| … with `without_timestamps` | 65/72 90% | 1 / 0 / 0 | 90 / 109 ms | 88 / 110 ms |
+| … with whisper's no-speech filter (0.6, −1.0) | 65/72 90% | 0 / 0 / 0 | — | — |
+
+(Two threads, `base.en`, int8, a load average ~5.) Shorter encoder inputs
+break whisper: at 5 s it wrote "Mind Mind", at 3 s "M M M M" (5/20 and
+1/20 on a probe). With no no-speech filter, noise still never woke (the
+hinted pass writes nothing for it), so the filter is off: a real but
+uncertain "MindFlock" now reaches the judge as text instead of as nothing.
+
+So a yes takes ~0.26 s (the tail) + ~0.2 s (two passes) + a round trip
+from the word's end, down from 2–5 s; the four misses the two decodes
+share are a "Hey, MindFlock." cut at its comma (the standby's pause rule
+above now sends the whole), a fast "MindFock"/"Mind fuck?" (vetoed: "Mind
+fog." decodes the same) and a fast SAPI "My clock." (the my-like sound
+shape above now takes it).
 
 ## Measured (2026-11-03)
 
@@ -95,7 +177,25 @@ What is still wrong on the bench:
 These are synthetic voices. The owner's own voice is the real test; use the
 diagnostics below.
 
-## Running the bench
+## Running the benches
+
+`tests/bench/wake_stream_bench.py` is the realistic one (the standby's own
+cuts, room noise, many voices, ordinary speech); `wake_bench.py` decodes
+ideal clips trimmed to the speech. Both need the tool venv:
+
+```bash
+PYTHONPATH=$PWD ~/.local/share/uv/tools/mindflock/bin/python \
+    tests/bench/wake_stream_bench.py corpus      # piper + SAPI (+ Voice Lab) → stream_clips.npz
+EVERY=4 ... wake_stream_bench.py decode fast server   # VARIANTS in the script
+... wake_stream_bench.py score [--detail fast]   # re-reads core/wake.py: seconds
+```
+
+`NOLAB=1` skips Voice Lab (on a CPU-only box its F5 engine takes minutes a
+clip); SAPI needs `powershell.exe` (WSL or Windows). `EVERY=N` decodes
+every Nth stream (the same ones for every variant). Timings are only
+worth anything on an idle box.
+
+`wake_bench.py`:
 
 It needs the local models' packages (faster-whisper, piper, numpy), which
 live in the uv tool venv, not the dev venv:

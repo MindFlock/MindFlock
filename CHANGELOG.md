@@ -84,6 +84,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"MindFlock" wakes the mic reliably, and fast.** A word said while the
+  previous check was still on its way (a cough, a key click, your first try)
+  is now kept and checked next instead of dropped; "Hey, MindFlock" and a
+  slow "Mind… flock" are heard whole; "My clock" counts as the word. The
+  server's check is meant to drop from 1–8 s to ~0.2 s by decoding the clip on a
+  10 s window, once, without the no-speech filter that turned an uncertain
+  "MindFlock" into nothing (the decode settings are in `core/wake.py`;
+  `core/speech.py` applying them is a separate change). Same rules on the
+  desktop and the phone. Measured by the new `tests/bench/wake_stream_bench.py`
+  (docs/voice-wake.md).
 - **A halted stop says why and what to do.** It keeps its name, shows the
   reason on one line, and offers Retry · Skip · **Let the agent fix it** on any
   kind of stop (the menu too); a click opens its details. A halt point you set
