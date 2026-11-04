@@ -7,7 +7,7 @@
  * One plane, panned and zoomed as a whole — one `translate(x, y) scale(z)` on
  * one container, no library. The wheel or a trackpad pans it, so do the middle
  * button, a touch drag and Space+drag (from anywhere); Ctrl/⌘+wheel and a pinch
- * zoom it (40%–300%). The keyboard: arrows pan, + / − zoom, 0 fits every line,
+ * zoom it (40%–300%). The keyboard: arrows pan, + / − zoom, 0 fits every line (as Fit),
  * 1 fits the focused one, T tidies, Enter opens the focused line's box, Esc
  * closes it. A faint dot grid scales with it, the flock (SkyFlock) drifts
  * behind it.
@@ -865,20 +865,29 @@ export function SkyView() {
   goToRef.current = goTo;
 
   useEffect(() => stopEase, [stopEase]);
-  /** Every line and the intake lane — legibly (`firstFit`: the width at no
-   * less than mid, top-left, when everything would need far), or, `whole`
-   * (the toolbar's Fit), all of it however small. Eased, unless `instant`
-   * (the first picture). */
-  const fitAll = useCallback((whole = false, instant = false) => {
-    const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
-    // The lane's width and its top (its height is its own scroll's).
+  /** What a fit of everything holds: every line, the intake lane's width
+   * and top (its height is its own scroll's), the right column's width and
+   * top, and the sticky notes whole (round 21: a fit never slices a note). */
+  const everyRect = useCallback((): Rect[] => {
+    const rects: Rect[] = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
     if (intakeOn) rects.push({ ...posOf(INTAKE_KEY), w: intakeBox.w, h: 1 });
-    // The right column's width and top, as the lane's.
     for (const o of objects) if (o.def.place === "right") rects.push({ ...posOf(o.key), w: objectBox(o).w, h: 1 });
-    // The sticky notes, whole (round 21): a fit never slices a note.
     for (const o of objects) if (o.def.kind === "note") rects.push({ ...posOf(o.key), ...objectBox(o) });
-    goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
-  }, [lines, posOf, mode, intakeOn, intakeBox, vp.w, vp.h, objects, objectBox, goTo]);
+    return rects;
+  }, [lines, posOf, intakeOn, intakeBox, objects, objectBox]);
+  /** Fit all (round 21b): ONE fit for `0`, Shift+1, the zoom menu's Fit all,
+   * the toolbar's Fit and the fit after a Tidy — everything on screen, notes
+   * included, however small (`fitCamera`: no legibility floor). Eased,
+   * unless `instant`. */
+  const fitAll = useCallback((instant = false) => {
+    goTo(fitCamera(boundsOf(everyRect()), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
+  }, [everyRect, mode, vp.w, vp.h, goTo]);
+  /** The first picture (a first visit, a new view) — legibly (`firstFit`:
+   * the width at no less than mid, top-left, when everything would need far).
+   * Only this automatic fit keeps the floor; Fit all never does. */
+  const firstPicture = useCallback(() => {
+    goTo(firstFit(boundsOf(everyRect()), vp.w, vp.h, mode === "one" ? 1.5 : 1), true);
+  }, [everyRect, mode, vp.w, vp.h, goTo]);
   /** The line This session shows (focused or picked), else "". */
   const oneLine = mode === "one" ? titles[0] || "" : "";
   /** The grid's "1": the focused line filling the window. This session's
@@ -893,7 +902,7 @@ export function SkyView() {
       return;
     }
     const r = focusLine ? rectOf(focusLine) : null;
-    if (!r) return fitAll(false, instant);
+    if (!r) return fitAll(instant);
     goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);
   }, [oneLine, focusLine, rectOf, fitAll, vp.w, vp.h, goTo]);
 
@@ -919,7 +928,7 @@ export function SkyView() {
     // The first picture is not a glide: there is nothing to glide from.
     // This session fits by its own effect below (it follows the route).
     if (first && gridOne && mode !== "one") fitFocused(true);
-    else if (mode !== "one") fitAll(false, true);
+    else if (mode !== "one") firstPicture();
   }, [vp.w, vp.h, instQ.data, fitKey, settled]); // eslint-disable-line react-hooks/exhaustive-deps
   // This session (round 21): every switch and the first load fit the route
   // to the window (`fitRoute`), and fit it AGAIN whenever its box changes —
@@ -1137,7 +1146,7 @@ export function SkyView() {
     const spotted = (id: string) => mode === "one" || !!autoPos[id] || !!layout[id]?.pinned;
     if (!lines.every((l) => spotted(l.id)) || (intakeOn && !spotted(INTAKE_KEY))) return;
     tidyFit.current = false;
-    fitAll(true);
+    fitAll();
   }, [place, autoPos, layout, lines, intakeOn, mode, fitAll]);
   /** Tidy these (the selection bar): only their spots are forgotten, only
    * their windows minimised. */
@@ -2492,8 +2501,8 @@ export function SkyView() {
           <button
             type="button"
             className="sky-zoom-btn sky-fit"
-            title="See everything: every route in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
-            onClick={() => fitAll(true)}
+            title="Fit all: every route and note in the window, however small (0, Shift+1)"
+            onClick={() => fitAll()}
           >
             Fit
           </button>

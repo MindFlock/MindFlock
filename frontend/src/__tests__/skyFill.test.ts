@@ -75,7 +75,7 @@ describe("the sky view uses it", () => {
 
   it("Tidy arms a whole fit that fires once every shown line has its spot; Tidy these doesn't", () => {
     expect(sky).toMatch(/const tidy = \(\) => \{[\s\S]*?tidyFit\.current = true;[\s\S]*?\n {2}\};/);
-    expect(sky).toMatch(/if \(!tidyFit\.current\) return;[\s\S]*?tidyFit\.current = false;\s*fitAll\(true\);/);
+    expect(sky).toMatch(/if \(!tidyFit\.current\) return;[\s\S]*?tidyFit\.current = false;\s*fitAll\(\);/);
     const these = sky.match(/const tidyThese = \(ids: string\[\]\) => \{[\s\S]*?\n {2}\};/);
     expect(these).not.toBeNull();
     expect(these![0]).not.toContain("tidyFit");

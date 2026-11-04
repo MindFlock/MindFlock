@@ -72,7 +72,7 @@ describe("the eased camera", () => {
     // Every other setCam stops a glide first.
     expect(v).toMatch(/const setCam: typeof setCamState = useCallback\(\s*\(next\) => \{\s*stopEase\(\);\s*setCamState\(next\);/);
     expect(v).toMatch(/const startPan = [^{]*\{\s*stopEase\(\);/);
-    expect(v).toContain("goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
+    expect(v).toContain("goTo(fitCamera(boundsOf(everyRect()), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
     expect(v).toContain("goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);");
     expect(v).toContain("goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
     expect(v).toMatch(/const zoomTo = \(z: number\) => \{\s*autoFit\.current = false;\s*goTo\(zoomAt\(camRef\.current, z, vp\.w \/ 2, vp\.h \/ 2\)\);/);

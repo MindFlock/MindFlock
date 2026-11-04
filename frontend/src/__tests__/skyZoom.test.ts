@@ -115,14 +115,15 @@ describe("the first picture", () => {
     expect(firstFit(null, 1400, 900)).toEqual({ x: 0, y: 0, z: 1 });
   });
 
-  it("the sky wires it: an automatic fit and 0 are legible, the Fit button whole", () => {
+  it("the sky wires it: the first picture is legible; 0, Shift+1 and the Fit button are one whole fit (round 21b)", () => {
     const sky = code("components/flights/SkyView.tsx");
     // Round 17: through the eased camera (`goTo`), instant only for the first picture.
-    expect(sky).toContain("goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
-    expect(sky).toContain('else if (mode !== "one") fitAll(false, true);');
-    expect(sky).toContain("onClick={() => fitAll(true)}");
+    expect(sky).toContain("goTo(firstFit(boundsOf(everyRect()), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), true);");
+    expect(sky).toContain("goTo(fitCamera(boundsOf(everyRect()), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
+    expect(sky).toContain('else if (mode !== "one") firstPicture();');
+    expect(sky).toContain("onClick={() => fitAll()}");
     expect(sky).toMatch(/k === "0"\) \{\s*handled\(\);\s*fitAll\(\);/);
-    expect(sky).toMatch(/title="See everything: every route in the window, however small/);
+    expect(sky).toMatch(/title="Fit all: every route and note in the window, however small/);
   });
 });
 
