@@ -28,10 +28,11 @@ vi.mock("react", async (orig) => {
 const closeDialog = vi.fn();
 vi.mock("../state/store", () => ({
   useUi: (sel: (s: unknown) => unknown) =>
-    sel({ openDialog: "rename", dialogTarget: "s1", closeDialog, setAlias: vi.fn() }),
+    sel({ openDialog: "rename", dialogTarget: "s1", closeDialog }),
 }));
 vi.mock("../lib/windowName", () => ({ windowName: () => "s1", nameTakenBy: () => "" }));
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
+vi.mock("../lib/renameSession", () => ({ renameSession: vi.fn() }));
 
 const { Modal, backdropPress, modalEscape, pushModal } = await import("../components/Modal");
 const { RenameDialog } = await import("../components/dialogs/RenameDialog");

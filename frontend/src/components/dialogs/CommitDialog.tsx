@@ -16,6 +16,7 @@ import { pickFastTrack, type Lane } from "../../lib/laneActions";
 import { toast } from "../../lib/toast";
 import { FastTrackChoice } from "./FastTrackChoice";
 import { Modal } from "../Modal";
+import { onSessionRenamed, renameMapKey } from "../../lib/renameSession";
 
 /** What "Then fast-track to" offers once this commit has landed: Commit itself
  * is what the press does, so the first choice is Off — commit and stop. */
@@ -24,6 +25,7 @@ const AFTER_COMMIT: readonly Lane[] = ["leave", "push", "pr", "merge"];
 /** Last commit message per session (pre-fills the prompt on retry).
  * In-memory only, like the vanilla Map. */
 const lastCommitMsg = new Map<string, string>();
+onSessionRenamed((from, to) => renameMapKey(lastCommitMsg, from, to));
 
 export function CommitDialog() {
   const open = useUi((s) => s.openDialog === "commit");

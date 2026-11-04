@@ -184,6 +184,10 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
+from backend.web.core import rename as _rename
+from backend.web.core import (
+    rename_stores as _rename_stores,
+)  # noqa: F401 — registers the stores
 from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
 from backend.web.core import guest_terminal as _guest_terminal
@@ -752,6 +756,14 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(_person.ensure_id)
     except Exception:  # noqa: BLE001 — never block startup on a label
         pass
+    # One name per session (core.rename): the aliases recorded before a
+    # rename renamed become the sessions' real titles, once. Not under pytest:
+    # ENGINE is the developer's real state there.
+    if not _restart._under_pytest():
+        try:
+            await asyncio.to_thread(_rename.migrate_once, sys.modules[__name__])
+        except Exception:  # noqa: BLE001 — never block startup on a migration
+            pass
     # Voice: the local whisper models configured for recognition are loaded a
     # few seconds after boot, and the voice a few after that (daemon threads;
     # each a no-op when there is nothing to warm), so the first press of the
@@ -1131,6 +1143,11 @@ async def _activity_log(request, call_next):
 # xterm.js are ~510KB of uncompressed text → ~4x smaller gzipped). Added before
 # the auth gate so auth stays OUTERMOST.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# A request for an old title (a running agent's MCP server and hooks still say
+# the name the agent was launched with) goes to the session it was renamed to
+# (core.rename). Inside the auth gate and the device/peer routers.
+app.add_middleware(_rename.RenamedTitleMiddleware, live=lambda: ENGINE.instances)
 
 # Remote-device proxy: requests for `<device>::<title>` sessions are forwarded
 # to the MindFlock server that owns them (backend.web.core.remote). Added
@@ -2010,6 +2027,7 @@ def list_instances(request: Request) -> JSONResponse:
             _fresh_lineage(cached)
             _ownership.overlay(cached)
             _aliases.overlay(cached)
+            _rename.overlay(cached)
             _flock_overlay(cached)
             return JSONResponse(_guest_rows(request, cached + remote + _pending_rows()))
     queues = _prompt_queue.snapshot()
@@ -2021,6 +2039,7 @@ def list_instances(request: Request) -> JSONResponse:
     _lanes.fill_duplicates(snap)
     _ownership.overlay(snap)
     _aliases.overlay(snap)
+    _rename.overlay(snap)
     _flock_overlay(snap)
     return JSONResponse(_guest_rows(request, snap + remote + _pending_rows()))
 
@@ -4536,14 +4555,17 @@ def post_aliases(payload: dict) -> JSONResponse:
     """
     payload = payload or {}
     if isinstance(payload.get("aliases"), dict):
-        _aliases.merge(
-            {
-                t: a
-                for t, a in payload["aliases"].items()
-                if not _peer_guard.is_peer_session(ENGINE.instances.get(t))
-            }
-        )
-        return JSONResponse({"aliases": _aliases.all_aliases()})
+        seed = {
+            t: a
+            for t, a in payload["aliases"].items()
+            if not _peer_guard.is_peer_session(ENGINE.instances.get(t))
+        }
+        # A rename IS the title now (core.rename): an alias this browser still
+        # keeps becomes the session's real name when it is a free, valid one,
+        # and the answer says which moved so the page moves its own state.
+        renamed = _rename.migrate_aliases(sys.modules[__name__], seed)
+        _aliases.merge({t: a for t, a in seed.items() if t not in renamed})
+        return JSONResponse({"aliases": _aliases.all_aliases(), "renamed": renamed})
     title = str(payload.get("title") or "").strip()
     if not title:
         return JSONResponse({"error": "title is required"}, status_code=400)
@@ -4566,6 +4588,20 @@ def post_aliases(payload: dict) -> JSONResponse:
     # next page load.
     _events.BUS.emit("session.renamed", session=title, new=alias, data={"name": alias})
     return JSONResponse({"aliases": _aliases.all_aliases()})
+
+
+@app.post("/api/instances/{title}/rename")
+def rename_instance(title: str, payload: dict) -> JSONResponse:
+    """Rename a session: ``{"to": "<new name>"}`` → ``{"title": new, "from":
+    old}``. The new name IS the title — every store, the tmux sessions, the
+    MCP identity and the row move to it at once (core.rename); the worktree
+    folder and branch keep theirs. 400 for a name a title cannot be, 409 when
+    another session is called that (``session`` names it) or for a remote or
+    shared-folder row, 404 for no such session; the same name is a no-op
+    (``unchanged: true``). Emits ``session.renamed {from, to}``."""
+    to = str((payload or {}).get("to") or "")
+    res = _rename.rename_session(sys.modules[__name__], title, to)
+    return JSONResponse(res.body, status_code=res.status)
 
 
 def _session_branches() -> Dict[str, str]:

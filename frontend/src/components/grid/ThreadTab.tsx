@@ -59,6 +59,7 @@ import { useRun } from "../../state/runs";
 import { RunLeadPanel } from "./RunLeadPanel";
 import { OrderDiagram } from "./OrderDiagram";
 import { fenceChips, orderWorthShowing } from "../../lib/order";
+import { onSessionRenamed, renameMapKey } from "../../lib/renameSession";
 
 /** How often an open, visible Thread re-reads the family (events refresh it
  * sooner; this catches what no event announces, like a spawn). */
@@ -71,6 +72,12 @@ const drafts = new Map<string, string>();
 /** Who the composer is addressed to, per session — survives a remount the
  * same way the draft does. */
 const toKeys = new Map<string, string>();
+// A rename keeps the unsent text, the addressee and the last body.
+onSessionRenamed((from, to) => {
+  renameMapKey(threadCache, from, to);
+  renameMapKey(drafts, from, to);
+  renameMapKey(toKeys, from, to, { values: true });
+});
 
 const nameOf = (t: string) => displayName(t);
 

@@ -24727,7 +24727,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$7 = /* @__PURE__ */ new Set();
+var listeners$8 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24751,7 +24751,7 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$7) l();
+	for (const l of listeners$8) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
@@ -35727,6 +35727,1006 @@ function installJoinLink() {
 	window.addEventListener("hashchange", take);
 }
 //#endregion
+//#region src/lib/codemapSeen.ts
+var KEY$1 = "mf_codemap_seen";
+var MAX_TITLES = 200;
+var cache = null;
+var listeners$7 = /* @__PURE__ */ new Set();
+function load() {
+	if (cache) return cache;
+	try {
+		const raw = localStorage.getItem(KEY$1);
+		const v = raw ? JSON.parse(raw) : null;
+		cache = v && typeof v === "object" ? v : {};
+	} catch {
+		cache = {};
+	}
+	return cache;
+}
+function codemapSeenAt(title) {
+	return Number(load()[title]) || 0;
+}
+function serverNow(skew, clientNowS = Date.now() / 1e3) {
+	return clientNowS + (Number.isFinite(skew) ? skew : 0);
+}
+function markCodemapSeen(title, ts) {
+	if (!Number.isFinite(ts) || ts <= 0) return;
+	const cur = load();
+	if ((cur[title] || 0) >= ts - 1) return;
+	const next = {
+		...cur,
+		[title]: ts
+	};
+	const keys = Object.keys(next);
+	if (keys.length > MAX_TITLES) {
+		keys.sort((a, b) => next[a] - next[b]);
+		for (const k of keys.slice(0, keys.length - MAX_TITLES)) delete next[k];
+	}
+	cache = next;
+	try {
+		localStorage.setItem(KEY$1, JSON.stringify(next));
+	} catch {}
+	listeners$7.forEach((l) => l());
+}
+function renameCodemapSeen(from, to) {
+	const cur = load();
+	if (!from || !to || from === to || !(from in cur)) return;
+	const next = { ...cur };
+	next[to] = Math.max(Number(next[from]) || 0, Number(next[to]) || 0);
+	delete next[from];
+	cache = next;
+	try {
+		localStorage.setItem(KEY$1, JSON.stringify(next));
+	} catch {}
+	listeners$7.forEach((l) => l());
+}
+function subscribeCodemapSeen(cb) {
+	listeners$7.add(cb);
+	return () => listeners$7.delete(cb);
+}
+function redZoneChip(rz, seenAt) {
+	if (!rz) return null;
+	const zones = rz.zones || 0;
+	const breaches = rz.breaches || 0;
+	const blockTs = rz.last_block_ts || 0;
+	if (breaches > 0) return {
+		cls: "rz-breach",
+		label: "⛔" + breaches,
+		title: `${breaches} red-zone file${breaches === 1 ? "" : "s"} changed on this branch — pushing is blocked until reverted. Click to open the map.`,
+		section: "breaches"
+	};
+	if (blockTs > seenAt) return {
+		cls: "rz-breach",
+		label: "⛔",
+		title: "A red zone blocked an edit since you last looked. Click to open the map.",
+		section: "breaches"
+	};
+	if (zones > 0 && (rz.guard === "off" || rz.guard === "arming")) return {
+		cls: "rz-warn",
+		label: "!",
+		title: rz.guard === "off" ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then." : "Red-zone guard is arming — it takes effect on the agent's next tool call.",
+		section: "zones"
+	};
+	const planned = rz.plan_pending || 0;
+	if (planned > 0) return {
+		cls: "rz-warn rz-plan",
+		label: "plan · " + planned,
+		title: "Plan ready — review & Go",
+		section: "plan"
+	};
+	if (zones > 0 && rz.guard === "guarded" && rz.mode === "green") return {
+		cls: "rz-ok",
+		label: "✓",
+		title: "Scoped to its green zones — edits outside them are blocked. Click to open the map.",
+		section: "zones"
+	};
+	if (zones > 0 && rz.guard === "guarded") return {
+		cls: "rz-ok",
+		label: "🛡",
+		title: `${zones} red zone${zones === 1 ? "" : "s"} guarded — edits there are blocked. Click to open the map.`,
+		section: "zones"
+	};
+	return null;
+}
+//#endregion
+//#region src/lib/skyLayout.ts
+var SKY_GAP = 64;
+var SKY_MARGIN = 40;
+var INTAKE_W = 240;
+var LINES_LEFT = 328;
+var INTAKE_KEY = "intake";
+var INTAKE_OPEN_W = 420;
+var INTAKE_MIN_W = 200;
+var INTAKE_MIN_H = 160;
+var INTAKE_MAX_W = 1200;
+var INTAKE_MAX_H = 1600;
+function objectFrame(stored, min, max) {
+	if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
+	return {
+		w: Math.min(max.w, Math.max(min.w, Math.round(stored.w))),
+		h: Math.min(max.h, Math.max(min.h, Math.round(stored.h)))
+	};
+}
+function intakeFrame(stored) {
+	return objectFrame(stored, {
+		w: INTAKE_MIN_W,
+		h: INTAKE_MIN_H
+	}, {
+		w: INTAKE_MAX_W,
+		h: INTAKE_MAX_H
+	});
+}
+var PALETTE_W$1 = 360;
+var PALETTE_H$1 = 300;
+var PALETTE_MIN = {
+	w: 220,
+	h: 140
+};
+var PALETTE_MAX = {
+	w: 1400,
+	h: 1200
+};
+var paletteFrame$1 = (stored) => objectFrame(stored, PALETTE_MIN, PALETTE_MAX);
+var PLACE_GAP = 24;
+function catalogFrame(view, screen, z, size, pad = 16) {
+	const k = z > 0 ? z : 1;
+	const m = pad / k;
+	const fit = (want, room, lo, hi) => Math.round(Math.min(hi, Math.max(lo, Math.min(want, room))));
+	const w = size ? size.w : fit(screen.w * .6 / k, view.w - 2 * m, PALETTE_MIN.w, PALETTE_MAX.w);
+	const h = size ? size.h : fit(screen.h * .7 / k, view.h - 2 * m, PALETTE_MIN.h, PALETTE_MAX.h);
+	const x = Math.max(view.x + m, Math.min(view.x + view.w / 2 + PLACE_GAP, view.x + view.w - m - w));
+	const y = Math.max(view.y + m, view.y + (view.h - h) / 2);
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		w,
+		h
+	};
+}
+var LANDING_KEY = "landing";
+var LANDING_W = 300;
+var LANDING_H = 240;
+var LANDING_MIN = {
+	w: 220,
+	h: 120
+};
+var LANDING_MAX = {
+	w: 1200,
+	h: 1600
+};
+var NOTE_W = 200;
+var NOTE_H = 120;
+var NOTE_MIN = {
+	w: 120,
+	h: 70
+};
+var NOTE_MAX = {
+	w: 800,
+	h: 800
+};
+var BLOCK_W = 200;
+var BLOCK_H = 64;
+function rightColumn(placed, items, top = SKY_MARGIN, gap = SKY_GAP) {
+	const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
+	const x = placed.length ? right + gap : LINES_LEFT;
+	const out = {};
+	let y = top;
+	for (const it of items) {
+		out[it.id] = {
+			x,
+			y
+		};
+		y += it.h + gap / 2;
+	}
+	return out;
+}
+function clearRightColumn(column, lines, gap = SKY_GAP) {
+	if (!column.length || !lines.length) return {};
+	if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
+	const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
+	return Object.fromEntries(column.map((c) => [c.id, {
+		x,
+		y: c.y
+	}]));
+}
+function spotNear(want, taken, size, within) {
+	const step = PLACE_GAP;
+	const free = (x, y) => !taken.some((t) => hits({
+		x,
+		y,
+		w: size.w,
+		h: size.h
+	}, t, 23));
+	const inside = (x, y) => !within || x >= within.x && y >= within.y && x + size.w <= within.x + within.w && y + size.h <= within.y + within.h;
+	const search = (bounded) => {
+		for (let r = 0; r <= 80; r++) {
+			let best = null;
+			let bestD = Infinity;
+			for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
+				if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
+				const x = Math.round(want.x + i * step);
+				const y = Math.round(want.y + j * step);
+				if (bounded && !inside(x, y)) continue;
+				const d = Math.hypot(i, j);
+				if (d < bestD && free(x, y)) {
+					best = {
+						x,
+						y
+					};
+					bestD = d;
+				}
+			}
+			if (best) return best;
+		}
+		return null;
+	};
+	return within && search(true) || search(false) || {
+		x: Math.round(want.x),
+		y: Math.round(want.y)
+	};
+}
+function grownOver(was, now, movable) {
+	if (!was || !now || was.x !== now.x || was.y !== now.y || now.w <= was.w && now.h <= was.h) return [];
+	return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
+}
+function intakeSize(stored, measured) {
+	const frame = intakeFrame(stored);
+	if (frame) return frame;
+	if (measured && measured.w > 0 && measured.h > 0) return measured;
+	return stored?.open ? {
+		w: INTAKE_OPEN_W,
+		h: 520
+	} : {
+		w: INTAKE_W,
+		h: 320
+	};
+}
+var ZOOM_MIN = .1;
+var ZOOM_MAX = 3;
+var FIT_PAD = 56;
+var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+function placeLines(lines, saved, area) {
+	const out = {};
+	const taken = [];
+	for (const l of lines) {
+		const s = saved[l.id];
+		if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+			out[l.id] = {
+				x: s.x,
+				y: s.y
+			};
+			taken.push({
+				x: s.x,
+				y: s.y,
+				w: l.w,
+				h: l.h
+			});
+		}
+	}
+	const x0 = area.left ?? SKY_MARGIN;
+	const y0 = area.top ?? SKY_MARGIN;
+	const right = Math.max(area.width, x0 + 1);
+	let cx = x0;
+	let cy = y0;
+	let rowH = 0;
+	for (const l of lines) {
+		if (out[l.id]) continue;
+		for (let guard = 0; guard < 1e4; guard++) {
+			if (cx > x0 && cx + l.w > right) {
+				cx = x0;
+				cy += (rowH || 0) + SKY_GAP;
+				rowH = 0;
+			}
+			const at = {
+				x: cx,
+				y: cy,
+				w: l.w,
+				h: l.h
+			};
+			const hit = taken.find((t) => hits(at, t, 63));
+			if (hit) {
+				cx = hit.x + hit.w + SKY_GAP;
+				continue;
+			}
+			out[l.id] = {
+				x: cx,
+				y: cy
+			};
+			taken.push(at);
+			cx += l.w + SKY_GAP;
+			rowH = Math.max(rowH, l.h);
+			break;
+		}
+	}
+	return out;
+}
+function assignSpots(existing, newcomers, area) {
+	const saved = {};
+	for (const e of existing) saved[e.id] = {
+		x: e.x,
+		y: e.y
+	};
+	const fresh = newcomers.filter((n) => !saved[n.id]);
+	if (!fresh.length) return {};
+	const all = placeLines([...existing, ...fresh], saved, area);
+	return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
+}
+var FILL_GAIN = 1.1;
+function fillWidth(existing, newcomers, area, vw, vh, opts = {}) {
+	const min = area.width;
+	const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
+	if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
+	const maxZ = opts.maxZ ?? 1;
+	const flat = new Set(opts.flat || []);
+	const aside = new Set((opts.right || []).map((r) => r.id));
+	const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
+	const x0 = area.left ?? SKY_MARGIN;
+	const stops = [];
+	let run = x0;
+	for (const n of fresh) {
+		run += n.w;
+		stops.push(run);
+		run += SKY_GAP;
+	}
+	const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
+	const steps = 24;
+	const k = max > min ? (max / Math.max(1, min)) ** (1 / 23) : 1;
+	const widths = /* @__PURE__ */ new Set([min]);
+	if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
+	for (const s of stops) if (s > min && s <= max) widths.add(s);
+	const counted = existing.filter((e) => !aside.has(e.id));
+	let best = min;
+	let bestZ = -Infinity;
+	let minZ = -Infinity;
+	for (const width of [...widths].sort((a, b) => a - b)) {
+		const spots = assignSpots(existing, fresh, {
+			...area,
+			width
+		});
+		const b = boundsOf([...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({
+			id: n.id,
+			...spots[n.id],
+			w: n.w,
+			h: n.h
+		}))].map((r) => ({
+			x: r.x,
+			y: r.y,
+			w: r.w,
+			h: flat.has(r.id) ? 1 : r.h
+		})));
+		if (!b) continue;
+		const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
+		const z = Math.min(maxZ, (vw - 112) / w, (vh - 112) / Math.max(1, b.h));
+		if (width === min) minZ = z;
+		if (z > bestZ + .001) {
+			bestZ = z;
+			best = width;
+		}
+	}
+	return bestZ >= minZ * FILL_GAIN ? best : min;
+}
+function boundsOf(rects) {
+	if (!rects.length) return null;
+	const x = Math.min(...rects.map((r) => r.x));
+	const y = Math.min(...rects.map((r) => r.y));
+	return {
+		x,
+		y,
+		w: Math.max(...rects.map((r) => r.x + r.w)) - x,
+		h: Math.max(...rects.map((r) => r.y + r.h)) - y
+	};
+}
+var clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1));
+function zoomAt(c, z, px, py) {
+	const nz = clampZoom(z);
+	const k = nz / c.z;
+	return {
+		z: nz,
+		x: px - (px - c.x) * k,
+		y: py - (py - c.y) * k
+	};
+}
+function toPlane(c, px, py) {
+	return {
+		x: (px - c.x) / c.z,
+		y: (py - c.y) / c.z
+	};
+}
+function fitCamera(b, vw, vh, maxZ = 1.25, pad = FIT_PAD) {
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
+	return {
+		x: b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
+		y: b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
+		z
+	};
+}
+function firstFit(b, vw, vh, maxZ = 1, pad = FIT_PAD) {
+	const all = fitCamera(b, vw, vh, maxZ, pad);
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0 || all.z >= LOD_MID) return all;
+	const z = clampZoom(Math.min(maxZ, Math.max(LOD_MID, (vw - 2 * pad) / b.w)));
+	return {
+		z,
+		x: pad - b.x * z,
+		y: pad - b.y * z
+	};
+}
+var ROUTE_FIT_PAD = 48;
+var ROUTE_FIT_MIN = .6;
+var ROUTE_FIT_MAX = 1.5;
+function fitRoute(b, vw, vh) {
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	const pad = ROUTE_FIT_PAD;
+	const want = Math.min((vw - 96) / b.w, (vh - 96) / b.h);
+	const z = Math.min(ROUTE_FIT_MAX, Math.max(ROUTE_FIT_MIN, Number.isFinite(want) ? want : 1));
+	return {
+		x: b.w * z + 96 <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
+		y: b.h * z + 96 <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
+		z
+	};
+}
+function screenBoxCovers(box, rects, c) {
+	return rects.some((r) => {
+		const sx = c.x + r.x * c.z;
+		const sy = c.y + r.y * c.z;
+		return sx < box.x + box.w && sx + r.w * c.z > box.x && sy < box.y + box.h && sy + r.h * c.z > box.y;
+	});
+}
+function centerOn(r, vw, vh, z) {
+	const nz = clampZoom(z);
+	return {
+		z: nz,
+		x: vw / 2 - (r.x + r.w / 2) * nz,
+		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
+	};
+}
+function fitSelection(rects, vw, vh, maxZ = 1.25) {
+	const b = boundsOf(rects);
+	return b ? fitCamera(b, vw, vh, maxZ) : null;
+}
+var CAM_EASE_MS = 220;
+var easeOut = (t) => {
+	return 1 - (1 - Math.min(1, Math.max(0, t))) ** 3;
+};
+function lerpCamera(from, to, t) {
+	if (t >= 1) return {
+		x: to.x,
+		y: to.y,
+		z: to.z
+	};
+	if (t <= 0) return {
+		x: from.x,
+		y: from.y,
+		z: from.z
+	};
+	const z = from.z > 0 && to.z > 0 ? Math.exp(Math.log(from.z) + (Math.log(to.z) - Math.log(from.z)) * t) : from.z + (to.z - from.z) * t;
+	return {
+		x: from.x + (to.x - from.x) * t,
+		y: from.y + (to.y - from.y) * t,
+		z
+	};
+}
+var sameCamera = (a, b) => Math.abs(a.x - b.x) < .01 && Math.abs(a.y - b.y) < .01 && Math.abs(a.z - b.z) < 1e-4;
+var LOD_MID = .62;
+var LOD_NEAR = 1.15;
+var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
+var FULL_DETAIL_LODS = [{
+	lod: "mid",
+	z: LOD_MID
+}, {
+	lod: "near",
+	z: 1
+}];
+var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
+var SKY_DRAWER_KEY = "mf_sky_drawer";
+var skyDrawerOpen = (pref) => pref === "1";
+var FLYWAY_MIME = "application/x-mindflock-flyway";
+var NEW_SESSION_MIME = "application/x-mindflock-new-session";
+var SKY_SIZES = [
+	"compact",
+	"normal",
+	"wide"
+];
+var BOX_W_MIN = 140;
+var BOX_W_MAX = 420;
+var BOX_H_MIN = 60;
+var BOX_H_MAX = 220;
+var BOX_PRESETS = {
+	compact: {
+		w: 150,
+		h: 64
+	},
+	normal: {
+		w: 236,
+		h: 100
+	},
+	wide: {
+		w: 330,
+		h: 120
+	}
+};
+var clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
+var clampBox = (w, h) => ({
+	w: clampTo(w, BOX_W_MIN, BOX_W_MAX),
+	h: clampTo(h, BOX_H_MIN, BOX_H_MAX)
+});
+function lineBox(l) {
+	const p = BOX_PRESETS[l?.size || "normal"] || BOX_PRESETS.normal;
+	return clampBox(Number.isFinite(l?.boxW) ? l.boxW : p.w, Number.isFinite(l?.boxH) ? l.boxH : p.h);
+}
+var SKY_LAYOUT_KEY = "mf_sky_layout";
+var SKY_POS_KEY = "mf_sky_pos";
+var LAYOUT_CAP = 400;
+var PANE_W$1 = 720;
+var PANE_H$1 = 420;
+var local = () => {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+};
+var parseObj = (raw) => {
+	if (!raw) return null;
+	try {
+		const doc = JSON.parse(raw);
+		return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : null;
+	} catch {
+		return null;
+	}
+};
+function readSkyPos(raw) {
+	const out = {};
+	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
+		const p = v;
+		if (k && p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y)) out[k] = {
+			x: Math.round(p.x),
+			y: Math.round(p.y)
+		};
+	}
+	return out;
+}
+function cleanLine(v) {
+	if (!v || typeof v !== "object") return null;
+	const p = v;
+	const out = {};
+	if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
+		out.x = Math.round(p.x);
+		out.y = Math.round(p.y);
+		if (p.pinned === true) out.pinned = true;
+	}
+	if (SKY_SIZES.includes(p.size) && p.size !== "normal") out.size = p.size;
+	if (p.open === true) out.open = true;
+	for (const k of [
+		"paneW",
+		"paneH",
+		"w",
+		"h"
+	]) if (Number.isFinite(p[k]) && p[k] > 0) out[k] = Math.round(p[k]);
+	if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {
+		const b = lineBox({
+			size: out.size,
+			boxW: p.boxW,
+			boxH: p.boxH
+		});
+		const preset = BOX_PRESETS[out.size || "normal"];
+		if (b.w !== preset.w || b.h !== preset.h) {
+			out.boxW = b.w;
+			out.boxH = b.h;
+		}
+	}
+	return Object.keys(out).length ? out : null;
+}
+function readSkyLayout(raw) {
+	const out = {};
+	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
+		const line = k ? cleanLine(v) : null;
+		if (line) out[k] = line;
+	}
+	return out;
+}
+function loadSkyLayout(store = local()) {
+	try {
+		const raw = store?.getItem(SKY_LAYOUT_KEY);
+		if (raw != null) return readSkyLayout(raw);
+		const old = readSkyPos(store?.getItem(SKY_POS_KEY));
+		const out = {};
+		for (const [k, p] of Object.entries(old)) out[k] = {
+			x: p.x,
+			y: p.y,
+			pinned: true
+		};
+		if (Object.keys(out).length) saveSkyLayout(out, store);
+		return out;
+	} catch {
+		return {};
+	}
+}
+function saveSkyLayout(all, store = local()) {
+	const next = { ...all };
+	const keys = Object.keys(next);
+	for (const k of keys.slice(0, Math.max(0, keys.length - LAYOUT_CAP))) delete next[k];
+	try {
+		store?.setItem(SKY_LAYOUT_KEY, JSON.stringify(next));
+	} catch {}
+	return next;
+}
+function renameSkyLine(all, from, to) {
+	if (!from || !to || from === to || !(from in all)) return all;
+	const next = {};
+	for (const [k, v] of Object.entries(all)) {
+		if (k === to) continue;
+		next[k === from ? to : k] = v;
+	}
+	return next;
+}
+function patchSkyLine(all, title, patch, store = local()) {
+	const next = { ...all };
+	const merged = cleanLine({
+		...next[title],
+		...patch
+	});
+	delete next[title];
+	if (merged) next[title] = merged;
+	return saveSkyLayout(next, store);
+}
+function tidySkyLayout(all, title, store = local()) {
+	const next = {};
+	for (const [k, v] of Object.entries(all)) {
+		if (title !== void 0 && k !== title) {
+			next[k] = v;
+			continue;
+		}
+		const { x: _x, y: _y, pinned: _p, ...rest } = v;
+		if (Object.keys(rest).length) next[k] = rest;
+	}
+	return saveSkyLayout(next, store);
+}
+function closeSkyWindows(all, titles, store = local()) {
+	const next = {};
+	let changed = false;
+	for (const [k, v] of Object.entries(all)) {
+		if (!v.open || k === INTAKE_KEY || titles && !titles.includes(k)) {
+			next[k] = v;
+			continue;
+		}
+		changed = true;
+		const { open: _o, ...rest } = v;
+		if (Object.keys(rest).length) next[k] = rest;
+	}
+	return changed ? saveSkyLayout(next, store) : all;
+}
+function pinnedPositions(all) {
+	const out = {};
+	for (const [k, v] of Object.entries(all)) if (v.pinned && Number.isFinite(v.x) && Number.isFinite(v.y)) out[k] = {
+		x: v.x,
+		y: v.y
+	};
+	return out;
+}
+function lineLayout(stored, at) {
+	return {
+		x: at.x,
+		y: at.y,
+		size: stored?.size || "normal",
+		open: !!stored?.open,
+		paneW: stored?.paneW,
+		paneH: stored?.paneH,
+		pinned: !!stored?.pinned,
+		boxW: stored?.boxW,
+		boxH: stored?.boxH
+	};
+}
+var LINE_BAR_H = 42;
+function estimateLine(base, stored) {
+	let w;
+	let h;
+	if (Number.isFinite(stored?.boxW) || Number.isFinite(stored?.boxH)) {
+		const b = lineBox(stored);
+		const n = BOX_PRESETS.normal;
+		w = Math.round(base.w * (b.w / n.w));
+		h = Math.round(Math.min(base.h, LINE_BAR_H) + Math.max(0, base.h - LINE_BAR_H) * (b.h / n.h));
+	} else {
+		const k = stored?.size === "compact" ? .75 : stored?.size === "wide" ? 1.4 : 1;
+		w = Math.round(base.w * k);
+		h = Math.round(base.h * (stored?.size === "compact" ? .85 : 1));
+	}
+	if (stored?.open) {
+		w = Math.max(w, (stored.paneW || PANE_W$1) + 24);
+		h += (stored.paneH || PANE_H$1) + 12;
+	}
+	return {
+		w,
+		h
+	};
+}
+var SKY_MODES = [
+	{
+		id: "one",
+		label: "This session",
+		title: "The session you're on: its route, filling the sky"
+	},
+	{
+		id: "all",
+		label: "All",
+		title: "Every session — a worker inside its lead's route"
+	},
+	{
+		id: "mine",
+		label: "Mine",
+		title: "Your top-level sessions, their workers folded into their route"
+	},
+	{
+		id: "perched",
+		label: "Needs you",
+		title: "Only the routes that need you"
+	}
+];
+var inSky = (r) => !r.hidden_by;
+function linePerched(r) {
+	const fl = r.flight;
+	if (rowWaitsOnYou(fl) || fl?.state === "halted") return true;
+	return deriveSessionState(r).state === "needs_you";
+}
+function skyLineTitles(rows, mode, opts = {}) {
+	const shown = rows.filter(inSky);
+	if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus] : [];
+	let pick = mode === "perched" ? shown.filter(linePerched) : shown;
+	const q = String(opts.query || "").trim().toLowerCase();
+	if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
+	const byTitle = new Map(pick.map((r) => [r.title, r]));
+	const isLine = /* @__PURE__ */ new Map();
+	const lineOf = (r, seen) => {
+		const known = isLine.get(r.title);
+		if (known !== void 0) return known;
+		const up = r.parent && r.parent !== r.title ? byTitle.get(r.parent) : void 0;
+		const out = !up || seen.has(up.title) || !lineOf(up, new Set(seen).add(r.title));
+		isLine.set(r.title, out);
+		return out;
+	};
+	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
+}
+function pickThisSession(rows, o = {}) {
+	const shown = rows.filter(inSky);
+	if (!shown.length) return "";
+	const has = new Set(shown.map((r) => r.title));
+	const firstOf = (ts) => (ts || []).find((t) => has.has(t)) || "";
+	const needs = firstOf(o.needsYou) || shown.find(linePerched)?.title;
+	if (needs) return needs;
+	const mru = o.mru || [];
+	const recency = (r) => {
+		const at = mru.indexOf(r.title);
+		return at < 0 ? mru.length : at;
+	};
+	const working = shown.filter((r) => deriveSessionState(r).state === "working").sort((a, b) => recency(a) - recency(b) || (Number(b.activity_since) || 0) - (Number(a.activity_since) || 0));
+	if (working.length) return working[0].title;
+	return firstOf(mru) || firstOf(o.railOrder) || shown[shown.length - 1].title;
+}
+function withLiveFlights(rows, flights, kinds) {
+	if (!flights?.length) return rows;
+	const newest = /* @__PURE__ */ new Map();
+	for (const f of flights) {
+		if (!f.session || f.free || !isShown(f)) continue;
+		const had = newest.get(f.session);
+		if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
+	}
+	if (!newest.size) return rows;
+	let out = null;
+	rows.forEach((r, i) => {
+		const f = newest.get(r.title);
+		if (!f || r.flight?.id) return;
+		const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
+		const row = {
+			...r.flight,
+			id: f.id,
+			plan_name: f.plan_name,
+			cursor: f.cursor,
+			total: f.steps.length,
+			state: f.state,
+			step: step ? {
+				id: step.id,
+				kind: step.kind,
+				title: step.title,
+				state: f.step_states?.[step.id]?.state || "pending",
+				actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot")
+			} : null
+		};
+		(out ??= rows.slice())[i] = {
+			...r,
+			flight: row
+		};
+	});
+	return out ?? rows;
+}
+//#endregion
+//#region src/lib/skyNodePos.ts
+var KEY = "mf_sky_node_pos";
+function read() {
+	try {
+		const raw = localStorage.getItem(KEY);
+		const v = raw ? JSON.parse(raw) : {};
+		return v && typeof v === "object" ? v : {};
+	} catch {
+		return {};
+	}
+}
+function loadNodePos(chain) {
+	return { ...read()[chain] || {} };
+}
+function renameNodePos(from, to) {
+	if (!from || !to || from === to) return;
+	try {
+		const all = read();
+		if (!(from in all)) return;
+		if (!(to in all)) all[to] = all[from];
+		delete all[from];
+		localStorage.setItem(KEY, JSON.stringify(all));
+	} catch {}
+}
+function saveNodePos(chain, spots) {
+	try {
+		const all = read();
+		if (Object.keys(spots).length) all[chain] = spots;
+		else delete all[chain];
+		localStorage.setItem(KEY, JSON.stringify(all));
+	} catch {}
+}
+//#endregion
+//#region src/lib/renameSession.ts
+var VERIFY = "\0verify:";
+var listeners$6 = /* @__PURE__ */ new Set();
+function onSessionRenamed(fn) {
+	listeners$6.add(fn);
+	return () => listeners$6.delete(fn);
+}
+function renameMapKey(m, from, to, opts = {}) {
+	if (m.has(from)) {
+		if (!m.has(to)) m.set(to, m.get(from));
+		m.delete(from);
+	}
+	if (opts.values) {
+		for (const [k, v] of m) if (v === from) m.set(k, to);
+	}
+}
+function persist(key, value) {
+	try {
+		localStorage.setItem(key, JSON.stringify(value));
+	} catch {}
+}
+function readObj(key) {
+	try {
+		const v = JSON.parse(localStorage.getItem(key) || "null");
+		return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+	} catch {
+		return null;
+	}
+}
+function moveSessionTitle(from, to) {
+	if (!from || !to || from === to) return;
+	const tok = (t) => t === from ? to : t === VERIFY + from ? VERIFY + to : t;
+	const swap = (list) => {
+		if (!list.some((t) => tok(t) !== t)) return list;
+		const seen = /* @__PURE__ */ new Set();
+		const out = [];
+		for (const t of list.map(tok)) if (!seen.has(t)) seen.add(t), out.push(t);
+		return out;
+	};
+	const rekey = (rec) => {
+		if (!(from in rec)) return rec;
+		const next = { ...rec };
+		if (!(to in next)) next[to] = next[from];
+		delete next[from];
+		return next;
+	};
+	const s = useUi.getState();
+	const patch = {};
+	const order = swap(s.order);
+	if (order !== s.order) patch.order = order, persist("cs_order", order);
+	const mru = swap(s.mru);
+	if (mru !== s.mru) patch.mru = mru, persist("cs_mru", mru);
+	const rows = s.gridRows.map(swap);
+	if (rows.some((r, i) => r !== s.gridRows[i])) patch.gridRows = rows, persist("cs_gridrows", rows);
+	const rail = swap(s.railOrder);
+	if (rail !== s.railOrder) patch.railOrder = rail;
+	const verify = swap(s.verifyPanes);
+	if (verify !== s.verifyPanes) patch.verifyPanes = verify;
+	if (s.hidden.has(from)) {
+		const hidden = new Set(swap([...s.hidden]));
+		patch.hidden = hidden;
+		persist("mf_hidden", [...hidden]);
+	}
+	if (s.collapsedFamilies.has(from)) {
+		const fam = new Set(swap([...s.collapsedFamilies]));
+		patch.collapsedFamilies = fam;
+		persist("mf_familycollapse", [...fam]);
+	}
+	if (s.bulkSelected.has(from)) patch.bulkSelected = new Set(swap([...s.bulkSelected]));
+	if (s.bulkAnchor === from) patch.bulkAnchor = to;
+	if (from in s.aliases || to in s.aliases) {
+		const aliases = { ...s.aliases };
+		delete aliases[from];
+		delete aliases[to];
+		patch.aliases = aliases;
+		persist("mf_aliases", aliases);
+	}
+	const lastTab = rekey(s.lastTab);
+	if (lastTab !== s.lastTab) patch.lastTab = lastTab, persist("cs_lasttab", lastTab);
+	const seen = rekey(s.threadLastSeen);
+	if (seen !== s.threadLastSeen) patch.threadLastSeen = seen, persist("mf_thread_seen", seen);
+	if (s.focused === from) patch.focused = to;
+	if (s.dialogTarget === from) patch.dialogTarget = to;
+	const ct = s.threadComposeTarget;
+	if (ct && (ct.title === from || ct.to === from)) patch.threadComposeTarget = {
+		...ct,
+		title: tok(ct.title),
+		to: tok(ct.to)
+	};
+	if (s.mapFocus?.title === from) patch.mapFocus = {
+		...s.mapFocus,
+		title: to
+	};
+	if (s.diffFocus?.title === from) patch.diffFocus = {
+		...s.diffFocus,
+		title: to
+	};
+	if (s.fastTrackMenu?.title === from) patch.fastTrackMenu = {
+		...s.fastTrackMenu,
+		title: to
+	};
+	if (Object.keys(patch).length) useUi.setState(patch);
+	renameCodemapSeen(from, to);
+	renameNodePos(from, to);
+	const layout = loadSkyLayout();
+	const moved = renameSkyLine(layout, from, to);
+	if (moved !== layout) saveSkyLayout(moved);
+	const oldPos = readObj(SKY_POS_KEY);
+	if (oldPos && from in oldPos) persist(SKY_POS_KEY, rekey(oldPos));
+	queryClient.setQueryData(["instances"], (prev) => {
+		if (!prev || !prev.some((r) => r.title === from || r.parent === from)) return prev;
+		const hasTo = prev.some((r) => r.title === to);
+		return prev.filter((r) => !(hasTo && r.title === from)).map((r) => r.title === from || r.parent === from ? {
+			...r,
+			title: r.title === from ? to : r.title,
+			parent: r.parent === from ? to : r.parent
+		} : r);
+	});
+	for (const fn of listeners$6) try {
+		fn(from, to);
+	} catch {}
+}
+async function renameSession(title, name, opts = {}) {
+	const next = String(name || "").trim();
+	if (!title || !next) return "";
+	const ui = useUi.getState();
+	if (ui.aliases[title] && (next === title || next === opts.plain)) {
+		ui.setAlias(title, "");
+		toast(`Renamed to “${next}”`);
+		return title;
+	}
+	if (next === title) return "";
+	try {
+		const r = await instApi(title, "/rename", { json: { to: next } });
+		const now = r && typeof r.title === "string" && r.title || next;
+		if (r?.unchanged || now === title) return "";
+		moveSessionTitle(title, now);
+		toast(`Renamed to “${now}”`);
+		refreshInstances();
+		return now;
+	} catch (err) {
+		if (err instanceof ApiError && err.status >= 400 && err.status < 500) toast(err.message || `Couldn't rename it to “${next}”`);
+		else errorPop("Rename failed", errMsg(err));
+		return "";
+	}
+}
+//#endregion
 //#region src/lib/aliasSync.ts
 var installed$1 = false;
 function adopt(aliases) {
@@ -35745,16 +36745,40 @@ function installAliasSync(guest) {
 	if (guest) pullAliases().catch(() => {});
 	else {
 		const aliases = useUi.getState().aliases;
-		api("/api/aliases", { json: { aliases } }).then((r) => {
-			if (r?.aliases) adopt(r.aliases);
-		}).catch(() => {});
+		api("/api/aliases", { json: { aliases } }).then(adoptSeedAnswer).catch(() => {});
 	}
 	const ev = window.mindflock?.events;
 	if (!ev) return;
-	ev.subscribe("session.renamed", (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		pullAliases().catch(() => {});
-	});
+	ev.subscribe("session.renamed", (env) => onSessionRenamedEvent(env, typeof ev.isReplay === "function" && ev.isReplay(env)));
+}
+function adoptSeedAnswer(r) {
+	if (!r) return;
+	if (r.renamed && typeof r.renamed === "object") {
+		for (const [from, to] of Object.entries(r.renamed)) if (typeof to === "string") moveSessionTitle(from, to);
+	}
+	if (r.aliases) adopt(r.aliases);
+}
+function realRename(env) {
+	const d = env?.data || {};
+	const from = typeof d.from === "string" ? d.from : "";
+	const to = typeof d.to === "string" ? d.to : "";
+	return from && to && from !== to ? {
+		from,
+		to
+	} : null;
+}
+function onSessionRenamedEvent(env, replay = false) {
+	const real = realRename(env);
+	if (real) {
+		if (replay) {
+			const rows = queryClient.getQueryData(["instances"]);
+			if (!rows || !rows.some((r) => r.title === real.to) || rows.some((r) => r.title === real.from)) return;
+		}
+		moveSessionTitle(real.from, real.to);
+		return;
+	}
+	if (replay) return;
+	pullAliases().catch(() => {});
 }
 //#endregion
 //#region \0vite/preload-helper.js
@@ -35826,11 +36850,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version$1 = 0;
-var listeners$6 = /* @__PURE__ */ new Set();
+var listeners$5 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$6.add(cb);
+	listeners$5.add(cb);
 	return () => {
-		listeners$6.delete(cb);
+		listeners$5.delete(cb);
 	};
 }
 function hostVersion() {
@@ -35838,7 +36862,7 @@ function hostVersion() {
 }
 function bump() {
 	version$1++;
-	for (const cb of listeners$6) cb();
+	for (const cb of listeners$5) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -40532,7 +41556,7 @@ var micState = {
 	caption: "",
 	unsure: ""
 };
-var listeners$5 = /* @__PURE__ */ new Set();
+var listeners$4 = /* @__PURE__ */ new Set();
 function publishMicState(patch) {
 	const next = {
 		...micState,
@@ -40540,15 +41564,15 @@ function publishMicState(patch) {
 	};
 	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
 	micState = next;
-	listeners$5.forEach((l) => l());
+	listeners$4.forEach((l) => l());
 }
 function getMicState() {
 	return micState;
 }
 function subscribeMicState(cb) {
-	listeners$5.add(cb);
+	listeners$4.add(cb);
 	return () => {
-		listeners$5.delete(cb);
+		listeners$4.delete(cb);
 	};
 }
 //#endregion
@@ -41764,7 +42788,7 @@ function wordsFrom(raw, fallback) {
 var defaults = BUILTIN_VOICE_WORDS;
 var current$1 = BUILTIN_VOICE_WORDS;
 var version = 0;
-var listeners$4 = /* @__PURE__ */ new Set();
+var listeners$3 = /* @__PURE__ */ new Set();
 function voiceWords() {
 	return current$1;
 }
@@ -41778,11 +42802,11 @@ function setVoiceWords(words, wordsDefault) {
 	defaults = d;
 	current$1 = w;
 	version++;
-	for (const fn of [...listeners$4]) fn(w);
+	for (const fn of [...listeners$3]) fn(w);
 }
 function onVoiceWords(fn) {
-	listeners$4.add(fn);
-	return () => void listeners$4.delete(fn);
+	listeners$3.add(fn);
+	return () => void listeners$3.delete(fn);
 }
 function applyVoiceView(j) {
 	const v = j && typeof j === "object" ? j : {};
@@ -54250,96 +55274,6 @@ async function expectBackgroundJob(title, jobId, secs) {
 	return true;
 }
 //#endregion
-//#region src/lib/codemapSeen.ts
-var KEY$1 = "mf_codemap_seen";
-var MAX_TITLES = 200;
-var cache = null;
-var listeners$3 = /* @__PURE__ */ new Set();
-function load() {
-	if (cache) return cache;
-	try {
-		const raw = localStorage.getItem(KEY$1);
-		const v = raw ? JSON.parse(raw) : null;
-		cache = v && typeof v === "object" ? v : {};
-	} catch {
-		cache = {};
-	}
-	return cache;
-}
-function codemapSeenAt(title) {
-	return Number(load()[title]) || 0;
-}
-function serverNow(skew, clientNowS = Date.now() / 1e3) {
-	return clientNowS + (Number.isFinite(skew) ? skew : 0);
-}
-function markCodemapSeen(title, ts) {
-	if (!Number.isFinite(ts) || ts <= 0) return;
-	const cur = load();
-	if ((cur[title] || 0) >= ts - 1) return;
-	const next = {
-		...cur,
-		[title]: ts
-	};
-	const keys = Object.keys(next);
-	if (keys.length > MAX_TITLES) {
-		keys.sort((a, b) => next[a] - next[b]);
-		for (const k of keys.slice(0, keys.length - MAX_TITLES)) delete next[k];
-	}
-	cache = next;
-	try {
-		localStorage.setItem(KEY$1, JSON.stringify(next));
-	} catch {}
-	listeners$3.forEach((l) => l());
-}
-function subscribeCodemapSeen(cb) {
-	listeners$3.add(cb);
-	return () => listeners$3.delete(cb);
-}
-function redZoneChip(rz, seenAt) {
-	if (!rz) return null;
-	const zones = rz.zones || 0;
-	const breaches = rz.breaches || 0;
-	const blockTs = rz.last_block_ts || 0;
-	if (breaches > 0) return {
-		cls: "rz-breach",
-		label: "⛔" + breaches,
-		title: `${breaches} red-zone file${breaches === 1 ? "" : "s"} changed on this branch — pushing is blocked until reverted. Click to open the map.`,
-		section: "breaches"
-	};
-	if (blockTs > seenAt) return {
-		cls: "rz-breach",
-		label: "⛔",
-		title: "A red zone blocked an edit since you last looked. Click to open the map.",
-		section: "breaches"
-	};
-	if (zones > 0 && (rz.guard === "off" || rz.guard === "arming")) return {
-		cls: "rz-warn",
-		label: "!",
-		title: rz.guard === "off" ? "Red-zone guard is off — MindFlock is re-arming it. Edits are detected, not blocked, until then." : "Red-zone guard is arming — it takes effect on the agent's next tool call.",
-		section: "zones"
-	};
-	const planned = rz.plan_pending || 0;
-	if (planned > 0) return {
-		cls: "rz-warn rz-plan",
-		label: "plan · " + planned,
-		title: "Plan ready — review & Go",
-		section: "plan"
-	};
-	if (zones > 0 && rz.guard === "guarded" && rz.mode === "green") return {
-		cls: "rz-ok",
-		label: "✓",
-		title: "Scoped to its green zones — edits outside them are blocked. Click to open the map.",
-		section: "zones"
-	};
-	if (zones > 0 && rz.guard === "guarded") return {
-		cls: "rz-ok",
-		label: "🛡",
-		title: `${zones} red zone${zones === 1 ? "" : "s"} guarded — edits there are blocked. Click to open the map.`,
-		section: "zones"
-	};
-	return null;
-}
-//#endregion
 //#region src/components/sidebar/SessionMenu.tsx
 function SessionMenu({ model, onDone, onInUse }) {
 	const [moreOpen, setMoreOpen] = (0, import_react.useState)(false);
@@ -55931,7 +56865,6 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 	const hidden = useUi((s) => s.hidden.has(inst.title));
 	const aliases = useUi((s) => s.aliases);
 	const alias = aliases[inst.title];
-	const setAlias = useUi((s) => s.setAlias);
 	const picking = useUi((s) => s.bulkMode);
 	const picked = useUi((s) => s.bulkSelected.has(inst.title));
 	const title = inst.title;
@@ -56100,8 +57033,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 			toast(`Another session is already named “${next}”`);
 			return;
 		}
-		setAlias(title, next === label.text ? "" : next);
-		toast(`Renamed to “${next}”`);
+		renameSession(title, next, { plain: label.text });
 	};
 	const rowCls = "inst" + (nested ? " nest-" + nest.depth : "") + (nest.stem ? " has-stem" : "") + (focused === title ? " active" : "") + (hidden ? " is-hidden" : "") + (missing ? " ws-missing" : "") + (pending ? " is-pending" : "") + (offlinePeer ? " peer-gone" : "") + (picked ? " bulk-picked" : "") + (menuAt ? " menu-open" : "") + (dropCue ? ` drop-${dropCue}` : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -64453,6 +65385,11 @@ var THREAD_POLL_MS = 8e3;
 var threadCache = /* @__PURE__ */ new Map();
 var drafts = /* @__PURE__ */ new Map();
 var toKeys = /* @__PURE__ */ new Map();
+onSessionRenamed((from, to) => {
+	renameMapKey(threadCache, from, to);
+	renameMapKey(drafts, from, to);
+	renameMapKey(toKeys, from, to, { values: true });
+});
 var nameOf = (t) => displayName(t);
 function Spans({ text }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: codeSpans(text).map((s, i) => s.code ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: s.text }, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: s.text }, i)) });
@@ -86138,715 +87075,6 @@ function withBehaviors(d, mark) {
 	};
 }
 //#endregion
-//#region src/lib/skyLayout.ts
-var SKY_GAP = 64;
-var SKY_MARGIN = 40;
-var INTAKE_W = 240;
-var LINES_LEFT = 328;
-var INTAKE_KEY = "intake";
-var INTAKE_OPEN_W = 420;
-var INTAKE_MIN_W = 200;
-var INTAKE_MIN_H = 160;
-var INTAKE_MAX_W = 1200;
-var INTAKE_MAX_H = 1600;
-function objectFrame(stored, min, max) {
-	if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
-	return {
-		w: Math.min(max.w, Math.max(min.w, Math.round(stored.w))),
-		h: Math.min(max.h, Math.max(min.h, Math.round(stored.h)))
-	};
-}
-function intakeFrame(stored) {
-	return objectFrame(stored, {
-		w: INTAKE_MIN_W,
-		h: INTAKE_MIN_H
-	}, {
-		w: INTAKE_MAX_W,
-		h: INTAKE_MAX_H
-	});
-}
-var PALETTE_W$1 = 360;
-var PALETTE_H$1 = 300;
-var PALETTE_MIN = {
-	w: 220,
-	h: 140
-};
-var PALETTE_MAX = {
-	w: 1400,
-	h: 1200
-};
-var paletteFrame$1 = (stored) => objectFrame(stored, PALETTE_MIN, PALETTE_MAX);
-var PLACE_GAP = 24;
-function catalogFrame(view, screen, z, size, pad = 16) {
-	const k = z > 0 ? z : 1;
-	const m = pad / k;
-	const fit = (want, room, lo, hi) => Math.round(Math.min(hi, Math.max(lo, Math.min(want, room))));
-	const w = size ? size.w : fit(screen.w * .6 / k, view.w - 2 * m, PALETTE_MIN.w, PALETTE_MAX.w);
-	const h = size ? size.h : fit(screen.h * .7 / k, view.h - 2 * m, PALETTE_MIN.h, PALETTE_MAX.h);
-	const x = Math.max(view.x + m, Math.min(view.x + view.w / 2 + PLACE_GAP, view.x + view.w - m - w));
-	const y = Math.max(view.y + m, view.y + (view.h - h) / 2);
-	return {
-		x: Math.round(x),
-		y: Math.round(y),
-		w,
-		h
-	};
-}
-var LANDING_KEY = "landing";
-var LANDING_W = 300;
-var LANDING_H = 240;
-var LANDING_MIN = {
-	w: 220,
-	h: 120
-};
-var LANDING_MAX = {
-	w: 1200,
-	h: 1600
-};
-var NOTE_W = 200;
-var NOTE_H = 120;
-var NOTE_MIN = {
-	w: 120,
-	h: 70
-};
-var NOTE_MAX = {
-	w: 800,
-	h: 800
-};
-var BLOCK_W = 200;
-var BLOCK_H = 64;
-function rightColumn(placed, items, top = SKY_MARGIN, gap = SKY_GAP) {
-	const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
-	const x = placed.length ? right + gap : LINES_LEFT;
-	const out = {};
-	let y = top;
-	for (const it of items) {
-		out[it.id] = {
-			x,
-			y
-		};
-		y += it.h + gap / 2;
-	}
-	return out;
-}
-function clearRightColumn(column, lines, gap = SKY_GAP) {
-	if (!column.length || !lines.length) return {};
-	if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
-	const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
-	return Object.fromEntries(column.map((c) => [c.id, {
-		x,
-		y: c.y
-	}]));
-}
-function spotNear(want, taken, size, within) {
-	const step = PLACE_GAP;
-	const free = (x, y) => !taken.some((t) => hits({
-		x,
-		y,
-		w: size.w,
-		h: size.h
-	}, t, 23));
-	const inside = (x, y) => !within || x >= within.x && y >= within.y && x + size.w <= within.x + within.w && y + size.h <= within.y + within.h;
-	const search = (bounded) => {
-		for (let r = 0; r <= 80; r++) {
-			let best = null;
-			let bestD = Infinity;
-			for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
-				if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
-				const x = Math.round(want.x + i * step);
-				const y = Math.round(want.y + j * step);
-				if (bounded && !inside(x, y)) continue;
-				const d = Math.hypot(i, j);
-				if (d < bestD && free(x, y)) {
-					best = {
-						x,
-						y
-					};
-					bestD = d;
-				}
-			}
-			if (best) return best;
-		}
-		return null;
-	};
-	return within && search(true) || search(false) || {
-		x: Math.round(want.x),
-		y: Math.round(want.y)
-	};
-}
-function grownOver(was, now, movable) {
-	if (!was || !now || was.x !== now.x || was.y !== now.y || now.w <= was.w && now.h <= was.h) return [];
-	return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
-}
-function intakeSize(stored, measured) {
-	const frame = intakeFrame(stored);
-	if (frame) return frame;
-	if (measured && measured.w > 0 && measured.h > 0) return measured;
-	return stored?.open ? {
-		w: INTAKE_OPEN_W,
-		h: 520
-	} : {
-		w: INTAKE_W,
-		h: 320
-	};
-}
-var ZOOM_MIN = .1;
-var ZOOM_MAX = 3;
-var FIT_PAD = 56;
-var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
-function placeLines(lines, saved, area) {
-	const out = {};
-	const taken = [];
-	for (const l of lines) {
-		const s = saved[l.id];
-		if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
-			out[l.id] = {
-				x: s.x,
-				y: s.y
-			};
-			taken.push({
-				x: s.x,
-				y: s.y,
-				w: l.w,
-				h: l.h
-			});
-		}
-	}
-	const x0 = area.left ?? SKY_MARGIN;
-	const y0 = area.top ?? SKY_MARGIN;
-	const right = Math.max(area.width, x0 + 1);
-	let cx = x0;
-	let cy = y0;
-	let rowH = 0;
-	for (const l of lines) {
-		if (out[l.id]) continue;
-		for (let guard = 0; guard < 1e4; guard++) {
-			if (cx > x0 && cx + l.w > right) {
-				cx = x0;
-				cy += (rowH || 0) + SKY_GAP;
-				rowH = 0;
-			}
-			const at = {
-				x: cx,
-				y: cy,
-				w: l.w,
-				h: l.h
-			};
-			const hit = taken.find((t) => hits(at, t, 63));
-			if (hit) {
-				cx = hit.x + hit.w + SKY_GAP;
-				continue;
-			}
-			out[l.id] = {
-				x: cx,
-				y: cy
-			};
-			taken.push(at);
-			cx += l.w + SKY_GAP;
-			rowH = Math.max(rowH, l.h);
-			break;
-		}
-	}
-	return out;
-}
-function assignSpots(existing, newcomers, area) {
-	const saved = {};
-	for (const e of existing) saved[e.id] = {
-		x: e.x,
-		y: e.y
-	};
-	const fresh = newcomers.filter((n) => !saved[n.id]);
-	if (!fresh.length) return {};
-	const all = placeLines([...existing, ...fresh], saved, area);
-	return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
-}
-var FILL_GAIN = 1.1;
-function fillWidth(existing, newcomers, area, vw, vh, opts = {}) {
-	const min = area.width;
-	const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
-	if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
-	const maxZ = opts.maxZ ?? 1;
-	const flat = new Set(opts.flat || []);
-	const aside = new Set((opts.right || []).map((r) => r.id));
-	const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
-	const x0 = area.left ?? SKY_MARGIN;
-	const stops = [];
-	let run = x0;
-	for (const n of fresh) {
-		run += n.w;
-		stops.push(run);
-		run += SKY_GAP;
-	}
-	const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
-	const steps = 24;
-	const k = max > min ? (max / Math.max(1, min)) ** (1 / 23) : 1;
-	const widths = /* @__PURE__ */ new Set([min]);
-	if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
-	for (const s of stops) if (s > min && s <= max) widths.add(s);
-	const counted = existing.filter((e) => !aside.has(e.id));
-	let best = min;
-	let bestZ = -Infinity;
-	let minZ = -Infinity;
-	for (const width of [...widths].sort((a, b) => a - b)) {
-		const spots = assignSpots(existing, fresh, {
-			...area,
-			width
-		});
-		const b = boundsOf([...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({
-			id: n.id,
-			...spots[n.id],
-			w: n.w,
-			h: n.h
-		}))].map((r) => ({
-			x: r.x,
-			y: r.y,
-			w: r.w,
-			h: flat.has(r.id) ? 1 : r.h
-		})));
-		if (!b) continue;
-		const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
-		const z = Math.min(maxZ, (vw - 112) / w, (vh - 112) / Math.max(1, b.h));
-		if (width === min) minZ = z;
-		if (z > bestZ + .001) {
-			bestZ = z;
-			best = width;
-		}
-	}
-	return bestZ >= minZ * FILL_GAIN ? best : min;
-}
-function boundsOf(rects) {
-	if (!rects.length) return null;
-	const x = Math.min(...rects.map((r) => r.x));
-	const y = Math.min(...rects.map((r) => r.y));
-	return {
-		x,
-		y,
-		w: Math.max(...rects.map((r) => r.x + r.w)) - x,
-		h: Math.max(...rects.map((r) => r.y + r.h)) - y
-	};
-}
-var clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1));
-function zoomAt(c, z, px, py) {
-	const nz = clampZoom(z);
-	const k = nz / c.z;
-	return {
-		z: nz,
-		x: px - (px - c.x) * k,
-		y: py - (py - c.y) * k
-	};
-}
-function toPlane(c, px, py) {
-	return {
-		x: (px - c.x) / c.z,
-		y: (py - c.y) / c.z
-	};
-}
-function fitCamera(b, vw, vh, maxZ = 1.25, pad = FIT_PAD) {
-	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
-		x: 0,
-		y: 0,
-		z: 1
-	};
-	const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
-	return {
-		x: b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
-		y: b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
-		z
-	};
-}
-function firstFit(b, vw, vh, maxZ = 1, pad = FIT_PAD) {
-	const all = fitCamera(b, vw, vh, maxZ, pad);
-	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0 || all.z >= LOD_MID) return all;
-	const z = clampZoom(Math.min(maxZ, Math.max(LOD_MID, (vw - 2 * pad) / b.w)));
-	return {
-		z,
-		x: pad - b.x * z,
-		y: pad - b.y * z
-	};
-}
-var ROUTE_FIT_PAD = 48;
-var ROUTE_FIT_MIN = .6;
-var ROUTE_FIT_MAX = 1.5;
-function fitRoute(b, vw, vh) {
-	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
-		x: 0,
-		y: 0,
-		z: 1
-	};
-	const pad = ROUTE_FIT_PAD;
-	const want = Math.min((vw - 96) / b.w, (vh - 96) / b.h);
-	const z = Math.min(ROUTE_FIT_MAX, Math.max(ROUTE_FIT_MIN, Number.isFinite(want) ? want : 1));
-	return {
-		x: b.w * z + 96 <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
-		y: b.h * z + 96 <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
-		z
-	};
-}
-function screenBoxCovers(box, rects, c) {
-	return rects.some((r) => {
-		const sx = c.x + r.x * c.z;
-		const sy = c.y + r.y * c.z;
-		return sx < box.x + box.w && sx + r.w * c.z > box.x && sy < box.y + box.h && sy + r.h * c.z > box.y;
-	});
-}
-function centerOn(r, vw, vh, z) {
-	const nz = clampZoom(z);
-	return {
-		z: nz,
-		x: vw / 2 - (r.x + r.w / 2) * nz,
-		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
-	};
-}
-function fitSelection(rects, vw, vh, maxZ = 1.25) {
-	const b = boundsOf(rects);
-	return b ? fitCamera(b, vw, vh, maxZ) : null;
-}
-var CAM_EASE_MS = 220;
-var easeOut = (t) => {
-	return 1 - (1 - Math.min(1, Math.max(0, t))) ** 3;
-};
-function lerpCamera(from, to, t) {
-	if (t >= 1) return {
-		x: to.x,
-		y: to.y,
-		z: to.z
-	};
-	if (t <= 0) return {
-		x: from.x,
-		y: from.y,
-		z: from.z
-	};
-	const z = from.z > 0 && to.z > 0 ? Math.exp(Math.log(from.z) + (Math.log(to.z) - Math.log(from.z)) * t) : from.z + (to.z - from.z) * t;
-	return {
-		x: from.x + (to.x - from.x) * t,
-		y: from.y + (to.y - from.y) * t,
-		z
-	};
-}
-var sameCamera = (a, b) => Math.abs(a.x - b.x) < .01 && Math.abs(a.y - b.y) < .01 && Math.abs(a.z - b.z) < 1e-4;
-var LOD_MID = .62;
-var LOD_NEAR = 1.15;
-var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
-var FULL_DETAIL_LODS = [{
-	lod: "mid",
-	z: LOD_MID
-}, {
-	lod: "near",
-	z: 1
-}];
-var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
-var SKY_DRAWER_KEY = "mf_sky_drawer";
-var skyDrawerOpen = (pref) => pref === "1";
-var FLYWAY_MIME = "application/x-mindflock-flyway";
-var NEW_SESSION_MIME = "application/x-mindflock-new-session";
-var SKY_SIZES = [
-	"compact",
-	"normal",
-	"wide"
-];
-var BOX_W_MIN = 140;
-var BOX_W_MAX = 420;
-var BOX_H_MIN = 60;
-var BOX_H_MAX = 220;
-var BOX_PRESETS = {
-	compact: {
-		w: 150,
-		h: 64
-	},
-	normal: {
-		w: 236,
-		h: 100
-	},
-	wide: {
-		w: 330,
-		h: 120
-	}
-};
-var clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
-var clampBox = (w, h) => ({
-	w: clampTo(w, BOX_W_MIN, BOX_W_MAX),
-	h: clampTo(h, BOX_H_MIN, BOX_H_MAX)
-});
-function lineBox(l) {
-	const p = BOX_PRESETS[l?.size || "normal"] || BOX_PRESETS.normal;
-	return clampBox(Number.isFinite(l?.boxW) ? l.boxW : p.w, Number.isFinite(l?.boxH) ? l.boxH : p.h);
-}
-var SKY_LAYOUT_KEY = "mf_sky_layout";
-var SKY_POS_KEY = "mf_sky_pos";
-var LAYOUT_CAP = 400;
-var PANE_W$1 = 720;
-var PANE_H$1 = 420;
-var local = () => {
-	try {
-		return typeof localStorage === "undefined" ? null : localStorage;
-	} catch {
-		return null;
-	}
-};
-var parseObj = (raw) => {
-	if (!raw) return null;
-	try {
-		const doc = JSON.parse(raw);
-		return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : null;
-	} catch {
-		return null;
-	}
-};
-function readSkyPos(raw) {
-	const out = {};
-	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
-		const p = v;
-		if (k && p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y)) out[k] = {
-			x: Math.round(p.x),
-			y: Math.round(p.y)
-		};
-	}
-	return out;
-}
-function cleanLine(v) {
-	if (!v || typeof v !== "object") return null;
-	const p = v;
-	const out = {};
-	if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
-		out.x = Math.round(p.x);
-		out.y = Math.round(p.y);
-		if (p.pinned === true) out.pinned = true;
-	}
-	if (SKY_SIZES.includes(p.size) && p.size !== "normal") out.size = p.size;
-	if (p.open === true) out.open = true;
-	for (const k of [
-		"paneW",
-		"paneH",
-		"w",
-		"h"
-	]) if (Number.isFinite(p[k]) && p[k] > 0) out[k] = Math.round(p[k]);
-	if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {
-		const b = lineBox({
-			size: out.size,
-			boxW: p.boxW,
-			boxH: p.boxH
-		});
-		const preset = BOX_PRESETS[out.size || "normal"];
-		if (b.w !== preset.w || b.h !== preset.h) {
-			out.boxW = b.w;
-			out.boxH = b.h;
-		}
-	}
-	return Object.keys(out).length ? out : null;
-}
-function readSkyLayout(raw) {
-	const out = {};
-	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
-		const line = k ? cleanLine(v) : null;
-		if (line) out[k] = line;
-	}
-	return out;
-}
-function loadSkyLayout(store = local()) {
-	try {
-		const raw = store?.getItem(SKY_LAYOUT_KEY);
-		if (raw != null) return readSkyLayout(raw);
-		const old = readSkyPos(store?.getItem(SKY_POS_KEY));
-		const out = {};
-		for (const [k, p] of Object.entries(old)) out[k] = {
-			x: p.x,
-			y: p.y,
-			pinned: true
-		};
-		if (Object.keys(out).length) saveSkyLayout(out, store);
-		return out;
-	} catch {
-		return {};
-	}
-}
-function saveSkyLayout(all, store = local()) {
-	const next = { ...all };
-	const keys = Object.keys(next);
-	for (const k of keys.slice(0, Math.max(0, keys.length - LAYOUT_CAP))) delete next[k];
-	try {
-		store?.setItem(SKY_LAYOUT_KEY, JSON.stringify(next));
-	} catch {}
-	return next;
-}
-function patchSkyLine(all, title, patch, store = local()) {
-	const next = { ...all };
-	const merged = cleanLine({
-		...next[title],
-		...patch
-	});
-	delete next[title];
-	if (merged) next[title] = merged;
-	return saveSkyLayout(next, store);
-}
-function tidySkyLayout(all, title, store = local()) {
-	const next = {};
-	for (const [k, v] of Object.entries(all)) {
-		if (title !== void 0 && k !== title) {
-			next[k] = v;
-			continue;
-		}
-		const { x: _x, y: _y, pinned: _p, ...rest } = v;
-		if (Object.keys(rest).length) next[k] = rest;
-	}
-	return saveSkyLayout(next, store);
-}
-function closeSkyWindows(all, titles, store = local()) {
-	const next = {};
-	let changed = false;
-	for (const [k, v] of Object.entries(all)) {
-		if (!v.open || k === INTAKE_KEY || titles && !titles.includes(k)) {
-			next[k] = v;
-			continue;
-		}
-		changed = true;
-		const { open: _o, ...rest } = v;
-		if (Object.keys(rest).length) next[k] = rest;
-	}
-	return changed ? saveSkyLayout(next, store) : all;
-}
-function pinnedPositions(all) {
-	const out = {};
-	for (const [k, v] of Object.entries(all)) if (v.pinned && Number.isFinite(v.x) && Number.isFinite(v.y)) out[k] = {
-		x: v.x,
-		y: v.y
-	};
-	return out;
-}
-function lineLayout(stored, at) {
-	return {
-		x: at.x,
-		y: at.y,
-		size: stored?.size || "normal",
-		open: !!stored?.open,
-		paneW: stored?.paneW,
-		paneH: stored?.paneH,
-		pinned: !!stored?.pinned,
-		boxW: stored?.boxW,
-		boxH: stored?.boxH
-	};
-}
-var LINE_BAR_H = 42;
-function estimateLine(base, stored) {
-	let w;
-	let h;
-	if (Number.isFinite(stored?.boxW) || Number.isFinite(stored?.boxH)) {
-		const b = lineBox(stored);
-		const n = BOX_PRESETS.normal;
-		w = Math.round(base.w * (b.w / n.w));
-		h = Math.round(Math.min(base.h, LINE_BAR_H) + Math.max(0, base.h - LINE_BAR_H) * (b.h / n.h));
-	} else {
-		const k = stored?.size === "compact" ? .75 : stored?.size === "wide" ? 1.4 : 1;
-		w = Math.round(base.w * k);
-		h = Math.round(base.h * (stored?.size === "compact" ? .85 : 1));
-	}
-	if (stored?.open) {
-		w = Math.max(w, (stored.paneW || PANE_W$1) + 24);
-		h += (stored.paneH || PANE_H$1) + 12;
-	}
-	return {
-		w,
-		h
-	};
-}
-var SKY_MODES = [
-	{
-		id: "one",
-		label: "This session",
-		title: "The session you're on: its route, filling the sky"
-	},
-	{
-		id: "all",
-		label: "All",
-		title: "Every session — a worker inside its lead's route"
-	},
-	{
-		id: "mine",
-		label: "Mine",
-		title: "Your top-level sessions, their workers folded into their route"
-	},
-	{
-		id: "perched",
-		label: "Needs you",
-		title: "Only the routes that need you"
-	}
-];
-var inSky = (r) => !r.hidden_by;
-function linePerched(r) {
-	const fl = r.flight;
-	if (rowWaitsOnYou(fl) || fl?.state === "halted") return true;
-	return deriveSessionState(r).state === "needs_you";
-}
-function skyLineTitles(rows, mode, opts = {}) {
-	const shown = rows.filter(inSky);
-	if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus] : [];
-	let pick = mode === "perched" ? shown.filter(linePerched) : shown;
-	const q = String(opts.query || "").trim().toLowerCase();
-	if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
-	const byTitle = new Map(pick.map((r) => [r.title, r]));
-	const isLine = /* @__PURE__ */ new Map();
-	const lineOf = (r, seen) => {
-		const known = isLine.get(r.title);
-		if (known !== void 0) return known;
-		const up = r.parent && r.parent !== r.title ? byTitle.get(r.parent) : void 0;
-		const out = !up || seen.has(up.title) || !lineOf(up, new Set(seen).add(r.title));
-		isLine.set(r.title, out);
-		return out;
-	};
-	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
-}
-function pickThisSession(rows, o = {}) {
-	const shown = rows.filter(inSky);
-	if (!shown.length) return "";
-	const has = new Set(shown.map((r) => r.title));
-	const firstOf = (ts) => (ts || []).find((t) => has.has(t)) || "";
-	const needs = firstOf(o.needsYou) || shown.find(linePerched)?.title;
-	if (needs) return needs;
-	const mru = o.mru || [];
-	const recency = (r) => {
-		const at = mru.indexOf(r.title);
-		return at < 0 ? mru.length : at;
-	};
-	const working = shown.filter((r) => deriveSessionState(r).state === "working").sort((a, b) => recency(a) - recency(b) || (Number(b.activity_since) || 0) - (Number(a.activity_since) || 0));
-	if (working.length) return working[0].title;
-	return firstOf(mru) || firstOf(o.railOrder) || shown[shown.length - 1].title;
-}
-function withLiveFlights(rows, flights, kinds) {
-	if (!flights?.length) return rows;
-	const newest = /* @__PURE__ */ new Map();
-	for (const f of flights) {
-		if (!f.session || f.free || !isShown(f)) continue;
-		const had = newest.get(f.session);
-		if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
-	}
-	if (!newest.size) return rows;
-	let out = null;
-	rows.forEach((r, i) => {
-		const f = newest.get(r.title);
-		if (!f || r.flight?.id) return;
-		const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
-		const row = {
-			...r.flight,
-			id: f.id,
-			plan_name: f.plan_name,
-			cursor: f.cursor,
-			total: f.steps.length,
-			state: f.state,
-			step: step ? {
-				id: step.id,
-				kind: step.kind,
-				title: step.title,
-				state: f.step_states?.[step.id]?.state || "pending",
-				actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot")
-			} : null
-		};
-		(out ??= rows.slice())[i] = {
-			...r,
-			flight: row
-		};
-	});
-	return out ?? rows;
-}
-//#endregion
 //#region src/lib/stopEditing.ts
 function insertGaps(boxes, insertFrom, vertical) {
 	const main = boxes.filter((b) => b.node.row === "main");
@@ -91321,29 +91549,6 @@ function useAgentMenu() {
 			})]
 		}), document.body)
 	};
-}
-//#endregion
-//#region src/lib/skyNodePos.ts
-var KEY = "mf_sky_node_pos";
-function read() {
-	try {
-		const raw = localStorage.getItem(KEY);
-		const v = raw ? JSON.parse(raw) : {};
-		return v && typeof v === "object" ? v : {};
-	} catch {
-		return {};
-	}
-}
-function loadNodePos(chain) {
-	return { ...read()[chain] || {} };
-}
-function saveNodePos(chain, spots) {
-	try {
-		const all = read();
-		if (Object.keys(spots).length) all[chain] = spots;
-		else delete all[chain];
-		localStorage.setItem(KEY, JSON.stringify(all));
-	} catch {}
 }
 //#endregion
 //#region src/lib/groundedLines.ts
@@ -127098,6 +127303,7 @@ var AFTER_COMMIT = [
 	"merge"
 ];
 var lastCommitMsg = /* @__PURE__ */ new Map();
+onSessionRenamed((from, to) => renameMapKey(lastCommitMsg, from, to));
 function CommitDialog() {
 	const open = useUi((s) => s.openDialog === "commit");
 	const target = useUi((s) => s.dialogTarget);
@@ -129056,7 +129262,6 @@ function RenameDialog() {
 	const open = useUi((s) => s.openDialog === "rename");
 	const target = useUi((s) => s.dialogTarget);
 	const closeDialog = useUi((s) => s.closeDialog);
-	const setAlias = useUi((s) => s.setAlias);
 	const [value, setValue] = (0, import_react.useState)("");
 	const [shown, setShown] = (0, import_react.useState)("");
 	const inputRef = (0, import_react.useRef)(null);
@@ -129080,9 +129285,8 @@ function RenameDialog() {
 			closeDialog();
 			return;
 		}
-		setAlias(target, next);
 		closeDialog();
-		toast(`Renamed to “${next}”`);
+		renameSession(target, next);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "rename-dialog",
@@ -138158,7 +138362,6 @@ function SkyLine(p) {
 		if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
 		else gc.onSelect?.(n);
 	};
-	const setAlias = useUi((s) => s.setAlias);
 	const [naming, setNaming] = (0, import_react.useState)(null);
 	const named = (0, import_react.useRef)(false);
 	const startRename = () => {
@@ -138176,8 +138379,7 @@ function SkyLine(p) {
 			toast("Another session is already named “" + next + "”");
 			return;
 		}
-		setAlias(p.title, next === p.title ? "" : next);
-		toast("Renamed to “" + next + "”");
+		renameSession(p.title, next);
 	};
 	const onBarDown = (e) => {
 		if (e.button !== 0) return;
@@ -141040,6 +141242,17 @@ function SkyView() {
 	const [layout, setLayout] = (0, import_react.useState)(() => loadSkyLayout());
 	const [measured, setMeasured] = (0, import_react.useState)({});
 	const [autoPos, setAutoPos] = (0, import_react.useState)({});
+	(0, import_react.useEffect)(() => onSessionRenamed((from, to) => {
+		setLayout((l) => renameSkyLine(l, from, to));
+		setAutoPos((a) => {
+			if (!(from in a)) return a;
+			const { [from]: at, ...rest } = a;
+			return to in rest ? rest : {
+				...rest,
+				[to]: at
+			};
+		});
+	}), []);
 	const [tidying, setTidying] = (0, import_react.useState)(false);
 	const [newOver, setNewOver] = (0, import_react.useState)(false);
 	const [drag, setDrag] = (0, import_react.useState)(null);

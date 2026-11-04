@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A rename renames the session.** There is no hidden second name any more:
+  renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
+  `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,
+  messages, flights, fences and every other place that names it follow at
+  once, and a running agent keeps working through it. The worktree folder and
+  branch keep their names. Existing renames become real titles on the next
+  start (a name that is taken or not valid as a title stays a label).
 - **After a crash, sessions stay offline until you press Start.** A session
   whose agent died (the server restarted, the OOM killer took it, it crashed)
   is held offline: no pane, sent prompt, queue, wake or sweep starts it, so a

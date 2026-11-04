@@ -748,6 +748,21 @@ export function saveSkyLayout(all: Readonly<SkyLayoutMap>, store: Store | null =
   return next;
 }
 
+/** A session was renamed (lib/renameSession): its line's layout — keyed by
+ * the session's title — moves to the new title, where it was in the map. The
+ * same map back (identity) when there is nothing under `from`, so it is
+ * idempotent and a setState with it re-renders nothing. Pure; the caller
+ * saves. */
+export function renameSkyLine(all: Readonly<SkyLayoutMap>, from: string, to: string): SkyLayoutMap {
+  if (!from || !to || from === to || !(from in all)) return all as SkyLayoutMap;
+  const next: SkyLayoutMap = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (k === to) continue;
+    next[k === from ? to : k] = v;
+  }
+  return next;
+}
+
 /** Change one line (a drop pins it, the size control, the box opening, a new
  * session made where its card was); returns the new map, remembered. The
  * line moves to the end, so the cap drops the least recently touched. */

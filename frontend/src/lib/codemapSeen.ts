@@ -64,6 +64,23 @@ export function markCodemapSeen(title: string, ts: number): void {
   listeners.forEach((l) => l());
 }
 
+/** The session `from` was renamed `to` (lib/renameSession): its seen-at
+ * moves with it. Idempotent — nothing under `from` is nothing to move. */
+export function renameCodemapSeen(from: string, to: string): void {
+  const cur = load();
+  if (!from || !to || from === to || !(from in cur)) return;
+  const next: Record<string, number> = { ...cur };
+  next[to] = Math.max(Number(next[from]) || 0, Number(next[to]) || 0);
+  delete next[from];
+  cache = next;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next));
+  } catch {
+    /* storage unavailable — in-memory for this page */
+  }
+  listeners.forEach((l) => l());
+}
+
 export function subscribeCodemapSeen(cb: () => void): () => void {
   listeners.add(cb);
   return () => listeners.delete(cb);

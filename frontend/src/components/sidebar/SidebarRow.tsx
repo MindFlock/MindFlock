@@ -44,6 +44,7 @@ import {
 } from "../../lib/sessionActions";
 import { toast } from "../../lib/toast";
 import { nameTakenBy } from "../../lib/windowName";
+import { renameSession } from "../../lib/renameSession";
 import { peekTerm, subscribeTermStates } from "../../lib/terminals";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
 import { zoneChipFocus } from "../../lib/mapEntry";
@@ -247,7 +248,6 @@ export const SidebarRow = memo(function SidebarRow({
   // a renamed parent or worker until the next poll.
   const aliases = useUi((s) => s.aliases);
   const alias = aliases[inst.title];
-  const setAlias = useUi((s) => s.setAlias);
   const picking = useUi((s) => s.bulkMode);
   const picked = useUi((s) => s.bulkSelected.has(inst.title));
 
@@ -505,9 +505,9 @@ export const SidebarRow = memo(function SidebarRow({
       toast(`Another session is already named “${next}”`);
       return;
     }
-    // Typed back to what the row shows by itself: no rename left to keep.
-    setAlias(title, next === label.text ? "" : next);
-    toast(`Renamed to “${next}”`);
+    // The session itself is renamed (its title, on the server); typed back
+    // to what the row shows by itself, an old rename (alias) is just dropped.
+    void renameSession(title, next, { plain: label.text });
   };
 
   const rowCls =

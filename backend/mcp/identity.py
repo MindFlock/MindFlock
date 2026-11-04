@@ -7,6 +7,8 @@ Resolution order (first hit wins):
    servers down to an allow-list). Must name a live local row — and when the
    tmux pane unambiguously belongs to a DIFFERENT live session, resolution
    fails closed (a stale baked title must never borrow a namesake's identity).
+   A session RENAMED while this server ran (core.rename) lists the old title
+   in its row's ``renamed_from``: the baked title then resolves to it.
 2. Inside tmux (``TMUX`` and ``TMUX_PANE`` set — never a bare lookup, which
    answers for the FOCUSED window): ``tmux display-message -p -t $TMUX_PANE
    '#{session_name}'`` matched EXACTLY against the rows' ``tmux_name``. The
@@ -108,8 +110,14 @@ class Identity:
         self.reason = ""
         want = self.env_title
         if want:
+            renamed = self._renamed_to(local, want)
             if want in titles:
                 other = self._pane_owner(local, want)
+                if other and other == renamed:
+                    # Renamed, and a NEW session took the old name since: we
+                    # run in the renamed one's pane, so we are it.
+                    self._title = other
+                    return other
                 if other:
                     # The baked title names a live session, but we run in
                     # ANOTHER live session's pane (a stale launcher, a
@@ -122,6 +130,19 @@ class Identity:
                     return None
                 self._title = want
                 return want
+            if renamed:
+                # The session was renamed while this server ran (core.rename):
+                # the baked title is one of the names it used to have. Same
+                # namesake guard as above, against the renamed row.
+                other = self._pane_owner(local, renamed)
+                if other:
+                    self.reason = (
+                        "MINDFLOCK_SESSION_TITLE=%r (renamed to %r) but this is "
+                        "the terminal of session %r" % (want, renamed, other)
+                    )
+                    return None
+                self._title = renamed
+                return renamed
             self.reason = "MINDFLOCK_SESSION_TITLE=%r is not a live session" % want
             return None
         name = self.tmux_session_name()
@@ -158,6 +179,15 @@ class Identity:
         if match is None and name.endswith(SHELL_SUFFIX):
             match = self._match(rows, name[: -len(SHELL_SUFFIX)])
         return match if match and match != want else ""
+
+    @staticmethod
+    def _renamed_to(rows: List[dict], old: str) -> str:
+        """The live session that used to be called ``old`` — its row lists
+        ``old`` in ``renamed_from`` — when exactly one does; "" otherwise."""
+        hits = [
+            str(r.get("title")) for r in rows if old in (r.get("renamed_from") or ())
+        ]
+        return hits[0] if len(hits) == 1 else ""
 
     @staticmethod
     def _match(rows: List[dict], tmux_name: str) -> Optional[str]:

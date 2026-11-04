@@ -3,7 +3,7 @@
 The console entry point (`backend/cli.py`) has two kinds of commands. **Host
 commands** run things locally: `serve`, `doctor`, `uninstall`, and `mcp`, the
 MindFlock MCP stdio server. **Session commands** (`new`, `ls`, `attach`, `close`,
-`delete`, `pause`, `resume`, `sleep`, `wake`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
+`delete`, `pause`, `resume`, `sleep`, `wake`, `rename`, `open`, `events`, `msg`, `inbox`; `rm` is an alias) are thin clients over a *running* server's
 HTTP API (`backend/client.py`). Session commands never spawn an engine of
 their own: the terminal and the web UI drive the same server, so a session
 created from either shows up in both.
@@ -522,6 +522,15 @@ conversation, and prints `woke <title>` (or `<title> was not asleep`).
 Opening the session anywhere, or sending it anything, wakes it too — and
 `attach` wakes a sleeper before landing in its tmux. `ls` shows a sleeper's
 ACTIVITY as `sleeping`. Titles resolve like `close`.
+
+### `mindflock rename OLD NEW`
+
+Renames a session (`POST /api/instances/{title}/rename`). The new name is the
+session's title from then on — in the sidebar, tmux, its MCP identity,
+messages and every command — and a running agent keeps working. The worktree
+folder and branch keep their names. Prints `renamed OLD -> NEW`; a name
+another session has, or one a title cannot be, is an error (exit 1). `OLD`
+resolves like `close`.
 
 ### `mindflock open TITLE`
 
