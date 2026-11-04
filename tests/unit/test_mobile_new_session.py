@@ -47,6 +47,13 @@ def _css() -> str:
     return client.get("/mobile.css").text
 
 
+def _start_fn(js: str) -> str:
+    """The body of mobile.js's ``startSession``. It takes ``startAnyway``: the
+    memory confirm's "Start anyway" calls it again with ``true``."""
+    body = js.split("  function startSession(startAnyway) {")[1]
+    return body.split("\n  function ")[0]
+
+
 # --------------------------------------------------------------------------- #
 # The entry points
 # --------------------------------------------------------------------------- #
@@ -266,12 +273,15 @@ def test_mobile_start_is_guarded_by_the_confirm_tick():
     js = _js()
     assert "function startBlockReason(" in js
     assert "if (!p.folder_exists && !newConfirmEl.checked)" in js
-    start_fn = js.split("  function startSession() {")[1].split("\n  function ")[0]
+    start_fn = _start_fn(js)
     # The guard runs FIRST and returns — the POST is downstream of it, so the
     # gate cannot be bypassed by any path through this function.
     assert "var blocked = startBlockReason(newPlan);" in start_fn
     assert "if (blocked) { newError(blocked); return; }" in start_fn
     assert start_fn.index("startBlockReason(") < start_fn.index('"/api/instances"')
+    # The memory confirm's Start anyway is a second startSession call, so it
+    # passes the same guard rather than POSTing around it.
+    assert "memoryConfirm(err, function () { startSession(true); })" in start_fn
     # And there is exactly one place that creates a session.
     assert js.count('fetch(devicePath(p.device, "/api/instances"), {') == 1
     assert 'fetch("/api/instances", {' not in js
@@ -330,7 +340,7 @@ def test_mobile_confirm_gate_is_visually_a_question_not_prose():
 # --------------------------------------------------------------------------- #
 def test_mobile_create_sends_five_keys_and_no_more():
     js = _js()
-    start_fn = js.split("  function startSession() {")[1].split("\n  function ")[0]
+    start_fn = _start_fn(js)
     for key in (
         "title: p.title,",
         "repo_path: p.repo_path,",
@@ -339,6 +349,9 @@ def test_mobile_create_sends_five_keys_and_no_more():
         "init_repo: !!p.init_repo,",
     ):
         assert key in start_fn, key
+    # The one addition: start_anyway, sent only on the memory confirm's retry.
+    assert "}, startAnyway === true ? { start_anyway: true } : {}))," in start_fn
+    assert start_fn.count("start_anyway:") == 1
     # Every one of these inherits the user's configured default when the key is
     # absent, which is exactly why the phone doesn't ask about any of them.
     for key in (
@@ -369,7 +382,7 @@ def test_mobile_create_never_sends_a_bare_folder_name():
 
 def test_mobile_create_keeps_the_sheet_open_on_failure():
     js = _js()
-    start_fn = js.split("  function startSession() {")[1].split("\n  function ")[0]
+    start_fn = _start_fn(js)
     # A 409 on a duplicate name is fixed by editing the name on screen, and
     # #status lives behind this sheet where nobody could read it.
     # rsplit: the inner ``r.json().catch(…)`` is the response-parsing idiom every
@@ -377,7 +390,9 @@ def test_mobile_create_keeps_the_sheet_open_on_failure():
     fail = start_fn.rsplit(".catch(", 1)[1]
     assert "closeNewSheet();" not in fail
     assert "newError(" in fail
-    assert 'if (!r.ok) throw new Error((j && j.error) || "create failed (' in start_fn
+    # apiError: an Error carrying the status + body, so the memory confirm can
+    # read a 409 ``memory_confirm`` off it.
+    assert 'if (!r.ok) throw apiError((j && j.error) || "create failed (' in start_fn
 
 
 def test_mobile_create_selects_the_new_session_when_it_lands():
@@ -519,7 +534,7 @@ def test_mobile_create_is_sequence_guarded_in_both_branches():
     js = _js()
     close_fn = js.split("  function closeNewSheet() {")[1].split("\n  }\n")[0]
     assert "startSeq += 1;" in close_fn
-    start_fn = js.split("  function startSession() {")[1].split("\n  function ")[0]
+    start_fn = _start_fn(js)
     assert "var seq = ++startSeq;" in start_fn
     # rsplit on the (err) signature: the inner `.catch(function () { return {}; })`
     # is the response-parsing idiom every fetch on this page uses.
