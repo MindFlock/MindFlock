@@ -24,6 +24,7 @@ import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { windowName } from "../../lib/windowName";
+import { haltedWhy } from "../../lib/sessionState";
 import { isFailing, planName } from "../dialogs/verify";
 import { useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
 import { openAsk } from "../../lib/ask";
@@ -183,7 +184,7 @@ function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly
       </button>
       <div className="sky-perch-step muted">
         {step ? (stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title) : ""}
-        {halted && flight.reason ? " — " + flight.reason : ""}
+        {halted && flight.reason ? " — " + haltedWhy(step?.title, flight.reason) : ""}
       </div>
       <YouStepActions flight={flight} />
     </div>

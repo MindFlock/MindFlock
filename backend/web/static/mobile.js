@@ -468,10 +468,14 @@
     sub.className = "sess-sub";
     var word = document.createElement("span");
     word.className = "sess-state tone-" + ss.tone;
-    word.textContent = ss.label;
+    // A halted route's word names its stop here ("Halted at CI checks"); the
+    // full reason is its tooltip.
+    word.textContent = ss.reason === "flight_halted" ? haltedWords(inst) : ss.label;
+    if (ss.reason === "flight_halted") word.title = ss.hint;
     sub.appendChild(word);
-    if (needsYouKind(inst) === "halted") {
-      // A halted route needs you whatever the agent does (lib/needsYou.ts).
+    if (needsYouKind(inst) === "halted" && ss.reason !== "flight_halted") {
+      // A halted route needs you whatever the agent does (lib/needsYou.ts) —
+      // said beside a state that outranks it (a failed setup).
       var halt = document.createElement("span");
       halt.className = "sess-state sess-halted tone-broken";
       halt.textContent = haltedWords(inst);
@@ -947,9 +951,10 @@
   //   state      tone       label
   //   starting   muted      Starting
   //   working    working    Working
-  //   needs_you  attention  Question · Perch: <stop> (a flight perched on you,
-  //                         docs/flights.md) · Pre-commit failed · Checks failing ·
-  //                         Setup failed
+  //   needs_you  attention  Question · Wait for me: <stop> (a flight perched on
+  //                         you, docs/flights.md) · Halted (a route halted until
+  //                         you Retry or Skip — in the broken tone, red) ·
+  //                         Pre-commit failed · Checks failing · Setup failed
   //   idle       neutral    Idle
   //   limit      waiting    Waiting on limit[, resumes HH:MM]
   //   offline    broken     Offline (actions: Restart)
@@ -969,6 +974,7 @@
   var REASON_LABEL = {
     question: "Question",
     flight_you: "Wait for me",
+    flight_halted: "Halted",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
@@ -1004,6 +1010,23 @@
     return !!fl && fl.state === "waiting_you" && !!fl.step && fl.step.actor === "you";
   }
 
+  // Why a route halted, without the stop's own name in front
+  // (sessionState.ts haltedWhy): "CI checks failed: 2 red" at "CI checks"
+  // says "Failed: 2 red".
+  function haltedWhy(stopTitle, reason) {
+    var r = String(reason || "").trim(), t = String(stopTitle || "").trim();
+    if (t && r.toLowerCase().indexOf(t.toLowerCase() + " ") === 0) {
+      var rest = r.slice(t.length).trim();
+      return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : r;
+    }
+    return r;
+  }
+  // The row's route is halted at a stop until you Retry or Skip it.
+  function flightHalted(inst) {
+    var fl = inst && inst.flight;
+    return !!fl && !!fl.id && fl.state === "halted";
+  }
+
   function sessionState(inst) {
     if (inst.workspace_missing)
       return st("offline", { label: "Missing", hint: "Workspace directory no longer exists — delete this session" });
@@ -1031,6 +1054,14 @@
       var you = youStepLabel(inst.flight.step.title);
       var flHint = you + " — route “" + (inst.flight.plan_name || "") + "” needs you; press Done";
       return st("needs_you", { reason: "flight_you", label: you, inBell: true, hint: flHint });
+    }
+    // A halted route: the same rank as Wait for me, in red (sessionState.ts).
+    if (flightHalted(inst)) {
+      var hfl = inst.flight, at = hfl.step ? String(hfl.step.title || "").trim() : "";
+      var why = haltedWhy(at, hfl.reason);
+      return st("needs_you", { reason: "flight_halted", label: REASON_LABEL.flight_halted, tone: "broken", inBell: true,
+                               hint: "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
+                                     " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip" });
     }
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {

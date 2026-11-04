@@ -18,6 +18,7 @@ import { refreshRuns } from "../../state/runs";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { effectiveActivity } from "../../lib/stage";
+import { haltedWhy } from "../../lib/sessionState";
 import { escalationText, laneOf } from "../../lib/agentMessages";
 import { errMsg } from "../../lib/format";
 import { errorPop } from "../../lib/errorPop";
@@ -523,15 +524,19 @@ function FlightHaltedRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; 
     }
   };
   const at = fl?.step?.title || "";
+  const chip = "Halted" + (at ? " at " + at : "");
+  // The chip names the stop; the line says what failed, without it again
+  // (and not at all when the reason is only the chip's own words).
+  const why = haltedWhy(at, w.reason);
   return (
     <div className="pr-open-item ob-item ob-flight_halted" data-outbox-row={w.title || w.key}>
       <RowMain title={w.title || w.text || ""} text={w.title ? w.text : ""} shown={w.title ? shown : (t) => t} row={row} />
       <div className="pr-open-meta">
         <span className="pr-open-chip bad" title={w.reason || undefined}>
-          {"Halted" + (at ? " at " + at : "")}
+          {chip}
         </span>
       </div>
-      {!!w.reason && <div className="ob-halt-reason">{w.reason}</div>}
+      {!!why && why !== chip && <div className="ob-halt-reason">{why}</div>}
       <div className="ik-item-start">
         <div className="ob-acts">
           {fl && (

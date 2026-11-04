@@ -17,6 +17,9 @@
  *                                              a reply that asks in plain words) ·
  *                                              You: <step> (a flight parked on a
  *                                              *you* step, docs/flights.md) ·
+ *                                              Halted (a route halted at a
+ *                                              stop until you Retry or Skip;
+ *                                              the broken tone — red) ·
  *                                              Pre-commit failed · Checks failing ·
  *                                              Setup failed
  *   idle       neutral    nobody     no        Idle (the ship-stage chip shows
@@ -97,7 +100,7 @@ export function effectiveActivity(inst: Partial<Instance>): string {
 // --- The state ----------------------------------------------------------------
 
 export type SessionStateKey = "starting" | "working" | "needs_you" | "idle" | "limit" | "offline";
-export type SessionReason = "question" | "flight_you" | "precommit_failed" | "checks_failing" | "setup_failed" | "stuck";
+export type SessionReason = "question" | "flight_you" | "flight_halted" | "precommit_failed" | "checks_failing" | "setup_failed" | "stuck";
 export type SessionTone = "muted" | "working" | "attention" | "neutral" | "waiting" | "broken";
 
 export interface SessionState {
@@ -140,6 +143,9 @@ export const REASON_LABEL: Record<SessionReason, string> = {
   question: "Question",
   // "Wait for me: <the stop's title>" when the row names it (flightYouLabel).
   flight_you: "Wait for me",
+  // A route halted at a stop until you Retry or Skip it; the reason (the
+  // stop and what failed) is the chip's tooltip, not its words.
+  flight_halted: "Halted",
   precommit_failed: "Pre-commit failed",
   checks_failing: "Checks failing",
   setup_failed: "Setup failed",
@@ -153,6 +159,8 @@ export const REASON_LABEL: Record<SessionReason, string> = {
 export const NOTIFY_RULE: Record<SessionReason | "offline", string> = {
   question: "needs_input",
   flight_you: "flight_needs_you",
+  // The server rings a halt as one of a route's finishes (addons/notify.py).
+  flight_halted: "flight_finished",
   precommit_failed: "precommit_failed",
   setup_failed: "setup_failed",
   checks_failing: "checks_failing",
@@ -210,6 +218,35 @@ function needsYou(reason: SessionReason, hint?: string): SessionState {
  * it (never "Perch: Perch: …" for a stop whose title already says so). */
 export function flightYouLabel(stepTitle: string | null | undefined): string {
   return perchLabel(stepTitle);
+}
+
+/** Why a route halted, without the stop's own name in front — the words
+ * the Sky's halted stop shows under its name (flights/SkyChain `stopWhy`):
+ * "CI checks failed: 2 of 14 red" at "CI checks" says "Failed: 2 of 14 red".
+ * The rail chip's tooltip and the Sky's Needs you card read it too. */
+export function haltedWhy(stopTitle: string | null | undefined, reason: string | null | undefined): string {
+  const r = String(reason || "").trim();
+  const t = String(stopTitle || "").trim();
+  if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
+    const rest = r.slice(t.length).trim();
+    return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
+  }
+  return r;
+}
+
+/** The tooltip of a halted route's chip: "Halted at CI checks — Failed: 2
+ * of 14 checks red", then which route waits and where to act. */
+export function haltedHint(fl: { plan_name?: string; reason?: string; step?: { title?: string } | null }): string {
+  const at = String(fl.step?.title || "").trim();
+  const why = haltedWhy(at, fl.reason);
+  return (
+    "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
+    "\nRoute “" + (fl.plan_name || "") + "” waits for Retry or Skip on its strip, the Sky or the bell"
+  );
+}
+
+function haltedState(fl: NonNullable<Instance["flight"]>): SessionState {
+  return { ...needsYou("flight_halted", haltedHint(fl as Parameters<typeof haltedHint>[0])), tone: "broken" };
 }
 
 /** The rail chip of a session whose flight is paused: a calm idle state,
@@ -279,6 +316,10 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       ),
       label: flightYouLabel(fl.step.title),
     };
+  // A route halted at a stop until you Retry or Skip it: the rank of a Wait
+  // for me stop (it waits on you whatever the agent does), in red — behind a
+  // question in plain words too, so the session keeps its answer row.
+  if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
   const bgHint = backgroundHint(inst);
   if (act === "working")
     return { state: "working", label: STATE_LABEL.working, tone: "working", inBell: false, restartable: false, hint: bgHint || "Agent is working" };
@@ -365,6 +406,8 @@ export function needsYouAction(
       return { act: "bell", aria: "Question — answer it in the bell" };
     case "flight_you":
       return { act: "bell", aria: ss.label + " — press Done in the bell" };
+    case "flight_halted":
+      return { act: "bell", aria: "Halted — Retry or Skip in the bell" };
     case "precommit_failed":
       return { act: "terminal", aria: "Pre-commit failed — open its Terminal" };
     case "setup_failed":
