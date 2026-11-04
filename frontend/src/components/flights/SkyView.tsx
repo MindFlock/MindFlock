@@ -2109,7 +2109,8 @@ export function SkyView() {
         focused: l.flight ? groundFocus === l.id : focusLine === l.id,
         // Round 21: a route that needs you — its edge chip says so when a
         // fit clips it, or it lies off screen.
-        needsYou: l.flight ? l.flight.state === "waiting_you" || l.flight.state === "halted" : !!row && (needsYou.includes(l.id) || linePerched(row)),
+        // Not in This session: the one route shown is the one you are on.
+        needsYou: mode === "one" ? false : l.flight ? l.flight.state === "waiting_you" || l.flight.state === "halted" : !!row && (needsYou.includes(l.id) || linePerched(row)),
       };
     }),
     ...objects.flatMap((o): MinimapRect[] => {
@@ -2855,7 +2856,7 @@ export function SkyView() {
         {drawer}
         {newBlock}
         <div className="sky-list">
-          <SkyEmpty blank={blank} className="fl-empty muted">{empty}</SkyEmpty>
+          <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="fl-empty muted">{empty}</SkyEmpty>
           {lines.map((l) => lineFor(l.id))}
         </div>
         {shelf}
@@ -3014,7 +3015,7 @@ export function SkyView() {
               </div>
             )}
             <SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={SKY_SHORTCUT_GROUPS} />
-            <SkyEmpty blank={blank} className="sky-empty muted">{empty}</SkyEmpty>
+            <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="sky-empty muted">{empty}</SkyEmpty>
           </div>
           {shelf}
         </div>
