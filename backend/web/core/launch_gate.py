@@ -63,6 +63,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from backend import memory_pressure
 
 __all__ = [
+    "WAITING_FOR_MEMORY",
     "WARMUP_SECONDS",
     "AUTO_SPACING_SECONDS",
     "QueueFull",
@@ -79,6 +80,10 @@ __all__ = [
     "status",
     "person_refusal",
 ]
+
+#: The ``error`` a relaunch path answers when its launch was queued here
+#: instead of started (not a failure: the queue starts it later).
+WAITING_FOR_MEMORY = "waiting for memory"
 
 _GiB = 1024**3
 _MiB = 1024**2
@@ -258,7 +263,12 @@ def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
         "projected_available": None,
         "projected_level": "unknown",
     }
-    if total and snap.get("level") in ("ok", "low", "critical"):
+    if snap.get("level") in ("ok", "low", "critical") and not warming_names:
+        # Nothing warming: the projection IS the reading (its hysteresis and
+        # settings included).
+        out["projected_available"] = snap.get("available")
+        out["projected_level"] = out["level"]
+    elif total and snap.get("level") in ("ok", "low", "critical"):
         projected = float(snap.get("available") or 0) - len(warming_names) * wb
         out["projected_available"] = int(max(0.0, projected))
         th = memory_pressure.thresholds()
@@ -499,6 +509,7 @@ def gate_auto(
     kind: str,
     source: str = "",
     parent: str = "",
+    creates: bool = False,
 ) -> Optional[dict]:
     """An automatic start's one call: None means go (the start is noted and
     the caller launches inline now), else the queued record. Someone already

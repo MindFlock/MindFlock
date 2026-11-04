@@ -40,10 +40,13 @@ a reboot every session not on screen sat Offline until someone clicked it.
 
 * **Memory** — reviving a dozen agents straight after the OOM killer took
   them down is how it happens again. Before each launch the sweep checks
-  :mod:`backend.memory_pressure`; while it reads low it waits (up to
-  :data:`MEMORY_WAIT_SECONDS`) for headroom, and if none comes the rest of
-  the sweep is skipped (``low memory``) — the Offline chips stay, for a
-  Restart when the machine has room.
+  :mod:`backend.memory_pressure`, counting every agent started in the last
+  :data:`WARMUP_SECONDS` (by any path: :mod:`backend.web.core.launch_gate`
+  reads tmux's own creation times) as still growing. While that reads low it
+  waits (up to :data:`MEMORY_WAIT_SECONDS`) for headroom. If none comes, the
+  rest of the sweep is handed to the launch gate's queue (``low memory``,
+  and the summary's ``waiting``): the rows say "Waiting for memory", and the
+  queue starts them one at a time as memory allows.
 * **Continue** — a relaunch resumes the conversation, but not the turn the
   agent was in the middle of: it comes back parked at its prompt. When the
   agent died mid-turn (:func:`died_mid_turn`) a short "continue where you
@@ -76,6 +79,7 @@ import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from backend import log, memory_pressure, providers, session
+from backend.web.core import launch_gate
 
 #: Launches in flight at once — each one starts an agent CLI, which is the
 #: expensive part (node boot, MCP attach, auth refresh).
@@ -306,6 +310,10 @@ def _revive_one(
     if reason is not None:
         return False, reason
     t0 = time.monotonic()
+    # Counted as warming from now (core.launch_gate), and no longer waiting
+    # in its queue: this is its start.
+    launch_gate.cancel(title)
+    launch_gate.note_start(title)
     _name, err, continued = relaunch(inst, title, srv, release=release_held)
     if err is not None:
         _info("revive %s: not started (%s)", title, err)
@@ -515,8 +523,37 @@ async def sweep(
         started_at: List[float] = []
 
         def _warming() -> int:
+            # This sweep's own starts, or every agent the launch gate sees
+            # warming (other paths, other processes), whichever is more.
             now = time.monotonic()
-            return sum(1 for t in started_at if now - t < WARMUP_SECONDS)
+            mine = sum(1 for t in started_at if now - t < WARMUP_SECONDS)
+            try:
+                seen = int(launch_gate.assess().get("warming") or 0)
+            except Exception:  # noqa: BLE001
+                seen = 0
+            return max(mine, seen)
+
+        waiting: List[str] = []
+
+        def _queue_rest(title: str) -> None:
+            # Out of memory for now: the launch gate's queue starts it later
+            # (the row says "Waiting for memory"). A full queue leaves it
+            # Offline/held, as before.
+            def _later() -> Optional[str]:
+                ok, why = _revive_one(srv, title, include_quit, release_held)
+                return None if ok else (why or "failed")
+
+            try:
+                launch_gate.enqueue(
+                    title,
+                    _later,
+                    kind="revive",
+                    source=trigger,
+                    reason=memory_pressure.describe() or "waiting for memory",
+                )
+                waiting.append(title)
+            except launch_gate.QueueFull:
+                pass
 
         queue: "asyncio.Queue[str]" = asyncio.Queue()
         for t in todo:
@@ -540,6 +577,7 @@ async def sweep(
                         )
                     out_of_memory = True
                     skipped[title] = SKIP_MEMORY
+                    _queue_rest(title)
                     continue
                 started_at.append(time.monotonic())
                 try:
@@ -560,6 +598,9 @@ async def sweep(
         workers = max(1, min(int(concurrency), len(todo) or 1))
         await asyncio.gather(*(_worker() for _ in range(workers)))
         out = _summarize(revived, skipped, alive, continued)
+        if waiting:
+            out["waiting"] = waiting
+            out["summary"] += "; %d waiting for memory" % len(waiting)
         _info("revive sweep (%s): %s", trigger, out["summary"])
         return out
 
@@ -804,14 +845,22 @@ def auto_tick(
             waiting = len(_AUTO_PENDING)
         if _sweep_running():
             return None
+        # Memory, then the launch gate (core.launch_gate): agents still
+        # warming up, the live-agent cap, the spacing between automatic
+        # starts, and launches already waiting in its queue (they go first).
+        why = ""
         if memory_pressure.is_low():
+            why = memory_pressure.describe() or "memory is low"
+        elif launch_gate.items():
+            why = "other launches are waiting for memory"
+        else:
+            verdict = launch_gate.decide("auto", now=now)
+            if verdict["decision"] != "go":
+                why = verdict["reason"]
+        if why:
             if not _AUTO_RUN["held"]:
                 _AUTO_RUN["held"] = True
-                _info(
-                    "auto-revive: holding %d killed agent(s) — %s",
-                    waiting,
-                    memory_pressure.describe(),
-                )
+                _info("auto-revive: holding %d killed agent(s) — %s", waiting, why)
             return None
         _AUTO_RUN["held"] = False
         with _AUTO_LOCK:
@@ -872,6 +921,7 @@ def _auto_revive_one(srv, title: str, nth: int = 1) -> None:
             return
         t0 = time.monotonic()
         attempted = True
+        launch_gate.note_start(title, auto=True)
         _name, err, continued = relaunch(inst, title, srv)
         if err is not None:
             with _AUTO_LOCK:

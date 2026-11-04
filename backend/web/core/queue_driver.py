@@ -36,6 +36,8 @@ from backend.session import tmux
 from backend.web.core import agent_io as _agent_io
 from backend.web.core import agent_state as _agent_state
 from backend.web.core import events as _events
+from backend.web.core import held as _held
+from backend.web.core import launch_gate as _launch_gate
 from backend.web.core import mailbox as _mailbox
 from backend.web.core import ports as _ports
 from backend.web.core import prompt_queue as _prompt_queue
@@ -840,13 +842,26 @@ def _drain_one_queue(title: str) -> None:
         rec["idle_since"] = None
         if now - rec.get("rebooted_at", 0.0) < _QUEUE_REBOOT_COOLDOWN:
             return
-        if _sleep.is_sleeping(title):
-            # Asleep (core.sleep): the queued prompt is what wakes it.
-            _sleep.ensure_awake(inst, title, "a queued prompt")
-        name, err = srv._ensure_agent_session(inst, title)
-        if err is None:
-            rec["rebooted_at"] = now
-            rec["armed"] = True
+        if _launch_gate.waiting(title) is not None:
+            return  # already waiting for memory (core.launch_gate)
+        # Nobody asked for this launch, so it asks the launch gate first
+        # (memory, agents still warming up, the live cap). On wait it joins
+        # the gate's queue, and the queue relaunches it. A held session
+        # (core.held) is refused by _ensure_agent_session anyway, so it never
+        # takes a queue place.
+        if not _held.is_held(title):
+            try:
+                queued = _launch_gate.gate_auto(
+                    title,
+                    lambda: _queue_relaunch(title, rec),
+                    kind="queued prompt",
+                    source="prompt queue",
+                )
+            except _launch_gate.QueueFull:
+                return
+            if queued is not None:
+                return
+        _queue_relaunch(title, rec, inst)
         return
     # activity == "idle": the CLI's idle signal (Claude `agents --json` / Stop hook,
     # Codex Stop hook) flips the instant a turn ends and _agent_activity trusts it at
@@ -918,6 +933,25 @@ def _drain_one_queue(title: str) -> None:
             srv._emit_queue_changed(title)
         return
     _send_queued_item(title, name, nxt, rec, now)
+
+
+def _queue_relaunch(title: str, rec: dict, inst=None) -> Optional[str]:
+    """Wake / relaunch ``title``'s agent so its queue can drain → the error,
+    or None. Re-reads the session when called from the launch gate's queue
+    (it may have been closed meanwhile). Blocking."""
+    srv = _server()
+    if inst is None:
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None:
+            return "the session was closed"
+    if _sleep.is_sleeping(title):
+        # Asleep (core.sleep): the queued prompt is what wakes it.
+        _sleep.ensure_awake(inst, title, "a queued prompt")
+    _name, err = srv._ensure_agent_session(inst, title)
+    if err is None:
+        rec["rebooted_at"] = time.time()
+        rec["armed"] = True
+    return err
 
 
 # --- Usage-limit watch: sessions parked on the limit screen with no queue --- #
@@ -1215,7 +1249,9 @@ def _drain_one_mailbox(title: str) -> None:
         # exactly what should wake it. The wake opens the queue's boot grace,
         # so the line below holds the typing until the CLI is ready.
         rec["idle_since"] = None
-        _sleep.ensure_awake(inst, title, "a message arrived")
+        # auto: nobody asked, so it waits its turn in the launch gate when
+        # memory is short (core.launch_gate).
+        _sleep.ensure_awake(inst, title, "a message arrived", auto=True)
         return
     q = _QUEUE_STATE.get(title) or {}
     if now - q.get("rebooted_at", 0.0) < _QUEUE_BOOT_GRACE:

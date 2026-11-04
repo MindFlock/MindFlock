@@ -760,11 +760,19 @@ def sleep_now(inst, title: str, srv=None) -> Optional[str]:
     return put_to_sleep(srv, inst, title, REASON_MANUAL)
 
 
-def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[str]]:
+def ensure_awake(
+    inst, title: str, why: str, srv=None, *, auto: bool = False
+) -> Tuple[bool, Optional[str]]:
     """Wake ``title`` if it is asleep → ``(woke, error)``. Every path that
     types into a session calls this first (or relaunches through
     ``_ensure_agent_session``, which ends the sleep the same way). ``why`` is
     what the log line says woke it. Blocking — off the loop.
+
+    ``auto``: nobody asked for this wake (a queued prompt, a mailbox
+    delivery), so it goes through the launch gate (core.launch_gate). When
+    the gate says wait, the wake joins its queue instead (the row shows
+    "Waiting for memory") and the answer is ``(False,
+    launch_gate.WAITING_FOR_MEMORY)``. The queue wakes it when memory allows.
 
     A PAUSED session is never woken: Pause outranks a sleep (the pause route
     drops the record), so a leftover one is dropped here and the wake is
@@ -783,6 +791,22 @@ def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[s
         return False, PAUSED_REFUSED
     if srv is None:
         srv = _server()
+    if auto:
+        from backend.web.core import launch_gate as _gate
+
+        def _later() -> Optional[str]:
+            cur = srv.ENGINE.instances.get(title)
+            if cur is None:
+                return "the session was closed"
+            return ensure_awake(cur, title, why, srv)[1]
+
+        try:
+            queued = _gate.gate_auto(title, _later, kind="wake", source=why)
+        except _gate.QueueFull as err:
+            _info("wake %s: not started (%s)", title, err)
+            return False, str(err)
+        if queued is not None:
+            return False, _gate.WAITING_FOR_MEMORY
     _WAKE_WHY[title] = why
     _name, err = srv._ensure_agent_session(inst, title)
     if err is not None:
@@ -797,6 +821,50 @@ def ensure_awake(inst, title: str, why: str, srv=None) -> Tuple[bool, Optional[s
     except Exception:  # noqa: BLE001
         pass
     return True, None
+
+
+def sleep_idle_now(srv=None, limit: int = 8) -> dict:
+    """A person's "Put idle agents to sleep" (the memory confirm's second
+    choice): every session :func:`veto` allows with ``manual`` (every safety
+    rule, none of the timing ones), longest-idle first, at most ``limit`` →
+    ``{"slept": [titles], "freed_mb": n}``. Blocking — off the loop. Never
+    raises."""
+    if srv is None:
+        srv = _server()
+    slept: List[str] = []
+    freed = 0
+    try:
+        from backend.web.core import events as _events
+
+        now = time.time()
+        rows = [r for r in _events.sessions_snapshot() if isinstance(r, dict)]
+        by_title = {r.get("title"): r for r in rows if not r.get("device")}
+        with srv.ENGINE.lock:
+            items = list(srv.ENGINE.instances.items())
+        candidates: List[Tuple[float, str, object]] = []
+        for title, inst in items:
+            row = by_title.get(title)
+            if row is None:
+                continue
+            try:
+                why = veto(srv, inst, title, row, now, 0.0, rows=rows, manual=True)
+            except Exception:  # noqa: BLE001
+                continue
+            if why is None:
+                candidates.append(
+                    (float(row.get("activity_since") or now), title, inst)
+                )
+        candidates.sort(key=lambda c: c[0])
+        for since, title, inst in candidates[: max(0, int(limit))]:
+            try:
+                if put_to_sleep(srv, inst, title, REASON_MANUAL, now - since) is None:
+                    slept.append(title)
+                    freed += int((info(title) or {}).get("freed_mb") or 0)
+            except Exception as err:  # noqa: BLE001
+                _info("sleep %s: failed (%s)", title, err)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"slept": slept, "freed_mb": freed}
 
 
 # --------------------------------------------------------------------------- #

@@ -237,6 +237,18 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
         _memory_pressure._reset_for_tests()
     except Exception:  # noqa: BLE001 — import is best-effort here
         pass
+    # ...and the launch gate (core.launch_gate) counts the REAL tmux agents
+    # against its live cap: no agents, an empty queue, no spacing carried
+    # over from the test before. Its tests feed it their own.
+    monkeypatch.setenv("MINDFLOCK_AUTO_LAUNCH_SPACING", "0")
+    try:
+        from backend.web.core import launch_gate as _launch_gate
+
+        _launch_gate._reset_for_tests()
+        _launch_gate.set_probe(lambda: [])
+        monkeypatch.setattr(_launch_gate, "AUTO_DRAIN", False)
+    except Exception:  # noqa: BLE001 — import is best-effort here
+        pass
     # ``/answer`` remembers the dialog it just answered (a repeat within a
     # few seconds is refused): start every test with nothing answered.
     try:
