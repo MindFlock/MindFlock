@@ -39,7 +39,7 @@ the work, check the work, or ask a person**.
 | **Run** / **Run now** | start a route (or a template) now | Fly, Fly now, Fly these stops, Take off (as a button) |
 | **Starts:** By hand / Ticket / Schedule / … | what starts a saved route | Takes off… (as a dialog/menu name; "takes off" may stay as a verb in a sentence) |
 | **Stop the route** | cancel a running route | Stop the chain, Cancel flight |
-| **Halt** / **Halted** / **Halt here** | the route pauses at a stop and waits until you press Retry/Skip/Continue — a failed stop halts by default, and you can set a halt point on any stop ("Halt here") | Pause here, perch, recovery |
+| **Halt** / **Halted** / **Halt here** | the route pauses at a stop and waits for you — a failed stop halts by default (Retry, Skip or Let the agent fix it, on the stop), and you can set a halt point on any stop ("Halt here"; Carry on moves past it) | Pause here, perch, recovery |
 | **If it fails:** Halt · Let the agent fix it · Skip · Ask me | a stop's failure option | on_fail, recovery ladder |
 | **Wait for me** | the stop kind that waits for your OK | Perch, You (as the kind's name) |
 | **Needs you** | everything waiting on a person (the bell's word) | Perched on you, Waiting on you, Needs attention |
