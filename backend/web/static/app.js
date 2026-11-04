@@ -51296,7 +51296,7 @@ var RELEASES = [
 			},
 			{
 				title: "One name per session",
-				body: "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (sitecheck-bot-2)."
+				body: "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (api-fix → api-fix-2)."
 			},
 			{
 				title: "Quieter, quicker voice",
