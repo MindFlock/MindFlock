@@ -18,3 +18,20 @@ export function cardCamera(c: SkyCamera, r: { x: number; y: number; w: number; h
   const sy = h + 2 * CARD_PAD <= vh ? (vh - h) / 2 : CARD_PAD;
   return { z, x: sx - p.x * z, y: sy - p.y * z };
 }
+
+/** A phone's This session (round 21b): the zoom that fits a route `natural`
+ * px wide (at 100 %) to `avail` px — never closer than 100 %, never further
+ * than `floor` (the route fit's own floor, so stop names stay readable). */
+export function phoneRouteZoom(natural: number, avail: number, floor = 0.6): number {
+  if (!(natural > 0) || !(avail > 0) || natural <= avail) return 1;
+  return Math.max(floor, avail / natural);
+}
+
+/** Where a sideways scroller must sit so `[left, right]` (content px) is
+ * whole inside its `width`, `pad` to spare — the scroll it has when that is
+ * already so. A box wider than the window starts at its left edge. */
+export function scrollToShow(scroll: number, width: number, left: number, right: number, pad = 12): number {
+  if (left - pad >= scroll && right + pad <= scroll + width) return scroll;
+  if (right - left + 2 * pad > width || left - pad < scroll) return Math.max(0, left - pad);
+  return Math.max(0, right + pad - width);
+}

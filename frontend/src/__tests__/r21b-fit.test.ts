@@ -7,7 +7,7 @@ import { code, css, cssRule } from "./sourceText";
 
 import { boundsOf, fitCamera, firstFit, type Rect } from "../lib/skyLayout";
 import { OffscreenHints, edgeChips, type MinimapRect } from "../components/flights/Minimap";
-import { CARD_PAD, cardCamera } from "../lib/skyCamera";
+import { CARD_PAD, cardCamera, phoneRouteZoom, scrollToShow } from "../lib/skyCamera";
 
 const sky = code("components/flights/SkyView.tsx");
 
@@ -139,5 +139,45 @@ describe("finding 6 (brief 3): Enter zooms to at least 100 % centred on the open
     expect(sky).toContain("goToRef.current(cardCamera(camRef.current, { x: c.left - v.left, y: c.top - v.top, w: c.width, h: c.height }, v.width, v.height));");
     expect(sky).toMatch(/k === "Escape" && \(focusLine \|\| oneLine\) && layout\[focusLine \|\| oneLine\]\?\.open\) \{\s*handled\(\);\s*const id = focusLine \|\| oneLine;\s*onLayout\(id, \{ open: false \}\);\s*restoreAfterEnter\(id\);/);
     expect(sky).toMatch(/if \(mode === "one"\) autoFit\.current = true;\s*else goTo\(was\.cam\);/);
+  });
+});
+
+describe("finding 8 (brief 4): the phone — New session clear of the Stops tab, the needs-you stop whole", () => {
+  it("phoneRouteZoom fits a route to the width, 100 % at most, the route fit's floor at least", () => {
+    expect(phoneRouteZoom(300, 370)).toBe(1);
+    expect(phoneRouteZoom(500, 370)).toBeCloseTo(0.74, 6);
+    expect(phoneRouteZoom(794, 370)).toBe(0.6);
+    expect(phoneRouteZoom(794, 370, 0.4)).toBeCloseTo(370 / 794, 6);
+    expect(phoneRouteZoom(0, 370)).toBe(1);
+  });
+
+  it("scrollToShow leaves a whole stop alone, brings a cut one in with room to spare, and a too-wide one starts at its left", () => {
+    expect(scrollToShow(0, 370, 200, 293)).toBe(0);
+    // The judge's halted stop at 0.6: 286..379 in a 370 px scroller.
+    expect(scrollToShow(0, 370, 286, 379)).toBe(379 + 12 - 370);
+    expect(scrollToShow(300, 370, 100, 200)).toBe(88);
+    expect(scrollToShow(0, 370, 500, 1000)).toBe(488);
+  });
+
+  it("the narrow This session wraps each route in a sideways scroller whose inner zoom is the fit; the stop that needs you is found by its state", () => {
+    expect(sky).toContain('const phoneOne = narrow && mode === "one";');
+    expect(sky).toMatch(/<div className="sky-list" ref=\{phoneList\}>/);
+    expect(sky).toMatch(/<div key=\{l\.id\} className="sky-phone-fit" data-fit=\{l\.id\}>\s*<div className="sky-phone-fit-in" style=\{phoneFit\[l\.id\] && phoneFit\[l\.id\] !== 1 \? \{ zoom: phoneFit\[l\.id\] \} : undefined\}>/);
+    expect(sky).toContain("next[id] = phoneRouteZoom(inner.getBoundingClientRect().width / z0, outer.clientWidth, ROUTE_FIT_MIN);");
+    expect(sky).toContain('inner.querySelector(".sky-node-stop.st-perched, .sky-node-stop.st-halted, .sky-node-stop.st-failed, .sky-node-stop.st-waiting_you")');
+    expect(sky).toContain("outer.scrollLeft = scrollToShow(outer.scrollLeft, outer.clientWidth, left, left + r.width);");
+  });
+
+  it("Sky.css: the list keeps clear of the tab, the empty card keeps a shelf's height below it, the route scrolls on its own", () => {
+    const text = css("components/flights/Sky.css");
+    const shelf = css("components/flights/StopShelf.css");
+    // The tab rides 25 px over the shelf's top edge.
+    expect(cssRule(shelf, ".sky-shelf-tabs")).toMatch(/top:\s*-25px/);
+    expect(cssRule(text, ".sky-narrow .sky-list")).toMatch(/padding-bottom:\s*16px/);
+    const room = cssRule(text, ".sky-narrow .sky-list > .sky-empty-plain");
+    expect(room).toMatch(/margin-bottom:\s*52px/);
+    expect(cssRule(text, ".sky-narrow .sky-list > .sky-empty-card")).toBe(room);
+    expect(cssRule(text, ".sky-phone-fit")).toMatch(/overflow-x:\s*auto/);
+    expect(cssRule(text, ".sky-phone-fit-in")).toMatch(/width:\s*max-content/);
   });
 });

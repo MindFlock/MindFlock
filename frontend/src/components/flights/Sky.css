@@ -797,6 +797,33 @@ details.fl-group-waiting > summary {
   gap: 12px;
 }
 
+/* Round 21b: the shelf's Stops tab rides 25 px above the shelf, over the
+   list's foot — the list keeps clear of it, and the empty card (its New
+   session) keeps a whole shelf's height of room below it. */
+.sky-narrow .sky-list {
+  padding-bottom: 16px;
+}
+
+.sky-narrow .sky-list > .sky-empty-plain,
+.sky-narrow .sky-list > .sky-empty-card {
+  margin-bottom: 52px;
+}
+
+/* A phone's This session: the route fits the width (SkyView sets the inner
+   zoom, 60–100 %), and a route still wider scrolls sideways on its own — to
+   the stop that needs you — instead of running off the page. */
+.sky-phone-fit {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.sky-phone-fit-in {
+  width: max-content;
+  min-width: 100%;
+}
+
 .sky-line.sky-line-flow {
   position: relative;
   width: auto;

@@ -209,6 +209,7 @@ import {
   skyLineTitles,
   pickThisSession,
   fitRoute,
+  ROUTE_FIT_MIN,
   screenBoxCovers,
   linePerched,
   spotNear,
@@ -277,7 +278,7 @@ import { QuickAdd } from "./QuickAdd";
 import { PlacePicker } from "./PlacePicker";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
-import { cardCamera } from "../../lib/skyCamera";
+import { cardCamera, phoneRouteZoom, scrollToShow } from "../../lib/skyCamera";
 import { useAutoTour, useTourOnFirstSight } from "../onboarding/useAutoTour";
 import { behaviorsOnARoute } from "../../lib/behaviors";
 import { SkyEmpty } from "../onboarding/SkyEmpty";
@@ -2667,6 +2668,41 @@ export function SkyView() {
     />
   );
 
+  // A phone's This session (round 21b): each route fits the width (no
+  // closer than 100 %, no further than the route fit's floor), and the stop
+  // that needs you — a perched or halted stop, else an asking agent tile —
+  // is scrolled whole into view once per stop (the owner's own scroll stays).
+  const phoneList = useRef<HTMLDivElement>(null);
+  const [phoneFit, setPhoneFit] = useState<Record<string, number>>({});
+  const phoneFitRef = useRef(phoneFit);
+  phoneFitRef.current = phoneFit;
+  const phoneShown = useRef<Record<string, string>>({});
+  const phoneOne = narrow && mode === "one";
+  useLayoutEffect(() => {
+    const list = phoneList.current;
+    if (!phoneOne || !list) return;
+    const next: Record<string, number> = {};
+    list.querySelectorAll<HTMLElement>(".sky-phone-fit[data-fit]").forEach((outer) => {
+      const id = outer.dataset.fit || "";
+      const inner = outer.firstElementChild as HTMLElement | null;
+      if (!id || !inner) return;
+      const z0 = phoneFitRef.current[id] || 1;
+      next[id] = phoneRouteZoom(inner.getBoundingClientRect().width / z0, outer.clientWidth, ROUTE_FIT_MIN);
+      if (Math.abs(next[id] - z0) > 0.005) return; // the zoom moves first; the scroll follows on the next pass
+      const stop =
+        inner.querySelector(".sky-node-stop.st-perched, .sky-node-stop.st-halted, .sky-node-stop.st-failed, .sky-node-stop.st-waiting_you") ||
+        inner.querySelector(".sky-node.sky-head.tone-attention");
+      const key = stop ? (stop.getAttribute("data-node") || stop.className) + "@" + next[id].toFixed(3) : "";
+      if (!stop || phoneShown.current[id] === key) return;
+      phoneShown.current[id] = key;
+      const o = outer.getBoundingClientRect();
+      const r = stop.getBoundingClientRect();
+      const left = r.left - o.left + outer.scrollLeft;
+      outer.scrollLeft = scrollToShow(outer.scrollLeft, outer.clientWidth, left, left + r.width);
+    });
+    const cur = phoneFitRef.current;
+    if (Object.keys(next).length !== Object.keys(cur).length || Object.entries(next).some(([k, z]) => Math.abs((cur[k] || 0) - z) > 0.005)) setPhoneFit(next);
+  });
   const lineFor = (id: string, at?: Pos) => {
     const f = isGroundedKey(id) ? lines.find((l) => l.id === id)?.flight : null;
     if (f)
@@ -2895,9 +2931,17 @@ export function SkyView() {
         {pick}
         {drawer}
         {newBlock}
-        <div className="sky-list">
+        <div className="sky-list" ref={phoneList}>
           <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="fl-empty muted">{empty}</SkyEmpty>
-          {lines.map((l) => lineFor(l.id))}
+          {phoneOne
+            ? lines.map((l) => (
+                <div key={l.id} className="sky-phone-fit" data-fit={l.id}>
+                  <div className="sky-phone-fit-in" style={phoneFit[l.id] && phoneFit[l.id] !== 1 ? { zoom: phoneFit[l.id] } : undefined}>
+                    {lineFor(l.id)}
+                  </div>
+                </div>
+              ))
+            : lines.map((l) => lineFor(l.id))}
         </div>
         {shelf}
       </main>
