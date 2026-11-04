@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Sky opens on This session.** The view picker (This session · All ·
+  Mine · Needs you) defaults to This session and remembers your pick. With
+  nothing selected it shows the route that needs you, else a working one, and
+  every switch fits the route to the window.
+- **Switching session never opens its terminal.** A pick from the rail, Alt+N
+  or the palette moves the Sky to the route; a click on its agent or Enter
+  opens the box (Enter zooms to a readable size, Esc goes back).
+- **A frame's colour is its state.** Neutral boxes; the border is amber for
+  Needs you, red for halted, faded when done. Wires and icons are neutral ink,
+  the session's own colour is a small dot, and no session colour is red or
+  amber any more. ▶ Run sits on the route's header bar.
+- **One Needs you list.** The bell, the Sky's Needs you panel, the top bar and
+  rail badges and the phone page count the same things: questions, Wait for me
+  stops and halted routes. A halted session's rail chip says **Halted**.
+- **Duplicate session names it `name-N`** with the lowest free number
+  (`sitecheck-bot` → `sitecheck-bot-2`), not `name-copy`.
+- **A new route waits for ▶ Run** instead of starting on your next prompt,
+  including a saved route dropped or wired onto a session.
+
 ### Fixed
+
+- **A halted stop says why and what to do.** It keeps its name, shows the
+  reason on one line, and offers Retry · Skip · **Let the agent fix it** on any
+  kind of stop (the menu too); a click opens its details. A halt point you set
+  says *Your halt point* with **Carry on** · Skip.
+- **Fit all fits all.** `0`, Shift+1 and the Fit button are one fit, notes
+  included; the "Needs you" edge chips sit in a gutter at the edge instead of
+  on routes; the minimap folds out of a route's way.
+- **The bird stays on its stop** after zooming out or Tidy.
+- **What's new isn't covered by a question** that arrives at the same time,
+  and its 0.11.0 notes match the screen (no "Continue", workers inside their
+  lead's route).
+- Stop subtitles no longer show internal ids; the dark-theme status chip under
+  the agent is readable; an empty answer strip draws nothing; "Use this route
+  for every ticket from undefined" names its source; the empty Sky has a New
+  session button (and it isn't under the phone's Stops tab).
 
 - **A burst of PR reviews no longer runs the machine out of memory.** PR
   reviews and GitHub issues now count toward Intake's *max sessions* cap and
