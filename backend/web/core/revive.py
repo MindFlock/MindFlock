@@ -23,8 +23,20 @@ a reboot every session not on screen sat Offline until someone clicked it.
   Working/Idle by itself.
 * **When** — :func:`run_on_start` (registered by the server lifespan) waits
   out the boot quiet window first, so the notification settle logic isn't
-  flooded, and runs only while ``general.revive_on_start`` is on (default).
-  ``POST /api/server/revive-all`` runs the same sweep on demand.
+  flooded, and runs only while ``general.revive_on_start`` is on (opt-in;
+  unset = OFF). ``POST /api/server/revive-all`` runs the same sweep on demand
+  — a person's Start all, which releases the holds below.
+
+* **Held offline** (``general.revive_on_start`` off, the default) — a crash
+  must not refill the memory that just ran out, so nothing relaunches an agent
+  that died: :func:`hold_on_boot` (run by the lifespan BEFORE the server
+  answers anything) holds every session the sweep would have revived
+  (:mod:`backend.web.core.held`), and :func:`observe` holds an agent that dies
+  uncleanly while the server runs. A held session is refused by
+  ``_ensure_agent_session`` and skipped by every sweep (``held offline``)
+  until a person's Start (``/revive``, ``/revive-all``) releases it.
+  :func:`announce_held` says once, after the boot quiet window, how many
+  stayed offline.
 
 * **Memory** — reviving a dozen agents straight after the OOM killer took
   them down is how it happens again. Before each launch the sweep checks
@@ -48,8 +60,9 @@ a reboot every session not on screen sat Offline until someone clicked it.
   ok again — one at a time, :data:`GAP_SECONDS` apart, at most
   :data:`AUTO_MAX_PER_WINDOW` times per session per hour; after that it stays
   Offline with the reason on its row. The same skip rules apply, and
-  ``general.revive_on_start`` switches it too. Its trip through Offline is not
-  announced (:func:`holds_offline`), so a revived agent rings no bell.
+  ``general.revive_on_start`` switches it too (off: the agent is HELD
+  instead). Its trip through Offline is not announced (:func:`holds_offline`),
+  so a revived agent rings no bell.
 
 One log line per revive, one summary line per sweep.
 """
@@ -95,6 +108,8 @@ SKIP_MEMORY = "low memory"
 #: Put to sleep on purpose (core.sleep): it wakes when someone needs it, not
 #: because the server restarted.
 SKIP_SLEEPING = "sleeping"
+#: Held offline after a crash (core.held): only a person's Start brings it back.
+SKIP_HELD = "held offline"
 #: :func:`_revive_one`'s second item on a revive that queued a continue.
 CONTINUED = "continued"
 
@@ -127,13 +142,14 @@ def _info(fmt: str, *args) -> None:
 
 
 def enabled() -> bool:
-    """``general.revive_on_start`` (unset = on). Never raises."""
+    """``general.revive_on_start`` (unset = OFF: sessions whose agent died are
+    held offline instead). Never raises."""
     try:
         from backend.config import settings as _settings
 
-        return _settings.load_settings().general.revive_on_start is not False
+        return _settings.load_settings().general.revive_on_start is True
     except Exception:  # noqa: BLE001 — an unreadable store keeps the default
-        return True
+        return False
 
 
 def _last_seen(inst) -> float:
@@ -159,12 +175,23 @@ def _limited(srv, inst, title: str, now: float) -> bool:
 
 
 def skip_reason(
-    srv, inst, title: str, now: float, include_quit: bool = False
+    srv,
+    inst,
+    title: str,
+    now: float,
+    include_quit: bool = False,
+    *,
+    include_held: bool = False,
+    check_limit: bool = True,
 ) -> Optional[str]:
     """Why ``inst`` must NOT be relaunched (``None`` = revive it). Cheap
     checks first; the usage meter (possibly a network read) last.
     ``include_quit``: an agent the user quit counts too (the rail's "Restart
-    all", which restarts every row whose chip offers Restart)."""
+    all", which restarts every row whose chip offers Restart).
+    ``include_held``: a session held offline counts too (a person's Start
+    all — the caller releases the hold right before the launch).
+    ``check_limit``: False skips the usage-limit check (:func:`hold_on_boot`
+    holds a limited session like any other)."""
     status = getattr(inst, "Status", None)
     if status == session.Paused:
         return SKIP_PAUSED
@@ -189,6 +216,14 @@ def skip_reason(
             return SKIP_SLEEPING
     except Exception:  # noqa: BLE001
         pass
+    if not include_held:
+        try:
+            from backend.web.core import held as _held
+
+            if _held.is_held(title):
+                return SKIP_HELD
+        except Exception:  # noqa: BLE001
+            pass
     # An agent the user quit BEFORE the restart left an exit marker with a
     # natural code: it had already ended, so a fresh process is not a revive.
     try:
@@ -199,7 +234,7 @@ def skip_reason(
             return SKIP_QUIT
     except Exception:  # noqa: BLE001 — no marker reads as "revive it"
         pass
-    if _limited(srv, inst, title, now):
+    if check_limit and _limited(srv, inst, title, now):
         return SKIP_LIMIT
     return None
 
@@ -215,13 +250,17 @@ def _alive(srv, title: str) -> bool:
 
 
 def plan(
-    srv, now: Optional[float] = None, only: Optional[List[str]] = None
+    srv,
+    now: Optional[float] = None,
+    only: Optional[List[str]] = None,
+    include_held: bool = False,
 ) -> Tuple[List[str], Dict[str, str], int]:
     """``(to_revive, skipped, alive)``: the titles to relaunch, oldest-first by
     last activity; ``{title: reason}`` for the ones left alone; and how many
     already have a live agent. ``only``: just these titles, and an agent the
     user quit counts too (the rail's "Restart all" names the rows whose chip
-    offers Restart). Blocking (tmux + meter reads) — run it off the event
+    offers Restart). ``include_held``: sessions held offline count too (a
+    person's Start all). Blocking (tmux + meter reads) — run it off the event
     loop."""
     if now is None:
         now = time.time()
@@ -235,7 +274,9 @@ def plan(
     skipped: Dict[str, str] = {}
     alive = 0
     for title, inst in items:
-        reason = skip_reason(srv, inst, title, now, include_quit)
+        reason = skip_reason(
+            srv, inst, title, now, include_quit, include_held=include_held
+        )
         if reason is not None:
             skipped[title] = reason
             continue
@@ -247,20 +288,25 @@ def plan(
     return [t for _, t in todo], skipped, alive
 
 
-def _revive_one(srv, title: str, include_quit: bool = False) -> Tuple[bool, str]:
+def _revive_one(
+    srv, title: str, include_quit: bool = False, release_held: bool = False
+) -> Tuple[bool, str]:
     """Relaunch ``title``'s agent through ``_ensure_agent_session`` (re-checking
     the skip rules first: minutes may have passed since the plan). Returns
     ``(revived, skip_reason_or_error)`` — on success the second item is
     :data:`CONTINUED` when the agent was told to carry on, else ``""``.
-    Blocking."""
+    ``release_held``: a person's Start all — a held session's hold is
+    released right before its launch. Blocking."""
     inst = srv.ENGINE.instances.get(title)
     if inst is None:
         return False, SKIP_GONE
-    reason = skip_reason(srv, inst, title, time.time(), include_quit)
+    reason = skip_reason(
+        srv, inst, title, time.time(), include_quit, include_held=release_held
+    )
     if reason is not None:
         return False, reason
     t0 = time.monotonic()
-    _name, err, continued = relaunch(inst, title, srv)
+    _name, err, continued = relaunch(inst, title, srv, release=release_held)
     if err is not None:
         _info("revive %s: not started (%s)", title, err)
         return False, err
@@ -343,16 +389,28 @@ def queue_continue(srv, title: str) -> bool:
     return True
 
 
-def relaunch(inst, title: str, srv=None) -> Tuple[str, Optional[str], bool]:
+def relaunch(
+    inst, title: str, srv=None, release: bool = False
+) -> Tuple[str, Optional[str], bool]:
     """``_ensure_agent_session`` plus the continue: ``(name, error, continued)``.
     Whether the agent died mid-turn is read BEFORE the launch (the launch
     starts a new incarnation, after which the old marker no longer counts).
-    The one path both the Restart chip and the sweep take. Blocking."""
+    The one path both the Restart chip and the sweep take. ``release``: a
+    person's explicit Start — a hold (core.held) is released first, and put
+    back when the launch fails, so a session that could not start stays
+    held rather than up for grabs. Blocking."""
     if srv is None:
         srv = _server()
+    from backend.web.core import held as _held
+
+    was_held = _held.info(title) if release else None
+    if was_held is not None:
+        _held.release(title)
     mid_turn = died_mid_turn(srv, inst, title)
     name, err = srv._ensure_agent_session(inst, title)
     if err is not None:
+        if was_held is not None:
+            _held.hold(title, was_held["reason"])
         return name, err, False
     continued = mid_turn and queue_continue(srv, title)
     return name, None, continued
@@ -405,17 +463,23 @@ async def sweep(
     trigger: str = "on demand",
     memory_wait: float = MEMORY_WAIT_SECONDS,
     only: Optional[List[str]] = None,
+    release_held: bool = False,
 ) -> dict:
     """Revive every eligible session (see the module docstring) and return
     ``{"revived": [...], "skipped": {title: reason}, "already_running": n,
     "continued": [...], "summary": "revived N, skipped M: reasons"}``.
-    ``only`` restricts the sweep to those titles (see :func:`plan`). One
-    sweep at a time: a second caller waits for the first, then runs its own
-    (cheap — whatever the first revived is alive by then)."""
+    ``only`` restricts the sweep to those titles (see :func:`plan`).
+    ``release_held``: a person's Start all — sessions held offline are
+    started too (each hold released right before its launch; one skipped for
+    low memory stays held). One sweep at a time: a second caller waits for
+    the first, then runs its own (cheap — whatever the first revived is alive
+    by then)."""
     if srv is None:
         srv = _server()
     async with _sweep_lock():
-        todo, skipped, alive = await asyncio.to_thread(plan, srv, None, only)
+        todo, skipped, alive = await asyncio.to_thread(
+            plan, srv, None, only, release_held
+        )
         include_quit = only is not None
         revived: List[str] = []
         continued: List[str] = []
@@ -445,7 +509,7 @@ async def sweep(
                     continue
                 try:
                     ok, why = await asyncio.to_thread(
-                        _revive_one, srv, title, include_quit
+                        _revive_one, srv, title, include_quit, release_held
                     )
                 except Exception as err:  # noqa: BLE001 — one bad session
                     ok, why = False, str(err)
@@ -551,12 +615,49 @@ def _should_run(inst) -> bool:
         return True
 
 
+#: Readings that mean the agent's CLI is up: a held session showing one was
+#: started by something outside MindFlock, so its hold is stale.
+_LIVE_READINGS = frozenset({"working", "idle", "clarify", "limit"})
+
+
+def hold_reason_after_death(srv, inst, title: str) -> Optional[str]:
+    """The :mod:`backend.web.core.held` reason for ``title``'s agent that just
+    died, or ``None`` when the death is no reason to hold it: a clean quit
+    (natural exit code), a sleep (stopped on purpose), a peer-shared session
+    (the peer service owns its launches), an agent that is somehow up again,
+    or no exit marker with no sign it died mid-turn (undecidable — the same
+    line :func:`killed_code` draws). Killed by SIGKILL → ``out of memory
+    (killed)``; any other unnatural exit → ``the agent crashed``. Blocking
+    (marker + tmux reads). Never raises."""
+    from backend.web.core import held as _held
+    from backend.web.core import sleep as _sleep
+
+    try:
+        if _sleep.is_sleeping(title) or (getattr(inst, "PeerShare", "") or ""):
+            return None
+        if _alive(srv, title):
+            return None
+        killed, code = killed_code(srv, inst, title)
+        if killed:
+            return _held.REASON_KILLED
+        if code is None:
+            return None
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        if provider.is_natural_exit(code):
+            return None
+        return _held.REASON_CRASH
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def observe(srv, title: str, inst, activity: str, now: Optional[float] = None):
     """Report one session's activity reading (the instances tick, per row,
-    BEFORE it emits state changes). A live reading marks the agent seen; the
-    first Offline after one is a death, and a death by SIGKILL
-    (:func:`killed_code`) queues the agent for :func:`auto_tick`. Blocking
-    only on a death (marker + tmux reads). Never raises."""
+    BEFORE it emits state changes). A live reading marks the agent seen (and
+    drops a stale hold); the first Offline after one is a death. With
+    ``general.revive_on_start`` off (the default) an unclean death HOLDS the
+    session offline (:func:`hold_reason_after_death`); with it on, a death by
+    SIGKILL (:func:`killed_code`) queues the agent for :func:`auto_tick`.
+    Blocking only on a death (marker + tmux reads). Never raises."""
     if now is None:
         now = time.time()
     try:
@@ -565,15 +666,35 @@ def observe(srv, title: str, inst, activity: str, now: Optional[float] = None):
                 _AUTO_LIVE.add(title)
                 _AUTO_PENDING.pop(title, None)
                 _AUTO_GAVE_UP.pop(title, None)
+            if activity in _LIVE_READINGS:
+                from backend.web.core import held as _held
+
+                if _held.release(title):
+                    _info("held %s: released (its agent is running again)", title)
             return
         with _AUTO_LOCK:
             if title not in _AUTO_LIVE:
                 return
             _AUTO_LIVE.discard(title)
-        if not _auto_on() or not _should_run(inst):
+        if not _should_run(inst):
+            return
+        if not enabled():
+            reason = hold_reason_after_death(srv, inst, title)
+            if reason is not None:
+                from backend.web.core import held as _held
+
+                if _held.hold(title, reason):
+                    _info(
+                        "held %s: offline since %s — it stays down until "
+                        "someone presses Start",
+                        title,
+                        reason,
+                    )
+            return
+        if not _auto_on():
             return
         killed, code = killed_code(srv, inst, title)
-        if not killed or not enabled():
+        if not killed:
             return
         with _AUTO_LOCK:
             _AUTO_PENDING.setdefault(title, (now, code))
@@ -760,6 +881,116 @@ def _auto_reset_for_tests() -> None:
         _AUTO_RUN.update({"busy": False, "last": 0.0, "held": False})
 
 
+def hold_on_boot(srv=None, now: Optional[float] = None) -> dict:
+    """The server-start half of "held offline" (:mod:`backend.web.core.held`),
+    run by the lifespan BEFORE the server answers anything (a pane attaching
+    a millisecond later must already be refused). With
+    ``general.revive_on_start`` off (the default) every session whose
+    persisted state says its agent was running — exactly the ones the
+    startup sweep would have revived, a usage-limited one included — and
+    whose agent tmux is gone is held: ``out of memory (killed)`` when its
+    exit marker says SIGKILL, else ``the server restarted``. Holds already on
+    disk stay; those of sessions no longer in the engine go. With the
+    setting on, every hold is dropped instead (old behaviour: the sweep
+    revives them). → ``{"held": [new titles], "total": n, "released": n}``.
+    Blocking (tmux reads) — run it off the event loop. Never raises."""
+    from backend.providers import launch_script
+    from backend.session import tmux as _tmux
+    from backend.web.core import held as _held
+
+    out: dict = {"held": [], "total": 0, "released": 0}
+    if srv is None:
+        srv = _server()
+    if now is None:
+        now = time.time()
+    try:
+        if enabled():
+            out["released"] = _held.release_all()
+            if out["released"]:
+                _info(
+                    "held: released %d (general.revive_on_start is on)",
+                    out["released"],
+                )
+            return out
+        with srv.ENGINE.lock:
+            items = list(srv.ENGINE.instances.items())
+        _held.prune([t for t, _ in items])
+        for title, inst in items:
+            try:
+                if _held.is_held(title) or not _should_run(inst):
+                    continue
+                if (
+                    skip_reason(
+                        srv, inst, title, now, include_held=True, check_limit=False
+                    )
+                    is not None
+                ):
+                    continue  # paused, peer, no workspace, asleep, quit…
+                if _alive(srv, title):
+                    continue
+                try:
+                    code = srv._read_exit_marker(_tmux.to_mindflock_tmux_name(title))
+                except Exception:  # noqa: BLE001
+                    code = None
+                reason = (
+                    _held.REASON_KILLED
+                    if code == launch_script.KILLED_EXIT_CODE
+                    else _held.REASON_RESTART
+                )
+                if _held.hold(title, reason):
+                    out["held"].append(title)
+            except Exception:  # noqa: BLE001 — one bad session
+                continue
+        live = {t for t, _ in items}
+        out["total"] = sum(1 for t in _held.held() if t in live)
+        if out["total"]:
+            _info(
+                "held: %d session(s) stay offline until someone presses Start "
+                "(%d new this boot)",
+                out["total"],
+                len(out["held"]),
+            )
+    except Exception as err:  # noqa: BLE001 — a boot must never fail over this
+        _info("held: boot check failed (%s)", err)
+    return out
+
+
+async def announce_held(srv=None) -> Optional[dict]:
+    """After the boot quiet window: when sessions are held offline, ONE
+    ``system.sessions_held`` event (the notify addon's ``sessions_held``
+    rule) — "N sessions stayed offline after the restart — press Start on the
+    ones you need." — rather than an Offline alarm per session. → the
+    envelope, or ``None`` when nothing is held."""
+    from backend.web.core import events as _events
+    from backend.web.core import held as _held
+
+    if srv is None:
+        srv = _server()
+    try:
+        left = srv._BOOT_QUIET_SECONDS - (time.monotonic() - srv._BOOT_MONO)
+    except Exception:  # noqa: BLE001
+        left = 0.0
+    if left > 0:
+        await asyncio.sleep(left + 1.0)
+    try:
+        with srv.ENGINE.lock:
+            live = set(srv.ENGINE.instances)
+        titles = sorted(t for t in _held.held() if t in live)
+    except Exception:  # noqa: BLE001
+        return None
+    if not titles:
+        return None
+    return _events.BUS.emit(
+        "system.sessions_held",
+        new=str(len(titles)),
+        data={
+            "count": len(titles),
+            "titles": titles,
+            "detail": _held.notice_text(len(titles)),
+        },
+    )
+
+
 async def run_on_start(srv=None) -> Optional[dict]:
     """The startup sweep: wait out the boot quiet window, then :func:`sweep`
     if ``general.revive_on_start`` is on. ``None`` when it was off."""
@@ -774,6 +1005,9 @@ async def run_on_start(srv=None) -> Optional[dict]:
         # are the revives' own.
         await asyncio.sleep(left + 1.0)
     if not await asyncio.to_thread(enabled):
-        _info("revive sweep (startup): off (general.revive_on_start)")
+        _info(
+            "revive sweep (startup): off (general.revive_on_start) — agents "
+            "that died stay offline until someone presses Start"
+        )
         return None
     return await sweep(srv, trigger="startup")

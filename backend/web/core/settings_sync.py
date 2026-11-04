@@ -244,7 +244,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         # LEGACY: what the former Pause intake turned off (no longer read).
         "intake_paused",
         "setup_devices",
-        # What THIS machine relaunches when its own server boots.
+        # What THIS machine relaunches when its own server boots ("Bring
+        # agents back by themselves after a crash"; off = held offline).
         "revive_on_start",
         # Sized to THIS machine's RAM (backend.slot).
         "heavy_slots",

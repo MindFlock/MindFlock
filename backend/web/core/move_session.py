@@ -167,9 +167,11 @@ def run(engine, title: str, dest: str, env: Optional[dict] = None) -> Optional[s
     if err is None:
         # A sleeping agent came back up in its new folder: it is awake.
         try:
+            from backend.web.core import held as _held
             from backend.web.core import sleep as _sleep
 
             _sleep.drop(title)
+            _held.drop(title)  # …and not held: the move started it
         except Exception:  # noqa: BLE001
             pass
     return str(err) if err is not None else None
