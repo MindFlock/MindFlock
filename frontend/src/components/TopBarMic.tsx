@@ -103,6 +103,7 @@ import {
   engineDiagnostics,
   passLine,
   loadVoiceCfg,
+  voiceInUse,
   loadVoicePrefs,
   noRecognizerLine,
   recognizerErrorLine,
@@ -543,6 +544,8 @@ export function TopBarMic() {
     setPrefsState(p);
     saveVoicePrefs(p);
     if (p.replies === "off") queue.cancel();
+    // Voice just came into use here: have the server's voice ready.
+    else if (voiceInUse(p) && !voiceInUse(prefsRef.current)) void refreshCfg(true);
   };
   /** The standby switch (in a click: the mic and the audio engine may start). */
   const setWakePref = (on: boolean) => {
@@ -551,8 +554,12 @@ export function TopBarMic() {
     setPrefs({ ...prefsRef.current, wake: on });
   };
 
-  const refreshCfg = () =>
-    loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow).then((c) => {
+  /** Re-read where speech runs. `warm` readies the server's voice (wakes a
+   * local voice host): by default only while voice is in use here — replies
+   * read out or standby on — never on a plain load or focus. The mic's own
+   * paths (pressed, its menu opened) pass true. */
+  const refreshCfg = (warm: boolean = voiceInUse(prefsRef.current)) =>
+    loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow, warm).then((c) => {
       cfgNow = c;
       setCfg(c);
       return c;
@@ -806,6 +813,9 @@ export function TopBarMic() {
     } = {}
   ): LiveDictation | null => {
     if (live.current) return null;
+    // Talking now: the server's voice must be up by the time a reply is read
+    // out (a no-op on the server when it already is).
+    if (cfgNow.tts === "server") void refreshCfg(true);
     // The ask pop-up is up: the mic answers THAT session — unless a box other
     // than its answer field has the keyboard (that one gets the words).
     const ask = askVoice();
@@ -1352,7 +1362,7 @@ export function TopBarMic() {
     setMenuOpen(true);
     // The options are often the step before talking: ready the mic now.
     warmMic(true);
-    void refreshCfg();
+    void refreshCfg(true);
   };
 
   // The push-to-talk hotkey (the keymap's Talk action): works wherever the

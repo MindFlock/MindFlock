@@ -661,7 +661,9 @@ def _failed(err: BaseException) -> JSONResponse:
 
 
 @router.get("/api/voice")
-def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
+def voice_get(
+    warm: str = "", allowed: bool = Depends(_auth.configure_allowed)
+) -> JSONResponse:
     """Where speech runs and what the server offers::
 
         {"stt": "phone"|"server", "tts": "phone"|"server",
@@ -697,7 +699,15 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     it) and the
     server's own cap (``timeout_ms``); ``server_ready.final_ms`` repeats
     ``expect_ms`` — the clients seed their wait for ``/end`` from it, not
-    from a fixed worst case."""
+    from a fixed worst case.
+
+    Fetching it readies the voice (the recognition models and the speaking
+    voice warmed, the session names pre-synthesised) — unless ``?warm=0``:
+    the desktop app reads this on every load and focus, and a local voice
+    host (Voice Lab: gigabytes, idles out after 30 min without a request)
+    must not be woken by someone who isn't using voice. It sends ``warm=0``
+    until voice is in use there (replies on, standby on, the mic pressed or
+    its menu opened). Recognition still warms (in-process, no host to wake)."""
     # An engine rebuild that dropped the local models' packages: put them
     # back (once per boot; nothing when they are there or never were).
     _install.start_self_heal()
@@ -722,10 +732,12 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     # voice warm before its first use (no-ops unless there is something to
     # load: see core.speech.warm_in_background).
     _speech.warm_in_background("stt")
-    _speech.warm_in_background("tts")
-    # And the lines it will hear first — the session names a switch says —
-    # pre-synthesised while the voice is idle (Prewarm; a thread of its own).
-    PREWARM.kick()
+    if str(warm).strip().lower() not in ("0", "false", "no", "off"):
+        _speech.warm_in_background("tts")
+        # And the lines it will hear first — the session names a switch
+        # says — pre-synthesised while the voice is idle (Prewarm; a thread
+        # of its own).
+        PREWARM.kick()
     return JSONResponse(body)
 
 

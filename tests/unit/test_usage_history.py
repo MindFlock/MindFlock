@@ -795,6 +795,396 @@ def test_unchanged_files_are_not_reparsed(_isolate, monkeypatch):
     assert len(calls) == 1  # second scan served from the (mtime, size) memo
 
 
+def _append(path, entries, *, newline=True):
+    with open(path, "a") as f:
+        for i, e in enumerate(entries):
+            last = i == len(entries) - 1
+            f.write(json.dumps(e) + ("\n" if newline or not last else ""))
+
+
+def _forget_process_memo(monkeypatch):
+    """What a server restart loses: the in-memory memo and the 60s cache."""
+    monkeypatch.setattr(uh, "_FILE_MEMO", {})
+    monkeypatch.setattr(
+        uh, "_memo_state", {"path": None, "dirty": False, "saved_at": 0.0}
+    )
+    _reset_cache(monkeypatch)
+
+
+def test_a_grown_transcript_is_read_from_where_the_last_read_stopped(
+    _isolate, monkeypatch
+):
+    home = _isolate
+    now = time.time()
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(now - 50, "m1", "r1", inp=2)]
+    )
+    full = []
+    real = uh._parse_turns
+    monkeypatch.setattr(uh, "_parse_turns", lambda p: full.append(p) or real(p))
+    starts = []
+    real_scan = uh._scan
+    monkeypatch.setattr(
+        uh, "_scan", lambda p, s, t, f: starts.append(s) or real_scan(p, s, t, f)
+    )
+    assert uh.windows()["day"]["in"] == 2
+    size = a.stat().st_size
+    # A later content block of the SAME response plus a new response.
+    _append(
+        a,
+        [
+            _api_line(now - 49, "m1", "r1", inp=2, out=5),
+            _api_line(now - 40, "m2", "r2", inp=3),
+        ],
+    )
+    _reset_cache(monkeypatch)
+    w = uh.windows()
+    assert w["day"]["in"] == 5  # m1 counted once, m2 added
+    assert w["day"]["out"] == 5  # m1's final block won
+    assert len(full) == 1  # the growth was not a full re-read
+    assert starts[-1] == size
+
+
+def test_a_line_still_being_written_is_read_again_when_it_completes(
+    _isolate, monkeypatch
+):
+    home = _isolate
+    now = time.time()
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(now - 50, "m1", "r1", inp=2)]
+    )
+    line = json.dumps(_api_line(now - 40, "m2", "r2", inp=3))
+    with open(a, "a") as f:
+        f.write(line[:20])  # half a line: not JSON yet
+    assert uh.windows()["day"]["in"] == 2
+    with open(a, "a") as f:
+        f.write(line[20:] + "\n")
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 5
+
+
+def test_a_restart_reads_only_what_changed_since_the_saved_memo(_isolate, monkeypatch):
+    home = _isolate
+    now = time.time()
+    _write_transcript(
+        home, "proj", "old.jsonl", [_api_line(now - 90, "m1", "r1", inp=2)]
+    )
+    b = _write_transcript(
+        home, "proj", "live.jsonl", [_api_line(now - 80, "m2", "r2", inp=3)]
+    )
+    assert uh.windows()["day"]["in"] == 5
+    assert os.path.isfile(uh._memo_path())  # the first scan saves at once
+    _forget_process_memo(monkeypatch)
+    size = b.stat().st_size
+    _append(b, [_api_line(now - 70, "m3", "r3", inp=4)])
+    full = []
+    real = uh._parse_turns
+    monkeypatch.setattr(uh, "_parse_turns", lambda p: full.append(p) or real(p))
+    starts = []
+    real_scan = uh._scan
+    monkeypatch.setattr(
+        uh, "_scan", lambda p, s, t, f: starts.append(s) or real_scan(p, s, t, f)
+    )
+    assert uh.windows()["day"]["in"] == 9
+    assert full == []  # neither file was read from the top
+    assert starts == [size]  # only the live file's new bytes
+
+
+def test_a_rewritten_transcript_is_read_again_in_full(_isolate, monkeypatch):
+    home = _isolate
+    now = time.time()
+    a = _write_transcript(
+        home,
+        "proj",
+        "a.jsonl",
+        [
+            _api_line(now - 50, "m1", "r1", inp=2),
+            _api_line(now - 40, "m2", "r2", inp=3),
+        ],
+    )
+    assert uh.windows()["day"]["in"] == 5
+    # Shorter content in place (same inode, smaller): never an append.
+    with open(a, "w") as f:
+        f.write(json.dumps(_api_line(now - 30, "m9", "r9", inp=7)) + "\n")
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 7
+
+
+def test_a_corrupt_saved_memo_is_ignored(_isolate, monkeypatch):
+    home = _isolate
+    now = time.time()
+    _write_transcript(home, "proj", "a.jsonl", [_api_line(now - 50, "m1", "r1", inp=2)])
+    assert uh.windows()["day"]["in"] == 2
+    with open(uh._memo_path(), "w") as f:
+        f.write('{"version": 1, "files": {"x": [1, 2]}')  # truncated
+    _forget_process_memo(monkeypatch)
+    assert uh.windows()["day"]["in"] == 2
+
+
+def test_lines_without_a_message_id_dedupe_across_processes(_isolate, monkeypatch):
+    """The fallback key outlives the process in the saved memo, so it must not
+    be Python's per-process salted ``hash()``."""
+    line = json.dumps(_entry(time.time() - 10, inp=1))
+    assert uh._line_key(line) == uh._line_key(line + "\n")
+    assert (
+        uh._line_key(line)
+        == "\x01"
+        + __import__("hashlib").blake2b(line.encode(), digest_size=8).hexdigest()
+    )
+
+
+def test_line_key_ignores_surrounding_whitespace_and_tells_lines_apart():
+    line = json.dumps(_entry(1_700_000_000, inp=1))
+    key = uh._line_key(line)
+    for variant in (line + "\r\n", line + "  \n", "\t" + line + " ", line):
+        assert uh._line_key(variant) == key
+    other = json.dumps(_entry(1_700_000_000, inp=2))
+    assert uh._line_key(other) != key
+    assert key.startswith("\x01") and len(key) == 17  # \x01 + 16 hex digits
+
+
+class _Clock:
+    """``uh.time`` with a settable ``time()`` (strftime/localtime pass through)."""
+
+    def __init__(self, t):
+        self.t = t
+
+    def time(self):
+        return self.t
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def _clock(monkeypatch):
+    clock = _Clock(time.time())
+    monkeypatch.setattr(uh, "time", clock)
+    return clock
+
+
+def _saved_memo():
+    with open(uh._memo_path()) as f:
+        return json.load(f)
+
+
+def _record_scan_starts(monkeypatch):
+    starts = []
+    real_scan = uh._scan
+    monkeypatch.setattr(
+        uh, "_scan", lambda p, s, t, f: starts.append(s) or real_scan(p, s, t, f)
+    )
+    return starts
+
+
+def test_a_transcript_truncated_in_place_is_read_again_from_the_top(
+    _isolate, monkeypatch
+):
+    """Same inode, fewer bytes: not an append — the old turns must go."""
+    home = _isolate
+    now = time.time()
+    a = _write_transcript(
+        home,
+        "proj",
+        "a.jsonl",
+        [
+            _api_line(now - 50, "m1", "r1", inp=2),
+            _api_line(now - 40, "m2", "r2", inp=3),
+            _api_line(now - 30, "m3", "r3", inp=4),
+        ],
+    )
+    ino = a.stat().st_ino
+    assert uh.windows()["day"]["in"] == 9
+    starts = _record_scan_starts(monkeypatch)
+    with open(a, "r+") as f:
+        f.truncate(0)
+        f.write(json.dumps(_api_line(now - 20, "m8", "r8", inp=1)) + "\n")
+    assert a.stat().st_ino == ino
+    # The ledger keeps today's 9 by design (a day never shrinks); without it
+    # the scan alone must see only what the file now holds.
+    os.unlink(uh._ledger_path())
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 1  # m1..m3 are not kept
+    assert starts == [0]
+    turns, _first = uh.read_turns(str(a))
+    assert [t[0] for t in turns] == ["m8\x00r8"]
+
+
+def test_a_saved_memo_of_another_version_is_ignored_and_rewritten(
+    _isolate, monkeypatch
+):
+    home = _isolate
+    now = time.time()
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(now - 50, "m1", "r1", inp=2)]
+    )
+    st = a.stat()
+    # Matches the file's signature exactly, but claims far more usage: were it
+    # trusted, the day would read 1000.
+    bogus = [
+        st.st_mtime_ns,
+        st.st_size,
+        st.st_ino,
+        st.st_size,
+        now - 50,
+        [["m1\x00r1", now - 50, 1000, 0, 0, 0, "m"]],
+    ]
+    os.makedirs(os.path.dirname(uh._memo_path()), exist_ok=True)
+    with open(uh._memo_path(), "w") as f:
+        json.dump({"version": uh.MEMO_VERSION + 1, "files": {str(a): bogus}}, f)
+    _forget_process_memo(monkeypatch)
+    assert uh.windows()["day"]["in"] == 2
+    doc = _saved_memo()
+    assert doc["version"] == uh.MEMO_VERSION
+    assert doc["files"][str(a)][5][0][2] == 2
+
+
+def test_the_saved_memo_is_rewritten_at_most_every_interval(_isolate, monkeypatch):
+    home = _isolate
+    clock = _clock(monkeypatch)
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(clock.t - 50, "m1", "r1", inp=2)]
+    )
+    writes = []
+    real = uh.atomic_write_json
+
+    def counting(path, *args, **kw):
+        if os.path.basename(path) == "usage-parse-cache.json":
+            writes.append(path)
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(uh, "atomic_write_json", counting)
+    uh._compute()
+    assert len(writes) == 1  # the first scan of a process saves at once
+    _append(a, [_api_line(clock.t - 40, "m2", "r2", inp=3)])
+    clock.t += 10
+    uh._compute()
+    assert len(writes) == 1  # changed, but inside the interval
+    assert uh._memo_state["dirty"] is True
+    clock.t += uh._MEMO_SAVE_EVERY
+    uh._compute()  # nothing new read, but the last change is still unsaved
+    assert len(writes) == 2
+    assert uh._memo_state["dirty"] is False
+    assert len(_saved_memo()["files"][str(a)][5]) == 2  # m1 and m2
+    clock.t += uh._MEMO_SAVE_EVERY * 2
+    uh._compute()
+    assert len(writes) == 2  # nothing changed: not rewritten
+
+
+def test_a_memo_from_another_assistant_dir_is_not_reused(
+    _isolate, monkeypatch, tmp_path
+):
+    home = _isolate
+    now = time.time()
+    _write_transcript(home, "proj", "a.jsonl", [_api_line(now - 50, "m1", "r1", inp=2)])
+    assert uh.windows()["day"]["in"] == 2
+    first = uh._memo_path()
+    assert uh._memo_state["path"] == first
+    # The other dir's memo has its own entry for a file this process has not
+    # read yet: its (deliberately different) turns prove it was the one loaded.
+    c = _write_transcript(
+        home, "proj", "c.jsonl", [_api_line(now - 40, "m3", "r3", inp=1)]
+    )
+    st = c.stat()
+    other = tmp_path / "assistant-2"
+    other.mkdir()
+    entry = [
+        st.st_mtime_ns,
+        st.st_size,
+        st.st_ino,
+        st.st_size,
+        now - 40,
+        [["m3\x00r3", now - 40, 42, 0, 0, 0, "m"]],
+    ]
+    (other / "usage-parse-cache.json").write_text(
+        json.dumps({"version": uh.MEMO_VERSION, "files": {str(c): entry}})
+    )
+    monkeypatch.setenv("MINDFLOCK_ASSISTANT_DIR", str(other))
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 2 + 42
+    assert uh._memo_state["path"] == str(other / "usage-parse-cache.json")
+    assert uh._memo_state["path"] != first
+    with open(first) as f:
+        assert str(c) not in json.load(f)["files"]  # the first dir's memo untouched
+
+
+def test_entries_of_deleted_transcripts_are_pruned_from_memory_and_disk(
+    _isolate, monkeypatch
+):
+    home = _isolate
+    clock = _clock(monkeypatch)
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(clock.t - 50, "m1", "r1", inp=2)]
+    )
+    b = _write_transcript(
+        home, "proj", "b.jsonl", [_api_line(clock.t - 40, "m2", "r2", inp=3)]
+    )
+    assert uh.windows()["day"]["in"] == 5
+    assert set(_saved_memo()["files"]) == {str(a), str(b)}
+    b.unlink()
+    clock.t += uh._MEMO_SAVE_EVERY + 1
+    _reset_cache(monkeypatch)
+    uh.windows()
+    assert str(b) not in uh._FILE_MEMO and str(a) in uh._FILE_MEMO
+    assert set(_saved_memo()["files"]) == {str(a)}
+
+
+def test_first_ts_survives_an_incremental_read(_isolate, monkeypatch):
+    home = _isolate
+    now = time.time()
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(now - 500, "m1", "r1", inp=2)]
+    )
+    _turns, first = uh.read_turns(str(a))
+    assert first == pytest.approx(now - 500, abs=1)
+    starts = _record_scan_starts(monkeypatch)
+    size = a.stat().st_size
+    _append(a, [_api_line(now - 10, "m2", "r2", inp=3)])
+    turns, first = uh.read_turns(str(a))
+    assert starts == [size]  # an incremental read
+    assert first == pytest.approx(now - 500, abs=1)  # not the appended block's
+    full_turns, full_first, _off = uh._parse_turns(str(a))
+    assert sorted(turns) == sorted(full_turns) and first == full_first
+    # An appended line that is (oddly) OLDER still moves the birth back.
+    _append(a, [_api_line(now - 900, "m3", "r3", inp=1)])
+    _turns, first = uh.read_turns(str(a))
+    assert first == pytest.approx(now - 900, abs=1)
+
+
+def test_a_failed_memo_save_keeps_the_previous_file_and_retries(_isolate, monkeypatch):
+    home = _isolate
+    clock = _clock(monkeypatch)
+    a = _write_transcript(
+        home, "proj", "a.jsonl", [_api_line(clock.t - 50, "m1", "r1", inp=2)]
+    )
+    assert uh.windows()["day"]["in"] == 2
+    with open(uh._memo_path(), "rb") as f:
+        before = f.read()
+    real_replace = os.replace
+
+    def failing(src, dst):
+        if os.path.basename(dst) == "usage-parse-cache.json":
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing)
+    _append(a, [_api_line(clock.t - 40, "m2", "r2", inp=3)])
+    clock.t += uh._MEMO_SAVE_EVERY + 1
+    _reset_cache(monkeypatch)
+    assert uh.windows()["day"]["in"] == 5  # no raise, correct totals
+    with open(uh._memo_path(), "rb") as f:
+        assert f.read() == before  # the old memo is intact
+    leftovers = [
+        n
+        for n in os.listdir(os.path.dirname(uh._memo_path()))
+        if n.startswith("usage-parse-cache.json.")
+    ]
+    assert leftovers == []  # the tmp file was cleaned up
+    assert uh._memo_state["dirty"] is True  # still owed a save
+    monkeypatch.setattr(os, "replace", real_replace)
+    uh._compute()
+    assert len(_saved_memo()["files"][str(a)][5]) == 2
+
+
 # --------------------------------------------------------------------------- #
 # Ledger v2: a day never shrinks because transcripts were pruned
 # --------------------------------------------------------------------------- #

@@ -413,6 +413,13 @@ export interface VoicePrefs {
 export const VOICE_PREFS_KEY = "cs_voice_desktop";
 export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", wake: false, confirm: false, sounds: true };
 
+/** Whether voice is in use on this desktop without the mic being pressed:
+ * replies are read out, or standby listens for the wake word. Only then does
+ * a load or focus ready the server's voice (`loadVoiceCfg(…, warm)`). */
+export function voiceInUse(p: VoicePrefs): boolean {
+  return p.replies !== "off" || !!p.wake;
+}
+
 /** The three choices as the mic's popover and Settings → Voice show them. */
 export const REPLIES_CHOICES: ReadonlyArray<{ value: RepliesMode; label: string }> = [
   { value: "off", label: "Off" },
@@ -5217,10 +5224,12 @@ export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_
 
 /** Where speech runs (Settings → Voice), and the voice words (lib/voiceWords
  * takes them). Unreachable / older server: `prev`
- * (a blink must not swap engines), else the browser's own. */
-export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
+ * (a blink must not swap engines), else the browser's own. `warm` false
+ * (`?warm=0`): read it WITHOUT readying the server's voice — a local voice
+ * host (Voice Lab) is gigabytes and only stays up while it is asked. */
+export async function loadVoiceCfg(prev: VoiceCfg | null, warm = true): Promise<VoiceCfg> {
   try {
-    const j = await api<Partial<VoiceCfg>>("/api/voice");
+    const j = await api<Partial<VoiceCfg>>(warm ? "/api/voice" : "/api/voice?warm=0");
     // The voice words ride along: the matchers and hints use them from now;
     // so do the person's pronunciations (the browser's own voice shapes with them).
     applyVoiceView(j);

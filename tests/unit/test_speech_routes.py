@@ -172,7 +172,91 @@ class TestGet:
         assert client.get("/api/voice").status_code == 200
         assert calls == ["stt", "tts"]
 
-    def test_boot_warms_both_kinds(self, fakes, monkeypatch):
+    def test_warm_0_reads_it_without_waking_the_voice(self, fakes, monkeypatch):
+        """The desktop app reads it on every load and focus: a local voice host
+        (Voice Lab) must not be woken — nor names pre-synthesised — for that."""
+        from backend.web.routes import speech as speech_routes
+
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        kicks: list = []
+        monkeypatch.setattr(speech_routes.PREWARM, "kick", lambda: kicks.append(1))
+        body = client.get("/api/voice?warm=0")
+        assert body.status_code == 200
+        assert "words" in body.json()
+        assert calls == ["stt"]  # in-process: no host to wake
+        assert kicks == []
+        client.get("/api/voice")
+        assert calls == ["stt", "stt", "tts"] and kicks == [1]
+
+    @pytest.mark.parametrize(
+        "value, wakes",
+        [
+            ("0", False),
+            ("false", False),
+            ("no", False),
+            ("OFF", False),
+            (" 0 ", False),
+            ("1", True),
+            ("yes", True),
+            ("", True),  # ?warm= with nothing: the default (warm)
+        ],
+    )
+    def test_warm_values(self, fakes, monkeypatch, value, wakes):
+        from backend.web.routes import speech as speech_routes
+
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        kicks: list = []
+        monkeypatch.setattr(speech_routes.PREWARM, "kick", lambda: kicks.append(1))
+        r = client.get("/api/voice", params={"warm": value})
+        assert r.status_code == 200
+        assert calls == (["stt", "tts"] if wakes else ["stt"])
+        assert kicks == ([1] if wakes else [])
+
+    def test_a_cold_read_loses_nothing(self, fakes, monkeypatch):
+        """``?warm=0`` only skips the side effects: the body is the same one."""
+        from backend.web.routes import speech as speech_routes
+
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: None
+        )
+        monkeypatch.setattr(speech_routes.PREWARM, "kick", lambda: None)
+        cold = client.get("/api/voice?warm=0").json()
+        warm = client.get("/api/voice").json()
+        assert cold == warm
+        for key in ("server_ready", "words", "warm", "configure_allowed"):
+            assert key in cold
+
+    def test_a_cold_read_still_self_heals_the_install(self, fakes, monkeypatch):
+        from backend.web.core import speech_install
+
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: None
+        )
+        heals: list = []
+        monkeypatch.setattr(
+            speech_install, "start_self_heal", lambda: heals.append(1) or False
+        )
+        assert client.get("/api/voice?warm=0").status_code == 200
+        assert heals == [1]
+
+    def test_the_served_desktop_bundle_reads_it_cold_until_voice_is_in_use(self):
+        """The committed build carries the TopBarMic/voiceDesktop change
+        (rebuilt with ``npm run build``): loads and focuses send ``warm=0``
+        unless replies or standby are on."""
+        js = client.get("/app.js").text
+        assert '"/api/voice?warm=0"' in js
+        assert "function voiceInUse(" in js
+        assert "refreshCfg = (warm = voiceInUse(prefsRef.current))" in js
+
+    def test_boot_warms_the_voice_only_when_everything_is_read(
+        self, fakes, monkeypatch
+    ):
         monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")  # the suite turns it off
         calls: list = []
         monkeypatch.setattr(
@@ -180,9 +264,34 @@ class TestGet:
             "warm_in_background",
             lambda kind, delay_s=0.0: calls.append((kind, delay_s)),
         )
+        monkeypatch.setattr(server._voice, "say_all", lambda: True)
         with TestClient(server.app):
             pass
         assert calls == [("stt", 3.0), ("tts", 6.0)]
+        calls.clear()
+        monkeypatch.setattr(server._voice, "say_all", lambda: False)
+        with TestClient(server.app):
+            pass
+        assert calls == [("stt", 3.0)]  # Voice Lab waits for a voice client
+
+    def test_boot_survives_a_failing_say_all(self, fakes, monkeypatch):
+        """Recognition is warmed BEFORE the say_all read, so a marker that
+        can't be read costs only the voice warm — never startup."""
+        monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")
+        calls: list = []
+        monkeypatch.setattr(
+            speech,
+            "warm_in_background",
+            lambda kind, delay_s=0.0: calls.append((kind, delay_s)),
+        )
+
+        def boom():
+            raise OSError("flag dir unreadable")
+
+        monkeypatch.setattr(server._voice, "say_all", boom)
+        with TestClient(server.app):
+            pass  # startup completed
+        assert calls == [("stt", 3.0)]
 
     def test_the_suite_skips_the_boot_warm(self, fakes, monkeypatch):
         monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "0")
@@ -1167,6 +1276,24 @@ class TestSayAll:
         assert voice.say_all() is False and pins == [1]  # off needs no re-pin
         assert client.post("/api/voice/say-all", json={"on": "yes"}).status_code == 400
         assert client.post("/api/voice/say-all", json={}).status_code == 400
+
+    def test_turning_it_on_does_not_warm_the_voice_itself(
+        self, fakes, monkeypatch, tmp_path
+    ):
+        """By design: the client that turns it on has replies on, so it reads
+        a WARM ``GET /api/voice`` (voiceInUse) — the toggle route wakes no
+        voice host on its own, and boot warms it only while it stays on."""
+        from backend.web import server
+
+        monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "flags"))
+        monkeypatch.setattr(server, "repin_voice_hooks", lambda: 1)
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        r = client.post("/api/voice/say-all", json={"on": True})
+        assert r.status_code == 200 and r.json() == {"say_all": True}
+        assert calls == []
 
 
 # --------------------------------------------------------------------------- #

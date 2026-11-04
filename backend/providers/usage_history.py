@@ -21,10 +21,17 @@ day it covers. Days carried over from a version-1 ledger (computed before the
 dedupe/subagent fixes, and no longer recomputable) are listed in
 ``approx_days`` so the UI can say the oldest part of the year is an estimate.
 Results are cached ~60s. Everything is best-effort and never raises.
+
+Reading the transcripts is the expensive part (gigabytes on a busy machine), so
+each file's parsed turns are memoized on its (mtime, size, inode) AND persisted
+beside the ledger (``usage-parse-cache.json``): a restarted server re-reads
+only what changed since the last save, and a transcript that grew is parsed
+from where the last read stopped — never from the top again.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -87,75 +94,124 @@ def _ts_epoch(s):
 # One transcript file -> its unique API turns (shared with providers/claude.py)
 # --------------------------------------------------------------------------- #
 
-#: Per-file parse memo: path -> ((mtime_ns, size), (turns, first_ts)).
-#: Transcripts are append-only and the full scan revisits ~5k files every
-#: minute; an unchanged file is never re-read. Entries for files the full scan
-#: no longer sees are dropped after each scan (:func:`_compute`).
+#: Per-file parse memo: path -> ((mtime_ns, size), inode, offset, (turns,
+#: first_ts)). ``offset`` is the byte just past the last COMPLETE line read, so
+#: a file that grew (transcripts are append-only) is parsed from there on.
+#: The full scan revisits ~5k files every minute; an unchanged file is never
+#: re-read. Entries for files the full scan no longer sees are dropped after
+#: each scan (:func:`_compute`). Persisted by :func:`_save_memo`.
 _FILE_MEMO: dict = {}
 _FILE_MEMO_MAX = 50000
 
+#: On-disk memo (``usage-parse-cache.json`` beside the ledger) format.
+MEMO_VERSION = 1
+#: The persisted memo is rewritten at most this often (it is megabytes; a
+#: crash loses at most this much re-parse work, never correctness).
+_MEMO_SAVE_EVERY = 300.0
+#: ``path`` — the memo file this process has loaded (``None``: not yet; a
+#: different assistant dir, as in tests, loads its own). ``dirty`` — the memo
+#: changed since the last save.
+_memo_state: dict = {"path": None, "dirty": False, "saved_at": 0.0}
+
+
+def _line_key(line: str) -> str:
+    """A STABLE key for a usage line without a message id (``hash()`` is
+    salted per process, and keys now outlive the process in the saved memo)."""
+    digest = hashlib.blake2b(line.strip().encode("utf-8", "replace"), digest_size=8)
+    return "\x01" + digest.hexdigest()
+
+
+def _scan(path: str, start: int, turns: dict, first_ts):
+    """Fold the usage lines of ``path`` from byte ``start`` into ``turns``
+    (key -> turn, kept per :func:`better_turn`) -> ``(first_ts, offset)``.
+
+    ``offset`` stops after the last line ending in a newline: a line still
+    being written is parsed now and AGAIN next time (same key, so it is not
+    counted twice). Raises OSError when the file can't be read."""
+    off = start
+    with open(path, "rb") as f:
+        if start:
+            f.seek(start)
+        for raw in f:
+            complete = raw.endswith(b"\n")
+            if complete:
+                off += len(raw)
+            if b'"usage"' not in raw:
+                continue
+            line = raw.decode("utf-8", "replace")
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            msg = obj.get("message")
+            if not isinstance(msg, dict):
+                msg = {}
+            u = msg.get("usage") or obj.get("usage")
+            if not isinstance(u, dict):
+                continue  # "usage" only appeared inside content / a tool result
+            ts = _ts_epoch(obj.get("timestamp"))
+            if ts is not None and (first_ts is None or ts < first_ts):
+                first_ts = ts
+            mid = msg.get("id")
+            if mid:
+                key = "%s\x00%s" % (mid, obj.get("requestId") or "")
+            else:
+                key = _line_key(line)
+            try:
+                turn = (
+                    key,
+                    ts,
+                    int(u.get("input_tokens", 0) or 0),
+                    int(u.get("output_tokens", 0) or 0),
+                    int(u.get("cache_read_input_tokens", 0) or 0),
+                    int(u.get("cache_creation_input_tokens", 0) or 0),
+                    sys.intern(str(msg.get("model") or obj.get("model") or "")),
+                )
+            except (TypeError, ValueError):
+                continue
+            if better_turn(turn, turns.get(key)):
+                turns[key] = turn
+    return first_ts, off
+
 
 def _parse_turns(path: str) -> Optional[tuple]:
-    """Parse one ``.jsonl`` transcript into ``(turns, first_ts)``.
+    """Parse one ``.jsonl`` transcript into ``(turns, first_ts, offset)``.
 
     ``turns`` is a list of ``(key, ts, in, out, cache_read, cache_write,
     model)`` — ONE per API response: the lines Claude Code writes per content
     block share ``(message.id, requestId)`` and are collapsed here, keeping the
     copy with the most output tokens (the final block). ``key`` is
-    message id + requestId (NUL-joined), or a hash of the raw line when the
-    message has no id. Lines without a usage block are ignored. ``first_ts`` is
-    the earliest timestamp among usage lines (the conversation's birth).
-    Returns ``None`` when the file can't be opened.
+    message id + requestId (NUL-joined), or a stable hash of the raw line when
+    the message has no id. Lines without a usage block are ignored.
+    ``first_ts`` is the earliest timestamp among usage lines (the
+    conversation's birth); ``offset`` is where an append-only re-read resumes
+    (:func:`_scan`). Returns ``None`` when the file can't be opened.
     """
     turns: dict = {}
-    first_ts = None
     try:
-        with open(path, errors="replace") as f:
-            for line in f:
-                if '"usage"' not in line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(obj, dict):
-                    continue
-                msg = obj.get("message")
-                if not isinstance(msg, dict):
-                    msg = {}
-                u = msg.get("usage") or obj.get("usage")
-                if not isinstance(u, dict):
-                    continue  # "usage" only appeared inside content / a tool result
-                ts = _ts_epoch(obj.get("timestamp"))
-                if ts is not None and (first_ts is None or ts < first_ts):
-                    first_ts = ts
-                mid = msg.get("id")
-                if mid:
-                    key = "%s\x00%s" % (mid, obj.get("requestId") or "")
-                else:
-                    key = "\x01%x" % (hash(line.strip()) & 0xFFFFFFFFFFFFFFFF)
-                try:
-                    turn = (
-                        key,
-                        ts,
-                        int(u.get("input_tokens", 0) or 0),
-                        int(u.get("output_tokens", 0) or 0),
-                        int(u.get("cache_read_input_tokens", 0) or 0),
-                        int(u.get("cache_creation_input_tokens", 0) or 0),
-                        sys.intern(str(msg.get("model") or obj.get("model") or "")),
-                    )
-                except (TypeError, ValueError):
-                    continue
-                prev = turns.get(key)
-                if prev is None or turn[3] > prev[3]:
-                    turns[key] = turn
+        first_ts, off = _scan(path, 0, turns, None)
     except OSError:
         return None
-    return list(turns.values()), first_ts
+    return list(turns.values()), first_ts, off
+
+
+def _parse_appended(path: str, start: int, parsed: tuple) -> Optional[tuple]:
+    """:func:`_parse_turns` for a file that only GREW since ``parsed`` was
+    read up to byte ``start``: the earlier turns are kept, the new bytes read."""
+    turns = {t[0]: t for t in parsed[0]}
+    try:
+        first_ts, off = _scan(path, start, turns, parsed[1])
+    except OSError:
+        return None
+    return list(turns.values()), first_ts, off
 
 
 def read_turns(path: str) -> Optional[tuple]:
-    """:func:`_parse_turns`, memoized on the file's (mtime, size). Never raises."""
+    """``(turns, first_ts)`` for one transcript (:func:`_parse_turns`),
+    memoized on the file's (mtime, size): an unchanged file is not read, a
+    file that grew is read from where the last read stopped. Never raises."""
     try:
         st = os.stat(path)
     except OSError:
@@ -163,9 +219,17 @@ def read_turns(path: str) -> Optional[tuple]:
     sig = (st.st_mtime_ns, st.st_size)
     hit = _FILE_MEMO.get(path)
     if hit is not None and hit[0] == sig:
-        return hit[1]
+        return hit[3]
     try:
-        parsed = _parse_turns(path)
+        if (
+            hit is not None
+            and hit[1] == st.st_ino
+            and st.st_size > hit[0][1]
+            and 0 <= hit[2] <= hit[0][1]
+        ):
+            parsed = _parse_appended(path, hit[2], hit[3])
+        else:
+            parsed = _parse_turns(path)
     except Exception:  # noqa: BLE001 — a bad file is skipped, never raised
         return None
     if parsed is None:
@@ -174,8 +238,87 @@ def read_turns(path: str) -> Optional[tuple]:
         # Drop the oldest-inserted half — simple, rare, keeps the dict bounded.
         for k in list(_FILE_MEMO)[: _FILE_MEMO_MAX // 2]:
             _FILE_MEMO.pop(k, None)
-    _FILE_MEMO[path] = (sig, parsed)
-    return parsed
+    result = (parsed[0], parsed[1])
+    _FILE_MEMO[path] = (sig, st.st_ino, parsed[2], result)
+    _memo_state["dirty"] = True
+    return result
+
+
+def _memo_path() -> str:
+    return os.path.join(os.path.dirname(_ledger_path()), "usage-parse-cache.json")
+
+
+def _load_memo() -> None:
+    """Seed :data:`_FILE_MEMO` from the saved memo, once per memo file (a
+    path already memoized in this process keeps its own entry). A missing,
+    foreign or corrupt file loads nothing. Never raises."""
+    path = _memo_path()
+    if _memo_state["path"] == path:
+        return
+    _memo_state.update(path=path, dirty=False, saved_at=0.0)
+    try:
+        with open(path) as f:
+            doc = json.load(f)
+    except Exception:  # noqa: BLE001 — no memo yet, or unreadable
+        return
+    if not isinstance(doc, dict) or doc.get("version") != MEMO_VERSION:
+        return
+    files = doc.get("files")
+    if not isinstance(files, dict):
+        return
+    for p, e in files.items():
+        if p in _FILE_MEMO:
+            continue
+        try:
+            mtime_ns, size, ino, off, first_ts, rows = e
+            turns = [
+                (
+                    str(k),
+                    None if ts is None else float(ts),
+                    int(a),
+                    int(b),
+                    int(c),
+                    int(d),
+                    sys.intern(str(m)),
+                )
+                for k, ts, a, b, c, d, m in rows
+            ]
+            entry = (
+                (int(mtime_ns), int(size)),
+                int(ino),
+                int(off),
+                (turns, None if first_ts is None else float(first_ts)),
+            )
+        except (TypeError, ValueError):
+            continue
+        _FILE_MEMO[p] = entry
+
+
+def _save_memo(now: float) -> None:
+    """Persist :data:`_FILE_MEMO` when it changed, at most every
+    :data:`_MEMO_SAVE_EVERY` seconds (the first scan of a process saves at
+    once). Best-effort."""
+    if not _memo_state["dirty"]:
+        return
+    if _memo_state["saved_at"] and now - _memo_state["saved_at"] < _MEMO_SAVE_EVERY:
+        return
+    files = {}
+    for p, (sig, ino, off, (turns, first_ts)) in list(_FILE_MEMO.items()):
+        files[p] = [sig[0], sig[1], ino, off, first_ts, [list(t) for t in turns]]
+    path = _memo_path()
+    try:
+        atomic_write_json(
+            path,
+            {"version": MEMO_VERSION, "files": files},
+            indent=None,
+            newline=False,
+            ensure_ascii=True,
+            prefix=os.path.basename(path) + ".",
+        )
+    except OSError:
+        return
+    _memo_state["dirty"] = False
+    _memo_state["saved_at"] = now
 
 
 def better_turn(new: tuple, old: Optional[tuple]) -> bool:
@@ -400,6 +543,7 @@ def _compute() -> tuple:
     # Pass 1: every unique API turn across every file (a turn copied into a
     # resumed/forked conversation's file is the same key — counted once).
     roots = _roots()
+    _load_memo()
     seen: dict = {}  # key -> (turn, account)
     visited = set()
     for root, path in _iter_transcripts(roots):
@@ -416,6 +560,8 @@ def _compute() -> tuple:
                 seen[t[0]] = (t, account)
     for p in [p for p in list(_FILE_MEMO) if p not in visited]:
         _FILE_MEMO.pop(p, None)
+        _memo_state["dirty"] = True
+    _save_memo(now)
 
     # Pass 2: fold the unique turns into windows + per-day totals.
     acc = {k: _zero() for k in _WINDOWS}

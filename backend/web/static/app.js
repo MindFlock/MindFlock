@@ -44302,6 +44302,9 @@ function isAnswerPhrase(text) {
 }
 var joinWords = (a, b) => [a.trim(), b.trim()].filter(Boolean).join(" ");
 var VOICE_PREFS_KEY = "cs_voice_desktop";
+function voiceInUse(p) {
+	return p.replies !== "off" || !!p.wake;
+}
 var REPLIES_CHOICES = [
 	{
 		value: "off",
@@ -47379,9 +47382,9 @@ var DEFAULT_VOICE_CFG = {
 	server_ready: {},
 	system: {}
 };
-async function loadVoiceCfg(prev) {
+async function loadVoiceCfg(prev, warm = true) {
 	try {
-		const j = await api("/api/voice");
+		const j = await api(warm ? "/api/voice" : "/api/voice?warm=0");
 		applyVoiceView(j);
 		setPronounce(j?.pronounce);
 		if (j && typeof j === "object") return {
@@ -48595,6 +48598,7 @@ function TopBarMic() {
 		setPrefsState(p);
 		saveVoicePrefs(p);
 		if (p.replies === "off") queue.cancel();
+		else if (voiceInUse(p) && !voiceInUse(prefsRef.current)) refreshCfg(true);
 	};
 	const setWakePref = (on) => {
 		if (on) voiceAudioCtx();
@@ -48604,7 +48608,7 @@ function TopBarMic() {
 			wake: on
 		});
 	};
-	const refreshCfg = () => loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow).then((c) => {
+	const refreshCfg = (warm = voiceInUse(prefsRef.current)) => loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow, warm).then((c) => {
 		cfgNow = c;
 		setCfg(c);
 		return c;
@@ -48781,6 +48785,7 @@ function TopBarMic() {
 	};
 	const start = (into, opts = {}) => {
 		if (live.current) return null;
+		if (cfgNow.tts === "server") refreshCfg(true);
 		const ask = askVoice();
 		if (ask && !opts.title && (!into || into === ask.field())) {
 			into = null;
@@ -49231,7 +49236,7 @@ function TopBarMic() {
 	const openMenu = () => {
 		setMenuOpen(true);
 		warmMic(true);
-		refreshCfg();
+		refreshCfg(true);
 	};
 	const keyRef = (0, import_react.useRef)({
 		hold,
