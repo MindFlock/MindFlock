@@ -5,7 +5,10 @@
  * prompt, Claude's question prompt included (activity clarify) — while
  * Settings → Notifications' "Pop up a session's permission and choice prompts" is on, and never
  * for an ask you already dealt with, one you are typing to in its pane, or
- * on top of another dialog (`askSuppressed`). A reply that ended with a
+ * on top of another dialog (`askSuppressed`). It queues behind What's new
+ * and the tours (lib/whatsNew `popupTurn`): while What's new is open, due,
+ * or still deciding at page load, or a tour is up, the ask waits, and it
+ * opens once they close — it is never dropped. A reply that ended with a
  * question in plain words never opens it by itself: its Reply does. It
  * waits for the keyboard to go quiet and an idle frame, so a word being
  * typed elsewhere is not cut in half. Several asking: ONE pop-up, "1 of N",
@@ -86,6 +89,8 @@ import { selectSession } from "../../lib/sessionActions";
 import { slotNumber, windowName } from "../../lib/windowName";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
+import { popupTurn } from "../../lib/whatsNew";
+import { useWhatsNew, whatsNewStage } from "../whatsNew/seen";
 import "./AskDialog.css";
 
 /** The keyboard must have been quiet this long before the pop-up opens by
@@ -182,6 +187,9 @@ export function AskDialog() {
   const target = useUi((s) => (s.openDialog === "ask" ? s.dialogTarget : null));
   const focused = useUi((s) => s.focused);
   const popupOn = useAskPopup();
+  // What's new and the tours go first (popupTurn): re-try when they close.
+  const wnStage = useWhatsNew(whatsNewStage);
+  const touring = useUi((s) => s.tourOpen || !!s.coachTour);
   const { data: instances } = useInstances();
   const { data: outbox } = useOutbox();
   // Asks announced by events, before the rows poll shows them.
@@ -279,7 +287,17 @@ export function AskDialog() {
         if (why === "typing") askMemory.handle(item, "typing");
         else if (!why && !found) found = item;
       }
-      return found;
+      if (!found) return null;
+      // One pop-up at a time: What's new (and a tour) first.
+      const ui = useUi.getState();
+      const turn = popupTurn({
+        whatsNew: whatsNewStage(useWhatsNew.getState()),
+        askOpen: false,
+        askWaiting: true,
+        otherOpen: ui.tourOpen || !!ui.coachTour,
+        sinceLoadMs: typeof performance !== "undefined" ? performance.now() : Infinity,
+      });
+      return turn === "ask" ? found : null;
     };
     const attempt = () => {
       if (!pick()) return;
@@ -295,14 +313,23 @@ export function AskDialog() {
       });
     };
     attempt();
-    // Behind another dialog (or a popover): look again until it closes.
-    const again = queueKey ? setInterval(bump, RECHECK_MS) : undefined;
+    // Behind another dialog, a popover, What's new or a tour: look again
+    // until it closes (an unchanged queue doesn't re-run this effect).
+    const again = queueKey
+      ? setInterval(() => {
+          bump();
+          clearTimeout(timer);
+          cancelIdle?.();
+          cancelIdle = null;
+          attempt();
+        }, RECHECK_MS)
+      : undefined;
     return () => {
       clearTimeout(timer);
       clearInterval(again);
       cancelIdle?.();
     };
-  }, [open, popupOn, queueKey, focused, bump]);
+  }, [open, popupOn, queueKey, focused, bump, wnStage, touring]);
 
   // --- open: follow the queue ---------------------------------------------- //
   const shown = useRef<string[]>([]);

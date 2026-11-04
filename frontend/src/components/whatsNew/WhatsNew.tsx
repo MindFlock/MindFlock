@@ -6,7 +6,10 @@
  * marks the version seen and shows nothing (the welcome tour is theirs); an
  * update with an unseen big entry opens this, but only once onboarding is
  * done and nothing else is on screen (no welcome card, no coach-mark tour, no
- * dialog), so it never covers the welcome tour.
+ * dialog), so it never covers the welcome tour. It shares the screen with
+ * the ask pop-up as a queue (lib/whatsNew popupTurn): whichever opened first
+ * stays and the other waits for it to close; at page load this goes first —
+ * the ask waits while it is deciding (`auto`, seen.ts) or due.
  *
  * By hand: openWhatsNew() — the palette's "What's new", Settings → Help, a
  * click on the version in the top bar — shows the latest release's entries.
@@ -24,6 +27,7 @@ import {
   knownAction,
   laterVersion,
   planWhatsNew,
+  popupTurn,
   reopenEntries,
   splitEntries,
   whatsNewTitle,
@@ -52,6 +56,8 @@ function closeWhatsNew(): void {
     saveSeen(seen);
     useWhatsNew.setState({ seen });
   }
+  // Closed: the automatic opening is spent (a pending one never comes back).
+  useWhatsNew.setState({ auto: "done" });
   s.close();
 }
 
@@ -60,7 +66,8 @@ function useAutoWhatsNew() {
   const rawVersion = useDoctor().data?.version;
   const { data: config } = useConfig();
   const welcomeSeen = useUi((s) => s.welcomeTourSeen);
-  const busy = useUi((s) => s.tourOpen || !!s.coachTour || !!s.openDialog);
+  const touring = useUi((s) => s.tourOpen || !!s.coachTour);
+  const dialog = useUi((s) => s.openDialog);
   const onboarded = welcomeSeen || config?.onboarded === true;
   const running = isReleaseVersion(rawVersion) ? rawVersion!.trim() : "";
   const [pulled, setPulled] = useState(false);
@@ -79,6 +86,12 @@ function useAutoWhatsNew() {
     if (running) useWhatsNew.setState({ running });
   }, [running]);
 
+  // A source tree (no release version): nothing will pop — the ask pop-up
+  // needn't wait for a decision.
+  useEffect(() => {
+    if (rawVersion !== undefined && !running && !decided.current) useWhatsNew.setState({ auto: "done" });
+  }, [rawVersion, running]);
+
   useEffect(() => {
     if (decided.current || !pulled || !running || !config) return;
     let live = true;
@@ -89,17 +102,19 @@ function useAutoWhatsNew() {
       if (plan.markSeen) {
         decided.current = true;
         saveSeen(plan.markSeen);
-        useWhatsNew.setState({ seen: plan.markSeen });
+        useWhatsNew.setState({ seen: plan.markSeen, auto: "done" });
         return;
       }
       if (!plan.pop) {
         decided.current = true;
+        useWhatsNew.setState({ auto: "done" });
         return;
       }
       // Seen on another device but not past first-run here: wait for
       // onboarding (this runs again when it flips).
       if (!onboarded) return;
       decided.current = true;
+      useWhatsNew.setState({ auto: "due" });
       setPending(plan.entries);
     });
     return () => {
@@ -107,11 +122,26 @@ function useAutoWhatsNew() {
     };
   }, [pulled, running, config, onboarded]);
 
+  // Its turn in the pop-up queue: an ask pop-up already open stays, and this
+  // opens when it closes (lib/whatsNew popupTurn).
   useEffect(() => {
-    if (!pending || busy || useWhatsNew.getState().shown) return;
-    useWhatsNew.getState().open(pending);
+    const st = useWhatsNew.getState();
+    if (!pending || st.shown || st.auto !== "due") {
+      if (pending && st.auto !== "due") setPending(null);
+      return;
+    }
+    const turn = popupTurn({
+      whatsNew: "due",
+      askOpen: dialog === "ask",
+      askWaiting: false,
+      otherOpen: touring || (!!dialog && dialog !== "ask"),
+      sinceLoadMs: 0,
+    });
+    if (turn !== "whats-new") return;
+    st.open(pending);
+    useWhatsNew.setState({ auto: "done" });
     setPending(null);
-  }, [pending, busy]);
+  }, [pending, touring, dialog]);
 }
 
 function FeatureRow({ f }: { f: WhatsNewFeature }) {

@@ -10,7 +10,7 @@
 
 import { create } from "zustand";
 import { api } from "../../api/client";
-import { isReleaseVersion, laterVersion } from "../../lib/whatsNew";
+import { isReleaseVersion, laterVersion, type WhatsNewStage } from "../../lib/whatsNew";
 import type { WhatsNewRelease } from "../../whatsNew/releases";
 
 export const WHATS_NEW_LS = "mf_whats_new_seen";
@@ -63,6 +63,10 @@ interface WhatsNewState {
   running: string;
   /** The seen version as loaded at page start (null = never). */
   seen: string | null;
+  /** The automatic opening: still deciding at page load, due (waiting for
+   * the screen to be free), or done. The ask pop-up queues behind it
+   * (lib/whatsNew popupTurn). */
+  auto: "deciding" | "due" | "done";
   open(entries: WhatsNewRelease[]): void;
   close(): void;
 }
@@ -71,6 +75,12 @@ export const useWhatsNew = create<WhatsNewState>((set) => ({
   shown: null,
   running: "",
   seen: null,
+  auto: "deciding",
   open: (entries) => set({ shown: entries }),
   close: () => set({ shown: null }),
 }));
+
+/** What's new's place in the pop-up queue (lib/whatsNew popupTurn). */
+export function whatsNewStage(s: Pick<WhatsNewState, "shown" | "auto">): WhatsNewStage {
+  return s.shown && s.shown.length ? "shown" : s.auto;
+}
