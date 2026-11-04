@@ -733,6 +733,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
 | `MINDFLOCK_CODE_MAP_WARM` | on | `0` skips the boot warm-up that builds every open session's Code Map snapshot in the background (it is always off under pytest) |
+| `MINDFLOCK_LOOP_WATCHDOG` | on | `0` turns off the event-loop stall watchdog ([session-engine.md](session-engine.md#memory-guard)): a loop stuck past `MINDFLOCK_LOOP_STALL_S` (default `10`) seconds appends a header and every thread's stack to `logs/stacks.log`. |
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
 | `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
@@ -1092,11 +1093,21 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   sat idle — its turn ended, nobody's terminal attached, nothing queued or
   waiting for it — before its CLI and MCP servers are stopped to free their
   memory ([session-engine.md](session-engine.md#sleeping-agents)). Unset = 45;
-  `0` turns sleeping off. While memory reads low the wait drops to 5 minutes
-  (never above the value). Opening a sleeping session or sending it anything
+  `0` turns the everyday sleeping off. While memory reads low the wait is
+  `general.memory_sleep_minutes` instead (below). Opening a sleeping session or sending it anything
   wakes it, resuming the conversation. Owner only (`auth.may_configure`), and
   per device: never synced (it is about this machine's memory). Read per
   sweep, so a save applies within a minute.
+- **Memory thresholds** (`general.memory_low_pct`, `general.memory_critical_pct`,
+  `general.memory_sleep_minutes`; JSON / `PUT /api/settings`): when this
+  machine counts as short of memory — the share of RAM the kernel reports
+  available at or below which the [memory guard](session-engine.md#memory-guard)
+  reads low (unset = 15) / critical (unset = 7; never above low; `0` drops
+  the share signal, the 2 GB / 1 GB floors and PSI still count) — and how many
+  idle minutes an agent gets while it does before it is put to sleep (unset =
+  5; `0` = never sleep for memory). The memory sleep applies even with
+  `sleep_idle_minutes` 0, and each pass that sleeps any sends one notice.
+  Per device, never synced; re-read within 30 s.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether

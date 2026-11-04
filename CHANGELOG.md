@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Running low on memory no longer wedges the server.** The background
+  ticks have their own small thread pool, so a tick stuck on a slow git, tmux
+  or gh call can't hold up the app's requests. While memory reads low the
+  server also does less: fewer probes at once, no new `gh` lookups (cached
+  answers stand), no Ctrl+F pre-indexing, and the local speech models it
+  holds (about 1 GB) are unloaded once unused for 2 minutes. If the event
+  loop does stall for 10 s, every thread's stack and the memory reading are
+  written to `logs/stacks.log` by themselves.
+- **Low memory puts idle agents to sleep, and says so.** When memory reads
+  low, agents idle for 5 minutes (`general.memory_sleep_minutes`) go to sleep,
+  longest-idle first, even with everyday sleeping turned off. One notice names
+  them and why, and they wake when you open or message them. Agents mid-turn
+  are never touched. When memory counts as low or critical is now a setting
+  (`general.memory_low_pct`, 15; `general.memory_critical_pct`, 7).
+
 - **A rename renames the session.** There is no hidden second name any more:
   renaming a session (the Rename dialog, F2 in the rail, the Sky frame bar,
   `mindflock rename OLD NEW`) changes its real title — tmux, its MCP identity,

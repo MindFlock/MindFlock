@@ -647,10 +647,17 @@ someone needs it.
     queue or mailbox send, and the last wake.
 
   The threshold is `general.sleep_idle_minutes` (unset = 45; `0` turns
-  sleeping off entirely). **Under memory pressure** — `memory_pressure` low
-  or critical — it drops to 5 minutes (never above the setting), and those
-  sleeps record `reason: memory`; longest-idle first is what frees the most
-  stale memory soonest. `POST /api/instances/{title}/sleep` and `mindflock
+  off the everyday sleeping). **Under memory pressure** — `memory_pressure`
+  low or critical — it is `general.memory_sleep_minutes` (unset = 5; never
+  above the everyday wait when that is on; `0` = never sleep for memory),
+  which applies even with everyday sleeping off. Those sleeps record
+  `reason: memory`; longest-idle first is what frees the most stale memory
+  soonest. A pass that sleeps any for memory emits ONE `system.sessions_slept`
+  event — the notify rule **Idle agents are put to sleep to free memory**
+  (on by default): *"Memory is low: 2.1 GB free of 20.0 GB (10%), so 2 idle
+  agents were put to sleep: a, b. They wake when you open or message
+  them."* An agent mid-turn is never a candidate at any level (the *turn not
+  ended* / *not idle* vetoes). `POST /api/instances/{title}/sleep` and `mindflock
   sleep` sleep one now: every rule above except the timing ones.
 - **Wake.** `sleep.ensure_awake(inst, title, why)` is the one helper: it
   relaunches through `_ensure_agent_session` and opens the prompt queue's
@@ -685,14 +692,16 @@ imports it too) reads two signals and returns `ok` / `low` / `critical`
 
 | Signal | low at | critical at |
 |---|---|---|
-| `MemAvailable` (`/proc/meminfo`) | ≤ 15 % of `MemTotal` or ≤ 2 GB | ≤ 7 % or ≤ 1 GB |
+| `MemAvailable` (`/proc/meminfo`) | ≤ 15 % of `MemTotal` (`general.memory_low_pct`) or ≤ 2 GB | ≤ 7 % (`general.memory_critical_pct`) or ≤ 1 GB |
 | PSI `some avg60` (`/proc/pressure/memory`) | ≥ 20 % | ≥ 40 % |
 | PSI `full avg60` | ≥ 5 % | ≥ 15 % |
 
+The two shares are settings (per device, never synced; `0` drops the share
+signal, leaving the floors and PSI); the floors and PSI lines are fixed.
 Stepping back down needs every reading past a recovery line a margin beyond the
-entry one (20 % / 2.5 GB / some 10 / full 2 to leave `low`; 10 % / 1.5 GB /
-some 30 / full 10 to leave `critical`), so a box hovering at the line doesn't
-flap. A reading is cached for 2 s, and the level is per process: the ticket
+entry one (share + 5 points / 2.5 GB / some 10 / full 2 to leave `low`; share +
+3 points / 1.5 GB / some 30 / full 10 to leave `critical` — 20 % and 10 % at
+the defaults), so a box hovering at the line doesn't flap. A reading is cached for 2 s, and the level is per process: the ticket
 pipeline keeps its own, so it and the server can briefly disagree near a line.
 While the level is `low` or `critical`:
 
@@ -713,9 +722,43 @@ While the level is `low` or `critical`:
   an `ok` reading, and ran WSL out of memory.
 - **The revive sweep waits**, as above. A person's single Restart is never
   held; its response carries `memory_warning` instead.
-- **Idle agents sleep sooner** — after 5 minutes idle instead of
-  `general.sleep_idle_minutes` ([Sleeping agents](#sleeping-agents)), longest
-  idle first, giving back their CLI's and MCP servers' memory.
+- **Idle agents sleep sooner** — after `general.memory_sleep_minutes` (5)
+  idle instead of `general.sleep_idle_minutes` ([Sleeping agents](#sleeping-agents)),
+  longest idle first, giving back their CLI's and MCP servers' memory, with
+  one notice per pass naming them.
+- **The server sheds its own background work** (`server._memory_low()`):
+  the per-session probe pool narrows from 8 threads to 2; the PR, merge-state
+  and review lookups serve their cached answer past its TTL instead of
+  forking `gh` per branch per minute (a forced lookup — a person pressing
+  something — still asks); Ctrl+F's background pre-indexing skips its pass
+  (Ctrl+F still indexes on demand); and the memory watch unloads the local
+  speech models unused for 2 minutes (`speech.shed_for_memory` — the resident
+  whisper models too, ~1 GB of the server's own memory, then `malloc_trim`).
+  Model loads are refused while the level is low, so nothing reloads until it
+  recovers.
+
+**A squeeze must not wedge the server.** On 2026-11-04 the server twice kept
+its listen sockets but answered nothing for minutes (the accept backlog full,
+~190 % CPU, every thread on a futex): the signature of the process thrashing
+— whichever thread holds the GIL takes a major page fault, and every other
+thread, the event loop's included, waits on the GIL behind it. Three things
+keep it answering, and say why when it doesn't:
+
+- **The ticks have their own pool.** The always-on loops (instances, state,
+  dialog watch, Ctrl+F index, red zone, sleep) run on `server._BG_POOL` (6
+  threads, `mf-tick-*`) via `_in_bg_pool`, not on asyncio's default executor
+  (12 threads) that every request handler's `await asyncio.to_thread` waits
+  on. A tick stuck on a slow child can delay other ticks, never a request.
+- **Less to page in** — the shedding above: fewer threads and children
+  touching memory at once, and the server's largest allocation released.
+- **A stall writes itself down** (`core/loop_watchdog.py`). The loop stamps
+  a heartbeat every second; a daemon thread checks it, and when it is 10 s
+  old (`MINDFLOCK_LOOP_STALL_S`) appends to `<config dir>/logs/stacks.log` a
+  header — time, how long, memory level / available / PSI, load, the
+  server's RSS and thread count — then every thread's stack (`faulthandler`),
+  again every minute of a long stall, and an "answered again after N s" line
+  when it recovers. `MINDFLOCK_LOOP_WATCHDOG=0` turns it off. `kill -USR1
+  <server pid>` still dumps on demand (no header) into the same file.
 
 The server's memory watch polls every 10 s, logs each level change and emits
 `system.memory_changed`. It starts from `ok`, so a server that boots already

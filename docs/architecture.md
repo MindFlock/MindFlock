@@ -427,8 +427,14 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `/proc/pressure/memory` and returns `ok` / `low` / `critical` / `unknown`.
   Agent spawns, team-run starts, pipeline launches and the revive sweep hold
   while it reads low; the lifespan's `_memory_watch_loop` emits
-  `system.memory_changed` on each level change. See
+  `system.memory_changed` on each level change and, while low, unloads the
+  idle speech models; background ticks shed on `server._memory_low()`. See
   [session-engine.md](session-engine.md#memory-guard).
+- **Tick pool + loop watchdog** — the always-on ticks run on
+  `server._BG_POOL` (`_in_bg_pool`, 6 threads), never on the default executor
+  the request handlers' `asyncio.to_thread` uses; `web/core/loop_watchdog.py`
+  appends every thread's stack to `logs/stacks.log` when the event loop's
+  heartbeat is 10 s old.
 - **Heavy-job slots** (`backend/slot.py`, `mindflock slot -- CMD`) — the
   other half: a server-less, flock-based semaphore that repos put in front of
   heavy commands (test suites in commit hooks), so jobs from many sessions
@@ -445,7 +451,8 @@ FastAPI app `backend.web.server:app`. Key pieces:
   backward in 64 KB blocks and stop at the first match.
 - **Sleeping agents** (`web/core/sleep.py`) — the lifespan's sleep sweep stops
   the CLI (and MCP servers) of an agent idle, unwatched and with nothing
-  waiting for it for `general.sleep_idle_minutes` (5 min while memory is low),
+  waiting for it for `general.sleep_idle_minutes` (`general.memory_sleep_minutes`,
+  5, while memory is low — one `system.sessions_slept` notice per pass),
   keeping the session; `ensure_awake` relaunches it, resuming, from every path
   that types into a session. See
   [session-engine.md](session-engine.md#sleeping-agents).
