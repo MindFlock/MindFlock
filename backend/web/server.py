@@ -4726,32 +4726,18 @@ async def create_instance(payload: dict, request: Request) -> JSONResponse:
     registry lock) so a team run creates its sessions through the same code.
     The session records the person the request is for (core.person_sessions).
 
-    Every create asks the launch gate (core.launch_gate) first. An
-    agent-spawned one (``spawned: true``) that has to wait is queued and
-    answered 202 ``{"queued": true, "status": "queued: waiting for memory"}``;
-    the queue creates it when memory allows. A person's create while memory
-    is low is **409** ``{"memory_confirm": true, ...}`` until it is resent
-    with ``start_anyway: true``. A team run's members (``run_member``) are
-    paced by the run's own planner.
+    Every create asks the launch gate (core.launch_gate) first
+    (:func:`core.session_create.create_requested`). An agent-spawned one
+    (``spawned: true``) that has to wait is queued and answered 202
+    ``{"queued": true, "status": "queued: waiting for memory"}``; the queue
+    creates it when memory allows. A person's create while memory is low is
+    **409** ``{"memory_confirm": true, ...}`` until it is resent with
+    ``start_anyway: true``. A team run's members (``run_member``) are paced by
+    the run's own planner.
     """
-    person = _auth.request_person(request)
-    start_anyway = payload.pop("start_anyway", None) is True
-    if not payload.get("run_member"):
-        if payload.get("spawned") is True:
-            held = await _session_create.create_gated(
-                payload, person=person, kind="spawn"
-            )
-            if held is not None:
-                return held
-            return await _session_create.create(payload, person=person, gated=True)
-        else:
-            if not start_anyway:
-                refusal = await _person_memory_refusal()
-                if refusal is not None:
-                    return refusal
-            title = str(payload.get("title") or "")
-            _launch_gate.note_start(title or "new-%d" % time.time_ns())
-    return await _session_create.create(payload, person=person)
+    return await _session_create.create_requested(
+        payload, person=_auth.request_person(request)
+    )
 
 
 @app.get("/api/create_failures")

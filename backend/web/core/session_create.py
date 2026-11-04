@@ -32,6 +32,7 @@ from backend.web.core import shared_branch as _shared_branch
 __all__ = [
     "create",
     "create_gated",
+    "create_requested",
     "create_result",
     "free_title",
     "memory_refusal",
@@ -1169,3 +1170,38 @@ async def create_gated(
         },
         status_code=202,
     )
+
+
+async def create_requested(payload: dict, *, person: str = "") -> JSONResponse:
+    """``POST /api/instances``: a create asks the launch gate, then
+    :func:`create`. ``person``: who the request is for (the route stamps it
+    from the request, never from the payload).
+
+    * An agent-spawned create (``spawned: true``) is an automatic start: when
+      it has to wait it is queued and answered 202 ``{"queued": true,
+      "status": "queued: waiting for memory", ...}`` (:func:`create_gated`);
+      the queue creates it when memory allows.
+    * A person's create while memory is low is **409** ``{"memory_confirm":
+      true, "level", "message", ...}`` (:func:`launch_gate.person_refusal`)
+      until it is resent with ``start_anyway: true``; once it goes it counts
+      as warming from now.
+    * A team run's member (``run_member``) skips the gate: the run's own
+      planner paces its starts.
+
+    ``start_anyway`` is taken out of ``payload`` (it is not a create key)."""
+    start_anyway = payload.pop("start_anyway", None) is True
+    if payload.get("run_member"):
+        return await create(payload, person=person)
+    if payload.get("spawned") is True:
+        held = await create_gated(payload, person=person, kind="spawn")
+        if held is not None:
+            return held
+        return await create(payload, person=person, gated=True)
+    if not start_anyway:
+        verdict = await asyncio.to_thread(_launch_gate.decide, "person")
+        body = _launch_gate.person_refusal(verdict)
+        if body is not None:
+            return JSONResponse(body, status_code=409)
+    title = str(payload.get("title") or "")
+    _launch_gate.note_start(title or "new-%d" % time.time_ns())
+    return await create(payload, person=person)
