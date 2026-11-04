@@ -1232,13 +1232,17 @@ class GeneralSettings:
     (never set) reads as ON — the whole point of the limit gate is that running
     out is temporary. ``False`` turns it off.
 
-    ``revive_on_start``: whether the server relaunches, in the background
-    after it boots, every session whose agent was running when it stopped
-    (:mod:`backend.web.core.revive`), instead of leaving them Offline until
-    someone opens them — and brings back an agent the OOM killer took once
-    memory recovers (the auto-revive, rate-limited per session). ``None``
-    (never set) reads as ON; ``False`` turns both off (``POST
-    /api/server/revive-all`` still runs the sweep on demand).
+    ``revive_on_start`` ("Bring agents back by themselves after a crash"):
+    whether the server relaunches, in the background after it boots, every
+    session whose agent was running when it stopped
+    (:mod:`backend.web.core.revive`), and brings back an agent the OOM killer
+    took once memory recovers (the auto-revive, rate-limited per session).
+    ``None`` (never set) reads as OFF, like ``False``: a session whose agent
+    died is instead HELD offline (:mod:`backend.web.core.held`) — nothing
+    starts it, not a pane attaching nor a queued prompt, until a person
+    presses Start — so a crash can't refill memory. ``True`` opts in to the
+    old behaviour (and nothing is held). ``POST /api/server/revive-all``
+    runs the sweep on demand either way.
 
     ``sleep_idle_minutes``: put an agent to sleep (:mod:`backend.web.core.sleep`
     — its CLI and MCP servers stopped to give their memory back, the session,
@@ -1305,7 +1309,7 @@ class GeneralSettings:
     intake_paused: Optional[List[str]] = None  # LEGACY, unread (see docstring)
     setup_devices: str = ""  # "" (not asked) | "first" | "join"
     resume_on_usage_reset: Optional[bool] = None  # None = on (see docstring)
-    revive_on_start: Optional[bool] = None  # None = on (see docstring)
+    revive_on_start: Optional[bool] = None  # None = OFF (see docstring)
     sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
     agent_mcp_scope: str = ""  # "" (= children) | "readonly" | "children" | "all"

@@ -736,7 +736,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
 | `MINDFLOCK_HEAVY_SLOTS` | — | How many heavy commands `mindflock slot` lets run at once; wins over `general.heavy_slots` (`--max` wins over both) |
 | `MINDFLOCK_SLOT_HELD` | — | **Internal**: set by `mindflock slot` on the command it runs (the pools held, comma-separated), so a nested `mindflock slot` for the same pool runs straight through |
-| `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep or the auto-revive of agents the OOM killer took (sandboxed or scratch servers), whatever `general.revive_on_start` says |
+| `MINDFLOCK_REVIVE_ON_START` | on | `0` starts the server without the background revive sweep or the auto-revive of agents the OOM killer took (sandboxed or scratch servers), whatever `general.revive_on_start` says. Agents that died are still **held offline** (that launches nothing) |
+| `MINDFLOCK_HELD_FILE` | `~/.mindflock/held.json` | Path of the held-offline store (`title -> {since, reason}`): sessions whose agent died in a crash and that wait for a person's Start ([session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)) |
 | `MALLOC_ARENA_MAX` | `2` (server only) | glibc malloc arenas for the web server process. Unset, `run.py` caps them at 2 with `mallopt` before any thread starts (not via the environment, so agent shells keep glibc's default); set it (or `GLIBC_TUNABLES=glibc.malloc.arena_max=…`) to choose another cap — glibc applies yours and the server leaves it alone. Uncapped, every worker thread grew its own arena of freed-but-kept memory (~1 GB RSS on a busy server). See [architecture.md](architecture.md) |
 | `MINDFLOCK_OOM_SCORE_ADJ` | `500` | The `oom_score_adj` every agent launch (and shell tab) gives itself, so under memory pressure the kernel kills an agent's process tree before the server ([session-engine.md](session-engine.md#when-the-oom-killer-fires-anyway-agents-go-first-and-come-back)); an integer up to 1000, `0` turns it off. Read when a launch command or launcher script is generated (a provisioned launcher keeps the value it was written with) |
 | `MINDFLOCK_SLEEP` | on | `0` starts the server without the sleep sweep ([session-engine.md](session-engine.md#sleeping-agents)) — no idle agent is put to sleep, whatever `general.sleep_idle_minutes` says (sandboxed or scratch servers). Sleepers already recorded still wake normally |
@@ -1071,6 +1072,20 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   back on — seeded"); a field unset here is stamped older still, so it never
   clears another device's value. Otherwise sync stays off (logged once) until
   the device joins your others again.
+- **Bring agents back by themselves after a crash** (`general.revive_on_start`;
+  Settings → General, note: "Off: sessions whose agent died stay Offline until
+  you press Start, so a crash can't refill memory."). Unset = **off** (since
+  2026-11-04): a session whose agent died — at a server restart, or killed by
+  the OOM killer / crashed while the server runs — is **held offline**
+  ([session-engine.md](session-engine.md#held-offline-the-default-after-a-crash)):
+  nothing relaunches it, not a pane attaching, a sent or queued prompt, a
+  wake or a sweep, until someone presses Start (the Offline chip, the pane's
+  Start button, Start all). A prompt sent to it waits on its queue. `true`
+  opts in to the old behaviour: the startup revive sweep relaunches every
+  agent that was running, and the auto-revive brings back one the OOM killer
+  took once memory recovers; nothing is held. Per device: never synced (it is
+  about what THIS machine relaunches when its own server boots). Read at boot
+  and per death.
 - **Sleeping agents** (`general.sleep_idle_minutes`; Settings → General →
   **Put idle agents to sleep after**): how many minutes an agent must have
   sat idle — its turn ended, nobody's terminal attached, nothing queued or

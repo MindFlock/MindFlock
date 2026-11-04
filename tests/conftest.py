@@ -114,6 +114,9 @@ def _redirect_tempfiles(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "MINDFLOCK_SLEEP_FILE", str(tmp_path / "mindflock" / "sleeping.json")
     )
+    # The held-offline records (``~/.mindflock/held.json``, core.held): every
+    # row reads them and _ensure_agent_session REFUSES a session they name.
+    monkeypatch.setenv("MINDFLOCK_HELD_FILE", str(tmp_path / "mindflock" / "held.json"))
     # The Usage Optimizer's sample store (``~/.mindflock/usage_optimizer.jsonl``):
     # a live server's sampler appends there every minute, and a test that
     # forces a sample would otherwise land in the owner's real history.
