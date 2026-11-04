@@ -278,7 +278,8 @@ def test_the_view_buttons_and_footer_icons_are_back():
         '{v === "sky" ? <Bird size={12} className="vt-icon" /> : <GridGlyph className="vt-icon" />}'
         in side
     )
-    assert "const perch = perchBadge(useFlights().data || []);" in side
+    # The Sky badge counts the one Needs-you list (lib/needsYou, round 21).
+    assert "const perch = needsYouBadge(useNeedsYou());" in side
     assert "vm-sky" not in side
     assert 'id="view-mode-select"' not in side
     assert "⌨ Shortcuts" in side
