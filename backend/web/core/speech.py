@@ -110,6 +110,7 @@ __all__ = [
     "recognition_hints",
     "select",
     "session_titles",
+    "shed_for_memory",
     "speech_form",
     "sweep_idle",
     "unload_all",
@@ -413,6 +414,38 @@ def sweep_idle(now: Optional[float] = None) -> List[str]:
                 _CACHE.pop(key, None)
                 _USED.pop(key, None)
                 dropped.append(key)
+    return dropped
+
+
+def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:
+    """Memory reads low (the server's memory watch calls this): drop every
+    cached model unused for ``min_idle_s`` — the RESIDENT whisper models too,
+    which :func:`sweep_idle` keeps (``small`` + the stream model are ~1 GB of
+    the server's memory). One in use right now stays. The warm-up record of
+    the dropped kind is forgotten, so the next warm loads again — once
+    :func:`_memory_block` lets it. → the keys dropped. Never raises."""
+    stamp = _now()
+    dropped: List[str] = []
+    try:
+        with _LOCK:
+            for key in list(_CACHE):
+                if stamp - _USED.get(key, stamp) >= min_idle_s:
+                    _CACHE.pop(key, None)
+                    _USED.pop(key, None)
+                    dropped.append(key)
+            if any(k.startswith("whisper") for k in dropped):
+                _WARMED.pop("stt", None)
+            if any(not k.startswith("whisper") for k in dropped):
+                _WARMED.pop("tts", None)
+    except Exception:  # noqa: BLE001 — shedding is best effort
+        return dropped
+    if dropped:
+        import gc
+
+        gc.collect()
+        from backend.web.core import malloc_arenas
+
+        malloc_arenas.trim()
     return dropped
 
 

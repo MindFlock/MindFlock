@@ -929,7 +929,8 @@ async def run_loop(srv=None) -> None:
         await asyncio.sleep(left + 1.0)
     while True:
         try:
-            await asyncio.to_thread(tick, srv)
+            runner = getattr(srv, "_in_bg_pool", None)  # the ticks' own pool
+            await (runner(tick, srv) if runner else asyncio.to_thread(tick, srv))
         except Exception:  # noqa: BLE001
             pass
         await asyncio.sleep(TICK_SECONDS)
