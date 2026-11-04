@@ -72,7 +72,7 @@ describe("the eased camera", () => {
     // Every other setCam stops a glide first.
     expect(v).toMatch(/const setCam: typeof setCamState = useCallback\(\s*\(next\) => \{\s*stopEase\(\);\s*setCamState\(next\);/);
     expect(v).toMatch(/const startPan = [^{]*\{\s*stopEase\(\);/);
-    expect(v).toContain("goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
+    expect(v).toContain("goTo(fitCamera(boundsOf(everyRect()), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
     expect(v).toContain("goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);");
     expect(v).toContain("goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
     expect(v).toMatch(/const zoomTo = \(z: number\) => \{\s*autoFit\.current = false;\s*goTo\(zoomAt\(camRef\.current, z, vp\.w \/ 2, vp\.h \/ 2\)\);/);
@@ -206,7 +206,7 @@ describe("the seams are mounted", () => {
     expect(v).toContain('import { Minimap, OffscreenHints, type MinimapRect } from "./Minimap";');
     expect(v).toContain('const MINIMAP_KEY = "mf_sky_minimap";');
     expect(v).toContain('const [minimapOpen, setMinimapOpen] = useState(() => readPref(MINIMAP_KEY) !== "0");');
-    expect(v).toContain("<OffscreenHints rects={mapRects} cam={cam} viewport={vp} onJump={jumpTo} />");
+    expect(v).toContain("<OffscreenHints rects={mapRects} cam={cam} viewport={vp} inset={drawerCover ? { right: drawerCover } : undefined} onJump={jumpTo} />");
     // Round 21: folded while it would cover a route (mmShown), a move on it is the owner's (userCam).
     expect(v).toMatch(/<div className="sky-minimap-host" ref=\{mmHost\}[^>]*>\s*<Minimap\s+rects=\{mapRects\}\s+cam=\{cam\}\s+viewport=\{vp\}\s+onCamera=\{\(c\) => userCam\(c\)\}\s+onJump=\{jumpTo\}\s+open=\{mmShown\}/);
     expect(v).toContain('kind: l.flight ? "grounded" : "line",');
