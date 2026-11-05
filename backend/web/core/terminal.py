@@ -19,11 +19,18 @@ import os
 import re
 import shlex
 import subprocess
+import threading
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-import ptyprocess
 from fastapi import WebSocket, WebSocketDisconnect
+
+from backend.session import mux
+
+if not mux.IS_WINDOWS:
+    import ptyprocess
+else:  # pragma: no cover - native Windows: no POSIX PTYs (docs/windows.md)
+    ptyprocess = None
 
 # --------------------------------------------------------------------------- #
 # Terminal scroll speed (UI setting)
@@ -107,7 +114,7 @@ def _tmux_server_running() -> bool:
     yet" and re-apply their tuning when the next session starts."""
     try:
         return (
-            subprocess.run(
+            mux.run(
                 ["tmux", "list-sessions"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -149,7 +156,7 @@ def apply_scroll_speed(speed: Optional[int] = None) -> None:
             ("WheelDownPane", "scroll-down"),
         ):
             try:
-                subprocess.run(
+                mux.run(
                     [
                         "tmux",
                         "bind-key",
@@ -177,7 +184,7 @@ def apply_scroll_speed(speed: Optional[int] = None) -> None:
         ("WheelDownPane", "send-keys -M"),
     ):
         try:
-            subprocess.run(
+            mux.run(
                 [
                     "tmux",
                     "bind-key",
@@ -280,21 +287,163 @@ def _wrap_launch_cmd(cmd: str, session_name: str) -> str:
 
 
 def spawn_tmux_attach(session_name: str, dimensions=(24, 80)):
-    """Spawn a PTY attached to a tmux session (interactive)."""
-    return ptyprocess.PtyProcess.spawn(
-        ["tmux", "attach-session", "-t", session_name],
-        dimensions=dimensions,
-        env={**os.environ, "TERM": "xterm-256color"},
-    )
+    """Spawn a PTY attached to a tmux session (interactive) —
+    :func:`backend.session.mux.attach`."""
+    return mux.attach(session_name, dimensions=dimensions)
 
 
 def spawn_tail(path, lines: int = 500, dimensions=(24, 80)):
-    """Spawn a PTY following a log file (read-only consumers)."""
+    """Spawn a PTY following a log file (read-only consumers). Native Windows
+    has no ``tail`` and no POSIX PTY: a :class:`FileFollower` does the same
+    (``fd`` is ``None``, so :func:`pump_pty` reads it from a thread)."""
+    if mux.IS_WINDOWS:
+        return FileFollower(path, lines=lines)
     return ptyprocess.PtyProcess.spawn(
         ["tail", "-F", "-n", str(lines), str(path)],
         dimensions=dimensions,
         env={**os.environ, "TERM": "xterm-256color"},
     )
+
+
+class FileFollower:
+    """``tail -F -n <lines> <path>`` as a :class:`backend.session.mux.Terminal`
+    (``fd`` is ``None``): the last ``lines`` lines, then whatever is appended,
+    starting over when the file is replaced or truncated (``-F``). The file is
+    opened only for each read — a handle held open on Windows would stop its
+    writer from rotating it. Newlines go out as CRLF, as a PTY's ``onlcr``
+    sends them to the browser's terminal. Input is ignored (read-only)."""
+
+    fd = None
+    pid = None
+    POLL_S = 0.25
+
+    def __init__(self, path, lines: int = 500):
+        self.path = str(path)
+        self._stop = threading.Event()
+        self._pos = 0
+        self._ident = None
+        self._pending = b""
+        data = self._chunk(None)
+        n = max(0, int(lines))
+        if data and n:
+            self._pending = self._crlf(b"".join(data.splitlines(keepends=True)[-n:]))
+
+    def _chunk(self, size: Optional[int]) -> bytes:
+        """What was appended since the last read (at most ``size`` bytes;
+        everything for ``None``), from the start again for a new or shrunk
+        file."""
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            return b""
+        ident = (st.st_dev, st.st_ino)
+        if ident != self._ident or st.st_size < self._pos:
+            self._ident, self._pos = ident, 0
+        if st.st_size <= self._pos:
+            return b""
+        try:
+            with open(self.path, "rb") as fh:
+                fh.seek(self._pos)
+                data = fh.read() if size is None else fh.read(size)
+        except OSError:
+            return b""
+        self._pos += len(data)
+        return data
+
+    @staticmethod
+    def _crlf(data: bytes) -> bytes:
+        return data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+
+    def read(self, size: int = 1024) -> bytes:
+        while not self._stop.is_set():
+            if self._pending:
+                out, self._pending = self._pending[:size], self._pending[size:]
+                return out
+            data = self._chunk(size)
+            if data:
+                self._pending = self._crlf(data)
+                continue
+            self._stop.wait(self.POLL_S)
+        return b""
+
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        pass
+
+    def getwinsize(self):
+        return (24, 80)
+
+    def isalive(self) -> bool:
+        return not self._stop.is_set()
+
+    def terminate(self, force: bool = False) -> bool:
+        self._stop.set()
+        return True
+
+    def close(self, force: bool = True) -> None:
+        self.terminate(force)
+
+
+def start_pty_reader(loop, proc, out_q: "asyncio.Queue") -> Callable[[], None]:
+    """Feed ``proc``'s output into ``out_q`` (``None`` once it ends) and return
+    the function that stops it. A selectable ``proc.fd`` (POSIX) is watched by
+    the event loop's ``add_reader``; a :class:`backend.session.mux.Terminal`
+    whose ``fd`` is ``None`` (native Windows, whose Proactor loop has no
+    ``add_reader``) is read by a daemon thread calling ``proc.read``."""
+    fd = proc.fd
+    if fd is not None:
+
+        def _on_readable() -> None:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                loop.remove_reader(fd)
+                out_q.put_nowait(None)
+                return
+            out_q.put_nowait(data)
+
+        loop.add_reader(fd, _on_readable)
+        return lambda: loop.remove_reader(fd)
+
+    stopped = threading.Event()
+
+    def _put(item) -> bool:
+        try:
+            loop.call_soon_threadsafe(out_q.put_nowait, item)
+            return True
+        except RuntimeError:  # the loop closed under us
+            return False
+
+    def _reader() -> None:
+        while not stopped.is_set():
+            try:
+                data = proc.read(65536)
+            except Exception:  # noqa: BLE001 — EOFError / OSError: the client is gone
+                data = b""
+            if isinstance(data, str):
+                data = data.encode("utf-8")
+            if not data:
+                break
+            if stopped.is_set() or not _put(data):
+                return
+        if not stopped.is_set():
+            _put(None)
+
+    threading.Thread(target=_reader, name="pty-reader", daemon=True).start()
+    return stopped.set
+
+
+def pty_write(proc, data: bytes) -> None:
+    """Write ``data`` to ``proc``: straight to its fd on POSIX, through
+    ``proc.write`` for a :class:`backend.session.mux.Terminal` without one."""
+    if proc.fd is not None:
+        os.write(proc.fd, data)
+    else:
+        proc.write(data)
 
 
 # What a terminal emulator sends back on its own — answers to the device
@@ -354,7 +503,6 @@ async def pump_pty(
     loop = asyncio.get_running_loop()
     if out_q is None:
         out_q = asyncio.Queue()
-    fd = proc.fd
 
     def _admit(data) -> bool:
         if gate is None or is_terminal_reply(data):
@@ -369,18 +517,9 @@ async def pump_pty(
             out_q.put_nowait(json.dumps({"type": "readonly", "message": verdict}))
         return False
 
-    def _on_readable() -> None:
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            data = b""
-        if not data:
-            loop.remove_reader(fd)
-            out_q.put_nowait(None)
-            return
-        out_q.put_nowait(data)
-
-    loop.add_reader(fd, _on_readable)
+    # The event loop watches a POSIX fd; a Terminal without one (native
+    # Windows) is read from a thread.
+    stop_reader = start_pty_reader(loop, proc, out_q)
 
     async def _pump_out() -> None:
         while True:
@@ -413,7 +552,7 @@ async def pump_pty(
                             on_input()
                         except Exception:  # noqa: BLE001
                             pass
-                    os.write(fd, b)
+                    pty_write(proc, b)
                 continue
             t = msg.get("text")
             if t is not None:
@@ -432,12 +571,12 @@ async def pump_pty(
                             on_input()
                         except Exception:  # noqa: BLE001
                             pass
-                    os.write(fd, t.encode("utf-8"))
+                    pty_write(proc, t.encode("utf-8"))
     except WebSocketDisconnect:
         pass
     finally:
         try:
-            loop.remove_reader(fd)
+            stop_reader()
         except Exception:  # noqa: BLE001
             pass
         out_q.put_nowait(None)

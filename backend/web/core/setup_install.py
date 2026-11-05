@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import subprocess
 from typing import Optional, Tuple
+
+from backend.session import mux
+from backend.web.core import proc as _proc
 
 SESSION = "mindflock_setup_install"
 _DN = subprocess.DEVNULL
@@ -47,15 +49,13 @@ def _status_path() -> str:
 
 def _tmux(*args: str) -> int:
     try:
-        return subprocess.run(
-            ["tmux", *args], stdout=_DN, stderr=_DN, timeout=10
-        ).returncode
+        return mux.run(["tmux", *args], stdout=_DN, stderr=_DN, timeout=10).returncode
     except (OSError, subprocess.TimeoutExpired):
         return 1
 
 
 def _have_tmux() -> bool:
-    return shutil.which("tmux") is not None
+    return mux.available()
 
 
 def _session_exists() -> bool:
@@ -161,7 +161,9 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         from backend.web.core import pty_run
 
         try:
-            pty_run.start(SESSION, ["sh", "-c", wrapped], os.path.expanduser("~"))
+            pty_run.start(
+                SESSION, [_proc.shell(), "-c", wrapped], os.path.expanduser("~")
+            )
         except Exception as err:  # noqa: BLE001 — surfaced in the terminal
             return SESSION, "could not start the install terminal: %s" % err
         return SESSION, None
@@ -175,7 +177,7 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         % status
     )
     try:
-        created = subprocess.run(
+        created = mux.run(
             [
                 "tmux",
                 "new-session",
@@ -184,7 +186,7 @@ def ensure_session() -> Tuple[str, Optional[str]]:
                 SESSION,
                 "-c",
                 os.path.expanduser("~"),
-                "sh",
+                _proc.shell(),
                 "-c",
                 wrapped,
             ],

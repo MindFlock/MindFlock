@@ -16,6 +16,7 @@ import socket
 import threading
 import time
 
+import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 
@@ -434,7 +435,7 @@ def term(app, monkeypatch):
         return procs[-1]
 
     monkeypatch.setattr(server, "_ensure_agent_session", lambda inst, t: ("s", None))
-    monkeypatch.setattr(server.ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
     monkeypatch.setattr(server, "_ATTACH_PROBE_GRACE_S", 0.0)
     return procs
 

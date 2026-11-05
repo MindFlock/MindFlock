@@ -24,6 +24,7 @@ import time
 from typing import List, Optional
 from urllib.parse import urlparse
 
+from backend import compat
 from backend import log
 from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flights as _flights
@@ -223,7 +224,7 @@ def stop_all(flight: Optional[dict]) -> List[dict]:
         )
         try:
             cp = subprocess.run(
-                ["/bin/sh", "-c", cmd],
+                [compat.posix_shell(), "-c", cmd],
                 cwd=folder if folder and os.path.isdir(folder) else None,
                 env=env,
                 stdin=subprocess.DEVNULL,

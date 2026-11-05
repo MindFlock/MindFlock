@@ -10,6 +10,7 @@ the owner's ``/api/guests`` routes (gate-off 409, a guest can't reach them).
 
 from __future__ import annotations
 
+import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 
@@ -752,7 +753,7 @@ def ptys(monkeypatch, tmp_path):
         got["readonly"].append(_Pty(["attach-session", "-r", "=" + name]))
         return got["readonly"][-1]
 
-    monkeypatch.setattr(server.ptyprocess.PtyProcess, "spawn", owner_spawn)
+    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", owner_spawn)
     monkeypatch.setattr(server._guest_terminal, "spawn_readonly_attach", readonly_spawn)
     monkeypatch.setattr(
         server._guest_terminal,

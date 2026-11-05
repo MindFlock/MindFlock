@@ -163,8 +163,6 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-import ptyprocess
-
 from backend import config, log
 from backend import providers
 from backend import session
@@ -176,6 +174,7 @@ from backend.config import ide as ide_cfg
 from backend.config import red_zones as _red_zones
 from backend.config import repo_zones as _repo_zones
 from backend.session import instance as _instance
+from backend.session import mux
 from backend.session import provisioned as provisioning
 from backend.session import tmux
 from backend.session.git import gh_available
@@ -469,10 +468,12 @@ from backend.web.core.terminal import (
     apply_scroll_speed,
     is_terminal_reply,
     load_scroll_speed,
+    pty_write,
     pump_pty,
     save_scroll_speed,
     spawn_tail,
     spawn_tmux_attach,
+    start_pty_reader,
     _clear_exit_marker,
     _exit_marker_path,
     _is_natural_exit,
@@ -1667,7 +1668,7 @@ def _fire_window_refresh(program: str) -> bool:
         scratch = os.path.join(config.GetConfigDir(), "window", name)
         os.makedirs(scratch, exist_ok=True)
         exists = (
-            subprocess.run(
+            mux.run(
                 ["tmux", "has-session", "-t=" + name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1679,7 +1680,7 @@ def _fire_window_refresh(program: str) -> bool:
             cmd = provider.minimal_launch_command(scratch, name) or prog
             # An agent CLI like any other: the OOM killer's pick before us.
             cmd = providers.launch_script.oom_score_prefix() + cmd
-            r = subprocess.run(
+            r = mux.run(
                 ["tmux", "new-session", "-d", "-s", name, "-c", scratch, cmd],
                 capture_output=True,
                 text=True,
@@ -12631,11 +12632,7 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
         if guest:
             proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
         else:
-            proc = ptyprocess.PtyProcess.spawn(
-                ["tmux", "attach-session", "-t", name],
-                dimensions=(24, 80),
-                env={**os.environ, "TERM": "xterm-256color"},
-            )
+            proc = mux.attach(name, dimensions=(24, 80))
     except Exception as err:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
@@ -12744,7 +12741,7 @@ def pane_history(title: str, pane: str = "agent") -> PlainTextResponse:
     if name is None:
         return PlainTextResponse("no live session", status_code=404)
     try:
-        out = subprocess.run(
+        out = mux.run(
             # -p print to stdout, -J join wrapped lines, -S - from the very
             # start of the scrollback. Targets the session's active pane.
             ["tmux", "capture-pane", "-p", "-J", "-t", name, "-S", "-"],
@@ -13564,11 +13561,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
         if guest:
             proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
         else:
-            proc = ptyprocess.PtyProcess.spawn(
-                ["tmux", "attach-session", "-t", name],
-                dimensions=(24, 80),
-                env={**os.environ, "TERM": "xterm-256color"},
-            )
+            proc = mux.attach(name, dimensions=(24, 80))
     except Exception as err:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
@@ -13585,26 +13578,15 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
         that settles a dialog stamps the session's last answer first."""
         _note_pane_input(inst, title, data)
         if typist is None or is_terminal_reply(data):
-            os.write(fd, data)
+            pty_write(proc, data)
         else:
             typist.type(data)
 
     loop = asyncio.get_event_loop()
     out_q: "asyncio.Queue[Optional[bytes | str]]" = asyncio.Queue()
-    fd = proc.fd
-
-    def _on_readable() -> None:
-        try:
-            data = os.read(fd, 65536)
-        except OSError:
-            data = b""
-        if not data:
-            loop.remove_reader(fd)
-            out_q.put_nowait(None)  # EOF sentinel
-            return
-        out_q.put_nowait(data)
-
-    loop.add_reader(fd, _on_readable)
+    # PTY output -> out_q (None = EOF): the loop's add_reader on a POSIX fd,
+    # a reader thread for a native-Windows Terminal (fd None).
+    stop_reader = start_pty_reader(loop, proc, out_q)
 
     async def _pump_out() -> None:
         while True:
@@ -13709,7 +13691,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
         if typist is not None:
             typist.close()
         try:
-            loop.remove_reader(fd)
+            stop_reader()
         except Exception:  # noqa: BLE001
             pass
         out_q.put_nowait(None)

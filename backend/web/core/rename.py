@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
 from backend import config, log
+from backend.session import mux
 from backend.session import tmux
 from backend.web.core import title_store
 
@@ -317,7 +318,7 @@ def _tmux_rename(old_n: str, new_n: str) -> bool:
     for o, n in ((old_n, new_n), (old_n + _SHELL_SUFFIX, new_n + _SHELL_SUFFIX)):
         try:
             if (
-                subprocess.run(
+                mux.run(
                     ["tmux", "has-session", "-t=" + o],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -326,7 +327,7 @@ def _tmux_rename(old_n: str, new_n: str) -> bool:
                 != 0
             ):
                 continue
-            cp = subprocess.run(
+            cp = mux.run(
                 ["tmux", "rename-session", "-t=" + o, n],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -343,7 +344,7 @@ def _tmux_rename(old_n: str, new_n: str) -> bool:
 def _pane_pid(tmux_name: str) -> str:
     """The agent pane's pid ("" when there is no such tmux session)."""
     try:
-        cp = subprocess.run(
+        cp = mux.run(
             ["tmux", "display-message", "-p", "-t", "=" + tmux_name, "#{pane_pid}"],
             capture_output=True,
             text=True,

@@ -46,7 +46,7 @@ same reasoning as the prompt queue. Unlike the queue, this store is written by
 more than one process (co-running servers, and it is polled by every MCP
 process through the server), so:
 
-* every read-modify-write holds a thread lock AND an exclusive ``fcntl.flock``
+* every read-modify-write holds a thread lock AND an exclusive ``compat.flock``
   on a sidecar ``mailbox.json.lock`` (the ``config.state_file_lock`` idea —
   the kernel drops the lock if the holder dies);
 * writes are atomic (temp file + ``os.replace``), so a reader never sees half a
@@ -73,7 +73,6 @@ from __future__ import annotations
 
 import contextlib
 import copy
-import fcntl
 import json
 import os
 import re
@@ -82,6 +81,7 @@ import time
 import unicodedata
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from backend import compat
 from backend.fsutil import atomic_write_bytes
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
@@ -327,7 +327,7 @@ def _write_lock():
         os.makedirs(os.path.dirname(lock_path) or ".", exist_ok=True)
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            compat.flock(fd, compat.LOCK_EX)
             yield
         finally:
             os.close(fd)  # closing the fd releases the flock

@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 from typing import Optional, Tuple
 
 from backend import providers
+from backend.session import mux
+from backend.web.core import proc as _proc
 
 # tmux session name prefix — kept distinct from instance/shell/assistant names.
 _LOGIN_PREFIX = "mindflock_login_"
@@ -43,7 +44,7 @@ def login_session_name(name: str, profile_id: str = "") -> str:
 
 
 def _have_tmux() -> bool:
-    return shutil.which("tmux") is not None
+    return mux.available()
 
 
 def _login_command_for(name: str) -> Optional[str]:
@@ -117,7 +118,7 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
         return _ensure_direct(session, cmd, home)
     try:
         if (
-            subprocess.run(
+            mux.run(
                 ["tmux", "has-session", "-t=" + session],
                 stdout=_DN,
                 stderr=_DN,
@@ -135,7 +136,7 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
         "you can close this terminal'; exec ${SHELL:-/bin/sh}" % cmd
     )
     try:
-        created = subprocess.run(
+        created = mux.run(
             [
                 "tmux",
                 "new-session",
@@ -144,7 +145,7 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
                 session,
                 "-c",
                 home,
-                "sh",
+                _proc.shell(),
                 "-c",
                 wrapped,
             ],
@@ -159,7 +160,7 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
         # "duplicate session". If it exists now, that's success.
         try:
             if (
-                subprocess.run(
+                mux.run(
                     ["tmux", "has-session", "-t=" + session],
                     stdout=_DN,
                     stderr=_DN,
@@ -180,7 +181,7 @@ def ensure_command_session(session: str, cmd: str) -> Optional[str]:
         ("status", "off"),
     ):
         try:
-            subprocess.run(
+            mux.run(
                 ["tmux", "set-option", "-t", session, opt, val],
                 stdout=_DN,
                 stderr=_DN,
@@ -205,7 +206,7 @@ def _ensure_direct(session: str, cmd: str, home: str) -> Optional[str]:
         "you can close this terminal'" % cmd
     )
     try:
-        pty_run.start(session, ["sh", "-c", wrapped], home)
+        pty_run.start(session, [_proc.shell(), "-c", wrapped], home)
     except Exception as err:  # noqa: BLE001 — surfaced in the terminal
         return "could not start the login terminal: %s" % err
     return None
@@ -224,7 +225,7 @@ def kill_session(session: str) -> None:
     if not _have_tmux():
         return
     try:
-        subprocess.run(
+        mux.run(
             ["tmux", "kill-session", "-t=" + session],
             stdout=_DN,
             stderr=_DN,

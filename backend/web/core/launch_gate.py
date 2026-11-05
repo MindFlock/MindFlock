@@ -61,6 +61,7 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from backend import memory_pressure
+from backend.session import mux
 
 __all__ = [
     "WAITING_FOR_MEMORY",
@@ -195,7 +196,7 @@ def _tmux_agents() -> Optional[List[Tuple[str, float]]]:
     """``[(tmux session name, created epoch)]`` for every MindFlock agent tmux
     session, ``[]`` with no tmux server, None when tmux can't be asked."""
     try:
-        out = subprocess.run(
+        out = mux.run(
             ["tmux", "list-sessions", "-F", "#{session_name} #{session_created}"],
             capture_output=True,
             text=True,

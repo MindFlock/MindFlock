@@ -25,9 +25,11 @@ import threading
 import time
 from typing import Dict, Optional
 
+from backend import compat
 from backend import providers
 from backend import session
 from backend.providers.usage_limits import is_limit_screen
+from backend.session import mux
 from backend.session import tmux
 from backend.session.storage import Loading
 from backend.web.core import events as _events
@@ -686,12 +688,15 @@ def _pane_has_agent_process(pane_pid) -> bool:
         return cached[1]
     result = False
     try:
-        cp = _proc.run_capped(
-            ["ps", "-e", "-o", "pid=,ppid=,comm="],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
+        if compat.IS_WINDOWS:  # no ps there: the same table from psutil
+            cp = _proc.ps_table("pid=,ppid=,comm=")
+        else:
+            cp = _proc.run_capped(
+                ["ps", "-e", "-o", "pid=,ppid=,comm="],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
         if cp.returncode == 0:
             children: Dict[str, list] = {}
             comms: Dict[str, str] = {}
@@ -820,15 +825,18 @@ def _pane_runs_agent(pane_pid, names: frozenset) -> Optional[bool]:
     if not pane_pid or not names:
         return None
     try:
-        cp = _proc.run_capped(
-            # -ww: unlimited width. Without it ps cuts args at $COLUMNS (80 on
-            # CI, or a server started from a narrow terminal), losing the
-            # script after `python`/`node` and so the agent itself.
-            ["ps", "-ww", "-e", "-o", "pid=,ppid=,args="],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
+        if compat.IS_WINDOWS:  # no ps there: the same table from psutil
+            cp = _proc.ps_table("pid=,ppid=,args=")
+        else:
+            cp = _proc.run_capped(
+                # -ww: unlimited width. Without it ps cuts args at $COLUMNS (80
+                # on CI, or a server started from a narrow terminal), losing
+                # the script after `python`/`node` and so the agent itself.
+                ["ps", "-ww", "-e", "-o", "pid=,ppid=,args="],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
     except OSError:
         return None
     if cp.returncode != 0:
@@ -886,6 +894,19 @@ def _proc_cpu_snapshot():
         return c["children"], c["jiffies"]
     children: Dict[str, list] = {}
     jiffies: Dict[str, int] = {}
+    if compat.IS_WINDOWS:  # no /proc: psutil's CPU times, in USER_HZ jiffies
+        try:
+            import psutil
+
+            for p in psutil.process_iter(["pid", "ppid", "cpu_times"]):
+                info = p.info
+                pid, ct = str(info.get("pid")), info.get("cpu_times")
+                children.setdefault(str(info.get("ppid") or 0), []).append(pid)
+                jiffies[pid] = int((ct.user + ct.system) * 100) if ct else 0
+        except Exception:  # noqa: BLE001 — unreadable: fall back as on macOS
+            return {}, {}
+        c.update(at=now, children=children, jiffies=jiffies)
+        return children, jiffies
     try:
         entries = os.listdir("/proc")
     except OSError:
@@ -973,13 +994,13 @@ def _dismiss_trust_prompt(inst, title: str, name: str, text: str) -> bool:
             # Enter EXITED the agent. Move it onto the accepting option first
             # (named keys, so tmux emits the pane's own arrow sequences).
             for key in spec.nav_keys_for(text):
-                subprocess.run(
+                mux.run(
                     ["tmux", "send-keys", "-t", name, key],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=10,
                 )
-            subprocess.run(
+            mux.run(
                 [
                     "tmux",
                     "send-keys",
@@ -1075,7 +1096,7 @@ def _startup_trust_gate_clarify(srv, inst, title: str, name: str, created) -> bo
             created is not None
             and (time.time() - float(created)) <= _TRUST_GATE_STARTUP_WINDOW_S
         ):
-            cp0 = subprocess.run(
+            cp0 = mux.run(
                 ["tmux", "capture-pane", "-p", "-t", name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -2152,7 +2173,7 @@ def _capture_shell_pane(title: str, lines: int = 400) -> Optional[str]:
     """
     try:
         name = _server()._shell_tmux_name(title)
-        cp = subprocess.run(
+        cp = mux.run(
             ["tmux", "capture-pane", "-p", "-J", "-S", "-%d" % int(lines), "-t", name],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -2187,7 +2208,7 @@ def _failed_precommit_step(title: str) -> Optional[str]:
     """
     try:
         name = _server()._shell_tmux_name(title)
-        cp = subprocess.run(
+        cp = mux.run(
             # -J joins tmux's wrapped lines. Without it a long error is captured
             # as one line per PANE ROW, so the generic fallback below — which
             # takes the LAST error-looking line — surfaced the tail of a wrapped

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _datetime
-import fcntl
 import json
 import os
 import re
@@ -23,6 +22,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket
 from fastapi.responses import JSONResponse
 
+from backend import compat
 from backend import log
 from backend.config import home_guard
 from backend.session import provisioned as provisioning
@@ -300,6 +300,17 @@ def _error_text(line: str) -> str:
     return text[:240]
 
 
+#: SIGKILL where it exists; Windows has none (its kill is TerminateProcess,
+#: which ``os.kill`` does for any signal and ``compat.kill_group`` forcibly).
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+
+def _group_of(pid: int) -> int:
+    """The process group to signal for ``pid``: its pgid on POSIX; on Windows
+    (no groups) the pid itself, whose tree ``compat.kill_group`` ends."""
+    return pid if compat.IS_WINDOWS else os.getpgid(pid)
+
+
 class _InheritedChild:
     """The ``Popen`` surface the controller uses, over a child this process
     did not spawn in its current image (it was started before an
@@ -312,6 +323,13 @@ class _InheritedChild:
 
     def poll(self) -> Optional[int]:
         if self.returncode is not None:
+            return self.returncode
+        if compat.IS_WINDOWS:  # pragma: no cover - no waitpid(WNOHANG) there
+            import psutil
+
+            if psutil.pid_exists(self.pid):
+                return None
+            self.returncode = -1
             return self.returncode
         try:
             done, status = os.waitpid(self.pid, os.WNOHANG)
@@ -336,7 +354,7 @@ class _InheritedChild:
         os.kill(self.pid, signal.SIGTERM)
 
     def kill(self) -> None:
-        os.kill(self.pid, signal.SIGKILL)
+        os.kill(self.pid, _SIGKILL)
 
 
 class TicketIngestionController:
@@ -419,7 +437,7 @@ class TicketIngestionController:
             return None, None
         try:
             try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                compat.flock(fh.fileno(), compat.LOCK_EX | compat.LOCK_NB)
             except OSError:
                 try:
                     fh.seek(0)
@@ -438,7 +456,7 @@ class TicketIngestionController:
                         meta = None
                 return pid, meta if isinstance(meta, dict) else None
             else:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)  # nobody holds it -> stale
+                compat.flock(fh.fileno(), compat.LOCK_UN)  # nobody holds it -> stale
                 return None, None
         finally:
             fh.close()
@@ -587,7 +605,7 @@ class TicketIngestionController:
                 stdout=logf,
                 stderr=logf,
                 stdin=subprocess.DEVNULL,
-                start_new_session=True,  # own process group for clean group-kill
+                **compat.detached_kwargs(),  # own process group for clean group-kill
             )
         finally:
             # The child holds its own dup of the fd — keeping the parent copy
@@ -601,7 +619,7 @@ class TicketIngestionController:
         if self._own_running():
             proc = self._proc
             try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                compat.kill_group(_group_of(proc.pid), signal.SIGTERM)
             except Exception:  # noqa: BLE001
                 try:
                     proc.terminate()
@@ -611,7 +629,7 @@ class TicketIngestionController:
                 proc.wait(timeout=10)
             except Exception:  # noqa: BLE001
                 try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    compat.kill_group(_group_of(proc.pid), _SIGKILL)
                 except Exception:  # noqa: BLE001
                     try:
                         proc.kill()
@@ -625,9 +643,9 @@ class TicketIngestionController:
         # ran in its own process group (start_new_session), so pgid == pid.
         pid = self._external_lock_pid()
         if pid and pid > 0:
-            for sig in (signal.SIGTERM, signal.SIGKILL):
+            for sig in (signal.SIGTERM, _SIGKILL):
                 try:
-                    os.killpg(pid, sig)
+                    compat.kill_group(pid, sig)
                 except Exception:  # noqa: BLE001
                     try:
                         os.kill(pid, sig)

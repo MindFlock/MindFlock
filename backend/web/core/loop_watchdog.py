@@ -86,6 +86,14 @@ def _rss_threads() -> str:
                     threads = int(line.split()[1])
     except (OSError, ValueError, IndexError):
         pass
+    if rss is None and os.name == "nt":  # pragma: no cover - no /proc there
+        try:
+            import psutil
+
+            me = psutil.Process()
+            rss, threads = me.memory_info().rss, me.num_threads()
+        except Exception:  # noqa: BLE001
+            pass
     if threads is None:
         threads = threading.active_count()
     parts = []

@@ -17,6 +17,9 @@ PTY, with the two tmux properties those terminals rely on kept:
 
 Runs are keyed by name in this process (they die with the server, as a tmux
 helper session would not — acceptable for a minutes-long install or a login).
+
+On native Windows the PTY is a ConPTY (pywinpty, :class:`WinPtyTerminal`):
+no fd, read and written through the object (docs/windows.md).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ import asyncio
 import json
 import os
 import threading
+import time
 from typing import Callable, Dict, List, Optional
 
 #: Replayed to a reattaching browser; older output is dropped.
@@ -34,17 +38,78 @@ _RUNS: Dict[str, "PtyRun"] = {}
 _LOCK = threading.Lock()
 
 
+class WinPtyTerminal:  # pragma: no cover - exercised on native Windows
+    """A pywinpty ``PtyProcess`` (a ConPTY) in :class:`backend.session.mux.Terminal`'s
+    shape: ``fd`` is ``None``, :meth:`read` returns bytes (``b""`` at the end)
+    and :meth:`write` takes them."""
+
+    fd = None
+
+    def __init__(self, proc):
+        self._proc = proc
+        self.pid = getattr(proc, "pid", None)
+
+    @classmethod
+    def spawn(cls, argv: List[str], cwd: str, env: dict, dimensions=(24, 80)):
+        import winpty
+
+        return cls(
+            winpty.PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=dimensions)
+        )
+
+    def read(self, size: int = 1024) -> bytes:
+        try:
+            data = self._proc.read(size)
+        except EOFError:
+            return b""
+        return data.encode("utf-8") if isinstance(data, str) else data
+
+    def write(self, data: bytes) -> int:
+        text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+        self._proc.write(text)
+        return len(data)
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        self._proc.setwinsize(rows, cols)
+
+    def getwinsize(self):
+        return self._proc.getwinsize()
+
+    def isalive(self) -> bool:
+        return self._proc.isalive()
+
+    def wait(self):
+        while self._proc.isalive():
+            time.sleep(0.1)
+        return getattr(self._proc, "exitstatus", None)
+
+    def terminate(self, force: bool = False) -> bool:
+        return self._proc.terminate(force)
+
+    def close(self, force: bool = True) -> None:
+        try:
+            self._proc.close(force)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _spawn(argv: List[str], cwd: str, env: dict):
+    """``argv`` under a PTY: ptyprocess on POSIX, a ConPTY on Windows."""
+    if os.name == "nt":  # pragma: no cover - native Windows
+        return WinPtyTerminal.spawn(argv, cwd=cwd, env=env, dimensions=(24, 80))
+    import ptyprocess
+
+    return ptyprocess.PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=(24, 80))
+
+
 class PtyRun:
     """One command under a PTY, drained by a thread, fanned out to listeners."""
 
     def __init__(self, argv: List[str], cwd: str, env: Optional[dict] = None):
-        import ptyprocess
-
-        self.proc = ptyprocess.PtyProcess.spawn(
+        self.proc = _spawn(
             argv,
-            cwd=cwd,
-            env={**(env if env is not None else os.environ), "TERM": "xterm-256color"},
-            dimensions=(24, 80),
+            cwd,
+            {**(env if env is not None else os.environ), "TERM": "xterm-256color"},
         )
         self._backlog = bytearray()
         self._subs: List[Callable[[Optional[bytes]], None]] = []
@@ -56,8 +121,11 @@ class PtyRun:
         fd = self.proc.fd
         while True:
             try:
-                data = os.read(fd, 65536)
-            except OSError:  # EIO once the child side is gone
+                if fd is not None:
+                    data = os.read(fd, 65536)
+                else:  # a ConPTY (native Windows): no fd
+                    data = self.proc.read(65536)
+            except (OSError, EOFError):  # EIO once the child side is gone
                 data = b""
             if not data:
                 break
@@ -99,7 +167,10 @@ class PtyRun:
         if self.finished:
             return
         try:
-            os.write(self.proc.fd, data)
+            if self.proc.fd is not None:
+                os.write(self.proc.fd, data)
+            else:
+                self.proc.write(data)
         except OSError:
             pass
 

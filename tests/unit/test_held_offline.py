@@ -29,6 +29,7 @@ import threading
 import time
 from types import SimpleNamespace
 
+import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -381,7 +382,7 @@ def test_the_terminal_socket_closes_4424_and_launches_nothing(h, monkeypatch):
     _no_provider(monkeypatch)  # the REAL helper runs: it must not get this far
     spawned = []
     monkeypatch.setattr(
-        server.ptyprocess.PtyProcess, "spawn", lambda *a, **k: spawned.append(a)
+        ptyprocess.PtyProcess, "spawn", lambda *a, **k: spawned.append(a)
     )
     c = TestClient(server.app)
     with c.websocket_connect("/api/instances/h/terminal") as ws:

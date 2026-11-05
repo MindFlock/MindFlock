@@ -21,8 +21,10 @@ from fastapi.responses import JSONResponse
 
 from backend import log, providers, session
 from backend.fsutil import atomic_write_text
+from backend.session import mux
 from backend.session import tmux
 
+from backend.web.core import proc as _proc
 from backend.web.core.terminal import (
     apply_scroll_speed,
     pump_pty,
@@ -179,7 +181,7 @@ def _ensure_assistant_session():
     name = ASSIST_TMUX
     try:
         exists = (
-            subprocess.run(
+            mux.run(
                 ["tmux", "has-session", "-t=" + name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -241,7 +243,7 @@ def _ensure_assistant_session():
             prefix = _secret_env.source_prefix(path) + prefix
         wrapped = prefix + wrapped
     try:
-        created = subprocess.run(
+        created = mux.run(
             [
                 "tmux",
                 "new-session",
@@ -250,7 +252,7 @@ def _ensure_assistant_session():
                 name,
                 "-c",
                 str(ASSIST_DIR),
-                "sh",
+                _proc.shell(),
                 "-c",
                 wrapped,
             ],
@@ -265,7 +267,7 @@ def _ensure_assistant_session():
         # "duplicate session". If it exists now, treat as success.
         try:
             if (
-                subprocess.run(
+                mux.run(
                     ["tmux", "has-session", "-t=" + name],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -285,7 +287,7 @@ def _ensure_assistant_session():
         ("window-size", "latest"),
     ):
         try:
-            subprocess.run(
+            mux.run(
                 ["tmux", "set-option", "-t", name, opt, val],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -323,7 +325,7 @@ def _restart_assistant_session() -> None:
     """Kill the assistant tmux session so the next chat relaunches ``claude``
     (picking up an edited CLAUDE.md). Best-effort; no-op if not running."""
     try:
-        subprocess.run(
+        mux.run(
             ["tmux", "kill-session", "-t=" + ASSIST_TMUX],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

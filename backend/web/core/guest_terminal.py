@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
-import subprocess
 from typing import Callable, List, Optional
+
+from backend.session import mux
 
 __all__ = ["spawn_readonly_attach", "send_keys", "send_keys_argv", "Typist"]
 
@@ -54,13 +54,7 @@ _MOUSE = re.compile(
 
 def spawn_readonly_attach(tmux_name: str, rows: int, cols: int):
     """A READ-ONLY tmux client on the session (see the module docstring)."""
-    import ptyprocess
-
-    return ptyprocess.PtyProcess.spawn(
-        ["tmux", "attach-session", "-r", "-t", "=" + tmux_name],
-        dimensions=(rows, cols),
-        env={**os.environ, "TERM": "xterm-256color"},
-    )
+    return mux.attach("=" + tmux_name, readonly=True, dimensions=(rows, cols))
 
 
 def _split_text(text: str) -> List[str]:
@@ -99,7 +93,7 @@ def send_keys_argv(tmux_name: str, data: bytes) -> List[List[str]]:
 
 
 def _run(argv: List[str]) -> str:
-    return subprocess.run(
+    return mux.run(
         argv,
         capture_output=True,
         text=True,

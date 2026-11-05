@@ -22,6 +22,7 @@ import time
 import uuid
 from typing import Dict
 
+from backend import compat
 from backend import git_auth_hints, providers
 from backend import session
 from backend.session import provisioned as provisioning
@@ -131,7 +132,9 @@ def _ensure_shell_session(title: str, wt: str):
     live = srv._live_session_name(name)
     if live is not None:
         return live, None  # attach the existing session
-    shell = os.environ.get("SHELL") or "/bin/bash"
+    shell = os.environ.get("SHELL") or (
+        compat.posix_shell(bash=True) if compat.IS_WINDOWS else "/bin/bash"
+    )
     # Run through sh so the shell starts with the agents' OOM score
     # (launch_script.OOM_SCORE_ADJ): what a person runs here — a test suite, a
     # build — is the OOM killer's pick before the server, like the agent's.
@@ -396,7 +399,18 @@ def _ensure_agent_session(inst, title: str):
             pass
     wrapped = _wrap_launch_cmd(cmd, name)
     created = _proc.run_capped(
-        ["tmux", "new-session", "-d", "-s", name, "-c", wt, "sh", "-c", wrapped],
+        [
+            "tmux",
+            "new-session",
+            "-d",
+            "-s",
+            name,
+            "-c",
+            wt,
+            _proc.shell(),
+            "-c",
+            wrapped,
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         timeout=10,
