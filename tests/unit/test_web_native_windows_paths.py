@@ -377,7 +377,10 @@ def test_paste_by_path_writes_prunes_and_refuses_a_linked_folder(monkeypatch, tm
     other.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    os.symlink(outside, other / uploads.WORKSPACE_PASTE_DIR)
+    try:
+        os.symlink(outside, other / uploads.WORKSPACE_PASTE_DIR)
+    except OSError:  # Windows without the symlink privilege
+        pytest.skip("cannot make a symlink here")
     with pytest.raises(OSError):
         uploads.write_workspace_paste(str(other), "paste-1.png", b"x")
     assert os.listdir(outside) == []
@@ -443,7 +446,10 @@ def test_workspace_size_walk_matches_the_files_and_skips_links(monkeypatch, tmp_
     big = tmp_path.parent / (tmp_path.name + "-outside")
     big.mkdir()
     (big / "huge").write_bytes(b"z" * 5000)
-    os.symlink(big, tmp_path / "link")
+    try:
+        os.symlink(big, tmp_path / "link")
+    except OSError:  # Windows without the symlink privilege
+        pass
     monkeypatch.setattr(workspaces.compat, "IS_WINDOWS", True)
     monkeypatch.setattr(
         workspaces._proc, "run_capped", lambda *a, **k: pytest.fail("no du on Windows")

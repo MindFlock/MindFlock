@@ -157,7 +157,13 @@ def _ensure_shell_session(title: str, wt: str):
             name,
             "-c",
             wt,
-            (wrapper + "exec " + shlex.quote(shell)) if wrapper else shell,
+            # (On Windows the shell is a path with a blank in it — Program
+            # Files — so it always goes quoted behind exec.)
+            (
+                (wrapper + "exec " + shlex.quote(shell))
+                if wrapper or compat.IS_WINDOWS
+                else shell
+            ),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
