@@ -45,6 +45,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+from backend import compat, osflags
 from backend.fsutil import atomic_write_json
 
 __all__ = [
@@ -83,10 +84,9 @@ RESERVED = ("mindflock",)
 # --------------------------------------------------------------------------- #
 def enabled() -> bool:
     """``MINDFLOCK_MCP_SHARE=0`` turns sharing off whatever the setting says;
-    otherwise it is on wherever :func:`shared_names` names something. POSIX
-    only (the bridge needs ``fcntl`` and process groups)."""
-    if os.name != "posix":
-        return False
+    otherwise it is on wherever :func:`shared_names` names something (POSIX
+    and native Windows: the bridge's locks and process groups are
+    :mod:`backend.compat`'s)."""
     return os.environ.get("MINDFLOCK_MCP_SHARE", "").strip().lower() not in _FALSY
 
 
@@ -260,6 +260,8 @@ def _free_port() -> int:
 def _pid_alive(pid) -> bool:
     if not isinstance(pid, int) or pid <= 0:
         return False
+    if compat.IS_WINDOWS:  # os.kill(pid, 0) would terminate it there
+        return osflags.pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -322,12 +324,8 @@ def _reap_spawned() -> None:
 def ensure_bridge() -> Optional[dict]:
     """The running bridge's ``{pid, port, token}``, starting it if need be;
     None on any failure (the caller then leaves the user's entries alone)."""
-    if os.name != "posix":
-        return None
     _reap_spawned()
     try:
-        import fcntl
-
         d = state_dir()
         live = _live_bridge(d)
         if live is not None:
@@ -335,7 +333,7 @@ def ensure_bridge() -> Optional[dict]:
         os.makedirs(d, mode=0o700, exist_ok=True)
         lock_fd = os.open(os.path.join(d, _START_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)  # one starter at a time
+            compat.flock(lock_fd, compat.LOCK_EX)  # one starter at a time
             live = _live_bridge(d)
             if live is not None:
                 return live
@@ -381,8 +379,8 @@ def _start(d: str) -> Optional[dict]:
             stdin=subprocess.DEVNULL,
             stdout=logf,
             stderr=logf,
-            start_new_session=True,  # outlives a server restart; own group
             close_fds=True,
+            **compat.detached_kwargs(),  # outlives a server restart; own group
         )
     finally:
         logf.close()
@@ -478,7 +476,13 @@ def stop_bridge(timeout: float = 5.0) -> bool:
         pid = info.get("pid")
         if not _pid_alive(pid):
             return False
-        os.kill(pid, signal.SIGTERM)
+        if compat.IS_WINDOWS:
+            # No SIGTERM there (os.kill is TerminateProcess, which would skip
+            # the bridge's own cleanup and orphan its upstreams): end the
+            # whole tree, the bridge and the servers it started.
+            compat.kill_group(pid, signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
         deadline = time.time() + timeout
         # Reap while waiting: a bridge this process started stays a zombie
         # until reaped, and kill(pid, 0) still succeeds on a zombie — so the
@@ -490,7 +494,7 @@ def stop_bridge(timeout: float = 5.0) -> bool:
             _reap_spawned()
         if _pid_alive(pid):
             try:
-                os.killpg(pid, signal.SIGKILL)
+                compat.kill_group(pid, getattr(signal, "SIGKILL", 9))
             except (ProcessLookupError, PermissionError):
                 pass  # gone meanwhile (or a zombie macOS won't signal)
         _reap_spawned()

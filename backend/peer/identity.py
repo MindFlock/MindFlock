@@ -26,6 +26,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 )
 from cryptography.x509.oid import NameOID
 
+from backend import osflags
 from backend.peer import paths
 
 __all__ = [
@@ -110,9 +111,13 @@ def _write_new(path: str, data: bytes, mode: int) -> str:
     """Write ``data`` to a fresh tmp file next to ``path`` (O_EXCL, ``mode``),
     fsync it and return the tmp path."""
     tmp = f"{path}.tmp-{os.getpid()}-{os.urandom(4).hex()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    fd = os.open(
+        tmp,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | osflags.O_NOFOLLOW | osflags.O_BINARY,
+        mode,
+    )
     try:
-        os.fchmod(fd, mode)
+        osflags.fchmod(fd, mode)
         view = memoryview(data)
         while view:
             view = view[os.write(fd, view) :]
@@ -126,7 +131,10 @@ def _read_private_file(path: str) -> bytes | None:
     """Read a 0600 file we own. None when it doesn't exist. Tightens loose
     modes; refuses symlinks, non-regular files and files owned by others."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        fd = os.open(
+            path,
+            os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY | osflags.O_NONBLOCK,
+        )
     except FileNotFoundError:
         return None
     except OSError as e:
@@ -135,10 +143,11 @@ def _read_private_file(path: str) -> bytes | None:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise IdentityError("identity key is not a regular file")
-        if st.st_uid != os.geteuid():
+        # (Windows: no POSIX owner in st_uid; the profile ACL guards it)
+        if not osflags.IS_WINDOWS and st.st_uid != os.geteuid():
             raise IdentityError("identity key is owned by another user")
         if st.st_mode & 0o077:
-            os.fchmod(fd, 0o600)
+            osflags.fchmod(fd, 0o600)
         if st.st_size > _MAX_FILE:
             raise IdentityError("identity key file is too large")
         return os.read(fd, _MAX_FILE)

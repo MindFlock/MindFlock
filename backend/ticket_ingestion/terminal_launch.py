@@ -8,6 +8,8 @@ take over. How you open a terminal is OS-specific:
 * **Linux** → the first available of ``gnome-terminal`` / ``konsole`` /
   ``xterm`` (respecting ``$MINDFLOCK_TERMINAL`` first)
 * **macOS** → ``Terminal.app`` via ``osascript``
+* **native Windows** → a Windows Terminal tab (else a new console window)
+  running a MindFlock session-host client (:func:`windows_attach_argv`)
 
 This module only *builds the argv* — the caller runs it (so the caller keeps its
 own subprocess machinery / test seams). :func:`build_terminal_tab_argv` returns
@@ -26,6 +28,7 @@ from backend import osenv
 
 __all__ = [
     "build_terminal_tab_argv",
+    "windows_attach_argv",
     "wsl_distro",
     "wsl_interop_available",
     "wt_command",
@@ -171,5 +174,35 @@ def build_terminal_tab_argv(title: str, tmux_session: str) -> Optional[List[str]
         # xterm and generic fallbacks.
         return [term, "-T", title, "-e", *attach]
 
-    # Native Windows (no tmux) or anything unknown: no terminal-tab launch.
+    if kind == "windows":
+        return _windows_tab_argv(title, tmux_session)
+
+    # Anything unknown: no terminal-tab launch.
     return None
+
+
+def windows_attach_argv(tmux_session: str) -> List[str]:
+    """Native Windows: the command that attaches this console to a session
+    on the MindFlock session host (there is no ``tmux attach`` to run)."""
+    import sys
+
+    return [
+        sys.executable,
+        "-c",
+        "import sys; from backend.session import mux; mux.exec_attach(sys.argv[1])",
+        tmux_session,
+    ]
+
+
+def _windows_tab_argv(title: str, tmux_session: str) -> Optional[List[str]]:
+    attach = windows_attach_argv(tmux_session)
+    wt = shutil.which(wt_command())
+    if wt:
+        return [wt, "-w", "0", "nt", "--title", title, *attach]
+    comspec = os.environ.get("COMSPEC") or shutil.which("cmd.exe")
+    if not comspec:
+        return None
+    # `start "" <cmd…>`: a new console window running the attach (the empty
+    # first argument is start's window title — a bare title would be taken
+    # for the command, and cmd.exe does not read \" escapes).
+    return [comspec, "/c", "start", "", *attach]

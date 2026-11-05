@@ -45,6 +45,8 @@ def under_pytest() -> bool:
 def real_home() -> str:
     """The real user's home from the password database — deliberately NOT
     ``$HOME``, which is exactly what a test redirects (or forgets to)."""
+    if os.name == "nt":
+        return _windows_profile()
     try:
         import pwd
 
@@ -53,7 +55,24 @@ def real_home() -> str:
         return os.path.realpath(os.path.expanduser("~"))
 
 
+def _windows_profile() -> str:
+    """The account's profile folder from the shell (``CSIDL_PROFILE``), not
+    ``%USERPROFILE%`` — the variable a test redirects."""
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 0x28, None, 0, buf) == 0:
+            if buf.value:
+                return os.path.realpath(buf.value)
+    except Exception:  # noqa: BLE001 — fall back to ~ expansion
+        pass
+    return os.path.realpath(os.path.expanduser("~"))
+
+
 def _inside(path: str, root: str) -> bool:
+    # normcase: identity on POSIX; Windows paths are case-insensitive
+    path, root = os.path.normcase(path), os.path.normcase(root)
     return path == root or path.startswith(root + os.sep)
 
 

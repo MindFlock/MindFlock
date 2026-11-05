@@ -44,7 +44,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from backend import gitutil
+from backend import compat, gitutil, osflags
 from backend.peer import paths
 
 __all__ = [
@@ -195,7 +195,7 @@ def _run(
                 cwd=cwd,
                 env=env,
                 close_fds=True,
-                start_new_session=True,
+                **compat.detached_kwargs(),
             )
         except OSError as e:
             raise ShareError("git unavailable: %s" % e.strerror) from None
@@ -703,7 +703,16 @@ def _chmod_dir_nofollow(path: str) -> None:
     """chmod 0700 the directory at ``path`` only if it is not a symlink: an
     O_PATH|O_NOFOLLOW fd pins the inode, the chmod goes through /proc. Without
     O_PATH (macOS) the O_NOFOLLOW fd is opened for reading — which needs r on
-    the dir — and fchmod'ed."""
+    the dir — and fchmod'ed. Windows: no POSIX modes — ``chmod`` there only
+    clears the read-only attribute (which blocks a delete), on anything that
+    is not a link."""
+    if osflags.IS_WINDOWS:
+        try:
+            _not_a_link(os.lstat(path))
+            os.chmod(path, 0o700)
+        except (OSError, ShareError):
+            pass
+        return
     if not _O_PATH:
         try:
             fd = os.open(
@@ -797,13 +806,50 @@ def validate_relpath(relpath) -> List[str]:
     return parts
 
 
-_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_DIR_FLAGS = os.O_RDONLY | osflags.O_DIRECTORY | osflags.O_NOFOLLOW | osflags.O_CLOEXEC
 _O_PATH = getattr(os, "O_PATH", 0)
+_REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT: symlinks AND junctions
+
+
+def _not_a_link(st: os.stat_result) -> None:
+    if stat.S_ISLNK(st.st_mode) or (
+        getattr(st, "st_file_attributes", 0) & _REPARSE_POINT
+    ):
+        raise ShareError("not found")
+
+
+def _open_regular_windows(share: Share, parts: List[str]) -> int:
+    """:func:`_open_regular` on Windows, which has neither ``dir_fd`` nor
+    ``O_NOFOLLOW``: every component is ``lstat``-checked (no symlink, no
+    junction), the leaf opened, and the opened file must be the one checked."""
+    path = share.work
+    for comp in parts[:-1]:
+        path = os.path.join(path, comp)
+        st = os.lstat(path)
+        _not_a_link(st)
+        if not stat.S_ISDIR(st.st_mode):
+            raise ShareError("not found")
+    path = os.path.join(path, parts[-1])
+    st = os.lstat(path)
+    _not_a_link(st)
+    _check_leaf(st)
+    rfd = os.open(path, os.O_RDONLY | osflags.O_BINARY)
+    try:
+        st2 = os.fstat(rfd)
+        _check_leaf(st2)
+        if (st.st_dev, st.st_ino) != (st2.st_dev, st2.st_ino):
+            raise ShareError("not found")
+    except BaseException:
+        os.close(rfd)
+        raise
+    return rfd
 
 
 def _open_regular(share: Share, parts: List[str]) -> int:
     """fd of the regular file ``work/<parts…>``, opened without following a
     symlink at any component. Raises OSError/ShareError on anything else."""
+    if osflags.IS_WINDOWS:
+        return _open_regular_windows(share, parts)
     fd = os.open(share.work, _DIR_FLAGS)
     try:
         for comp in parts[:-1]:

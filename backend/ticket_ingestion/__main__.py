@@ -2,13 +2,13 @@
 
 import asyncio
 import datetime as _dt
-import fcntl
 import json
 import logging
 import os
 import re
 import sys
 
+from backend import compat
 from backend.fsutil import atomic_write_json
 from backend.ticket_ingestion.config import ConfigError, load_config
 from backend.ticket_ingestion.logging_config import setup_logging
@@ -103,7 +103,7 @@ def _acquire_singleton_lock() -> bool:
     # (which acquires the lock) rewrites the PID.
     fh = open(lock_path, "a+")
     try:
-        fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        compat.flock(fh.fileno(), compat.LOCK_EX | compat.LOCK_NB)
     except OSError:
         fh.close()
         return False

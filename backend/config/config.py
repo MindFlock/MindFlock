@@ -187,12 +187,16 @@ def GetConfigDir() -> str:
 
 
 def _user_home_dir() -> Optional[str]:
-    """Mirror Go's ``os.UserHomeDir()`` on unix: return ``$HOME`` (if set and
-    non-empty); ``None`` otherwise.
+    """Mirror Go's ``os.UserHomeDir()``: ``$HOME`` (if set and non-empty);
+    on Windows, where ``$HOME`` is usually unset (Git Bash sets it to the
+    profile), ``%USERPROFILE%`` — Go's own Windows answer; ``None``
+    otherwise.
     """
     home = os.environ.get("HOME", "")
     if home != "":
         return home
+    if os.name == "nt":
+        return os.environ.get("USERPROFILE", "") or None
     return None
 
 
@@ -222,7 +226,16 @@ def GetClaudeCommand() -> str:
 
     Raises ``RuntimeError("claude command not found in aliases or PATH")`` if
     both fail (Go returns ``"", error``).
+
+    Native Windows: the PATH lookup only (``claude.exe`` / ``claude.cmd``
+    via PATHEXT) — a Git Bash ``which`` would answer with a ``/c/…`` path
+    nothing but bash can run, and bash rc aliases are not a Windows habit.
     """
+    if os.name == "nt":
+        found = shutil.which("claude")
+        if found is not None:
+            return found
+        raise RuntimeError("claude command not found in aliases or PATH")
     shell = os.environ.get("SHELL", "")
     if shell == "":
         shell = "/bin/bash"  # Default to bash if SHELL is not set.

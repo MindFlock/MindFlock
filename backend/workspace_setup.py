@@ -22,11 +22,13 @@ both generic so any project can use them:
 """
 
 import logging
+import os
 import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -319,6 +321,28 @@ def resolve_setup_commands(configured: list[str] | None, directory: Path) -> lis
     return auto_setup_commands(Path(directory))
 
 
+def shell_argv(command: str) -> Optional[List[str]]:
+    """``None`` on POSIX (the command goes to ``/bin/sh`` via ``shell=True``,
+    as always); on native Windows the argv that runs this POSIX shell string
+    in Git for Windows' bash — ``shell=True`` there would hand it to cmd.exe."""
+    if os.name != "nt":
+        return None
+    from backend import compat
+
+    return [compat.posix_shell(bash=True), "-c", command]
+
+
+async def create_shell_subprocess(command: str, **kwargs):
+    """``asyncio.create_subprocess_shell(command, **kwargs)``, with the
+    command in Git Bash on native Windows (see :func:`shell_argv`)."""
+    import asyncio
+
+    argv = shell_argv(command)
+    if argv is None:
+        return await asyncio.create_subprocess_shell(command, **kwargs)
+    return await asyncio.create_subprocess_exec(*argv, **kwargs)
+
+
 def run_setup_commands(
     commands: list[str],
     directory: Path,
@@ -334,9 +358,10 @@ def run_setup_commands(
     """
     for command in commands:
         _logger.info("%s: running setup command: %s", log_prefix, command)
+        argv = shell_argv(command)
         cp = subprocess.run(
-            command,
-            shell=True,
+            argv if argv is not None else command,
+            shell=argv is None,
             cwd=str(directory),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -368,7 +393,7 @@ async def run_setup_commands_async(
 
     for command in commands:
         _logger.info("%s: running setup command: %s", log_prefix, command)
-        proc = await asyncio.create_subprocess_shell(
+        proc = await create_shell_subprocess(
             command,
             cwd=str(directory),
             stdout=asyncio.subprocess.PIPE,

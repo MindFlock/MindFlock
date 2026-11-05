@@ -64,6 +64,10 @@ def _log_dir() -> Path:
 
 
 def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":  # os.kill(pid, 0) would terminate it there
+        from backend import osflags
+
+        return osflags.pid_alive(pid)
     try:
         os.kill(pid, 0)
         return True

@@ -121,8 +121,31 @@ def well_known_dirs() -> tuple[str, ...]:
         "~/.asdf/shims",  # asdf version manager
         "/snap/bin",
     )
+    if os.name == "nt":
+        # Native Windows: where the agent CLIs' installers put their .exe /
+        # .cmd launchers (npm's global prefix, winget's links, the Claude and
+        # uv installers' ~/.local/bin, Git for Windows' cmd folder).
+        appdata = os.environ.get("APPDATA", "")
+        local = os.environ.get("LOCALAPPDATA", "")
+        progs = os.environ.get("ProgramFiles", r"C:\Program Files")
+        candidates = (
+            "~/.local/bin",
+            os.path.join(appdata, "npm") if appdata else "",
+            os.path.join(local, "Microsoft", "WinGet", "Links") if local else "",
+            os.path.join(local, "Programs", "Git", "cmd") if local else "",
+            os.path.join(progs, "Git", "cmd"),
+            os.path.join(progs, "nodejs"),
+            "~/.bun/bin",
+            "~/.cargo/bin",
+            "~/.deno/bin",
+            "~/.volta/bin",
+            "~/go/bin",
+            "~/.opencode/bin",
+        )
     out: list[str] = []
     for c in candidates:
+        if not c:
+            continue
         p = os.path.expanduser(c)
         if p not in out and os.path.isdir(p):
             out.append(p)

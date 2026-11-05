@@ -160,14 +160,20 @@ def prepare_seatbelt(
 
 
 #: Forwarded from the supervisor to the sandboxed process group.
-FORWARD_SIGNALS = (
-    signal.SIGWINCH,
-    signal.SIGINT,
-    signal.SIGQUIT,
-    signal.SIGTERM,
-    signal.SIGHUP,
-    signal.SIGUSR1,
-    signal.SIGUSR2,
+#: (Those the OS has: this module only RUNS on Linux and macOS, but must
+#: import everywhere.)
+FORWARD_SIGNALS = tuple(
+    getattr(signal, n)
+    for n in (
+        "SIGWINCH",
+        "SIGINT",
+        "SIGQUIT",
+        "SIGTERM",
+        "SIGHUP",
+        "SIGUSR1",
+        "SIGUSR2",
+    )
+    if hasattr(signal, n)
 )
 
 

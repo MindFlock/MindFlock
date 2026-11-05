@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import functools
 import os
-import pwd
 import re
 import secrets
 import shutil
 import stat
 import subprocess
 import sys
+
+from backend import osflags
 
 __all__ = [
     "SandboxError",
@@ -57,6 +58,8 @@ __all__ = [
 DEFAULT_BRIDGE_PORT = 3128
 FALLBACK_BWRAP = "~/.local/opt/bwrap/root/usr/bin/bwrap"
 UNAVAILABLE_OS = "peer sandbox needs Linux (bubblewrap) or macOS (sandbox-exec)"
+#: Native Windows has neither bubblewrap nor Seatbelt (docs/windows.md).
+UNAVAILABLE_WINDOWS = "The sandboxed shared folder needs Linux or macOS for now"
 
 ETC_ALLOW = (
     "ssl",
@@ -237,6 +240,8 @@ def available() -> tuple[bool, str]:
         from backend.peer import seatbelt
 
         return seatbelt.available()
+    if sys.platform == "win32":
+        return False, UNAVAILABLE_WINDOWS
     if not sys.platform.startswith("linux"):
         return False, UNAVAILABLE_OS
     bwrap = find_bwrap()
@@ -443,7 +448,7 @@ def share_dirs(share) -> dict:
 
 def _user_home() -> str:
     try:
-        return os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+        return osflags.home_dir()
     except KeyError:
         return os.path.realpath(os.path.expanduser("~"))
 
@@ -641,7 +646,7 @@ def _sandbox_env(
     lists; it may not override anything set before it)."""
     proxy = f"http://127.0.0.1:{bridge_port}"
     try:
-        user = pwd.getpwuid(os.getuid()).pw_name
+        user = osflags.user_name()
     except KeyError:
         user = "peer"
     final: dict[str, str] = {

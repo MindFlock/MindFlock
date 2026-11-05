@@ -181,10 +181,18 @@ def _binds(argv):
 
 
 def test_available_reports_reason_off_linux_and_macos(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "platform", "freebsd14")
     assert sandbox.available() == (
         False,
         "peer sandbox needs Linux (bubblewrap) or macOS (sandbox-exec)",
+    )
+
+
+def test_available_on_windows_says_so_in_a_sentence(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert sandbox.available() == (
+        False,
+        "The sandboxed shared folder needs Linux or macOS for now",
     )
 
 

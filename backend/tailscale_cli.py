@@ -49,7 +49,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import List, Optional
 
-from backend import osenv
+from backend import compat, osenv
 
 #: An explicit CLI path (or name on PATH) that wins over discovery.
 BIN_ENV = "MINDFLOCK_TAILSCALE_BIN"
@@ -698,7 +698,7 @@ def start_login(wait: float = 5.0) -> dict:
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     env=env(),
-                    start_new_session=True,
+                    **compat.detached_kwargs(),
                 )
             except OSError as err:
                 return {
