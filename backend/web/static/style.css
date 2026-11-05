@@ -36220,10 +36220,11 @@ button.linklike {
   }
 }
 
-/* The memory chip ("812 MB", lib/sessionMemory): the diff-stat's look, so it
-   yields and drops out with it. Colour only when it matters — amber big for
-   the machine, red too big or a culprit under memory pressure — and then it
-   stays even in a narrow header: that is when it must be seen. */
+/* The memory chip ("812 MB", lib/sessionMemory): the diff-stat's look. It is
+   short, so it outlasts the diff-stat (Pane.css drops .ctxline below 700px —
+   a 2×2 grid's heads) down to 560px. Colour only when it matters — amber big
+   for the machine, red too big or a culprit under memory pressure — and then
+   it stays in any header: that is when it must be seen. */
 .ctxline.mem-chip {
   cursor: default;
 }
@@ -36239,9 +36240,14 @@ button.linklike {
 }
 
 @container (max-width: 700px) {
-  .pane-head .ctxline.mem-chip.mem-warn,
-  .pane-head .ctxline.mem-chip.mem-crit {
+  .pane-head .ctxline.mem-chip {
     display: inline-flex !important;
+  }
+}
+
+@container (max-width: 560px) {
+  .pane-head .ctxline.mem-chip:not(.mem-warn):not(.mem-crit) {
+    display: none !important;
   }
 }
 

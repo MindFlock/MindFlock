@@ -159,10 +159,13 @@ describe("the pane's wiring (source)", () => {
   it("hidden, it is still one click away at the top of ⋯", () => {
     expect(pane).toContain('!shows("memory") && mem && memoryTip(mem),');
   });
-  it("amber and red stay in a narrow header", () => {
+  it("outlasts the diff-stat in a 2×2 head; amber and red stay in any header", () => {
     const s = css("components/grid/contextPresets.css");
     expect(s).toContain(".ctxline.mem-chip.mem-warn");
     expect(s).toContain(".ctxline.mem-chip.mem-crit");
-    expect(s).toMatch(/\.pane-head \.ctxline\.mem-chip\.mem-crit\s*\{\s*display: inline-flex !important;/);
+    expect(s).toMatch(/max-width: 700px\)\s*\{\s*\.pane-head \.ctxline\.mem-chip\s*\{\s*display: inline-flex !important;/);
+    expect(s).toMatch(
+      /max-width: 560px\)\s*\{\s*\.pane-head \.ctxline\.mem-chip:not\(\.mem-warn\):not\(\.mem-crit\)\s*\{\s*display: none !important;/,
+    );
   });
 });

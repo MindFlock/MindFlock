@@ -1232,8 +1232,9 @@ newest thing you actually asked.
   · 23 processes*. It is neutral unless it matters: **amber** at ≥ 10% of the
   machine's RAM or ≥ 2 GB, **red** at ≥ 20% or ≥ 4 GB — and red too, while
   the machine's memory reads low or critical (`/api/system/memory`), for the
-  three biggest sessions holding ≥ 512 MB: the ones to close first. A
-  coloured number stays in a narrow header after the diff stats have gone. A
+  three biggest sessions holding ≥ 512 MB: the ones to close first. It
+  outlasts the diff stats in a narrow header (down to 560px — a 2×2 grid's
+  heads keep it), and an amber or red one stays in any header. A
   peer's or another device's session is weighed by the 2 GB / 4 GB floors
   alone. On by default; switch it off in Customize → Pane header, and it
   heads ⋯ instead, like the diff stats.
@@ -1332,7 +1333,7 @@ newest thing you actually asked.
   name or a Queue badge can be in icons beside one in words. The container
   queries still trim the rest: below 1000px the cost chip drops its provider
   and context parts (the cost stays); below 700px the diff-stat line goes
-  (and a neutral memory number with it — an amber or red one stays);
+  (the memory number stays down to 560px, an amber or red one always);
   below 640px and 440px the gaps and pads tighten; below 300px an Off ⏩
   leaves (Fast-track… is in ⋯). A squeezed name gives way in its middle first, then — only past
   its tail — with an ellipsis at the end, never sliced mid-letter; a
