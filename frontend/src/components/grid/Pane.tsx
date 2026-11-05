@@ -10,7 +10,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { instApi } from "../../api/client";
-import { refreshInstances, useConfig, useInstances } from "../../state/queries";
+import { refreshInstances, useConfig, useInstances, useMemory } from "../../state/queries";
+import { fmtMb, memoryRank, memoryReading, memoryTip, memoryTone, type MemoryTone } from "../../lib/sessionMemory";
 import { useUi } from "../../state/store";
 import { fmtUsd, displayBranch, firstLine } from "../../lib/format";
 import { chipState, fastTrackStep, liveStep, nextStep, resetStep, withVerifyVerdict } from "../../lib/stage";
@@ -180,6 +181,9 @@ export function Pane({
   // its composer here). Its badge counts workers that need YOUR answer plus
   // reports newer than the last time you looked.
   const { data: allRows } = useInstances();
+  // The machine's RAM and pressure level (the same poll as the rail's memory
+  // line) — what colours the memory chip.
+  const { data: sysMem } = useMemory();
   const family = familyOf(title, allRows ?? []);
   const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
   const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
@@ -825,6 +829,19 @@ export function Pane({
   const budget = inst.budget;
   const ds = inst.workspace_missing ? null : inst.diff_stat;
   const hasDiffStat = !!(ds && ((ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0));
+  // The memory chip (lib/sessionMemory): only with a reading. Its colour
+  // weighs it against THIS machine's RAM and its sessions, so a peer's or
+  // another device's session is judged by the absolute floors alone.
+  const mem = memoryReading(inst.memory);
+  const memLocal = !theirs && !inst.device;
+  const memTone: MemoryTone = mem
+    ? memoryTone(
+        mem.mb,
+        memLocal ? (sysMem?.total || 0) / 1048576 : 0,
+        memLocal ? sysMem?.level : undefined,
+        memLocal ? memoryRank((allRows ?? []).filter((r) => !r.device && !isPeerRow(r)), title) : -1,
+      )
+    : "";
   // The guided button only wears the accent when pressing it is the thing to
   // do now: not while the agent is busy (working, asking, at its limit).
   // Quiet, it is still the same button, outlined. Hint and blocked steps keep
@@ -890,6 +907,7 @@ export function Pane({
   const menuSummary = [
     !shows("cost") && usageHeadline(inst),
     !shows("diffstat") && hasDiffStat && diffStatText(inst),
+    !shows("memory") && mem && memoryTip(mem),
   ].filter(Boolean) as string[];
   // No Pause button: pausing lives in the palette, the CLI and the API. A
   // session that IS paused (from there, or by an older build) shows ▶ Resume
@@ -901,6 +919,7 @@ export function Pane({
   const fitKeyNow = [
     items.tabs.join(","),
     items.buttons.join(","),
+    mem ? 1 : 0,
     displayName,
     shownStep?.label ?? "",
     ft?.label ?? "",
@@ -1182,6 +1201,11 @@ export function Pane({
     ),
     cost: <SessionUsageChip key="cost" inst={inst} />,
     diffstat: hasDiffStat ? <CtxLine key="diffstat" inst={inst} /> : null,
+    memory: mem ? (
+      <span key="memory" className={"ctxline mem-chip" + (memTone ? " mem-" + memTone : "")} title={memoryTip(mem)}>
+        {fmtMb(mem.mb)}
+      </span>
+    ) : null,
     // A Sky card isn't a grid slot: nothing to hide it from.
     hide: embedded ? null : (
       <button

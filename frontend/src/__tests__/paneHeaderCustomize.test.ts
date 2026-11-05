@@ -53,10 +53,12 @@ const ctx = (o: Partial<Parameters<typeof headerItems>[1]> = {}) => ({
 });
 
 describe("the default set and the rules", () => {
-  it("is the owner's list: Agent · Terminal · Diff · Queue · Map, then ⏩ and Copy entire history", () => {
+  it("is the owner's list: Agent · Terminal · Diff · Queue · Map, then ⏩ and Copy entire history (+ the memory number)", () => {
+    // "memory" is on by default but draws only with a reading (Pane.tsx:
+    // `memory: mem ? … : null`), so a session without one shows the list.
     expect(headerItems(null, ctx())).toEqual({
       tabs: ["agent", "shell", "diff", "queue", "map"],
-      buttons: ["fasttrack", "copy"],
+      buttons: ["fasttrack", "copy", "memory"],
     });
     const r = resolvePaneHeader(null);
     for (const off of ["thread", "next", "history", "cost", "diffstat", "hide"] as const)
@@ -77,10 +79,10 @@ describe("the default set and the rules", () => {
     p = togglePaneItem(p, "queue");
     expect(headerItems(p, ctx())).toEqual({
       tabs: ["agent", "shell", "diff", "map"],
-      buttons: ["fasttrack", "copy", "history"],
+      buttons: ["fasttrack", "copy", "history", "memory"],
     });
     p = movePaneItem(p, "copy", -1);
-    expect(headerItems(p, ctx()).buttons).toEqual(["copy", "fasttrack", "history"]);
+    expect(headerItems(p, ctx()).buttons).toEqual(["copy", "fasttrack", "history", "memory"]);
     // A tab never moves among the buttons, and the ends don't wrap.
     expect(movePaneItem(p, "agent", -1)).toEqual(p);
     p = placePaneItem(p, "map", "agent");
@@ -118,10 +120,11 @@ describe("the default set and the rules", () => {
   });
 
   it("calm folds Queue and ⏩ only from an untouched header, and never their state", () => {
-    expect(headerItems(null, ctx({ calm: true }))).toEqual({ tabs: ["agent", "shell", "diff"], buttons: ["copy"] });
+    // The memory number is state, not an option: calm never folds it.
+    expect(headerItems(null, ctx({ calm: true }))).toEqual({ tabs: ["agent", "shell", "diff"], buttons: ["copy", "memory"] });
     expect(headerItems(null, ctx({ calm: true, queueBusy: true, ftBusy: true }))).toEqual({
       tabs: ["agent", "shell", "diff", "queue"],
-      buttons: ["fasttrack", "copy"],
+      buttons: ["fasttrack", "copy", "memory"],
     });
     expect(headerItems(null, ctx({ calm: true, active: "queue" })).tabs).toContain("queue");
     // Customized (even to the same set): calm leaves it alone.

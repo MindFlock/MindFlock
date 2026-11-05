@@ -27019,6 +27019,13 @@ var PANE_BUTTONS = [
 		on: false
 	},
 	{
+		id: "memory",
+		kind: "button",
+		label: "Memory",
+		note: "What the session's processes hold — agent, MCP servers, tests, servers it runs",
+		on: true
+	},
+	{
 		id: "hide",
 		kind: "button",
 		label: "Hide −",
@@ -62075,6 +62082,51 @@ function DeviceSection(props) {
 	] });
 }
 //#endregion
+//#region src/lib/sessionMemory.ts
+function memoryReading(m) {
+	if (!m || typeof m !== "object") return null;
+	const mb = Number(m.mb);
+	if (!Number.isFinite(mb) || mb <= 0) return null;
+	return m;
+}
+function fmtMb(mb) {
+	const n = Math.max(0, Number(mb) || 0);
+	if (n < 1e3) return Math.round(n) + " MB";
+	const gb = n / 1024;
+	if (gb < 10) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
+	return Math.round(gb) + " GB";
+}
+var WARN_MB = 2048;
+var CRIT_MB = 4096;
+var WARN_SHARE = .1;
+var CRIT_SHARE = .2;
+var PRESSURE_TOP = 3;
+var PRESSURE_MIN_MB = 512;
+function memoryTone(mb, totalMb, level, rank = -1) {
+	const share = totalMb > 0 ? mb / totalMb : 0;
+	if (mb >= CRIT_MB || share >= CRIT_SHARE) return "crit";
+	if ((level === "low" || level === "critical") && rank >= 0 && rank < PRESSURE_TOP && mb >= PRESSURE_MIN_MB) return "crit";
+	if (mb >= WARN_MB || share >= WARN_SHARE) return "warn";
+	return "";
+}
+function memoryRank(rows, title) {
+	return (rows || []).map((r) => ({
+		title: r.title,
+		mb: memoryReading(r.memory)?.mb ?? 0
+	})).filter((r) => r.mb > 0).sort((a, b) => b.mb - a.mb).findIndex((r) => r.title === title);
+}
+function memoryTip(m) {
+	let s = "Memory: " + fmtMb(m.mb);
+	if ((m.peak_mb || 0) > m.mb) s += " (peak " + fmtMb(m.peak_mb) + ")";
+	const parts = [];
+	if (m.agent_mb > 0) parts.push("agent " + fmtMb(m.agent_mb));
+	if (m.mcp_mb > 0) parts.push("MCP servers " + fmtMb(m.mcp_mb));
+	if (m.other_mb > 0) parts.push("other " + fmtMb(m.other_mb) + " (tests, servers…)");
+	if (m.procs > 0) parts.push(m.procs + (m.procs === 1 ? " process" : " processes"));
+	if (parts.length) s += " — " + parts.join(" · ");
+	return s;
+}
+//#endregion
 //#region src/lib/paneHistory.ts
 function fetchPaneHistory(title, pane) {
 	return apiText(`/api/instances/${encodeURIComponent(title)}/history?pane=${pane}`);
@@ -95970,6 +96022,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const setLastTab = useUi((s) => s.setLastTab);
 	const reduceMotion = useUi((s) => s.reduceMotion);
 	const { data: allRows } = useInstances();
+	const { data: sysMem } = useMemory();
 	const family = familyOf(title, allRows ?? []);
 	const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
@@ -96472,6 +96525,9 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const budget = inst.budget;
 	const ds = inst.workspace_missing ? null : inst.diff_stat;
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
+	const mem = memoryReading(inst.memory);
+	const memLocal = !theirs && !inst.device;
+	const memTone = mem ? memoryTone(mem.mb, memLocal ? (sysMem?.total || 0) / 1048576 : 0, memLocal ? sysMem?.level : void 0, memLocal ? memoryRank((allRows ?? []).filter((r) => !r.device && !isPeerRow(r)), title) : -1) : "";
 	const act = effectiveActivity(inst);
 	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 	const items = headerItems(paneHeader, {
@@ -96507,11 +96563,16 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		onCopyHistory: termTab ? copyHistory : void 0,
 		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
 	}), inst);
-	const menuSummary = [!shows("cost") && usageHeadline(inst), !shows("diffstat") && hasDiffStat && diffStatText(inst)].filter(Boolean);
+	const menuSummary = [
+		!shows("cost") && usageHeadline(inst),
+		!shows("diffstat") && hasDiffStat && diffStatText(inst),
+		!shows("memory") && mem && memoryTip(mem)
+	].filter(Boolean);
 	const canResume = sessionAction("resume").enabled(menuCtx);
 	const fitKeyNow = [
 		items.tabs.join(","),
 		items.buttons.join(","),
+		mem ? 1 : 0,
 		displayName,
 		shownStep?.label ?? "",
 		ft?.label ?? "",
@@ -96754,6 +96815,11 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		}, "copy"),
 		cost: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }, "cost"),
 		diffstat: hasDiffStat ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }, "diffstat") : null,
+		memory: mem ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ctxline mem-chip" + (memTone ? " mem-" + memTone : ""),
+			title: memoryTip(mem),
+			children: fmtMb(mem.mb)
+		}, "memory") : null,
 		hide: embedded ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			className: "act pane-close",
 			type: "button",
@@ -127197,6 +127263,10 @@ function previewButton(id) {
 					children: "· 2 files"
 				})
 			]
+		}, id);
+		case "memory": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ctxline mem-chip",
+			children: "812 MB"
 		}, id);
 		case "hide": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "act pane-close",
