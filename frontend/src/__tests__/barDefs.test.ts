@@ -37,8 +37,8 @@ describe("SIDEBAR_BARS labels", () => {
     expect(label("prompts")).toBe("Prompts");
   });
 
-  it("keeps the owner's out-of-the-box set: Usage, Tickets and Assistant", () => {
-    expect(DEFAULT_VISIBLE_BARS).toEqual(["usage", "ingestion", "assistant"]);
+  it("keeps the owner's out-of-the-box set: Usage, Memory, Tickets and Assistant", () => {
+    expect(DEFAULT_VISIBLE_BARS).toEqual(["usage", "memory", "ingestion", "assistant"]);
   });
 });
 
@@ -52,6 +52,7 @@ describe("orderedSections", () => {
       "prompts",
       "sessions",
       "usage",
+      "memory",
       "ingestion",
       "pr-review",
       "issue-handling",
@@ -66,6 +67,7 @@ describe("orderedSections", () => {
     expect(orderedSections(["bogus", "assistant"])).toEqual([
       "assistant",
       "usage",
+      "memory",
       "ingestion",
       "pr-review",
       "issue-handling",
@@ -80,6 +82,15 @@ describe("orderedSections", () => {
     expect(out.indexOf("prompts")).toBe(out.indexOf(SESSIONS_KEY) - 1);
     // Once the order mentions it, its saved place wins.
     expect(orderedSections([SESSIONS_KEY, "prompts", "usage"]).slice(0, 2)).toEqual([SESSIONS_KEY, "prompts"]);
+  });
+  it("puts Memory right after Usage in a saved order that never mentioned it", () => {
+    // A save from before Memory existed, Usage dragged under the sessions.
+    const out = orderedSections(["ingestion", SESSIONS_KEY, "usage", "assistant"]);
+    expect(out.indexOf("memory")).toBe(out.indexOf("usage") + 1);
+    // Once the order mentions it, its saved place wins.
+    const saved = orderedSections(["memory", "ingestion", SESSIONS_KEY, "usage"]);
+    expect(saved[0]).toBe("memory");
+    expect(saved.filter((k) => k === "memory")).toHaveLength(1);
   });
   it("dedupes repeated keys, keeping the first occurrence", () => {
     expect(orderedSections(["usage", "usage"])).toEqual(DEFAULT_SECTION_ORDER);
@@ -118,6 +129,7 @@ describe("orderedSections with extension bars", () => {
       DB,
       "sessions",
       "usage",
+      "memory",
       "ingestion",
       "pr-review",
       "issue-handling",
@@ -126,7 +138,7 @@ describe("orderedSections with extension bars", () => {
   });
   it("keeps the saved place of an extension bar the order already mentions", () => {
     const out = orderedSections([DB, "usage", "prompts", SESSIONS_KEY], [DB]);
-    expect(out.slice(0, 4)).toEqual([DB, "usage", "prompts", SESSIONS_KEY]);
+    expect(out.slice(0, 5)).toEqual([DB, "usage", "memory", "prompts", SESSIONS_KEY]);
     // It is not inserted a second time.
     expect(out.filter((k) => k === DB)).toHaveLength(1);
   });
@@ -159,6 +171,7 @@ describe("orderedBars", () => {
       "prompts",
       "assistant",
       "usage",
+      "memory",
       "ingestion",
       "pr-review",
       "issue-handling",

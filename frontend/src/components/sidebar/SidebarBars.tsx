@@ -1,4 +1,4 @@
-/** The movable sidebar sections. Each customizable bar (Usage, Tickets, Pull
+/** The movable sidebar sections. Each customizable bar (Usage, Memory, Tickets, Pull
  * requests, Issues, Assistant, Prompts) renders inside a <BarSlot> that carries
  * the drag affordance (a grip on the left, since the bars themselves are
  * wall-to-wall buttons/toggles that would otherwise swallow the drag gesture)
@@ -10,6 +10,7 @@
 
 import { type DragEvent, type ReactNode } from "react";
 import { ExtensionBar } from "../../extensions/ExtensionBar";
+import { OverallMemory } from "../usage/OverallMemory";
 import { OverallUsage } from "../usage/OverallUsage";
 import { AutomationBar } from "./AutomationBar";
 import { EXT_BAR_PREFIX } from "./barDefs";
@@ -37,6 +38,8 @@ export function barContent(key: string, cbs: ContentCbs): ReactNode {
   switch (key) {
     case "usage":
       return <OverallUsage />;
+    case "memory":
+      return <OverallMemory />;
     case "ingestion":
       return <AutomationBar />;
     case "pr-review":
