@@ -1309,9 +1309,14 @@ class GeneralSettings:
     the ``gitnexus analyze`` gate (:mod:`backend.providers.agent_limits`) —
     ``enabled``, per-agent ``high`` / ``max`` / ``swap``, all-agents
     ``fleet_high`` / ``fleet_max`` / ``fleet_swap`` (``"30%"`` of RAM,
-    ``"6G"``, ``"off"``), ``gitnexus_heap_mb`` (0 = no gate) and
-    ``gitnexus_at_once``. ``{}`` (the default) = the built-in defaults; only
-    keys the user set are stored. Per device (RAM is). Read at launch.
+    ``"6G"``, ``"off"``), ``gitnexus_heap_mb`` (0 = no gate),
+    ``gitnexus_at_once`` and ``shed_idle`` (default true: when memory stays
+    critical, :mod:`backend.web.core.memory_shield` puts idle agents to
+    sleep; false turns that off). ``fleet_high`` (default ``"65%"``) is the
+    share of RAM all agents together may use before the kernel throttles
+    them as one (``MemoryHigh`` on the agents' slice). ``{}`` (the default)
+    = the built-in defaults; only keys the user set are stored. Per device
+    (RAM is). Read at launch (``shed_idle``: on every memory watch pass).
 
     ``workers_request`` / ``workers_model``: Flock mode's words
     (:mod:`backend.web.core.flock_mode`) — the request a session gets with

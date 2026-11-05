@@ -269,6 +269,23 @@ def _memory_block() -> str:
     return ""
 
 
+def host_held_back(url: str) -> str:
+    """Why a request to the voice host at ``url`` must not be sent now ("" =
+    send it): a host on this machine or network (Voice Lab and its kin: a
+    model server that takes gigabytes once woken) while memory reads low or
+    critical (core.memory_shield.voice_lab_yield, which logs it once per
+    episode). A remote API is never held. Never raises."""
+    try:
+        if not _local_host(url):
+            return ""
+        from backend.web.core import memory_shield as _shield
+
+        why = _shield.voice_lab_yield()
+    except Exception:  # noqa: BLE001 — the guard never breaks a request
+        return ""
+    return ("voice host held back: " + why) if why else ""
+
+
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -863,8 +880,13 @@ class _OpenAI(Backend):
         self, url: str, headers: Dict[str, str], body: bytes, timeout: float
     ) -> Tuple[str, bytes]:
         """POST and return ``(content-type, body)``; every failure is a
-        :class:`SpeechError` naming the host."""
+        :class:`SpeechError` naming the host. A local host is never called
+        while memory reads low (:func:`host_held_back`): nothing would wake
+        Voice Lab then, whichever path asked (a line, a warm, a probe)."""
         host = _host(url)
+        held = host_held_back(url)
+        if held:
+            raise SpeechError(held)
         try:
             status, ctype, data = _http("POST", url, headers, body, timeout)
         except (OSError, http.client.HTTPException) as err:  # refused, reset, timeout
@@ -990,6 +1012,9 @@ class OpenAITTS(_OpenAI):
         url = self._cfg()[0]
         if not _local_host(url):
             return "skipped: %s is not on this machine or network" % _host(url)
+        held = host_held_back(url)
+        if held:
+            return "skipped: " + held
         TTS_CHAIN.warm_host(self)  # in the lane, and timed: see TtsChain
         return "loaded"
 
@@ -1814,6 +1839,10 @@ COLD_START_TIMEOUT = 90.0
 PROBE_TIMEOUT = 3.0
 #: The fallback voices, in order, after the configured one (never itself).
 FALLBACK_TTS: Tuple[str, ...] = ("local",)
+#: Also tried while the configured host yields to memory
+#: (:meth:`TtsChain.memory_yield`): piper is held back then too, and the OS
+#: voice costs next to nothing.
+MEMORY_FALLBACK_TTS: Tuple[str, ...] = ("system",)
 #: :class:`TtsChain`'s switch back: this long after the last fallback line
 #: should have finished playing, with nothing in flight.
 REPLY_GAP_SECONDS = 2.5
@@ -2463,10 +2492,25 @@ class TtsChain:
 
     # -- choosing -------------------------------------------------------- #
     @staticmethod
-    def fallback_for(primary: Backend) -> Optional[Backend]:
+    def memory_yield(primary: Backend) -> str:
+        """Why ``primary`` must not be woken or called now ("" = it may): a
+        host that :meth:`Backend.starts_cold` (on this machine or network:
+        Voice Lab) while memory reads low or critical. Its lines go to the
+        fallback meanwhile; nothing is sent to it, not even a probe."""
+        try:
+            if not primary.starts_cold():
+                return ""
+            return host_held_back(primary._cfg()[0])  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — unreadable settings: not held
+            return ""
+
+    @staticmethod
+    def fallback_for(primary: Backend, held: bool = False) -> Optional[Backend]:
         """The first ready :data:`FALLBACK_TTS` engine that is not
-        ``primary``."""
-        for backend_id in FALLBACK_TTS:
+        ``primary``. ``held`` (the host yields to memory, :meth:`memory_yield`):
+        the OS voice (:data:`MEMORY_FALLBACK_TTS`) may say it too, since piper
+        itself is held back while memory is low."""
+        for backend_id in FALLBACK_TTS + (MEMORY_FALLBACK_TTS if held else ()):
             if backend_id == primary.id:
                 continue
             backend = get("tts", backend_id)
@@ -2488,7 +2532,18 @@ class TtsChain:
         when it is healthy), too slow for now (:meth:`too_slow`) or a reply
         of this listener that began on the fallback is still going
         (:class:`TtsChain`). ``engine`` is None when ``primary`` is down and
-        no fallback is ready. ``probe``: as :meth:`down_reason`."""
+        no fallback is ready. ``probe``: as :meth:`down_reason`.
+
+        While memory is short (:meth:`memory_yield`) a local host is not
+        asked at all: the line goes to the fallback (piper, else the OS
+        voice), ``why`` says so, and with neither ready ``engine`` is None
+        (the client then uses its own voice). No probe is started."""
+        held = self.memory_yield(primary)
+        if held:
+            with self._lock:
+                self._reply(listener).sticky = True
+            fallback = self.fallback_for(primary, held=True)
+            return (fallback, True, held) if fallback else (None, False, held)
         why = self.down_reason(primary, probe)
         slow = "" if why else self.too_slow(primary, probe)
         with self._lock:
@@ -2574,6 +2629,10 @@ class TtsChain:
         it."""
         engine, fell_back, why = self.pick(primary, listener)
         if engine is None:
+            if self.memory_yield(primary):
+                raise SpeechError(
+                    "%s (%s); no local fallback voice is ready" % (why, primary.label)
+                )
             raise SpeechError(
                 "%s is down (%s) and no fallback voice is ready" % (primary.label, why),
                 down=True,
@@ -2654,13 +2713,15 @@ class TtsChain:
         cold start (:meth:`cold`). ``probe=False``: a read only, nothing
         sent to the host (:meth:`down_reason`)."""
         engine, fell_back, why = self.pick(primary, listener, probe)
-        slow = "" if why else self.too_slow(primary, probe)
+        held = self.memory_yield(primary)
+        slow = "" if (why or held) else self.too_slow(primary, probe)
         return {
             "engine": engine,
             "fell_back": fell_back,
-            "why": why,
+            "why": "" if held else why,
+            "held": held,
             "slow": slow,
-            "cold": self.cold(primary),
+            "cold": False if held else self.cold(primary),
         }
 
 
@@ -2691,7 +2752,15 @@ def _warm_target(kind: str) -> Tuple[Optional[Backend], str]:
     elif kind == "tts":
         backend, detail = select(kind)
         ok = backend is not None
-        if backend is not None and TTS_CHAIN.down_reason(backend):
+        held = TTS_CHAIN.memory_yield(backend) if backend is not None else ""
+        if held:
+            # Memory is short: never wake a local host to warm it; have the
+            # fallback that speaks meanwhile ready instead.
+            fallback = TTS_CHAIN.fallback_for(backend, held=True)  # type: ignore[arg-type]
+            if fallback is None:
+                return None, "skipped: " + held
+            backend, detail = fallback, fallback.ready()[1]
+        elif backend is not None and TTS_CHAIN.down_reason(backend):
             # The configured voice is down: have the fallback that speaks
             # meanwhile loaded instead (its probe re-checks the host).
             fallback = TTS_CHAIN.fallback_for(backend)
@@ -2831,6 +2900,11 @@ def _describe_tts(
     ready["tts_cold"] = bool(st.get("cold"))
     if engine is None:
         ready["tts"] = False
+        if st.get("held"):
+            return "%s is held back (%s) and no fallback voice is ready" % (
+                detail,
+                st["held"],
+            )
         return "%s is down (%s) and no fallback voice is ready" % (detail, why)
     ready["tts_fallback"] = bool(st["fell_back"])
     name = engine.engine_name()
@@ -2842,7 +2916,9 @@ def _describe_tts(
         fb_detail = engine.ready()[1]
     except Exception:  # noqa: BLE001
         fb_detail = engine.label
-    if why:
+    if st.get("held"):
+        until = "while memory is short (%s)" % st["held"]
+    elif why:
         until = "while it is down (%s)" % why
     elif st.get("slow"):
         until = "while it is too slow (%s)" % st["slow"]

@@ -26,6 +26,7 @@ interface BarNote {
 
 const NOTES: Record<string, BarNote> = {
   usage: { text: "What your sessions cost" },
+  memory: { text: "How full this machine's memory is, and what holds it" },
   ingestion: {
     text: "Appears once a ticket source is connected",
     link: { label: "Intake → Tickets", dialog: "intake", target: "tickets" },

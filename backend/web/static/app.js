@@ -26420,6 +26420,10 @@ var SIDEBAR_BARS = [
 		label: "Usage"
 	},
 	{
+		key: "memory",
+		label: "Memory"
+	},
+	{
 		key: "ingestion",
 		label: "Tickets"
 	},
@@ -26441,8 +26445,10 @@ var SIDEBAR_BARS = [
 	}
 ];
 var LATE_BARS = /* @__PURE__ */ new Set(["prompts"]);
+var FOLLOWS = { memory: "usage" };
 var DEFAULT_VISIBLE_BARS = [
 	"usage",
+	"memory",
 	"ingestion",
 	"assistant"
 ];
@@ -26473,6 +26479,7 @@ function orderedSections(order, extraKeys = []) {
 	const lateMissing = [];
 	for (const key of DEFAULT_SECTION_ORDER) if (!seen.has(key)) {
 		if (order.length && LATE_BARS.has(key)) lateMissing.push(key);
+		else if (order.length && FOLLOWS[key] && out.includes(FOLLOWS[key])) out.splice(out.indexOf(FOLLOWS[key]) + 1, 0, key);
 		else out.push(key);
 		seen.add(key);
 	}
@@ -27032,6 +27039,13 @@ var PANE_BUTTONS = [
 		label: "Diff stats",
 		note: "+added −removed · files, against the base branch",
 		on: false
+	},
+	{
+		id: "memory",
+		kind: "button",
+		label: "Memory",
+		note: "What the session's processes hold — agent, MCP servers, tests, servers it runs",
+		on: true
 	},
 	{
 		id: "hide",
@@ -28032,6 +28046,26 @@ function useMemory() {
 		queryFn: () => api("/api/system/memory"),
 		refetchInterval: (q) => q.state.data?.gate?.holding ? 5e3 : 15e3,
 		retry: false
+	});
+}
+function useMemoryDetail(enabled) {
+	return useQuery({
+		queryKey: ["memory-detail"],
+		queryFn: () => api("/api/memory"),
+		refetchInterval: 15e3,
+		refetchIntervalInBackground: false,
+		retry: false,
+		enabled
+	});
+}
+function useMemoryHistory(enabled) {
+	return useQuery({
+		queryKey: ["memory-history", 60],
+		queryFn: () => api("/api/memory/history?minutes=60"),
+		refetchInterval: 6e4,
+		refetchIntervalInBackground: false,
+		retry: false,
+		enabled
 	});
 }
 function useSlots(enabled) {
@@ -30606,7 +30640,7 @@ var LEAD_ASKS = {
 	lead_gone: "its lead is gone — nothing can merge or ship",
 	stray: "changes no worker owns in the lead's folder — commit or discard them yourself"
 };
-var num$6 = (v) => Number(v) || 0;
+var num$7 = (v) => Number(v) || 0;
 var str$4 = (v) => v == null ? "" : String(v);
 function runNote(event, data, info = {}) {
 	const d = data || {};
@@ -30648,8 +30682,8 @@ function runNote(event, data, info = {}) {
 			};
 		}
 		case "run.finished": {
-			const shipped = num$6(d.shipped);
-			const failed = num$6(d.failed);
+			const shipped = num$7(d.shipped);
+			const failed = num$7(d.failed);
 			const lane = info.lane?.(run) || "";
 			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " " + laneDoneWord(lane);
 			const what = str$4(d.outcome) || shipped + word;
@@ -38222,7 +38256,7 @@ function openThread(title, composeTo) {
 //#region src/lib/ask.ts
 var TYPED_RECENTLY_MS = 1e4;
 var EVENT_ASK_GRACE_MS = 8e3;
-var num$5 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
+var num$6 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
 var strOrNull$1 = (v) => typeof v === "string" && v.trim() ? v.trim() : null;
 function normAsking(v) {
 	if (!v || typeof v !== "object") return null;
@@ -38232,7 +38266,7 @@ function normAsking(v) {
 	return {
 		kind,
 		text: strOrNull$1(o.text),
-		ts: num$5(o.ts),
+		ts: num$6(o.ts),
 		dialog_id: strOrNull$1(o.dialog_id),
 		parsed: o.parsed === true,
 		source: strOrNull$1(o.source)
@@ -38246,7 +38280,7 @@ function askingOf(inst, activity = effectiveActivity(inst)) {
 		return {
 			kind: "dialog",
 			text: null,
-			ts: num$5(inst.activity_since),
+			ts: num$6(inst.activity_since),
 			dialog_id: null,
 			parsed: false,
 			source: null
@@ -38285,7 +38319,7 @@ function askQueue(instances, waiting, events, opts = {}) {
 	};
 	for (const w of waiting || []) {
 		if (w.kind !== "question" || !w.title || out.has(w.title) || movedOn(w.title)) continue;
-		const ts = num$5(w.since);
+		const ts = num$6(w.since);
 		out.set(w.title, {
 			title: w.title,
 			kind: "question",
@@ -48451,7 +48485,11 @@ function writeCalmHint(calm) {
 		if (localStorage.getItem(CALM_HINT_KEY) !== (calm ? "1" : "0")) localStorage.setItem(CALM_HINT_KEY, calm ? "1" : "0");
 	} catch {}
 }
-var CALM_HIDDEN_BARS = ["usage", "assistant"];
+var CALM_HIDDEN_BARS = [
+	"usage",
+	"memory",
+	"assistant"
+];
 function calmHidesBar(key) {
 	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
 }
@@ -50241,7 +50279,7 @@ function useTitleBadge() {
 //#endregion
 //#region src/lib/codemapApi.ts
 var arr = (v) => Array.isArray(v) ? v : [];
-var num$4 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
+var num$5 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
 var str$2 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
 var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var enc = encodeURIComponent;
@@ -50250,8 +50288,8 @@ function normSym(v) {
 	return {
 		name: str$2(o.name),
 		kind: str$2(o.kind, "function"),
-		line: num$4(o.line),
-		end: num$4(o.end),
+		line: num$5(o.line),
+		end: num$5(o.end),
 		public: o.public !== false,
 		sig: str$2(o.sig),
 		parent: o.parent == null ? null : str$2(o.parent),
@@ -50264,7 +50302,7 @@ function normEntry(v) {
 		kind: str$2(o.kind, "http"),
 		method: str$2(o.method, "ANY"),
 		route: str$2(o.route),
-		line: num$4(o.line),
+		line: num$5(o.line),
 		handler: str$2(o.handler),
 		path: o.path == null ? void 0 : str$2(o.path),
 		changed: o.changed === true ? true : void 0
@@ -50281,7 +50319,7 @@ function normFileView(v) {
 	return {
 		path: str$2(o.path),
 		lang: str$2(o.lang),
-		loc: num$4(o.loc),
+		loc: num$5(o.loc),
 		symbols: arr(o.symbols).map(normSym),
 		imports: {
 			internal: arr(imp.internal).map(normDep).filter((d) => d.path),
@@ -50289,7 +50327,7 @@ function normFileView(v) {
 		},
 		entry: arr(o.entry).map(normEntry),
 		used_by: arr(o.used_by).map(normDep).filter((d) => d.path),
-		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$4(h[0]), num$4(h[1])]),
+		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$5(h[0]), num$5(h[1])]),
 		changed_symbols: arr(o.changed_symbols).map((x) => str$2(x)),
 		zones: {
 			red: !!z.red,
@@ -50309,8 +50347,8 @@ async function searchCode(title, q) {
 			path: str$2(o.path),
 			name: str$2(o.name),
 			kind: str$2(o.kind, "file"),
-			line: num$4(o.line),
-			score: num$4(o.score)
+			line: num$5(o.line),
+			score: num$5(o.score)
 		};
 	});
 }
@@ -59269,6 +59307,350 @@ function UsagePopNote({ text }) {
 	});
 }
 //#endregion
+//#region src/lib/sessionMemory.ts
+function memoryReading(m) {
+	if (!m || typeof m !== "object") return null;
+	const mb = Number(m.mb);
+	if (!Number.isFinite(mb) || mb <= 0) return null;
+	return m;
+}
+function fmtMb(mb) {
+	const n = Math.max(0, Number(mb) || 0);
+	if (n < 1e3) return Math.round(n) + " MB";
+	const gb = n / 1024;
+	if (gb < 10) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
+	return Math.round(gb) + " GB";
+}
+var WARN_MB = 2048;
+var CRIT_MB = 4096;
+var WARN_SHARE = .1;
+var CRIT_SHARE = .2;
+var PRESSURE_TOP = 3;
+var PRESSURE_MIN_MB = 512;
+function memoryTone(mb, totalMb, level, rank = -1) {
+	const share = totalMb > 0 ? mb / totalMb : 0;
+	if (mb >= CRIT_MB || share >= CRIT_SHARE) return "crit";
+	if ((level === "low" || level === "critical") && rank >= 0 && rank < PRESSURE_TOP && mb >= PRESSURE_MIN_MB) return "crit";
+	if (mb >= WARN_MB || share >= WARN_SHARE) return "warn";
+	return "";
+}
+function memoryRank(rows, title) {
+	return (rows || []).map((r) => ({
+		title: r.title,
+		mb: memoryReading(r.memory)?.mb ?? 0
+	})).filter((r) => r.mb > 0).sort((a, b) => b.mb - a.mb).findIndex((r) => r.title === title);
+}
+function memoryTip(m) {
+	let s = "Memory: " + fmtMb(m.mb);
+	if ((m.peak_mb || 0) > m.mb) s += " (peak " + fmtMb(m.peak_mb) + ")";
+	const parts = [];
+	if (m.agent_mb > 0) parts.push("agent " + fmtMb(m.agent_mb));
+	if (m.mcp_mb > 0) parts.push("MCP servers " + fmtMb(m.mcp_mb));
+	if (m.other_mb > 0) parts.push("other " + fmtMb(m.other_mb) + " (tests, servers…)");
+	if (m.procs > 0) parts.push(m.procs + (m.procs === 1 ? " process" : " processes"));
+	if (parts.length) s += " — " + parts.join(" · ");
+	return s;
+}
+//#endregion
+//#region src/components/usage/memoryModel.ts
+var MIB = 1048576;
+var num$4 = (v) => {
+	const n = typeof v === "number" ? v : NaN;
+	return Number.isFinite(n) ? n : null;
+};
+function asLevel(v) {
+	return v === "ok" || v === "low" || v === "critical" ? v : "unknown";
+}
+function machineFromDetail(sys) {
+	const s = sys || {};
+	const total = num$4(s.total_mb);
+	const avail = num$4(s.available_mb);
+	return {
+		totalMb: total && total > 0 ? total : null,
+		usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
+		swapTotalMb: num$4(s.swap_total_mb),
+		swapUsedMb: num$4(s.swap_used_mb),
+		level: asLevel(s.level)
+	};
+}
+function machineFromReading(r) {
+	if (!r) return {
+		totalMb: null,
+		usedMb: null,
+		swapTotalMb: null,
+		swapUsedMb: null,
+		level: "unknown"
+	};
+	const total = num$4(r.total);
+	const avail = num$4(r.available);
+	const swapTotal = num$4(r.swap_total);
+	const swapFree = num$4(r.swap_free);
+	const totalMb = total && total > 0 ? Math.floor(total / MIB) : null;
+	return {
+		totalMb,
+		usedMb: totalMb != null && avail != null ? Math.max(0, totalMb - Math.floor(avail / MIB)) : null,
+		swapTotalMb: swapTotal != null ? Math.floor(swapTotal / MIB) : null,
+		swapUsedMb: swapTotal != null ? Math.max(0, Math.floor((swapTotal - (swapFree ?? 0)) / MIB)) : null,
+		level: asLevel(r.level)
+	};
+}
+function gb1(mb) {
+	return (Math.max(0, mb) / 1024).toFixed(1).replace(/\.0$/, "");
+}
+function fmtUsedOfTotal(usedMb, totalMb) {
+	if (usedMb == null || totalMb == null || totalMb <= 0) return null;
+	if (usedMb < 1e3 || totalMb < 1e3) return fmtMb(usedMb) + " / " + fmtMb(totalMb);
+	return gb1(usedMb) + " / " + gb1(totalMb) + " GB";
+}
+function memoryRowTone(level) {
+	if (level === "critical") return "crit";
+	if (level === "low") return "warn";
+	return "";
+}
+function levelWords(level) {
+	switch (level) {
+		case "ok": return "OK — room to spare";
+		case "low": return "Low — new agents wait";
+		case "critical": return "Critical — close something";
+		default: return "Not measured";
+	}
+}
+function memoryRowText(m) {
+	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
+	const share = m.usedMb != null && m.totalMb ? Math.min(1, m.usedMb / m.totalMb) : null;
+	const head = "Memory " + (pair ?? "—");
+	let title = pair ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)" : "This machine's memory";
+	if (m.level === "low" || m.level === "critical") title += " — " + levelWords(m.level).toLowerCase();
+	return {
+		head,
+		title: title + " — click for what holds it",
+		share
+	};
+}
+function shortCmd(cmd, max = 40) {
+	const t = (cmd || "").replace(/\s+/g, " ").trim().split(" ").map((w) => /^\/\S+\/[^/]+$/.test(w) ? w.slice(w.lastIndexOf("/") + 1) : w).join(" ");
+	return t.length <= max ? t : t.slice(0, max - 1) + "…";
+}
+function memoryPopModel(detail, fallback, aliases = {}) {
+	const m = detail ? machineFromDetail(detail.system) : fallback;
+	const machine = [];
+	const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
+	if (pair) {
+		const pct = Math.round((m.usedMb || 0) / (m.totalMb || 1) * 100);
+		machine.push(["In use", pair + " (" + pct + "%)"]);
+	}
+	if ((m.swapUsedMb || 0) > 0) machine.push(["Swap", fmtMb(m.swapUsedMb || 0) + (m.swapTotalMb ? " of " + fmtMb(m.swapTotalMb) : "")]);
+	machine.push(["Pressure", levelWords(m.level)]);
+	const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
+	const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];
+	sess.sort((a, b) => b.mb - a.mb);
+	oth.sort((a, b) => b.mb - a.mb);
+	const top = Math.max(1, ...sess.map((r) => r.mb), ...oth.map((r) => r.mb));
+	const sessions = sess.map((r) => {
+		const parts = [];
+		if ((r.agent_mb || 0) > 0) parts.push("agent " + fmtMb(r.agent_mb || 0));
+		if ((r.mcp_mb || 0) > 0) parts.push("MCP servers " + fmtMb(r.mcp_mb || 0));
+		if ((r.other_mb || 0) > 0) parts.push("other " + fmtMb(r.other_mb || 0));
+		const label = aliases[r.title] || r.title;
+		return {
+			key: "s:" + r.title,
+			title: r.title,
+			label,
+			sub: "",
+			tip: label + ": " + fmtMb(r.mb) + (parts.length ? " — " + parts.join(" · ") : "") + " — click to open it",
+			mb: r.mb,
+			value: fmtMb(r.mb),
+			frac: r.mb / top
+		};
+	});
+	const others = oth.map((r) => {
+		const label = r.server ? "MindFlock server" : r.name || "process " + r.pid;
+		return {
+			key: "p:" + r.pid,
+			title: "",
+			label,
+			sub: shortCmd(r.cmd),
+			tip: label + " (pid " + r.pid + "): " + fmtMb(r.mb) + (r.cmd ? "\n" + r.cmd : ""),
+			mb: r.mb,
+			value: fmtMb(r.mb),
+			frac: r.mb / top
+		};
+	});
+	return {
+		machine,
+		tone: memoryRowTone(m.level),
+		sessions,
+		others,
+		machineOnly: !detail
+	};
+}
+function sparkPoints(samples, w, h, maxPoints = 120) {
+	const pts = [];
+	for (const s of samples || []) {
+		const m = machineFromDetail(s && s.system);
+		if (m.usedMb == null || m.totalMb == null || !Number.isFinite(s.at)) continue;
+		pts.push({
+			at: s.at,
+			used: m.usedMb,
+			total: m.totalMb
+		});
+	}
+	if (pts.length < 2) return null;
+	const step = Math.max(1, Math.ceil(pts.length / maxPoints));
+	const kept = pts.filter((_, i) => i % step === 0 || i === pts.length - 1);
+	const t0 = kept[0].at;
+	const span = Math.max(1, kept[kept.length - 1].at - t0);
+	const totalMb = Math.max(...kept.map((p) => p.total));
+	const r1 = (n) => Math.round(n * 10) / 10;
+	return {
+		points: kept.map((p) => r1((p.at - t0) / span * w) + "," + r1(h - Math.min(p.used, totalMb) / totalMb * h)).join(" "),
+		lastUsedMb: kept[kept.length - 1].used,
+		totalMb
+	};
+}
+//#endregion
+//#region src/components/usage/OverallMemory.tsx
+var SPARK_W = 200;
+var SPARK_H = 28;
+function BarRows({ rows, onPick }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+		className: "mem-pop-list",
+		children: rows.map((r) => {
+			const inner = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "mem-pop-name",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mem-pop-label",
+						children: r.label
+					}), r.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mem-pop-sub",
+						children: r.sub
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-pop-bar",
+					"aria-hidden": "true",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.max(2, Math.round(r.frac * 100)) + "%" } })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-pop-num",
+					children: r.value
+				})
+			] });
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: onPick && r.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "mem-pop-row mem-pop-pick",
+				title: r.tip,
+				onClick: (ev) => {
+					ev.stopPropagation();
+					onPick(r.title);
+				},
+				children: inner
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "mem-pop-row",
+				title: r.tip,
+				children: inner
+			}) }, r.key);
+		})
+	});
+}
+function OverallMemory() {
+	const sidebarHidden = useUi((s) => s.sidebarHidden);
+	const aliases = useUi((s) => s.aliases);
+	const btnRef = (0, import_react.useRef)(null);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const detailQ = useMemoryDetail(!sidebarHidden);
+	const { data: reading } = useMemory();
+	const detail = detailQ.isError ? null : detailQ.data ?? null;
+	const { data: hist } = useMemoryHistory(open && !!detail);
+	const machine = (0, import_react.useMemo)(() => detail ? machineFromDetail(detail.system) : machineFromReading(reading), [detail, reading]);
+	const { head, title, share } = memoryRowText(machine);
+	const tone = memoryRowTone(machine.level);
+	const model = (0, import_react.useMemo)(() => open ? memoryPopModel(detail, machine, aliases) : null, [
+		open,
+		detail,
+		machine,
+		aliases
+	]);
+	const spark = (0, import_react.useMemo)(() => open && hist ? sparkPoints(hist.samples, SPARK_W, SPARK_H) : null, [open, hist]);
+	if (machine.totalMb == null) return null;
+	const pick = (t) => {
+		selectSession(t);
+		const ui = useUi.getState();
+		if (ui.narrow && !ui.sidebarHidden) ui.toggleSidebar();
+		setOpen(false);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		id: "overall-memory",
+		ref: btnRef,
+		className: "overall-usage overall-memory" + (tone ? " mem-" + tone : ""),
+		type: "button",
+		title,
+		onClick: (ev) => {
+			ev.stopPropagation();
+			setOpen((o) => {
+				if (!o && !sidebarHidden) detailQ.refetch();
+				return !o;
+			});
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "usage-head",
+				children: head
+			}),
+			share != null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "mem-meter",
+				"aria-hidden": "true",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { width: Math.round(share * 100) + "%" } })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "caret",
+				children: "▾"
+			})
+		]
+	}), open && btnRef.current && model && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(UsagePopover, {
+		anchor: btnRef.current,
+		onClose: () => setOpen(false),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "usage-pop-head" + (model.tone ? " mem-" + model.tone : ""),
+				children: "This machine"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: model.machine }),
+			spark && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mem-spark",
+				title: "Memory in use over the last hour — now " + fmtMb(spark.lastUsedMb) + " of " + fmtMb(spark.totalMb),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+					viewBox: `0 0 ${SPARK_W} ${SPARK_H}`,
+					preserveAspectRatio: "none",
+					role: "img",
+					"aria-label": "Memory in use over the last hour",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", {
+						points: spark.points,
+						fill: "none",
+						vectorEffect: "non-scaling-stroke"
+					})
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mem-spark-cap",
+					children: "last hour"
+				})]
+			}),
+			model.sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "usage-pop-head mem-pop-sec",
+				children: "Sessions"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, {
+				rows: model.sessions,
+				onPick: pick
+			})] }),
+			model.others.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "usage-pop-head mem-pop-sec",
+				children: "Outside MindFlock"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BarRows, { rows: model.others })] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopNote, { text: model.machineOnly ? "This server reports the machine only — update MindFlock to see what each session holds." : "Each session counts its whole process tree (agent, MCP servers, tests), sampled every 15 s." })
+		]
+	})] });
+}
+//#endregion
 //#region src/components/usage/usageModel.ts
 function asUsageWindows(data) {
 	return data ? data : null;
@@ -60148,6 +60530,7 @@ function barContent(key, cbs) {
 	if (key.startsWith(EXT_BAR_PREFIX)) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionBar, { extId: key.slice(EXT_BAR_PREFIX.length) });
 	switch (key) {
 		case "usage": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverallUsage, {});
+		case "memory": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverallMemory, {});
 		case "ingestion": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationBar, {});
 		case "pr-review": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PrReviewBar, {});
 		case "issue-handling": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitIssueBar, {});
@@ -95988,6 +96371,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const setLastTab = useUi((s) => s.setLastTab);
 	const reduceMotion = useUi((s) => s.reduceMotion);
 	const { data: allRows } = useInstances();
+	const { data: sysMem } = useMemory();
 	const family = familyOf(title, allRows ?? []);
 	const threadOpened = useUi((s) => s.threadComposeTarget?.title === title);
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
@@ -96490,6 +96874,9 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const budget = inst.budget;
 	const ds = inst.workspace_missing ? null : inst.diff_stat;
 	const hasDiffStat = !!(ds && (ds.files || 0) + (ds.additions || 0) + (ds.deletions || 0) > 0);
+	const mem = memoryReading(inst.memory);
+	const memLocal = !theirs && !inst.device;
+	const memTone = mem ? memoryTone(mem.mb, memLocal ? (sysMem?.total || 0) / 1048576 : 0, memLocal ? sysMem?.level : void 0, memLocal ? memoryRank((allRows ?? []).filter((r) => !r.device && !isPeerRow(r)), title) : -1) : "";
 	const act = effectiveActivity(inst);
 	const quiet = !!ns && !ns.hint && !ns.disabled && (act === "working" || act === "clarify" || act === "limit");
 	const items = headerItems(paneHeader, {
@@ -96525,11 +96912,16 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		onCopyHistory: termTab ? copyHistory : void 0,
 		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
 	}), inst);
-	const menuSummary = [!shows("cost") && usageHeadline(inst), !shows("diffstat") && hasDiffStat && diffStatText(inst)].filter(Boolean);
+	const menuSummary = [
+		!shows("cost") && usageHeadline(inst),
+		!shows("diffstat") && hasDiffStat && diffStatText(inst),
+		!shows("memory") && mem && memoryTip(mem)
+	].filter(Boolean);
 	const canResume = sessionAction("resume").enabled(menuCtx);
 	const fitKeyNow = [
 		items.tabs.join(","),
 		items.buttons.join(","),
+		mem ? 1 : 0,
 		displayName,
 		shownStep?.label ?? "",
 		ft?.label ?? "",
@@ -96772,6 +97164,11 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		}, "copy"),
 		cost: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionUsageChip, { inst }, "cost"),
 		diffstat: hasDiffStat ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CtxLine, { inst }, "diffstat") : null,
+		memory: mem ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ctxline mem-chip" + (memTone ? " mem-" + memTone : ""),
+			title: memoryTip(mem),
+			children: fmtMb(mem.mb)
+		}, "memory") : null,
 		hide: embedded ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			className: "act pane-close",
 			type: "button",
@@ -127009,6 +127406,7 @@ function CustomizeRow({ id, list, label, note, on, locked, lockedWhy, onToggle, 
 //#region src/components/customize/SidebarBarsPicker.tsx
 var NOTES = {
 	usage: { text: "What your sessions cost" },
+	memory: { text: "How full this machine's memory is, and what holds it" },
 	ingestion: {
 		text: "Appears once a ticket source is connected",
 		link: {
@@ -127228,6 +127626,10 @@ function previewButton(id) {
 					children: "· 2 files"
 				})
 			]
+		}, id);
+		case "memory": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ctxline mem-chip",
+			children: "812 MB"
 		}, id);
 		case "hide": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "act pane-close",

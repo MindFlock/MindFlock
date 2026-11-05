@@ -15,6 +15,7 @@ import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verifySession";
 import { windowName } from "../lib/windowName";
 import type { EffortCap } from "../lib/effort";
+import type { MemoryDetail, MemoryHistory } from "../components/usage/memoryModel";
 import type { PeerStatus } from "../lib/peer";
 import type { Flight, FlightPlan, StepKindDef } from "../lib/flights";
 import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
@@ -291,6 +292,36 @@ export function useMemory() {
     // "new agents wait" line clears soon after the queue drains.
     refetchInterval: (q) => (q.state.data?.gate?.holding ? 5_000 : 15_000),
     retry: false,
+  });
+}
+
+/** Per-session memory (`GET /api/memory`): the machine, every session's
+ * process tree and the top processes outside MindFlock — the sidebar's
+ * Memory row and its popover. Polled every 15 s (the sampler's own tick)
+ * only while something showing it is visible (`enabled`). An older server
+ * 404s: no retry, and the row falls back to useMemory()'s numbers. */
+export function useMemoryDetail(enabled: boolean) {
+  return useQuery({
+    queryKey: ["memory-detail"],
+    queryFn: () => api<MemoryDetail>("/api/memory"),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    retry: false,
+    enabled,
+  });
+}
+
+/** The last hour of `GET /api/memory/history` — the Memory popover's
+ * sparkline. Fetched only while the popover is open; a line lands every
+ * 30 s, so a minute's poll is plenty. */
+export function useMemoryHistory(enabled: boolean) {
+  return useQuery({
+    queryKey: ["memory-history", 60],
+    queryFn: () => api<MemoryHistory>("/api/memory/history?minutes=60"),
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    retry: false,
+    enabled,
   });
 }
 

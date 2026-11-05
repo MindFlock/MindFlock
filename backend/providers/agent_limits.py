@@ -41,7 +41,17 @@ optional, ``""`` = the default)::
      "high": "30%", "max": "40%", "swap": "15%",           # each agent
      "fleet_high": "65%", "fleet_max": "75%", "fleet_swap": "40%",  # all agents
      "gitnexus_heap_mb": 4096,              # 0 = no gitnexus shim
-     "gitnexus_at_once": 1}
+     "gitnexus_at_once": 1,
+     "shed_idle": true}                     # core.memory_shield: sleep idle
+                                            # agents when memory stays critical
+
+``fleet_high`` is the share of RAM all agents together may use before the
+kernel throttles and reclaims them collectively (``MemoryHigh`` on
+:data:`FLEET_SLICE`): ten agents each under their own cap still swap the
+box, the slice stops that first. The slice's limits are put on at server
+start (:func:`ensure_fleet_slice`) and again whenever the scope probe
+answers yes (every 10 minutes at most), so a user manager restarted since
+gets them back; ``set-property --runtime`` is idempotent.
 
 Sizes are a share of physical RAM (``"30%"``), bytes with an optional
 K/M/G/T suffix (``"6G"``), or ``"off"`` for no limit. ``MINDFLOCK_AGENT_SCOPE=0``
@@ -71,6 +81,7 @@ from .launch_script import shell_path
 __all__ = [
     "DEFAULTS",
     "FLEET_SLICE",
+    "ensure_fleet_slice",
     "SHIM_MARKER",
     "config",
     "gitnexus_shim_dir",
@@ -107,6 +118,8 @@ DEFAULTS: Dict[str, object] = {
     # (heap + native graph store); one at a time, that fits anywhere this runs.
     "gitnexus_heap_mb": 4096,
     "gitnexus_at_once": 1,
+    # core.memory_shield: when memory stays critical, put idle agents to sleep.
+    "shed_idle": True,
 }
 
 _SIZE_KEYS = ("high", "max", "swap", "fleet_high", "fleet_max", "fleet_swap")
@@ -150,8 +163,9 @@ def clean_config(raw) -> Dict[str, object]:
     out: Dict[str, object] = {}
     if not isinstance(raw, dict):
         return out
-    if isinstance(raw.get("enabled"), bool):
-        out["enabled"] = raw["enabled"]
+    for key in ("enabled", "shed_idle"):
+        if isinstance(raw.get(key), bool):
+            out[key] = raw[key]
     for key in _SIZE_KEYS:
         v = raw.get(key)
         if isinstance(v, (int, float)) and not isinstance(v, bool):
@@ -270,24 +284,46 @@ def _memory_props(prefix: str, limits: Dict[str, int]) -> List[str]:
     return props
 
 
-def _apply_fleet_limits(limits: Dict[str, int]) -> None:
+def _apply_fleet_limits(limits: Dict[str, int]) -> bool:
     """Put the all-agents limits on :data:`FLEET_SLICE` (runtime-only: gone at
-    reboot, re-applied by the first launch after it). Best-effort."""
+    reboot, re-applied at the next server start or scope probe). Idempotent
+    (``set-property`` of the same values is a no-op). → whether systemctl
+    took them. Best-effort."""
     props = _memory_props("fleet_", limits)
     systemctl = shutil.which("systemctl")
     if not props or not systemctl:
-        return
+        return False
     try:
-        subprocess.run(
-            [systemctl, "--user", "set-property", "--runtime", FLEET_SLICE, *props],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
+        return (
+            subprocess.run(
+                [systemctl, "--user", "set-property", "--runtime", FLEET_SLICE, *props],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            ).returncode
+            == 0
         )
     except (OSError, subprocess.SubprocessError):
-        pass
+        return False
+
+
+def ensure_fleet_slice() -> bool:
+    """Server start: put the all-agents limits on :data:`FLEET_SLICE` now,
+    before any agent launches (the probe would otherwise only do it at the
+    first launch). Linux with a reachable systemd user manager only; a no-op
+    (False) wherever scopes are off or unavailable, exactly as
+    :func:`wrap_launch` is. Blocking (up to two short systemctl calls):
+    off the event loop. Never raises."""
+    try:
+        if not config().get("enabled", True):
+            return False
+        if not scope_available():
+            return False
+        return _apply_fleet_limits(resolved_limits())
+    except Exception:  # noqa: BLE001 — a guard never blocks startup
+        return False
 
 
 def scope_available(*, refresh: bool = False) -> bool:
@@ -330,9 +366,10 @@ def scope_available(*, refresh: bool = False) -> bool:
                 )
             except (OSError, subprocess.SubprocessError):
                 ok = False
-        first_yes = ok and (_PROBE is None or not _PROBE[1])
         _PROBE = (now, ok)
-    if first_yes:
+    if ok:
+        # Every fresh yes (at most one per _PROBE_TTL_YES): a user manager
+        # restarted since the last one lost the runtime properties.
         _apply_fleet_limits(resolved_limits())
     return ok
 
