@@ -37,6 +37,22 @@ if (process.platform === 'win32') {
   app.setAppUserModelId(app.isPackaged ? 'ai.mindflock.desktop' : process.execPath)
 }
 
+// Launch flags for what the dev launchers used to set as environment
+// variables: a Windows shortcut can pass arguments but not environment, and
+// a .bat launcher (the only way to set it) opens a console window every
+// time. `--mindflock-url=…`, `--mindflock-engine=native|wsl` and
+// `--mindflock-profile=…` set MINDFLOCK_URL, MINDFLOCK_DESKTOP_ENGINE and
+// MINDFLOCK_DEV_PROFILE before anything below reads them; an environment
+// variable that is already set wins.
+for (const [flag, name] of [
+  ['--mindflock-url=', 'MINDFLOCK_URL'],
+  ['--mindflock-engine=', 'MINDFLOCK_DESKTOP_ENGINE'],
+  ['--mindflock-profile=', 'MINDFLOCK_DEV_PROFILE'],
+]) {
+  const arg = process.argv.find((a) => a.startsWith(flag))
+  if (arg && !process.env[name]) process.env[name] = arg.slice(flag.length)
+}
+
 // Dev sandbox — the dev launcher (run-dev.bat) sets MINDFLOCK_DEV=1 so this
 // shell runs FULLY ISOLATED from the installed prod app: its own userData
 // (config, logs, window state, per-origin localStorage under a separate
