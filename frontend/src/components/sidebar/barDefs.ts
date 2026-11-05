@@ -19,6 +19,8 @@ export interface BarDef {
 /** The draggable, hideable bars — also the fallback order for a fresh user. */
 export const SIDEBAR_BARS: BarDef[] = [
   { key: "usage", label: "Usage" },
+  // The machine's memory, Usage's twin (OverallMemory) — right under it.
+  { key: "memory", label: "Memory" },
   { key: "ingestion", label: "Tickets" },
   { key: "pr-review", label: "Pull requests" },
   { key: "issue-handling", label: "Issues" },
@@ -36,6 +38,11 @@ export const SIDEBAR_BARS: BarDef[] = [
  * nothing suggests it exists — the rule extension bars already follow. */
 export const LATE_BARS = new Set(["prompts"]);
 
+/** Built-in bars added later that belong next to an older one: a saved order
+ * that never mentioned the key gets it directly after its partner (Memory
+ * under Usage, wherever the person dragged Usage), not tail-appended. */
+export const FOLLOWS: Record<string, string> = { memory: "usage" };
+
 /** Bars shown out of the box to a brand-new user. Tickets is in here because
  * ticket ingestion is the headline feature — connecting a tracker is the first
  * thing a new user does, and hiding its bar meant they had to go find the
@@ -45,7 +52,7 @@ export const LATE_BARS = new Set(["prompts"]);
  * Customize → Sidebar. Only applied when the user has never touched that
  * checklist (no persisted hiddenBars) — order and length carry no meaning,
  * this is only a membership set (see `defaultHiddenBars`). */
-export const DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"];
+export const DEFAULT_VISIBLE_BARS = ["usage", "memory", "ingestion", "assistant"];
 
 /** Bars the calm first hour (lib/calm.ts) adds to the default hidden set —
  * set by the sidebar while the screen is calm, [] after. Module state rather
@@ -111,6 +118,8 @@ export function orderedSections(order: string[], extraKeys: string[] = []): stri
     if (!seen.has(key)) {
       // An empty saved order is "all defaults": nothing is late there.
       if (order.length && LATE_BARS.has(key)) lateMissing.push(key);
+      else if (order.length && FOLLOWS[key] && out.includes(FOLLOWS[key]))
+        out.splice(out.indexOf(FOLLOWS[key]) + 1, 0, key);
       else out.push(key);
       seen.add(key);
     }

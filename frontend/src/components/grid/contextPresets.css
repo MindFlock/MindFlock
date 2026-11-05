@@ -44,6 +44,37 @@
   }
 }
 
+/* The memory chip ("812 MB", lib/sessionMemory): the diff-stat's look. It is
+   short, so it outlasts the diff-stat (Pane.css drops .ctxline below 700px —
+   a 2×2 grid's heads) down to 560px. Colour only when it matters — amber big
+   for the machine, red too big or a culprit under memory pressure — and then
+   it stays in any header: that is when it must be seen. */
+.ctxline.mem-chip {
+  cursor: default;
+}
+
+.ctxline.mem-chip.mem-warn {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+.ctxline.mem-chip.mem-crit {
+  color: var(--red);
+  font-weight: 700;
+}
+
+@container (max-width: 700px) {
+  .pane-head .ctxline.mem-chip {
+    display: inline-flex !important;
+  }
+}
+
+@container (max-width: 560px) {
+  .pane-head .ctxline.mem-chip:not(.mem-warn):not(.mem-crit) {
+    display: none !important;
+  }
+}
+
 /* --------------------------------------------------------------------------- *
  * J4 — prompt presets in the New-session dialog.
  * --------------------------------------------------------------------------- */

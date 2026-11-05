@@ -194,6 +194,18 @@ export interface SleepInfo {
   freed_mb: number;
 }
 
+/** `Instance.memory`: one session's process tree, in MB (PSS). `at` is epoch
+ * seconds of the sample. */
+export interface SessionMemory {
+  mb: number;
+  peak_mb: number;
+  agent_mb: number;
+  mcp_mb: number;
+  other_mb: number;
+  procs: number;
+  at: number;
+}
+
 export interface Instance {
   title: string;
   branch: string;
@@ -237,6 +249,12 @@ export interface Instance {
   held_offline?: boolean;
   held_since?: number;
   held_reason?: string;
+  /** What the session's whole process tree holds (the agent CLI, its MCP
+   * servers, whatever it runs: tests, dev servers), proportional (PSS) MB,
+   * sampled every ~15 s — the pane header's memory chip (lib/sessionMemory).
+   * Absent or null = unknown (an older server, not sampled yet, not
+   * running): nothing is shown. */
+  memory?: SessionMemory | null;
   has_origin: boolean;
   /** Auth profile: the stored pin ("" = inherit the global default,
    * "default" = the CLI's own login), its resolution, and the resolved

@@ -149,7 +149,9 @@ def test_bar_labels_are_the_intake_tab_names():
     for old in ("Ticket Ingestion", "PR Review", "Issue Handling"):
         assert old not in defs, old
     # The owner's out-of-the-box set is unchanged.
-    assert 'DEFAULT_VISIBLE_BARS = ["usage", "ingestion", "assistant"]' in defs
+    assert (
+        'DEFAULT_VISIBLE_BARS = ["usage", "memory", "ingestion", "assistant"]' in defs
+    )
 
 
 def test_each_bar_label_is_one_door_button_keeping_its_old_id():
@@ -458,6 +460,7 @@ def test_the_rename_kept_every_persisted_bar_key():
     keys = re.findall(r'key: "([^"]+)"', block)
     assert keys == [
         "usage",
+        "memory",  # the machine's memory, under Usage (2026-11-05)
         "ingestion",
         "pr-review",
         "issue-handling",

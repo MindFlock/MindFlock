@@ -87,6 +87,12 @@ function previewButton(id: PaneItemId): ReactNode {
           <span className="ctx-files">· 2 files</span>
         </span>
       );
+    case "memory":
+      return (
+        <span key={id} className="ctxline mem-chip">
+          812 MB
+        </span>
+      );
     case "hide":
       return (
         <span key={id} className="act pane-close">

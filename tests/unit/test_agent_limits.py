@@ -447,3 +447,57 @@ def test_server_protect_off_switch(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_SERVER_OOM_PROTECT", "0")
     assert run.protect_from_oom(str(p)) is None
     assert p.read_text() == "300"
+
+
+# --- the all-agents slice -------------------------------------------------------
+
+
+def test_server_start_puts_the_fleet_ceiling_on_the_slice(monkeypatch):
+    """ensure_fleet_slice (server start): the slice gets MemoryHigh = 65% of
+    RAM for all agents together before any agent launches."""
+    runs = _Runs(0)
+    monkeypatch.setattr(al.subprocess, "run", runs)
+    monkeypatch.setattr(al, "_systemd_run", lambda: "/usr/bin/systemd-run")
+    monkeypatch.setattr(al.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(al, "_total_memory", lambda: 20 * GB)
+    monkeypatch.setattr(al, "_settings_blob", lambda: {})
+    assert al.ensure_fleet_slice() is True
+    sets = [c for c in runs.calls if c[0].endswith("systemctl")]
+    assert sets and sets[-1][4] == "app-mindflock.slice"
+    assert "MemoryHigh=%d" % int(20 * GB * 0.65) in sets[-1]
+    # Idempotent: a second call sets the same values again, nothing else.
+    al.ensure_fleet_slice()
+    sets2 = [c for c in runs.calls if c[0].endswith("systemctl")]
+    assert sets2[-1] == sets[-1]
+
+
+def test_a_fresh_probe_yes_reapplies_the_ceiling(monkeypatch):
+    """A user manager restarted since the last probe lost the runtime
+    properties: every fresh yes (not a cached one) puts them back."""
+    runs = _Runs(0)
+    monkeypatch.setattr(al.subprocess, "run", runs)
+    monkeypatch.setattr(al, "_systemd_run", lambda: "/usr/bin/systemd-run")
+    monkeypatch.setattr(al.shutil, "which", lambda name: "/usr/bin/" + name)
+    assert al.scope_available() is True
+    assert al.scope_available(refresh=True) is True
+    sets = [c for c in runs.calls if c[0].endswith("systemctl")]
+    assert len(sets) == 2
+
+
+def test_no_scope_no_slice(monkeypatch):
+    runs = _Runs(0)
+    monkeypatch.setattr(al.subprocess, "run", runs)
+    monkeypatch.setenv("MINDFLOCK_AGENT_SCOPE", "0")
+    assert al.ensure_fleet_slice() is False
+    assert runs.calls == []
+    monkeypatch.delenv("MINDFLOCK_AGENT_SCOPE")
+    monkeypatch.setattr(al, "_systemd_run", lambda: None)  # macOS, no systemd
+    al._PROBE = None
+    assert al.ensure_fleet_slice() is False
+    assert runs.calls == []
+
+
+def test_shed_idle_is_an_agent_memory_key():
+    assert al.DEFAULTS["shed_idle"] is True
+    assert al.clean_config({"shed_idle": False, "junk": 1}) == {"shed_idle": False}
+    assert al.config({"shed_idle": False})["shed_idle"] is False

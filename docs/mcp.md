@@ -430,7 +430,14 @@ first result per 10 minutes skips the rate limit (see
 ### `whoami`
 
 No arguments. → `{session, external, scope, parent, children, unread, server,
-person, you_drive, flock, fence?, note?}`. `flock` is true when the person
+person, you_drive, flock, fence?, note?, capacity?}`. `capacity` is `{room,
+session_mb, short_mb?, hint}` from `GET /api/memory/capacity` (the launch
+gate's budget, [session-engine.md](session-engine.md#memory-admission-by-measured-cost)):
+how many more sessions this machine has memory for now, at what one has been
+measured to cost. Plan a worker count from it rather than spawning blindly:
+past `room`, spawns queue (`hint` says so, e.g. *room for 2 more sessions now
+(~950 MB each); more will queue*). `room` is `null` where memory is not
+measured; `capacity` is absent from a server that predates it. `flock` is true when the person
 has Flock mode on for your session: they want its work split across
 MindFlock workers by default, so orchestrate unless a prompt says otherwise.
 `fence` (a fenced worker only) is `{only,
@@ -646,7 +653,16 @@ How the worker is created:
   provisioning row, so `list_sessions` shows it and `wait_for_session` waits
   through the queue. Don't spawn more workers to make up for it: they queue
   behind it. The person can Start it anyway from the app. The queue is saved,
-  so a server restart keeps the worker waiting.
+  so a server restart keeps the worker waiting. The gate also queues a spawn
+  when the level reads ok but one more session would not fit above the
+  machine's reserve at its measured cost; the `reason` then says what it
+  needs (*one more session needs ~1.0 GB; only 0.4 GB is free above the
+  reserve*).
+- **`capacity`** (both results, when the server has `GET
+  /api/memory/capacity`): `{room, session_mb, short_mb?, hint}` after this
+  spawn (it counts as warming already), as in `whoami`. A queued result's
+  `hint` adds *One more session needs ~950 MB; 400 MB more would have to be
+  free.*
 
 **The report-back footer** is appended only when all three hold:
 
@@ -1020,7 +1036,9 @@ it surfaces to the user.
 It previews first (`POST /api/runs/preview`): a ticket that resolves in no
 source is an error naming it — never silently turned into a task. Then
 `POST /api/runs` with `created_by: "agent:<you>"`. → `{run_id, name, lane,
-tasks: [{id, ref, title, state}], warnings, note}`. A ticket that already has a
+tasks: [{id, ref, title, state}], warnings, note, capacity?}` (`capacity` as
+in `whoami`: the run starts its lines as they fit, so a concurrency past
+`room` waits rather than fails). A ticket that already has a
 session is added to the team run, not restarted (a warning says so).
 
 **The sessions are MindFlock's, not yours.** They have no parent, never enter

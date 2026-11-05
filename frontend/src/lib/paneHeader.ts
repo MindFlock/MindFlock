@@ -4,12 +4,13 @@
  * Two kinds of item, each ordered among its own kind: TABS (Agent, Terminal,
  * Diff, Queue, Map, Flight, Thread) sit after the session's name, BUTTONS (⏩
  * Fast-track, Copy entire history, History, the Commit…/next-step button,
- * the cost chip, the diff-stat, Hide −) after them. ⋯ is not an item: it is
+ * the cost chip, the diff-stat, the memory number, Hide −) after them. ⋯ is not an item: it is
  * always the far-right element, and everything hidden here stays reachable
  * from it, so hiding never loses a feature.
  *
  * The default (the owner's list): Agent · Terminal · Diff · Queue · Map,
- * then ⏩ and Copy entire history. Everything else starts off and can be
+ * then ⏩ and Copy entire history — and the memory number, once the server
+ * sends one (lib/sessionMemory). Everything else starts off and can be
  * switched on. (Map joined the default in 0.10: one switch away, nobody
  * found it. A saved choice that hid it keeps it hidden.)
  * Agent can't be hidden. A hidden tab you are ON still shows while you are on
@@ -32,7 +33,7 @@
  * Also here: `fitDecision`, the text → icons switch (see there). Pure. */
 
 export type PaneTabId = "agent" | "shell" | "diff" | "queue" | "map" | "flight" | "thread";
-export type PaneButtonId = "fasttrack" | "copy" | "history" | "next" | "cost" | "diffstat" | "hide";
+export type PaneButtonId = "fasttrack" | "copy" | "history" | "next" | "cost" | "diffstat" | "memory" | "hide";
 export type PaneItemId = PaneTabId | PaneButtonId;
 
 export interface PaneItemDef {
@@ -70,6 +71,16 @@ export const PANE_BUTTONS: PaneItemDef[] = [
   { id: "history", kind: "button", label: "History", note: "Scroll and select the full history like a page", on: false },
   { id: "cost", kind: "button", label: "Cost", note: "What the session has cost, click for its tokens", on: false },
   { id: "diffstat", kind: "button", label: "Diff stats", note: "+added −removed · files, against the base branch", on: false },
+  // On by default (the owner, 2026-11-05: "an optional number we can see at
+  // the pane header like diff number"), drawn only once the server sends a
+  // reading — so it is state, and calm never folds it.
+  {
+    id: "memory",
+    kind: "button",
+    label: "Memory",
+    note: "What the session's processes hold — agent, MCP servers, tests, servers it runs",
+    on: true,
+  },
   { id: "hide", kind: "button", label: "Hide −", note: "Hide the window — the session keeps running", on: false },
 ];
 

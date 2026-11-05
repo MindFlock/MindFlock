@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **See what holds the memory.** Every session's pane header shows its
+  memory ("1.4 GB", amber when large, red when very large or the machine is
+  short), with the agent / MCP servers / everything else (test runs, dev
+  servers) and the peak on hover; hide it under Customize → Pane header like
+  the diff stats. The sidebar shows the machine's memory under Usage
+  ("Memory 9.8 / 19.5 GB"); its popover lists the sessions biggest first,
+  what runs outside MindFlock (another app's python, a TTS server), and the
+  last hour. A history log (`~/.mindflock/logs/memory.jsonl`, every 30 s)
+  keeps the evidence for the next slowdown. `GET /api/memory`,
+  `/api/memory/history`, `/api/memory/capacity`.
+
+### Changed
+
+- **MindFlock starts what fits, measured.** The launch gate's budget is now
+  the memory actually free minus a reserve, divided by what a session here
+  really costs (learned from the sampler, not a fixed guess), and agents
+  that spawn workers are told how many more fit right now ("room for 2 more
+  sessions now; more will queue").
+- **It sheds before the machine bricks.** When memory stays critical for a
+  minute, idle sessions are put to sleep (never one that is working, asking,
+  watched or holding a background job), biggest-and-longest-idle first, with
+  one notice; Wake brings them back (`general.agent_memory.shed_idle`).
+  Voice Lab is never woken while memory is low (the built-in voice speaks
+  instead) and is stopped at critical. All agents share one memory ceiling
+  (65% of RAM), applied at server start.
+
 ## [0.12.1] - 2026-11-05
 
 ### Fixed
