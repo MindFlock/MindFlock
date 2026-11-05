@@ -969,6 +969,18 @@ async def lifespan(app: FastAPI):
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
     if _memory_watch.enabled():
         _register_task(_memory_watch.run_loop(sys.modules[__name__]))
+    # The all-agents memory ceiling (providers.agent_limits.FLEET_SLICE): put
+    # its limits on now, before any agent launches, rather than at the first
+    # launch. Linux with a user systemd only; idempotent. Off under pytest.
+    if not _restart._under_pytest():
+        try:
+            from backend.providers import agent_limits as _agent_limits
+
+            asyncio.get_running_loop().run_in_executor(
+                None, _agent_limits.ensure_fleet_slice
+            )
+        except Exception:  # noqa: BLE001 — a guard never blocks startup
+            pass
     # The launch gate's queue (core.launch_gate): what waited for memory when
     # the server stopped waits again — automatic starts, so through the gate,
     # one at a time. Off under pytest (ENGINE is the developer's real state).
@@ -2921,7 +2933,42 @@ def get_system_memory() -> JSONResponse:
     snap["message"] = _mem.describe(snap)
     # The launch gate (core.launch_gate): what waits for memory, and why.
     snap["gate"] = _launch_gate.status()
+    snap["capacity"] = _capacity_brief(_launch_gate.capacity())
     return JSONResponse(snap)
+
+
+def _capacity_brief(cap: dict) -> dict:
+    """The capacity fields a status read carries (the full set is
+    ``GET /api/memory/capacity``)."""
+    return {
+        k: cap.get(k)
+        for k in (
+            "room",
+            "session_mb",
+            "available_mb",
+            "reserve_mb",
+            "why",
+            "hint",
+        )
+    }
+
+
+@app.get("/api/memory/capacity")
+def get_memory_capacity() -> JSONResponse:
+    """How many more agent sessions fit now (core.launch_gate.capacity): the
+    admission budget ``room = (available - reserve - penalties - growth still
+    to come of the agents warming) / session_mb``. ``{"room": n | null,
+    "session_mb", "peak_mb", "available_mb", "reserve_mb", "penalty_mb",
+    "to_come_mb", "free_mb", "short_mb", "level", "source":
+    "measured"|"default", "samples", "live", "cap", "warming", "why",
+    "hint", "shield": {...}}``. ``room`` null: memory is not measured here
+    and there is no live cap. ``shield`` is the memory shield's state
+    (core.memory_shield.status: the last shed, Voice Lab held back)."""
+    from backend.web.core import memory_shield as _shield
+
+    cap = _launch_gate.capacity()
+    cap["shield"] = _shield.status()
+    return JSONResponse(cap)
 
 
 # --------------------------------------------------------------------------- #
@@ -3073,9 +3120,24 @@ async def _memory_watch_loop() -> None:
                 last = lvl
             if lvl in ("low", "critical"):
                 await asyncio.to_thread(_shed_for_memory)
+            # The memory shield (core.memory_shield): stop Voice Lab at
+            # critical, put idle agents to sleep once critical has held a
+            # minute. Every pass, so its "critical since" clock resets.
+            if lvl != "unknown":
+                await asyncio.to_thread(_memory_shield_tick, snap)
         except Exception:  # noqa: BLE001 — a watch must never die
             pass
         await asyncio.sleep(_MEMORY_WATCH_SECONDS)
+
+
+def _memory_shield_tick(snap: dict) -> dict:
+    """One :func:`core.memory_shield.tick` on this server. Never raises."""
+    try:
+        from backend.web.core import memory_shield as _shield
+
+        return _shield.tick(sys.modules[__name__], snap)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _shed_for_memory() -> list:

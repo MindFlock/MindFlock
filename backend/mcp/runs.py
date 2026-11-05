@@ -420,7 +420,7 @@ class RunTools:
             "POST", "/api/runs", payload, "start_team_run", timeout=180.0
         )
         run = resp.get("run") or {}
-        return {
+        out = {
             "run_id": run.get("id"),
             "name": run.get("name"),
             "lane": (run.get("policy") or {}).get("lane"),
@@ -437,6 +437,13 @@ class RunTools:
             + list(preview.get("warnings") or []),
             "note": "MindFlock owns these sessions now — use get_run / wait_for_run",
         }
+        # How many sessions the machine has memory for: the run starts its
+        # lines as they fit (a concurrency past the room waits, not fails).
+        capacity = getattr(self, "_capacity", None)
+        cap = capacity() if callable(capacity) else None
+        if cap is not None:
+            out["capacity"] = cap
+        return out
 
     # -- read ----------------------------------------------------------------- #
     def _get_run(self, run_id: str, what: str) -> dict:

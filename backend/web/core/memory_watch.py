@@ -596,6 +596,30 @@ _STATE: Dict[str, object] = {
     "tick_cpu_ms": None,
     "source": "",
 }
+
+
+def session_mb() -> Dict[str, int]:
+    """{title: mb} from the last reading — the launch gate's learned
+    per-session cost (``core.launch_gate``'s sizes seam)."""
+    with _LOCK:
+        rows = dict(_STATE["sessions"])  # type: ignore[arg-type]
+    return {
+        t: int(r["mb"]) for t, r in rows.items() if isinstance(r, dict) and r.get("mb")
+    }
+
+
+def session_peak_mb() -> Dict[str, int]:
+    """{title: peak mb} from the last reading (the gate counts a warming
+    agent at the learned peak)."""
+    with _LOCK:
+        rows = dict(_STATE["sessions"])  # type: ignore[arg-type]
+    return {
+        t: int(r["peak_mb"])
+        for t, r in rows.items()
+        if isinstance(r, dict) and r.get("peak_mb")
+    }
+
+
 #: title -> (roots tuple, peak mb): the peak resets with a new incarnation.
 _PEAKS: Dict[str, Tuple[Tuple[int, ...], int]] = {}
 _HIST = {"last": 0.0, "failed": False}

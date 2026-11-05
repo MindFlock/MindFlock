@@ -505,14 +505,17 @@ class TestTicketStartLineage:
     def _low(monkeypatch, level="low"):
         from backend import memory_pressure
 
+        # "ok" frees 8 GB: the launch gate's budget (core.launch_gate.budget)
+        # has room above its reserve only then — 1 GB free is no room at all.
+        avail = (8 << 30) if level == "ok" else (1 << 30)
         monkeypatch.setattr(
             memory_pressure,
             "snapshot",
             lambda **kw: {
                 "level": level,
-                "available": 1 << 30,
+                "available": avail,
                 "total": 16 << 30,
-                "available_pct": 6.3,
+                "available_pct": round(avail * 100.0 / (16 << 30), 1),
                 "psi": None,
                 "at": 0.0,
             },

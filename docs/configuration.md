@@ -740,10 +740,12 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_MEMORY_GUARD` | on | `0` turns off the memory guard ([session-engine.md](session-engine.md#memory-guard)): the level reads `unknown`, so agent spawns, team-run starts, pipeline launches and the revive sweep are never held for memory |
 | `MINDFLOCK_LAUNCH_QUEUE_FILE` | `~/.mindflock/launch_queue.json` | Where the launch gate saves what waits for memory, so a restart keeps it |
 | `MINDFLOCK_MAX_LIVE_AGENTS` | `general.max_live_agents`, else RAM ÷ 1.2 GB (16 on 20 GB) | The launch gate's machine-wide cap on live agents that **automatic** starts respect (an agent's spawned worker, a queued prompt relaunching its agent, the revive sweep, the ticket pipeline); a person's own starts are never capped. `0` = no cap ([session-engine.md](session-engine.md#launch-gate)) |
-| `MINDFLOCK_AGENT_WARMUP_MB` | `general.agent_warmup_mb`, else `700` | What one agent started in the last 90 s is assumed to still take as it grows; the launch gate subtracts it per warming agent from available memory before deciding |
+| `MINDFLOCK_AGENT_WARMUP_MB` | `general.agent_warmup_mb`, else `700` | What one session costs (steady and peak) until the memory sampler has measured at least 3; the launch gate's budget divides by the measured cost after that |
 | `MINDFLOCK_AUTO_LAUNCH_SPACING` | `20` | Seconds between two automatic launches the launch gate lets through (its queue drains one at a time). `0` = no spacing |
 | `MINDFLOCK_LAUNCH_QUEUE_MAX` | `32` | Launches that may wait in the launch gate's queue; past it a new automatic start is refused (`memory_queue_full`). `0` = no limit |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
+| `MINDFLOCK_SHED_IDLE` | unset | `0` stops the memory shield putting idle agents to sleep when memory stays critical (`general.agent_memory.shed_idle`) |
+| `MINDFLOCK_VOICELAB_UNIT` | `voicelab-backend.service` | The systemd user unit the memory shield stops when memory turns critical (Voice Lab's backend); `0` = never stop one |
 | `MINDFLOCK_AGENT_SCOPE` | unset | `0` launches agents without their memory-limited systemd scope (`general.agent_memory`) |
 | `MINDFLOCK_GITNEXUS_GATE` | unset | `0` leaves the `gitnexus` shim off agents' `PATH` (and makes an existing shim pass `analyze` straight through) |
 | `MINDFLOCK_SERVER_OOM_PROTECT` | unset | `0` stops the server lowering its own `oom_score_adj` at boot |
@@ -1122,11 +1124,15 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
 - **Launch gate** (`general.max_live_agents`, `general.agent_warmup_mb`; JSON /
   `PUT /api/settings`): the most live agents that automatic starts bring this
   machine to (unset = one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap), and
-  what one agent started in the last 90 s is assumed to still take as it
-  grows (unset = 700 MB) — see
-  [session-engine.md](session-engine.md#launch-gate). A person's own starts
-  are never capped. `MINDFLOCK_MAX_LIVE_AGENTS` / `MINDFLOCK_AGENT_WARMUP_MB`
-  win over them. Per device, never synced; re-read within 30 s.
+  what one session costs until the memory sampler has measured at least 3
+  (unset = 700 MB; past that the gate uses the measured 75th percentile, and
+  warming agents count at the measured peak) — see
+  [session-engine.md](session-engine.md#memory-admission-by-measured-cost).
+  A person's own starts are never capped. `MINDFLOCK_MAX_LIVE_AGENTS` /
+  `MINDFLOCK_AGENT_WARMUP_MB` win over them. Per device, never synced;
+  re-read within 30 s. The reserve the budget keeps is the low line
+  (`max(2 GB, general.memory_low_pct)`); `GET /api/memory/capacity` shows
+  the room it gives.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether
@@ -1208,8 +1214,13 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   Keys, all optional: `enabled` (`false` = neither), per agent `high` /
   `max` / `swap` (default `"30%"` / `"40%"` / `"15%"` of RAM), all agents
   together `fleet_high` / `fleet_max` / `fleet_swap` (`"65%"` / `"75%"` /
-  `"40%"`), `gitnexus_heap_mb` (4096; `0` = no gate) and `gitnexus_at_once`
-  (1). Sizes are a share of RAM, bytes with a K/M/G/T suffix, or `"off"`;
+  `"40%"`), `gitnexus_heap_mb` (4096; `0` = no gate), `gitnexus_at_once`
+  (1) and `shed_idle` (`true`; `false` = the memory shield never puts idle
+  agents to sleep when memory stays critical, see
+  [session-engine.md](session-engine.md#memory-shedding-before-it-bricks)).
+  `fleet_high` is the agents' shared ceiling: the share of RAM all agents
+  together may use before the kernel throttles them as one (`MemoryHigh` on
+  `app-mindflock.slice`, set at server start). Sizes are a share of RAM, bytes with a K/M/G/T suffix, or `"off"`;
   anything unreadable reads as the default and is dropped on save. Per
   device, so settings sync never carries it. Read at each launch. Linux
   with a systemd user manager only — elsewhere launches are unchanged.

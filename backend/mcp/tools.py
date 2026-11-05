@@ -206,7 +206,9 @@ _D_WHOAMI = (
     "children, your unread message count and the person you work for "
     "(person: {id, name} — shared by all of that person's devices). flock: true "
     "means the person wants this session's work split across MindFlock workers "
-    "by default. Call this first."
+    "by default. capacity: {room, session_mb, hint} = how many more sessions "
+    "this machine has memory for now; plan your worker count from it. "
+    "Call this first."
 )
 _D_LIST = (
     "List MindFlock sessions as compact rows: title, status (running | ready | "
@@ -312,8 +314,7 @@ _D_SPAWN = (
     "it (see fence_session) before it starts, and a fence that overlaps an "
     'unfinished worker\'s waits for it (overlap="parallel" to allow); '
     "set_order sets serial / N at a time. A fenced caller's workers inherit "
-    'its fence. Low memory: status "queued: waiting for memory" (it starts '
-    "later)."
+    'its fence. Low memory: "queued: waiting for memory"; capacity = room left.'
 )
 _D_WAIT = (
     "Block until the given sessions are done, then return a result per "
@@ -1124,6 +1125,34 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
             note = (note + "; " if note else "") + self.identity.reason
         if note:
             out["note"] = note
+        # How many more sessions this machine has memory for: plan a worker
+        # count from it rather than spawning blindly (past it they queue).
+        cap = self._capacity()
+        if cap is not None:
+            out["capacity"] = cap
+        return out
+
+    def _capacity(self) -> Optional[dict]:
+        """``{"room", "session_mb", "hint"}`` from ``GET /api/memory/capacity``
+        (the launch gate's budget: how many more sessions fit now), or None
+        from a server that predates it or can't answer. ``room`` None:
+        memory is not measured there."""
+        try:
+            resp = self.api.get("/api/memory/capacity")
+        except (client.ApiError, ToolError):
+            return None
+        except Exception:  # noqa: BLE001 — advisory: never fail a tool on it
+            return None
+        if not isinstance(resp, dict) or "room" not in resp:
+            return None
+        out: Dict[str, Any] = {
+            "room": resp.get("room"),
+            "session_mb": resp.get("session_mb"),
+        }
+        if resp.get("short_mb"):
+            out["short_mb"] = resp.get("short_mb")
+        if resp.get("hint"):
+            out["hint"] = str(resp["hint"])
         return out
 
     def _person(self) -> Optional[dict]:
@@ -1870,6 +1899,14 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                     "up for it: they would only queue behind it."
                 ),
             }
+            cap = self._capacity()
+            if cap is not None:
+                queued["capacity"] = cap
+                if cap.get("short_mb"):
+                    queued["hint"] += (
+                        " One more session needs ~%s MB; %s MB more would have "
+                        "to be free." % (cap.get("session_mb"), cap["short_mb"])
+                    )
             if not footer:
                 queued["reason_no_report"] = reason
             if warnings:
@@ -1952,6 +1989,10 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
             out["warnings"] = warnings
         if not ready:
             out["hint"] = "still starting; wait_for_session will wait for it"
+        # What is left after this one (it counts as warming already).
+        cap = self._capacity()
+        if cap is not None:
+            out["capacity"] = cap
         return out
 
     # -- wait_for_session ------------------------------------------------------- #
