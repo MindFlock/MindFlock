@@ -95,7 +95,7 @@ def _read_meminfo(path: str = _MEMINFO) -> Optional[Dict[str, int]]:
     (``GlobalMemoryStatusEx``'s available physical memory; the page file as
     swap). There is no PSI there, so the level rests on the available share
     and the absolute floors alone."""
-    if os.name == "nt":
+    if os.name == "nt" and path == _MEMINFO:
         return _read_meminfo_psutil()
     want = {
         "MemTotal": "total",

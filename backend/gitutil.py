@@ -27,6 +27,8 @@ from typing import Dict, List, Mapping, Optional, Sequence
 
 from backend import compat
 
+_IS_WINDOWS = os.name == "nt"
+
 __all__ = [
     "TIMEOUT_RC",
     "LAUNCH_RC",
@@ -186,6 +188,9 @@ def parse_worktree_list(text: str) -> List[Dict[str, object]]:
             continue
         key, _, value = line.partition(" ")
         if key == "worktree":
+            if _IS_WINDOWS and value:
+                # Git for Windows prints C:/…; callers compare OS paths.
+                value = os.path.normpath(value)
             cur = {"path": value}
             out.append(cur)
         elif cur is None:

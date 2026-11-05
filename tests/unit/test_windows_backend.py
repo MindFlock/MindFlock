@@ -429,3 +429,13 @@ def test_secret_env_source_prefix_uses_forward_slashes_on_windows(monkeypatch):
     finally:
         monkeypatch.undo()
     assert got == ". C:/Users/me/.mindflock/run/s.env 2>/dev/null || true\n"
+
+
+def test_git_paths_are_native_on_windows(monkeypatch):
+    from backend import gitutil
+
+    text = "worktree C:/Users/me/repo\nbranch refs/heads/main\n"
+    assert gitutil.parse_worktree_list(text)[0]["path"] == "C:/Users/me/repo"
+    monkeypatch.setattr(gitutil, "_IS_WINDOWS", True)
+    got = gitutil.parse_worktree_list(text)[0]["path"]
+    assert got == os.path.normpath("C:/Users/me/repo")
