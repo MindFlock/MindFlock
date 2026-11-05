@@ -403,3 +403,49 @@ def test_pty_run_drains_and_writes_an_fdless_pty(monkeypatch):
     run.finished = False
     run.write(b"y\r")
     assert pty.written == [b"y\r"]
+
+
+# --------------------------------------------------------------------------- #
+# user event hooks without shebangs; du without du
+# --------------------------------------------------------------------------- #
+def test_hook_argv_is_the_file_itself_off_windows(tmp_path):
+    from backend.web.core import events
+
+    if compat.IS_WINDOWS:
+        pytest.skip("POSIX hooks")
+    hook = tmp_path / "notify.sh"
+    assert events._hook_argv(hook) == [str(hook)]
+
+
+def test_hook_argv_on_windows_picks_the_interpreter(monkeypatch, tmp_path):
+    from backend.web.core import events
+
+    monkeypatch.setattr(events.compat, "IS_WINDOWS", True)
+    monkeypatch.setattr(events.compat, "posix_shell", lambda bash=False: "bash.exe")
+    assert events._hook_argv(tmp_path / "a.cmd") == [str(tmp_path / "a.cmd")]
+    assert events._hook_argv(tmp_path / "a.EXE") == [str(tmp_path / "a.EXE")]
+    assert events._hook_argv(tmp_path / "a.ps1")[-2:] == [
+        "-File",
+        str(tmp_path / "a.ps1"),
+    ]
+    assert events._hook_argv(tmp_path / "notify") == [
+        "bash.exe",
+        str(tmp_path / "notify"),
+    ]
+
+
+def test_workspace_size_walk_matches_the_files_and_skips_links(monkeypatch, tmp_path):
+    from backend.web.core import workspaces
+
+    (tmp_path / "a").write_bytes(b"x" * 100)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b").write_bytes(b"y" * 23)
+    big = tmp_path.parent / (tmp_path.name + "-outside")
+    big.mkdir()
+    (big / "huge").write_bytes(b"z" * 5000)
+    os.symlink(big, tmp_path / "link")
+    monkeypatch.setattr(workspaces.compat, "IS_WINDOWS", True)
+    monkeypatch.setattr(
+        workspaces._proc, "run_capped", lambda *a, **k: pytest.fail("no du on Windows")
+    )
+    assert workspaces._dir_size_bytes(str(tmp_path)) == 123
