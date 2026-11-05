@@ -279,6 +279,9 @@ def test_meminfo_from_psutil_on_windows(monkeypatch):
 # --------------------------------------------------------------------------- #
 # Background jobs: psutil process table in /proc's units
 # --------------------------------------------------------------------------- #
+@pytest.mark.skipif(
+    not os.path.isdir("/proc/self"), reason="compares psutil against /proc (Linux)"
+)
 def test_background_jobs_psutil_table_matches_proc(monkeypatch):
     from backend.providers import claude_background as cb
 

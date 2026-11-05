@@ -120,7 +120,10 @@ def _powershell() -> str:
     return shutil.which("powershell") or shutil.which("powershell.exe") or ""
 
 
-@pytest.mark.skipif(not _powershell(), reason="no Windows PowerShell here")
+@pytest.mark.skipif(
+    not _powershell() or not shutil.which("wslpath"),
+    reason="needs Windows PowerShell reached from WSL (wslpath); a macOS runner can have a powershell without it",
+)
 def test_windows_powershell_parses_it():
     path = str(_ROOT / "install.ps1")
     if os.name != "nt":
