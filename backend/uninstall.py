@@ -14,11 +14,21 @@ longer exist, and nothing is left on disk that knows how to clean them up.
 **Activity hooks.** For in-place sessions MindFlock merges hook entries into
 the *user's own repo* — ``.claude/settings.local.json``, ``.codex/hooks.json``
 (see :func:`backend.providers.activity_markers.merge_activity_hooks`). The hook
-body is self-contained inline ``python3``: it has no dependency on the
-``mindflock`` binary, so it keeps firing on every agent tool call after the
-engine is gone, and its ``os.makedirs`` re-creates
+body is self-contained inline Python (``python3`` on Linux/macOS; on native
+Windows, which has no ``python3`` — only the Microsoft Store alias — the
+engine's own ``python.exe`` by path): it has no dependency on the
+``mindflock`` binary, so on Linux/macOS it keeps firing on every agent tool
+call after the engine is gone, and its ``os.makedirs`` re-creates
 ``~/.mindflock-assistant/.activity-markers`` — meaning a "clean" uninstall
-silently regrows the directory the user just deleted.
+silently regrows the directory the user just deleted. (On Windows it would
+fail on every call instead, naming an interpreter that no longer exists.)
+
+**The session host (native Windows).** There is no tmux there: sessions live
+in MindFlock's own session host (:mod:`backend.session.winmux`), a daemon that
+runs on the engine's ``python.exe`` and outlives the server. Uninstall stops it
+(and the sessions in it) FIRST: Windows refuses to delete a file a process
+holds open, so its agents would keep the worktrees from being removed, and the
+host itself would keep ``uv tool uninstall`` from deleting the venv.
 
 So this module walks every workdir recorded in ``state.json`` and reverses
 those writes, then (only under ``--purge``) removes MindFlock's two home
@@ -38,7 +48,8 @@ Deliberately conservative:
   session would leave the engine writing into deleted directories.
 
 The final ``uv tool uninstall mindflock`` is *printed*, not run: this process
-is executing out of the very venv that command deletes.
+is executing out of the very venv that command deletes (the same line on every
+OS, Windows included: ``install.ps1`` installs with ``uv tool install`` too).
 """
 
 from __future__ import annotations
@@ -241,6 +252,30 @@ def _mcp_bridge_running() -> bool:
         from backend.providers import mcp_share
 
         return mcp_share.bridge_pid() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _session_host_running() -> bool:
+    """Native Windows: whether the session host is up (always False
+    elsewhere — tmux is the user's own program there, left alone)."""
+    if os.name != "nt":
+        return False
+    try:
+        from backend.session.winmux import client
+
+        return client.host_running()
+    except Exception:  # noqa: BLE001 — no host package, no resolvable home
+        return False
+
+
+def _stop_session_host() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        from backend.session.winmux import client
+
+        return client.stop_host()
     except Exception:  # noqa: BLE001
         return False
 
@@ -569,6 +604,15 @@ def execute(
     deleted wholesale, so the repos they're registered in stay consistent.
     """
     report = Report()
+
+    # Native Windows: the session host goes first (see the module docstring):
+    # its agents hold the worktrees open, and it runs from the venv the final
+    # `uv tool uninstall` deletes.
+    if dry_run:
+        if _session_host_running():
+            report.did("would stop the session host (and the sessions in it)")
+    elif _stop_session_host():
+        report.did("stopped the session host (and the sessions in it)")
 
     if not keep_worktrees:
         for target in plan.sessions:

@@ -32,6 +32,13 @@ def _get_terminal_size():
     We query ``TIOCGWINSZ`` on stdin and unpack the kernel ``winsize`` struct
     (row, col, xpixel, ypixel), returning them in the same (cols, rows) order.
     """
+    if os.name == "nt":
+        # No TIOCGWINSZ (nor fcntl/termios) on Windows: ask the console.
+        try:
+            size = os.get_terminal_size()
+            return size.columns, size.lines, None
+        except (OSError, ValueError) as e:
+            return 0, 0, e
     import fcntl
     import termios
 

@@ -15,6 +15,11 @@ dependencies = [
     # in the MAIN dependencies because `uv tool install "mindflock[web]"`
     # installs no groups, and the OS engine must work on a fresh install.
     "pyobjc-framework-Speech; sys_platform == 'darwin'",
+    # Native Windows (docs/windows.md): process tables and memory where
+    # Linux reads /proc; the session host's ConPTY and screen model.
+    "psutil",
+    "pywinpty; sys_platform == 'win32'",
+    "pyte; sys_platform == 'win32'",
 ]
 
 [project.urls]
@@ -31,7 +36,7 @@ mindflock = "backend.cli:main"
 [project.optional-dependencies]
 engine = [
     "pyperclip",
-    "ptyprocess",
+    "ptyprocess; sys_platform != 'win32'",
 ]
 web = [
     "mindflock[engine]",
@@ -44,6 +49,9 @@ web = [
 [dependency-groups]
 dev = [
     "hypothesis",
+    # The Windows session host's screen model (backend/session/winmux): a
+    # runtime dependency only on Windows, but its tests run everywhere.
+    "pyte",
     "pytest",
     "pytest-asyncio",
     # CI runs the suite across every runner core (`pytest -n auto`, see
@@ -76,13 +84,13 @@ voice = [
 #   uv sync --group engine
 engine = [
     "pyperclip",
-    "ptyprocess",
+    "ptyprocess; sys_platform != 'win32'",
 ]
 # Everything needed to run the web UI (backend.web): engine deps + FastAPI.
 #   uv sync --group web
 web = [
     "pyperclip",
-    "ptyprocess",
+    "ptyprocess; sys_platform != 'win32'",
     "fastapi",
     "uvicorn[standard]",
     "segno",  # pure-python QR codes for the startup mobile-URL banner

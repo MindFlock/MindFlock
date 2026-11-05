@@ -177,6 +177,8 @@ def _install_stack_dump() -> None:
         import faulthandler
         import signal
 
+        if not hasattr(signal, "SIGUSR1"):  # native Windows: no USR1 to dump on
+            return
         from backend import config
 
         logs = os.path.join(config.GetConfigDir(), "logs")

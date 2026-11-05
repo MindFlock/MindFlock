@@ -73,6 +73,7 @@ import threading
 import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from backend import compat
 from backend.fsutil import atomic_write_json, read_json
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
@@ -734,7 +735,7 @@ _FLOCK = {"depth": 0, "fd": None}
 @contextlib.contextmanager
 def _store_lock():
     """The run store's lock ACROSS processes as well as threads: ``_LOCK``
-    (in-process, reentrant) plus an ``fcntl.flock`` on ``<runs dir>/.lock``
+    (in-process, reentrant) plus a ``compat.flock`` on ``<runs dir>/.lock``
     held for the outermost section. Two servers sharing one ``~/.mindflock``
     used to be able to both claim a lease, and a route on the non-driving
     server could lose an update (a lost pause turns every member into
@@ -743,12 +744,10 @@ def _store_lock():
         if _FLOCK["depth"] == 0:
             fd = None
             try:
-                import fcntl
-
                 d = runs_dir()
                 os.makedirs(d, exist_ok=True)
                 fd = os.open(os.path.join(d, ".lock"), os.O_CREAT | os.O_RDWR, 0o644)
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                compat.flock(fd, compat.LOCK_EX)
             except Exception:  # noqa: BLE001 — no flock here: in-process only
                 if fd is not None:
                     try:
@@ -844,6 +843,10 @@ def list_runs(include_finished: bool = True) -> List[dict]:
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if compat.IS_WINDOWS:  # pragma: no cover - os.kill(pid, 0) KILLS it there
+        import psutil
+
+        return psutil.pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

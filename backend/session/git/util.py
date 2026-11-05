@@ -10,6 +10,7 @@ Go source so the port is drop-in compatible.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -159,7 +160,11 @@ def find_git_repo_root(path: str) -> str:
         raise RuntimeError(
             "failed to find Git repository root from path: {}".format(path)
         )
-    return cmd.stdout.decode("utf-8", "replace").strip()
+    root = cmd.stdout.decode("utf-8", "replace").strip()
+    if os.name == "nt" and root:
+        # Git for Windows prints C:/…; every caller compares OS paths (C:\…).
+        root = os.path.normpath(root)
+    return root
 
 
 # ---------------------------------------------------------------------------

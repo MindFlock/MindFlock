@@ -180,6 +180,31 @@ def test_write_launcher_golden(tmp_path, golden, prompt, program, skip):
     assert got == expected
 
 
+_GOLDEN_CASES = test_write_launcher_golden.pytestmark[0].args[1]
+
+
+@pytest.mark.parametrize("golden,prompt,program,skip", _GOLDEN_CASES)
+def test_write_launcher_windows_golden(
+    tmp_path, monkeypatch, golden, prompt, program, skip
+):
+    """The same launchers as native Windows writes them (Git Bash runs them,
+    docs/windows.md): ``launcher_*.win.golden.sh``. The one difference from
+    the POSIX bytes is no ``oom_score_adj`` line (no OOM killer there); paths
+    are spelled ``C:/…`` (pinned in test_windows_launch, as no ``C:`` dir
+    exists here)."""
+    from backend import compat
+
+    monkeypatch.setattr(compat, "IS_WINDOWS", True)
+    win = golden.replace(".golden.sh", ".win.golden.sh")
+    expected = (_DATA / win).read_text(encoding="utf-8")
+    got = _render_launcher(tmp_path, prompt, program, skip)
+    assert got == expected
+    posix = (_DATA / golden).read_text(encoding="utf-8")
+    assert [ln for ln in posix.splitlines(True) if "oom_score_adj" not in ln] == (
+        got.splitlines(True)
+    )
+
+
 @pytest.mark.parametrize("program", ["aider", "codex", "goose", "opencode", "cline"])
 def test_write_launcher_never_leaks_claude_flags_to_other_clis(tmp_path, program):
     """The bug this whole spec exists for: a provisioned (= ingested) session on

@@ -18,6 +18,7 @@ from __future__ import annotations
 import socket
 import time
 
+import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 
@@ -256,7 +257,7 @@ def term(pane, monkeypatch):
     inst = _Inst()
     monkeypatch.setattr(server.ENGINE, "instances", {"w": inst})
     monkeypatch.setattr(server, "ensure_terminal_session", lambda i, t: ("mf_w", None))
-    monkeypatch.setattr(server.ptyprocess.PtyProcess, "spawn", spawn)
+    monkeypatch.setattr(ptyprocess.PtyProcess, "spawn", spawn)
     monkeypatch.setattr(server, "_budget_locked", lambda t: False)
     monkeypatch.setattr(server, "_note_human_input", lambda *a, **k: None)
     return procs

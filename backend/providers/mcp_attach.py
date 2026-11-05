@@ -55,6 +55,7 @@ import threading
 from dataclasses import dataclass
 from typing import Optional
 
+from backend import osflags
 from backend.fsutil import atomic_write_json
 
 __all__ = [
@@ -171,6 +172,36 @@ STARTUP_TIMEOUT_S = 30
 #: LANG, TERM, TMPDIR, … plus ``env``/``env_vars``), so the tmux identity
 #: fallback and the auth token have to be forwarded by name.
 _CODEX_ENV_VARS = ("TMUX", "TMUX_PANE", "TMUX_TMPDIR", "MINDFLOCK_AUTH_TOKEN")
+
+#: What else a cleared environment must carry on native Windows. A Windows
+#: process breaks without ``SystemRoot`` (Python cannot seed its RNG, sockets
+#: fail); identity reaches the session host through ``MINDFLOCK_HOME`` /
+#: ``USERPROFILE`` (its rendezvous file, ``backend.session.winmux.proto``),
+#: and ``PATH``/``PATHEXT``/``COMSPEC`` let it run ``git`` and the ``tmux``
+#: shim. (Claude Code hands its stdio servers its whole environment — verified
+#: on Windows, 2.1.232 — so only Codex's attach needs the list.)
+_CODEX_WINDOWS_ENV_VARS = (
+    "SystemRoot",
+    "USERPROFILE",
+    "HOME",
+    "MINDFLOCK_HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+)
+
+
+def codex_env_vars() -> tuple:
+    """The names Codex forwards to the MCP server (``env_vars``): the identity
+    and token vars, plus :data:`_CODEX_WINDOWS_ENV_VARS` on native Windows."""
+    if osflags.IS_WINDOWS:
+        return _CODEX_ENV_VARS + _CODEX_WINDOWS_ENV_VARS
+    return _CODEX_ENV_VARS
+
 
 _RUN_FILE_PREFIX = "mcp-"
 _RUN_FILE_SUFFIX = ".json"
@@ -375,7 +406,10 @@ def attach_args(
         return ()
 
 
-_MCP_CONFIG_IN_SCRIPT = re.compile(r"--mcp-config=([^'\"\s]+)")
+#: ``--mcp-config=<path>`` as a launcher bakes it in: bare, or — a path
+#: with a space, ``C:\\Users\\John Smith\\…`` on Windows — inside the
+#: single quotes ``shlex.quote`` put around the whole word.
+_MCP_CONFIG_IN_SCRIPT = re.compile(r"'--mcp-config=([^']+)'|--mcp-config=([^'\"\s]+)")
 
 
 def _script_run_files(script: str) -> list:
@@ -383,8 +417,8 @@ def _script_run_files(script: str) -> list:
     our own run directory (nothing else is ever written to)."""
     root = os.path.abspath(run_dir())
     out = []
-    for path in _MCP_CONFIG_IN_SCRIPT.findall(script or ""):
-        full = os.path.abspath(path)
+    for quoted, bare in _MCP_CONFIG_IN_SCRIPT.findall(script or ""):
+        full = os.path.abspath(quoted or bare)
         if os.path.dirname(full) == root and full not in out:
             out.append(full)
     return out
@@ -703,7 +737,7 @@ def codex_server_table(spec: McpSpec) -> str:
             _toml_str(spec.command()),
             _toml_array(spec.args()),
             env,
-            _toml_array(_CODEX_ENV_VARS),
+            _toml_array(codex_env_vars()),
             STARTUP_TIMEOUT_S,
             TOOL_TIMEOUT_S,
             tools,
@@ -864,7 +898,13 @@ class PeerMcpSpec:
         else:
             body = data if isinstance(data, bytes) else str(data).encode()
             fd = os.open(
-                path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+                path,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_TRUNC
+                | osflags.O_NOFOLLOW
+                | osflags.O_BINARY,
+                0o600,
             )
             with os.fdopen(fd, "wb") as fh:
                 fh.write(body)

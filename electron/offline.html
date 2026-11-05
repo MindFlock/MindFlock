@@ -126,7 +126,7 @@
       <p id="ni-where">MindFlock isn’t set up in WSL
          (<span class="distro">Ubuntu</span>) yet.</p>
       <p>This installs MindFlock’s engine under your home folder, then the
-         tools your agents need (tmux and your coding agent). That last part
+         tools your agents need (<span class="ni-tools">tmux and your coding agent</span>). That last part
          may ask for your password once.</p>
       <!-- macOS only. The app is self-signed (and stays so), so Gatekeeper may
            have blocked it on the way here; this is the whole fix, in two lines. -->
@@ -197,10 +197,12 @@
       document.getElementById('wsl-detail').textContent = (diag && diag.detail) || ''
     }
     if (state === 'not-installed' && diag) {
-      if (diag.platform !== 'win32') {
+      if (diag.platform !== 'win32' || diag.engine === 'native') {
         document.getElementById('ni-where').textContent =
           'MindFlock isn’t set up on this computer yet.'
       }
+      // Native Windows has no tmux to install: Git for Windows stands in.
+      if (diag.engine === 'native') setAll('.ni-tools', 'Git for Windows and your coding agent')
       document.getElementById('ni-gatekeeper').hidden = (diag.platform !== 'darwin')
     }
     // Booting normally takes seconds. After 10 s the server's own log appears

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import os
 from unittest.mock import patch
 
 import pytest
@@ -223,6 +224,44 @@ class TestTerminalArgv:
         ):
             assert tl.build_terminal_tab_argv("T", "sess") is None
 
-    def test_native_windows_no_launch(self):
-        with patch.object(osenv, "os_kind", return_value="windows"):
+    def test_native_windows_opens_a_wt_tab_on_the_session_host(self):
+        # No tmux there: the tab runs the session host's `tmux attach-session`
+        # (python -m backend.session.winmux) after wt's `--`.
+        with (
+            patch.object(osenv, "os_kind", return_value="windows"),
+            patch(
+                "shutil.which", side_effect=lambda c: "C:/wt.exe" if "wt" in c else None
+            ),
+        ):
+            argv = tl.build_terminal_tab_argv("T", "sess")
+        assert argv[:7] == ["C:/wt.exe", "-w", "0", "nt", "--title", "T", "--"]
+        assert argv[7:] == tl.windows_attach_argv("sess")
+        assert argv[-5:] == [
+            "-m",
+            "backend.session.winmux",
+            "attach-session",
+            "-t",
+            "sess",
+        ]
+        # Windows Terminal splits its command line at every `;`, even inside
+        # an argument: the attach command must carry none.
+        assert not any(";" in a for a in argv)
+
+    def test_native_windows_without_wt_opens_a_console(self):
+        with (
+            patch.object(osenv, "os_kind", return_value="windows"),
+            patch("shutil.which", return_value=None),
+            patch.dict(os.environ, {"COMSPEC": "C:/Windows/system32/cmd.exe"}),
+        ):
+            argv = tl.build_terminal_tab_argv("T", "sess")
+        # `start ""`: an empty window title, so the command is not taken for one
+        assert argv[:4] == ["C:/Windows/system32/cmd.exe", "/c", "start", ""]
+        assert argv[-1] == "sess"
+
+    def test_native_windows_nothing_to_open_degrades(self):
+        with (
+            patch.object(osenv, "os_kind", return_value="windows"),
+            patch("shutil.which", return_value=None),
+            patch.dict(os.environ, {"COMSPEC": ""}),
+        ):
             assert tl.build_terminal_tab_argv("T", "sess") is None

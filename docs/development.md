@@ -244,7 +244,7 @@ The tag push runs `release.yml`, which publishes to one GitHub release:
 | Asset | Built by | Notes |
 |---|---|---|
 | `mindflock-<v>-py3-none-any.whl`, `.tar.gz`, `SHA256SUMS` | `uv build` on Linux | The wheel is smoke-installed before publishing. |
-| `MindFlock-Setup.exe` (+ `.sha256`) | electron-builder, Windows runner | NSIS; also installs the CLI into WSL (`electron/build/installer.nsh`). |
+| `MindFlock-Setup.exe` (+ `.sha256`) | electron-builder, Windows runner | NSIS (`electron/build/installer.nsh`): no WSL requirement; the app installs its engine natively on first launch with the bundled `install.ps1`, and the uninstaller tears down a native engine and/or a WSL one. |
 | `MindFlock.dmg` (+ `.sha256`) | electron-builder, macOS runner | Universal (arm64 + x64). |
 | `MindFlock.AppImage` (+ `.sha256`) | electron-builder, Linux runner | |
 
@@ -310,7 +310,7 @@ frontend/                  # the web UI source: React + TypeScript, built by Vit
 └── vitest.config.ts      #   `npm test`
 
 electron/                  # the desktop app: main.js, preload.js, offline.html, logger.js
-└── build/                #   installer.nsh (Windows: checks WSL only), entitlements
+└── build/                #   installer.nsh (Windows: engine teardown on uninstall), entitlements
 
 tests/{unit,property,integration}/
 scripts/                   # bump-version.py, check-bundle-fresh.sh, quickstart-verify.sh,
@@ -379,7 +379,8 @@ Parallel-safety rules the suite already follows, which a new test must too:
 ### How CI runs the suite
 
 `.github/workflows/ci.yml`, job `test` (checks named `test (ubuntu-latest)`
-and `test (macos-latest)`):
+and `test (macos-latest)`; native Windows is the separate `test-windows` job,
+below):
 
 | Event | Ubuntu | macOS |
 |---|---|---|
@@ -406,6 +407,20 @@ Keep each directory's paths together in that file (CI sorts it anyway):
 pytest 9 drops a directory's `conftest.py` for a file passed after another
 directory's file that itself followed one from the first, so
 `peer/a.py unit/b.py peer/c.py` runs `c.py` without the peer fixtures.
+
+**Native Windows** has a job of its own, `test (windows-latest)`, so the
+matrix above is not slowed down: an import smoke (`backend.cli`,
+`backend.web.server`), the Windows tests (`tests/unit/test_winmux*.py`,
+`test_windows_*.py`, `test_web_native_windows_paths.py`,
+`test_doctor_windows.py`, `test_install_ps1.py`,
+`test_electron_native_windows.py`), the desktop app's `node --test`, and a
+cold `install.ps1 -Source <checkout> -NoPathUpdate` in Windows PowerShell 5.1
+into a fresh profile that ends on `mindflock doctor` and asserts its Windows
+rows (Git for Windows, the session host, Python). To try `install.ps1` on a
+real Windows box without touching your own install, point `USERPROFILE`,
+`HOME`, `MINDFLOCK_HOME`, `UV_TOOL_DIR` and `UV_TOOL_BIN_DIR` at scratch
+folders and pass `-Source <checkout> -NoPathUpdate`; `-DryRun` prints the
+`winget`/uv installs it would run instead of running them.
 
 Every CI job has a `timeout-minutes`, and the test step passes
 `--timeout=300`, so a hang fails with the stuck test's traceback rather than

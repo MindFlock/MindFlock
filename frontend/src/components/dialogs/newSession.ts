@@ -4,6 +4,7 @@
  * written against can be replayed in a test. */
 
 import type { PlanAnswer } from "../../api/types";
+import { isWindowsFullPath, serverIsWindows } from "../../lib/serverPaths";
 
 /** The two things New makes. Session is the landing tab and stays that way:
  * it is the hot path (name → Enter), and a tab strip that makes the common
@@ -117,7 +118,9 @@ export function advancedSummary(parts: Array<[string, boolean]>): string {
  * turns a path back into a search and typing one turns it back again. */
 export function looksLikePath(text: string): boolean {
   const t = text.trim();
-  return t.startsWith("/") || t.startsWith("~");
+  // On a native-Windows server `C:\…`, `C:/…` and `\\server\share` are
+  // locations too (lib/serverPaths: the server's OS, not the browser's).
+  return t.startsWith("/") || t.startsWith("~") || (serverIsWindows() && isWindowsFullPath(t));
 }
 
 /** Whether the Folder field is holding a QUERY rather than a folder to use.

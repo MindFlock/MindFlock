@@ -8,7 +8,8 @@ session — and then the OOM killer takes agents down mid-turn. This module is
 the one place that reads the signal; callers decide what to hold back:
 
 * ``level()`` — ``"ok"`` / ``"low"`` / ``"critical"`` (``"unknown"`` where
-  the probe has nothing to read: non-Linux, or a kernel without ``/proc``).
+  the probe has nothing to read: macOS, or a kernel without ``/proc``;
+  native Windows reads psutil instead, without PSI).
   Unknown never gates anything.
 * :func:`snapshot` — the numbers behind the level, for the UI.
 
@@ -88,7 +89,14 @@ def _enabled() -> bool:
 
 
 def _read_meminfo(path: str = _MEMINFO) -> Optional[Dict[str, int]]:
-    """``{"total", "available", "swap_total", "swap_free"}`` in bytes, or None."""
+    """``{"total", "available", "swap_total", "swap_free"}`` in bytes, or None.
+
+    Native Windows has no ``/proc``: the same numbers come from psutil
+    (``GlobalMemoryStatusEx``'s available physical memory; the page file as
+    swap). There is no PSI there, so the level rests on the available share
+    and the absolute floors alone."""
+    if os.name == "nt" and path == _MEMINFO:
+        return _read_meminfo_psutil()
     want = {
         "MemTotal": "total",
         "MemAvailable": "available",
@@ -107,6 +115,24 @@ def _read_meminfo(path: str = _MEMINFO) -> Optional[Dict[str, int]]:
     if "total" not in out or "available" not in out or out["total"] <= 0:
         return None
     return out
+
+
+def _read_meminfo_psutil() -> Optional[Dict[str, int]]:
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        sw = psutil.swap_memory()
+    except Exception:  # noqa: BLE001 - never raises: unknown instead
+        return None
+    if not vm.total:
+        return None
+    return {
+        "total": int(vm.total),
+        "available": int(vm.available),
+        "swap_total": int(sw.total),
+        "swap_free": int(sw.free),
+    }
 
 
 def _read_psi(path: str = _PSI) -> Optional[Dict[str, float]]:

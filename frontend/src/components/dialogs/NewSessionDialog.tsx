@@ -17,6 +17,7 @@
  * its Base branch picker, and per-session launch flags behind progressive
  * disclosure. */
 
+import { noteServerHome } from "../../lib/serverPaths";
 import {
   useCallback,
   useEffect,
@@ -512,6 +513,9 @@ export function NewSessionDialog() {
       if (!here()) return;
       const cfg = cfgR.status === "fulfilled" ? cfgR.value : undefined;
       setHomePath(cfg?.home || "");
+      // The server this dialog creates on (this device or another) decides
+      // what a full path looks like (lib/serverPaths: C:\… on Windows).
+      noteServerHome(cfg?.home);
       // $HOME is the fallback it always was: almost never what the user wants,
       // but a place the browser can start from when the suggestions had nothing
       // to offer (or failed, or are still walking).

@@ -36,6 +36,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from backend import compat
 from backend import log
 
 # The complete vocabulary. Emitters stick to these; hook authors key their
@@ -468,6 +469,28 @@ def hook_executables(event: str) -> List[Path]:
     return out
 
 
+def _hook_argv(path: Path) -> List[str]:
+    """How to start a hook: the file itself (its shebang picks the
+    interpreter). Native Windows has no shebangs: an ``.exe``/``.bat``/
+    ``.cmd``/``.com`` runs itself, a ``.ps1`` runs under PowerShell, anything
+    else — a shell script, as on Linux — under Git for Windows' bash."""
+    if not compat.IS_WINDOWS:
+        return [str(path)]
+    ext = path.suffix.lower()
+    if ext in (".exe", ".com", ".bat", ".cmd"):
+        return [str(path)]
+    if ext == ".ps1":
+        return [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(path),
+        ]
+    return [compat.posix_shell(bash=True), str(path)]
+
+
 async def _run_hook(path: Path, env: dict, payload: bytes) -> None:
     """Run one hook: envelope on stdin, 10s budget, failures logged not raised.
 
@@ -476,7 +499,7 @@ async def _run_hook(path: Path, env: dict, payload: bytes) -> None:
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            str(path),
+            *_hook_argv(path),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,

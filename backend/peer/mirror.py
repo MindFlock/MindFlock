@@ -39,6 +39,7 @@ import threading
 import time
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
+from backend import osflags
 from backend.peer import paths
 from backend.peer import share as share_mod
 
@@ -114,7 +115,9 @@ def load(link_id: str) -> Optional[dict]:
     """The link's mirror (``{repo_path, branch, enabled, last_head, last_at,
     last_error}``) or None. A missing, unreadable or foreign file is None."""
     try:
-        fd = os.open(_path(link_id), os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(
+            _path(link_id), os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY
+        )
     except (OSError, ValueError):
         return None
     try:
@@ -130,7 +133,11 @@ def _save(link_id: str, m: dict) -> dict:
     m = {k: m[k] for k in _FIELDS}
     tmp = "%s.tmp-%d-%s" % (path, os.getpid(), os.urandom(4).hex())
     data = json.dumps({"version": VERSION, "mirror": m}).encode("utf-8")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fd = os.open(
+        tmp,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | osflags.O_NOFOLLOW | osflags.O_BINARY,
+        0o600,
+    )
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

@@ -695,6 +695,42 @@ def _green_one(rel: str, green, comps, ci: bool) -> str:
     return "outside"
 
 
+#: Native Windows: a path may reach the predicate in the OS's own spelling.
+#: A module flag (not ``os.name`` inline) so the tests can exercise it.
+_WINDOWS = os.name == "nt"
+
+
+def rel_form(path: Optional[str], root: str = "") -> Optional[str]:
+    """``path`` in the zones' repo-relative ``/`` form.
+
+    Linux/macOS: ``path`` unchanged (git already hands every caller that
+    form). Native Windows: ``\\`` → ``/``, a leading ``./`` dropped, and an
+    ABSOLUTE path — ``C:\\…``, ``C:/…`` or Git Bash's ``/c/…``, any case —
+    made relative to ``root`` (None when it lies outside it), so a tool
+    call's Windows spelling of a zoned file can never miss its zone."""
+    if path is None or not _WINDOWS:
+        return path
+    import ntpath
+
+    p = str(path).replace("\\", "/")
+    m = re.match(r"^/([A-Za-z])(/.*)?$", p)
+    if m:  # Git Bash: /c/Users/x
+        p = m.group(1) + ":" + (m.group(2) or "/")
+    if re.match(r"^[A-Za-z]:/", p):
+        if not root:
+            return None
+        a = ntpath.normcase(ntpath.normpath(p))
+        b = ntpath.normcase(ntpath.normpath(str(root).replace("/", "\\")))
+        if a == b:
+            return ""
+        if not a.startswith(b.rstrip("\\") + "\\"):
+            return None
+        p = ntpath.normpath(p)[len(b.rstrip("\\")) + 1 :].replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
 def classify(
     rel_real: Optional[str],
     rel_lex: Optional[str],
@@ -719,6 +755,8 @@ def classify(
     try:
         doc = zones_doc or {}
         cands: List[str] = []
+        if _WINDOWS:
+            rel_real, rel_lex = rel_form(rel_real), rel_form(rel_lex)
         for c in (rel_real, rel_lex):
             if c is not None and c not in cands:
                 cands.append(c)
@@ -748,6 +786,8 @@ def verdict(doc: dict, rel: str, ci: bool = False) -> Optional[dict]:
     """``{"kind", "pattern", "zone_id"}`` when ``rel`` is blocked (the first
     red zone it hits) or outside the green scope (``pattern`` =
     :data:`GREEN_OUTSIDE`); None when it may be written (ok / companion)."""
+    if _WINDOWS:
+        rel = rel_form(rel) or ""
     v = classify(rel, None, doc, ci)
     if v == "blocked":
         m = _NESTED_RE.match(rel or "")

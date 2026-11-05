@@ -1353,7 +1353,9 @@ def write_launcher(
     seed = ""
     seed_by_keys = False
     if prompt:
-        (directory / PROMPT_BASENAME).write_text(prompt, encoding="utf-8")
+        # newline="": the bytes as given on every OS (Windows' text mode would
+        # turn each \n into \r\n, and `$(cat …)` hands the CLI those \r).
+        (directory / PROMPT_BASENAME).write_text(prompt, encoding="utf-8", newline="")
         if spec.prompt_arg:
             seed = " " + spec.prompt_arg.format(prompt=f'"$(cat {PROMPT_BASENAME})"')
         else:
@@ -1450,16 +1452,21 @@ def write_launcher(
     script = (
         "#!/usr/bin/env bash\n"
         "cd "
-        + _sh_quote(str(directory))
+        + _sh_quote(launch_script.shell_path(directory))
         + "\n"
         + (oom + "\n" if oom else "")
         + "exec bash -ilc "
         + _sh_quote(inner)
         + "\n"
     )
-    launch.write_text(script, encoding="utf-8")
+    # newline="": LF-only on every OS — the script is bash's to read.
+    launch.write_text(script, encoding="utf-8", newline="")
     os.chmod(launch, 0o755)
-    return str(launch)
+    # The path doubles as the session's launch command (``sh -c <path>``). On
+    # native Windows that shell is Git Bash, where an unquoted ``C:\x\y``
+    # loses its backslashes; ``C:/x/y`` is the same file to Python and to
+    # bash, which runs it by its shebang (docs/windows.md).
+    return launch_script.shell_path(launch)
 
 
 def _resume_chain(prog: str, spec: LauncherSpec) -> str:

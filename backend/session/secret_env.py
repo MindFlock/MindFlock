@@ -114,8 +114,13 @@ def write(session_name: str, secret: Optional[Mapping[str, str]]) -> str:
             for k, v in sorted(secret.items())
         )
         # Create 0600 from the start: writing then chmod-ing leaves a window in
-        # which the file is world-readable.
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # which the file is world-readable. O_BINARY (Windows only): a text-mode
+        # fd would end every line in \r, which bash then keeps in the value.
+        fd = os.open(
+            str(path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
         try:
             os.write(fd, body.encode("utf-8"))
         finally:
@@ -134,6 +139,8 @@ def source_prefix(path: str) -> str:
     """
     if not path:
         return ""
+    if os.name == "nt":  # Git Bash sources it: C:/… rather than C:\…
+        path = path.replace("\\", "/")
     return ". %s 2>/dev/null || true\n" % shlex.quote(path)
 
 

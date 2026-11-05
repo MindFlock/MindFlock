@@ -23,6 +23,7 @@ from __future__ import annotations
 import subprocess
 from typing import Optional
 
+from backend.session import mux
 from backend.web.core.find_query import Hit, Query, find_hits
 
 # The tmux invocation; tests point it at a private server (``-L``).
@@ -30,7 +31,7 @@ TMUX = ["tmux"]
 
 
 def _tmux(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run([*TMUX, *args], capture_output=True, text=True, timeout=10)
+    return mux.run([*TMUX, *args], capture_output=True, text=True, timeout=10)
 
 
 def _capture(name: str) -> Optional[list[str]]:

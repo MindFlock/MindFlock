@@ -23,9 +23,11 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import subprocess
 from typing import Optional, Tuple
+
+from backend.session import mux
+from backend.web.core import proc as _proc
 
 SESSION = "mindflock_setup_install"
 _DN = subprocess.DEVNULL
@@ -47,15 +49,13 @@ def _status_path() -> str:
 
 def _tmux(*args: str) -> int:
     try:
-        return subprocess.run(
-            ["tmux", *args], stdout=_DN, stderr=_DN, timeout=10
-        ).returncode
+        return mux.run(["tmux", *args], stdout=_DN, stderr=_DN, timeout=10).returncode
     except (OSError, subprocess.TimeoutExpired):
         return 1
 
 
 def _have_tmux() -> bool:
-    return shutil.which("tmux") is not None
+    return mux.available()
 
 
 def _session_exists() -> bool:
@@ -110,7 +110,9 @@ def _write_script(script: str) -> str:
     os.makedirs(_run_dir(), mode=0o700, exist_ok=True)
     path = _script_path()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    # newline="": LF only — Git Bash runs it on Windows, where text mode would
+    # end every line with a \r that `sh` reads as part of the command.
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         fh.write(script)
     return path
 
@@ -147,13 +149,16 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         script = _write_script(plan["script"])
     except OSError as err:
         return SESSION, "could not write the install script: %s" % err
-    status = shlex.quote(_status_path())
+    from backend.providers.launch_script import shell_path
+
+    # shell_path: C:/… on Windows, where Git Bash runs this (identity elsewhere).
+    status = shlex.quote(shell_path(_status_path()))
     # Record the exit status BEFORE handing the pane to a shell: that file is
     # what says "safe to close" and what the UI watches to re-run the doctor.
     wrapped = (
         "sh %s; echo $? > %s; echo; "
         "echo '[mindflock] done — you can close this window'"
-        % (shlex.quote(script), status)
+        % (shlex.quote(shell_path(script)), status)
     )
     if not _have_tmux():
         # No shell after it: nothing would ever close a plain PTY's leftover
@@ -161,7 +166,9 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         from backend.web.core import pty_run
 
         try:
-            pty_run.start(SESSION, ["sh", "-c", wrapped], os.path.expanduser("~"))
+            pty_run.start(
+                SESSION, [_proc.shell(), "-c", wrapped], os.path.expanduser("~")
+            )
         except Exception as err:  # noqa: BLE001 — surfaced in the terminal
             return SESSION, "could not start the install terminal: %s" % err
         return SESSION, None
@@ -175,7 +182,7 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         % status
     )
     try:
-        created = subprocess.run(
+        created = mux.run(
             [
                 "tmux",
                 "new-session",
@@ -184,7 +191,7 @@ def ensure_session() -> Tuple[str, Optional[str]]:
                 SESSION,
                 "-c",
                 os.path.expanduser("~"),
-                "sh",
+                _proc.shell(),
                 "-c",
                 wrapped,
             ],

@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from backend import osflags
 from backend.ticket_ingestion.backfill import BackfillScanner
 from backend.ticket_ingestion.providers import get_provider
 from backend.ticket_ingestion.clarification import InteractiveClarificationHandler
@@ -131,7 +132,7 @@ def _live_tmux_sessions() -> set[str] | None:
     """Every tmux session name on the default server, or None when tmux can't
     be listed (missing / timed out). No server running means no sessions."""
     try:
-        proc = subprocess.run(
+        proc = osflags.tmux_run(
             ["tmux", "list-sessions", "-F", "#{session_name}"],
             capture_output=True,
             text=True,
@@ -206,7 +207,7 @@ def _tmux_session_alive(slug: str) -> bool | None:
     """
     for name in (slug, f"mindflock_{slug}"):
         try:
-            proc = subprocess.run(
+            proc = osflags.tmux_run(
                 ["tmux", "has-session", "-t", f"={name}"],
                 capture_output=True,
                 timeout=5,

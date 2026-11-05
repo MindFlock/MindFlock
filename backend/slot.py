@@ -50,7 +50,6 @@ from __future__ import annotations
 
 import argparse
 import errno
-import fcntl
 import json
 import os
 import re
@@ -59,6 +58,8 @@ import signal
 import sys
 import time
 from typing import Callable, Dict, List, Optional, Sequence
+
+from backend import compat, osflags
 
 __all__ = [
     "DEFAULT_POOL",
@@ -114,6 +115,11 @@ def _guard(path: str, what: str) -> str:
 
 
 def _config_dir() -> str:
+    # backend.config.config.GetConfigDir's rule, stdlib-only (startup cost):
+    # $MINDFLOCK_HOME IS the directory when set.
+    override = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if override:
+        return os.path.expanduser(override)
     home = os.environ.get("HOME", "") or os.path.expanduser("~")
     return os.path.join(home, ".mindflock")
 
@@ -137,7 +143,15 @@ def pool_dir(pool: str) -> str:
 
 
 def _total_memory() -> int:
-    """Physical RAM in bytes (Linux and macOS), 0 when unknown."""
+    """Physical RAM in bytes (sysconf on Linux and macOS, psutil on
+    Windows), 0 when unknown."""
+    if osflags.IS_WINDOWS:
+        try:
+            import psutil
+
+            return int(psutil.virtual_memory().total)
+        except Exception:  # noqa: BLE001
+            return 0
     try:
         return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
     except (AttributeError, OSError, ValueError):
@@ -240,6 +254,8 @@ def _pid_alive(pid) -> bool:
         return False
     if pid <= 0:
         return False
+    if osflags.IS_WINDOWS:  # os.kill(pid, 0) TERMINATES a process there
+        return osflags.pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -262,12 +278,12 @@ def _probe_locked(path: str) -> Optional[bool]:
         return None
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            compat.flock(fd, compat.LOCK_SH | compat.LOCK_NB)
         except OSError as err:
             if err.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
                 return True
             return None
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        compat.flock(fd, compat.LOCK_UN)
         return False
     finally:
         os.close(fd)
@@ -325,9 +341,9 @@ def try_acquire(pool: str, n: int, record: Optional[dict] = None) -> Optional[Sl
     _ensure_dir(directory)
     for i in range(max(1, int(n))):
         path = os.path.join(directory, "slot-%d.lock" % i)
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | osflags.O_CLOEXEC, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            compat.flock(fd, compat.LOCK_EX | compat.LOCK_NB)
         except OSError as err:
             os.close(fd)
             if err.errno in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
@@ -352,9 +368,18 @@ class _Waiter:
         self.path = os.path.join(directory, self.name)
         # Lock under a temp name, then rename into place: the queue never
         # sees an unlocked (= dead-looking) file of a live waiter.
+        if osflags.IS_WINDOWS:
+            # An open file can be neither renamed nor deleted there, so the
+            # final name is created directly: a reaper that probes it in the
+            # instant before the lock cannot unlink it while we hold it open.
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+            compat.flock(fd, compat.LOCK_EX)
+            os.write(fd, json.dumps(record).encode("utf-8"))
+            self.fd = fd
+            return
         tmp = os.path.join(directory, ".tmp-" + self.name)
-        fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_EXCL | osflags.O_CLOEXEC, 0o600)
+        compat.flock(fd, compat.LOCK_EX)
         os.write(fd, json.dumps(record).encode("utf-8"))
         os.rename(tmp, self.path)
         self.fd = fd
@@ -362,10 +387,18 @@ class _Waiter:
     def close(self) -> None:
         if self.fd < 0:
             return
+        if osflags.IS_WINDOWS:  # an open file cannot be deleted there
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = -1
         try:
             os.unlink(self.path)
         except OSError:
             pass
+        if self.fd < 0:
+            return
         try:
             os.close(self.fd)
         except OSError:
@@ -474,7 +507,7 @@ def _tmux_session_of(rec: dict) -> str:
     import subprocess
 
     try:
-        cp = subprocess.run(
+        cp = osflags.tmux_run(
             [
                 "tmux",
                 "-S",
@@ -590,7 +623,10 @@ def _tty_delivered_sigint() -> bool:
     """Whether a SIGINT we got also reached the child straight from the
     terminal: we are in the terminal's foreground process group, and so is
     the child (it inherits our group). Forwarding it again would interrupt
-    the child twice — pytest reads a second ^C as "abort teardown"."""
+    the child twice — pytest reads a second ^C as "abort teardown".
+    Windows: a console's Ctrl+C reaches every process attached to it."""
+    if osflags.IS_WINDOWS:
+        return True
     for fd in (0, 1, 2):
         try:
             if os.isatty(fd) and os.tcgetpgrp(fd) == os.getpgrp():
@@ -602,7 +638,11 @@ def _tty_delivered_sigint() -> bool:
 
 def _exec(cmd: Sequence[str], err) -> int:
     """Replace this process with ``cmd`` (the bypass path). Returns only on
-    failure: 127 not found, 126 not runnable — the shell's codes."""
+    failure: 127 not found, 126 not runnable — the shell's codes. Windows
+    has no exec (``os.execvp`` there starts a new process and exits, losing
+    its exit code): the command runs as our child and its code is ours."""
+    if osflags.IS_WINDOWS:
+        return _run_child(cmd, dict(os.environ), None, err)
     try:
         os.execvp(cmd[0], list(cmd))
     except FileNotFoundError:
@@ -621,7 +661,11 @@ def _run_child(
     exits; return its exit code (a signal death is re-raised on ourselves)."""
     import subprocess
 
-    forwarded = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    forwarded = tuple(  # no SIGHUP on Windows
+        getattr(signal, n)
+        for n in ("SIGTERM", "SIGHUP", "SIGINT")
+        if hasattr(signal, n)
+    )
     child: List[Optional[subprocess.Popen]] = [None]
     pending: List[int] = []
 
@@ -634,7 +678,7 @@ def _run_child(
             return
         try:
             proc.send_signal(signum)
-        except OSError:
+        except (OSError, ValueError):  # ValueError: not a Windows signal
             pass
 
     previous = {}
@@ -659,7 +703,7 @@ def _run_child(
         for s in pending:
             try:
                 proc.send_signal(s)
-            except OSError:
+            except (OSError, ValueError):
                 pass
         rc = proc.wait()
     finally:
@@ -747,10 +791,11 @@ def _pane_sessions(sockets: Sequence[str]) -> Dict[tuple, str]:
 
     out: Dict[tuple, str] = {}
     for sock in sorted(set(s for s in sockets if s)):
-        if not os.path.exists(sock):
+        # (the session host's socket, "winmux", is a name, not a path)
+        if not osflags.IS_WINDOWS and not os.path.exists(sock):
             continue
         try:
-            cp = subprocess.run(
+            cp = osflags.tmux_run(
                 [
                     "tmux",
                     "-S",

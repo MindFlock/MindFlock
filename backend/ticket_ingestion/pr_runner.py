@@ -21,7 +21,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from backend import osenv
+from backend import compat, osenv, osflags
 from backend.providers import launch_script
 from backend.ticket_ingestion.claude_runner import (
     _prompt_dir,
@@ -333,7 +333,7 @@ async def _cursor_window_alive(search: str) -> bool:
 
 
 async def _kill_session(session: str) -> None:
-    proc = await asyncio.create_subprocess_exec(
+    proc = await osflags.tmux_exec(
         "tmux",
         "kill-session",
         "-t",
@@ -347,7 +347,11 @@ async def _kill_session(session: str) -> None:
 async def _start_tmux_session(
     session: str, workdir: Path, prompt_file: Path, done_marker: Path, agent: str = ""
 ) -> None:
-    shell = shutil.which("zsh") or shutil.which("bash") or "bash"
+    if compat.IS_WINDOWS:
+        # The launch strings are POSIX shell: Git for Windows' bash runs them.
+        shell = compat.posix_shell(bash=True)
+    else:
+        shell = shutil.which("zsh") or shutil.which("bash") or "bash"
     shell_flag = "-ilc"
     marker = shlex.quote(str(done_marker))
     # The agent's own skip-prompts flag and prompt-passing form (see
@@ -361,7 +365,7 @@ async def _start_tmux_session(
     # The EXIT trap is what the waiter below blocks on, so it is armed before the
     # agent starts and fires however the session ends.
     inner = f"{preamble}trap 'touch {marker}' EXIT; {command}"
-    proc = await asyncio.create_subprocess_exec(
+    proc = await osflags.tmux_exec(
         "tmux",
         "new-session",
         "-d",
@@ -386,7 +390,7 @@ async def _start_tmux_session(
         ("history-limit", "100000"),
         ("remain-on-exit", "on"),
     ):
-        opt = await asyncio.create_subprocess_exec(
+        opt = await osflags.tmux_exec(
             "tmux",
             "set-option",
             "-t",
@@ -397,7 +401,7 @@ async def _start_tmux_session(
             stderr=asyncio.subprocess.DEVNULL,
         )
         await opt.wait()
-    hook = await asyncio.create_subprocess_exec(
+    hook = await osflags.tmux_exec(
         "tmux",
         "set-hook",
         "-t",
@@ -428,7 +432,9 @@ async def _open_terminal_windows(
         await _open_wsl_terminal_window(pr, sessions)
         return
 
-    # Linux / macOS: one terminal per session (graceful no-op if none found).
+    # Linux / macOS / native Windows (a Windows Terminal tab, or a console,
+    # running a session-host attach — see terminal_launch).
+    # One terminal per session (graceful no-op if none found).
     opened = 0
     for comment, session in sessions:
         title = f"PR #{pr.number}: {comment.kind} c-{comment.id}"

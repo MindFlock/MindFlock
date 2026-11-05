@@ -118,6 +118,17 @@ class Executor:
 DEFAULT_TIMEOUT: float = 60.0
 
 
+def _spawn(args: List[str], **kwargs) -> subprocess.CompletedProcess:
+    """``subprocess.run`` — except a tmux argv, which goes through
+    :func:`backend.session.mux.run` (the same ``subprocess.run`` on POSIX;
+    the MindFlock session host on native Windows)."""
+    if args and args[0] == "tmux":
+        from backend.session import mux
+
+        return mux.run(args, **kwargs)
+    return subprocess.run(args, **kwargs)
+
+
 class Exec(Executor):
     """Production :class:`Executor` backed by :mod:`subprocess`.
 
@@ -137,7 +148,7 @@ class Exec(Executor):
         describing the timeout is returned (same return-an-error convention).
         """
         try:
-            completed = subprocess.run(
+            completed = _spawn(
                 cmd.args,
                 cwd=cmd.dir,
                 stdout=subprocess.DEVNULL,
@@ -169,7 +180,7 @@ class Exec(Executor):
         ``RuntimeError`` describing the timeout.
         """
         try:
-            completed = subprocess.run(
+            completed = _spawn(
                 cmd.args,
                 cwd=cmd.dir,
                 stdout=subprocess.PIPE,

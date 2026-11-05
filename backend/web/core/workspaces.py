@@ -21,11 +21,12 @@ import concurrent.futures
 import datetime as _datetime
 import os
 import shutil
+import stat
 import subprocess
 import threading
 import time
 
-from backend import config, gitutil
+from backend import compat, config, gitutil
 from backend.providers.claude import remove_trust_entry as _remove_trust_entry
 from backend.session import provisioned as provisioning
 from backend.web.core import proc as _proc
@@ -84,6 +85,8 @@ def _workspace_roots() -> list:
 def _dir_size_bytes(path: str) -> int:
     # GNU du takes -b (bytes); BSD/macOS du doesn't, so fall back to the
     # POSIX -k (KiB) form there. Best-effort either way — 0 on any failure.
+    if compat.IS_WINDOWS:  # no du: walk it (links and junctions not followed)
+        return _walk_size_bytes(path)
     cp = _proc.run_capped(
         ["du", "-sb", path],
         stdout=subprocess.PIPE,
@@ -105,6 +108,26 @@ def _dir_size_bytes(path: str) -> int:
         return int(cp.stdout.split()[0]) * scale
     except (ValueError, IndexError):
         return 0
+
+
+def _walk_size_bytes(path: str) -> int:
+    """``du -sb``'s apparent size by walking ``path`` (symlinks and junctions
+    are not followed); 0 when unreadable."""
+    total = 0
+    for dirpath, dirnames, filenames in os.walk(path, onerror=lambda e: None):
+        isjunction = getattr(os.path, "isjunction", None)
+        if isjunction is not None:
+            dirnames[:] = [
+                d for d in dirnames if not isjunction(os.path.join(dirpath, d))
+            ]
+        for name in filenames:
+            try:
+                st = os.lstat(os.path.join(dirpath, name))
+            except OSError:
+                continue
+            if not stat.S_ISLNK(st.st_mode):
+                total += st.st_size
+    return total
 
 
 def _find_worktrees(root: str) -> list:

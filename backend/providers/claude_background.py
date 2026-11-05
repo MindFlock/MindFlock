@@ -87,6 +87,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from backend import osflags
+
 # A job whose process tree used at least this fraction of one core since the
 # previous sample is doing work. A `sleep 5` polling loop costs well under 1%.
 ACTIVE_CPU_FRACTION = 0.03
@@ -142,9 +144,39 @@ def _hz() -> int:
         return 100
 
 
+_IS_WINDOWS = os.name == "nt"
+
+
+def _ps_stat(pid: int) -> Optional[dict]:
+    """:func:`_read_stat` from psutil (native Windows: no ``/proc``), in the
+    same units — clock ticks of :func:`_hz`, start counted from boot."""
+    try:
+        import psutil
+
+        p = psutil.Process(pid)
+        with p.oneshot():
+            ppid = p.ppid()
+            t = p.cpu_times()
+            created = p.create_time()
+        boot = psutil.boot_time()
+    except Exception:  # noqa: BLE001 - vanished, denied, or no psutil
+        return None
+    hz = _hz()
+    cpu = sum(getattr(t, f, 0.0) for f in ("user", "system")) + sum(
+        getattr(t, f, 0.0) for f in ("children_user", "children_system")
+    )
+    return {
+        "ppid": int(ppid),
+        "cpu": int(cpu * hz),
+        "start": int(max(0.0, created - boot) * hz),
+    }
+
+
 def _read_stat(pid: int) -> Optional[dict]:
     """ppid, cpu ticks (self + reaped children) and start time from
     ``/proc/<pid>/stat``, or None for a vanished process."""
+    if _IS_WINDOWS:
+        return _ps_stat(pid)
     try:
         with open("/proc/%d/stat" % pid, "rb") as fh:
             raw = fh.read().decode("utf-8", "replace")
@@ -162,8 +194,30 @@ def _read_stat(pid: int) -> Optional[dict]:
         return None
 
 
+def _pids() -> List[int]:
+    """Every pid: ``/proc`` on Linux, psutil on Windows."""
+    if _IS_WINDOWS:
+        try:
+            import psutil
+
+            return list(psutil.pids())
+        except Exception:  # noqa: BLE001
+            return []
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return []
+    return [int(n) for n in names if n.isdigit()]
+
+
 def _process_table() -> Dict[int, dict]:
     table: Dict[int, dict] = {}
+    if _IS_WINDOWS:
+        for pid in _pids():
+            st = _read_stat(pid)
+            if st is not None:
+                table[pid] = st
+        return table
     try:
         names = os.listdir("/proc")
     except OSError:
@@ -177,6 +231,13 @@ def _process_table() -> Dict[int, dict]:
 
 
 def _cmdline(pid: int) -> str:
+    if _IS_WINDOWS:
+        try:
+            import psutil
+
+            return " ".join(psutil.Process(pid).cmdline()).strip()
+        except Exception:  # noqa: BLE001
+            return ""
     try:
         with open("/proc/%d/cmdline" % pid, "rb") as fh:
             raw = fh.read()
@@ -186,6 +247,8 @@ def _cmdline(pid: int) -> str:
 
 
 def _stdout_target(pid: int) -> str:
+    if _IS_WINDOWS:  # no readable fd table there
+        return ""
     try:
         return os.readlink("/proc/%d/fd/1" % pid)
     except OSError:
@@ -285,13 +348,17 @@ def waits_on_itself(
         return False
     if cmdlines is None:
         cmdlines = {}
-        try:
-            names = os.listdir("/proc")
-        except OSError:
-            return False
-        for name in names:
-            if name.isdigit():
-                cmdlines[int(name)] = _cmdline(int(name))
+        if _IS_WINDOWS:
+            for pid in _pids():
+                cmdlines[pid] = _cmdline(pid)
+        else:
+            try:
+                names = os.listdir("/proc")
+            except OSError:
+                return False
+            for name in names:
+                if name.isdigit():
+                    cmdlines[int(name)] = _cmdline(int(name))
     me = os.getpid()
     for pid, text in cmdlines.items():
         if pid in own or pid == me or not text:
@@ -551,6 +618,13 @@ def clear_expectation(job_id: str, now: Optional[float] = None) -> bool:
 
 
 def _boot_time(now: float) -> Optional[float]:
+    if _IS_WINDOWS:
+        try:
+            import psutil
+
+            return float(psutil.boot_time())
+        except Exception:  # noqa: BLE001
+            return None
     try:
         with open("/proc/uptime") as fh:
             return now - float(fh.read().split()[0])
@@ -616,7 +690,7 @@ def jobs_under(pane_pid, now: Optional[float] = None) -> Optional[List[dict]]:
     "threshold_s", "past_expected"}`` with ``state`` one of running /
     waiting / stuck. None when it cannot be known (no ``/proc``, no pane
     pid)."""
-    if not pane_pid or not os.path.isdir("/proc/self"):
+    if not pane_pid or not (_IS_WINDOWS or os.path.isdir("/proc/self")):
         return None
     try:
         pane_pid = int(pane_pid)
@@ -736,7 +810,7 @@ def jobs_under(pane_pid, now: Optional[float] = None) -> Optional[List[dict]]:
 
 def _pane_pid(session_name: str) -> Optional[str]:
     try:
-        cp = subprocess.run(
+        cp = osflags.tmux_run(
             ["tmux", "display-message", "-p", "-t", session_name, "#{pane_pid}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -830,6 +904,8 @@ def stop(session_name: str, pid: int, grace_s: float = 2.0) -> bool:
     jobs = jobs_under(_pane_pid(session_name)) or []
     if not any(j["pid"] == pid for j in jobs):
         return False
+    if _IS_WINDOWS:
+        return _stop_windows(session_name, pid, grace_s)
     try:
         pgid = os.getpgid(pid)
     except OSError:
@@ -854,6 +930,29 @@ def stop(session_name: str, pid: int, grace_s: float = 2.0) -> bool:
                 os.killpg(target, signal.SIGKILL)
             else:
                 os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    forget(session_name)
+    return True
+
+
+def _stop_windows(session_name: str, pid: int, grace_s: float) -> bool:
+    """:func:`stop` on native Windows: no process groups or SIGTERM there, so
+    the job's tree is ended (``taskkill /T``), forcibly after ``grace_s``."""
+    from backend import compat
+
+    try:
+        compat.kill_group(pid, signal.SIGTERM)
+    except OSError:
+        return False
+    deadline = time.time() + grace_s
+    while time.time() < deadline:
+        if _read_stat(pid) is None:
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            compat.kill_group(pid, getattr(signal, "SIGKILL", 9))
         except OSError:
             pass
     forget(session_name)

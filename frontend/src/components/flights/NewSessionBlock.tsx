@@ -36,6 +36,7 @@
  * which pins that row's line where the block sat and hides the block; a
  * refusal brings the block back with the error (`onFailed`). */
 
+import { fullPathHint } from "../../lib/serverPaths";
 import { withMemoryConfirm } from "../../lib/memoryConfirm";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
@@ -120,7 +121,7 @@ export function repoChoices(suggestions: readonly RepoSuggestion[], max = REPO_C
 /** Why Fly is greyed out ("" = it can fly). */
 export function flyBlocked(repo: string): string {
   if (!repo.trim()) return "Pick a repository first";
-  if (isNameQuery(repo)) return "Type a full path starting with / or ~ (Browse… fills one in)";
+  if (isNameQuery(repo)) return "Type " + fullPathHint() + " (Browse… fills one in)";
   return "";
 }
 

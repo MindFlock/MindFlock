@@ -58,6 +58,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from backend import compat
 from backend.fsutil import atomic_write_json
 from backend import log
 from backend.config import config as _config
@@ -808,6 +809,10 @@ def _pid_alive(pid: int) -> bool:
             return _PROC.poll() is None
         except Exception:  # noqa: BLE001
             pass
+    if compat.IS_WINDOWS:  # pragma: no cover - os.kill(pid, 0) KILLS it there
+        import psutil
+
+        return psutil.pid_exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -1127,11 +1132,11 @@ def start_update(ref: str) -> dict:
         # to add forks when its caller already leads a group, so the PID
         # recorded below would have been a parent that exits at once.
         proc = subprocess.Popen(  # noqa: S603
-            ["/bin/sh", str(script_path)],
+            [compat.posix_shell(), str(script_path)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
-            start_new_session=True,
+            **compat.detached_kwargs(),
             cwd=str(Path.home()),
         )
     except (OSError, subprocess.SubprocessError) as err:

@@ -11,7 +11,12 @@ the PR create/merge shortcut, never a push.
 Each check is independent, fast (subprocesses capped at ~5s), and never raises:
 a broken probe degrades to a ``warn`` result. Remediation hints are picked per
 platform via :func:`backend.osenv.os_kind` (apt for linux/WSL, brew for
-macOS).
+macOS, winget for native Windows).
+
+Native Windows is a supported host (docs/windows.md): there is no tmux row,
+the ``session-host`` row checks the MindFlock session host instead (ConPTY,
+Windows 10 1809+, and its pywinpty/pyte packages), and ``git`` means Git for
+Windows — ``git.exe`` AND its ``bash.exe``, which runs every launch script.
 
 Statuses: ``ok`` (good) · ``info`` (optional dep absent) · ``warn`` (works but
 needs attention) · ``fail`` (a required dependency is missing). The overall
@@ -22,14 +27,19 @@ missing dependency this host actually needs (``Check.install``) into ONE script
 — a single package-manager run for everything that has a system package
 (``Check.pkg``), then each tool's own installer. ``doctor --fix`` runs it after
 one confirmation, and the web UI runs it in a terminal (one sudo prompt).
+On native Windows the plan is a PowerShell script (winget first), handed back
+as ONE ``powershell -EncodedCommand`` line that ``cmd.exe`` and Git Bash both
+run as is.
 """
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -118,7 +128,9 @@ GROUP_TITLES = {
 }
 #: Rows a first agent session cannot do without (the agent's sign-in included:
 #: an agent at a login screen is not a running agent).
-_RUN_IDS = frozenset({"git", "tmux", "agent-cli", "node", "agent-auth"})
+_RUN_IDS = frozenset(
+    {"git", "tmux", "session-host", "python", "agent-cli", "node", "agent-auth"}
+)
 #: Rows only commit / push / PR need.
 _SHIP_IDS = frozenset({"git-identity", "gh"})
 
@@ -176,12 +188,125 @@ def _pkg_fix(pkg: str) -> str:
         if mgr == "zypper":
             return f"sudo zypper install {pkg}"
         return f"sudo {mgr} install {pkg}"
-    return "use WSL — native Windows is not a supported MindFlock host"
+    if kind == "windows":
+        return _win_fix(pkg) or f"install {pkg} for Windows"
+    return f"install {pkg} with your system's package manager"
 
 
 def _pkg_supported() -> bool:
-    """Whether :func:`_pkg_fix` names a real package manager here."""
+    """Whether :func:`_pkg_fix` names a real package manager here — one whose
+    packages batch into ONE run (``Check.pkg``). winget is not one of them:
+    each winget install is its own step (``Check.cmd``)."""
     return osenv.os_kind() in ("macos", "linux", "wsl")
+
+
+# --------------------------------------------------------------------------- #
+# Native Windows
+# --------------------------------------------------------------------------- #
+#: winget package ids of what MindFlock installs on native Windows.
+_WINGET_IDS = {
+    "git": "Git.Git",
+    "uv": "astral-sh.uv",
+    "gh": "GitHub.cli",
+    "node": "OpenJS.NodeJS.LTS",
+    "tailscale": "tailscale.tailscale",
+    "cloudflared": "Cloudflare.cloudflared",
+}
+
+#: Windows 10 1809 — the first build with ConPTY, which the session host
+#: (backend.session.winmux) runs every session in.
+CONPTY_MIN_BUILD = 17763
+
+#: Where the Windows one-liner installer lives (install.ps1).
+_WIN_INSTALLER = (
+    "irm https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.ps1 | iex"
+)
+
+#: The agent CLIs' own Windows installers, for the bundled providers whose
+#: ``install_hint`` is a POSIX one (``curl … | sh`` runs nowhere on Windows).
+#: A provider that declares ``install_hint_windows()`` wins over this table;
+#: an npm hint needs no entry (npm is the same command there). A CLI with no
+#: Windows installer gets no runnable install, never a guess.
+_WINDOWS_AGENT_INSTALL = {
+    "claude": "irm https://claude.ai/install.ps1 | iex",
+    "codex": "npm install -g @openai/codex",
+    "aider": "irm https://aider.chat/install.ps1 | iex",
+    "opencode": "npm install -g opencode-ai",
+}
+
+
+def _winget(package_id: str) -> str:
+    """The non-interactive winget install of ``package_id``."""
+    return (
+        f"winget install --id {package_id} -e --source winget"
+        " --accept-package-agreements --accept-source-agreements"
+    )
+
+
+def _win_fix(tool: str) -> str:
+    """winget's install of ``tool`` (``""`` when winget doesn't carry it)."""
+    pid = _WINGET_IDS.get(tool)
+    return _winget(pid) if pid else ""
+
+
+def _windows_build() -> int:
+    """This Windows' build number (``0`` when unknown, or not Windows)."""
+    try:
+        return int(sys.getwindowsversion().build)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 — not Windows, or an odd Python
+        pass
+    import platform
+
+    m = re.search(r"\d+\.\d+\.(\d+)", platform.version() or "")
+    return int(m.group(1)) if m else 0
+
+
+def _git_bash() -> str:
+    """Git for Windows' ``bash.exe`` (:func:`backend.compat.posix_shell`), or
+    ``""`` when there is none — or when this is not Windows."""
+    from backend import compat
+
+    if not compat.IS_WINDOWS:
+        return ""
+    try:
+        return compat.posix_shell(bash=True)
+    except (FileNotFoundError, OSError):
+        return ""
+
+
+def _git_for_windows_exe() -> str:
+    """``git.exe`` in Git for Windows' default folders (``""`` if none) — a
+    fresh winget install lands there before this process's PATH sees it."""
+    for base in (
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+    ):
+        p = os.path.join(base, "Git", "cmd", "git.exe")
+        if base and os.path.isfile(p):
+            return p
+    return ""
+
+
+def _windows_agent_install(name: str, provider) -> str:
+    """Agent ``name``'s Windows installer (see :data:`_WINDOWS_AGENT_INSTALL`)."""
+    hook = getattr(provider, "install_hint_windows", None)
+    if callable(hook):
+        try:
+            return hook() or ""
+        except Exception:  # noqa: BLE001 — a provider quirk must not break it
+            return ""
+    if name in _WINDOWS_AGENT_INSTALL:
+        return _WINDOWS_AGENT_INSTALL[name]
+    try:
+        hint = provider.install_hint() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+    if re.match(r"npm\s+(?:i|install)\s", hint):
+        # `--prefix ~/.local` is a POSIX no-sudo trick; on Windows npm's
+        # global prefix is already the user's own (%APPDATA%\npm).
+        return re.sub(r"\s+--prefix\s+\S+", "", hint)
+    return ""
 
 
 #: Where Homebrew's installer puts ``brew`` (Apple silicon, then Intel). A
@@ -254,6 +379,8 @@ TMUX_MIN = (2, 4)
 
 
 def check_git() -> Check:
+    if osenv.os_kind() == "windows":
+        return _check_git_windows()
     path = shutil.which("git")
     if not path:
         fix = _pkg_fix("git")
@@ -295,7 +422,126 @@ def check_git() -> Check:
     return Check("git", "git", "ok", line)
 
 
-def check_tmux() -> Check:
+def _check_git_windows() -> Check:
+    """Git for Windows: required on Windows, unlike git elsewhere — its
+    ``bash.exe`` runs every session's launch script and exit marker (and
+    Claude Code on Windows needs it too)."""
+    label = "Git for Windows"
+    fix = _win_fix("git")
+    path = shutil.which("git")
+    bash = _git_bash()
+    if not path and not bash:
+        return Check(
+            "git",
+            label,
+            "fail",
+            "not found — sessions run their launch scripts with Git for "
+            "Windows' bash.exe",
+            fix,
+            docs="https://git-scm.com/download/win",
+            cmd=fix,
+            install=True,
+        )
+    if not path:
+        where = _git_for_windows_exe() or bash
+        return Check(
+            "git",
+            label,
+            "warn",
+            f"installed ({where}) but git is not on PATH — open a new terminal "
+            "(or restart MindFlock) so it is found",
+            "open a new terminal",
+        )
+    if not bash:
+        return Check(
+            "git",
+            label,
+            "fail",
+            f"{path} has no bash.exe next to it — install Git for Windows (or set "
+            "MINDFLOCK_GIT_BASH to its bash.exe)",
+            fix,
+            docs="https://git-scm.com/download/win",
+            cmd=fix,
+            install=True,
+        )
+    _, out = _run(["git", "--version"])
+    line = _first_line(out) or path
+    ver = _parse_version(out)
+    if ver and ver < GIT_MIN:
+        want = ".".join(map(str, GIT_MIN))
+        return Check(
+            "git",
+            label,
+            "fail",
+            f"{line} is too old — `git worktree remove` needs git ≥ {want}",
+            fix,
+            cmd=fix,
+            install=True,
+        )
+    return Check("git", label, "ok", f"{line} · bash: {bash}")
+
+
+def check_session_host() -> Optional[Check]:
+    """Native Windows' tmux: the MindFlock session host (backend.session.winmux)
+    — ConPTY (Windows 10 1809+) and its pywinpty + pyte packages. ``None`` (no
+    row) everywhere else."""
+    if osenv.os_kind() != "windows":
+        return None
+    import importlib.util
+
+    label = "session host (ConPTY)"
+    build = _windows_build()
+    if build and build < CONPTY_MIN_BUILD:
+        return Check(
+            "session-host",
+            label,
+            "fail",
+            f"Windows build {build} has no ConPTY — sessions need Windows 10 "
+            f"1809 (build {CONPTY_MIN_BUILD}) or newer",
+            "update Windows (Settings → Windows Update)",
+        )
+    missing = [
+        mod for mod in ("winpty", "pyte") if importlib.util.find_spec(mod) is None
+    ]
+    if missing:
+        names = ", ".join("pywinpty" if m == "winpty" else m for m in missing)
+        return Check(
+            "session-host",
+            label,
+            "fail",
+            f"{names} missing from MindFlock's environment — sessions cannot start",
+            "reinstall MindFlock: " + _WIN_INSTALLER,
+            cmd=_WIN_INSTALLER,
+        )
+    return Check(
+        "session-host",
+        label,
+        "ok",
+        "winmux on ConPTY" + (f" (Windows build {build})" if build else ""),
+    )
+
+
+def check_python() -> Optional[Check]:
+    """The interpreter MindFlock runs on, on native Windows (``None``
+    elsewhere — install.sh pins it there): 3.12 or newer."""
+    if osenv.os_kind() != "windows":
+        return None
+    ver = ".".join(map(str, sys.version_info[:3]))
+    if sys.version_info[:2] < (3, 12):
+        return Check(
+            "python",
+            "Python",
+            "fail",
+            f"Python {ver} — MindFlock needs 3.12 or newer",
+            "reinstall MindFlock (uv fetches Python 3.12): " + _WIN_INSTALLER,
+            cmd=_WIN_INSTALLER,
+        )
+    return Check("python", "Python", "ok", f"Python {ver} ({sys.executable})")
+
+
+def check_tmux() -> Optional[Check]:
+    if osenv.os_kind() == "windows":
+        return None  # the session host stands in (check_session_host)
     path = shutil.which("tmux")
     if not path:
         return Check(
@@ -399,6 +645,8 @@ def _agent_install_cmd(name: str, binary: str) -> str:
     provider = _agent_provider(name)
     if provider is None:
         return ""
+    if osenv.os_kind() == "windows":
+        return _windows_agent_install(name, provider)
     try:
         return provider.install_hint() or ""
     except Exception:  # noqa: BLE001 — a provider quirk must not break the doctor
@@ -581,6 +829,18 @@ def check_node() -> Optional[Check]:
     detail = f"npm not found — {who} is installed with npm"
     if shutil.which("npm"):  # only the Windows one, through WSL interop
         detail += " (the Windows npm under /mnt/ can't install Linux tools)"
+    if osenv.os_kind() == "windows":
+        fix = _win_fix("node")
+        return Check(
+            "node",
+            "Node.js (npm)",
+            "warn",
+            detail,
+            fix,
+            docs=_DOCS["node"],
+            cmd=fix,
+            install=True,
+        )
     return Check(
         "node",
         "Node.js (npm)",
@@ -870,6 +1130,17 @@ def _uv_install_cmd() -> str:
 
 def check_uv() -> Check:
     path = shutil.which("uv")
+    if not path and osenv.os_kind() == "windows":
+        return Check(
+            "uv",
+            "uv",
+            "warn",
+            "not found on PATH (used for installs/updates)",
+            _win_fix("uv"),
+            docs=_DOCS["uv"],
+            cmd=_win_fix("uv"),
+            install=True,
+        )
     if not path:
         from backend import _pins
 
@@ -955,6 +1226,8 @@ def check_tailscale() -> Check:
             )
         wanted = _tailscale_wanted()
         fix = issue.get("fix") or tailscale_cli.LINUX_INSTALL
+        if osenv.os_kind() == "windows":
+            fix = _win_fix("tailscale")
         if osenv.os_kind() == "macos":
             # The GUI app (cask `tailscale-app`, or the Standalone download) is
             # what Tailscale recommends on a Mac; formula `tailscale` is the
@@ -1136,6 +1409,8 @@ def _cloudflared_install() -> Tuple[str, str]:
     kind = osenv.os_kind()
     if kind == "macos":
         return "brew install cloudflared", "cloudflared"
+    if kind == "windows":
+        return _win_fix("cloudflared"), ""
     if kind not in ("linux", "wsl"):
         return "", ""
     mgr = _linux_pkg_manager()
@@ -1486,6 +1761,8 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "git": check_git,
     "git-identity": check_git_identity,
     "tmux": check_tmux,
+    "session-host": check_session_host,
+    "python": check_python,
     "gh": check_gh,
     "agent-cli": check_agent_cli,
     "assistant-cli": check_assistant_cli,
@@ -1603,6 +1880,8 @@ def install_plan(checks: List[Check]) -> dict:
     nothing to install.
     """
     wanted = [c for c in checks if c.install and c.status != "ok" and (c.pkg or c.cmd)]
+    if osenv.os_kind() == "windows":
+        return _install_plan_windows(wanted)
     pkgs: List[str] = []
     steps: List[dict] = []
     pkg_labels: List[str] = []
@@ -1662,6 +1941,67 @@ def install_plan(checks: List[Check]) -> dict:
         "is still not found (PATH).'\n"
     )
     return {"steps": steps, "packages": pkgs, "script": "".join(body)}
+
+
+def _ps_quote(text: str) -> str:
+    """``text`` as a single-quoted PowerShell literal."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+#: The PowerShell install script's head: ``S`` runs one step in a child
+#: PowerShell (an installer's own ``exit`` ends that child, not the plan),
+#: then re-reads PATH from the registry so the next step finds what this one
+#: installed (winget's Git before npm's CLI, …).
+_PS_HEAD = (
+    "$ErrorActionPreference='Continue';$ProgressPreference='SilentlyContinue';"
+    "$global:f=@();function W($t){[Console]::WriteLine($t)};"
+    "function S($l,$c){W '';W ('==> '+$l);"
+    "& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $c;"
+    "if($LASTEXITCODE -ne 0){$global:f+=$l};"
+    "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path','Machine')"
+    "+';'+[Environment]::GetEnvironmentVariable('Path','User')}\n"
+)
+
+#: Messages go through ``[Console]::WriteLine`` (``W``), not ``Write-Host``:
+#: with ``-EncodedCommand`` and a redirected stderr, Windows PowerShell 5.1
+#: also serializes every Write-Host record onto stderr as CLIXML.
+_PS_TAIL = (
+    "W '';if($global:f.Count){W '[mindflock] these did not install:';"
+    "$global:f|ForEach-Object{W ('  - '+$_)};exit 1}\n"
+    "W '[mindflock] everything installed. Open a new terminal if a tool "
+    "is still not found (PATH).'\n"
+)
+
+
+def _install_plan_windows(wanted: List[Check]) -> dict:
+    """:func:`install_plan` on native Windows: winget installs first (they put
+    Git, Node and uv on PATH for the installers after them), then each tool's
+    own installer, every one run in turn so one failure doesn't stop the rest.
+
+    ``script`` is ONE ``powershell -EncodedCommand`` line, because the callers
+    hand it to a shell as is (``doctor --fix``: ``cmd.exe``; Setup's install
+    terminal: Git Bash) — the base64 payload needs no quoting in either.
+    ``ps1`` is the same script in clear, for reading. A step command must not
+    contain ``"``: PowerShell 5.1 passes it to the child unescaped."""
+    steps = [
+        {"id": c.id, "label": c.label, "cmd": c.cmd}
+        for c in wanted
+        if c.cmd and '"' not in c.cmd
+    ]
+    steps.sort(key=lambda st: 0 if st["cmd"].startswith("winget ") else 1)
+    if not steps:
+        return {"steps": [], "packages": [], "script": ""}
+    body = [_PS_HEAD]
+    for st in steps:
+        body.append(f"S {_ps_quote(st['label'])} {_ps_quote(st['cmd'])}\n")
+    body.append(_PS_TAIL)
+    ps1 = "".join(body)
+    encoded = base64.b64encode(ps1.encode("utf-16-le")).decode("ascii")
+    script = (
+        "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass"
+        " -EncodedCommand " + encoded
+    )
+    return {"steps": steps, "packages": [], "script": script, "ps1": ps1}
 
 
 def to_payload(checks: List[Check]) -> dict:

@@ -86,6 +86,12 @@ def _powershell() -> Optional[str]:
     return shutil.which("powershell.exe")
 
 
+#: Keywords for a powershell.exe child: on native Windows no console window
+#: (a server started by the desktop app has none to share, so each probe
+#: would flash one); nothing under WSL / elsewhere.
+_PS_KW = {"creationflags": 0x08000000} if os.name == "nt" else {}  # NO_WINDOW
+
+
 def _ps_encoded(script: str) -> str:
     """PowerShell -EncodedCommand payload (base64 of UTF-16LE) — dodges all shell
     and quoting issues when passing a multi-line script."""
@@ -325,6 +331,7 @@ def _focus_cursor_window(workspace_path: str) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
+                **_PS_KW,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -367,6 +374,7 @@ def _cursor_windows_open(workspace_path: str) -> bool:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=15,
+                **_PS_KW,
             )
             return b"YES" in r.stdout
         except Exception:  # noqa: BLE001
@@ -425,6 +433,7 @@ def _maximize_new_cursor_window(workspace_path: str) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
+                **_PS_KW,
             )
         except Exception:  # noqa: BLE001
             pass
@@ -491,6 +500,7 @@ def _cursor_storage_path() -> Optional[str]:
       * **macOS**  — ``~/Library/Application Support/<dir>/User/globalStorage/storage.json``
       * **WSL**    — the editor runs on Windows via Remote-WSL, so its state
         lives under ``/mnt/<drive>/Users/<user>/AppData/Roaming/<dir>/...``
+      * **Windows** — ``%APPDATA%\\<dir>\\User\\globalStorage\\storage.json``
 
     All candidates are probed regardless of the detected OS (cheap, and robust to
     unusual setups); the first that exists wins.
@@ -510,6 +520,12 @@ def _cursor_storage_path() -> Optional[str]:
             % glob.escape(dirname)
         )
     )
+    if os.name == "nt" and os.environ.get("APPDATA"):  # pragma: no cover
+        cands.append(
+            os.path.join(
+                os.environ["APPDATA"], dirname, "User/globalStorage/storage.json"
+            )
+        )
     for c in cands:
         if os.path.isfile(c):
             return c
@@ -527,13 +543,17 @@ def _cursor_uri_to_path(uri) -> str:
         return ""
     u = urlparse(uri)
     if u.scheme == "vscode-remote":
-        if unquote(u.netloc).lower().startswith("wsl+"):
+        # A Remote-WSL folder is this machine's only from inside WSL; a
+        # server on native Windows can't run sessions in it.
+        if unquote(u.netloc).lower().startswith("wsl+") and os.name != "nt":
             return unquote(u.path)
         return ""
     if u.scheme == "file":
         p = unquote(u.path)
         m = re.match(r"^/([A-Za-z]):/(.*)$", p)
         if m:
+            if os.name == "nt":  # pragma: no cover - native Windows: C:/…
+                return "%s:/%s" % (m.group(1).upper(), m.group(2))
             return "/mnt/%s/%s" % (m.group(1).lower(), m.group(2))
         return p
     return ""

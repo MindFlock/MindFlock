@@ -13,7 +13,8 @@ for GUI editors whose CLI shim is on PATH. This module handles the rest:
   :func:`backend.ticket_ingestion.terminal_launch.build_terminal_tab_argv`:
   WSL → ``wt.exe`` + ``wsl.exe -d <distro>``, macOS → Terminal.app via
   ``osascript``, Linux → first available emulator
-  (``$MINDFLOCK_TERMINAL`` wins).
+  (``$MINDFLOCK_TERMINAL`` wins), native Windows → ``wt.exe`` running the
+  editor itself.
 
 Failures raise :class:`IdeLaunchError` whose message includes remediation
 ("install X" / "set your IDE in Settings → Advanced") so callers can surface
@@ -30,6 +31,7 @@ import socket
 import subprocess
 from typing import List, Optional
 
+from backend import compat
 from backend import log, osenv
 from backend.config import ide as ide_cfg
 from backend.ticket_ingestion.terminal_launch import (
@@ -94,8 +96,8 @@ def _popen_detached(argv: List[str], env: Optional[dict] = None) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
-        start_new_session=True,
         env=env,
+        **compat.detached_kwargs(),
     )
 
 
@@ -232,7 +234,8 @@ def _wsl_ipc_hook(marker: Optional[str] = None) -> Optional[str]:
     xdg = os.environ.get("XDG_RUNTIME_DIR")
     if xdg:
         roots.append(xdg)
-    roots.append("/run/user/%d" % os.getuid())
+    if hasattr(os, "getuid"):
+        roots.append("/run/user/%d" % os.getuid())
     roots.append(os.environ.get("TMPDIR") or "/tmp")
     seen: set = set()
     socks: List[str] = []
@@ -303,7 +306,8 @@ def _terminal_wrap_argv(title: str, command: List[str]) -> Optional[List[str]]:
 
     Mirrors ``build_terminal_tab_argv``'s per-OS branching (which is
     tmux-attach-specific) for an arbitrary command. Returns ``None`` when no
-    terminal emulator is available (native Windows, or bare Linux).
+    terminal emulator is available (bare Linux, or Windows without Windows
+    Terminal).
     """
     kind = osenv.os_kind()
 
@@ -335,6 +339,14 @@ def _terminal_wrap_argv(title: str, command: List[str]) -> Optional[List[str]]:
 
     if kind == "linux":
         return _linux_terminal_argv(title, command)
+
+    if kind == "windows":
+        # Native Windows: a new Windows Terminal tab running the command
+        # itself (no wsl.exe hop). No wt.exe → no terminal to offer.
+        wt = shutil.which(wt_command())
+        if wt is None:
+            return None
+        return [wt, "-w", "0", "nt", "--title", title, "--", *command]
 
     return None
 

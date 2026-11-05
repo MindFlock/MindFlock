@@ -25,6 +25,10 @@ import signal
 import subprocess
 from typing import Dict, List, Mapping, Optional, Sequence
 
+from backend import compat
+
+_IS_WINDOWS = os.name == "nt"
+
 __all__ = [
     "TIMEOUT_RC",
     "LAUNCH_RC",
@@ -133,13 +137,13 @@ def _run_group(argv, timeout, kw) -> subprocess.CompletedProcess:
     data = kw.pop("input", None)
     if data is not None:
         kw["stdin"] = subprocess.PIPE
-    proc = subprocess.Popen(argv, start_new_session=True, **kw)
+    proc = subprocess.Popen(argv, **compat.detached_kwargs(), **kw)
     try:
         out, err = proc.communicate(input=data, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (OSError, AttributeError):  # AttributeError: no killpg (Windows)
+            compat.kill_group(proc.pid, getattr(signal, "SIGKILL", 9))
+        except (OSError, AttributeError):
             proc.kill()
         proc.communicate()
         raise subprocess.TimeoutExpired(argv, timeout) from exc
@@ -184,6 +188,9 @@ def parse_worktree_list(text: str) -> List[Dict[str, object]]:
             continue
         key, _, value = line.partition(" ")
         if key == "worktree":
+            if _IS_WINDOWS and value:
+                # Git for Windows prints C:/…; callers compare OS paths.
+                value = os.path.normpath(value)
             cur = {"path": value}
             out.append(cur)
         elif cur is None:

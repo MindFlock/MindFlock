@@ -20,6 +20,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from backend import osflags
 from backend.workspace_setup import is_refresher_dirname
 
 _logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def _live_session_paths() -> set[str]:
     a missing/unresponsive tmux yields an empty set (age rules still apply).
     """
     try:
-        proc = subprocess.run(
+        proc = osflags.tmux_run(
             ["tmux", "list-panes", "-a", "-F", "#{pane_current_path}"],
             capture_output=True,
             text=True,

@@ -161,10 +161,19 @@ def normalize_program(program: Optional[str]) -> str:
         return key
     import os
 
+    from .base import _windows, split_program
+
     # Arguments mean the string is a command line, not a binary to identify.
-    if len(key.split()) > 1:
+    # (On Windows a profile path with spaces is ONE executable: split_program.)
+    exe, rest = split_program(key)
+    if rest:
         return key
-    base = os.path.basename(key)
+    if _windows():  # either slash (os.path is ntpath there anyway)
+        import ntpath
+
+        base = ntpath.basename(exe)
+    else:
+        base = os.path.basename(exe)
     if base == key:  # already a bare name
         return key
     for name in _ORDER:

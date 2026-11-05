@@ -56,7 +56,55 @@ def _paste_dirs() -> list:
 #: ``O_NOFOLLOW`` directory fds — never by path.
 WORKSPACE_PASTE_DIR = ".mindflock_pastes"
 
-_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+#: Directory fds (``O_DIRECTORY`` + ``dir_fd``) — POSIX. Native Windows has
+#: neither: there the folder is checked to be no link before each use
+#: (:func:`_no_link_dir`), by path.
+_FD_DIRS = hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd
+
+_DIR_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+
+
+def _no_link_dir(path: str) -> bool:
+    """``path`` is a real directory — no symlink or junction (Windows)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        return False
+    isjunction = getattr(os.path, "isjunction", None)
+    return not (isjunction is not None and isjunction(path))
+
+
+def _prune_path(base: str, keep: int) -> None:
+    """:func:`_prune_fd` by path, for a host without directory fds."""
+    if not _no_link_dir(base):
+        return
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return
+    stamped = []
+    for n in names:
+        if not n.startswith("paste-"):
+            continue
+        try:
+            st = os.lstat(os.path.join(base, n))
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            stamped.append((st.st_mtime, n))
+    victims = sorted(stamped)[:-keep] if keep > 0 else sorted(stamped)
+    for _, n in victims:
+        try:
+            os.unlink(os.path.join(base, n))
+        except OSError:
+            pass
 
 
 def _prune_fd(dfd: int, keep: int) -> None:
@@ -91,6 +139,9 @@ def _prune_pastes(base: str, keep: int = _PASTE_KEEP) -> None:
     ever touched, so a user file that wandered into the directory is safe. A
     ``base`` that is a symlink is left alone (a workspace's agent could point
     it anywhere on the host). Never raises."""
+    if not _FD_DIRS:
+        _prune_path(base, keep)
+        return
     try:
         dfd = os.open(base, _DIR_FLAGS)
     except OSError:
@@ -111,6 +162,8 @@ def write_workspace_paste(folder: str, filename: str, data: bytes) -> str:
     raise ``OSError`` instead of writing (or pruning) outside the workspace."""
     if not filename or "/" in filename or filename in (".", ".."):
         raise OSError("bad paste name")
+    if not _FD_DIRS:
+        return _write_paste_by_path(folder, filename, data)
     wfd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         try:
@@ -133,6 +186,31 @@ def write_workspace_paste(folder: str, filename: str, data: bytes) -> str:
     finally:
         os.close(pfd)
     return os.path.join(folder, WORKSPACE_PASTE_DIR, filename)
+
+
+def _write_paste_by_path(folder: str, filename: str, data: bytes) -> str:
+    """:func:`write_workspace_paste` for a host without directory fds
+    (native Windows): the paste folder must be a real directory, no link or
+    junction, and the file is created ``O_EXCL`` in it."""
+    if "\\" in filename:
+        raise OSError("bad paste name")
+    pdir = os.path.join(folder, WORKSPACE_PASTE_DIR)
+    try:
+        os.mkdir(pdir, 0o700)
+    except FileExistsError:
+        pass
+    if not _no_link_dir(pdir):
+        raise OSError("the paste folder is not a plain directory")
+    path = os.path.join(pdir, filename)
+    fd = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+        0o600,
+    )
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    _prune_path(pdir, _PASTE_KEEP)
+    return path
 
 
 def _clear_all_pastes() -> None:

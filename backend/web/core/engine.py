@@ -46,6 +46,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 from backend import config, log
 from backend import session
+from backend.session import mux
 
 # Tombstones older than this are pruned on every save (a co-running server
 # only needs to see one within its merge/adopt cycle, i.e. seconds).
@@ -117,7 +118,7 @@ def _tmux_session_exists(title: str) -> bool:
 
         name = _tmux.to_mindflock_tmux_name(title)
         return (
-            subprocess.run(
+            mux.run(
                 ["tmux", "has-session", "-t", "=" + name],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

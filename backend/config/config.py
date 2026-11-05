@@ -173,26 +173,40 @@ _CONFIG_DIR_NAME = ".mindflock"
 def GetConfigDir() -> str:
     """Return the path to the application's configuration directory (``~/.mindflock``).
 
-    Honors ``$HOME``. Raises ``OSError`` if the home directory cannot be resolved
-    (Go returns a wrapped error).
+    ``$MINDFLOCK_HOME``, when set, IS that directory — the rule the session
+    host (``backend.session.winmux.proto.home_dir``), ``install.json``
+    (install.sh / install.ps1), ``asking.json`` and the job expectations
+    already follow, so a scratch ``MINDFLOCK_HOME`` keeps ``state.json`` /
+    ``config.json`` / ``settings.json`` out of the real home too (before,
+    only ``$HOME`` moved them: a process given just ``MINDFLOCK_HOME`` wrote
+    its defaults into the real profile). Else ``$HOME/.mindflock``. Raises
+    ``OSError`` if the home directory cannot be resolved (Go returns a
+    wrapped error).
     """
+    from backend.config.home_guard import guard
+
+    override = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if override:
+        return guard(os.path.expanduser(override), "config dir")
     home_dir = _user_home_dir()
     if home_dir is None:
         raise OSError("failed to get config home directory: $HOME is not defined")
-    from backend.config.home_guard import guard
-
     # Under pytest a $HOME that was never redirected raises RealHomeStoreError
     # (an OSError, so LoadState/LoadConfig fall back to their defaults).
     return guard(os.path.join(home_dir, _CONFIG_DIR_NAME), "config dir")
 
 
 def _user_home_dir() -> Optional[str]:
-    """Mirror Go's ``os.UserHomeDir()`` on unix: return ``$HOME`` (if set and
-    non-empty); ``None`` otherwise.
+    """Mirror Go's ``os.UserHomeDir()``: ``$HOME`` (if set and non-empty);
+    on Windows, where ``$HOME`` is usually unset (Git Bash sets it to the
+    profile), ``%USERPROFILE%`` — Go's own Windows answer; ``None``
+    otherwise.
     """
     home = os.environ.get("HOME", "")
     if home != "":
         return home
+    if os.name == "nt":
+        return os.environ.get("USERPROFILE", "") or None
     return None
 
 
@@ -222,7 +236,16 @@ def GetClaudeCommand() -> str:
 
     Raises ``RuntimeError("claude command not found in aliases or PATH")`` if
     both fail (Go returns ``"", error``).
+
+    Native Windows: the PATH lookup only (``claude.exe`` / ``claude.cmd``
+    via PATHEXT) — a Git Bash ``which`` would answer with a ``/c/…`` path
+    nothing but bash can run, and bash rc aliases are not a Windows habit.
     """
+    if os.name == "nt":
+        found = shutil.which("claude")
+        if found is not None:
+            return found
+        raise RuntimeError("claude command not found in aliases or PATH")
     shell = os.environ.get("SHELL", "")
     if shell == "":
         shell = "/bin/bash"  # Default to bash if SHELL is not set.

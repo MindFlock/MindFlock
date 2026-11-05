@@ -67,6 +67,7 @@ import threading
 import time
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from backend import compat
 from backend import config, log, memory_pressure, providers, session
 from backend.session import tmux
 from backend.web.core import title_store
@@ -584,7 +585,16 @@ def veto(
 # sleeping
 # --------------------------------------------------------------------------- #
 def _proc_stat(pid: int) -> Optional[Tuple[int, int]]:
-    """``(ppid, starttime)`` of ``pid`` from ``/proc``, or None."""
+    """``(ppid, starttime)`` of ``pid`` from ``/proc`` (psutil on Windows,
+    the start time in the same 1/100 s ticks), or None."""
+    if compat.IS_WINDOWS:  # pragma: no cover - no /proc there
+        try:
+            import psutil
+
+            p = psutil.Process(pid)
+            return p.ppid(), int(p.create_time() * 100)
+        except Exception:  # noqa: BLE001 — gone, or not ours to read
+            return None
     try:
         with open("/proc/%d/stat" % pid, "rb") as fh:
             raw = fh.read().decode("ascii", "replace")
@@ -620,7 +630,12 @@ def _pane_tree(name: str) -> List[Tuple[int, int]]:
     children: Dict[int, List[int]] = {}
     starts: Dict[int, int] = {}
     try:
-        pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
+        if compat.IS_WINDOWS:  # pragma: no cover - no /proc there
+            import psutil
+
+            pids = psutil.pids()
+        else:
+            pids = [int(p) for p in os.listdir("/proc") if p.isdigit()]
     except OSError:
         return []
     for pid in pids:
@@ -649,6 +664,15 @@ def _tree_mb(tree: List[Tuple[int, int]]) -> int:
     page = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
     for pid, _start in tree:
         kb = 0
+        if compat.IS_WINDOWS:  # pragma: no cover - no /proc there: RSS
+            try:
+                import psutil
+
+                kb = psutil.Process(pid).memory_info().rss // 1024
+            except Exception:  # noqa: BLE001
+                kb = 0
+            total += kb
+            continue
         try:
             with open("/proc/%d/smaps_rollup" % pid, encoding="ascii") as fh:
                 for line in fh:
@@ -684,7 +708,7 @@ def _reap(tree: List[Tuple[int, int]], wait: float = REAP_WAIT_SECONDS) -> int:
     left = [(p, s) for p, s in left if _alive(p, s)]
     if not left:
         return 0
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", signal.SIGTERM)):
         for pid, start in left:
             if _alive(pid, start):
                 try:

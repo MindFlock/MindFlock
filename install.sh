@@ -11,8 +11,8 @@
 #                         prints the whole line, pinned to its own version).
 #
 # What it does (and prints as it goes):
-#   1. Checks the platform (Linux, macOS, or WSL; native Windows is refused
-#      with a pointer to WSL2).
+#   1. Checks the platform (Linux, macOS, or WSL; Git Bash / MSYS on native
+#      Windows is pointed at install.ps1, the PowerShell twin of this script).
 #   2. Installs `uv` (Astral's Python manager) via its official installer if
 #      it isn't already present — into ~/.local/bin, no root. The installer is
 #      version-pinned and sha256-verified before it runs (no blind curl|sh).
@@ -89,10 +89,11 @@ OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Linux|Darwin) ;;
   MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    fail "native Windows is not a supported MindFlock host (the engine needs
-tmux and Unix PTYs). Install WSL2 (https://learn.microsoft.com/windows/wsl/install)
-and run this installer inside your WSL distro." ;;
-  *) fail "unsupported platform: $OS (supported: Linux, macOS, Windows-via-WSL2)" ;;
+    fail "this is Git Bash / MSYS on Windows — native Windows has its own installer.
+In PowerShell run:
+  irm https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.ps1 | iex
+(Or run this script inside WSL to install MindFlock there.)" ;;
+  *) fail "unsupported platform: $OS (supported: Linux, macOS, WSL2, and Windows via install.ps1)" ;;
 esac
 say "platform: $OS $(uname -m 2>/dev/null || true)"
 

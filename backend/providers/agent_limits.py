@@ -74,6 +74,10 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
+from backend import compat
+
+from .launch_script import shell_path
+
 __all__ = [
     "DEFAULTS",
     "FLEET_SLICE",
@@ -87,6 +91,8 @@ __all__ = [
     "scope_available",
     "scope_command",
     "wrap_launch",
+    "bash_path",
+    "windows_scope_command",
 ]
 
 #: The slice every agent scope goes in (a child of the user manager's
@@ -192,6 +198,13 @@ def _valid_size(spec: str) -> bool:
 
 
 def _total_memory() -> int:
+    if os.name == "nt":  # no sysconf there
+        try:
+            import psutil
+
+            return int(psutil.virtual_memory().total)
+        except Exception:  # noqa: BLE001
+            return 0
     try:
         return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
     except (AttributeError, OSError, ValueError):
@@ -397,7 +410,15 @@ def _run_dir() -> str:
     env = (os.environ.get("MINDFLOCK_RUN_DIR") or "").strip()
     if env:
         return env
-    return os.path.join(os.path.expanduser("~"), ".mindflock", "run")
+    # The config dir's rule ($MINDFLOCK_HOME, else $HOME/.mindflock — not
+    # expanduser, which reads %USERPROFILE% on Windows): the same run dir
+    # the MCP run files use (mcp_attach.run_dir).
+    try:
+        from backend.config.config import GetConfigDir
+
+        return os.path.join(GetConfigDir(), "run")
+    except OSError:
+        return os.path.join(os.path.expanduser("~"), ".mindflock", "run")
 
 
 def shim_dir() -> str:
@@ -424,9 +445,16 @@ def gitnexus_shim_text(
     still runs — capped, just not queued. ``-P`` keeps the repo being
     committed (the hook's cwd) off ``sys.path``; ``PYTHONPATH`` names the
     package this server runs from, installed or a checkout alike."""
-    sd = shlex.quote(shim_dir())
-    py = shlex.quote(python)
-    root = shlex.quote(package_root or _package_root())
+    # Native Windows (Git Bash runs the shim): the shim's own dir as bash's
+    # $PATH spells it (/c/…, what the loop below compares), the interpreter
+    # and PYTHONPATH as C:/… (native programs take that; bash eats C:\…).
+    # What the slot runs: the real binary (Linux/macOS); on Windows the
+    # arguments _WIN_SLOT_TARGET puts in front of the caller's.
+    win_target = _WIN_SLOT_TARGET if compat.IS_WINDOWS else ""
+    target = '"$@"' if compat.IS_WINDOWS else '"$real" "$@"'
+    sd = shlex.quote(bash_path(shim_dir()))
+    py = shlex.quote(shell_path(python))
+    root = shlex.quote(shell_path(package_root or _package_root()))
     return (
         "#!/bin/sh\n"
         f"{SHIM_MARKER} (backend/providers/agent_limits.py) — regenerated at\n"
@@ -455,11 +483,27 @@ def gitnexus_shim_text(
         f'  *) NODE_OPTIONS="${{NODE_OPTIONS:+$NODE_OPTIONS }}--max-old-space-size={int(heap_mb)}"; export NODE_OPTIONS ;;\n'
         "esac\n"
         f"if [ -x {py} ]; then\n"
-        f"  PYTHONPATH={root} exec {py} -P -m backend.slot --pool gitnexus --max {max(1, int(at_once))} "
-        f'--timeout {int(wait_seconds)} -- "$real" "$@"\n'
+        + win_target
+        + f"  PYTHONPATH={root} exec {py} -P -m backend.slot --pool gitnexus --max {max(1, int(at_once))} "
+        f"--timeout {int(wait_seconds)} -- {target}\n"
         "fi\n"
         'exec "$real" "$@"\n'
     )
+
+
+#: Native Windows: what the slot (a native python.exe) starts for the
+#: queued analyze. npm's ``gitnexus`` next to ``gitnexus.cmd`` is an sh
+#: script, which only bash can run — CreateProcess refuses it ("not a valid
+#: Win32 application") — so the slot gets npm's ``gitnexus.cmd`` (native
+#: path), else ``sh.exe <script>``, as ``set --`` arguments ahead of the
+#: caller's. (bash's own passthrough above still execs the sh script.)
+_WIN_SLOT_TARGET = (
+    '  if [ -f "$real.cmd" ]; then\n'
+    '    set -- "$(cygpath -w "$real.cmd" 2>/dev/null || echo "$real.cmd")" "$@"\n'
+    "  else\n"
+    '    set -- "$(cygpath -w "$(command -v sh)")" "$(cygpath -w "$real")" "$@"\n'
+    "  fi\n"
+)
 
 
 def _real_gitnexus_on_path(path: Optional[str] = None) -> Optional[str]:
@@ -501,13 +545,80 @@ def gitnexus_shim_dir(cfg: Optional[Dict[str, object]] = None) -> Optional[str]:
         if current != text:
             os.makedirs(directory, exist_ok=True)
             tmp = "%s.%d.tmp" % (path, os.getpid())
-            with open(tmp, "w", encoding="utf-8") as fh:
+            # newline="": a CRLF shim would not run under Git Bash.
+            with open(tmp, "w", encoding="utf-8", newline="") as fh:
                 fh.write(text)
             os.chmod(tmp, 0o755)
             os.replace(tmp, path)
     except OSError:
         return None
     return directory
+
+
+# --- native Windows ------------------------------------------------------------
+
+
+def bash_path(path) -> str:
+    """``path`` as Git Bash's ``$PATH`` spells a directory (``/c/Users/x``),
+    on native Windows; unchanged elsewhere. (Launch shell text otherwise uses
+    ``C:/…`` — :func:`backend.providers.launch_script.shell_path` — which
+    native programs take too, but a ``$PATH`` entry with a drive colon would
+    split at it.)"""
+    p = str(path)
+    if not compat.IS_WINDOWS:
+        return p
+    p = p.replace("\\", "/")
+    m = re.match(r"^([A-Za-z]):(/.*)?$", p)
+    if not m:
+        return p
+    return "/" + m.group(1).lower() + (m.group(2) or "/")
+
+
+def jobscope_path() -> str:
+    """The Windows scope wrapper (:mod:`backend.session.winmux.jobscope`),
+    run by path: stdlib only, so it needs nothing importable."""
+    return os.path.join(_package_root(), "backend", "session", "winmux", "jobscope.py")
+
+
+def windows_scope_command(
+    limit: int, cmd: str, python: str = "", bash: str = ""
+) -> str:
+    """``cmd`` (a shell string) run inside a Job Object of ``limit`` bytes:
+    ``<python> -I <jobscope.py> --max <limit> -- <bash> -c <cmd>`` — the
+    ``systemd-run --scope … sh -c <cmd>`` of Linux. ``-I``: neither the
+    script's directory nor the user's site is on ``sys.path``."""
+    if not python:
+        from .activity_markers import hook_python
+
+        python = hook_python()
+    bash = bash or compat.posix_shell(bash=True)
+    return "%s -I %s --max %d -- %s -c %s" % (
+        shlex.quote(shell_path(python)),
+        shlex.quote(shell_path(jobscope_path())),
+        int(limit),
+        shlex.quote(shell_path(bash)),
+        shlex.quote(cmd),
+    )
+
+
+def _wrap_launch_windows(cmd: str) -> str:
+    try:
+        cfg = config()
+        if not cfg.get("enabled", True):
+            return cmd
+        out = cmd
+        limit = resolved_limits(cfg).get("max", 0)
+        if limit > 0 and not _env_off("MINDFLOCK_AGENT_SCOPE"):
+            out = windows_scope_command(limit, out)
+        shims = gitnexus_shim_dir(cfg)
+        if shims:
+            out = 'PATH=%s:"$PATH"; export PATH; %s' % (
+                shlex.quote(bash_path(shims)),
+                out,
+            )
+        return out
+    except Exception:  # noqa: BLE001 — a guard never blocks a launch
+        return cmd
 
 
 # --- composing a launch -------------------------------------------------------
@@ -522,7 +633,14 @@ def wrap_launch(cmd: str, session_name: str) -> str:
 
     The scope runs ``sh -c <cmd>``: ``systemd-run --scope`` execs it in place,
     so the pane's terminal, environment, working directory and exit status
-    are the agent's own."""
+    are the agent's own.
+
+    Native Windows (Git Bash runs the launch): the scope is a Job Object
+    with the per-agent ``max`` (:func:`windows_scope_command`, which ends an
+    agent over it with exit 137 as Linux's OOM killer would), and the shim's
+    directory goes on ``PATH`` as bash spells it (``/c/…``)."""
+    if compat.IS_WINDOWS:
+        return _wrap_launch_windows(cmd)
     try:
         cfg = config()
         if not cfg.get("enabled", True):

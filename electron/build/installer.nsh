@@ -1,106 +1,37 @@
 ; MindFlock — NSIS installer customization (auto-included by electron-builder
 ; as buildResources/installer.nsh; no package.json wiring needed).
 ;
-; The Windows app is only half of MindFlock: the engine needs tmux and Unix
-; PTYs, so it runs inside WSL2 and the app talks to it over localhost.
+; The Windows app is only half of MindFlock: the engine (the mindflock CLI and
+; its server) runs natively on Windows — or, for an existing WSL user, inside
+; WSL2 — and the app talks to it over localhost.
 ;
 ; The engine (a private Python toolchain + the mindflock CLI) is installed by
 ; the APP ON FIRST LAUNCH, where its offline page shows a live progress
 ; transcript and can retry on failure. The installer USED to run that step here
 ; via `install.sh`, but a multi-minute network install inside the setup wizard
 ; gave no feedback, couldn't be cancelled (NSIS disables Cancel inside a
-; section), and looked hung — so the wizard now only checks that WSL is present
-; and hands off to the app.
+; section), and looked hung — so the wizard now only installs the app and hands
+; off to it.
 ;
 ; Deliberately written in core NSIS only (no LogicLib/FileFunc macros) wherever
 ; possible, so it cannot collide with whatever electron-builder's own template
 ; already included. LogicLib + ${isUpdated} ARE in scope (the template defines
 ; them) and are used only where the update path has to be told apart.
 
-; Preflight, BEFORE any file is copied (.onInit): an app installed onto a
-; machine without WSL 2 and a Linux distro is a shell with nothing behind it,
-; and its first launch could only show "WSL isn't installed". Say so here,
-; once, and stop — so the user isn't left with a broken install to remove.
-;
-; Two checks, in order: wsl.exe exists (WSL is installed at all), then
-; `wsl -l -q` exits 0 with at least one distro listed (`wsl --install` done AND
-; the reboot it needs taken). The output is UTF-16, which NSIS reads as a string
-; cut at the first NUL — only its non-emptiness matters here, and that survives.
-;
-; Skipped for silent runs and for the in-app updater's `--updated` reinstall:
-; neither has a user at the keyboard to read a box, and an update must never be
-; blocked by a WSL that is merely asleep (the app's own page handles that).
+; No preflight: the engine runs natively on Windows now (docs/windows.md) —
+; the app's first launch installs it (install.ps1, with live progress on its
+; offline page) — so a machine without WSL is no reason to stop here any
+; more. Someone who already runs MindFlock inside WSL keeps that engine: the
+; app finds it (electron/engine.js).
 !macro customInit
-  IfSilent mf_init_end
-  ${if} ${isUpdated}
-    Goto mf_init_end
-  ${endif}
-  Push $0
-  Push $1
-
-  ; wsl.exe lives in the real System32. A 32-bit installer on 64-bit Windows
-  ; sees SysWOW64 as $SYSDIR (no wsl.exe there), so try the $WINDIR\Sysnative
-  ; alias first, then the plain path (64-bit installer, or 32-bit Windows).
-  StrCpy $1 "$WINDIR\Sysnative\wsl.exe"
-  IfFileExists "$1" mf_init_have_wsl 0
-  StrCpy $1 "$SYSDIR\wsl.exe"
-  IfFileExists "$1" mf_init_have_wsl mf_init_no_wsl
-
-  mf_init_have_wsl:
-  ; A wedged WSL can hang `wsl -l`; give it 20 s, and on a timeout let the
-  ; install proceed (we can't tell, and the app's offline page has a "Restart
-  ; WSL" button for exactly that case).
-  nsExec::ExecToStack /TIMEOUT=20000 '"$1" -l -q'
-  Pop $0   ; exit code, or "error" / "timeout"
-  Pop $1   ; the distro list (UTF-16 → effectively its first character)
-  StrCmp $0 "timeout" mf_init_ok 0
-  StrCmp $0 "0" 0 mf_init_no_wsl
-  StrCmp $1 "" mf_init_no_wsl mf_init_ok
-
-  mf_init_no_wsl:
-  MessageBox MB_YESNO|MB_ICONSTOP \
-    "MindFlock needs WSL 2 with a Linux distro.$\r$\n$\r$\nInstall it with `wsl --install`, reboot, then run this installer again.$\r$\n$\r$\nOpen the setup guide in your browser now?" \
-    /SD IDNO IDYES mf_init_open_guide
-  Goto mf_init_quit
-  mf_init_open_guide:
-  ExecShell "open" "https://github.com/MindFlock/MindFlock#installation"
-  mf_init_quit:
-  Pop $1
-  Pop $0
-  Quit
-
-  mf_init_ok:
-  Pop $1
-  Pop $0
-  mf_init_end:
 !macroend
 
 !macro customInstall
-  Push $0
-  Push $1
-
   SetDetailsPrint both
-
-  ; wsl.exe lives in the real System32. A 32-bit installer on 64-bit Windows
-  ; sees SysWOW64 as $SYSDIR (no wsl.exe there), so try the $WINDIR\Sysnative
-  ; alias first, then the plain path (64-bit installer, or 32-bit Windows).
-  StrCpy $1 "$WINDIR\Sysnative\wsl.exe"
-  IfFileExists "$1" mf_have_wsl 0
-  StrCpy $1 "$SYSDIR\wsl.exe"
-  IfFileExists "$1" mf_have_wsl 0
-    DetailPrint "MindFlock: WSL was not found. The engine runs inside WSL2 —"
-    DetailPrint "MindFlock: run 'wsl --install' in PowerShell and reboot, then open MindFlock to finish setup."
-    Goto mf_end
-
-  mf_have_wsl:
-  DetailPrint "MindFlock: installed. It finishes setting up its engine inside WSL the first time you open it."
-
-  mf_end:
-  Pop $1
-  Pop $0
+  DetailPrint "MindFlock: installed. It sets up its engine the first time you open it."
 !macroend
 
-; Uninstall — take the WSL engine with the app, so removing MindFlock from
+; Uninstall — take the engine (native, and/or the one in WSL) with the app, so removing MindFlock from
 ; Add/Remove Programs clears the whole product. The shell alone would strand
 ; the `uv` tool + ~/.local/bin/mindflock shim, the git worktrees MindFlock
 ; registered inside the user's own repos, and the activity hooks it merged
@@ -141,6 +72,40 @@
     Push $1
 
     SetDetailsPrint both
+
+    ; The NATIVE engine (install.ps1 / the app's first launch): mindflock.exe
+    ; in uv's tool bin dir. Stop the server (uninstall refuses while it
+    ; answers), reverse the repo footprint without --purge, stop the session
+    ; host (it runs from the venv, which uv can't remove while it does), then
+    ; remove the uv tool. The blob is, decoded (UTF-16LE PowerShell):
+    ;   $v=Join-Path $env:APPDATA 'uv\tools\mindflock'
+    ;   Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like ($v+'\*') } |
+    ;     ForEach-Object { taskkill /T /F /PID $_.ProcessId }
+    IfFileExists "$PROFILE\.local\bin\mindflock.exe" 0 mf_un_native_end
+    DetailPrint "MindFlock: removing the engine (worktrees + hooks + the mindflock tool)…"
+    System::Call 'Kernel32::SetEnvironmentVariable(t "MINDFLOCK_NONINTERACTIVE", t "1")i'
+    System::Call 'Kernel32::SetEnvironmentVariable(t "PYTHONIOENCODING", t "utf-8")i'
+    ReadEnvStr $0 HOME
+    StrCmp $0 "" 0 mf_un_have_home
+    System::Call 'Kernel32::SetEnvironmentVariable(t "HOME", t "$PROFILE")i'
+    mf_un_have_home:
+    nsExec::ExecToLog 'taskkill /F /T /IM mindflock.exe'
+    Pop $0
+    Sleep 1000
+    nsExec::ExecToLog '"$PROFILE\.local\bin\mindflock.exe" uninstall --yes'
+    Pop $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand JAB2AD0ASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGUAbgB2ADoAQQBQAFAARABBAFQAQQAgACcAdQB2AFwAdABvAG8AbABzAFwAbQBpAG4AZABmAGwAbwBjAGsAJwA7AEcAZQB0AC0AQwBpAG0ASQBuAHMAdABhAG4AYwBlACAAVwBpAG4AMwAyAF8AUAByAG8AYwBlAHMAcwB8AFcAaABlAHIAZQAtAE8AYgBqAGUAYwB0AHsAJABfAC4ARQB4AGUAYwB1AHQAYQBiAGwAZQBQAGEAdABoACAALQBsAGkAawBlACAAKAAkAHYAKwAnAFwAKgAnACkAfQB8AEYAbwByAEUAYQBjAGgALQBPAGIAagBlAGMAdAB7AHQAYQBzAGsAawBpAGwAbAAgAC8AVAAgAC8ARgAgAC8AUABJAEQAIAAkAF8ALgBQAHIAbwBjAGUAcwBzAEkAZAB9AA=='
+    Pop $0
+    StrCpy $1 "$PROFILE\.local\bin\uv.exe"
+    IfFileExists "$1" 0 mf_un_uv_on_path
+    nsExec::ExecToLog '"$1" tool uninstall mindflock'
+    Goto mf_un_uv_done
+    mf_un_uv_on_path:
+    nsExec::ExecToLog 'uv tool uninstall mindflock'
+    mf_un_uv_done:
+    Pop $0
+    DetailPrint "MindFlock: engine teardown finished (exit $0)."
+    mf_un_native_end:
 
     ; wsl.exe: Sysnative alias first (32-bit uninstaller on 64-bit Windows),
     ; then plain System32 — the same lookup customInstall uses.

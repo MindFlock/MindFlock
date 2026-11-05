@@ -15,13 +15,14 @@ Go's ``json.MarshalIndent(state, "", "  ")``.
 
 from __future__ import annotations
 
-import fcntl
 import os
 import threading
 import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from typing import Optional
+
+from backend import compat
 
 from backend import log
 from backend.config.config import (
@@ -139,7 +140,7 @@ def state_file_lock():
 
     Serializes state.json read-modify-write cycles against other threads in
     this process (RLock) and against co-running servers sharing the file
-    (``fcntl.flock``, released by the kernel if the holder dies). Reentrant
+    (``fcntl.flock`` via ``backend.compat``, released by the kernel if the holder dies). Reentrant
     within a thread, so callers can wrap a whole load-merge-save section
     while ``LoadState``/``SaveState`` take the lock themselves.
     """
@@ -150,7 +151,7 @@ def state_file_lock():
             os.makedirs(os.path.dirname(lock_path), mode=0o755, exist_ok=True)
             fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                compat.flock(fd, compat.LOCK_EX)
             except Exception:
                 os.close(fd)
                 raise

@@ -34,6 +34,7 @@ import time
 import uuid
 from typing import Dict, List, Optional, Tuple
 
+from backend import compat
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import flight_kinds as _kinds
@@ -1237,7 +1238,7 @@ def run_shell(
     def _work() -> None:
         try:
             cp = subprocess.run(
-                ["/bin/sh", "-c", cmd],
+                [compat.posix_shell(), "-c", cmd],
                 cwd=folder or None,
                 env=env,
                 stdin=subprocess.DEVNULL,

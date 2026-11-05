@@ -45,6 +45,7 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from backend import compat
 from backend.web.core import events as _events
 from backend.web.core import ports as _ports
 from backend.workspace_setup import WorkspaceConfigError, parse_setup_commands
@@ -272,9 +273,15 @@ def _run_logged(
             logf.write("$ %s\n" % command)
             logf.flush()
             try:
+                # A setup command is a POSIX shell string: run by /bin/sh
+                # (shell=True) here, by Git for Windows' bash on Windows.
                 cp = subprocess.run(
-                    command,
-                    shell=True,
+                    (
+                        [compat.posix_shell(), "-c", command]
+                        if compat.IS_WINDOWS
+                        else command
+                    ),
+                    shell=not compat.IS_WINDOWS,
                     cwd=wt_path,
                     env=env,
                     stdout=logf,

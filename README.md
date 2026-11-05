@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/MindFlock/MindFlock?include_prereleases)](https://github.com/MindFlock/MindFlock/releases)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
-[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows%20(WSL2)-lightgrey)](#requirements)
+[![Platforms](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#requirements)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [What is it?](#what-is-mindflock) •
@@ -29,12 +29,18 @@
 3. **Sign in to your agent**, pick a project folder, and click **+ New session**.
 
 <details>
-<summary>No desktop? <code>curl … | sh</code>, then <code>mindflock init</code>, then open http://127.0.0.1:8765</summary>
+<summary>No desktop? <code>curl … | sh</code> (Windows: <code>irm … | iex</code>), then <code>mindflock init</code>, then open http://127.0.0.1:8765</summary>
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
 mindflock init     # the same three steps: tools, sign in to your agent, project folder
 mindflock serve    # then open http://127.0.0.1:8765 in your browser
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.ps1 | iex
 ```
 
 </details>
@@ -282,7 +288,7 @@ happens on your hardware.
 | Session isolation | git worktree + tmux | git worktree + tmux | git worktree | git worktree |
 | Agent-state detection | **deterministic — provider-defined hooks** (working / idle / needs-input) | inferred from the tmux pane | built-in, per supported agent | Claude-native |
 | Interface | Cross-platform desktop app **+ phone UI** | Terminal TUI | Native macOS app | Built into the CLI |
-| Platforms | Linux, macOS, Windows (WSL2) | macOS, Linux | macOS only | Anywhere Claude Code runs |
+| Platforms | Linux, macOS, Windows (native or WSL2) | macOS, Linux | macOS only | Anywhere Claude Code runs |
 | Remote / phone control | **tailnet + QR, full action bar** | — | — | — |
 
 <sub>Both comparisons are as of July 2026; these tools move fast. If a cell is out of date, please [open an issue or PR](CONTRIBUTING.md) and we'll correct it.</sub>
@@ -520,7 +526,7 @@ standalone — see [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md).
 
 <div align="center">
 
-[![Download for Windows](https://img.shields.io/badge/Download-Windows%20(WSL2)-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock-Setup.exe)
+[![Download for Windows](https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock-Setup.exe)
 [![Download for macOS](https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white)](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock.dmg)
 [![Download for Linux](https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/MindFlock/MindFlock/releases/latest/download/MindFlock.AppImage)
 
@@ -530,7 +536,7 @@ standalone — see [docs/ingestion-pipeline.md](docs/ingestion-pipeline.md).
 
 | | What you get | Anything else? |
 |---|---|---|
-| **Windows** | `MindFlock-Setup.exe` — the app. Its engine runs inside WSL2 and is installed there on first launch. | **Set up WSL2 first — see the note below.** With a working WSL2 distro in place, first launch does the rest. |
+| **Windows** | `MindFlock-Setup.exe` — the app. Its engine runs natively on Windows 10 1809+ / 11 (no WSL) and is installed on first launch. | Nothing — first launch installs the engine, Git for Windows (with winget, if missing) and your agent. Already run MindFlock inside WSL2? The app keeps using that engine ([below](#windows)). |
 | **macOS** | `MindFlock.dmg` (universal — Apple silicon & Intel). Drag to Applications. | **Gatekeeper will block the first open** (the build is self-signed, not notarized): System Settings → Privacy & Security → **Open Anyway**, or `xattr -dr com.apple.quarantine /Applications/MindFlock.app` — [details below](#download). Then first launch offers **Set up MindFlock on this computer** — one click, no terminal. If Apple's Command Line Tools (git) are missing, the app opens Apple's installer and waits for it; Homebrew is installed along the way if missing (your password, once). |
 | **Linux** | `MindFlock.AppImage`. `chmod +x` it and run. | Same — first launch sets everything up for you. |
 
@@ -542,20 +548,17 @@ the engine every time after that. If the engine is missing, the app's waiting
 page says so and shows the exact command.
 
 <details>
-<summary><b>⚠️ Windows: finish setting up WSL2 <i>before</i> you run the installer</b></summary>
+<summary><b>Windows: native, or your existing WSL2 setup</b></summary>
 
-The engine runs inside WSL2, so a Linux distribution must be **fully installed
-and launchable first** — not just `wsl --install` half-run. In PowerShell:
+The engine runs **natively** on Windows 10 1809 or newer: sessions live in
+MindFlock's own session host (ConPTY — no tmux, no WSL), and their launch
+scripts run in Git for Windows' `bash.exe`, which the setup installs with
+`winget` when it's missing. Nothing to prepare first.
 
-```powershell
-wsl --install     # if WSL isn't set up yet — then REBOOT your PC
-wsl -l -v         # verify a distro (e.g. Ubuntu) is listed
-wsl               # verify this drops you into a Linux shell (first run asks you to create a user), then type: exit
-```
-
-Only once `wsl` opens a Linux shell should you run `MindFlock-Setup.exe`. A
-**partially set-up WSL** — installed but with no distro, or with a reboot still
-pending — is the single most common Windows install failure.
+**Already run MindFlock inside WSL2?** That keeps working exactly as before:
+the app goes on using the WSL engine as long as no native one is installed.
+`MINDFLOCK_DESKTOP_ENGINE=wsl` (or `native`) picks one explicitly
+([electron/README.md](electron/README.md)).
 
 </details>
 
@@ -619,11 +622,32 @@ commands.
 ### 1. Server + CLI
 
 On Linux, macOS, or inside WSL on Windows (the desktop app runs this for you
-on first launch — inside your default WSL distro on Windows):
+on first launch):
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.sh | sh
 ```
+
+#### Windows
+
+On native Windows, in PowerShell (5.1 is enough; no admin rights) — the
+desktop app runs the same script on first launch:
+
+```powershell
+irm https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.ps1 | iex
+```
+
+It is `install.sh`'s twin: it checks for Windows 10 1809+ (ConPTY), installs
+**Git for Windows** with `winget` if it's missing (its `bash.exe` runs every
+session's launch script), brings uv (Astral's pinned, sha256-verified
+installer), installs the newest release of `mindflock` into `~\.local\bin`
+and ends on the same three steps. `mindflock doctor` then checks Git for
+Windows, the **session host** (ConPTY and its packages — native Windows has no
+tmux row), Python and your agent CLI; `mindflock doctor --fix` installs what's
+missing with `winget` and the agents' own Windows installers (Claude Code's is
+`irm https://claude.ai/install.ps1 | iex`). Options: `-Join 'DEVICE CODE'`,
+and the same `MINDFLOCK_INSTALL_*` variables as `install.sh`. **WSL is still
+supported**: run `install.sh` inside your distro instead, as before.
 
 No repo clone, no Python setup needed — the installer brings
 [uv](https://docs.astral.sh/uv/) (no root), installs the newest **release**
@@ -702,8 +726,9 @@ It finds — and auto-starts — the server by itself.
 
 | Requirement | Notes |
 |---|---|
-| **OS** | Linux, macOS (Apple silicon & Intel), Windows **via WSL2** (the app runs natively on Windows; the engine lives in WSL2 — native Windows has no tmux/PTYs) |
-| `tmux` ≥ 2.4 | On `PATH`; checked, with its version, by `mindflock doctor`. Required — every session runs in a detached tmux session |
+| **OS** | Linux, macOS (Apple silicon & Intel), Windows 10 1809+ / 11 natively, or Windows via WSL2 |
+| `tmux` ≥ 2.4 | On `PATH`; checked, with its version, by `mindflock doctor`. Required — every session runs in a detached tmux session. **Not on native Windows**: sessions run in MindFlock's session host (ConPTY) instead |
+| Git for Windows | **Native Windows only, required**: its `bash.exe` runs every session's launch script. `mindflock doctor --fix` installs it with `winget` |
 | `git` ≥ 2.17 | Checked by the doctor but reported as **optional** (`info`): sessions can run in plain folders without it, but isolated worktrees, Diff, commit and PR all need it, so the doctor keeps it in the install plan |
 | A coding-agent CLI | `claude` (Claude Code) by default |
 | A git remote you can already push to | **SSH or HTTPS — either works.** MindFlock pushes with plain `git push` over the remote your repo already has, verbatim, and never rewrites it. If `git push` works in your terminal, it works here |

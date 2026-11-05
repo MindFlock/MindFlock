@@ -24,6 +24,7 @@ from backend.ticket_ingestion.clone_transport import headless_git_env
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.workspace_setup import (
     CacheSeed,
+    create_shell_subprocess,
     refresher_dirname,
     run_setup_commands_async,
 )
@@ -328,7 +329,7 @@ class CacheRefresher:
         )
         env = os.environ.copy()
         env.update(self.cache.env)
-        proc = await asyncio.create_subprocess_shell(
+        proc = await create_shell_subprocess(
             self.cache.refresh_command,
             cwd=str(self.directory),
             env=env,
