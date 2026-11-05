@@ -24,6 +24,13 @@ from backend.providers import activity_markers as am
 from backend.providers import launch_script, mcp_attach
 from backend.session import mux
 
+#: Pins POSIX output (or drives a POSIX ``sh`` shim) by patching the platform
+#: flags; on a real Windows box the rest of the platform leaks in, and the
+#: Windows paths are pinned by the tests beside these.
+posix_only = pytest.mark.skipif(
+    os.name == "nt", reason="pins the POSIX path; Windows runs its own tests"
+)
+
 
 @pytest.fixture
 def win(monkeypatch):
@@ -43,6 +50,7 @@ def _body(cmd: str) -> str:
 # --------------------------------------------------------------------------- #
 # launch_script
 # --------------------------------------------------------------------------- #
+@posix_only
 def test_shell_path_is_identity_off_windows():
     assert launch_script.shell_path("/a/b c") == "/a/b c"
     assert launch_script.shell_path(r"odd\name") == r"odd\name"
@@ -124,6 +132,7 @@ def test_wrap_launch_cmd_leaves_commands_alone(win):
     assert "; " + cmd + "; echo $? > " in wrapped
 
 
+@posix_only
 def test_wrap_launch_cmd_posix_unchanged(monkeypatch, tmp_path):
     from backend.web.core import terminal
 
@@ -190,6 +199,7 @@ def test_windows_pythonw_is_swapped_for_python(win, tmp_path):
     assert am.hook_python() == str(tmp_path / "python.exe").replace("\\", "/")
 
 
+@posix_only
 def test_posix_hook_command_unchanged():
     assert am.hook_command("working").startswith("python3 -c '")
     assert " || true # mindflock-activity" in am.hook_command("working")
@@ -248,8 +258,11 @@ def zoned(tmp_path):
 
 
 def _fire(cmd, payload, env):
+    # Claude Code on Windows runs hooks with Git Bash; "sh" is on PATH only
+    # inside one.
+    shell = compat.posix_shell(bash=True) if os.name == "nt" else "sh"
     cp = subprocess.run(
-        ["sh", "-c", cmd],
+        [shell, "-c", cmd],
         input=json.dumps(payload).encode(),
         capture_output=True,
         env=env,
@@ -306,6 +319,7 @@ def test_windows_tool_hook_skips_a_tampered_guard_file(win, zoned):
     assert _fire(cmd, _payload(repo, "Write", {"file_path": secret}), env) == "deny"
 
 
+@posix_only
 def test_windows_hook_resolves_the_session_through_the_tmux_shim(win, tmp_path):
     """No MINDFLOCK_SESSION_NAME: the hook asks the `tmux` on PATH (the session
     host's shim) for its own pane's session."""
@@ -335,6 +349,7 @@ def test_windows_hook_resolves_the_session_through_the_tmux_shim(win, tmp_path):
 # --------------------------------------------------------------------------- #
 # MCP attach
 # --------------------------------------------------------------------------- #
+@posix_only
 def test_codex_env_vars_posix_unchanged():
     assert mcp_attach.codex_env_vars() == (
         "TMUX",
@@ -389,6 +404,7 @@ def test_claude_runner_goes_through_the_session_host_on_windows(win, tmp_path):
     assert calls[-1] == ["tmux", "kill-session", "-t", "tkt"]
 
 
+@posix_only
 def test_claude_runner_posix_still_execs_tmux(monkeypatch, tmp_path):
     from backend.ticket_ingestion import claude_runner
 

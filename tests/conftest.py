@@ -453,7 +453,7 @@ def _isolated_gitconfig_path(tmp_path_factory):
         "\tdefaultBranch = main\n"
         "[core]\n"
         # Point at a path with no hook files so no ambient global/system hook runs.
-        "\thooksPath = %s\n" % (base / "no-git-hooks"),
+        "\thooksPath = %s\n" % (base / "no-git-hooks").as_posix(),
     )
     return gitconfig
 
