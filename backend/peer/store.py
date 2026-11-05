@@ -1,6 +1,6 @@
 """Persisted peer links (``links.json``, 0600).
 
-Every operation re-reads the file under an exclusive ``fcntl.flock`` on a
+Every operation re-reads the file under an exclusive ``flock`` (``backend.compat``) on a
 sibling lock file, and every write is atomic (fresh 0600 tmp file, fsync,
 ``os.replace``). A file that doesn't parse — or holds any entry that fails
 validation — loads as empty and is moved aside to ``links.json.corrupt-<ts>``.
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-import fcntl
 import hmac
 import json
 import logging
@@ -28,6 +27,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from backend import compat, osflags
 from backend.peer import paths
 from backend.peer.addr import parse_addr
 
@@ -205,9 +205,13 @@ class LinkStore:
     def _locked(self):
         paths.ensure_dir(os.path.dirname(self.path))
         with self._tlock:
-            fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            fd = os.open(
+                self._lock_path,
+                os.O_RDWR | os.O_CREAT | osflags.O_NOFOLLOW | osflags.O_BINARY,
+                0o600,
+            )
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                compat.flock(fd, compat.LOCK_EX)
                 yield
             finally:
                 os.close(fd)  # releases the flock
@@ -225,7 +229,13 @@ class LinkStore:
 
     def _load(self) -> dict[str, Link]:
         try:
-            fd = os.open(self.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            fd = os.open(
+                self.path,
+                os.O_RDONLY
+                | osflags.O_NOFOLLOW
+                | osflags.O_BINARY
+                | osflags.O_NONBLOCK,
+            )
         except FileNotFoundError:
             return {}
         except OSError:
@@ -238,7 +248,7 @@ class LinkStore:
                 raw = None
             else:
                 if st.st_mode & 0o077:
-                    os.fchmod(fd, 0o600)
+                    osflags.fchmod(fd, 0o600)
                 with os.fdopen(os.dup(fd), "rb") as f:
                     raw = f.read(_MAX_FILE + 1)
         finally:
@@ -271,9 +281,17 @@ class LinkStore:
         data = json.dumps(doc, indent=1, sort_keys=True).encode("utf-8")
         d = os.path.dirname(self.path)
         tmp = f"{self.path}.tmp-{os.getpid()}-{os.urandom(4).hex()}"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            tmp,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | osflags.O_NOFOLLOW
+            | osflags.O_BINARY,
+            0o600,
+        )
         try:
-            os.fchmod(fd, 0o600)
+            osflags.fchmod(fd, 0o600)
             view = memoryview(data)
             while view:
                 view = view[os.write(fd, view) :]
@@ -284,11 +302,7 @@ class LinkStore:
             raise
         os.close(fd)
         os.replace(tmp, self.path)
-        dfd = os.open(d, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
+        osflags.fsync_dir(d)
 
     # -- public API ----------------------------------------------------------
 
@@ -442,7 +456,8 @@ class SharedSessions:
     def _read(self, link_id: str) -> dict:
         try:
             fd = os.open(
-                paths.shared_sessions_file(link_id), os.O_RDONLY | os.O_NOFOLLOW
+                paths.shared_sessions_file(link_id),
+                os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY,
             )
         except (OSError, ValueError):
             return {}
@@ -470,7 +485,15 @@ class SharedSessions:
             doc["invite"] = invite
         data = json.dumps(doc, indent=1, sort_keys=True).encode("utf-8")
         tmp = f"{path}.tmp-{os.getpid()}-{os.urandom(4).hex()}"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            tmp,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | osflags.O_NOFOLLOW
+            | osflags.O_BINARY,
+            0o600,
+        )
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(data)

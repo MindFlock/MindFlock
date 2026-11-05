@@ -48,6 +48,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
+from backend import osflags
 from backend.peer import launch as peer_launch
 from backend.peer import paths
 
@@ -651,7 +652,7 @@ class PeerService:
         d = paths.ensure_dir(os.path.join(paths.peer_root(), "relay"))
         path = os.path.join(d, "token")
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY)
             with os.fdopen(fd) as f:
                 tok = f.read(64).strip()
             if _RELAY_TOKEN_RE.match(tok):
@@ -662,7 +663,15 @@ class PeerService:
         tmp = path + ".tmp"
         with contextlib.suppress(FileNotFoundError):
             os.unlink(tmp)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            tmp,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | osflags.O_NOFOLLOW
+            | osflags.O_BINARY,
+            0o600,
+        )
         with os.fdopen(fd, "w") as f:
             f.write(tok + "\n")
         os.replace(tmp, path)
@@ -800,7 +809,7 @@ class PeerService:
         path = os.path.join(d, "host")
         old = ""
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY)
             with os.fdopen(fd) as f:
                 old = f.read(300).strip()
         except OSError:
@@ -812,7 +821,13 @@ class PeerService:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(tmp)
             fd = os.open(
-                tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+                tmp,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | osflags.O_NOFOLLOW
+                | osflags.O_BINARY,
+                0o600,
             )
             with os.fdopen(fd, "w") as f:
                 f.write(host + "\n")

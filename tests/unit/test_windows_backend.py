@@ -334,3 +334,56 @@ def test_gitutil_group_timeout_kills_through_compat(monkeypatch):
     with pytest.raises(subprocess.TimeoutExpired):
         gitutil._run_group(["sleep", "5"], 0.2, {})
     assert killed == [9]
+
+
+# --------------------------------------------------------------------------- #
+# Peer: the shared folder's reads and the contract file without dir_fd
+# --------------------------------------------------------------------------- #
+def test_share_reads_on_windows_refuse_links(monkeypatch, tmp_path):
+    from backend.peer import share as share_mod
+
+    work = tmp_path / "work"
+    (work / "src").mkdir(parents=True)
+    (work / "src" / "a.txt").write_bytes(b"one\ntwo\n")
+    (tmp_path / "secret").write_text("nope")
+    os.symlink(tmp_path / "secret", work / "src" / "link")
+    os.symlink(tmp_path, work / "up")
+    monkeypatch.setattr(share_mod.osflags, "IS_WINDOWS", True)
+    sh = type("S", (), {"work": str(work)})()
+    fd = share_mod._open_regular(sh, ["src", "a.txt"])
+    try:
+        assert os.read(fd, 100) == b"one\ntwo\n"
+    finally:
+        os.close(fd)
+    for parts in (["src", "link"], ["up", "secret"], ["src"]):
+        with pytest.raises(share_mod.ShareError):
+            share_mod._open_regular(sh, parts)
+
+
+def test_contract_file_on_windows_replaces_a_planted_link(monkeypatch, tmp_path):
+    from backend.peer import joint
+
+    (tmp_path / "outside").write_text("keep")
+    os.symlink(tmp_path / "outside", tmp_path / joint.CONTRACT_FILE)
+    work = tmp_path
+    monkeypatch.setattr(joint.osflags, "IS_WINDOWS", True)
+    joint.write_contract_file(str(work), "the deal\n")
+    assert (tmp_path / "outside").read_text() == "keep"
+    assert not os.path.islink(tmp_path / joint.CONTRACT_FILE)
+    assert (tmp_path / joint.CONTRACT_FILE).read_bytes() == b"the deal\n"
+
+
+def test_fchmod_and_dir_fsync_are_noops_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(osflags, "IS_WINDOWS", True)
+    monkeypatch.setattr(os, "fchmod", lambda *a: pytest.fail("no fchmod there"))
+    osflags.fchmod(0, 0o600)
+    osflags.fsync_dir(str(tmp_path / "missing"))  # never opens the dir
+
+
+def test_sandbox_exec_signal_list_is_portable():
+    from backend.peer import sandbox_exec
+
+    import signal
+
+    assert signal.SIGWINCH in sandbox_exec.FORWARD_SIGNALS
+    assert len(sandbox_exec.FORWARD_SIGNALS) == 7

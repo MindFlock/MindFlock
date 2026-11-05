@@ -50,9 +50,11 @@ import logging
 import os
 import re
 import secrets
+import stat
 import threading
 from typing import Any, Callable, Dict, List, Optional
 
+from backend import osflags
 from backend.peer import paths, wire
 
 __all__ = [
@@ -217,7 +219,10 @@ class JointStore:
 
     def _load_doc(self, link_id: str) -> dict:
         try:
-            fd = os.open(self._path(link_id), os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(
+                self._path(link_id),
+                os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY,
+            )
         except OSError:
             return {}
         try:
@@ -231,7 +236,15 @@ class JointStore:
         path = self._path(link_id)
         tmp = "%s.tmp-%d-%s" % (path, os.getpid(), os.urandom(4).hex())
         data = json.dumps(doc).encode("utf-8")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            tmp,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | osflags.O_NOFOLLOW
+            | osflags.O_BINARY,
+            0o600,
+        )
         try:
             with os.fdopen(fd, "wb") as f:
                 f.write(data)
@@ -459,7 +472,27 @@ def write_contract_file(work: str, text: str) -> None:
     """Write ``CONTRACT.md`` at the root of a share's work dir. The sandboxed
     agent can write there, so nothing is followed: the dir is opened
     O_NOFOLLOW and the file goes in as a fresh temp file renamed over
-    whatever is there (a planted symlink is replaced, never written through)."""
+    whatever is there (a planted symlink is replaced, never written through).
+    Windows (no ``dir_fd``): the work dir must not be a link, and the same
+    fresh-temp-file-then-replace keeps a planted link from being written
+    through."""
+    if osflags.IS_WINDOWS:
+        st = os.lstat(work)
+        if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
+            raise OSError("the shared folder is a link: %s" % work)
+        tmp = os.path.join(work, ".%s.tmp-%s" % (CONTRACT_FILE, secrets.token_hex(4)))
+        fd = os.open(
+            tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | osflags.O_BINARY, 0o644
+        )
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(text.encode("utf-8"))
+            os.replace(tmp, os.path.join(work, CONTRACT_FILE))
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+        return
     dfd = os.open(work, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         tmp = ".%s.tmp-%s" % (CONTRACT_FILE, secrets.token_hex(4))

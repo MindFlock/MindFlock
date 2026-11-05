@@ -25,6 +25,7 @@ import threading
 import time
 from typing import Iterable, List, Optional
 
+from backend import osflags
 from backend.peer import paths
 
 __all__ = [
@@ -56,7 +57,9 @@ def _path(link_id: str) -> str:
 
 def _load(link_id: str) -> List[dict]:
     try:
-        fd = os.open(_path(link_id), os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(
+            _path(link_id), os.O_RDONLY | osflags.O_NOFOLLOW | osflags.O_BINARY
+        )
     except OSError:
         return []
     try:
@@ -72,7 +75,11 @@ def _save(link_id: str, items: List[dict]) -> None:
     path = _path(link_id)
     tmp = "%s.tmp-%d-%s" % (path, os.getpid(), os.urandom(4).hex())
     data = json.dumps({"version": 1, "messages": items[-MAX_ENTRIES:]}).encode("utf-8")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    fd = os.open(
+        tmp,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | osflags.O_NOFOLLOW | osflags.O_BINARY,
+        0o600,
+    )
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

@@ -10,6 +10,13 @@ POSIX value or call it stands for, unchanged.
   :data:`O_NOCTTY`): ``0`` there. Windows fds are not inherited by default
   (``O_CLOEXEC``'s job) and there is no ``O_NOFOLLOW``: the symlink checks
   that matter are made with ``lstat`` by the callers that need them.
+  :data:`O_BINARY` is the reverse — Windows only (``0`` on POSIX): without
+  it an ``os.open`` fd is in TEXT mode there, so ``os.write`` turns every
+  ``\n`` into ``\r\n`` and a read stops at the first ``\x1a``. Every
+  byte-exact ``os.open`` (keys, JSON stores) ORs it in.
+* :func:`fchmod` (no-op on Windows, which has no POSIX modes) and
+  :func:`fsync_dir` (a directory cannot be opened there; NTFS journals the
+  rename itself).
 * :func:`pid_alive` — ``os.kill(pid, 0)`` is a liveness probe on POSIX but
   **terminates** the process on Windows (``os.kill`` there is
   ``TerminateProcess`` for any signal but the two console events), so no
@@ -29,11 +36,14 @@ from typing import Any, Sequence
 
 __all__ = [
     "IS_WINDOWS",
+    "O_BINARY",
     "O_CLOEXEC",
     "O_DIRECTORY",
     "O_NOCTTY",
     "O_NOFOLLOW",
     "O_NONBLOCK",
+    "fchmod",
+    "fsync_dir",
     "home_dir",
     "pid_alive",
     "tmux_exec",
@@ -48,6 +58,27 @@ O_CLOEXEC: int = getattr(os, "O_CLOEXEC", 0)
 O_NONBLOCK: int = getattr(os, "O_NONBLOCK", 0)
 O_DIRECTORY: int = getattr(os, "O_DIRECTORY", 0)
 O_NOCTTY: int = getattr(os, "O_NOCTTY", 0)
+O_BINARY: int = getattr(os, "O_BINARY", 0)
+
+
+def fchmod(fd: int, mode: int) -> None:
+    """``os.fchmod`` on POSIX; nothing on Windows (no POSIX modes: the
+    profile folder's ACL is what keeps a file the user's own)."""
+    if IS_WINDOWS:
+        return
+    os.fchmod(fd, mode)
+
+
+def fsync_dir(path: str) -> None:
+    """Make a rename in directory ``path`` durable: fsync the directory on
+    POSIX (``OSError`` propagates as before); nothing on Windows."""
+    if IS_WINDOWS:
+        return
+    dfd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def pid_alive(pid: Any) -> bool:

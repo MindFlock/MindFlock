@@ -39,7 +39,7 @@ import signal
 import subprocess
 import sys
 
-from backend import compat
+from backend import compat, osflags
 from backend.peer import paths
 
 __all__ = [
@@ -219,7 +219,15 @@ class QuickTunnel:
     def _prepare(self) -> tuple[str, dict]:
         home = paths.ensure_dir(os.path.join(paths.ensure_dir(self.workdir), "home"))
         cfg = os.path.join(self.workdir, "cloudflared.yml")
-        fd = os.open(cfg, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            cfg,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_TRUNC
+            | osflags.O_NOFOLLOW
+            | osflags.O_BINARY,
+            0o600,
+        )
         with os.fdopen(fd, "w") as f:
             f.write("# written by MindFlock: quick tunnel to the peer relay only\n")
             f.write("no-autoupdate: true\n")

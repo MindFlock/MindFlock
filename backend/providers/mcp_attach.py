@@ -55,6 +55,7 @@ import threading
 from dataclasses import dataclass
 from typing import Optional
 
+from backend import osflags
 from backend.fsutil import atomic_write_json
 
 __all__ = [
@@ -864,7 +865,13 @@ class PeerMcpSpec:
         else:
             body = data if isinstance(data, bytes) else str(data).encode()
             fd = os.open(
-                path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+                path,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_TRUNC
+                | osflags.O_NOFOLLOW
+                | osflags.O_BINARY,
+                0o600,
             )
             with os.fdopen(fd, "wb") as fh:
                 fh.write(body)
