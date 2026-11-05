@@ -1,5 +1,5 @@
-# CI proof, not hope: build + full test suite on Linux and macOS, plus a
-# cold-install job that runs the curl-style installer on a bare container and
+# CI proof, not hope: build + full test suite on Linux and macOS, a native
+# Windows job (test (windows-latest): no WSL, no tmux), plus a cold-install job that runs the curl-style installer on a bare container and
 # drives the scripted quickstart against a stub agent (no API credentials).
 #
 # WSL note: a WSL2 guest is a Linux userland, so ubuntu-latest is the
@@ -189,6 +189,76 @@ jobs:
           else
             uv run pytest "${args[@]}"
           fi
+
+  test-windows:
+    # Native Windows (docs/windows.md): no WSL, no tmux — sessions run in the
+    # MindFlock session host (ConPTY). Its own job, so the Linux/macOS matrix
+    # above is not a second longer: the import smoke (the server and the CLI
+    # import on Windows), the Windows-specific tests (the session host on a
+    # real ConPTY, the web paths, the Windows backend, the doctor's Windows
+    # rows, install.ps1, the desktop app's native mode), the desktop app's
+    # node tests, and a cold install with install.ps1 from this checkout in
+    # Windows PowerShell 5.1 (what a default machine has) into a fresh
+    # profile, ending on `mindflock doctor`.
+    name: test (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # mindflock prints check marks; a cp1252 pipe refuses them.
+      PYTHONIOENCODING: utf-8
+      MINDFLOCK_AUTH: "0"
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.2
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dependencies
+        run: uv sync --group web --group dev
+
+      - name: Import smoke
+        run: uv run python -c "import backend.cli, backend.doctor, backend.session.mux, backend.session.winmux.client, backend.web.server; print('import smoke ok')"
+
+      - name: Windows tests
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(tests/unit/test_winmux*.py tests/unit/test_windows_*.py
+                 tests/unit/test_web_native_windows_paths.py
+                 tests/unit/test_doctor_windows.py tests/unit/test_install_ps1.py
+                 tests/unit/test_electron_native_windows.py)
+          uv run pytest -q -rs --timeout=300 "${files[@]}"
+
+      - name: Desktop app tests (node)
+        working-directory: electron
+        run: node --test
+
+      - name: install.ps1 into a fresh profile, then mindflock doctor
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $p = Join-Path $env:RUNNER_TEMP 'mf'
+          $env:USERPROFILE = "$p\profile"; $env:HOME = $env:USERPROFILE
+          $env:MINDFLOCK_HOME = "$p\profile\.mindflock"
+          $env:MINDFLOCK_SETTINGS_FILE = "$p\profile\.mindflock\settings.json"
+          $env:UV_TOOL_DIR = "$p\tools"; $env:UV_TOOL_BIN_DIR = "$p\bin"
+          $env:MINDFLOCK_INSTALL_NO_RESTART = '1'; $env:MINDFLOCK_NONINTERACTIVE = '1'
+          New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
+          & .\install.ps1 -Source $env:GITHUB_WORKSPACE -NoPathUpdate
+          $record = Get-Content -Raw "$p\profile\.mindflock\install.json" | ConvertFrom-Json
+          if ($record.method -ne 'uv-tool' -or $record.ref -ne 'local') { throw "install.json: $($record | ConvertTo-Json -Compress)" }
+          $out = & "$p\bin\mindflock.exe" doctor --all 2>&1 | Out-String
+          Write-Output $out
+          foreach ($want in @('session host (ConPTY)', 'Git for Windows', 'Python 3.12')) {
+            if (-not $out.Contains($want)) { throw "doctor printed no '$want' row" }
+          }
+          if ($out.Contains('check errored')) { throw 'a doctor check errored on Windows' }
+          if ($out.Contains('use WSL')) { throw 'the doctor still sends Windows to WSL' }
+          exit 0
 
   e2e:
     # Journey tests (tests/e2e): the committed bundle, served by a real

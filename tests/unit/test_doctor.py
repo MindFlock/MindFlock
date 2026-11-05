@@ -69,10 +69,12 @@ class TestProbeHelpers:
     def test_parse_version_no_match_is_empty(self):
         assert doctor._parse_version("no digits here") == ()
 
-    def test_pkg_fix_windows_points_to_wsl(self, monkeypatch):
+    def test_pkg_fix_windows_is_winget(self, monkeypatch):
+        # Native Windows is a supported host now (docs/windows.md).
         monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "windows")
         fix = doctor._pkg_fix("git")
-        assert "WSL" in fix and "not a supported" in fix
+        assert fix.startswith("winget install --id Git.Git -e --source winget")
+        assert "WSL" not in fix
 
     def test_pkg_fix_pacman_and_zypper(self, monkeypatch):
         monkeypatch.setattr(doctor.osenv, "os_kind", lambda: "linux")

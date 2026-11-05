@@ -93,14 +93,21 @@ Overrides:
 
 - `MINDFLOCK_URL` — point at a different server
   (e.g. `MINDFLOCK_URL=http://localhost:9000`).
+- `MINDFLOCK_DESKTOP_ENGINE` — Windows only: `native` or `wsl`. Which engine
+  the app drives (`electron/engine.js`): by default a native one
+  (`mindflock.exe`, installed by `install.ps1` on first launch) — unless this
+  app already ran a WSL engine and no native one is installed, so an existing
+  WSL setup keeps working. `<userData>\engine.json` (`{"engine": "wsl"}`)
+  saves the same choice. The app stops the native server it started when it
+  quits; sessions live on in the session host.
 - `MINDFLOCK_WSL_DISTRO` — Windows only: pins which distro the **app**
   launches and probes in. Unset (the default), `wsl.exe` picks your default
   distro. It steers only the app: the first-launch engine install goes into
   whichever distro the app is looking in, so set it before that first launch
   if you don't want the default distro. `wsl -l -v` lists them.
 - `MINDFLOCK_REPO` — **developer mode**: path of a MindFlock *source checkout*
-  (inside WSL on Windows); the app then runs that checkout's `.venv` server
-  instead of the installed CLI.
+  (inside WSL on Windows — or a `C:\…` checkout, which runs natively); the app
+  then runs that checkout's `.venv` server instead of the installed CLI.
 - `MINDFLOCK_UPDATE_REPO` — `owner/name` of the GitHub repo whose Releases the
   app polls for update notifications (default `MindFlock/MindFlock`). The check
   is best-effort: offline or a non-200 (e.g. a private repo's 404) is silent.

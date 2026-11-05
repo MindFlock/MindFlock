@@ -1,11 +1,12 @@
 """Operating-system detection — the one place MindFlock branches on platform.
 
-MindFlock's session engine runs on tmux + Unix PTYs + ``fcntl`` locks, so it
-supports Linux, macOS, and Windows-via-WSL. Native Windows (PowerShell/cmd,
-no tmux) is not a supported host for the engine. This module centralises the
-detection so OS-specific integrations (terminal-tab launchers, Cursor config
-paths, window management) can pick the right path and degrade gracefully rather
-than assuming one environment.
+MindFlock's session engine runs on Linux, macOS, Windows-via-WSL and native
+Windows: tmux + Unix PTYs on the first three, the MindFlock session host
+(ConPTY, ``backend.session.winmux``) + Git for Windows' bash on native Windows
+(docs/windows.md). This module centralises the detection so OS-specific
+integrations (terminal-tab launchers, Cursor config paths, window management,
+the doctor's install hints) can pick the right path and degrade gracefully
+rather than assuming one environment.
 
 Usage::
 
@@ -92,10 +93,12 @@ def is_wsl() -> bool:
 
 
 def is_windows() -> bool:
-    """True on native Windows (cmd/PowerShell) — an *unsupported* engine host."""
+    """True on native Windows (cmd/PowerShell, no WSL) — a supported engine
+    host since the session host (docs/windows.md); not :func:`is_unix_like`."""
     return _detect() == "windows"
 
 
 def is_unix_like() -> bool:
-    """True where tmux / PTYs / fcntl are available (Linux, macOS, WSL)."""
+    """True where tmux / PTYs / fcntl are available (Linux, macOS, WSL) —
+    native Windows runs sessions in the session host instead."""
     return _detect() in ("linux", "macos", "wsl")

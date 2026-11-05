@@ -56,9 +56,30 @@ CLIs as native `.exe`/`.cmd` (claude, codex, …), PowerShell 5.1, ConPTY
    (locks, process groups, `/proc` → psutil, import-time POSIX modules).
 3. Launchers + hooks under Git Bash; install (doctor/winget, `install.ps1`,
    Electron native mode, NSIS without the WSL requirement) and a Windows CI
-   job.
+   job. **Install side done** (see "Installing" below); launchers + hooks are
+   their own piece.
 4. End to end on a real Windows box: serve, New session (claude), type,
    capture, attach from the browser, restart the server, sessions survive.
+
+## Installing (phase 3, done)
+
+* `install.ps1` (repo root) — `irm …/install.ps1 | iex`, PowerShell 5.1: ConPTY
+  check (build 17763+), Git for Windows via `winget` when missing, uv (Astral's
+  pinned, sha256-verified `install.ps1`), `uv tool install mindflock[web]`
+  (newest release → a pinned SHA, or `-Source <folder>`), voice packages
+  carried, `install.json`, a running server restarted, `-Join`, and
+  `mindflock init --steps`. `install.sh` under Git Bash/MSYS points here.
+* `mindflock doctor` on Windows: `git` = Git for Windows (`git.exe` AND its
+  `bash.exe`, required), `session-host` (ConPTY + pywinpty/pyte) instead of
+  `tmux`, `python`, the agents' own Windows installers (claude:
+  `irm https://claude.ai/install.ps1 | iex`; npm CLIs as is); `--fix` is a
+  PowerShell plan, winget first, handed out as one `-EncodedCommand` line.
+* Desktop app: `electron/engine.js` picks native or WSL
+  (`MINDFLOCK_DESKTOP_ENGINE`, `engine.json`, an existing WSL engine stays);
+  native mode spawns `mindflock serve` hidden, installs with the bundled
+  `install.ps1`, and kills the server it started on quit (the session host,
+  and so the sessions, live on). NSIS no longer requires WSL.
+* CI: `test (windows-latest)` (docs/development.md, "How CI runs the suite").
 
 Not in the first cut: the peer links' sandboxed shared folder (bwrap /
 seatbelt have no Windows equivalent yet — Windows refuses it with a
