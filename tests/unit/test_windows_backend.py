@@ -387,3 +387,45 @@ def test_sandbox_exec_signal_list_is_portable():
 
     assert signal.SIGWINCH in sandbox_exec.FORWARD_SIGNALS
     assert len(sandbox_exec.FORWARD_SIGNALS) == 7
+
+
+# --------------------------------------------------------------------------- #
+# Shells, homes, sourced secrets
+# --------------------------------------------------------------------------- #
+def test_setup_commands_run_in_git_bash_on_windows(monkeypatch):
+    from backend import workspace_setup
+
+    assert workspace_setup.shell_argv("uv sync && echo ok") is None  # POSIX
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(compat, "posix_shell", lambda bash=False: "C:/Git/bin/bash.exe")
+    try:
+        argv = workspace_setup.shell_argv("uv sync && echo ok")
+    finally:
+        monkeypatch.undo()
+    assert argv == ["C:/Git/bin/bash.exe", "-c", "uv sync && echo ok"]
+
+
+def test_config_home_falls_back_to_userprofile_on_windows(monkeypatch):
+    from backend.config import config
+
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\me")
+    assert config._user_home_dir() is None  # POSIX: $HOME or nothing
+    monkeypatch.setattr(os, "name", "nt")
+    try:
+        got = config._user_home_dir()
+    finally:
+        monkeypatch.undo()
+    assert got == r"C:\Users\me"
+
+
+def test_secret_env_source_prefix_uses_forward_slashes_on_windows(monkeypatch):
+    from backend.session import secret_env
+
+    assert secret_env.source_prefix("/a/b.env") == ". /a/b.env 2>/dev/null || true\n"
+    monkeypatch.setattr(os, "name", "nt")
+    try:
+        got = secret_env.source_prefix(r"C:\Users\me\.mindflock\run\s.env")
+    finally:
+        monkeypatch.undo()
+    assert got == ". C:/Users/me/.mindflock/run/s.env 2>/dev/null || true\n"

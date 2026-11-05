@@ -1155,7 +1155,9 @@ def _claude_project_dirs(workdir: str):
     if not workdir:
         return []
     encoded = _project_slug(workdir)
-    home = os.environ.get("HOME", "")
+    home = os.environ.get("HOME", "") or (
+        os.path.expanduser("~") if os.name == "nt" else ""
+    )
     roots = set()
     cfg = os.environ.get("CLAUDE_CONFIG_DIR")
     if cfg:

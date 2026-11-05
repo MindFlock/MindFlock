@@ -187,12 +187,16 @@ def GetConfigDir() -> str:
 
 
 def _user_home_dir() -> Optional[str]:
-    """Mirror Go's ``os.UserHomeDir()`` on unix: return ``$HOME`` (if set and
-    non-empty); ``None`` otherwise.
+    """Mirror Go's ``os.UserHomeDir()``: ``$HOME`` (if set and non-empty);
+    on Windows, where ``$HOME`` is usually unset (Git Bash sets it to the
+    profile), ``%USERPROFILE%`` — Go's own Windows answer; ``None``
+    otherwise.
     """
     home = os.environ.get("HOME", "")
     if home != "":
         return home
+    if os.name == "nt":
+        return os.environ.get("USERPROFILE", "") or None
     return None
 
 
