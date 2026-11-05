@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MindFlock runs on native Windows.** No WSL, no tmux: `install.ps1`
+  (`irm …/install.ps1 | iex`) installs uv, Git for Windows (winget) and
+  MindFlock; `mindflock doctor --fix` installs what is missing with winget;
+  the desktop app starts the server natively (an existing WSL setup keeps
+  using WSL). Sessions run in MindFlock's own Windows session host (ConPTY,
+  answering the tmux commands MindFlock uses), launch scripts and hooks run
+  under Git for Windows' bash, an agent killed for memory exits 137 like
+  Linux's OOM kill so it resumes, and the New dialog takes `C:\…` folders.
+  Linux and macOS behave exactly as before. The peer links' sandboxed shared
+  folder is not on Windows yet (it says so).
 - **See what holds the memory.** Every session's pane header shows its
   memory ("1.4 GB", amber when large, red when very large or the machine is
   short), with the agent / MCP servers / everything else (test runs, dev
@@ -22,6 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Claude usage on a weekly-only plan shows the weekly limit.** On a plan
+  with no 5-hour window (e.g. the owner's: `five_hour` is null, the weekly
+  limit is what counts) the sidebar headline is "Week 74% · resets Mon 1:00
+  AM", with per-model weekly rows and no 5-hour countdown anywhere; plans
+  with both windows show both. The windows that kept "resetting at certain
+  times" were (1) the transcript estimate MindFlock fell back to, which
+  always chained 5-hour windows, because (2) Anthropic's usage endpoint was
+  rate-limiting every MindFlock process polling it every 20 s. Now one
+  reading per machine is shared by every process (at most once a minute, a
+  backoff of up to 15 min on 429 that all of them honour), the last real
+  reading is kept and labelled "as of 12 min ago" instead of falling back,
+  and a fallback on a weekly-only plan models the week. The 5-hour window
+  refresh ping no longer fires for a plan that has no 5-hour window.
 - **MindFlock starts what fits, measured.** The launch gate's budget is now
   the memory actually free minus a reserve, divided by what a session here
   really costs (learned from the sampler, not a fixed guess), and agents

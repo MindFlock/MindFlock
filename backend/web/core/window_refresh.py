@@ -159,20 +159,44 @@ def due_providers(now: float, cfg: Optional[dict] = None) -> List[str]:
         return []
     hhmm = parse_hhmm(cfg.get("anchor_time"))
     out = []
+    # A plan with no 5-hour window (weekly-only, e.g. "ultra") has nothing to
+    # anchor: the ping would only spend usage at fixed times — which the owner
+    # saw as "usage windows resetting at certain times" (2026-11-05).
+    skip = {p for p in cfg["providers"] if not _has_session_window(p)}
     if hhmm:
         anchor = _today_anchor_epoch(now, hhmm[0], hhmm[1])
         if now < anchor:
             return []  # today's anchor hasn't arrived yet
         for p in cfg["providers"]:
+            if p in skip:
+                continue
             if cfg["last_fired"].get(p, 0.0) < anchor:  # not fired since today's anchor
                 out.append(p)
         return out
     span = cfg["interval_hours"] * 3600.0
     for p in cfg["providers"]:
+        if p in skip:
+            continue
         last = cfg["last_fired"].get(p, 0.0)
         if now - last >= span:
             out.append(p)
     return out
+
+
+def _has_session_window(program: str) -> bool:
+    """Whether ``program``'s plan has a 5-hour window to anchor. Claude's comes
+    from the last live reading's remembered plan shape
+    (``claude_usage_api.plan_shape``); unknown (no reading yet, another
+    provider) counts as yes — the old behaviour."""
+    if program != "claude":
+        return True
+    try:
+        from backend.providers import claude_usage_api
+
+        shape = claude_usage_api.plan_shape()
+    except Exception:  # noqa: BLE001
+        return True
+    return shape is None or bool(shape.get("session"))
 
 
 def next_fire_at(
