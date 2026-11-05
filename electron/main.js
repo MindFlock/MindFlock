@@ -42,15 +42,17 @@ if (process.platform === 'win32') {
 // a .bat launcher (the only way to set it) opens a console window every
 // time. `--mindflock-url=…`, `--mindflock-engine=native|wsl` and
 // `--mindflock-profile=…` set MINDFLOCK_URL, MINDFLOCK_DESKTOP_ENGINE and
-// MINDFLOCK_DEV_PROFILE before anything below reads them; an environment
-// variable that is already set wins.
+// MINDFLOCK_DEV_PROFILE before anything below reads them. The flag wins over
+// an inherited variable: it is what this shortcut asked for, while the
+// environment may be another launcher's (Windows programs started from WSL
+// inherit the WSL dev launcher's MINDFLOCK_URL=…:9000).
 for (const [flag, name] of [
   ['--mindflock-url=', 'MINDFLOCK_URL'],
   ['--mindflock-engine=', 'MINDFLOCK_DESKTOP_ENGINE'],
   ['--mindflock-profile=', 'MINDFLOCK_DEV_PROFILE'],
 ]) {
   const arg = process.argv.find((a) => a.startsWith(flag))
-  if (arg && !process.env[name]) process.env[name] = arg.slice(flag.length)
+  if (arg) process.env[name] = arg.slice(flag.length)
 }
 
 // Dev sandbox — the dev launcher (run-dev.bat) sets MINDFLOCK_DEV=1 so this
