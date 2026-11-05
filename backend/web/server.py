@@ -4194,7 +4194,9 @@ async def paste_image(request: Request) -> JSONResponse:
                 # Through O_NOFOLLOW dir fds: the workspace's agent (a shared
                 # folder's is untrusted) may have made the paste dir a symlink.
                 return _write_workspace_paste(folder, fname, data)
-        base = os.path.join(os.path.expanduser("~"), ".mindflock", "pastes")
+        from backend.config.config import GetConfigDir
+
+        base = os.path.join(GetConfigDir(), "pastes")
         os.makedirs(base, exist_ok=True)
         path = os.path.join(base, fname)
         with open(path, "wb") as f:

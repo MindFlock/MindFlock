@@ -115,6 +115,11 @@ def _guard(path: str, what: str) -> str:
 
 
 def _config_dir() -> str:
+    # backend.config.config.GetConfigDir's rule, stdlib-only (startup cost):
+    # $MINDFLOCK_HOME IS the directory when set.
+    override = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if override:
+        return os.path.expanduser(override)
     home = os.environ.get("HOME", "") or os.path.expanduser("~")
     return os.path.join(home, ".mindflock")
 

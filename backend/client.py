@@ -156,6 +156,9 @@ def _settings_file(env: Mapping[str, str]) -> str:
     override = (env.get("MINDFLOCK_SETTINGS_FILE") or "").strip()
     if override:
         return override
+    mf_home = (env.get("MINDFLOCK_HOME") or "").strip()
+    if mf_home:  # GetConfigDir's rule: $MINDFLOCK_HOME IS the directory
+        return os.path.join(os.path.expanduser(mf_home), "settings.json")
     home = env.get("HOME") or os.path.expanduser("~")
     return os.path.join(home, ".mindflock", "settings.json")
 
