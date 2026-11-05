@@ -7012,6 +7012,15 @@ across sessions with a period selector (session / day / week / month / year,
 backed by `/api/usage`). Figures come from Claude Code transcripts and a daily
 pricing feed — rough estimates for awareness, not billing.
 
+On a subscription plan the readout leads with the plan window: "Claude usage:
+94% left · resets 3h 15m" for a plan with a 5-hour window, or — for a plan
+with only a weekly limit (`window_kind: "weekly"`) — "Claude usage: Week 35% ·
+resets Tue 9:00 AM", with no 5-hour countdown anywhere. A plan with both shows
+the session window first and the weekly cap under it. When the live reading is
+being served from the shared cache through a rate-limit backoff, the popover's
+**Live reading** row (and the readout's tooltip) says how old it is ("as of 12
+min ago").
+
 The **Usage** bar (the built-in Usage Optimizer extension) goes a step
 further for subscription plans: a capacity score (how much of the plan
 windows you could have filled you actually did), the live window and weekly

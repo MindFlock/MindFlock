@@ -228,6 +228,7 @@ def _usage_window_for(p) -> Optional[dict]:
                 "session",
                 "weekly",
                 "weekly_opus",
+                "weekly_models",
                 "groups",
                 "extra",
                 "plan",

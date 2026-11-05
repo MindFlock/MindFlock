@@ -609,3 +609,46 @@ def test_provider_decides_on_recent_readings_and_displays_stale_ones(monkeypatch
     p.usage_live()
     p.usage_live_display()
     assert seen == [api.DECISION_MAX_AGE, None]
+
+
+def test_normalize_the_real_weekly_only_payload_shape():
+    # The live payload seen 2026-11-05 on a weekly-only plan (values trimmed):
+    # five_hour null, the weekly cap twice in limits[] — the all-models row and
+    # a model-scoped one — plus seven_day; seven_day_opus null.
+    doc = {
+        "five_hour": None,
+        "seven_day": {"utilization": 74.0, "resets_at": "2026-11-09T06:00:00+00:00"},
+        "seven_day_opus": None,
+        "seven_day_sonnet": None,
+        "limits": [
+            {
+                "kind": "weekly_scoped",
+                "group": "weekly",
+                "percent": 0,
+                "resets_at": "2026-11-09T05:59:59+00:00",
+                "scope": {"model": {"id": None, "display_name": "Fable"}},
+            },
+            {
+                "kind": "weekly_all",
+                "group": "weekly",
+                "percent": 74,
+                "resets_at": "2026-11-09T06:00:00+00:00",
+                "scope": None,
+            },
+        ],
+        "extra_usage": {"is_enabled": False},
+    }
+    out = api._normalize(doc)
+    assert out["window_kind"] == "weekly"
+    assert out["session"] is None
+    # The all-models row is the headline even when listed after a scoped one.
+    assert out["percent_used"] == pytest.approx(74.0)
+    assert out["end"] == api._iso_epoch("2026-11-09T06:00:00+00:00")
+    assert out["weekly_models"] == [
+        {
+            "percent_used": 0.0,
+            "end": api._iso_epoch("2026-11-09T05:59:59+00:00"),
+            "label": "Fable",
+        }
+    ]
+    assert "weekly_opus" not in out and "extra" not in out

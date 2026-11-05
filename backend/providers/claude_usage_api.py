@@ -162,6 +162,7 @@ def _normalize(doc) -> Optional[dict]:
          "session": {"percent_used", "end"} | None,
          "weekly": {"percent_used", "end"} | None,
          "weekly_opus": {"percent_used", "end"},
+         "weekly_models": [{"label", "percent_used", "end"}],  # per-model caps
          "extra": {"used": usd, "limit": usd, "currency": "USD"}}
 
     The headline is the 5-hour session window when the plan has one, else the
@@ -173,18 +174,46 @@ def _normalize(doc) -> Optional[dict]:
         return None
     session = _window(doc.get("five_hour"))
     weekly = None
-    # Weekly cap: the first "weekly" entry in limits[] (the endpoint may also
-    # carry per-model weekly scopes; the group row is the headline one), else
-    # the seven_day object.
-    for lim in doc.get("limits") or []:
-        if isinstance(lim, dict) and str(lim.get("group")) == "weekly":
-            weekly = _window(lim)
-            break
+    # Weekly cap from limits[]: the account-wide row (kind "weekly_all",
+    # scope null) — the live payload also carries per-model "weekly_scoped"
+    # rows in the same group (observed 2026-11-05: a Fable-scoped row after the
+    # all-models one), so "the first weekly entry" was right only by order.
+    # Else the seven_day object.
+    weekly_rows = [
+        lim
+        for lim in (doc.get("limits") or [])
+        if isinstance(lim, dict) and str(lim.get("group")) == "weekly"
+    ]
+    head_row = next(
+        (
+            lim
+            for lim in weekly_rows
+            if lim.get("kind") == "weekly_all"
+            or (not lim.get("scope") and lim.get("kind") != "weekly_scoped")
+        ),
+        weekly_rows[0] if weekly_rows else None,
+    )
+    if head_row is not None:
+        weekly = _window(head_row)
     if not weekly:
         weekly = _window(doc.get("seven_day")) or weekly
+    # Per-model weekly limits ("weekly_scoped" rows): their own meters.
+    models = []
+    for lim in weekly_rows:
+        if lim is head_row or not lim.get("scope"):
+            continue
+        scope = lim.get("scope") or {}
+        model = scope.get("model") if isinstance(scope, dict) else None
+        label = (model or {}).get("display_name") if isinstance(model, dict) else None
+        w = _window(lim)
+        if label and w:
+            w["label"] = str(label)
+            models.append(w)
     opus = _window(doc.get("seven_day_opus"))
     out: dict = {"session": session, "weekly": weekly or None}
-    if opus:
+    if models:
+        out["weekly_models"] = models
+    if opus and not any("opus" in m["label"].lower() for m in models):
         out["weekly_opus"] = opus
     head = session if session is not None else (weekly or None)
     out["window_kind"] = "session" if session is not None else "weekly"
@@ -208,7 +237,7 @@ def _normalize(doc) -> Optional[dict]:
             }
         except (TypeError, ValueError):
             pass
-    if not (session or weekly or opus or out.get("extra")):
+    if not (session or weekly or opus or models or out.get("extra")):
         return None
     return out
 
