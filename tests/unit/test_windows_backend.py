@@ -15,6 +15,11 @@ from backend import cmd as cmd_pkg
 from backend import compat, osflags
 from backend.session import mux
 
+# These pin the Windows branches FROM POSIX (flipping the modules' switches
+# and comparing with the real POSIX calls); on Windows itself the modules'
+# own suites run the real thing.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="pins Windows from POSIX")
+
 
 # --------------------------------------------------------------------------- #
 # osflags
