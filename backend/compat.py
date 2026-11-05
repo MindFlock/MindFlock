@@ -8,8 +8,8 @@ the Windows branches only ever run on ``os.name == "nt"``.
 * **File locks** — :func:`flock` with ``fcntl.flock``'s operations
   (:data:`LOCK_SH`, :data:`LOCK_EX`, :data:`LOCK_NB`, :data:`LOCK_UN`) and
   its errors (``BlockingIOError`` for a held non-blocking lock). Windows:
-  ``LockFileEx`` / ``UnlockFileEx`` on the file's first byte (a range past
-  the end is allowed), shared or exclusive like ``flock``; the lock is the
+  ``LockFileEx`` / ``UnlockFileEx`` on one byte far past the end (Windows
+  locks are mandatory: a lock on real data would block other readers), shared or exclusive like ``flock``; the lock is the
   handle's, so it goes with the file's close as ``flock``'s does.
 * **Process groups** — :func:`detached_kwargs` (``subprocess.Popen``
   keywords for a child in its own group: ``start_new_session`` on POSIX,
@@ -80,7 +80,12 @@ def _win_flock(fd: int, op: int) -> None:  # pragma: no cover - Windows only
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     handle = wintypes.HANDLE(msvcrt.get_osfhandle(fd))
+    # A byte far past any real data (SQLite's trick): Windows byte-range
+    # locks are mandatory, so locking byte 0 would stop every other handle
+    # from READING a lock file that carries data (a pid, a record) while
+    # it is held. A range past the end is allowed and still conflicts.
     ov = _Overlapped()
+    ov.Offset, ov.OffsetHigh = 0xFFFFFFFE, 0x7FFFFFFF
     if op & LOCK_UN:
         kernel32.UnlockFileEx(handle, 0, 1, 0, ctypes.byref(ov))
         return
