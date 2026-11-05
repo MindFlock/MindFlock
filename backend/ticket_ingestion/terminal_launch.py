@@ -182,23 +182,34 @@ def build_terminal_tab_argv(title: str, tmux_session: str) -> Optional[List[str]
 
 
 def windows_attach_argv(tmux_session: str) -> List[str]:
-    """Native Windows: the command that attaches this console to a session
-    on the MindFlock session host (there is no ``tmux attach`` to run)."""
+    """Native Windows: the command that attaches a console to a session on
+    the MindFlock session host — its ``tmux attach-session`` (the in-session
+    ``tmux`` shim's entry, :mod:`backend.session.winmux.__main__`) on this
+    install's console ``python.exe``.
+
+    Not ``mindflock attach``: that resolves a MindFlock TITLE through the
+    server, and these are the pipeline's own detached sessions, named by
+    their tmux name. And no ``python -c "…; …"``: Windows Terminal splits its
+    command line at every ``;`` (its subcommand separator), even inside an
+    argument."""
     import sys
 
-    return [
-        sys.executable,
-        "-c",
-        "import sys; from backend.session import mux; mux.exec_attach(sys.argv[1])",
-        tmux_session,
-    ]
+    exe = sys.executable or "python"
+    folder, base = os.path.split(exe)
+    if base.lower() == "pythonw.exe":  # no console: the attach needs one
+        alt = os.path.join(folder, "python.exe")
+        if os.path.isfile(alt):
+            exe = alt
+    return [exe, "-m", "backend.session.winmux", "attach-session", "-t", tmux_session]
 
 
 def _windows_tab_argv(title: str, tmux_session: str) -> Optional[List[str]]:
     attach = windows_attach_argv(tmux_session)
     wt = shutil.which(wt_command())
     if wt:
-        return [wt, "-w", "0", "nt", "--title", title, *attach]
+        # `--`: everything after it is the tab's command line, never wt's own
+        # options (`-m`, `-t` would read as wt flags).
+        return [wt, "-w", "0", "nt", "--title", title, "--", *attach]
     comspec = os.environ.get("COMSPEC") or shutil.which("cmd.exe")
     if not comspec:
         return None

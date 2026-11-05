@@ -31,7 +31,7 @@ mid-flight takes effect on the very next tool call.
 # a build heals a hook of an OLDER revision and leaves a NEWER one alone, so
 # two MindFlock builds on one worktree (the uv-tool copy + a dev server)
 # converge instead of rewriting settings.local.json every tick.
-_MF_HOOK_REV = 6
+_MF_HOOK_REV = 7
 
 # The firing session's tmux name, set by ``_mf_tool_hook`` for this one fire
 # (the hook process handles exactly one tool call). Per-session fences in a
@@ -547,13 +547,29 @@ def _mf_abs(target, cwd):
     return os.path.normpath(os.path.join(cwd or os.getcwd(), target))
 
 
+def _mf_key(path):
+    """``path`` as two paths compare: itself on Linux/macOS; on native
+    Windows normalised (``C:/x``, ``c:\\X`` and ``C:\\x`` are one file
+    there — the case-insensitive, either-slash rule of the filesystem), so
+    a tool call's spelling of a path inside the guard's root can never miss
+    the root and fail open."""
+    import os
+
+    if os.name != "nt" or not isinstance(path, str):
+        return path
+    return os.path.normcase(os.path.normpath(path))
+
+
 def _mf_relto(abs_path, base):
+    """``abs_path`` relative to ``base`` in the guard's ``/`` form, ``""``
+    for the root itself, None outside it."""
     import os
 
     base = os.path.normpath(base)
-    if abs_path == base:
+    a, b = _mf_key(abs_path), _mf_key(base)
+    if a == b:
         return ""
-    if abs_path.startswith(base + os.sep):
+    if a.startswith(b + os.sep):
         return abs_path[len(base) + 1 :].replace(os.sep, "/")
     return None
 
@@ -596,6 +612,9 @@ def _mf_ancestor_hit(rel, guard):
 def _mf_under(p, entry):
     import os
 
+    if os.name == "nt":
+        p, e = _mf_key(p), _mf_key(_mf_native(entry))
+        return p == e or p.startswith(e.rstrip(os.sep) + os.sep)
     e = entry.rstrip("/")
     return p == e or p.startswith(e + os.sep)
 

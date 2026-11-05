@@ -29,7 +29,7 @@ from typing import Optional, Sequence
 
 from backend import compat
 
-from .base import LauncherSpec
+from .base import LauncherSpec, program_args, split_program
 
 __all__ = [
     "SEED_FN",
@@ -48,6 +48,7 @@ __all__ = [
     "local_overlay",
     "profile_overlay",
     "shell_path",
+    "program_word",
 ]
 
 #: Name of the generated shell function that types the seed prompt into a CLI
@@ -105,6 +106,25 @@ def shell_path(path) -> str:
     return p.replace("\\", "/")
 
 
+def program_word(program: str) -> str:
+    """``program`` (an executable plus any arguments) as the start of a launch
+    shell string.
+
+    Linux/macOS: unchanged — every launcher stays byte-identical. Native
+    Windows: when the executable is a path (``shutil.which``'s
+    ``C:\\Users\\John Smith\\.local\\bin\\claude.EXE``, a binary-path
+    override), it is spelled for Git Bash — :func:`shell_path` and
+    ``shlex.quote`` — so neither a space in the profile path splits it nor
+    bash eats its backslashes. The arguments follow verbatim."""
+    if not compat.IS_WINDOWS or not program:
+        return program
+    exe, rest = split_program(program)
+    if not exe or not any(c in exe for c in "\\/:"):
+        return program
+    word = shlex.quote(shell_path(exe))
+    return word + (" " + rest if rest else "")
+
+
 def spec_for(program: str) -> LauncherSpec:
     """The launcher flag vocabulary for whichever provider claims ``program``.
 
@@ -143,7 +163,7 @@ def apply_binary_override(program: str) -> str:
         from . import resolve
         from .config import binary_override
 
-        rest = program.split()[1:]
+        rest = program_args(program)
         override = binary_override(getattr(resolve(program), "name", "") or "")
         if not override:
             return program
@@ -163,9 +183,9 @@ def launch_program(program: str, spec: LauncherSpec) -> str:
     keeping any args the caller appended to the program string.
     """
     if not spec.command:
-        return apply_binary_override(program)
-    rest = program.split()[1:]
-    return " ".join([spec.command, *rest])
+        return program_word(apply_binary_override(program))
+    rest = program_args(program)
+    return program_word(" ".join([spec.command, *rest]))
 
 
 def seed_by_keys_function(prompt_path: str, fn_name: str = SEED_FN) -> str:

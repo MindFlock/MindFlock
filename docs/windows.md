@@ -24,7 +24,7 @@ CLIs as native `.exe`/`.cmd` (claude, codex, …), PowerShell 5.1, ConPTY
 | File locks | `fcntl.flock` | `backend.compat.flock` (LockFileEx, shared + exclusive) |
 | Process groups, killing a tree | `start_new_session`, `os.killpg` | `compat.detached_kwargs()`, `compat.kill_group()` (taskkill /T) |
 | Process tables, memory, `/proc` | `/proc`, `ps` | `psutil` (both, where it replaces `ps`; `/proc` reads stay on Linux) |
-| Agent memory scopes | systemd-run user scope | a Job Object with a memory limit (later phase) |
+| Agent memory scopes | systemd-run user scope (`MemoryMax`; the OOM killer leaves exit 137) | `backend/session/winmux/jobscope.py`: a Job Object with the per-agent `max`; over it the whole tree is ended with `TerminateJobObject(…, 137)`, so the exit marker and the auto-revive read it as on Linux |
 | Event loop | selector (`add_reader`) | Proactor: no `add_reader` — PTY pumps read in a thread |
 | Desktop app | Electron → server in WSL | Electron → server on Windows itself (`mindflock serve`), WSL as a fallback |
 
@@ -80,6 +80,59 @@ CLIs as native `.exe`/`.cmd` (claude, codex, …), PowerShell 5.1, ConPTY
   `install.ps1`, and kills the server it started on quit (the session host,
   and so the sessions, live on). NSIS no longer requires WSL.
 * CI: `test (windows-latest)` (docs/development.md, "How CI runs the suite").
+
+## Homes, paths and the rest (the follow-ups)
+
+* **MindFlock's home.** `$MINDFLOCK_HOME`, when set, IS the config dir
+  (`state.json`, `config.json`, `settings.json`, `run/`, …) — the rule the
+  session host, `install.json` and `install.ps1` already used. Else
+  `$HOME\.mindflock`, else `%USERPROFILE%\.mindflock` (Windows has no
+  `$HOME` by default; note `Path.home()` / `expanduser` read only
+  `USERPROFILE` there). **Importing `backend.web.server` builds the engine,
+  which writes a default `config.json` + `state.json` into that dir** — so a
+  scratch run (an "import smoke", a CI rehearsal) must point `USERPROFILE`,
+  `HOME` and `MINDFLOCK_HOME` at scratch folders first. That is how a real
+  `C:\Users\<you>\.mindflock` once appeared during a test session.
+  A process started from WSL (`/mnt/c/…/python.exe`) gets none of the
+  Linux side's variables either, only those named in `WSLENV`.
+* **Launch paths.** A program's executable may be a path with spaces
+  (`C:\Users\John Smith\.local\bin\claude.EXE`, what `shutil.which` answers
+  — and what `config.json`'s `default_program` gets): `providers.base.
+  split_program` keeps it whole, provider matching drops `.exe`/`.cmd`, and
+  `launch_script.program_word` spells it `'C:/…'` for Git Bash. Seed-prompt
+  and install-script files are written LF-only.
+* **Session env.** The session host keeps the server's interpreter home
+  (`PYTHONHOME`, `UV_INTERNAL__PYTHONHOME`, a `VIRTUAL_ENV` naming the
+  server's venv) out of every pane; an explicit `new-session -e` still sets
+  them. (tmux on Linux/macOS passes them through, as before.)
+* **GitNexus gate.** The shim's directory goes on bash's `PATH` as `/c/…`;
+  for the queued `analyze` the slot (a native `python.exe`) runs npm's
+  `gitnexus.cmd` — the extension-less `gitnexus` beside it is an sh script
+  only bash can start.
+* **Terminal tabs** (the pipeline's detached sessions):
+  `wt.exe -w 0 nt --title <t> -- python.exe -m backend.session.winmux
+  attach-session -t <session>` (else `cmd /c start "" …`). No `python -c
+  "…; …"`: Windows Terminal splits its command line at every `;`.
+* **Zones and fences.** A tool call's `C:\…`, `C:/…`, `c:\…` or Git Bash
+  `/c/…` spelling of a path is compared case-insensitively against the
+  guard's root and matched in the repo-relative `/` form (the hook's
+  `_mf_relto` / `_mf_under`; `red_zones.rel_form` on the server side).
+* **Setup's "Install everything"** runs the doctor's one-line
+  `powershell … -EncodedCommand …` plan as `bash.exe -c "sh 'C:/…/setup-install.sh'; …"`.
+
+## Uninstalling on Windows
+
+`mindflock uninstall` (add `--purge` to delete `%USERPROFILE%\.mindflock`
+and `.mindflock-assistant` too) stops the **session host** first — and with
+it every session in it: Windows will not delete a worktree an agent holds
+open, nor the tool venv the host runs from — then removes the worktrees and
+the hooks it merged into your repos (Windows hooks name the engine's own
+`python.exe`; there is no `python3` there, only the Microsoft Store alias).
+Finish with the line it prints, the same on every OS:
+
+```powershell
+uv tool uninstall mindflock
+```
 
 Not in the first cut: the peer links' sandboxed shared folder (bwrap /
 seatbelt have no Windows equivalent yet — Windows refuses it with a

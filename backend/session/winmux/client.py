@@ -24,7 +24,16 @@ from typing import Any, Dict, List, Optional, Tuple
 from backend import compat
 from backend.session.winmux import proto
 
-__all__ = ["run", "popen", "attach", "console_attach", "Terminal", "Popen"]
+__all__ = [
+    "run",
+    "popen",
+    "attach",
+    "console_attach",
+    "Terminal",
+    "Popen",
+    "host_running",
+    "stop_host",
+]
 
 _STARTERS = ("new-session", "start-server")
 #: What a request that does not start a server sends of the caller's env:
@@ -184,6 +193,47 @@ def _start_host(env: Dict[str, str]) -> dict:
             )
         finally:
             compat.flock(lock, compat.LOCK_UN)
+
+
+def host_running() -> bool:
+    """Whether this home's session host is up (its rendezvous file names a
+    live process that answers)."""
+    info = _read_info()
+    return info is not None and _ping(info)
+
+
+def stop_host(timeout: float = 10.0) -> bool:
+    """End this home's session host and every session in it, in all
+    namespaces (``mindflock uninstall`` on Windows: the host runs from the
+    tool venv ``uv tool uninstall`` deletes, and its agents hold the
+    worktrees open). True when a host was running and is gone."""
+    info = _read_info()
+    if info is None:
+        return False
+    pid = int(info.get("pid") or 0)
+    ok = False
+    try:
+        sock = _connect(info, 5.0)
+        try:
+            proto.send_json(sock, {"op": "shutdown", "token": info["token"]})
+            ok = bool(json.loads(proto.recv_line(sock, bytearray())).get("ok"))
+        finally:
+            sock.close()
+    except (OSError, ValueError, ConnectionError):
+        ok = False
+    if not ok and pid > 0:
+        # An older host without the op (or one that stopped answering).
+        try:
+            compat.kill_group(pid)
+        except OSError:
+            pass
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            _forget(info)
+            return True
+        time.sleep(0.1)
+    return not _pid_alive(pid)
 
 
 def _request(
