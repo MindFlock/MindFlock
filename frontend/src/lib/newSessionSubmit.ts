@@ -5,6 +5,7 @@
  * caller that reaches postCreate from a several-renders-old closure (page 1's
  * immediate start, after a model turn) still sees that render's form. */
 
+import { fullPathHint } from "./serverPaths";
 import { withMemoryConfirm } from "./memoryConfirm";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 import type { Instance } from "../api/types";
@@ -336,7 +337,7 @@ export function newSessionSubmit(ctx: NewSessionSubmitCtx) {
       // there is nothing left on screen to cancel. See isNameQuery for what the
       // server does with a name.
       failCreate(
-        `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path starting with / or ~ (Browse… fills one in).`
+        `“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type ${fullPathHint()} (Browse… fills one in).`
       );
       return false;
     }

@@ -3,6 +3,7 @@
  * something polls, so the cadence is a feature, not laziness). Each poll also
  * feeds window.mindflock.__setSessions so addons see the same snapshot. */
 
+import { noteServerHome } from "../lib/serverPaths";
 import { useEffect } from "react";
 import { normalizeFlightRows } from "../lib/flights";
 import { QueryClient, useQuery } from "@tanstack/react-query";
@@ -103,7 +104,11 @@ export function useInstances() {
 export function useConfig() {
   return useQuery({
     queryKey: ["config"],
-    queryFn: () => api<Config>("/api/config"),
+    queryFn: () =>
+      api<Config>("/api/config").then((c) => {
+        noteServerHome((c as { home?: string } | undefined)?.home);
+        return c;
+      }),
     staleTime: 60_000,
   });
 }

@@ -24112,6 +24112,21 @@ var L = class {
 	}
 };
 //#endregion
+//#region src/lib/serverPaths.ts
+var windowsServer = false;
+function noteServerHome(home) {
+	if (typeof home === "string" && home) windowsServer = isWindowsFullPath(home);
+}
+function serverIsWindows() {
+	return windowsServer;
+}
+function isWindowsFullPath(text) {
+	return /^[A-Za-z]:[\\/]/.test(text) || /^\\\\[^\\]/.test(text);
+}
+function fullPathHint() {
+	return windowsServer ? "a full path like C:\\Users\\you\\project" : "a full path starting with / or ~";
+}
+//#endregion
 //#region src/lib/format.ts
 function errMsg(err) {
 	return err?.message || "error";
@@ -27917,7 +27932,10 @@ function useInstances() {
 function useConfig() {
 	return useQuery({
 		queryKey: ["config"],
-		queryFn: () => api("/api/config"),
+		queryFn: () => api("/api/config").then((c) => {
+			noteServerHome(c?.home);
+			return c;
+		}),
 		staleTime: 6e4
 	});
 }
@@ -99165,12 +99183,24 @@ function savePickerRect(r) {
 }
 //#endregion
 //#region src/lib/pathComplete.ts
+function sepOf(prefix) {
+	return isWindowsFullPath(prefix) && prefix.endsWith("\\") ? "\\" : "/";
+}
 function splitForCompletion(text) {
 	if (text === "~") return {
 		dir: "~",
 		partial: "",
 		prefix: "~/"
 	};
+	if (serverIsWindows() && isWindowsFullPath(text)) {
+		const cut = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
+		const head = text.slice(0, cut + 1);
+		return {
+			dir: /^[A-Za-z]:[\\/]$/.test(head) ? head : head.slice(0, -1),
+			partial: text.slice(cut + 1),
+			prefix: head
+		};
+	}
 	const cut = text.lastIndexOf("/");
 	const partial = text.slice(cut + 1);
 	const head = cut >= 0 ? text.slice(0, cut + 1) : "";
@@ -99227,7 +99257,7 @@ function completeFrom(text, names) {
 	};
 	const matches = matchNames(partial, names);
 	if (matches.length === 1) return {
-		text: prefix + matches[0] + "/",
+		text: prefix + matches[0] + sepOf(prefix),
 		matches,
 		prefix
 	};
@@ -99246,9 +99276,9 @@ function completeFrom(text, names) {
 }
 function cycle(matches, current, prefix, step = 1) {
 	if (!matches.length) return current;
-	const at = matches.findIndex((m) => current === prefix + m + "/" || current === prefix + m);
+	const at = matches.findIndex((m) => current === prefix + m + sepOf(prefix) || current === prefix + m);
 	const n = matches.length;
-	return prefix + matches[at < 0 ? step > 0 ? 0 : n - 1 : (at + step + n) % n] + "/";
+	return prefix + matches[at < 0 ? step > 0 ? 0 : n - 1 : (at + step + n) % n] + sepOf(prefix);
 }
 async function tabComplete(text, list, cache) {
 	const { dir } = splitForCompletion(text);
@@ -99604,7 +99634,7 @@ function advancedSummary(parts) {
 }
 function looksLikePath$1(text) {
 	const t = text.trim();
-	return t.startsWith("/") || t.startsWith("~");
+	return t.startsWith("/") || t.startsWith("~") || serverIsWindows() && isWindowsFullPath(t);
 }
 function isNameQuery(text) {
 	const t = text.trim();
@@ -104754,7 +104784,7 @@ function newSessionSubmit(ctx) {
 			return false;
 		}
 		if (isNameQuery(repoPath)) {
-			failCreate(`“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type a full path starting with / or ~ (Browse… fills one in).`);
+			failCreate(`“${repoPath.trim()}” is a name to look up, not a folder — pick one of the matches, or type ${fullPathHint()} (Browse… fills one in).`);
 			return false;
 		}
 		await postCreate(buildBody({
@@ -105681,6 +105711,7 @@ function NewSessionDialog() {
 			if (!here()) return;
 			const cfg = cfgR.status === "fulfilled" ? cfgR.value : void 0;
 			setHomePath(cfg?.home || "");
+			noteServerHome(cfg?.home);
 			folderDo({
 				t: "fallback",
 				path: cfg?.home || ""
@@ -137018,7 +137049,7 @@ function repoChoices(suggestions, max = REPO_CHIPS) {
 }
 function flyBlocked(repo) {
 	if (!repo.trim()) return "Pick a repository first";
-	if (isNameQuery(repo)) return "Type a full path starting with / or ~ (Browse… fills one in)";
+	if (isNameQuery(repo)) return "Type " + fullPathHint() + " (Browse… fills one in)";
 	return "";
 }
 function cardKey(e, onCancel) {

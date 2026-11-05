@@ -24,6 +24,14 @@
  *   down the tree; several fill their longest common prefix and are returned
  *   as `matches` for the field to show. */
 
+import { isWindowsFullPath, serverIsWindows } from "./serverPaths";
+
+/** The separator a completed folder name gets: "\\" after a Windows path
+ * typed with backslashes, else "/". */
+function sepOf(prefix: string): string {
+  return isWindowsFullPath(prefix) && prefix.endsWith("\\") ? "\\" : "/";
+}
+
 export interface CompletionSplit {
   /** The folder to list: "" = home (the server's default), else as typed
    * (`~` and absolute paths are expanded by the server). */
@@ -36,6 +44,13 @@ export interface CompletionSplit {
 
 export function splitForCompletion(text: string): CompletionSplit {
   if (text === "~") return { dir: "~", partial: "", prefix: "~/" };
+  if (serverIsWindows() && isWindowsFullPath(text)) {
+    // A native-Windows server: split at the last \ or /; "C:\" is a root.
+    const cut = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
+    const head = text.slice(0, cut + 1);
+    const dir = /^[A-Za-z]:[\\/]$/.test(head) ? head : head.slice(0, -1);
+    return { dir, partial: text.slice(cut + 1), prefix: head };
+  }
   const cut = text.lastIndexOf("/");
   const partial = text.slice(cut + 1);
   const head = cut >= 0 ? text.slice(0, cut + 1) : "";
@@ -93,7 +108,7 @@ export function completeFrom(text: string, names: string[]): Completion {
   const { partial, prefix } = splitForCompletion(text);
   if (text === "~") return { text: "~/", matches: [], prefix }; // a shell's first step too
   const matches = matchNames(partial, names);
-  if (matches.length === 1) return { text: prefix + matches[0] + "/", matches, prefix };
+  if (matches.length === 1) return { text: prefix + matches[0] + sepOf(prefix), matches, prefix };
   if (!matches.length) return { text, matches, prefix };
   const exact = matches.every((m) => m.startsWith(partial));
   const lcp = commonPrefix(matches, !exact);
@@ -109,10 +124,10 @@ export function completeFrom(text: string, names: string[]): Completion {
  * Each candidate is written as `prefix + name + "/"`, ready to type into. */
 export function cycle(matches: string[], current: string, prefix: string, step: 1 | -1 = 1): string {
   if (!matches.length) return current;
-  const at = matches.findIndex((m) => current === prefix + m + "/" || current === prefix + m);
+  const at = matches.findIndex((m) => current === prefix + m + sepOf(prefix) || current === prefix + m);
   const n = matches.length;
   const next = at < 0 ? (step > 0 ? 0 : n - 1) : (at + step + n) % n;
-  return prefix + matches[next] + "/";
+  return prefix + matches[next] + sepOf(prefix);
 }
 
 /** One folder's listing, kept between Tabs so a Tab in the same folder asks
