@@ -1,6 +1,7 @@
 /** Ports the pure usage/cost helpers from 050-usage-cost.js: per-session
  * headline + breakdown rows, plan-window helpers (isPlanMode / planStripRows /
- * fmtResetIn), period rows, provider summary rows, and the
+ * windowPillText / fmtResetIn — a weekly-only plan's headline is its weekly
+ * limit, never a 5-hour countdown), period rows, provider summary rows, and the
  * usage-note texts (verbatim). The /api/usage payload itself comes from
  * useUsage() in state/queries.ts — no fetching happens here. */
 
@@ -25,15 +26,34 @@ export interface PlanWindowGroup {
   end?: number | null;
 }
 
+export interface PlanMeter {
+  percent_used?: number | null;
+  end?: number | null;
+}
+
 export interface PlanWindow {
   end?: number | null;
   /** "live" = the provider's own meter; anything else is our estimate. */
   source?: string | null;
+  /** Which window the headline (percent_used/end) is: "session" = the 5-hour
+   * window; "weekly" = a plan with only a weekly limit (no 5-hour window, so
+   * no 5-hour countdown anywhere). Absent = "session". */
+  window_kind?: "session" | "weekly" | null;
   percent_used?: number | null;
   cost?: number | null;
   groups?: PlanWindowGroup[] | null;
-  weekly?: { percent_used?: number | null; end?: number | null } | null;
+  session?: PlanMeter | null;
+  weekly?: PlanMeter | null;
+  weekly_opus?: PlanMeter | null;
+  /** Per-model weekly limits (the endpoint's "weekly_scoped" rows). */
+  weekly_models?: Array<PlanMeter & { label: string }> | null;
   extra?: { used: number; limit: number } | null;
+  /** When the live reading was taken (epoch s), and whether it is old: the
+   * meter is shared per machine and backs off on a 429, serving the last
+   * good reading meanwhile. */
+  fetched_at?: number | null;
+  stale?: boolean | null;
+  backoff_until?: number | null;
 }
 
 export type PeriodTotals = {
@@ -185,13 +205,109 @@ export function usageProviders(usage: UsageWindows | null | undefined): UsagePro
   return usage && Array.isArray(usage.providers) ? usage.providers : [];
 }
 
+/** True when the window's headline is a WEEKLY limit (a plan with no 5-hour
+ * window). */
+export function isWeekly(w: PlanWindow | null | undefined): boolean {
+  return !!w && w.window_kind === "weekly";
+}
+
+/** "2d 4h" for a weekly reset, falling back to fmtResetIn under a day. */
+export function fmtResetInDays(endEpochSec: number): string {
+  const ms = endEpochSec * 1000 - Date.now();
+  if (ms < 86_400_000) return fmtResetIn(endEpochSec);
+  const h = Math.round(ms / 3_600_000);
+  return Math.floor(h / 24) + "d " + (h % 24) + "h";
+}
+
+/** A weekly reset as weekday + time in the user's locale: "Tue 9:00 AM". */
+export function fmtWeeklyReset(endEpochSec: number): string {
+  return new Date(endEpochSec * 1000).toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** "as of 12 min ago" when the live reading is stale (served from the shared
+ * cache through a backoff), else null. */
+export function staleLabel(w: PlanWindow | null | undefined, nowMs: number = Date.now()): string | null {
+  if (!w || !w.stale || !w.fetched_at) return null;
+  const min = Math.max(1, Math.round((nowMs - w.fetched_at * 1000) / 60000));
+  if (min < 90) return "as of " + min + " min ago";
+  return "as of " + Math.round(min / 60) + " h ago";
+}
+
+function credits(w: PlanWindow): string | null {
+  // Window exhausted + extra-usage credits flowing: the one moment on a plan
+  // where tokens ARE real billed dollars — say so.
+  if (w.percent_used != null && w.percent_used >= 99.5 && w.extra && w.extra.limit) {
+    return "on credits ($" + w.extra.used.toFixed(0) + ")";
+  }
+  return null;
+}
+
+/** The pill's window text after "<Label> usage: ", or null when no window is
+ * active:
+ *   session  ->  "94% left · resets 3h 15m"
+ *   weekly   ->  "Week 35% · resets Tue 9:00 AM"   (never a 5-hour countdown) */
+export function windowPillText(w: PlanWindow | null | undefined): string | null {
+  if (!w) return null;
+  const onCredits = credits(w);
+  if (isWeekly(w)) {
+    if (!w.end && w.percent_used == null) return null;
+    const head = onCredits || "Week" + (w.percent_used != null ? " " + w.percent_used.toFixed(0) + "%" : "");
+    return w.end ? head + " · resets " + fmtWeeklyReset(w.end) : head;
+  }
+  if (!w.end) return null;
+  if (onCredits) return onCredits + " · resets " + fmtResetIn(w.end);
+  const left = w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left · " : "";
+  return left + "resets " + fmtResetIn(w.end);
+}
+
+/** The single-provider view's heading suffix: what the plan meters. */
+export function planHeadLabel(w: PlanWindow | null | undefined): string {
+  return isWeekly(w) ? "weekly limit" : "plan window";
+}
+
+function meterValue(m: PlanMeter, weekday: boolean): string {
+  let v = m.percent_used != null ? m.percent_used.toFixed(0) + "% used" : "active";
+  if (m.end) {
+    v +=
+      " · resets " +
+      (weekday
+        ? new Date(m.end * 1000).toLocaleDateString([], { weekday: "short" })
+        : fmtWeeklyReset(m.end));
+  }
+  return v;
+}
+
+function modelRows(w: PlanWindow, weekday: boolean): UsageRowData[] {
+  return (w.weekly_models || [])
+    .filter((m) => m && m.label && (m.percent_used != null || m.end))
+    .map((m) => ["Weekly (" + m.label + ")", meterValue(m, weekday)] as UsageRowData);
+}
+
 /** [label, value] rows describing ONE plan window (used %, reset, weekly cap,
  * billed extra-usage) — shared by the per-provider tab and, compactly, the
- * combined view. `w` is a provider's `.window` (may be null = fresh/idle). */
+ * combined view. `w` is a provider's `.window` (may be null = fresh/idle).
+ * A weekly-only plan (window_kind "weekly") leads with the weekly meter and
+ * shows no 5-hour rows at all; a plan with both shows the session first. */
 export function planStripRows(w: PlanWindow | null | undefined): UsageRowData[] {
   const rows: UsageRowData[] = [];
-  if (w && w.end) {
-    const live = w.source === "live"; // provider's own meter vs our estimate
+  const live = !!w && w.source === "live"; // provider's own meter vs our estimate
+  if (w && isWeekly(w)) {
+    if (w.percent_used != null) {
+      rows.push(["Weekly limit used", w.percent_used.toFixed(0) + "%" + (live ? "" : " (est.)")]);
+    } else {
+      rows.push(["Weekly limit used", "not known yet — the live meter is unavailable", "wrap"]);
+    }
+    if (w.end) rows.push(["Week resets", fmtWeeklyReset(w.end) + " (in " + fmtResetInDays(w.end) + ")"]);
+    if (w.cost != null) rows.push(["Week cost (≈API)", "~" + fmtUsd(w.cost)]);
+    if (w.weekly_opus && (w.weekly_opus.percent_used != null || w.weekly_opus.end)) {
+      rows.push(["Weekly (Opus)", meterValue(w.weekly_opus, false)]);
+    }
+    modelRows(w, false).forEach((r) => rows.push(r));
+  } else if (w && w.end) {
     if (w.groups && w.groups.length) {
       // Per-model-group quotas (Antigravity): one row per group beats a
       // single ambiguous "plan window" number.
@@ -213,23 +329,24 @@ export function planStripRows(w: PlanWindow | null | undefined): UsageRowData[] 
     }
     if (w.cost != null) rows.push(["Window cost (≈API)", "~" + fmtUsd(w.cost)]);
     if (w.weekly && w.weekly.percent_used != null) {
-      let v = w.weekly.percent_used.toFixed(0) + "% used";
-      if (w.weekly.end) {
-        v +=
-          " · resets " +
-          new Date(w.weekly.end * 1000).toLocaleDateString([], { weekday: "short" });
-      }
-      rows.push(["Weekly cap", v]);
+      rows.push(["Weekly cap", meterValue(w.weekly, true)]);
     }
-    if (w.extra && w.extra.limit) {
-      rows.push([
-        "Extra usage (billed)",
-        "$" + w.extra.used.toFixed(0) + " / $" + w.extra.limit.toFixed(0) + " this month",
-      ]);
+    if (w.weekly_opus && w.weekly_opus.percent_used != null) {
+      rows.push(["Weekly (Opus)", meterValue(w.weekly_opus, true)]);
     }
+    modelRows(w, true).forEach((r) => rows.push(r));
   } else {
     rows.push(["Plan window", "fresh — your next message starts a new one", "wrap"]);
+    return rows;
   }
+  if (w.extra && w.extra.limit) {
+    rows.push([
+      "Extra usage (billed)",
+      "$" + w.extra.used.toFixed(0) + " / $" + w.extra.limit.toFixed(0) + " this month",
+    ]);
+  }
+  const stale = staleLabel(w);
+  if (stale) rows.push(["Live reading", stale]);
   return rows;
 }
 
@@ -260,6 +377,11 @@ export function periodRows(
 export function providerSummaryRow(p: UsageProviderEntry): UsageRowData {
   if (p.mode === "windowed") {
     const w = p.window;
+    if (w && isWeekly(w) && (w.end || w.percent_used != null)) {
+      const left =
+        w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left this week" : "this week";
+      return [p.label, w.end ? left + " · resets " + fmtWeeklyReset(w.end) : left];
+    }
     if (w && w.end) {
       const left =
         w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left" : "active";

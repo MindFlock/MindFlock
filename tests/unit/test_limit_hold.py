@@ -382,3 +382,36 @@ def test_credits_banner_on_the_pane_clears_a_hold(h):
     )
     assert refresh() == 0.0
     assert server._LIMIT_STATE.get("t") is None
+
+
+# --------------------------------------------------------------------------- #
+# Weekly-only plans: the limit that matters is the weekly one
+# --------------------------------------------------------------------------- #
+def test_live_reset_weekly_only_plan_holds_until_the_weekly_reset():
+    # A plan with no 5-hour window: the normalized reading's headline IS the
+    # weekly window (window_kind "weekly", session None). A spent week holds
+    # until the WEEKLY reset — never a 5-hour one.
+    week_end = _NOW + 3 * 86400
+    prov = _meter(
+        {
+            "window_kind": "weekly",
+            "session": None,
+            "percent_used": 100.0,
+            "end": week_end,
+            "weekly": {"percent_used": 100.0, "end": week_end},
+        }
+    )
+    assert server._live_limit_reset(prov, _NOW) == pytest.approx(week_end)
+
+
+def test_live_reset_weekly_only_plan_with_headroom_is_open():
+    prov = _meter(
+        {
+            "window_kind": "weekly",
+            "session": None,
+            "percent_used": 40.0,
+            "end": _NOW + 86400,
+            "weekly": {"percent_used": 40.0, "end": _NOW + 86400},
+        }
+    )
+    assert server._live_limit_reset(prov, _NOW) == 0.0

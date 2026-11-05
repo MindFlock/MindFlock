@@ -59721,10 +59721,70 @@ function isPlanMode(usage) {
 function usageProviders(usage) {
 	return usage && Array.isArray(usage.providers) ? usage.providers : [];
 }
+function isWeekly(w) {
+	return !!w && w.window_kind === "weekly";
+}
+function fmtResetInDays(endEpochSec) {
+	const ms = endEpochSec * 1e3 - Date.now();
+	if (ms < 864e5) return fmtResetIn(endEpochSec);
+	const h = Math.round(ms / 36e5);
+	return Math.floor(h / 24) + "d " + h % 24 + "h";
+}
+function fmtWeeklyReset(endEpochSec) {
+	return (/* @__PURE__ */ new Date(endEpochSec * 1e3)).toLocaleString([], {
+		weekday: "short",
+		hour: "numeric",
+		minute: "2-digit"
+	});
+}
+function staleLabel(w, nowMs = Date.now()) {
+	if (!w || !w.stale || !w.fetched_at) return null;
+	const min = Math.max(1, Math.round((nowMs - w.fetched_at * 1e3) / 6e4));
+	if (min < 90) return "as of " + min + " min ago";
+	return "as of " + Math.round(min / 60) + " h ago";
+}
+function credits(w) {
+	if (w.percent_used != null && w.percent_used >= 99.5 && w.extra && w.extra.limit) return "on credits ($" + w.extra.used.toFixed(0) + ")";
+	return null;
+}
+function windowPillText(w) {
+	if (!w) return null;
+	const onCredits = credits(w);
+	if (isWeekly(w)) {
+		if (!w.end && w.percent_used == null) return null;
+		const head = onCredits || "Week" + (w.percent_used != null ? " " + w.percent_used.toFixed(0) + "%" : "");
+		return w.end ? head + " · resets " + fmtWeeklyReset(w.end) : head;
+	}
+	if (!w.end) return null;
+	if (onCredits) return onCredits + " · resets " + fmtResetIn(w.end);
+	return (w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left · " : "") + "resets " + fmtResetIn(w.end);
+}
+function planHeadLabel(w) {
+	return isWeekly(w) ? "weekly limit" : "plan window";
+}
+function meterValue(m, weekday) {
+	let v = m.percent_used != null ? m.percent_used.toFixed(0) + "% used" : "active";
+	if (m.end) v += " · resets " + (weekday ? (/* @__PURE__ */ new Date(m.end * 1e3)).toLocaleDateString([], { weekday: "short" }) : fmtWeeklyReset(m.end));
+	return v;
+}
+function modelRows(w, weekday) {
+	return (w.weekly_models || []).filter((m) => m && m.label && (m.percent_used != null || m.end)).map((m) => ["Weekly (" + m.label + ")", meterValue(m, weekday)]);
+}
 function planStripRows(w) {
 	const rows = [];
-	if (w && w.end) {
-		const live = w.source === "live";
+	const live = !!w && w.source === "live";
+	if (w && isWeekly(w)) {
+		if (w.percent_used != null) rows.push(["Weekly limit used", w.percent_used.toFixed(0) + "%" + (live ? "" : " (est.)")]);
+		else rows.push([
+			"Weekly limit used",
+			"not known yet — the live meter is unavailable",
+			"wrap"
+		]);
+		if (w.end) rows.push(["Week resets", fmtWeeklyReset(w.end) + " (in " + fmtResetInDays(w.end) + ")"]);
+		if (w.cost != null) rows.push(["Week cost (≈API)", "~" + fmtUsd(w.cost)]);
+		if (w.weekly_opus && (w.weekly_opus.percent_used != null || w.weekly_opus.end)) rows.push(["Weekly (Opus)", meterValue(w.weekly_opus, false)]);
+		modelRows(w, false).forEach((r) => rows.push(r));
+	} else if (w && w.end) {
 		if (w.groups && w.groups.length) w.groups.forEach((g) => {
 			if (g.percent_used == null && !g.end) return;
 			let v = g.percent_used != null ? g.percent_used.toFixed(0) + "% used" : "active";
@@ -59740,17 +59800,20 @@ function planStripRows(w) {
 			rows.push(["Window resets", at + " (in " + fmtResetIn(w.end) + ")"]);
 		}
 		if (w.cost != null) rows.push(["Window cost (≈API)", "~" + fmtUsd(w.cost)]);
-		if (w.weekly && w.weekly.percent_used != null) {
-			let v = w.weekly.percent_used.toFixed(0) + "% used";
-			if (w.weekly.end) v += " · resets " + (/* @__PURE__ */ new Date(w.weekly.end * 1e3)).toLocaleDateString([], { weekday: "short" });
-			rows.push(["Weekly cap", v]);
-		}
-		if (w.extra && w.extra.limit) rows.push(["Extra usage (billed)", "$" + w.extra.used.toFixed(0) + " / $" + w.extra.limit.toFixed(0) + " this month"]);
-	} else rows.push([
-		"Plan window",
-		"fresh — your next message starts a new one",
-		"wrap"
-	]);
+		if (w.weekly && w.weekly.percent_used != null) rows.push(["Weekly cap", meterValue(w.weekly, true)]);
+		if (w.weekly_opus && w.weekly_opus.percent_used != null) rows.push(["Weekly (Opus)", meterValue(w.weekly_opus, true)]);
+		modelRows(w, true).forEach((r) => rows.push(r));
+	} else {
+		rows.push([
+			"Plan window",
+			"fresh — your next message starts a new one",
+			"wrap"
+		]);
+		return rows;
+	}
+	if (w.extra && w.extra.limit) rows.push(["Extra usage (billed)", "$" + w.extra.used.toFixed(0) + " / $" + w.extra.limit.toFixed(0) + " this month"]);
+	const stale = staleLabel(w);
+	if (stale) rows.push(["Live reading", stale]);
 	return rows;
 }
 function periodRows(sessionAgg, periods, period, plan) {
@@ -59767,6 +59830,10 @@ function periodRows(sessionAgg, periods, period, plan) {
 function providerSummaryRow(p) {
 	if (p.mode === "windowed") {
 		const w = p.window;
+		if (w && isWeekly(w) && (w.end || w.percent_used != null)) {
+			const left = w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left this week" : "this week";
+			return [p.label, w.end ? left + " · resets " + fmtWeeklyReset(w.end) : left];
+		}
 		if (w && w.end) {
 			const left = w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left" : "active";
 			return [p.label, left + " · resets " + fmtResetIn(w.end)];
@@ -59852,10 +59919,11 @@ function pillText(usage, provs, instances, focused, agg, aggByProvider) {
 		const tag = target.label + " usage: ";
 		if (target.mode === "windowed") {
 			const w = target.window;
-			if (w && w.end) {
-				head = tag + (w.percent_used != null ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left · " : "") + "resets " + fmtResetIn(w.end);
-				if (w.percent_used != null && w.percent_used >= 99.5 && w.extra && w.extra.limit) head = tag + "on credits ($" + w.extra.used.toFixed(0) + ") · resets " + fmtResetIn(w.end);
-				title = target.label + " plan window" + (focusedProv ? " (focused session)" : " (default)") + " — click for the breakdown";
+			const text = windowPillText(w);
+			if (w && text) {
+				head = tag + text;
+				const stale = staleLabel(w);
+				title = target.label + (isWeekly(w) ? " weekly limit: " : " plan window: ") + text + (focusedProv ? " (focused session)" : " (default)") + (stale ? " — " + stale : "") + " — click for the breakdown";
 			} else {
 				head = tag + "none yet this window";
 				title = "No active " + target.label + " window — your next message starts one. Click for the breakdown";
@@ -59963,7 +60031,7 @@ function OverallUsage() {
 			active ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "usage-pop-head",
-					children: active.label + (active.mode === "windowed" ? " · plan window" : " · metered")
+					children: active.label + (active.mode === "windowed" ? " · " + planHeadLabel(active.window) : " · metered")
 				}),
 				active.mode === "windowed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: planStripRows(active.window) }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UsagePopTable, { rows: periodRows(aggByProvider[active.name] || ZERO_AGG, active.periods, period, active.mode === "windowed") }),

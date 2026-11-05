@@ -20,7 +20,10 @@ import {
   ZERO_AGG,
   asUsageWindows,
   isPlanMode,
-  fmtResetIn,
+  isWeekly,
+  planHeadLabel,
+  staleLabel,
+  windowPillText,
   loadUsagePeriod,
   loadUsageTab,
   periodRows,
@@ -73,6 +76,7 @@ function aggregate(instances: Instance[]): {
  * Always names what it measures — a bare "Claude: fresh window" read like a
  * button that opens a window:
  *   plan, active window  ->  "Codex usage: 94% left · resets 3h 15m"
+ *   weekly-only plan     ->  "Claude usage: Week 35% · resets Tue 9:00 AM"
  *   plan, idle window    ->  "Claude usage: none yet this window"
  *   metered              ->  "Aider ~$4.20"   (real marginal spend) */
 function pillText(
@@ -96,21 +100,17 @@ function pillText(
     const tag = target.label + " usage: ";
     if (target.mode === "windowed") {
       const w = target.window;
-      if (w && w.end) {
-        const left =
-          w.percent_used != null
-            ? Math.max(0, 100 - w.percent_used).toFixed(0) + "% left · "
-            : "";
-        head = tag + left + "resets " + fmtResetIn(w.end);
-        // Window exhausted + extra-usage credits flowing: the one moment on
-        // a plan where tokens ARE real billed dollars — say so.
-        if (w.percent_used != null && w.percent_used >= 99.5 && w.extra && w.extra.limit) {
-          head = tag + "on credits ($" + w.extra.used.toFixed(0) + ") · resets " + fmtResetIn(w.end);
-        }
+      const text = windowPillText(w);
+      if (w && text) {
+        head = tag + text;
+        const stale = staleLabel(w);
+        // The pill truncates in a narrow sidebar: the tooltip repeats it whole.
         title =
           target.label +
-          " plan window" +
+          (isWeekly(w) ? " weekly limit: " : " plan window: ") +
+          text +
           (focusedProv ? " (focused session)" : " (default)") +
+          (stale ? " — " + stale : "") +
           " — click for the breakdown";
       } else {
         head = tag + "none yet this window";
@@ -250,7 +250,8 @@ export function OverallUsage() {
             // own Session/Day/Week/… token+cost breakdown.
             <>
               <div className="usage-pop-head">
-                {active.label + (active.mode === "windowed" ? " · plan window" : " · metered")}
+                {active.label +
+                  (active.mode === "windowed" ? " · " + planHeadLabel(active.window) : " · metered")}
               </div>
               {active.mode === "windowed" && (
                 <UsagePopTable rows={planStripRows(active.window)} />

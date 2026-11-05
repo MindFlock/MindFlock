@@ -1102,10 +1102,47 @@ Two provider methods drive the usage-limit hold on the prompt queue (see
   open window — the queue holds on a bounded fallback rather than firing a
   prompt into a still-closed window. A window that reads open, or an
   unavailable reading (`None`), leaves the queue free to send.
+- `percent_used`/`end` are the **headline** window and `window_kind`
+  (`"session"` | `"weekly"`) says which: a plan with no 5-hour window
+  (weekly-only) reports `window_kind: "weekly"` and `session: null`, so its
+  weekly cap is the limit the hold waits on — never a 5-hour reset. Claude's
+  normalized reading is `{window_kind, percent_used, end, session, weekly,
+  weekly_opus?, extra?}`; both endpoint shapes are read (`five_hour` +
+  `limits[]` group `"weekly"`, or `seven_day` / `seven_day_opus`).
+- `usage_live_display()` is the reading for the cost panel: by default the same
+  as `usage_live()`. Claude's may be older (up to 6 h, through a 429 backoff)
+  and then carries `stale: true`, `fetched_at` and `backoff_until`; the
+  decision-side `usage_live()` never returns one older than 10 minutes.
+- `usage_plan_shape()` is the plan's remembered shape from the last good
+  reading — `{session: bool, weekly_end}` or `None` — so the fallback estimate
+  on a weekly-only plan models the WEEK (last reset rolled forward, the rolling
+  week's cost) instead of chaining 5-hour windows from the first message.
 - `usage_limit_state(pane_text, now)` parses the CLI's on-pane limit banner
   (`{limited, reset_at}`). The hold logic consults the live meter even when this
   reports no banner, so a rebooted session with a fresh idle prompt is still
   held when its meter shows a window genuinely spent.
+
+### One Claude reading per machine
+
+Anthropic's usage endpoint rate-limits per **account**, and every MindFlock
+process on a machine (the server, a dev server, the ticket pipeline child)
+used to poll it on its own clock — enough to keep it answering 429. The
+reading now lives in one file, `<run dir>/claude_usage.json` (`$MINDFLOCK_RUN_DIR`,
+else `~/.mindflock/run`), written atomically and read first by every process:
+
+- it is fetched at most once a minute machine-wide, by whichever process finds
+  it stale, under a non-blocking `flock` on `claude_usage.json.lock` (the others
+  serve what the file holds);
+- a 429 or 5xx backs off 2 → 4 → 8 → 15 min (±20 % jitter; a `Retry-After` > 0
+  wins), recorded as `backoff_until` in the file so every process honours it;
+- meanwhile the last good reading keeps being served, marked `stale` with its
+  `fetched_at` (the sidebar says "as of 12 min ago"); the transcript estimate
+  takes over only when there has never been a good reading or it is over 6 h old;
+- the file also remembers the plan's shape (`plan.session_seen_at`,
+  `plan.weekly_end`) for `usage_plan_shape()`. It never holds the token.
+
+The first good reading per process logs the payload's keys and which windows
+are null at debug level (`backend.providers.claude_usage_api`).
 
 ### Credential sources for `usage_live()`
 
