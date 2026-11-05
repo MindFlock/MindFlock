@@ -173,6 +173,36 @@ STARTUP_TIMEOUT_S = 30
 #: fallback and the auth token have to be forwarded by name.
 _CODEX_ENV_VARS = ("TMUX", "TMUX_PANE", "TMUX_TMPDIR", "MINDFLOCK_AUTH_TOKEN")
 
+#: What else a cleared environment must carry on native Windows. A Windows
+#: process breaks without ``SystemRoot`` (Python cannot seed its RNG, sockets
+#: fail); identity reaches the session host through ``MINDFLOCK_HOME`` /
+#: ``USERPROFILE`` (its rendezvous file, ``backend.session.winmux.proto``),
+#: and ``PATH``/``PATHEXT``/``COMSPEC`` let it run ``git`` and the ``tmux``
+#: shim. (Claude Code hands its stdio servers its whole environment — verified
+#: on Windows, 2.1.232 — so only Codex's attach needs the list.)
+_CODEX_WINDOWS_ENV_VARS = (
+    "SystemRoot",
+    "USERPROFILE",
+    "HOME",
+    "MINDFLOCK_HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PATH",
+    "PATHEXT",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+)
+
+
+def codex_env_vars() -> tuple:
+    """The names Codex forwards to the MCP server (``env_vars``): the identity
+    and token vars, plus :data:`_CODEX_WINDOWS_ENV_VARS` on native Windows."""
+    if osflags.IS_WINDOWS:
+        return _CODEX_ENV_VARS + _CODEX_WINDOWS_ENV_VARS
+    return _CODEX_ENV_VARS
+
+
 _RUN_FILE_PREFIX = "mcp-"
 _RUN_FILE_SUFFIX = ".json"
 _FALSY = ("0", "false", "no", "off")
@@ -704,7 +734,7 @@ def codex_server_table(spec: McpSpec) -> str:
             _toml_str(spec.command()),
             _toml_array(spec.args()),
             env,
-            _toml_array(_CODEX_ENV_VARS),
+            _toml_array(codex_env_vars()),
             STARTUP_TIMEOUT_S,
             TOOL_TIMEOUT_S,
             tools,

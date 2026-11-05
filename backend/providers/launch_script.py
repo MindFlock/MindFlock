@@ -27,6 +27,8 @@ import os
 import shlex
 from typing import Optional, Sequence
 
+from backend import compat
+
 from .base import LauncherSpec
 
 __all__ = [
@@ -45,6 +47,7 @@ __all__ = [
     "env_exports",
     "local_overlay",
     "profile_overlay",
+    "shell_path",
 ]
 
 #: Name of the generated shell function that types the seed prompt into a CLI
@@ -78,7 +81,28 @@ OOM_SCORE_ADJ = 500
 #: as "the resume failed" — relaunching a CLI the kernel just killed for memory
 #: is the server's call (:mod:`backend.web.core.revive`), made once memory
 #: has recovered, not the launch chain's three seconds later.
+#:
+#: Native Windows has no signals and no OOM killer: a process ended with
+#: ``taskkill /F`` or ``TerminateProcess`` exits with the code its killer
+#: chose (``taskkill`` picks 1, which reads as a crash and resumes). A
+#: MindFlock memory guard there that means "killed for memory" must end the
+#: agent with this code itself (``TerminateProcess(h, 137)``), so the launch
+#: chains and the exit marker read the same on every OS.
 KILLED_EXIT_CODE = 137
+
+
+def shell_path(path) -> str:
+    """``path`` as launch shell text spells it: unchanged on Linux/macOS; on
+    native Windows with forward slashes (``C:/Users/me/x``). Git for Windows'
+    ``bash.exe`` (which runs every launch script there, docs/windows.md) and
+    the native programs it starts — claude.exe, node CLIs, python.exe — all
+    accept that form, and no layer of shell quoting or ``\\``-escaping can
+    eat a forward slash. Still quote the result (``shlex.quote``) for a
+    path with spaces."""
+    p = str(path)
+    if not compat.IS_WINDOWS:
+        return p
+    return p.replace("\\", "/")
 
 
 def spec_for(program: str) -> LauncherSpec:
@@ -171,7 +195,7 @@ def seed_by_keys_function(prompt_path: str, fn_name: str = SEED_FN) -> str:
     Uses only double quotes — callers embed the result in a single-quoted
     ``bash -ilc '…'`` string, where a single quote would turn into ``'"'"`` soup.
     """
-    path = shlex.quote(prompt_path)
+    path = shlex.quote(shell_path(prompt_path))
     return (
         f"{fn_name}() {{\n"
         '  [ -n "$TMUX_PANE" ] || return 0\n'
@@ -215,7 +239,13 @@ def oom_score_line() -> str:
     set one — needs privilege; this one is positive). The brace
     group is what makes it silent: ``echo … > f 2>/dev/null`` reports a failed
     ``> f`` before the ``2>`` applies. A builtin ``echo`` writes from the shell
-    itself, so ``/proc/self`` is the shell that goes on to start the CLI."""
+    itself, so ``/proc/self`` is the shell that goes on to start the CLI.
+
+    Native Windows: ``""`` — there is no OOM killer to volunteer for (Git
+    Bash's emulated ``/proc`` accepts the write and nothing reads it), so the
+    launch carries no statement that does nothing."""
+    if compat.IS_WINDOWS:
+        return ""
     value = oom_score_adj()
     if value <= 0:
         return ""
@@ -353,7 +383,9 @@ def launch_command(
     if not prompt_path:
         return preamble, base
     if spec.prompt_arg:
-        seed = spec.prompt_arg.format(prompt=f'"$(cat {shlex.quote(prompt_path)})"')
+        seed = spec.prompt_arg.format(
+            prompt=f'"$(cat {shlex.quote(shell_path(prompt_path))})"'
+        )
         return preamble, "%s %s" % (base, seed)
     # No prompt argument: background the keystroke seeder and run the CLI in the
     # foreground. `seeder & cli` keeps $? pointing at the CLI.

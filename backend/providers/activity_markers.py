@@ -27,7 +27,10 @@ from __future__ import annotations
 
 import re
 import shlex
+import zlib
 from typing import Optional, Sequence, Tuple
+
+from backend import compat
 
 # The three states MindFlock's UI understands. A marker with any other value is
 # ignored (treated as no signal).
@@ -459,11 +462,153 @@ def hook_command(
             "except Exception:",
             "    pass",
         ]
+        if compat.IS_WINDOWS:
+            guard_lines[:1] = _win_tool_hook_loader()
         insert_at = lines.index("    raise SystemExit(0)") - 1
         lines[insert_at:insert_at] = guard_lines
         tag = TOOL_HOOK_TAG
     code = "\n".join(lines) + "\n"
-    return "python3 -c %s || true %s" % (shlex.quote(code), tag)
+    return _python_hook(code, tag)
+
+
+# --------------------------------------------------------------------------- #
+# Native Windows (docs/windows.md)
+#
+# Claude Code on Windows runs a hook command with Git for Windows' bash.exe
+# (verified, 2.1.232: ``$0`` is ``/usr/bin/bash``, MSYSTEM=MINGW64). There
+# ``python3`` resolves to the Microsoft Store alias (verified on a default
+# box: ``WindowsApps/python3``) — no interpreter at all — and Codex's hook
+# shell there is not pinned down. So a Windows hook command:
+#
+# * names THIS install's interpreter (``sys.executable``, a ``C:/…`` path),
+#   never a bare ``python3``;
+# * carries its script zlib-compressed and hex-encoded,
+#   ``exec(__import__('zlib').decompress(bytes.fromhex('…')))``, in double
+#   quotes: the same characters mean the same thing to bash, cmd and
+#   PowerShell (no ``$``, ``\``, ``%``, ``^``, ``&``, backtick or double quote
+#   inside), and MSYS's argv path conversion finds no path to rewrite.
+#   Compressed because Git Bash cuts a quoted argument at ~8,190 characters
+#   (measured: both ``bin\bash.exe`` and ``usr\bin\bash.exe``), far below
+#   Windows' own 32,767 — :data:`WINDOWS_HOOK_MAX` keeps a margin under it;
+# * ends ``# <tag>`` with no ``|| true`` (PowerShell 5.1 has no ``||``): the
+#   script itself swallows its errors, and bash/PowerShell read the tag as a
+#   comment (cmd passes it to Python as ignored argv);
+# * resolves the ``tmux`` the session host puts on PATH (``tmux.cmd``:
+#   CreateProcess never runs a bare ``tmux`` name) for the session lookup;
+# * loads the red-zone guard from a file instead of inlining it: the guard's
+#   source is ~100 KB, ~25 KB compressed — past Git Bash's argument limit.
+#   The file sits in the guard directory (an agent tool may not write there,
+#   see ``_mf_control_hit``), is named after the source's hash and is run
+#   only when its bytes still hash to that name — otherwise the guard is
+#   skipped, as on any of its own failures (fail-open, like the inline one).
+#   Its directory is resolved at FIRE time from the firing CLI's env, like
+#   the marker dirs; :func:`ensure_tool_hook_file` writes it at install.
+# --------------------------------------------------------------------------- #
+#: The longest Windows hook command MindFlock writes (see above: Git Bash
+#: truncates a longer quoted argument). ``test_windows_launch`` pins it.
+WINDOWS_HOOK_MAX = 7000
+
+
+def _python_hook(code: str, tag: str) -> str:
+    """The hook command that runs ``code`` (a Python script) and carries
+    ``tag``: ``python3 -c '<code>' || true <tag>`` on Linux/macOS; on Windows
+    the form described above."""
+    if not compat.IS_WINDOWS:
+        return "python3 -c %s || true %s" % (shlex.quote(code), tag)
+    import textwrap
+
+    code = code.replace(
+        "subprocess.run(['tmux',",
+        "subprocess.run([__import__('shutil').which('tmux') or 'tmux',",
+    )
+    body = "try:\n%sexcept Exception:\n    pass\n" % textwrap.indent(code, "    ")
+    packed = zlib.compress(body.encode("utf-8"), 9).hex()
+    return "%s -c \"exec(__import__('zlib').decompress(bytes.fromhex('%s')))\" %s" % (
+        _exe_word(hook_python()),
+        packed,
+        tag,
+    )
+
+
+def hook_python() -> str:
+    """The interpreter a Windows hook command names: this process's own
+    (``pythonw.exe`` swapped for its ``python.exe``, which has stdio), with
+    forward slashes."""
+    import os
+    import sys
+
+    exe = sys.executable or "python"
+    folder, base = os.path.split(exe)
+    if base.lower() == "pythonw.exe":
+        alt = os.path.join(folder, "python.exe")
+        if os.path.isfile(alt):
+            exe = alt
+    return exe.replace("\\", "/")
+
+
+def _exe_word(path: str) -> str:
+    """``path`` as the first word of a command every Windows shell runs: bare
+    when it has nothing a shell splits or expands (PowerShell would read a
+    quoted first word as a string, not a command); double-quoted otherwise,
+    which bash and cmd both take."""
+    if re.fullmatch(r"[A-Za-z0-9_./:+@~-]+", path):
+        return path
+    return '"%s"' % path
+
+
+def tool_hook_file() -> str:
+    """Where a Windows tool hook loads the guard source from (see above)."""
+    import os
+
+    from . import _tool_hook_src as _src
+
+    return os.path.join(_src._mf_guard_dir(), "tool-hook-%s.py" % _source_hash8())
+
+
+def ensure_tool_hook_file() -> bool:
+    """Write :func:`tool_hook_file` unless it already holds this build's guard
+    source byte for byte (a tampered or torn copy is replaced). True when the
+    file is current. Never raises."""
+    import os
+
+    path = tool_hook_file()
+    data = _tool_hook_source().encode("utf-8", "replace")
+    try:
+        with open(path, "rb") as f:
+            if f.read() == data:
+                return True
+    except OSError:
+        pass
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        return False
+
+
+def _win_tool_hook_loader() -> list:
+    """The lines that set ``_MF_SRC`` from :func:`tool_hook_file` at fire time
+    (empty — no guard — when the file is missing or not this exact source)."""
+    h = _source_hash8()
+    return [
+        "_MF_SRC=''",
+        "try:",
+        "    import hashlib",
+        "    _mf_f=os.path.join(os.environ.get('MINDFLOCK_RED_ZONE_DIR') or "
+        "os.path.join(os.environ.get('MINDFLOCK_ASSISTANT_DIR') or "
+        "os.path.join(os.path.expanduser('~'),'.mindflock-assistant'),"
+        "'.red-zones'),'tool-hook-%s.py')" % h,
+        "    with open(_mf_f,'rb') as _mf_h:",
+        "        _mf_b=_mf_h.read()",
+        "    if hashlib.sha1(_mf_b).hexdigest()[:8]==%r:" % h,
+        "        _MF_SRC=_mf_b.decode('utf-8')",
+        "except Exception:",
+        "    pass",
+    ]
 
 
 def notification_hook_command(marker_dir=None) -> str:
@@ -511,7 +656,7 @@ def notification_hook_command(marker_dir=None) -> str:
         "open(os.path.join(md,s+'.json'), \"w\").write("
         'json.dumps({"state": "clarify", "ts": int(time.time())}))\n'
     )
-    return "python3 -c %s || true %s" % (shlex.quote(code), _HOOK_TAG)
+    return _python_hook(code, _HOOK_TAG)
 
 
 def is_mindflock_hook_entry(entry) -> bool:
@@ -803,6 +948,11 @@ def merge_activity_hooks(
         hooks = {}
         data["hooks"] = hooks
     th_map = dict(tool_hook_events or ())
+    if th_map and compat.IS_WINDOWS:
+        # A Windows tool hook loads the guard from this file (it is too big
+        # for a command line); kept current on every install, so a missing or
+        # tampered copy heals within one reconcile tick.
+        ensure_tool_hook_file()
     for event, state in event_states:
         entries = hooks.get(event)
         if not isinstance(entries, list):
