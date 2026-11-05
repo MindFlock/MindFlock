@@ -3802,6 +3802,22 @@ def _cli_update():
     return cli_update
 
 
+def _utf8_console() -> None:
+    """On Windows a piped stdout is the ANSI code page (cp1252), which can't
+    print the ✓ / ✗ the CLI prints: write UTF-8 there instead (a console
+    takes it; an installer reading the pipe decodes it)."""
+    if os.name != "nt":
+        return
+    for stream in (sys.stdout, sys.stderr):  # pragma: no cover - Windows
+        try:
+            if (getattr(stream, "encoding", "") or "").lower().replace(
+                "-", ""
+            ) != "utf8":
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Parse ``argv`` and dispatch to the matching subcommand; return the exit code.
 
@@ -3814,6 +3830,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.
     """
+    _utf8_console()
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["slot"]:
         # Before the big parser on purpose: `slot` wraps every commit's test

@@ -114,7 +114,9 @@ def _is_exec(path: str) -> bool:
 
 
 def _kind_of(path: str) -> str:
-    if path.lower().endswith(".exe"):
+    # A ``.exe`` seen from WSL is the Windows host's client (another tailnet
+    # node); on native Windows it is this machine's own.
+    if path.lower().endswith(".exe") and os.name != "nt":
         return "wsl-windows-host"
     real = path
     try:
