@@ -3,8 +3,10 @@
 //
 // A single frameless BrowserWindow loads the MindFlock UI from the local
 // server over localhost, auto-starting that server when nothing answers:
-//   * Windows — the engine lives in WSL2 (tmux/PTYs don't exist natively);
-//     the server is started hidden inside the distro via wsl.exe.
+//   * Windows — the engine runs natively (`mindflock serve`, sessions in the
+//     MindFlock session host, docs/windows.md), spawned hidden; or, for
+//     someone who already runs it there, inside WSL2 via wsl.exe
+//     (electron/engine.js decides which; MINDFLOCK_DESKTOP_ENGINE=native|wsl).
 //   * Linux / macOS — the server runs natively; it's spawned directly.
 // We inject a slim title strip + thin scrollbars. Electron gives frameless
 // windows native drag (-webkit-app-region) and native edge-resize, so none of
@@ -23,6 +25,8 @@ const logger = require('./logger')
 // detection, the first-launch marker) — shared with electron/test.
 const fl = require('./firstlaunch')
 const upd = require('./update')
+// Which engine Windows drives (native or WSL) and how a native one runs.
+const eng = require('./engine')
 
 // Windows attributes toast notifications by AppUserModelID. Without setting it,
 // toasts are labeled "electron.app.MindFlock" with no icon. The packaged app
@@ -195,7 +199,7 @@ let serverStart = { startedAt: 0, answered: false, exited: null }
 // The spawned server's log, as a path THIS machine can read ('' on Windows,
 // where it lives inside the WSL distro).
 function serverLogPath() {
-  if (process.platform === 'win32') return ''
+  if (WIN_WSL) return ''
   const p = WSL_SERVER_LOG
   if (p === '~') return os.homedir()
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2))
@@ -233,6 +237,38 @@ const WSL_DISTRO_LABEL = WSL_DISTRO || 'your default distro'
 // the script logs the install one-liner and the offline page guides the user.
 const WSL_REPO = process.env.MINDFLOCK_REPO || ''
 
+// Windows: drive the native engine or the WSL one (electron/engine.js has
+// the rule). Decided once per launch, after the dev sandbox moved userData.
+// WIN_NATIVE / WIN_WSL are both false on Linux and macOS.
+function findNativeEngine() {
+  return eng.findNativeEngine({
+    env: process.env,
+    home: os.homedir(),
+    exists: (p) => fs.existsSync(p),
+    where: () => spawnSync('where', ['mindflock'],
+      { windowsHide: true, encoding: 'utf8', timeout: 3000 }).stdout,
+  })
+}
+const ENGINE = (() => {
+  if (process.platform !== 'win32') return eng.decideEngine({ platform: process.platform })
+  const userData = app.getPath('userData')
+  let saved = ''
+  try { saved = eng.readSavedChoice(fs.readFileSync(path.join(userData, 'engine.json'), 'utf8')) } catch (e) {}
+  return eng.decideEngine({
+    platform: 'win32',
+    env: process.env,
+    saved,
+    nativePath: findNativeEngine(),
+    wslHistory: eng.WSL_TRACES.some((f) => fs.existsSync(path.join(userData, f))),
+  })
+})()
+const WIN_NATIVE = ENGINE.engine === 'native'
+const WIN_WSL = ENGINE.engine === 'wsl'
+// A native developer checkout (MINDFLOCK_REPO=C:\…): its venv's run.py.
+const WIN_REPO = WIN_NATIVE ? WSL_REPO : ''
+// The native server this app started (killed on quit: see 'will-quit').
+let ownedServer = null
+
 // Single-quote a string for POSIX sh so paths with spaces/quotes/$ survive
 // being spliced into the bootstrap script: close the quote, emit an escaped
 // literal quote, reopen ('\'' technique).
@@ -262,6 +298,7 @@ function startServerIfNeeded() {
     if (Date.now() - lastSpawnAt < SPAWN_COOLDOWN_MS) return
     lastSpawnAt = Date.now()
     serverStart = { startedAt: lastSpawnAt, answered: false, exited: null }
+    if (WIN_NATIVE) return startNativeServer()
     // Redirect the server's stdout+stderr to a WSL-side log (appended, with a
     // boot banner and a 2 MB cap) so a crash before the Python log module comes
     // up -- bad venv, import error, port bind -- is still diagnosable.
@@ -350,8 +387,8 @@ function startServerIfNeeded() {
       + ' grep -qi microsoft /proc/version 2>/dev/null || exit 0;'
       + ' exec flock -n /tmp/.mindflock-wsl-keepalive sleep 2147483647'
     try {
-      if (process.platform === 'win32') {
-        // Windows: the engine lives in WSL2. The bootstrap is a real shell
+      if (WIN_WSL) {
+        // Windows with a WSL engine (native Windows returned above). The bootstrap is a real shell
         // script (it quotes paths for dirname/wc and prints a dated banner).
         // Threading its inner quotes through the VBS string literal AND the
         // wsl.exe `-c "..."` command line is hopeless: doubling " for VBS does
@@ -405,6 +442,73 @@ function startServerIfNeeded() {
   sock.setTimeout(700, () => finish(false))
 }
 
+// Native Windows: spawn the server itself, hidden — the same log (banner,
+// 2 MB cap), the same exit watch (a crash before the port answers is what the
+// offline page's failed-to-start reports) as the Linux/macOS bootstrap. Not
+// detached: with windowsHide and no inherited stdio libuv gives it a HIDDEN
+// console, which every git/agent/bash child inherits (a detached server has
+// none, and each console child would flash a window of its own).
+function startNativeServer() {
+  const mine = serverStart
+  const logPath = serverLogPath()
+  let fd = null
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    try { if (fs.statSync(logPath).size > 2000000) fs.truncateSync(logPath, 0) } catch (e) {}
+    fd = fs.openSync(logPath, 'a')
+    fs.writeSync(fd, '===== desktop bootstrap ' + new Date().toString() + ' (port ' + PORT + ') =====\n')
+    const spec = eng.nativeServeCommand({
+      exe: findNativeEngine(), repo: WIN_REPO, port: PORT, home: os.homedir(),
+      exists: (p) => fs.existsSync(p),
+    })
+    if (!spec) {
+      fs.writeSync(fd, 'mindflock is not installed on this computer.\n'
+        + 'Install it (PowerShell):  ' + installCommandLine() + '\n')
+      return
+    }
+    const child = spawn(spec.file, spec.args, {
+      cwd: spec.cwd,
+      env: eng.nativeServerEnv(process.env, os.homedir()),
+      stdio: ['ignore', fd, fd],
+      windowsHide: true,
+    })
+    ownedServer = child
+    child.on('error', (e) => {
+      if (ownedServer === child) ownedServer = null
+      if (serverStart !== mine) return
+      mine.exited = { code: 127, signal: null, at: Date.now(), error: e && e.message }
+      console.log('[mindflock] native server could not start:', e && e.message)
+    })
+    child.on('exit', (code, signal) => {
+      if (ownedServer === child) ownedServer = null
+      if (serverStart !== mine || mine.answered) return
+      mine.exited = { code: code == null ? 1 : code, signal: signal || null, at: Date.now() }
+      console.log('[mindflock] server exited before answering: code', code, signal || '')
+    })
+    console.log('[mindflock] starting the native server (' + ENGINE.why + '):', spec.file,
+      spec.args.join(' '), '; server log ->', logPath)
+  } catch (e) {
+    console.log('[mindflock] could not start the native server:', e && e.message)
+  } finally {
+    if (fd !== null) { try { fs.closeSync(fd) } catch (e) {} }
+  }
+}
+
+// Stop native servers: the one we own (its whole tree), then any other
+// `mindflock serve` — KILL_SERVER's pkill, by command line. The session host
+// is left running, so sessions survive (as they survive tmux's clients).
+function killNativeServer() {
+  if (ownedServer && ownedServer.pid) {
+    try { spawnSync('taskkill', eng.taskkillArgs(ownedServer.pid), { windowsHide: true, timeout: 10000 }) } catch (e) {}
+  }
+  try {
+    spawn('powershell.exe', eng.powershellEncodedArgs(eng.killServerScript()),
+      { windowsHide: true, stdio: 'ignore' })
+  } catch (e) {
+    console.log('[mindflock] could not stop the native server:', e && e.message)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Offline diagnostics. The offline page polls `diag:get` so it can say WHY
 // the UI can't load instead of dumping shell commands on the user:
@@ -426,7 +530,7 @@ function startServerIfNeeded() {
 // (hung vmcompute etc.) lands in wsl-down.
 const DIAG_PROBE_TIMEOUT_MS = 20000
 const DIAG_STALE_MS = 8000
-let diag = { state: 'checking', detail: '', distro: WSL_DISTRO_LABEL, platform: process.platform }
+let diag = { state: 'checking', detail: '', distro: WSL_DISTRO_LABEL, platform: process.platform, engine: ENGINE.engine }
 let diagAt = 0
 let diagInFlight = false
 
@@ -440,7 +544,7 @@ function diagProbeScript() {
 }
 
 function setDiag(state, detail) {
-  diag = { state, detail: detail || '', distro: WSL_DISTRO_LABEL, platform: process.platform }
+  diag = { state, detail: detail || '', distro: WSL_DISTRO_LABEL, platform: process.platform, engine: ENGINE.engine }
   diagAt = Date.now()
   console.log('[mindflock] diag:', state, detail || '')
 }
@@ -449,7 +553,14 @@ function refreshDiag() {
   if (diagInFlight || Date.now() - diagAt < DIAG_STALE_MS) return
   diagInFlight = true
   const done = (state, detail) => { diagInFlight = false; setDiag(state, detail) }
-  const win32 = process.platform === 'win32'
+  if (WIN_NATIVE) {
+    // No WSL to probe: the engine is there or it isn't.
+    const there = WIN_REPO
+      ? fs.existsSync(path.join(WIN_REPO, '.venv', 'Scripts', 'python.exe'))
+      : !!findNativeEngine()
+    return done(there ? 'starting' : 'not-installed')
+  }
+  const win32 = WIN_WSL
   try {
     let child
     if (win32) {
@@ -520,7 +631,7 @@ function startStatus() {
     tail,
     logPath: logPath || WSL_SERVER_LOG,
     // "Try again" respawns the server; only meaningful where we watch it.
-    canRetry: process.platform !== 'win32',
+    canRetry: !WIN_WSL,
   }
 }
 
@@ -604,7 +715,7 @@ ipcMain.handle('shell:show-item', (_e, p) => {
 // (the offline page warns that this closes anything else running in WSL),
 // then the normal launcher cold-boots the distro and the server again.
 ipcMain.handle('diag:restart-wsl', async () => {
-  if (process.platform !== 'win32') return { ok: false }
+  if (!WIN_WSL) return { ok: false }
   setDiag('checking', 'Restarting WSL…')
   await new Promise((resolve) => {
     try {
@@ -648,13 +759,18 @@ ipcMain.handle('diag:restart-wsl', async () => {
 // MINDFLOCK_INSTALL_SCRIPT overrides the path -- point it at a stub to
 // exercise this flow without actually reinstalling the engine.
 const INSTALL_SCRIPT = process.env.MINDFLOCK_INSTALL_SCRIPT || (app.isPackaged
-  ? path.join(process.resourcesPath, 'install.sh')
-  : path.join(__dirname, '..', 'install.sh'))
+  ? path.join(process.resourcesPath, WIN_NATIVE ? 'install.ps1' : 'install.sh')
+  : path.join(__dirname, '..', WIN_NATIVE ? 'install.ps1' : 'install.sh'))
 
 // Pin the CLI to this app's version, exactly as build/installer.nsh does, so
 // the engine and the shell that talks to it are the same release. An
 // unpackaged dev run has no meaningful tag, so it tracks main.
 const INSTALL_REF = app.isPackaged ? 'v' + app.getVersion() : 'main'
+
+// The manual install line for this engine (the offline page's escape hatch).
+function installCommandLine() {
+  return WIN_NATIVE ? eng.installCommandPs(INSTALL_REF) : fl.installCommand(INSTALL_REF)
+}
 
 const INSTALL_LOG_MAX = 400
 // Last line the Windows install writes: wscript's exit code is the launcher's,
@@ -824,12 +940,19 @@ function darwinPreflight() {
 
 // Linux / macOS: run the bundled install.sh. --login so ~/.local/bin (where uv
 // and the CLI land) is on PATH for the doctor step at the end of the script.
+// Native Windows: the bundled install.ps1, hidden, piped the same way.
 function runUnixInstaller(envAdds) {
   try {
-    const child = spawn('/bin/bash', ['--login', INSTALL_SCRIPT], {
-      env: Object.assign({}, process.env, envAdds),
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const child = WIN_NATIVE
+      ? spawn('powershell.exe', eng.powershellFileArgs(INSTALL_SCRIPT), {
+        env: Object.assign({ PYTHONIOENCODING: 'utf-8' }, process.env, envAdds),
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true,
+      })
+      : spawn('/bin/bash', ['--login', INSTALL_SCRIPT], {
+        env: Object.assign({}, process.env, envAdds),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
     child.stdout.on('data', installLog)
     child.stderr.on('data', installLog)
     child.on('error', (e) => {
@@ -862,7 +985,7 @@ function startInstall(ref, opts) {
   installLog('=== installing the MindFlock engine (' + ref + ') ===')
 
   if (!fs.existsSync(INSTALL_SCRIPT)) {
-    installLog('install.sh is missing from this build: ' + INSTALL_SCRIPT)
+    installLog(path.basename(INSTALL_SCRIPT) + ' is missing from this build: ' + INSTALL_SCRIPT)
     installFinish(1)
     return { started: true }
   }
@@ -881,7 +1004,7 @@ function startInstall(ref, opts) {
     MINDFLOCK_INSTALL_NO_RESTART: '1',
   }
 
-  if (process.platform !== 'win32') {
+  if (!WIN_WSL) {
     install.env = envAdds
     if (process.platform === 'darwin') darwinPreflight()
     else runUnixInstaller(envAdds)
@@ -954,7 +1077,7 @@ ipcMain.handle('install:state', () => ({
   lines: install.lines,
   waiting: install.waiting || '',
   // The manual escape hatch the offline page shows when an install fails.
-  command: fl.installCommand(INSTALL_REF),
+  command: installCommandLine(),
 }))
 
 // ---------------------------------------------------------------------------
@@ -975,8 +1098,15 @@ const KILL_SERVER =
 // flashes and no quoting has to survive wsl.exe's tokenizer), natively through
 // a login shell elsewhere. Fire-and-forget.
 function spawnEngineShell(scriptText) {
+  if (WIN_NATIVE) {
+    // No bash between us and a native engine: the one engine shell anything
+    // asks for is KILL_SERVER, which has its own native twin.
+    if (scriptText === KILL_SERVER) killNativeServer()
+    else console.log('[mindflock] no engine shell on native Windows; skipped')
+    return
+  }
   try {
-    if (process.platform === 'win32') {
+    if (WIN_WSL) {
       const b64 = Buffer.from(scriptText, 'utf8').toString('base64')
       const cmd = 'echo ' + b64 + ' | base64 -d | bash'
       const vbs = 'CreateObject("WScript.Shell").Run "wsl.exe ' + WSL_D +
@@ -1059,7 +1189,26 @@ function readEngineToken() {
       finish('')
     }, TOKEN_READ_TIMEOUT_MS)
     try {
-      if (process.platform === 'win32') {
+      if (WIN_NATIVE) {
+        // `mindflock token`, hidden; else the settings file, read directly.
+        const fromSettings = () => {
+          try {
+            const j = JSON.parse(fs.readFileSync(path.join(process.env.HOME || os.homedir(),
+              '.mindflock', 'settings.json'), 'utf8'))
+            return String((j && (j.auth_token || (j.general && j.general.auth_token))) || '')
+          } catch (e) { return '' }
+        }
+        const spec = eng.nativeTokenCommand({ exe: findNativeEngine(), repo: WIN_REPO })
+        if (!spec) return finish(fromSettings())
+        let out = ''
+        child = spawn(spec.file, spec.args, {
+          cwd: spec.cwd, env: eng.nativeServerEnv(process.env, os.homedir()),
+          stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
+        })
+        child.stdout.on('data', (d) => { out += d })
+        child.on('error', () => finish(fromSettings()))
+        child.on('exit', () => finish(lastTokenLine(out) || fromSettings()))
+      } else if (WIN_WSL) {
         outPath = path.join(app.getPath('userData'), 'engine-token.out')
         try { fs.unlinkSync(outPath) } catch (e) {}
         const script = 'OUT="$(wslpath -u ' + shq(outPath) + ')"; { ' + tokenScript() + '; } > "$OUT"'
@@ -1230,7 +1379,8 @@ ipcMain.handle('app:uninstall', async () => {
       title: 'Uninstall MindFlock',
       message: 'Uninstall MindFlock from Windows Settings',
       detail: 'Open Settings → Apps → MindFlock → Uninstall. That removes the app AND '
-        + 'the engine inside WSL (worktrees, agent hooks, and the mindflock tool) in one '
+        + (WIN_WSL ? 'the engine inside WSL' : 'its engine')
+        + ' (worktrees, agent hooks, and the mindflock tool) in one '
         + 'step. Your history and settings are kept.',
       buttons: ['Open Apps settings', 'Cancel'],
       defaultId: 0,
@@ -2747,7 +2897,8 @@ app.whenReady().then(() => {
     Menu.setApplicationMenu(null)
   }
   const lp = logger.init(app)
-  console.log('[mindflock] logs:', lp.file, '| WSL server log:', WSL_SERVER_LOG)
+  console.log('[mindflock] logs:', lp.file, '| server log:', serverLogPath() || WSL_SERVER_LOG,
+    '| engine:', ENGINE.engine, '(' + ENGINE.why + ')')
   // macOS draws the dock icon from the app bundle, not the BrowserWindow icon,
   // so set it explicitly for an unpackaged dev run to get the red "dev" badge.
   if (DEV && DEV_ICON && process.platform === 'darwin' && app.dock) {
@@ -2765,4 +2916,13 @@ app.whenReady().then(() => {
   startUpdateChecks()
 })
 app.on('window-all-closed', () => app.quit())
+// Native Windows: the server this app started goes with it (its whole tree,
+// forcibly — there are no signals to ask nicely with). Sessions live on in
+// the session host, which the server only started; a server the user started
+// themselves is never ours to stop.
+app.on('will-quit', () => {
+  if (!WIN_NATIVE || !ownedServer || !ownedServer.pid) return
+  try { spawnSync('taskkill', eng.taskkillArgs(ownedServer.pid), { windowsHide: true, timeout: 10000 }) } catch (e) {}
+  ownedServer = null
+})
 app.on('activate', () => { if (!win) createWindow() })

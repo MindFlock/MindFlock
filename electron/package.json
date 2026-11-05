@@ -37,6 +37,7 @@
       "logger.js",
       "firstlaunch.js",
       "update.js",
+      "engine.js",
       "offline.html",
       "icon.ico"
     ],
@@ -44,6 +45,10 @@
       {
         "from": "../install.sh",
         "to": "install.sh"
+      },
+      {
+        "from": "../install.ps1",
+        "to": "install.ps1"
       }
     ],
     "win": {
