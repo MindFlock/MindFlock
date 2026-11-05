@@ -1,9 +1,11 @@
 """Live Claude plan-usage (claude_usage_api).
 
 The module reads Anthropic's OAuth usage endpoint READ-ONLY and normalizes it
-into the shared ``usage_live()`` shape. These tests lock the normalization, the
-credential gate, and the TTL/grace caching — including that the blocking fetch
-runs OUTSIDE the module lock so one slow probe can't serialize every caller.
+into the shared ``usage_live()`` shape. These tests lock the normalization (both
+payload shapes, weekly-only plans), the credential gate, and the shared
+per-machine reading — one fetch for every process, the 429 backoff they all
+honour, stale serving — including that the blocking fetch runs OUTSIDE the
+module lock so one slow probe can't serialize every caller.
 """
 
 from __future__ import annotations
@@ -16,10 +18,13 @@ from backend.providers import claude_usage_api as api
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
-    api._cache = {"at": 0.0, "good_at": 0.0, "good": None}
+def _reset_cache(tmp_path, monkeypatch):
+    # conftest points MINDFLOCK_RUN_DIR at a per-test dir; a fresh module
+    # state per test keeps the shared reading per-test too.
+    monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "run"))
+    api._SHARED = None
     yield
-    api._cache = {"at": 0.0, "good_at": 0.0, "good": None}
+    api._SHARED = None
 
 
 @pytest.fixture
@@ -227,62 +232,299 @@ def test_fetch_empty_doc_returns_none(_creds, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# live_usage: TTL throttle, grace on failure, fetch-outside-lock
+# _normalize: both payload shapes, weekly-only plans
 # --------------------------------------------------------------------------- #
-def test_live_usage_caches_within_ttl(monkeypatch):
-    calls = {"n": 0}
-
-    def _f():
-        calls["n"] += 1
-        return {"percent_used": 10.0}
-
-    monkeypatch.setattr(api, "_fetch", _f)
-    assert api.live_usage() == {"percent_used": 10.0}
-    assert api.live_usage() == {"percent_used": 10.0}
-    assert calls["n"] == 1  # second call served from cache, no re-fetch
+_WK = "2026-07-20T00:00:00+00:00"
+_FH = "2026-07-14T20:05:00+00:00"
 
 
-def test_live_usage_grace_serves_last_good_on_failure(monkeypatch):
-    seq = [{"percent_used": 10.0}, None]
+def test_normalize_five_hour_plan_headlines_the_session_window():
+    out = api._normalize(
+        {
+            "five_hour": {"utilization": 42.5, "resets_at": _FH},
+            "seven_day": {"utilization": 12.0, "resets_at": _WK},
+        }
+    )
+    assert out["window_kind"] == "session"
+    assert out["percent_used"] == pytest.approx(42.5)
+    assert int(out["end"]) == 1784059500
+    assert out["session"]["percent_used"] == pytest.approx(42.5)
+    assert out["weekly"]["percent_used"] == pytest.approx(12.0)
 
-    def _f():
-        return seq.pop(0)
 
-    monkeypatch.setattr(api, "_fetch", _f)
-    assert api.live_usage() == {"percent_used": 10.0}
-    # Force the TTL to expire; next call fetches None but grace reuses last good.
-    api._cache["at"] = 0.0
-    assert api.live_usage() == {"percent_used": 10.0}
+def test_normalize_five_hour_null_is_a_weekly_only_plan():
+    # A plan with no session limit ("ultra"): five_hour is null, the weekly
+    # window is the only meter — and it becomes the headline.
+    out = api._normalize(
+        {
+            "five_hour": None,
+            "seven_day": {"utilization": 35.0, "resets_at": _WK},
+            "seven_day_opus": {"utilization": 3.0, "resets_at": _WK},
+        }
+    )
+    assert out["window_kind"] == "weekly"
+    assert out["session"] is None
+    assert out["percent_used"] == pytest.approx(35.0)
+    assert out["end"] == api._iso_epoch(_WK)
+    assert out["weekly_opus"]["percent_used"] == pytest.approx(3.0)
 
 
-def test_live_usage_grace_expires_to_none(monkeypatch):
-    monkeypatch.setattr(api, "_fetch", lambda: None)
-    # Prime a stale last-good beyond the grace horizon.
-    import time
+def test_normalize_five_hour_absent_with_limits_weekly():
+    out = api._normalize(
+        {"limits": [{"group": "weekly", "percent": 61.0, "resets_at": _WK}]}
+    )
+    assert out["window_kind"] == "weekly"
+    assert out["session"] is None
+    assert out["percent_used"] == pytest.approx(61.0)
+    assert out["weekly"]["end"] == api._iso_epoch(_WK)
 
-    api._cache = {
-        "at": 0.0,
-        "good_at": time.time() - (api._GRACE + 10),
-        "good": {"percent_used": 5.0},
+
+def test_normalize_limits_weekly_wins_over_seven_day():
+    out = api._normalize(
+        {
+            "five_hour": {"utilization": 1.0, "resets_at": _FH},
+            "limits": [{"group": "weekly", "percent": 20.0, "resets_at": _WK}],
+            "seven_day": {"utilization": 99.0, "resets_at": _WK},
+        }
+    )
+    assert out["weekly"]["percent_used"] == pytest.approx(20.0)
+
+
+def test_normalize_fresh_five_hour_window_still_counts_as_session():
+    # A present-but-empty five_hour (no use yet, no reset) is a plan WITH a
+    # session window, not a weekly-only one.
+    out = api._normalize(
+        {"five_hour": {}, "seven_day": {"utilization": 5.0, "resets_at": _WK}}
+    )
+    assert out["window_kind"] == "session"
+    assert out["session"] == {}
+    assert "percent_used" not in out
+
+
+def test_normalize_nothing_usable_is_none():
+    assert api._normalize({"five_hour": None, "seven_day": None}) is None
+    assert api._normalize("junk") is None
+
+
+# --------------------------------------------------------------------------- #
+# _fetch_raw: status + Retry-After for the backoff
+# --------------------------------------------------------------------------- #
+def _http_error(monkeypatch, code, retry_after=None):
+    import email.message
+    import urllib.error
+
+    hdrs = email.message.Message()
+    if retry_after is not None:
+        hdrs["Retry-After"] = str(retry_after)
+
+    def _raise(*a, **k):
+        raise urllib.error.HTTPError(api._ENDPOINT, code, "x", hdrs, None)
+
+    monkeypatch.setattr(api.urllib.request, "urlopen", _raise)
+
+
+def test_fetch_raw_reports_429_and_retry_after(_creds, monkeypatch):
+    _http_error(monkeypatch, 429, retry_after=0)
+    assert api._fetch_raw() == (None, 429, 0.0)
+    _http_error(monkeypatch, 429, retry_after=30)
+    assert api._fetch_raw() == (None, 429, 30.0)
+    _http_error(monkeypatch, 503)
+    assert api._fetch_raw() == (None, 503, None)
+
+
+def test_fetch_raw_success_logs_keys_never_the_token(_creds, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(api, "_shape_logged", False)
+    _mock_response(monkeypatch, {"five_hour": None, "seven_day": {"utilization": 1}})
+    with caplog.at_level(logging.DEBUG, logger=api.__name__):
+        reading, status, _ = api._fetch_raw()
+    assert status == 200 and reading["window_kind"] == "weekly"
+    text = caplog.text
+    assert "five_hour" in text and "seven_day" in text
+    assert "tok-abc" not in text
+
+
+# --------------------------------------------------------------------------- #
+# live_usage: ONE reading per machine (shared file), backoff, stale serving
+# --------------------------------------------------------------------------- #
+from backend.providers import _usage_cache  # noqa: E402
+
+_GOOD = {"window_kind": "session", "percent_used": 10.0, "session": {}}
+
+
+def _two(tmp_path, fetch, **kw):
+    """Two "processes": two SharedReading states over ONE file."""
+    path = str(tmp_path / "run" / "claude_usage.json")
+    mk = lambda: _usage_cache.SharedReading(  # noqa: E731
+        "claude_usage",
+        fetch,
+        path=path,
+        plan_update=api._plan_update,
+        **kw,
+    )
+    return mk(), mk(), path
+
+
+def test_shared_reading_one_fetch_for_two_processes(tmp_path):
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return dict(_GOOD), 200, None
+
+    a, b, path = _two(tmp_path, fetch)
+    assert a.get()["percent_used"] == 10.0
+    got = b.get()
+    assert got["percent_used"] == 10.0 and got["stale"] is False
+    assert calls == [1]  # the second process read the file, no fetch
+    doc = json.loads(open(path).read())
+    assert doc["reading"]["percent_used"] == 10.0 and doc["fetched_at"] > 0
+    assert "tok" not in open(path).read()
+
+
+def test_shared_reading_429_backs_off_for_every_process(tmp_path, monkeypatch):
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        return None, 429, 0.0  # Retry-After: 0 -> our own backoff
+
+    a, b, path = _two(tmp_path, fetch, ttl=60.0, backoff_base=120.0)
+    assert a.get() is None
+    doc = json.loads(open(path).read())
+    assert doc["failures"] == 1 and doc["last_status"] == 429
+    until = doc["backoff_until"]
+    assert 0.8 * 120 - 1 <= until - doc["attempt_at"] <= 1.2 * 120 + 1
+    # Past the TTL but inside the backoff: neither process fetches.
+    import time as _t
+
+    real = _t.time
+    monkeypatch.setattr(_usage_cache.time, "time", lambda: real() + 90)
+    assert b.get() is None and a.get() is None
+    assert calls == [1]
+    # After the backoff: one more fetch, and the failure count doubles the wait.
+    monkeypatch.setattr(_usage_cache.time, "time", lambda: until + 1)
+    b.get()
+    doc = json.loads(open(path).read())
+    assert calls == [1, 1] and doc["failures"] == 2
+    assert doc["backoff_until"] - doc["attempt_at"] >= 0.8 * 240 - 1
+
+
+def test_shared_reading_retry_after_wins(tmp_path):
+    a, _, path = _two(tmp_path, lambda: (None, 429, 1800.0))
+    a.get()
+    doc = json.loads(open(path).read())
+    assert doc["backoff_until"] - doc["attempt_at"] == pytest.approx(1800.0, abs=1)
+
+
+def test_backoff_delay_doubles_to_the_cap():
+    mid = lambda: 0.5  # noqa: E731 — no jitter
+    assert [_usage_cache.backoff_delay(n, 120, 900, mid) for n in (1, 2, 3, 4, 9)] == [
+        120,
+        240,
+        480,
+        900,
+        900,
+    ]
+
+
+def test_shared_reading_serves_last_good_stale_through_backoff(tmp_path, monkeypatch):
+    seq = [(dict(_GOOD), 200, None), (None, 429, 0.0)]
+    a, b, path = _two(tmp_path, lambda: seq.pop(0), stale_after=150.0)
+    assert a.get()["stale"] is False
+    import time as _t
+
+    t0 = _t.time()
+    monkeypatch.setattr(_usage_cache.time, "time", lambda: t0 + 600)
+    got = b.get()  # due -> fetch -> 429 -> still the old reading, now stale
+    assert got["percent_used"] == 10.0
+    assert got["stale"] is True
+    assert got["backoff_until"] > t0 + 600
+    assert t0 + 600 - got["fetched_at"] >= 599
+    # A deciding caller asks for a recent one and gets nothing.
+    assert b.get(max_age=300) is None
+    # Past stale_max (6 h) even the display reading is dropped.
+    monkeypatch.setattr(_usage_cache.time, "time", lambda: t0 + 7 * 3600)
+    assert b.get() is None
+
+
+def test_shared_reading_remembers_plan_shape(tmp_path):
+    weekly_only = {
+        "window_kind": "weekly",
+        "session": None,
+        "weekly": {"percent_used": 35.0, "end": 2e9},
     }
-    assert api.live_usage() is None
+    a, b, _ = _two(tmp_path, lambda: (weekly_only, 200, None))
+    a.get()
+    plan = b.plan()
+    assert plan["weekly_end"] == 2e9 and not plan.get("session_seen_at")
 
 
-def test_live_usage_fetch_runs_without_holding_lock(monkeypatch):
-    # Regression: the ~4s network fetch must NOT run while the module lock is
-    # held, or concurrent callers serialize behind one slow probe. We assert the
-    # lock is released during _fetch by acquiring it from inside the fetch.
-    api._cache = {"at": 0.0, "good_at": 0.0, "good": None}
+def test_shared_reading_skips_when_another_process_holds_the_lock(tmp_path):
+    import fcntl
+    import os as _os
+
+    calls = []
+    a, _, path = _two(tmp_path, lambda: calls.append(1) or (dict(_GOOD), 200, None))
+    _os.makedirs(_os.path.dirname(path), exist_ok=True)
+    fd = _os.open(path + ".lock", _os.O_RDWR | _os.O_CREAT)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        assert a.get() is None
+        assert calls == []
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        _os.close(fd)
+    assert a.get()["percent_used"] == 10.0
+
+
+def test_live_usage_is_shared_through_the_run_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "run"))
+    calls = []
+    monkeypatch.setattr(
+        api, "_fetch_raw", lambda: calls.append(1) or (dict(_GOOD), 200, None)
+    )
+    assert api.live_usage()["percent_used"] == 10.0
+    api._SHARED = None  # a second process: fresh module state, same file
+    assert api.live_usage()["percent_used"] == 10.0
+    assert calls == [1]
+    assert (tmp_path / "run" / "claude_usage.json").exists()
+
+
+def test_plan_shape_weekly_only_and_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "run"))
+    assert api.plan_shape() is None  # never read
+    reading = {"window_kind": "weekly", "session": None, "weekly": {"end": 2e9}}
+    monkeypatch.setattr(api, "_fetch_raw", lambda: (reading, 200, None))
+    api.live_usage()
+    assert api.plan_shape() == {"session": False, "weekly_end": 2e9}
+    # A 5-hour plan: session seen -> remembered as having one.
+    api._SHARED = None
+    (tmp_path / "run" / "claude_usage.json").unlink()
+    monkeypatch.setattr(
+        api, "_fetch_raw", lambda: ({**_GOOD, "weekly": {"end": 2e9}}, 200, None)
+    )
+    api.live_usage()
+    assert api.plan_shape()["session"] is True
+
+
+def test_live_usage_fetch_runs_without_holding_lock(tmp_path, monkeypatch):
+    # Regression: the ~4s network fetch must NOT run while a module lock is
+    # held, or concurrent callers serialize behind one slow probe.
+    monkeypatch.setenv("MINDFLOCK_RUN_DIR", str(tmp_path / "run"))
+    shared = api._shared()
 
     def _f():
-        acquired = api._lock.acquire(blocking=False)
-        if acquired:
-            api._lock.release()
-        assert acquired, "lock was held across the network fetch"
-        return {"percent_used": 1.0}
+        for lk in (api._lock, shared._lock):
+            acquired = lk.acquire(blocking=False)
+            if acquired:
+                lk.release()
+            assert acquired, "lock was held across the network fetch"
+        return {"percent_used": 1.0}, 200, None
 
-    monkeypatch.setattr(api, "_fetch", _f)
-    assert api.live_usage() == {"percent_used": 1.0}
+    monkeypatch.setattr(api, "_fetch_raw", _f)
+    assert api.live_usage()["percent_used"] == 1.0
 
 
 # --- macOS credentials (Keychain) ------------------------------------------- #
@@ -356,3 +598,14 @@ def test_credentials_file_wins_when_present(monkeypatch, tmp_path):
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("keychain consulted")),
     )
     assert api._token() == "file-tok"
+
+
+def test_provider_decides_on_recent_readings_and_displays_stale_ones(monkeypatch):
+    from backend.providers.claude import ClaudeProvider
+
+    seen = []
+    monkeypatch.setattr(api, "live_usage", lambda max_age=None: seen.append(max_age))
+    p = ClaudeProvider()
+    p.usage_live()
+    p.usage_live_display()
+    assert seen == [api.DECISION_MAX_AGE, None]

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from typing import Optional
 
@@ -27,24 +28,19 @@ from . import _usage_cache
 from ._timeparse import ts_epoch
 
 _ENDPOINT = "https://api.anthropic.com/api/oauth/usage"
-_FETCH_TIMEOUT = 4  # seconds; only paid on a cold/expired cache
-_TTL = 20.0  # see _usage_cache.serve; bounds how stale a UI refresh can be
-# (was 60s, "matching" the pill's poll — which meant a
-# refresh triggered by a finished turn could still be
-# answered from a cache filled a minute earlier, i.e. the
-# event-driven refresh bought nothing. Kept well UNDER the
-# poll cadence for that reason. Still at most one upstream
-# fetch per _TTL no matter how many callers arrive.)
-_GRACE = 600.0  # keep serving the last known-good reading through transient
-# fetch failures for up to this long, so a single blip (401,
-# timeout, network hiccup, or a between-windows payload) does
-# not blank the plan-usage % in the UI. Still only one fetch
-# per _TTL — no retry storm.
+_FETCH_TIMEOUT = 4  # seconds; only paid on a cold/expired reading
+# The endpoint rate-limits per ACCOUNT: several MindFlock processes (live
+# server, dev server, the ticket pipeline child) and other devices on the same
+# login each polling on their own clock kept it answering 429 for good. So the
+# reading is shared per machine (_usage_cache.SharedReading) and fetched at
+# most once per _TTL by whichever process finds it stale.
+_TTL = 60.0
+_STALE_AFTER = 150.0  # older than this the UI says "as of N min ago"
+_STALE_MAX = 6 * 3600.0  # past this the last good reading is dropped (estimate)
+_BACKOFF_BASE = 120.0  # 429/5xx: 2 -> 4 -> 8 min ... (±20 % jitter)
+_BACKOFF_CAP = 900.0  # ... up to 15 min; a Retry-After > 0 wins
 
 _lock = threading.Lock()
-# ``good``/``good_at`` hold the last SUCCESSFUL reading; ``at`` is when we last
-# attempted a fetch (throttles retries to _TTL whether or not it succeeded).
-_cache: dict = {"at": 0.0, "good_at": 0.0, "good": None}
 
 _logger = logging.getLogger(__name__)
 _creds_diag_logged = False  # one-time "why is live usage dark" breadcrumb
@@ -130,18 +126,133 @@ def _iso_epoch(s) -> Optional[float]:
     return ts_epoch(s)
 
 
-def _fetch() -> Optional[dict]:
-    """GET the usage endpoint -> normalized dict, or None on any failure.
+def _window(obj) -> Optional[dict]:
+    """``{percent_used, end}`` from one window object of the payload
+    (``five_hour`` / ``seven_day`` / a ``limits[]`` entry), or None when it is
+    null/absent. ``{}`` for a present object with nothing readable — the
+    window EXISTS (a fresh one: no utilization, no reset yet)."""
+    if not isinstance(obj, dict):
+        return None
+    w: dict = {}
+    # The five-hour/seven-day objects spell it "utilization"; limits[] entries
+    # have been observed with "percent" — accept either ("percent" wins).
+    pct = obj.get("percent")
+    if pct is None:
+        pct = obj.get("utilization")
+    if pct is not None:
+        try:
+            w["percent_used"] = float(pct)
+        except (TypeError, ValueError):
+            pass
+    end = _iso_epoch(obj.get("resets_at"))
+    if end:
+        w["end"] = end
+    return w
 
-    Normalized shape (all keys optional)::
 
-        {"percent_used": float, "end": epoch,
-         "weekly": {"percent_used": float, "end": epoch},
+def _normalize(doc) -> Optional[dict]:
+    """The endpoint's payload -> the normalized reading, or None when it
+    carries no usable window at all.
+
+    Normalized shape (``session``/``weekly`` None = the plan has no such
+    window; other keys optional)::
+
+        {"window_kind": "session" | "weekly",
+         "percent_used": float, "end": epoch,      # the HEADLINE window
+         "session": {"percent_used", "end"} | None,
+         "weekly": {"percent_used", "end"} | None,
+         "weekly_opus": {"percent_used", "end"},
          "extra": {"used": usd, "limit": usd, "currency": "USD"}}
+
+    The headline is the 5-hour session window when the plan has one, else the
+    WEEKLY window: a plan without a session limit (weekly-only, "ultra") must
+    never be shown a 5-hour reset. Both payload shapes are read: the weekly cap
+    as a ``limits[]`` entry with group "weekly", or as ``seven_day``.
     """
+    if not isinstance(doc, dict):
+        return None
+    session = _window(doc.get("five_hour"))
+    weekly = None
+    # Weekly cap: the first "weekly" entry in limits[] (the endpoint may also
+    # carry per-model weekly scopes; the group row is the headline one), else
+    # the seven_day object.
+    for lim in doc.get("limits") or []:
+        if isinstance(lim, dict) and str(lim.get("group")) == "weekly":
+            weekly = _window(lim)
+            break
+    if not weekly:
+        weekly = _window(doc.get("seven_day")) or weekly
+    opus = _window(doc.get("seven_day_opus"))
+    out: dict = {"session": session, "weekly": weekly or None}
+    if opus:
+        out["weekly_opus"] = opus
+    head = session if session is not None else (weekly or None)
+    out["window_kind"] = "session" if session is not None else "weekly"
+    if head:
+        if head.get("percent_used") is not None:
+            out["percent_used"] = head["percent_used"]
+        if head.get("end"):
+            out["end"] = head["end"]
+    # Extra-usage credits: REAL billed dollars once the plan window is spent —
+    # exactly the "only show cost when actually spending" signal. The endpoint
+    # reports minor units ("decimal_places": 2 -> hundredths of a dollar), so
+    # divide down to dollars: used_credits 6333 @ 2dp = $63.33.
+    ex = doc.get("extra_usage") or {}
+    if isinstance(ex, dict) and ex.get("is_enabled"):
+        try:
+            scale = 10.0 ** int(ex.get("decimal_places") or 0)
+            out["extra"] = {
+                "used": float(ex.get("used_credits") or 0) / scale,
+                "limit": float(ex.get("monthly_limit") or 0) / scale,
+                "currency": str(ex.get("currency") or "USD"),
+            }
+        except (TypeError, ValueError):
+            pass
+    if not (session or weekly or opus or out.get("extra")):
+        return None
+    return out
+
+
+_shape_logged = False  # one debug line per process: which windows the plan has
+
+
+def _log_shape(doc) -> None:
+    """Log the payload's KEYS and which windows are null — once per process,
+    at debug. Never a value beyond what the UI shows, never the token."""
+    global _shape_logged
+    if _shape_logged or not isinstance(doc, dict):
+        return
+    _shape_logged = True
+    nulls = sorted(k for k, v in doc.items() if v is None)
+    groups = sorted(
+        str(lim.get("group"))
+        for lim in (doc.get("limits") or [])
+        if isinstance(lim, dict)
+    )
+    _logger.debug(
+        "claude usage payload keys=%s null=%s limits.groups=%s",
+        sorted(doc.keys()),
+        nulls,
+        groups,
+    )
+
+
+def _retry_after(headers) -> Optional[float]:
+    try:
+        v = headers.get("Retry-After") if headers is not None else None
+        return float(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _fetch_raw() -> tuple:
+    """GET the usage endpoint -> ``(reading | None, status | None,
+    retry_after | None)`` — the :class:`_usage_cache.SharedReading` fetch
+    contract. ``status`` is the HTTP status of a failed request (None for no
+    credentials / network / bad JSON), so a 429 can back off."""
     tok = _token()
     if not tok:
-        return None
+        return None, None, None
     req = urllib.request.Request(
         _ENDPOINT,
         headers={
@@ -153,59 +264,101 @@ def _fetch() -> Optional[dict]:
     try:
         with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as r:
             doc = json.loads(r.read())
-    except Exception:  # noqa: BLE001 — 401/network/JSON: fall back quietly
+    except urllib.error.HTTPError as e:  # 401/429/5xx: the caller decides
+        return None, int(getattr(e, "code", 0) or 0) or None, _retry_after(e.headers)
+    except Exception:  # noqa: BLE001 — network/JSON: fall back quietly
+        return None, None, None
+    _log_shape(doc)
+    return _normalize(doc), 200, None
+
+
+def _fetch() -> Optional[dict]:
+    """GET the usage endpoint -> normalized reading (see :func:`_normalize`),
+    or None on any failure."""
+    return _fetch_raw()[0]
+
+
+def _plan_update(plan: dict, reading: dict, now: float) -> dict:
+    """Fold a good reading into the remembered plan shape: when a session
+    window was last seen, and the last known weekly reset — what a FALLBACK
+    estimate needs to not invent 5-hour windows on a weekly-only plan."""
+    plan = dict(plan or {})
+    plan["checked_at"] = now
+    if reading.get("session") is not None:
+        plan["session_seen_at"] = now
+    wk = reading.get("weekly") or {}
+    if wk.get("end"):
+        plan["weekly_end"] = wk["end"]
+    return plan
+
+
+#: A session window seen within this long means the plan has one (a single
+#: between-windows payload with ``five_hour`` null must not flip a 5-hour
+#: plan's fallback to weekly).
+_SESSION_MEMORY = 8 * 86400.0
+
+
+def plan_shape() -> Optional[dict]:
+    """The plan's remembered shape from the last good reading on this machine,
+    or None when no reading has ever landed::
+
+        {"session": bool, "weekly_end": epoch | None}
+
+    File read only — never fetches."""
+    try:
+        plan = _shared().plan()
+    except Exception:  # noqa: BLE001
         return None
-    out: dict = {}
-    fh = doc.get("five_hour") or {}
-    if fh.get("utilization") is not None:
-        try:
-            out["percent_used"] = float(fh["utilization"])
-        except (TypeError, ValueError):
-            pass
-    end = _iso_epoch(fh.get("resets_at"))
-    if end:
-        out["end"] = end
-    # Weekly cap: the first "weekly" entry in limits[] (the endpoint may also
-    # carry per-model weekly scopes; the group row is the headline one).
-    for lim in doc.get("limits") or []:
-        if str(lim.get("group")) == "weekly":
-            wk: dict = {}
-            # The five-hour window spells this "utilization"; limits[] entries
-            # have been observed with "percent" — accept either spelling.
-            pct = lim.get("percent")
-            if pct is None:
-                pct = lim.get("utilization")
-            try:
-                wk["percent_used"] = float(pct or 0)
-            except (TypeError, ValueError):
-                pass
-            wend = _iso_epoch(lim.get("resets_at"))
-            if wend:
-                wk["end"] = wend
-            if wk:
-                out["weekly"] = wk
-            break
-    # Extra-usage credits: REAL billed dollars once the plan window is spent —
-    # exactly the "only show cost when actually spending" signal. The endpoint
-    # reports minor units ("decimal_places": 2 -> hundredths of a dollar), so
-    # divide down to dollars: used_credits 6333 @ 2dp = $63.33.
-    ex = doc.get("extra_usage") or {}
-    if ex.get("is_enabled"):
-        try:
-            scale = 10.0 ** int(ex.get("decimal_places") or 0)
-            out["extra"] = {
-                "used": float(ex.get("used_credits") or 0) / scale,
-                "limit": float(ex.get("monthly_limit") or 0) / scale,
-                "currency": str(ex.get("currency") or "USD"),
-            }
-        except (TypeError, ValueError):
-            pass
-    return out or None
+    if not plan.get("checked_at"):
+        return None
+    try:
+        seen = float(plan.get("session_seen_at") or 0.0)
+    except (TypeError, ValueError):
+        seen = 0.0
+    return {
+        "session": bool(seen) and time.time() - seen < _SESSION_MEMORY,
+        "weekly_end": plan.get("weekly_end") or None,
+    }
 
 
-def live_usage() -> Optional[dict]:
-    """Normalized live plan usage, cached ~60s. Through a transient fetch
-    failure the last known-good reading is reused for up to _GRACE seconds so
-    the plan-usage % doesn't flicker in and out; returns None only when a fetch
-    has never succeeded or the last success is older than _GRACE."""
-    return _usage_cache.serve(_cache, _lock, _TTL, _GRACE, _fetch)
+def _shared_fetch() -> tuple:
+    # Resolved at call time so tests can monkeypatch ``api._fetch_raw``.
+    return _fetch_raw()
+
+
+_SHARED: Optional[_usage_cache.SharedReading] = None
+
+
+def _shared() -> _usage_cache.SharedReading:
+    global _SHARED
+    with _lock:
+        if _SHARED is None:
+            _SHARED = _usage_cache.SharedReading(
+                "claude_usage",
+                _shared_fetch,
+                ttl=_TTL,
+                stale_after=_STALE_AFTER,
+                stale_max=_STALE_MAX,
+                backoff_base=_BACKOFF_BASE,
+                backoff_cap=_BACKOFF_CAP,
+                plan_update=_plan_update,
+            )
+        return _SHARED
+
+
+#: How old a reading a caller DECIDING on it (the queue's limit hold, the
+#: usage-limit release) is served: the old in-memory grace. The sidebar shows
+#: older ones (up to _STALE_MAX), labelled "as of …".
+DECISION_MAX_AGE = 600.0
+
+
+def live_usage(max_age: Optional[float] = None) -> Optional[dict]:
+    """Normalized live plan usage — ONE reading per machine, shared through
+    ``<run dir>/claude_usage.json`` by every MindFlock process (see
+    :class:`_usage_cache.SharedReading`). Fetched at most once per ``_TTL``
+    machine-wide; a 429/5xx backs off exponentially (a Retry-After > 0 wins)
+    and every process honours it. Meanwhile the last good reading is served
+    with ``stale: True`` and its ``fetched_at``; None only when no fetch has
+    ever succeeded or the last success is older than ``max_age`` (default
+    ``_STALE_MAX``)."""
+    return _shared().get(max_age)

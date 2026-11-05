@@ -235,3 +235,9 @@ def test_normalize_program_never_returns_the_catch_all():
     from backend import providers
 
     assert providers.normalize_program("/opt/bin/whatever") == "/opt/bin/whatever"
+
+
+def test_usage_live_display_and_plan_shape_defaults(base):
+    # Display falls back to usage_live(); no plan shape is known by default.
+    assert base.usage_live_display() is None
+    assert base.usage_plan_shape() is None

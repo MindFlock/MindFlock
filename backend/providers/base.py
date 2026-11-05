@@ -838,7 +838,26 @@ class BaseProvider:
         """Authoritative live usage from the provider's own service, if it has
         one — ``{"percent_used", "end", "weekly", "extra"}`` (all optional) or
         None. When present it overrides MindFlock's transcript-derived window
-        estimate (which can drift). Default: no live source."""
+        estimate (which can drift). Default: no live source.
+
+        ``percent_used``/``end`` are the HEADLINE window; ``window_kind``
+        (``"session"`` | ``"weekly"``) says which one it is — a plan with only
+        a weekly limit reports ``"weekly"`` and ``session: None``. Absent =
+        ``"session"``."""
+        return None
+
+    def usage_live_display(self) -> Optional[dict]:
+        """The live reading for DISPLAY (the cost panel). May be older than
+        :meth:`usage_live`'s — then it carries ``stale: True`` and
+        ``fetched_at`` so the UI can say "as of …". Default: the same."""
+        return self.usage_live()
+
+    def usage_plan_shape(self) -> Optional[dict]:
+        """What the provider's last good live reading said about the plan's
+        windows — ``{"session": bool, "weekly_end": epoch | None}`` — so a
+        FALLBACK estimate (live reading unavailable) models the windows the
+        plan really has: ``session`` False = weekly-only, never estimate a
+        5-hour window. None = unknown (no live source or no reading yet)."""
         return None
 
     def usage_periods(self) -> Optional[dict]:

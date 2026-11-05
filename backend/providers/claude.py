@@ -190,10 +190,30 @@ class ClaudeProvider(BaseProvider):
     def usage_live(self) -> Optional[dict]:
         """Real window utilization + reset from Anthropic's OAuth usage
         endpoint (the same source as Claude Code's ``/usage`` screen), or None
-        — callers then fall back to the transcript estimate."""
+        — callers then fall back to the transcript estimate.
+
+        This is the reading code DECIDES on (the queue's usage-limit hold), so
+        it is never older than :data:`claude_usage_api.DECISION_MAX_AGE`; the
+        sidebar's :meth:`usage_live_display` shows older ones, marked stale."""
+        from . import claude_usage_api
+
+        return claude_usage_api.live_usage(claude_usage_api.DECISION_MAX_AGE)
+
+    def usage_live_display(self) -> Optional[dict]:
+        """The machine's shared reading for DISPLAY: through a 429 backoff the
+        last good one keeps being served (``stale``, ``fetched_at``) for up to
+        six hours instead of dropping to the transcript estimate."""
         from . import claude_usage_api
 
         return claude_usage_api.live_usage()
+
+    def usage_plan_shape(self) -> Optional[dict]:
+        """Whether this plan has a 5-hour session window, remembered from the
+        last good live reading on this machine (a weekly-only plan reports
+        none) — see :func:`claude_usage_api.plan_shape`."""
+        from . import claude_usage_api
+
+        return claude_usage_api.plan_shape()
 
     def usage_periods(self) -> Optional[dict]:
         """Rolling day/week/month/year token+cost totals from the Claude Code

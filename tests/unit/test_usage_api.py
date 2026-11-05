@@ -8,6 +8,8 @@ codex/antigravity builds that omit the reset field).
 
 from __future__ import annotations
 
+import pytest
+
 from backend.web.core import usage_api
 
 
@@ -374,3 +376,133 @@ def test_group_quotas_are_left_alone(monkeypatch):
     )
     assert win["percent_used"] is None
     assert win["source"] == "live"
+
+
+# --------------------------------------------------------------------------- #
+# Weekly-only plans (no 5-hour window): live, stale, and the fallback estimate
+# --------------------------------------------------------------------------- #
+# The owner's plan has only a weekly limit. The transcript estimate always
+# chained 5-hour windows from the first message, so with the live meter dark
+# the sidebar showed a window "resetting at 3pm" that the plan does not have.
+import time as _time  # noqa: E402
+
+_WEEK = 7 * 86400.0
+
+
+class _ClaudeShaped(_ClaudeLive):
+    def __init__(self, live, shape=None):
+        self._live = live
+        self._shape = shape
+
+    def usage_plan_shape(self):
+        return self._shape
+
+
+def _patch_week(monkeypatch, cost=12.5):
+    from backend.providers import usage_history
+
+    week = {"in": 10, "out": 20, "cache_read": 30, "cache_write": 40, "cost": cost}
+    monkeypatch.setattr(usage_history, "windows", lambda: {"week": week})
+
+    def _no_chain(*a, **k):
+        raise AssertionError("a weekly-only plan must not chain 5-hour windows")
+
+    monkeypatch.setattr(usage_history, "current_window", _no_chain)
+    monkeypatch.setattr(usage_api, "_window_account", lambda p: None)
+
+
+def test_live_weekly_only_headlines_the_weekly_window(monkeypatch):
+    _patch_week(monkeypatch)
+    end = _time.time() + 3 * 86400
+    live = {
+        "window_kind": "weekly",
+        "session": None,
+        "percent_used": 35.0,
+        "end": end,
+        "weekly": {"percent_used": 35.0, "end": end},
+        "fetched_at": _time.time(),
+        "stale": False,
+        "backoff_until": 0.0,
+    }
+    win = usage_api._usage_window_for(_ClaudeShaped(live))
+    assert win["window_kind"] == "weekly"
+    assert win["source"] == "live"
+    assert win["percent_used"] == 35.0
+    assert win["end"] == end
+    assert win["anchor"] == pytest.approx(end - _WEEK)
+    assert win["cost"] == 12.5 and win["tokens"] == 100  # the week's
+    assert win["stale"] is False and win["fetched_at"] > 0
+
+
+def test_fallback_on_weekly_only_plan_estimates_the_week(monkeypatch):
+    # Live dark (429, nothing good for 6h) but the last good reading said the
+    # plan is weekly-only: estimate the week, never a 5-hour window.
+    _patch_week(monkeypatch)
+    last_reset = _time.time() - 2 * _WEEK - 3600  # two resets ago
+    win = usage_api._usage_window_for(
+        _ClaudeShaped(None, {"session": False, "weekly_end": last_reset})
+    )
+    assert win["window_kind"] == "weekly"
+    assert win["source"] == "estimate"
+    assert win["percent_used"] is None
+    assert win["end"] == pytest.approx(last_reset + 3 * _WEEK)
+    assert win["end"] > _time.time()
+    assert win["cost"] == 12.5
+
+
+def test_fallback_with_session_plan_keeps_the_5_hour_estimate(monkeypatch):
+    _patch_estimate(
+        monkeypatch,
+        {"anchor": 0.0, "end": 5.0, "cost": 2.0, "tokens": 100},
+        budget=10.0,
+    )
+    win = usage_api._usage_window_for(
+        _ClaudeShaped(None, {"session": True, "weekly_end": None})
+    )
+    assert win["window_kind"] == "session"
+    assert win["end"] == 5.0 and win["percent_used"] == 20.0
+
+
+def test_stale_reading_whose_window_reset_drops_the_old_percent(monkeypatch):
+    _patch_week(monkeypatch)
+    past = _time.time() - 3600
+    live = {
+        "window_kind": "weekly",
+        "session": None,
+        "percent_used": 90.0,
+        "end": past,
+        "weekly": {"percent_used": 90.0, "end": past},
+        "fetched_at": past - 600,
+        "stale": True,
+        "backoff_until": _time.time() + 300,
+    }
+    win = usage_api._usage_window_for(_ClaudeShaped(live))
+    assert win["percent_used"] is None
+    assert win["end"] == pytest.approx(past + _WEEK)  # rolled to the next reset
+    assert win["stale"] is True
+
+
+def test_weekly_only_entry_carries_the_weekly_note(monkeypatch):
+    _patch_week(monkeypatch)
+
+    class _P(_ClaudeShaped):
+        def usage_periods(self):
+            return None
+
+        def usage_estimated_before(self):
+            return None
+
+    class _Srv:
+        def _provider_label(self, n):
+            return "Claude"
+
+        def _usage_window_for(self, p):
+            return usage_api._usage_window_for(p)
+
+    monkeypatch.setattr(usage_api, "_server", lambda: _Srv())
+    monkeypatch.setattr(usage_api, "_account_usage_entries", lambda p: None)
+    entry = usage_api._provider_usage_entry(
+        _P(None, {"session": False, "weekly_end": _time.time() + 86400})
+    )
+    assert entry["window_note"] == usage_api.WEEKLY_ONLY_NOTE
+    assert entry["window"]["window_kind"] == "weekly"
