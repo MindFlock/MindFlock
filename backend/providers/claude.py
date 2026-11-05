@@ -23,11 +23,12 @@ from .base import (
     SandboxProfile,
     TrustSpec,
     oneshot_command,
+    program_basename,
     seed_prompt_expr,
 )
 from . import claude_background
 from ._timeparse import ts_epoch
-from .launch_script import unless_killed
+from .launch_script import program_word, unless_killed
 
 # Activity markers live in the shared, provider-agnostic module (Codex reuses
 # the same {state, ts} marker + hook-command machinery).
@@ -64,7 +65,7 @@ def claude_launch_command(
     """
     import shlex
 
-    base = program or "claude"
+    base = program_word(program or "claude")
     if launch_args:
         base = "%s %s" % (base, " ".join(shlex.quote(a) for a in launch_args))
     if skip_permissions:
@@ -98,7 +99,7 @@ class ClaudeProvider(BaseProvider):
     def matches(self, program: str) -> bool:
         if not program:
             return True
-        return os.path.basename(program.split()[0]) in self.program_aliases
+        return program_basename(program) in self.program_aliases
 
     # --- minimal / connection-free launch (roadmap E) -------------------- #
     def minimal_launch_command(self, workdir: str = "", session_name: str = "") -> str:

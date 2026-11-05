@@ -424,6 +424,16 @@ class Host:
                 )
             elif op == "attach":
                 self._attach(sock, buf, req)
+            elif op == "shutdown":
+                # Every namespace, every session (``mindflock uninstall``):
+                # what no tmux command does — kill-server ends one namespace.
+                with self.lock:
+                    self.closing = True
+                    self.unpublish()
+                proto.send_json(sock, {"ok": True, "pid": os.getpid()})
+                threading.Thread(
+                    target=self.server.shutdown, name="winmux-stop", daemon=True
+                ).start()
             else:
                 proto.send_json(sock, {"ok": False, "error": "unknown op"})
         except OSError:

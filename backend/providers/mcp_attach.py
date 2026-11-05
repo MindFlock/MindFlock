@@ -406,7 +406,10 @@ def attach_args(
         return ()
 
 
-_MCP_CONFIG_IN_SCRIPT = re.compile(r"--mcp-config=([^'\"\s]+)")
+#: ``--mcp-config=<path>`` as a launcher bakes it in: bare, or — a path
+#: with a space, ``C:\\Users\\John Smith\\…`` on Windows — inside the
+#: single quotes ``shlex.quote`` put around the whole word.
+_MCP_CONFIG_IN_SCRIPT = re.compile(r"'--mcp-config=([^']+)'|--mcp-config=([^'\"\s]+)")
 
 
 def _script_run_files(script: str) -> list:
@@ -414,8 +417,8 @@ def _script_run_files(script: str) -> list:
     our own run directory (nothing else is ever written to)."""
     root = os.path.abspath(run_dir())
     out = []
-    for path in _MCP_CONFIG_IN_SCRIPT.findall(script or ""):
-        full = os.path.abspath(path)
+    for quoted, bare in _MCP_CONFIG_IN_SCRIPT.findall(script or ""):
+        full = os.path.abspath(quoted or bare)
         if os.path.dirname(full) == root and full not in out:
             out.append(full)
     return out

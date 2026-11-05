@@ -229,6 +229,73 @@ class EffortSpec:
     prompt_keyword: str = ""
 
 
+#: What Windows runs a bare name as (``claude`` → ``claude.exe``): stripped
+#: from an executable's basename when matching a provider there.
+_WIN_EXE_SUFFIXES = (".exe", ".cmd", ".bat", ".com")
+
+
+def _windows() -> bool:
+    from backend import compat
+
+    return compat.IS_WINDOWS
+
+
+def split_program(program: str) -> tuple:
+    """``(executable, rest)`` of a program string: the executable and the
+    rest of the string verbatim (``""`` when there are no arguments).
+
+    Linux/macOS: the first whitespace-separated word, exactly the
+    ``program.split()[0]`` every caller used. Native Windows: an executable
+    path may hold spaces (``C:\\Users\\John Smith\\.local\\bin\\claude.exe`` —
+    what ``shutil.which`` reports under such a profile), so a leading quoted
+    word is unquoted, and otherwise the longest leading run of words that
+    names an existing file is the executable."""
+    import os
+
+    s = (program or "").strip()
+    if not s:
+        return "", ""
+    if _windows():
+        if s[0] in "\"'":
+            end = s.find(s[0], 1)
+            if end > 0:
+                return s[1:end], s[end + 1 :].strip()
+        words = s.split(" ")
+        for i in range(len(words), 1, -1):
+            cand = " ".join(words[:i])
+            if cand.strip() and os.path.isfile(cand):
+                return cand, " ".join(words[i:]).strip()
+    parts = s.split(None, 1)
+    return parts[0], (parts[1].strip() if len(parts) > 1 else "")
+
+
+def program_args(program: str) -> list:
+    """The arguments after :func:`split_program`'s executable, as words
+    (``program.split()[1:]`` on Linux/macOS)."""
+    return split_program(program)[1].split()
+
+
+def program_basename(program: str) -> str:
+    """The basename of a program string's executable, which provider
+    matching compares with ``program_aliases``: ``os.path.basename(
+    program.split()[0])`` on Linux/macOS; on Windows (either slash) without
+    its ``.exe`` / ``.cmd`` / ``.bat`` / ``.com`` suffix (``claude.EXE`` is
+    ``claude``)."""
+    import os
+
+    exe = split_program(program)[0]
+    if not _windows():
+        return os.path.basename(exe)
+    import ntpath
+
+    base = ntpath.basename(exe)
+    low = base.lower()
+    for suf in _WIN_EXE_SUFFIXES:
+        if low.endswith(suf) and len(base) > len(suf):
+            return base[: -len(suf)]
+    return base
+
+
 def seed_prompt_expr(session_name: str, prompt: str) -> str:
     """A shell expression that expands to ``prompt`` as ONE argument, or ``""``.
 
@@ -262,10 +329,15 @@ def seed_prompt_expr(session_name: str, prompt: str) -> str:
         d = Path(base_dir)
         d.mkdir(parents=True, exist_ok=True)
         path = d / (safe + ".md")
-        path.write_text(prompt, encoding="utf-8")
+        # LF only (newline=""): text mode on Windows would write CRLF, and
+        # the CLI would receive every line with a trailing \r.
+        path.write_text(prompt, encoding="utf-8", newline="")
     except OSError:
         return ""
-    return '"$(cat %s)"' % shlex.quote(str(path))
+    from .launch_script import shell_path
+
+    # shell_path: C:/… on Windows, where Git Bash would eat a bare C:\…
+    return '"$(cat %s)"' % shlex.quote(shell_path(path))
 
 
 #: The token an ``oneshot_args`` template uses for the prompt text.
@@ -353,9 +425,7 @@ class BaseProvider:
     def matches(self, program: str) -> bool:
         if not program:
             return False
-        import os
-
-        return os.path.basename(program.split()[0]) in self.program_aliases
+        return program_basename(program) in self.program_aliases
 
     # --- launch ----------------------------------------------------------- #
     def build_launch_command(self, ctx: LaunchContext) -> Optional[str]:

@@ -110,7 +110,9 @@ def _write_script(script: str) -> str:
     os.makedirs(_run_dir(), mode=0o700, exist_ok=True)
     path = _script_path()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    # newline="": LF only — Git Bash runs it on Windows, where text mode would
+    # end every line with a \r that `sh` reads as part of the command.
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as fh:
         fh.write(script)
     return path
 
@@ -147,13 +149,16 @@ def ensure_session() -> Tuple[str, Optional[str]]:
         script = _write_script(plan["script"])
     except OSError as err:
         return SESSION, "could not write the install script: %s" % err
-    status = shlex.quote(_status_path())
+    from backend.providers.launch_script import shell_path
+
+    # shell_path: C:/… on Windows, where Git Bash runs this (identity elsewhere).
+    status = shlex.quote(shell_path(_status_path()))
     # Record the exit status BEFORE handing the pane to a shell: that file is
     # what says "safe to close" and what the UI watches to re-run the doctor.
     wrapped = (
         "sh %s; echo $? > %s; echo; "
         "echo '[mindflock] done — you can close this window'"
-        % (shlex.quote(script), status)
+        % (shlex.quote(shell_path(script)), status)
     )
     if not _have_tmux():
         # No shell after it: nothing would ever close a plain PTY's leftover

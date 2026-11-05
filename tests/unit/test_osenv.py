@@ -225,7 +225,8 @@ class TestTerminalArgv:
             assert tl.build_terminal_tab_argv("T", "sess") is None
 
     def test_native_windows_opens_a_wt_tab_on_the_session_host(self):
-        # No tmux there: the tab runs a session-host client (mux.exec_attach).
+        # No tmux there: the tab runs the session host's `tmux attach-session`
+        # (python -m backend.session.winmux) after wt's `--`.
         with (
             patch.object(osenv, "os_kind", return_value="windows"),
             patch(
@@ -233,9 +234,18 @@ class TestTerminalArgv:
             ),
         ):
             argv = tl.build_terminal_tab_argv("T", "sess")
-        assert argv[:6] == ["C:/wt.exe", "-w", "0", "nt", "--title", "T"]
-        assert argv[-4:] == tl.windows_attach_argv("sess")
-        assert "mux.exec_attach" in argv[-2] and argv[-1] == "sess"
+        assert argv[:7] == ["C:/wt.exe", "-w", "0", "nt", "--title", "T", "--"]
+        assert argv[7:] == tl.windows_attach_argv("sess")
+        assert argv[-5:] == [
+            "-m",
+            "backend.session.winmux",
+            "attach-session",
+            "-t",
+            "sess",
+        ]
+        # Windows Terminal splits its command line at every `;`, even inside
+        # an argument: the attach command must carry none.
+        assert not any(";" in a for a in argv)
 
     def test_native_windows_without_wt_opens_a_console(self):
         with (

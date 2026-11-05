@@ -20,7 +20,7 @@ from .base import (
     seed_prompt_expr,
 )
 from .config import ProviderConfig
-from .launch_script import unless_killed
+from .launch_script import program_word, unless_killed
 
 
 class GenericProvider(BaseProvider):
@@ -44,7 +44,7 @@ class GenericProvider(BaseProvider):
         # ``resolved_binary`` honors a user binary-path override (settings/env),
         # falling back to ``command``/``name`` — so with no override this is
         # byte-identical to the pre-override behaviour.
-        base = cfg.resolved_binary()
+        base = program_word(cfg.resolved_binary())
         launch_args = cfg.launch_args_shell()
         if launch_args:
             base = "%s %s" % (base, launch_args)

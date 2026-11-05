@@ -22,6 +22,7 @@ import re
 import shlex
 import socket
 import subprocess
+import sys
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
 
 from backend import compat
@@ -414,8 +415,39 @@ def _shell(ctx: "Ctx", session=None) -> str:
     return sh if sh and os.path.exists(sh) else "/bin/sh"
 
 
+#: The MindFlock server's own interpreter, as its launcher leaves it in the
+#: environment (uv's Windows trampolines set ``PYTHONHOME`` /
+#: ``UV_INTERNAL__PYTHONHOME``; a venv sets ``VIRTUAL_ENV``). A session's
+#: python, claude and hooks must not run on the server's interpreter home,
+#: so they do not reach a pane from the global environment — a session's
+#: own (``new-session -e``, ``set-environment -t``) still does. (tmux on
+#: Linux/macOS passes them through as before.)
+SERVER_PYTHON_ENV = ("PYTHONHOME", "UV_INTERNAL__PYTHONHOME")
+
+
+def _server_python_env(env: Dict[str, str]) -> List[str]:
+    """The keys of ``env`` that name the server's own interpreter home:
+    :data:`SERVER_PYTHON_ENV`, and ``VIRTUAL_ENV`` when it is the venv this
+    host (started from the server's interpreter) runs in."""
+    keys = [k for k in env if k.upper() in SERVER_PYTHON_ENV]
+    for k in env:
+        if k.upper() != "VIRTUAL_ENV":
+            continue
+        try:
+            same = os.path.normcase(os.path.realpath(env[k])) == os.path.normcase(
+                os.path.realpath(sys.prefix)
+            )
+        except (OSError, ValueError):
+            same = False
+        if same:
+            keys.append(k)
+    return keys
+
+
 def _session_env(ctx: "Ctx", session: "Session") -> Dict[str, str]:
     env: Dict[str, str] = {k: v for k, v in ctx.ns.env.items() if v is not None}
+    for k in _server_python_env(env):
+        del env[k]
     upd = ctx.host.option(ctx.ns, session, "update-environment").split()
     for k in upd:
         if k in ctx.env:
