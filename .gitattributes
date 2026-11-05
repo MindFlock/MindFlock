@@ -8,6 +8,11 @@
 #
 #     install.sh: 38: set: Illegal option -
 #
+# Every text file is LF on every checkout (later lines override): the engine
+# runs natively on Windows too now, and its tests compare sources and golden
+# files byte for byte (a CRLF checkout broke electron/test's source pins on
+# the windows-latest runner).
+*               text=auto eol=lf
 *.sh            text eol=lf
 install.sh      text eol=lf
 *.bash          text eol=lf
