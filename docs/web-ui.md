@@ -707,7 +707,8 @@ another session's agent spawned or adopted (see
 [Agent teams](#agent-teams-mindflock-mcp)) nests under its parent and carries
 a status line under its name; the parent carries a roll-up of its workers. Above the list:
 **+ New** and a stack of **customizable bars** (see below) — the token/cost
-**Usage** readout (hidden while there are no sessions), the **Assistant** bar
+**Usage** readout (hidden while there are no sessions), its twin the
+**Memory** row (see below), the **Assistant** bar
 (**Chat** · **Todo** · **Instructions** — **Instructions** opens the
 assistant's editable agent file, its standing instructions; the chat window's
 head has the same editor under the same word, and so does the palette's
@@ -729,7 +730,7 @@ Disk management is not a screen of its own any more: it is the same page as
 first session under a week old, read from the server's setup record (the
 `repo` step's date), so every device agrees — with fewer than three sessions
 sees only what the first hour needs: the sessions, **+ New** and **Setup**.
-The usage strip, the **Assistant** bar and every extension's bar (Database,
+The usage strip, the **Memory** row, the **Assistant** bar and every extension's bar (Database,
 Usage optimizer…) join the *default* hidden set; the **View** row's pane
 counts (never its Grid · Sky toggle), the
 filter box (`/` still summons it), the "more bars" 💡 hint and the rows'
@@ -770,16 +771,37 @@ the three required steps, then **Setup 3 of 3 · 2 optional** while optional
 steps are left (see [First-run onboarding](#first-run-onboarding)).
 
 **Customizable bars** — the sidebar bars are movable and hideable, driven by a
-shared registry (`sidebar/barDefs.ts`: Usage, Tickets, Pull requests, Issues,
-Verify, Assistant, Prompts). A **fresh install shows three** (`DEFAULT_VISIBLE_BARS`) —
-**Usage**, **Tickets** and **Assistant** — so the flagship ticket → session flow
+shared registry (`sidebar/barDefs.ts`: Usage, Memory, Tickets, Pull requests, Issues,
+Verify, Assistant, Prompts). A **fresh install shows four** (`DEFAULT_VISIBLE_BARS`) —
+**Usage**, **Memory**, **Tickets** and **Assistant** — so the flagship ticket → session flow
 is reachable out of the box without being overwhelming; **Pull requests**,
 **Issues**, **Verify** and **Prompts** start hidden. **Customize** toggles each bar
 on/off, and bars drag-to-reorder by their ⠿ grip (the session list is a fixed
 anchor bars can sit above or below, but which never itself moves). Order and the
 hidden set are synced prefs (`hidden_bars`, `bar_order`). A bar added after you saved an
 order (Prompts — `LATE_BARS`) appears just above the session list rather than
-below it, and a hidden set saved before it existed leaves it visible.
+below it, Memory (`FOLLOWS`) lands directly under Usage wherever Usage sits, and
+a hidden set saved before either existed leaves it visible.
+
+**Memory row** (`usage/OverallMemory.tsx`, model in `usage/memoryModel.ts`) —
+the Usage row's twin, same button and same popover shell: **Memory 9.8 / 19.5 GB**
+(in use = total − available, binary GB) with a thin used/total meter before the
+▾. Neutral normally, **amber** while the machine's level is *low* and **red** at
+*critical* (the levels the memory notice and the launch gate act on). It reads
+`GET /api/memory` every 15 s, only while the sidebar is showing
+(`useMemoryDetail`). The popover lists, top to bottom: **This machine** (in use,
+swap if any is used, and the pressure in words), a last-hour sparkline of memory in
+use against the machine's total (`GET /api/memory/history`, plain SVG, fetched
+only while open), **Sessions** biggest first, each with its number and a bar
+(clicking one opens it as its rail row would, and its tooltip splits agent / MCP
+servers / other), and **Outside MindFlock**, the biggest processes in no
+session's tree (name, a short command line, MB; the full command is in the tooltip;
+the MindFlock server names itself). Sessions and outsiders share one bar
+scale, so another app's 4 GB python shows up as the biggest bar.
+An older server without `/api/memory` still gets the row, from
+`GET /api/system/memory`, and its popover shows only the machine line. Customize
+hides it like any bar; the phone page has no usage line, so it has no memory
+line either.
 
 The three automation bars carry the **names of the Intake tabs they mirror**, so
 one feature has one name: **Tickets**, **Pull requests**, **Issues**. Each bar's
@@ -5345,7 +5367,8 @@ sidebar order (the same `hidden_bars` / `bar_order` prefs the bars always
 used), with the session list drawn as a fixed dashed divider — moving a bar
 past it moves it below (or above) your sessions, as dragging its grip in the
 sidebar does. Each built-in bar says when it has something to show —
-*What your sessions cost* (Usage); *Appears once a ticket source is connected*
+*What your sessions cost* (Usage); *How full this machine's memory is, and
+what holds it* (Memory); *Appears once a ticket source is connected*
 with an **Intake → Tickets** link (Tickets); *Appears once a repository is
 added* with **Intake → GitHub PRs** / **Intake → GitHub issues** (Pull requests,
 Issues); *Appears once Verify tracks a repository or has a checklist* with
@@ -5353,7 +5376,7 @@ Issues); *Appears once Verify tracks a repository or has a checklist* with
 always there); *Chat, a todo list, and its editable agent file* (Assistant);
 *Your saved prompts — pick one to paste it into the session you are in* with **Manage
 prompts** (Prompts); *From an extension* for an extension's bar. *Session list*
-→ **Filter box**. Reset brings back the starter bars (Usage, Tickets,
+→ **Filter box**. Reset brings back the starter bars (Usage, Memory, Tickets,
 Assistant), the default order and the filter box.
 
 **Pane header** — *Choose the tabs and buttons along the top of every session

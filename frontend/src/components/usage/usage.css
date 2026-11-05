@@ -232,3 +232,156 @@
   outline: none;
   border-color: var(--accent);
 }
+
+
+/* --- Overall memory (OverallMemory) ----------------------------------------
+   The Usage row's twin: same .overall-usage button, same .usage-pop shell.
+   Neutral until the server's level says otherwise — amber at "low", red at
+   "critical" (the pane chip's .mem-warn / .mem-crit colours). */
+.overall-memory.mem-warn {
+  color: var(--gold);
+}
+
+.overall-memory.mem-crit {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* A thin used/total meter between the text and the caret — the row keeps
+   the Usage row's height and type. */
+.overall-memory .mem-meter {
+  flex: 0 0 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.overall-memory .mem-meter > span,
+.mem-pop-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--muted);
+  opacity: 0.7;
+}
+
+.overall-memory.mem-warn .mem-meter > span {
+  background: var(--gold);
+  opacity: 1;
+}
+
+.overall-memory.mem-crit .mem-meter > span {
+  background: var(--red);
+  opacity: 1;
+}
+
+.usage-pop-head.mem-warn {
+  color: var(--gold);
+}
+
+.usage-pop-head.mem-crit {
+  color: var(--red);
+}
+
+/* A heading after the table / sparkline / a list needs air above it. */
+.usage-pop-head.mem-pop-sec {
+  margin-top: 10px;
+}
+
+/* Sessions / Outside MindFlock: name · proportional bar · MB. */
+.mem-pop-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.mem-pop-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px 52px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  box-sizing: content-box;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+}
+
+.mem-pop-pick {
+  cursor: pointer;
+}
+
+.mem-pop-pick:hover,
+.mem-pop-pick:focus-visible {
+  color: var(--text);
+  background: var(--panel-2);
+  outline: none;
+}
+
+.mem-pop-name {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mem-pop-label,
+.mem-pop-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mem-pop-sub {
+  font-size: 10px;
+  opacity: 0.8;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.mem-pop-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.mem-pop-num {
+  text-align: right;
+  color: var(--text);
+  white-space: nowrap;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The last hour, used memory against the machine's total (top = full). */
+.mem-spark {
+  position: relative;
+  margin-top: 6px;
+  height: 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mem-spark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.mem-spark polyline {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.mem-spark-cap {
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-size: 9px;
+  color: var(--muted);
+}
