@@ -16,6 +16,10 @@ the Windows branches only ever run on ``os.name == "nt"``.
   ``CREATE_NEW_PROCESS_GROUP`` with no console window on Windows) and
   :func:`kill_group` (``os.killpg`` on POSIX; the whole process tree on
   Windows, ``taskkill /T``, as there is no group signal there).
+* **The POSIX shell** — :func:`posix_shell`: ``/bin/sh`` (or ``bash``) on
+  POSIX; Git for Windows' ``bash.exe`` on Windows (never
+  ``C:\\Windows\\System32\\bash.exe``, the WSL launcher), which runs the
+  launch scripts, exit markers and ``sh -c`` strings unchanged.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ __all__ = [
     "detached_kwargs",
     "flock",
     "kill_group",
+    "posix_shell",
 ]
 
 IS_WINDOWS = os.name == "nt"
@@ -123,3 +128,46 @@ def kill_group(pid: int, sig: int = signal.SIGTERM) -> None:
                 creationflags=0x08000000,
                 check=False,
             )
+
+
+def posix_shell(bash: bool = False) -> str:
+    """The shell that runs MindFlock's shell strings: ``/bin/sh`` (``bash``
+    for ``bash=True``, from PATH) on POSIX; on Windows Git for Windows'
+    ``bash.exe`` — ``CLAUDE_CODE_GIT_BASH_PATH`` (Claude Code's own
+    setting) or ``MINDFLOCK_GIT_BASH``, else next to ``git.exe`` on PATH
+    (``…\\Git\\cmd\\git.exe`` → ``…\\Git\\bin\\bash.exe``), else the default
+    install folders. ``FileNotFoundError`` with a sentence when there is
+    none (``mindflock doctor --fix`` installs Git for Windows)."""
+    if not IS_WINDOWS:
+        if bash:
+            import shutil
+
+            return shutil.which("bash") or "/bin/bash"
+        return "/bin/sh"
+    import shutil  # pragma: no cover - Windows
+
+    for env in ("MINDFLOCK_GIT_BASH", "CLAUDE_CODE_GIT_BASH_PATH"):  # pragma: no cover
+        p = os.environ.get(env, "")
+        if p and os.path.isfile(p):
+            return p
+    tried = []  # pragma: no cover
+    git = shutil.which("git")  # pragma: no cover
+    if git:  # pragma: no cover
+        root = os.path.dirname(os.path.dirname(os.path.realpath(git)))
+        tried += [
+            os.path.join(root, "bin", "bash.exe"),
+            os.path.join(root, "usr", "bin", "bash.exe"),
+        ]
+    for base in (  # pragma: no cover
+        os.environ.get("ProgramFiles", r"C:\Program Files"),
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+    ):
+        tried.append(os.path.join(base, "Git", "bin", "bash.exe"))
+    for p in tried:  # pragma: no cover
+        if p and os.path.isfile(p):
+            return p
+    raise FileNotFoundError(  # pragma: no cover
+        "Git for Windows' bash.exe was not found: install Git for Windows"
+        " (mindflock doctor --fix does) or set MINDFLOCK_GIT_BASH"
+    )
