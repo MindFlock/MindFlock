@@ -58,6 +58,8 @@ List all sessions. Each item:
   "tokens_ctx": 0, "tokens_ctx_window": 200000, "tokens_cost": 0.0,
   "tokens_model": "…",
   "diff_stat": {"files": 2, "additions": 42, "deletions": 7},  // or null
+  "memory": {"mb": 812, "peak_mb": 1340, "agent_mb": 402, "mcp_mb": 236,
+             "other_mb": 174, "procs": 9, "at": 1762300000.0},  // or null
   "workspace_missing": false,  // L1(c): started but its directory vanished
   "sleeping": null,            // or {"since", "reason": "idle"|"memory"|"manual", "freed_mb"}: agent asleep
   // "held_offline": true, "held_since": 1762300000.0, "held_reason": "the server restarted"
@@ -140,6 +142,23 @@ per-session base — committed-beyond-base **plus** uncommitted tracked changes,
 one `git diff --shortstat <merge-base(base, HEAD)>` cached ~10 s per session.
 Untracked files aren't counted (counting them would mutate the index on every
 poll). `null` when unavailable (paused / loading / no worktree / git failure).
+
+`memory` is the session's memory from the per-session sampler
+(`backend/web/core/memory_watch.py`, every 15 s): `mb` is the whole process
+tree of its tmux panes (the pane's process and every descendant) in MB — PSS
+(shared pages split between their users, `/proc/<pid>/smaps_rollup`) where the
+kernel reports it, else RSS. `agent_mb` is the agent CLI itself (the first
+non-shell process under the pane, plus its children that are the same CLI —
+codex's node wrapper and its native binary), `mcp_mb` the MCP stdio servers it
+started (MindFlock's `-m backend.mcp`, any command line naming `mcp`, or a
+server configured in `~/.claude.json` / `~/.codex/config.toml`, each with its
+whole subtree), `other_mb` the rest (launcher shells, the agent's tool shells,
+test runs, dev servers); the three add up to `mb`. `peak_mb` is the highest
+`mb` seen since the server started or the session's panes were relaunched,
+`procs` how many processes the tree holds, `at` the sample time (epoch s).
+`null` while not sampled yet, not running (no tmux pane), or when the last
+sample is over 5 minutes old. A dict read on both snapshot paths, so it is
+never older than the sampler's last tick plus the 4 s tick.
 
 `sleeping` is set while the session's agent is asleep
 ([session-engine.md](session-engine.md#sleeping-agents)): its CLI and MCP
@@ -3949,6 +3968,8 @@ reason, position, creates}`, [session-engine.md](session-engine.md#launch-gate))
 |---|---|---|
 | POST | `/api/server/revive-all` | Run the revive sweep now and wait for it → `{revived: [title], continued: [title], skipped: {title: reason}, already_running: n, summary}` (`summary` = `"revived N, skipped M: 1 paused, …; K already running; told J to continue"`; a launch that failed is listed in `skipped` with its error; `continued` = the agents that died mid-turn and were queued a *continue where you left off*). Body `{titles: [...]}` (the rail's **Start all**) sweeps just those sessions, agents the user quit included; 400 when it isn't a list of strings. Either form is a person's Start: sessions **held offline** are released and started too (each hold right before its launch; one skipped for `low memory` stays held), where every other sweep skips them as `held offline`. While memory is low the call is **409** `{memory_confirm: true, …}` first, until resent with `start_anyway: true` in the body. Then each launch waits up to 120 s (`MEMORY_WAIT_SECONDS`) for headroom, counting the agents started in the last 90 s as still growing. The rest are listed in `skipped` as `low memory` **and** handed to the launch gate's queue (`waiting: [title]`, present when non-empty), which starts them one at a time as memory allows. So the call can block for that long plus launch time, and a scripted caller needs a longer timeout. Runs regardless of `general.revive_on_start`. Owner only (`auth.may_configure`, **403** otherwise) — it launches agents. One sweep at a time: a second call waits for the first |
 | GET | `/api/system/memory` | The machine's memory headroom (`backend.memory_pressure`) → `{level: "ok"\|"low"\|"critical"\|"unknown", available, total, available_pct, swap_total, swap_free, psi: {some_avg10, some_avg60, full_avg10, full_avg60} \| null, at, message, gate}`. While `low`/`critical`, agent spawns wait in the launch gate's queue, team runs start no new lines and the revive sweep waits ([session-engine.md](session-engine.md#memory-guard)); `message` is the one-line reason, `""` when ok; `gate` is `GET /api/launch-gate` |
+| GET | `/api/memory` | Who holds the memory (`core.memory_watch`) → `{system: {total_mb, available_mb, swap_total_mb, swap_used_mb, psi_some_avg10, psi_full_avg10, level}, sessions: [{title, mb, peak_mb, agent_mb, mcp_mb, other_mb, procs, at}] (biggest first; the row's `memory` field, see above), others: [{pid, name, cmd, mb, server?}] (the 8 biggest processes in NO session's tree — another app's Python, a TTS server, the shared-MCP bridge's servers, this server itself with `server: true`; `cmd` cut at 200 chars), at, tick_ms, tick_cpu_ms}`. The sampler's last reading; taken on demand (no history line) when that is older than 30 s (the loop is off, skipping under thrash, or the server just started). `tick_ms` / `tick_cpu_ms`: the last tick's wall and CPU cost. Not on a guest link's allow-list |
+| GET | `/api/memory/history?minutes=60` | The history log → `{samples: [{at, system, sessions: {title: mb}, others}]}`, oldest first, from `<config dir>/logs/memory.jsonl` (one line every 30 s, rotated at 5 MB to `memory.jsonl.1`, both read). `minutes` (default 60) is clamped to 1…10080; **400** when it is not a number. Not on a guest link's allow-list |
 | GET | `/api/launch-gate` | What the launch gate holds back ([session-engine.md](session-engine.md#launch-gate)) → `{holding, queued: [{id, title, kind: "spawn"\|"queued prompt"\|"wake"\|"revive", source, parent, since, reason, position, creates}], reason, live, cap, warming, projected_available, projected_level}`. `live` is null when tmux can't be read; `cap` 0 = no cap |
 | POST | `/api/launch-gate/{title}/start` | **Start anyway**: launch a waiting session now, past the gate (the row's chip). → `{title, started, error}`. **404** when nothing by that name waits. Owner only (**403**) |
 | POST | `/api/launch-gate/{title}/cancel` | Stop waiting: a queued create is never made, a queued relaunch or wake stays Offline / asleep. → `{title, cancelled: true}`. **404** when nothing by that name waits. Owner only (**403**) |
