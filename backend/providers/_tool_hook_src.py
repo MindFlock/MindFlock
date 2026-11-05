@@ -6,6 +6,13 @@ embedded as a string literal into the ``python3 -c`` command the CLI's hooks
 run, and executed there with ``exec(compile(SRC, "<mf-tool-hook>", "exec"),
 ns)``. The command then calls ``ns['_mf_tool_hook'](p, s, ev)``.
 
+On native Windows the command instead names the MindFlock install's own
+interpreter and loads this source from a hash-checked copy in the guard
+directory (a Windows command line cannot hold it — see
+``activity_markers._python_hook``); there a Bash call's paths may be Git Bash
+spellings (``/c/Users/x``, :func:`_mf_native`) and Claude Code's PowerShell
+tool is judged like Bash (:func:`_ps_targets`).
+
 Because the source runs under whatever system ``python3`` the CLI has on PATH —
 never the MindFlock venv — it is stdlib-only, imports lazily inside functions,
 and uses Python 3.8-compatible syntax. It contains ONLY function definitions and
@@ -24,7 +31,7 @@ mid-flight takes effect on the very next tool call.
 # a build heals a hook of an OLDER revision and leaves a NEWER one alone, so
 # two MindFlock builds on one worktree (the uv-tool copy + a dev server)
 # converge instead of rewriting settings.local.json every tick.
-_MF_HOOK_REV = 5
+_MF_HOOK_REV = 6
 
 # The firing session's tmux name, set by ``_mf_tool_hook`` for this one fire
 # (the hook process handles exactly one tool call). Per-session fences in a
@@ -255,6 +262,143 @@ _MF_WRITE_ALL = (
 )
 _MF_WRITE_LAST = ("cp", "install", "ln", "rsync")
 
+# --- PowerShell (Claude Code's PowerShell tool on native Windows) ----------- #
+# The cmdlets that write a path: ``cmdlet: (slot, …)``, where slot i says what
+# the i-th POSITIONAL argument is — "w" a path written, "r" a path only read,
+# "d" a destination (a directory takes the source's name, like ``cp``),
+# "n" a new name beside slot 0 (Rename-Item), "" no path at all.
+_MF_PS_WRITERS = {
+    "set-content": ("w",),
+    "add-content": ("w",),
+    "clear-content": ("w",),
+    "out-file": ("w",),
+    "tee-object": ("w",),
+    "export-csv": ("w",),
+    "export-clixml": ("w",),
+    "new-item": ("w",),
+    "remove-item": ("w",),
+    "move-item": ("w", "d"),
+    "copy-item": ("r", "d"),
+    "rename-item": ("w", "n"),
+    "expand-archive": ("r", "w"),
+    "compress-archive": ("r", "w"),
+    "invoke-webrequest": ("",),
+    "invoke-restmethod": ("",),
+}
+# The built-in aliases of those cmdlets (and of Set-Location / Push-Location).
+_MF_PS_ALIASES = {
+    "sc": "set-content",
+    "ac": "add-content",
+    "clc": "clear-content",
+    "tee": "tee-object",
+    "epcsv": "export-csv",
+    "ni": "new-item",
+    "mkdir": "new-item",
+    "md": "new-item",
+    "rm": "remove-item",
+    "ri": "remove-item",
+    "del": "remove-item",
+    "erase": "remove-item",
+    "rd": "remove-item",
+    "rmdir": "remove-item",
+    "mv": "move-item",
+    "mi": "move-item",
+    "move": "move-item",
+    "cp": "copy-item",
+    "cpi": "copy-item",
+    "copy": "copy-item",
+    "ren": "rename-item",
+    "rni": "rename-item",
+    "iwr": "invoke-webrequest",
+    "curl": "invoke-webrequest",
+    "wget": "invoke-webrequest",
+    "irm": "invoke-restmethod",
+    "cd": "set-location",
+    "sl": "set-location",
+    "chdir": "set-location",
+    "pushd": "push-location",
+}
+# Named parameters that carry a path, and what it is ("w" written, "d"
+# destination, "r" read, "j" a name joined onto -Path (New-Item -Name),
+# "n" a new name (Rename-Item -NewName)); per cmdlet where it differs.
+_MF_PS_PATH_PARAMS = {
+    "path": "w",
+    "literalpath": "w",
+    "filepath": "w",
+    "destination": "d",
+    "destinationpath": "w",
+    "outfile": "w",
+}
+_MF_PS_PARAM_OVERRIDES = {
+    "copy-item": {"path": "r", "literalpath": "r"},
+    "expand-archive": {"path": "r", "literalpath": "r"},
+    "compress-archive": {"path": "r", "literalpath": "r"},
+    "new-item": {"name": "j"},
+    "rename-item": {"newname": "n"},
+}
+# Parameters that take no value: everything else takes the next argument.
+_MF_PS_SWITCHES = (
+    "force",
+    "recurse",
+    "nonewline",
+    "append",
+    "passthru",
+    "whatif",
+    "confirm",
+    "noclobber",
+    "container",
+    "verbose",
+    "debug",
+    "asbytestream",
+    "raw",
+    "notypeinformation",
+    "usebasicparsing",
+    "update",
+)
+# Other value-taking parameters worth knowing by name, so an abbreviation of
+# one (``-Val``, ``-Enc``) is not mistaken for a path parameter.
+_MF_PS_VALUE_PARAMS = (
+    "value",
+    "encoding",
+    "itemtype",
+    "type",
+    "filter",
+    "include",
+    "exclude",
+    "credential",
+    "stream",
+    "delimiter",
+    "inputobject",
+    "width",
+    "uri",
+    "method",
+    "body",
+    "headers",
+    "target",
+    "name",
+    "newname",
+    "compressionlevel",
+    "erroraction",
+    "warningaction",
+)
+# ``[System.IO.File]::WriteAllText('p', …)`` and kin: .NET calls whose FIRST
+# argument is a path written.
+_MF_PS_NET_WRITES = (
+    "writealltext",
+    "writealllines",
+    "writeallbytes",
+    "appendalltext",
+    "appendalllines",
+    "delete",
+    "create",
+    "createtext",
+    "appendtext",
+    "openwrite",
+    "createdirectory",
+    "move",
+    "replace",
+)
+
 
 # --------------------------------------------------------------------------- #
 # environment / paths (resolved at FIRE time from the firing shell's env)
@@ -377,9 +521,27 @@ def _mf_cmd_guard(cwd, proj, cache):
 # --------------------------------------------------------------------------- #
 # path matching against a guard
 # --------------------------------------------------------------------------- #
+def _mf_native(path, nt=None):
+    """A Git Bash path (``/c/Users/x``) as Windows names it (``C:/Users/x``),
+    on native Windows only (``nt``: the test's override of ``os.name``).
+    Claude Code runs its Bash tool with Git Bash there, so a command's paths
+    may come in either spelling."""
+    import os
+    import re
+
+    if not (os.name == "nt" if nt is None else nt) or not isinstance(path, str):
+        return path
+    m = re.match(r"^/([A-Za-z])(/.*)?$", path)
+    if not m:
+        return path
+    return m.group(1).upper() + ":" + (m.group(2) or "/")
+
+
 def _mf_abs(target, cwd):
     import os
 
+    target = _mf_native(target)
+    cwd = _mf_native(cwd)
     if os.path.isabs(target):
         return os.path.normpath(target)
     return os.path.normpath(os.path.join(cwd or os.getcwd(), target))
@@ -680,6 +842,11 @@ def _classify(tool, ti):
         return "read", [], [fp] if fp else [], {}
     if tool == "Bash":
         return "bash", [], [], {"cmd": ti.get("command") or ""}
+    if tool == "PowerShell":
+        # Claude Code's PowerShell tool (native Windows): a shell call like
+        # Bash — fences, red zones and the git-status backstop all apply —
+        # whose write targets are read by the PowerShell rules.
+        return "bash", [], [], {"cmd": ti.get("command") or "", "ps": True}
     if tool in ("exec_command", "shell", "local_shell"):
         cmd = ti.get("command")
         if cmd is None:
@@ -1090,6 +1257,352 @@ def _bash_targets(cmd, cwd, depth=0, tags=None):
                 except Exception:
                     pass
     return writes, reads, True
+
+
+# --------------------------------------------------------------------------- #
+# PowerShell heuristic (Claude Code's PowerShell tool) — as narrow as the Bash
+# one: the cmdlets/aliases that write a path, redirects, .NET File calls, an
+# in-command Set-Location; any other program (git, an .exe) is judged by the
+# Bash heuristic on its argv. The git-status backstop is the real net.
+# --------------------------------------------------------------------------- #
+def _mf_ps_tokenize(cmd):
+    """Statements of a PowerShell command, each a list of ``(word, dyn)``:
+    ``dyn`` when the shell would still expand the word (a ``$`` outside single
+    quotes). Separators: ``;`` ``|`` ``&&`` ``||`` ``&`` newline and every
+    bracket (so a script block's or subexpression's commands are statements of
+    their own); ``,`` is a word of its own (an array). Quotes: ``'…'`` (``''``
+    is a quote), ``"…"`` (backtick escapes); backtick escapes outside quotes
+    too (backtick-newline continues the line); ``#`` starts a comment at a
+    word start, ``<# … #>`` is a block comment. Raises ValueError on an
+    unterminated quote or comment."""
+    out = []
+    cur = []
+    word = []
+    state = {"in_word": False, "dyn": False}
+
+    def _end_word():
+        if state["in_word"]:
+            cur.append(("".join(word), state["dyn"]))
+        del word[:]
+        state["in_word"] = False
+        state["dyn"] = False
+
+    def _end_stmt():
+        _end_word()
+        if cur:
+            out.append(list(cur))
+            del cur[:]
+
+    i = 0
+    n = len(cmd)
+    while i < n:
+        ch = cmd[i]
+        if ch == "`":
+            if i + 1 < n and cmd[i + 1] == "\n":
+                i += 2
+                continue
+            if i + 1 < n:
+                word.append(cmd[i + 1])
+                state["in_word"] = True
+            i += 2
+            continue
+        if ch == "'":
+            j = i + 1
+            buf = []
+            while True:
+                if j >= n:
+                    raise ValueError("unterminated '")
+                if cmd[j] == "'":
+                    if j + 1 < n and cmd[j + 1] == "'":
+                        buf.append("'")
+                        j += 2
+                        continue
+                    break
+                buf.append(cmd[j])
+                j += 1
+            word.extend(buf)
+            state["in_word"] = True
+            i = j + 1
+            continue
+        if ch == '"':
+            j = i + 1
+            buf = []
+            while True:
+                if j >= n:
+                    raise ValueError('unterminated "')
+                c = cmd[j]
+                if c == "`" and j + 1 < n:
+                    buf.append(cmd[j + 1])
+                    j += 2
+                    continue
+                if c == '"':
+                    if j + 1 < n and cmd[j + 1] == '"':
+                        buf.append('"')
+                        j += 2
+                        continue
+                    break
+                if c == "$":
+                    state["dyn"] = True
+                buf.append(c)
+                j += 1
+            word.extend(buf)
+            state["in_word"] = True
+            i = j + 1
+            continue
+        if ch == "<" and cmd.startswith("<#", i):
+            j = cmd.find("#>", i + 2)
+            if j < 0:
+                raise ValueError("unterminated <#")
+            i = j + 2
+            continue
+        if ch == "#" and not state["in_word"]:
+            j = cmd.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if ch in " \t\r":
+            _end_word()
+            i += 1
+            continue
+        if ch in ";|&\n(){}":
+            if ch == "&" and i + 1 < n and cmd[i + 1] == ">":
+                pass  # not a PowerShell operator; a word char
+            else:
+                if ch in "({" and word and "".join(word) in ("$", "@"):
+                    del word[:]
+                    state["in_word"] = False
+                _end_stmt()
+                i += 1
+                continue
+        if ch == ",":
+            _end_word()
+            cur.append((",", False))
+            i += 1
+            continue
+        if ch == ">":
+            # A redirect operator is a word of its own — `>`, `>>`, `2>`,
+            # `*>>`, `2>&1` — marked "op" so no quoted word can pose as one;
+            # the target follows (attached or not).
+            fd = "".join(word) if state["in_word"] else ""
+            if fd in ("1", "2", "3", "4", "5", "6", "*"):
+                del word[:]
+                state["in_word"] = False
+            else:
+                fd = ""
+                _end_word()
+            op = fd + ">"
+            i += 1
+            if i < n and cmd[i] == ">":
+                op += ">"
+                i += 1
+            if i < n and cmd[i] == "&":
+                op += "&"
+                i += 1
+            cur.append((op, "op"))
+            continue
+        if ch == "$":
+            state["dyn"] = True
+        word.append(ch)
+        state["in_word"] = True
+        i += 1
+    _end_stmt()
+    return out
+
+
+def _mf_ps_param(name, cmdlet):
+    """The canonical parameter a (possibly abbreviated, any-case) ``-name``
+    means, with its kind: ``(canon, kind)`` — kind ``"switch"``, ``"value"``
+    or a path kind (see ``_MF_PS_PATH_PARAMS``). An unknown name is a value
+    parameter; an ambiguous prefix that could be a path parameter is read as
+    the path one (the guard errs toward seeing a write)."""
+    low = name.lower()
+    over = _MF_PS_PARAM_OVERRIDES.get(cmdlet) or {}
+    paths = dict(_MF_PS_PATH_PARAMS)
+    paths.update(over)
+    known = list(paths) + list(_MF_PS_SWITCHES) + list(_MF_PS_VALUE_PARAMS)
+    if low in known:
+        hits = [low]
+    else:
+        hits = [k for k in known if k.startswith(low)]
+    if not hits:
+        return low, "value"
+    for h in hits:
+        if h in paths:
+            return h, paths[h]
+    h = hits[0]
+    return h, ("switch" if h in _MF_PS_SWITCHES else "value")
+
+
+def _ps_targets(cmd, cwd, depth=0, tags=None):
+    """``(writes, reads, parse_ok)`` for a PowerShell command — the contract of
+    :func:`_bash_targets` (same ``tags``), for Claude Code's PowerShell tool."""
+    import os
+    import re
+    import shlex
+
+    try:
+        stmts = _mf_ps_tokenize(cmd)
+    except Exception:
+        return set(), set(), False
+    writes = set()
+    reads = set()
+    eff_cwd = cwd
+
+    def _abs(word, base):
+        if word == "~" or word.startswith("~/") or word.startswith("~\\"):
+            word = os.path.expanduser(word)
+        return _mf_abs(word, base)
+
+    def _w(word, dyn, why="w"):
+        if not word or word.lower() == "$null":
+            return
+        p = _abs(word, eff_cwd)
+        writes.add(p)
+        if tags is not None:
+            tags.setdefault(p, set()).add(why)
+            if dyn or "$" in word:
+                tags[p].add("dyn")
+
+    def _r(word):
+        if word and "$" not in word and len(reads) < 40:
+            p = _abs(word, eff_cwd)
+            try:
+                if os.path.exists(p):
+                    reads.add(p)
+            except Exception:
+                pass
+
+    for m in re.finditer(
+        r"\[(?:System\.)?IO\.(?:File|Directory)\]::(\w+)\(\s*(['\"])(.*?)\2",
+        cmd,
+        flags=re.I,
+    ):
+        if m.group(1).lower() in _MF_PS_NET_WRITES:
+            _w(m.group(3), m.group(2) == '"' and "$" in m.group(3))
+
+    for st in stmts:
+        # redirects first: `> f`, `2>> f`, `*> f` (`2>&1` writes nothing)
+        words = []
+        i = 0
+        while i < len(st):
+            w, dyn = st[i]
+            if dyn == "op":
+                if w.endswith("&"):
+                    i += 2  # an fd duplication: the next word is its fd
+                    continue
+                if i + 1 < len(st):
+                    _w(st[i + 1][0], st[i + 1][1])
+                i += 2
+                continue
+            words.append((w, dyn))
+            i += 1
+        if not words:
+            continue
+        prog = words[0][0].lower()
+        base = prog.replace("\\", "/").rsplit("/", 1)[-1]
+        if base.endswith(".exe"):
+            base = base[:-4]
+        cmdlet = _MF_PS_ALIASES.get(base, base)
+        args = words[1:]
+        if cmdlet in ("set-location", "push-location"):
+            vals = [w for w, _d in args if not w.startswith("-")]
+            if vals:
+                eff_cwd = _abs(vals[0], eff_cwd)
+            continue
+        slots = _MF_PS_WRITERS.get(cmdlet)
+        if slots is None:
+            if "-" in cmdlet or depth >= 3:
+                continue  # some other cmdlet: reads at most
+            # A program (git, an .exe, bash -c …): its argv by the Bash rules.
+            argv = [w for w, _d in args if w != ","]
+            line = " ".join(shlex.quote(x) for x in [base] + argv)
+            w2, r2, _ok = _bash_targets(line, eff_cwd, depth + 1, tags)
+            writes |= w2
+            reads |= r2
+            continue
+        # Parameters: named (any case, abbreviated, `-P:v` or `-P v`, arrays
+        # with `,`) and positional.
+        named = []  # (kind, [(word, dyn)])
+        positional = []  # [[(word, dyn)]]
+        whatif = False
+        dirtype = False
+        j = 0
+        while j < len(args):
+            w, dyn = args[j]
+            if w == ",":
+                j += 1
+                continue
+            if w.startswith("-") and len(w) > 1 and not dyn and w[1] != "-":
+                name, colon, val = w[1:].partition(":")
+                canon, kind = _mf_ps_param(name, cmdlet)
+                if canon == "whatif" and val.lower() not in ("$false",):
+                    whatif = True
+                if kind == "switch":
+                    j += 1
+                    continue
+                vals = []
+                if colon and val:
+                    vals.append((val, "$" in val))
+                    j += 1
+                else:
+                    j += 1
+                    if j < len(args):
+                        vals.append(args[j])
+                        j += 1
+                while j + 1 < len(args) and args[j][0] == ",":
+                    vals.append(args[j + 1])
+                    j += 2
+                if canon in ("itemtype", "type") and vals:
+                    dirtype = vals[0][0].lower() in ("directory", "d", "dir")
+                named.append((kind if kind not in ("value", "switch") else "", vals))
+                continue
+            vals = [(w, dyn)]
+            j += 1
+            while j + 1 < len(args) and args[j][0] == ",":
+                vals.append(args[j + 1])
+                j += 2
+            positional.append(vals)
+        if whatif:
+            continue
+        items = []  # (kind, [(word, dyn)])
+        for k, vals in named:
+            if k:
+                items.append((k, vals))
+        for idx, vals in enumerate(positional):
+            if idx < len(slots) and slots[idx]:
+                items.append((slots[idx], vals))
+            elif cmdlet == "remove-item":
+                items.append(("w", vals))
+        why = "rm" if cmdlet == "remove-item" else ("mkdir" if dirtype else "w")
+        sources = [v for k, vals in items if k in ("w", "r") for v in vals]
+        joined = any(k == "j" for k, _v in items)
+        for k, vals in items:
+            for w, dyn in vals:
+                if k == "w" and joined:
+                    continue  # New-Item -Path <dir> -Name <f>: <dir> is the parent
+                if k == "r":
+                    _r(w)
+                elif k == "w":
+                    _w(w, dyn, why if cmdlet in ("remove-item", "new-item") else "w")
+                elif k == "d":
+                    if dyn:
+                        _w(w, dyn)
+                        continue
+                    for t in _mf_into_dir([s for s, _d in sources] + [w], eff_cwd):
+                        _w(t, False)
+                elif k in ("j", "n"):
+                    parents = [s for s, _d in sources] or [""]
+                    for par in parents:
+                        if k == "n":
+                            par = os.path.dirname(par.replace("\\", "/"))
+                        _w(os.path.join(par, w) if par else w, dyn, why)
+    return writes, reads, True
+
+
+def _mf_shell_targets(extra, cwd, depth=0, tags=None):
+    """:func:`_bash_targets` or :func:`_ps_targets`, as the call's shell."""
+    if extra.get("ps"):
+        return _ps_targets(extra.get("cmd") or "", cwd, depth, tags)
+    return _bash_targets(extra.get("cmd") or "", cwd, depth, tags)
 
 
 def _mf_zone_literals(guard):
@@ -2149,7 +2662,7 @@ def _mf_pre_deny(kind, writes, tool, cwd, proj, extra, cache, s=""):
                         "reason": reason,
                     }
             tags = {}
-            w, _r, ok = _bash_targets(cmd, cwd, tags=tags)
+            w, _r, ok = _mf_shell_targets(extra, cwd, tags=tags)
             if not ok:
                 # Red only: a literal zone prefix in an unparseable command.
                 # GREEN never denies on a parse failure (the git-status
@@ -2266,7 +2779,7 @@ def _mf_tool_hook(p, s, ev):
         r_abs = [_mf_abs(x, cwd) for x in reads]
         if kind == "bash":
             try:
-                bw, br, _ok = _bash_targets(extra.get("cmd") or "", cwd)
+                bw, br, _ok = _mf_shell_targets(extra, cwd)
                 w_abs = [x for x in bw if x]
                 r_abs = list(br)
             except Exception:

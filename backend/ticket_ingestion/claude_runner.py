@@ -26,6 +26,7 @@ from pathlib import Path
 
 import aiohttp
 
+from backend import compat
 from backend.providers import launch_script
 from backend.ticket_ingestion.config import PipelineConfig
 from backend.ticket_ingestion.models import (
@@ -99,6 +100,54 @@ def _prune_old_prompts(
         pass
 
 
+async def _exec(*argv, stdout=None, stderr=None):
+    """``asyncio.create_subprocess_exec(*argv, …)`` — except a ``tmux`` argv on
+    native Windows, which goes to the session host (there is no tmux binary
+    there: :func:`backend.session.mux.run`, in a worker thread) and comes back
+    as a process-like object with ``returncode``, ``wait()`` and
+    ``communicate()``. Linux/macOS run exactly what they always did."""
+    if not (compat.IS_WINDOWS and argv and argv[0] == "tmux"):
+        return await asyncio.create_subprocess_exec(*argv, stdout=stdout, stderr=stderr)
+    import subprocess
+
+    from backend.session import mux
+
+    def _run():
+        return mux.run(
+            list(argv),
+            stdout=(
+                subprocess.PIPE
+                if stdout == asyncio.subprocess.PIPE
+                else subprocess.DEVNULL
+            ),
+            stderr=(
+                subprocess.PIPE
+                if stderr == asyncio.subprocess.PIPE
+                else subprocess.DEVNULL
+            ),
+            timeout=30,
+        )
+
+    cp = await asyncio.to_thread(_run)
+    return _Finished(cp)
+
+
+class _Finished:
+    """A finished :func:`backend.session.mux.run` as the slice of
+    ``asyncio.subprocess.Process`` this module uses."""
+
+    def __init__(self, cp):
+        self.returncode = cp.returncode
+        self._out = cp.stdout if isinstance(cp.stdout, bytes) else None
+        self._err = cp.stderr if isinstance(cp.stderr, bytes) else None
+
+    async def wait(self):
+        return self.returncode
+
+    async def communicate(self):
+        return self._out, self._err
+
+
 class AgentCliRunner:
     """Starts the ticket's agent CLI in a tmux pane and surfaces it in a terminal tab."""
 
@@ -129,7 +178,9 @@ class AgentCliRunner:
         )
         os.close(fd)
         prompt_file = Path(prompt_path)
-        prompt_file.write_text(prompt, encoding="utf-8")
+        # newline="": the prompt's own bytes on every OS (`$(cat …)` would hand
+        # the CLI each \r Windows' text mode adds).
+        prompt_file.write_text(prompt, encoding="utf-8", newline="")
 
         session = _tmux_session_name(story)
         agent = self.agent_for(story)
@@ -166,7 +217,7 @@ class AgentCliRunner:
 
     async def _kill_existing_session(self, session: str) -> None:
         """Best-effort cleanup of a stale tmux session by the same name."""
-        process = await asyncio.create_subprocess_exec(
+        process = await _exec(
             "tmux",
             "kill-session",
             "-t",
@@ -191,7 +242,7 @@ class AgentCliRunner:
             agent or default_agent(), str(prompt_file)
         )
         inner = f"{preamble}{command}; exec bash -i"
-        process = await asyncio.create_subprocess_exec(
+        process = await _exec(
             "tmux",
             "new-session",
             "-d",
@@ -199,7 +250,9 @@ class AgentCliRunner:
             session,
             "-c",
             str(workdir),
-            "bash",
+            # Native Windows: Git for Windows' bash.exe — a bare "bash" there
+            # can be System32's WSL launcher (docs/windows.md).
+            compat.posix_shell(bash=True) if compat.IS_WINDOWS else "bash",
             "-ilc",
             inner,
             stdout=asyncio.subprocess.PIPE,
@@ -214,7 +267,7 @@ class AgentCliRunner:
         # Enable mouse-wheel scrolling (drops into copy mode automatically) and
         # bump the scrollback buffer so long Claude transcripts stay reachable.
         for option, value in (("mouse", "on"), ("history-limit", "100000")):
-            opt_proc = await asyncio.create_subprocess_exec(
+            opt_proc = await _exec(
                 "tmux",
                 "set-option",
                 "-t",

@@ -269,7 +269,13 @@ def _wrap_launch_cmd(cmd: str, session_name: str) -> str:
     The command itself runs inside the agent guards of
     :mod:`backend.providers.agent_limits` — its own memory-limited systemd
     user scope and the ``gitnexus analyze`` gate on ``PATH`` — wherever they
-    apply; elsewhere it is ``cmd`` unchanged."""
+    apply; elsewhere it is ``cmd`` unchanged.
+
+    Native Windows: the shell is Git Bash (docs/windows.md), so the marker is
+    spelled ``C:/…`` and a launcher script named by its native path (the
+    relaunch of a provisioned session passes ``C:\\…\\.mindflock_launch.sh``,
+    which bash would unescape into a name that does not exist) is quoted
+    and spelled the same way (:func:`_shell_launcher`)."""
     from backend.providers import agent_limits, launch_script
 
     marker = _exit_marker_path(session_name)
@@ -277,13 +283,34 @@ def _wrap_launch_cmd(cmd: str, session_name: str) -> str:
         marker.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    q = shlex.quote(str(marker))
+    if mux.IS_WINDOWS:
+        cmd = _shell_launcher(cmd)
+    q = shlex.quote(launch_script.shell_path(marker))
     return "rm -f %s; %s%s; echo $? > %s" % (
         q,
         launch_script.oom_score_prefix(),
         agent_limits.wrap_launch(cmd, session_name),
         q,
     )
+
+
+def _shell_launcher(cmd: str) -> str:
+    """``cmd`` with a trailing native path to a script file (its last line,
+    after any ``export …`` / secret-sourcing lines a relaunch puts in front)
+    rewritten as Git Bash can run it: quoted, forward slashes. Anything else
+    — a program name, a provider-built command — is returned unchanged."""
+    from backend.providers import launch_script
+
+    head, sep, tail = cmd.rpartition("\n")
+    path = tail.strip()
+    if "\\" not in path or path[:1] in ("'", '"'):
+        return cmd
+    try:
+        if not os.path.isfile(path):
+            return cmd
+    except (OSError, ValueError):
+        return cmd
+    return head + sep + shlex.quote(launch_script.shell_path(path))
 
 
 def spawn_tmux_attach(session_name: str, dimensions=(24, 80)):
