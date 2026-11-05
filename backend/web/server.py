@@ -413,6 +413,7 @@ from backend.web.core import held as _held
 from backend.web.core import revive as _revive
 from backend.web.core import launch_gate as _launch_gate
 from backend.web.core import sleep as _sleep
+from backend.web.core import memory_watch as _memory_watch
 from backend.web.core import loop_watchdog as _loop_watchdog
 from backend.web.core import self_update as _self_update
 from backend.web.core import spoken as _spoken
@@ -686,6 +687,7 @@ from backend.web.routes import sky as _sky_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
+from backend.web.routes import memory as _memory_routes
 from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
@@ -963,6 +965,10 @@ async def lifespan(app: FastAPI):
     if _sleep_loop_enabled():
         _register_task(_sleep.run_loop())
     _register_task(_memory_watch_loop())
+    # Per-session memory sampler + logs/memory.jsonl (core.memory_watch), on
+    # the ticks' own pool. Off under pytest (ENGINE is the real state there).
+    if _memory_watch.enabled():
+        _register_task(_memory_watch.run_loop(sys.modules[__name__]))
     # The launch gate's queue (core.launch_gate): what waited for memory when
     # the server stopped waits again — automatic starts, so through the gate,
     # one at a time. Off under pytest (ENGINE is the developer's real state).
@@ -1827,6 +1833,7 @@ def _session_snapshot(i, queues: dict) -> dict:
     # other stage is indifferent to it. None = "could not find out", which the UI
     # must treat as "leave the button alone", never as "cannot merge".
     d["merge_state"] = None
+    d["memory"] = _memory_watch.row(i.Title)  # the sampler's last reading
     if d.get("stage") == "pr":
         try:
             _wt_ms = i.GetWorktreePath()
@@ -1966,6 +1973,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["stage_reset"] = False
     d["pr_url"] = None
     d["merge_state"] = None
+    d["memory"] = _memory_watch.row(i.Title)  # a dict read, fresh on both paths
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
     d["flight"] = _flight_dto(i.Title, i)
@@ -10020,6 +10028,9 @@ app.include_router(_voice_routes.router)
 
 # --- Flock mode (every prompt asks for MindFlock workers): routes/flock.py -----
 app.include_router(_flock_routes.router)
+
+# --- Per-session memory + its history: routes/memory.py ------------------------
+app.include_router(_memory_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
