@@ -49,6 +49,9 @@ web = [
 [dependency-groups]
 dev = [
     "hypothesis",
+    # The Windows session host's screen model (backend/session/winmux): a
+    # runtime dependency only on Windows, but its tests run everywhere.
+    "pyte",
     "pytest",
     "pytest-asyncio",
     # CI runs the suite across every runner core (`pytest -n auto`, see
