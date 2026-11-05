@@ -147,13 +147,18 @@ def _spawn_host(run_dir: str, env: Dict[str, str]) -> None:
         close_fds=True,
     )
     if compat.IS_WINDOWS:  # pragma: no cover - Windows
-        # No console (DETACHED_PROCESS), own group, and out of the caller's
-        # job when allowed (Electron / a terminal may kill their job on exit).
+        # A HIDDEN console (CREATE_NO_WINDOW), own group, and out of the
+        # caller's job when allowed (Electron / a terminal may kill their job
+        # on exit). Never DETACHED_PROCESS: it overrides CREATE_NO_WINDOW,
+        # and sys.executable is uv's venv launcher, whose real python.exe
+        # child — finding no console to inherit — opened a NEW, visible one
+        # (a Windows Terminal window on Windows 11, every time the desktop
+        # app started the host). A hidden console is inherited instead.
         # And through a short-lived middleman: Windows keeps the parent link,
         # so `taskkill /T` of the MindFlock server's tree (a restart) would
         # take a direct child with it. With the middleman gone the chain is
         # broken — the host outlives the server, as a daemonized tmux does.
-        flags = 0x00000008 | 0x00000200 | 0x08000000
+        flags = 0x00000200 | 0x08000000
         subprocess.run(
             [sys.executable, "-c", _MIDDLEMAN, str(flags)] + argv,
             creationflags=flags,
