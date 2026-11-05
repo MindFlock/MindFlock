@@ -752,13 +752,104 @@ agent start asks first. It answers **go / wait / refuse** from:
 - **agents still warming up** — every MindFlock agent tmux session created
   in the last 90 s (read from tmux's own `session_created`, so starts from
   any path and any process count), plus starts this server admitted that
-  have no tmux session yet. Each is assumed to still take ~700 MB
-  (`general.agent_warmup_mb`; the `MINDFLOCK_AGENT_WARMUP_MB` env var wins). The gate works out what memory would read
-  once they have grown, and that projection counts like the level;
+  have no tmux session yet. Each still has the learned peak (below) minus
+  what it reads now to come (all of it when unmeasured; ~700 MB, i.e.
+  `general.agent_warmup_mb` / `MINDFLOCK_AGENT_WARMUP_MB`, with no
+  measurements yet). The gate works out what memory would read once they
+  have grown, and that projection counts like the level;
+- **the budget** — how many more sessions fit, at what one has been
+  *measured* to cost (below). An automatic start waits while the room is 0,
+  checked after the cap; a person's start asks;
 - **live agents** against a machine-wide cap (`general.max_live_agents`,
   the `MINDFLOCK_MAX_LIVE_AGENTS` env var wins; default one per 1.2 GB of
   RAM, 16 on 20 GB; `0` = no cap). The cap applies to automatic starts only.
   Both settings are per device and never synced.
+
+#### Memory: admission by measured cost
+
+The budget (`launch_gate.budget`, `GET /api/memory/capacity`) replaces a guess
+per agent with what this machine's sessions really take:
+
+```
+room = floor((available − reserve − penalties − to_come) / session_mb)
+```
+
+- **`session_mb`** — the 75th percentile of the steady size the memory
+  sampler measures per session (a session's whole tree: CLI, MCP servers,
+  what it runs; the sampler is `core.memory_watch`, read through the
+  `launch_gate.set_sizes_source` seam, else the rows' `memory.mb`). Sessions
+  still warming and ones reading under 50 MB (asleep, closing) are not
+  samples. Fewer than 3 samples: 700 MB. Never under 200 MB.
+- **`peak_mb`** — the 75th percentile of the sessions' peaks, never under
+  `session_mb` nor over 2.5× it (a peak from an 8-worker test run is not what
+  a CLI starting grows to). Warming agents count at it.
+- **`reserve`** — the low line: `max(2 GB, general.memory_low_pct of RAM)`
+  (15 % by default, 3 GB on 20 GB). The room is what fits *above* it, so
+  room 0 means one more would take the machine to `low`.
+- **`penalties`** — swap in use (up to 10 % of RAM: pages the agents will
+  fault back in, and on WSL a disk-backed swap that drags the Windows host),
+  and a **rising** PSI stall (`some avg10` ≥ 5 % and above `avg60`):
+  `avg10 / 200` of RAM, at most 15 % (20 % stalled → 10 % of RAM).
+- **`to_come`** — the warming agents' growth still to come.
+
+The room is 0 while the level reads low or critical, and never past the
+live cap. On 20 GB with 15.6 GB available, no swap, no stall, nothing warming
+and no measurements yet: (15.6 − 3.0) GB / 0.7 GB → room 18 (the live cap,
+16 by default, then bounds it). Measured at 1 GB per session it is 12.
+
+What the room changes: an agent's `spawn_session` past it queues (`queued:
+waiting for memory`, the reason saying what one more needs: *one more
+session needs ~1.0 GB; only 0.4 GB is free above the reserve*); a team
+run's pass starts at most `room` new lines; the MCP `whoami`,
+`spawn_session` and `start_team_run` results carry `capacity: {room,
+session_mb, hint}` so an orchestrator plans its worker count from it; a
+person's own start asks first (`Memory is tight: … No room for another
+session: one needs ~1.0 GB, 0.4 GB is free above the 3.0 GB this machine
+keeps in reserve.`).
+
+#### Memory: shedding before it bricks
+
+Holding new agents back does nothing for the ones already running. On
+2026-11-05 the owner's PC had to be rebooted: ~10 sessions, a 5 GB app and
+Voice Lab's F5 voice (4.1 GB + 1 GB swap) on 19.5 GB of WSL. The **memory
+shield** (`core/memory_shield.py`, called by the server's memory watch every
+10 s) acts:
+
+- **When**: the level has read `critical` for 60 s, or PSI `full avg10` is at
+  25 % or past it (every runnable task stalled on memory a quarter of the last
+  10 s: a thrash under way, where waiting the minute would cost ~15 s of
+  total stall). At most once per 90 s, so the next shed acts on readings
+  taken after the memory came back.
+- **Which**: idle agent sessions that `sleep.veto` allows with a two-minute
+  idle window — never one working, asking or on a dialog, open in a
+  terminal, driven by a person, typed into or woken in the last two minutes,
+  holding a background job, in a team run, or with working workers.
+  Largest-and-longest-idle first (measured MB × idle time, capped at an hour).
+- **How many**: only enough to bring available memory back over the `low`
+  line, counting each at its measured size (else the learned cost); at least
+  one, at most six.
+- They are put to sleep exactly as *Put idle agents to sleep* does (Wake,
+  opening or messaging one brings it back with its conversation). One notice
+  (`system.sessions_slept`): *Memory critical — put 3 idle sessions to sleep
+  (Wake brings them back): a, b, c*. Every decision is logged (`memory
+  shield:` lines: the trigger, what was needed, the picks, what was kept
+  awake and why).
+- `general.agent_memory.shed_idle: false` (or `MINDFLOCK_SHED_IDLE=0`)
+  turns it off. `GET /api/memory/capacity` → `shield` shows the last shed.
+
+#### Memory: Voice Lab yields
+
+A local voice host (Voice Lab, or any OpenAI-compatible model server on this
+machine or network) is never woken or called while the level reads low or
+critical: `TtsChain.pick` hands the line to piper, else the OS voice (piper
+itself is held back while low), else the client's own voice; warms, prewarms
+and health probes are not sent; the host call itself refuses
+(`speech.host_held_back`). The log says why once per episode, and again when
+it may be used. When the level turns `critical` and Voice Lab's backend
+(`voicelab-backend.service`, `MINDFLOCK_VOICELAB_UNIT`; `0` = never) runs, it
+is stopped with `systemctl --user stop`. It is socket-activated, so the next
+voice request would start it again, and none reaches it until memory allows.
+No unit, no systemd, no Voice Lab: nothing to do.
 
 **Automatic starts wait in a FIFO queue.** That means an agent-spawned
 create, a queued prompt relaunching or waking its agent, a mailbox wake, a
@@ -910,9 +1001,14 @@ runs inside `systemd-run --user --scope` (`backend.providers.agent_limits`):
   long before the machine is out), `MemorySwapMax` 15%.
 - **All agents together**: every scope sits in `app-mindflock.slice`, which
   gets `MemoryHigh` 65% / `MemoryMax` 75% / `MemorySwapMax` 40%
-  (`systemctl --user set-property --runtime`, applied by the first launch
-  after a reboot), so the server, the tmux server, the editor and the OS keep
-  the rest whatever the agents do.
+  (`general.agent_memory.fleet_high` / `fleet_max` / `fleet_swap`), so the
+  kernel throttles and reclaims the agents *collectively* before the whole
+  machine thrashes: ten agents each under their own cap would still swap the
+  box. The properties are set with `systemctl --user set-property --runtime`
+  (idempotent) at server start (`agent_limits.ensure_fleet_slice`) and again
+  on every fresh scope probe (at most every 10 min), so a restarted user
+  manager gets them back; the server, the tmux server, the editor and the OS
+  keep the rest whatever the agents do.
 - The scope is named `mindflock-<session>-<ms>.scope`
   (`systemctl --user status 'mindflock-*'` shows each agent's memory). The
   pane's terminal, environment, cwd and exit status are the agent's own:

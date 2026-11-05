@@ -495,7 +495,11 @@ class Prewarm:
             return None, None, []
         chain = _speech.TTS_CHAIN
         engine: Optional[_speech.Backend] = primary
-        if chain.down_reason(primary) or chain.too_slow(primary):
+        held = chain.memory_yield(primary)
+        if held:
+            # Memory is short: a local host is not woken for a prewarm.
+            engine = chain.fallback_for(primary, held=True)
+        elif chain.down_reason(primary) or chain.too_slow(primary):
             engine = chain.fallback_for(primary)
         if engine is None or not _prewarmable(engine):
             return None, None, []

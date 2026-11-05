@@ -20,6 +20,16 @@ The gate answers **go / wait / refuse** from three things:
   have no tmux session yet are counted too. Each one is assumed to still take
   :func:`warmup_bytes` (``MINDFLOCK_AGENT_WARMUP_MB``, default 700). The gate
   works out what memory would read once they have grown.
+* **What a session really costs** (:func:`learned_cost`): the 75th
+  percentile of the steady per-session size the memory sampler measures
+  (``core.memory_watch``, through :func:`set_sizes_source`'s seam), and of
+  the peak sizes for agents still warming. With fewer than
+  :data:`MIN_SAMPLES` readings the cost is :func:`warmup_bytes`. The
+  admission **budget** (:func:`budget`) is ``room = (available - reserve -
+  penalties - growth still to come of the warming agents) / session cost``:
+  the reserve is the low line (``max(2 GB, general.memory_low_pct`` of RAM,
+  15% by default)), the penalties are swap in use and a rising PSI stall.
+  An automatic start waits while the room is 0; a person's start asks.
 * **How many agents are live**, against a machine-wide cap
   (``MINDFLOCK_MAX_LIVE_AGENTS``; by default one agent per
   :data:`GB_PER_AGENT` GB of RAM, so 16 on 20 GB; ``0`` turns the cap off).
@@ -58,7 +68,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from backend import memory_pressure
 
@@ -83,6 +93,11 @@ __all__ = [
     "drain_once",
     "status",
     "person_refusal",
+    "budget",
+    "learned_cost",
+    "capacity",
+    "set_sizes_source",
+    "session_sizes",
 ]
 
 #: The ``error`` a relaunch path answers when its launch was queued here
@@ -189,6 +204,378 @@ def live_cap(total_bytes: float) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# What one session costs (learned), and how many more fit (the budget)
+# --------------------------------------------------------------------------- #
+#: Readings needed before the measured cost replaces :func:`warmup_bytes`.
+MIN_SAMPLES = 3
+#: A reading under this (MB) is a session with nothing running in it (asleep,
+#: just closed), not a sample of what one costs.
+SAMPLE_FLOOR_MB = 50
+#: The learned cost never reads under this (MB): a dozen idle shells must not
+#: make room look unlimited.
+COST_FLOOR_MB = 200
+#: A warming agent's learned peak is capped at this multiple of the steady
+#: cost: the sampler's ``peak_mb`` is a session's whole-life peak, and one
+#: that once ran an 8-worker test suite says nothing about a CLI starting.
+PEAK_CAP_RATIO = 2.5
+#: The reserve never reads under this, whatever ``general.memory_low_pct``.
+RESERVE_FLOOR_BYTES = 2 * _GiB
+#: Swap in use counts against the room (pages the running agents will fault
+#: back in; on WSL a disk-backed swap that drags the whole Windows host
+#: down), up to this share of RAM.
+SWAP_PENALTY_SHARE = 0.10
+#: A RISING PSI stall (``some`` avg10 above avg60, and at least
+#: :data:`PSI_PENALTY_FROM` %) counts ``avg10 / PSI_PENALTY_DIVISOR`` of RAM
+#: against the room, up to :data:`PSI_PENALTY_MAX` (20% stalled → 10% of RAM).
+PSI_PENALTY_FROM = 5.0
+PSI_PENALTY_DIVISOR = 200.0
+PSI_PENALTY_MAX = 0.15
+
+#: ``() -> ({title: mb}, {title: peak_mb})``: per-session memory readings.
+SizesSource = Callable[[], Tuple[Dict[str, int], Dict[str, int]]]
+
+
+def _int_map(raw) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        if isinstance(v, bool):
+            continue
+        try:
+            n = int(float(v))
+        except (TypeError, ValueError):
+            continue
+        if n >= 0:
+            out[str(k)] = n
+    return out
+
+
+def _default_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    """The memory sampler's readings: ``core.memory_watch.session_mb()`` /
+    ``session_peak_mb()`` when that module has them, else the ``memory``
+    field (``{mb, peak_mb, ...}``) of this server's published rows, else
+    nothing. Only in the server process (the ticket pipeline has no
+    sampler: it keeps the default cost). Never raises."""
+    import sys
+
+    if "backend.web.server" not in sys.modules:
+        return {}, {}
+    try:
+        from backend.web.core import memory_watch as _mw  # type: ignore[attr-defined]
+
+        fn_mb = getattr(_mw, "session_mb", None)
+        fn_peak = getattr(_mw, "session_peak_mb", None)
+        if callable(fn_mb):
+            mb = _int_map(fn_mb())
+            peak = _int_map(fn_peak()) if callable(fn_peak) else {}
+            if mb or peak:
+                return mb, peak
+    except Exception:  # noqa: BLE001 — no sampler (yet): the rows, or nothing
+        pass
+    try:
+        from backend.web.core import events as _events
+
+        rows = _events.sessions_snapshot()
+    except Exception:  # noqa: BLE001
+        return {}, {}
+    mb: Dict[str, int] = {}
+    peak: Dict[str, int] = {}
+    for r in rows or ():
+        if not isinstance(r, dict) or r.get("device") or r.get("sleeping"):
+            continue
+        m = r.get("memory")
+        title = r.get("title")
+        if not isinstance(m, dict) or not isinstance(title, str):
+            continue
+        got = _int_map({"mb": m.get("mb"), "peak_mb": m.get("peak_mb")})
+        if "mb" in got:
+            mb[title] = got["mb"]
+        if "peak_mb" in got:
+            peak[title] = got["peak_mb"]
+    return mb, peak
+
+
+_SIZES: SizesSource = _default_sizes
+_SIZES_CACHE: Dict[str, object] = {"at": -1e18, "val": ({}, {})}
+
+
+def set_sizes_source(fn: Optional[SizesSource]) -> None:
+    """Replace where per-session readings come from (None restores the
+    sampler). The seam the memory sampler plugs into; tests feed it."""
+    global _SIZES
+    _SIZES = fn or _default_sizes
+    _SIZES_CACHE.update({"at": -1e18, "val": ({}, {})})
+
+
+def _sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    now = time.monotonic()
+    if now - float(_SIZES_CACHE["at"]) < _PROBE_SECONDS:  # type: ignore[arg-type]
+        return _SIZES_CACHE["val"]  # type: ignore[return-value]
+    try:
+        mb, peak = _SIZES()
+        val = (_int_map(mb), _int_map(peak))
+    except Exception:  # noqa: BLE001 — a reading never fails a launch
+        val = ({}, {})
+    _SIZES_CACHE.update({"at": now, "val": val})
+    return val
+
+
+def session_sizes() -> Tuple[Dict[str, int], Dict[str, int]]:
+    """``({title: mb}, {title: peak_mb})`` from the sizes source (cached
+    :data:`_PROBE_SECONDS`). Never raises."""
+    return _sizes()
+
+
+def _p75(values: List[int]) -> float:
+    vals = sorted(values)
+    if not vals:
+        return 0.0
+    pos = 0.75 * (len(vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(vals) - 1)
+    return vals[lo] + (vals[hi] - vals[lo]) * (pos - lo)
+
+
+def learned_cost(
+    mb: Dict[str, int],
+    peak: Dict[str, int],
+    warming: Iterable[str] = (),
+    default_mb: int = DEFAULT_WARMUP_MB,
+) -> dict:
+    """What one session costs, from the sampler's readings (pure)::
+
+        {"session_mb": steady cost, "peak_mb": what a warming one grows to,
+         "samples": n, "source": "measured" | "default"}
+
+    Steady = the 75th percentile of the sessions NOT still warming (titles
+    in ``warming``) that read at least :data:`SAMPLE_FLOOR_MB`; peak = the
+    75th percentile of every peak reading, never under the steady cost nor
+    over :data:`PEAK_CAP_RATIO` times it. Fewer than :data:`MIN_SAMPLES`
+    readings: ``default_mb`` for both (``source: "default"``)."""
+    warm = set(warming or ())
+    steady = [v for t, v in mb.items() if t not in warm and v >= SAMPLE_FLOOR_MB]
+    peaks = [v for v in peak.values() if v >= SAMPLE_FLOOR_MB]
+    default_mb = max(1, int(default_mb))
+    if len(steady) >= MIN_SAMPLES:
+        session = max(float(COST_FLOOR_MB), _p75(steady))
+        source = "measured"
+    else:
+        session = float(default_mb)
+        source = "default"
+    if len(peaks) >= MIN_SAMPLES:
+        top = _p75(peaks)
+    else:
+        top = float(default_mb)
+    top = min(max(top, session), session * PEAK_CAP_RATIO)
+    return {
+        "session_mb": int(round(session)),
+        "peak_mb": int(round(top)),
+        "samples": len(steady) if source == "measured" else 0,
+        "source": source,
+    }
+
+
+def reserve_bytes(total: float) -> int:
+    """What the machine always keeps: the low line (``max(share of RAM,
+    absolute floor)`` from :func:`memory_pressure.thresholds`), never under
+    :data:`RESERVE_FLOOR_BYTES`."""
+    try:
+        th = memory_pressure.thresholds()["low"]
+        line = max(float(th[0]) * float(total), float(th[1]))
+    except Exception:  # noqa: BLE001
+        line = 0.0
+    return int(max(float(RESERVE_FLOOR_BYTES), line))
+
+
+def _penalties(snap: dict) -> Tuple[int, int]:
+    """``(swap penalty, PSI penalty)`` in bytes for a memory snapshot."""
+    total = float(snap.get("total") or 0)
+    swap_used = max(
+        0.0, float(snap.get("swap_total") or 0) - float(snap.get("swap_free") or 0)
+    )
+    swap_pen = min(swap_used, SWAP_PENALTY_SHARE * total)
+    psi = snap.get("psi") or {}
+    try:
+        a10 = float(psi.get("some_avg10") or 0.0)
+        a60 = float(psi.get("some_avg60") or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        a10 = a60 = 0.0
+    psi_pen = 0.0
+    if a10 >= PSI_PENALTY_FROM and a10 > a60:
+        psi_pen = total * min(PSI_PENALTY_MAX, a10 / PSI_PENALTY_DIVISOR)
+    return int(swap_pen), int(psi_pen)
+
+
+def _mb(n) -> int:
+    return int(round(float(n or 0) / _MiB))
+
+
+def budget(
+    snap: dict,
+    cost: dict,
+    warming_mb: Iterable[Optional[int]] = (),
+    *,
+    reserve: Optional[int] = None,
+    live: Optional[int] = None,
+    cap: int = 0,
+) -> dict:
+    """How many more sessions fit now (pure; ``snap`` a
+    :func:`memory_pressure.snapshot`, ``cost`` a :func:`learned_cost`,
+    ``warming_mb`` the current size of each agent still warming, None when
+    unmeasured)::
+
+        {"room": n | None, "session_mb", "peak_mb", "available_mb",
+         "reserve_mb", "penalty_mb", "to_come_mb", "free_mb", "short_mb",
+         "level", "source", "samples", "live", "cap", "why"}
+
+    ``free = available - reserve - penalties - to_come``, where each warming
+    agent still has ``peak - its size now`` to come (all of ``peak`` when
+    unmeasured); ``room = floor(free / session)``, 0 while the level is low
+    or critical, never past the live cap. ``room`` None: memory unknown and
+    no cap. ``short_mb``: what one more session is missing (0 when it fits).
+    """
+    lvl = str(snap.get("level") or "unknown")
+    total = float(snap.get("total") or 0)
+    session_b = max(1, int(cost.get("session_mb") or DEFAULT_WARMUP_MB)) * _MiB
+    peak_b = max(session_b, int(cost.get("peak_mb") or 0) * _MiB)
+    out = {
+        "room": None,
+        "session_mb": _mb(session_b),
+        "peak_mb": _mb(peak_b),
+        "available_mb": None,
+        "reserve_mb": None,
+        "penalty_mb": 0,
+        "to_come_mb": 0,
+        "free_mb": None,
+        "short_mb": 0,
+        "level": lvl,
+        "source": cost.get("source") or "default",
+        "samples": int(cost.get("samples") or 0),
+        "live": live,
+        "cap": int(cap or 0),
+        "why": "",
+    }
+    left_by_cap: Optional[int] = None
+    if cap and live is not None:
+        left_by_cap = max(0, int(cap) - int(live))
+    if total <= 0 or lvl not in ("ok", "low", "critical"):
+        out["room"] = left_by_cap
+        out["why"] = (
+            "memory is not measured here; %d agents are running and automatic "
+            "starts stop at %d" % (live or 0, cap)
+            if left_by_cap is not None
+            else "memory is not measured on this machine: nothing is held for it"
+        )
+        return out
+    avail = float(snap.get("available") or 0)
+    res = float(reserve_bytes(total) if reserve is None else reserve)
+    swap_pen, psi_pen = _penalties(snap)
+    to_come = 0.0
+    for cur in warming_mb or ():
+        if cur is None:
+            to_come += peak_b
+        else:
+            to_come += max(0.0, peak_b - float(cur) * _MiB)
+    free = avail - res - swap_pen - psi_pen - to_come
+    room = max(0, int(free // session_b)) if free > 0 else 0
+    if lvl in ("low", "critical"):
+        room = 0
+    out.update(
+        available_mb=_mb(avail),
+        reserve_mb=_mb(res),
+        penalty_mb=_mb(swap_pen + psi_pen),
+        to_come_mb=_mb(to_come),
+        free_mb=_mb(free),
+        short_mb=max(0, _mb(session_b - max(0.0, free))),
+    )
+    each = "each ~%s (%s)" % (
+        _gb(session_b),
+        (
+            "measured over %d sessions" % out["samples"]
+            if out["source"] == "measured"
+            else "no measurements yet"
+        ),
+    )
+    parts = ["%s available" % _gb(avail), "%s reserve" % _gb(res)]
+    if swap_pen:
+        parts.append("%s for swap in use" % _gb(swap_pen))
+    if psi_pen:
+        parts.append("%s for a rising memory stall" % _gb(psi_pen))
+    if to_come:
+        parts.append("%s still to come for agents starting" % _gb(to_come))
+    sums = " − ".join(parts)
+    if lvl in ("low", "critical"):
+        out["why"] = memory_pressure.describe(snap) or "memory is %s" % lvl
+    elif room == 0:
+        out["why"] = (
+            "one more session needs ~%s; only %s is free above the reserve (%s)"
+            % (_gb(session_b), _gb(max(0.0, free)), sums)
+        )
+    else:
+        out["why"] = "room for %d more session%s: %s, %s" % (
+            room,
+            "" if room == 1 else "s",
+            sums,
+            each,
+        )
+    if left_by_cap is not None and left_by_cap < room:
+        room = left_by_cap
+        out["why"] = "%d agents are running; automatic starts stop at %d" % (
+            live,
+            cap,
+        )
+    out["room"] = room
+    return out
+
+
+def capacity(now: Optional[float] = None) -> dict:
+    """The budget for an orchestrator or the UI (``GET /api/memory/capacity``,
+    MCP ``whoami`` / ``spawn_session`` / ``start_team_run``): :func:`budget`'s
+    fields plus ``warming`` and ``hint``, one line to plan a worker count
+    from. Never raises."""
+    try:
+        a = assess(now=now)
+        b = dict(a["budget"])
+        b["warming"] = a["warming"]
+        b["hint"] = capacity_hint(b)
+        return b
+    except Exception as err:  # noqa: BLE001
+        return {
+            "room": None,
+            "session_mb": DEFAULT_WARMUP_MB,
+            "why": str(err),
+            "hint": "",
+        }
+
+
+def capacity_hint(b: dict) -> str:
+    """``"room for 2 more sessions now; more will queue"`` and its kin."""
+    room = b.get("room")
+    if room is None:
+        return "memory is not measured here: spawns are not held back for it"
+    if room > 0:
+        return "room for %d more session%s now (~%d MB each); more will queue" % (
+            room,
+            "" if room == 1 else "s",
+            int(b.get("session_mb") or 0),
+        )
+    if b.get("level") in ("low", "critical"):
+        return "no room now (%s); a spawn will queue until memory allows" % (
+            b.get("why") or "memory is low"
+        )
+    if b.get("short_mb"):
+        return (
+            "no room for another session now: one needs ~%d MB, %d MB more than "
+            "is free above the reserve; a spawn will queue until memory allows"
+            % (int(b.get("session_mb") or 0), int(b.get("short_mb") or 0))
+        )
+    return "no room for another session now (%s); a spawn will queue" % (
+        b.get("why") or "the live-agent cap"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Which agents are live, and which are still warming up
 # --------------------------------------------------------------------------- #
 def _tmux_agents() -> Optional[List[Tuple[str, float]]]:
@@ -277,10 +664,13 @@ def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
         {"memory": <memory_pressure.snapshot()>, "level": str,
          "live": int | None, "warming": int, "cap": int,
          "warmup_bytes": int, "projected_available": bytes | None,
-         "projected_level": "ok"|"low"|"critical"|"unknown"}
+         "projected_level": "ok"|"low"|"critical"|"unknown",
+         "cost": <learned_cost()>, "to_come": bytes, "budget": <budget()>}
 
     ``projected_*``: what memory would read once the warming agents have
-    grown. ``live`` is None when tmux can't be read. Never raises."""
+    grown — each to the learned peak (``cost["peak_mb"]``) from the size it
+    reads now (all of it when unmeasured); ``warmup_bytes`` is that peak in
+    bytes. ``live`` is None when tmux can't be read. Never raises."""
     now = time.time() if now is None else now
     snap = memory_pressure.snapshot(fresh=fresh)
     agents = _agents(fresh=fresh)
@@ -291,16 +681,31 @@ def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
     warming_names |= set(admitted)
     live = None if agents is None else len(names | set(admitted))
     total = float(snap.get("total") or 0)
-    wb = warmup_bytes()
+    mb, peak = _sizes()
+    by_tmux = {_tmux_name(t): t for t in set(mb) | set(peak)}
+    warming_titles = {by_tmux[n] for n in warming_names if n in by_tmux}
+    cost = learned_cost(mb, peak, warming_titles, _mb(warmup_bytes()))
+    warming_mb: List[Optional[int]] = [
+        mb.get(by_tmux[n]) if n in by_tmux else None for n in sorted(warming_names)
+    ]
+    peak_b = int(cost["peak_mb"]) * _MiB
+    to_come = sum(
+        peak_b if cur is None else max(0, peak_b - int(cur) * _MiB)
+        for cur in warming_mb
+    )
+    cap = live_cap(total)
     out = {
         "memory": snap,
         "level": str(snap.get("level") or "unknown"),
         "live": live,
         "warming": len(warming_names),
-        "cap": live_cap(total),
-        "warmup_bytes": wb,
+        "cap": cap,
+        "warmup_bytes": peak_b,
         "projected_available": None,
         "projected_level": "unknown",
+        "cost": cost,
+        "to_come": int(to_come),
+        "budget": budget(snap, cost, warming_mb, live=live, cap=cap),
     }
     if snap.get("level") in ("ok", "low", "critical") and not warming_names:
         # Nothing warming: the projection IS the reading (its hysteresis and
@@ -308,7 +713,7 @@ def assess(*, fresh: bool = False, now: Optional[float] = None) -> dict:
         out["projected_available"] = snap.get("available")
         out["projected_level"] = out["level"]
     elif total and snap.get("level") in ("ok", "low", "critical"):
-        projected = float(snap.get("available") or 0) - len(warming_names) * wb
+        projected = float(snap.get("available") or 0) - to_come
         out["projected_available"] = int(max(0.0, projected))
         th = memory_pressure.thresholds()
         share = projected / total
@@ -345,9 +750,16 @@ def _memory_reason(a: dict) -> str:
     return "%d agent%s still starting (~%s to come): only %s would be left" % (
         a["warming"],
         "" if a["warming"] == 1 else "s",
-        _gb(a["warming"] * a["warmup_bytes"]),
+        _gb(a.get("to_come", a["warming"] * a["warmup_bytes"])),
         _gb(a["projected_available"]),
     )
+
+
+def _budget_full(a: dict) -> bool:
+    """Whether the budget has no room for one more session while the level
+    itself reads ok (one more would take the machine past its reserve)."""
+    b = a.get("budget") or {}
+    return b.get("room") == 0 and b.get("level") == "ok" and bool(b.get("short_mb"))
 
 
 def decide(
@@ -361,9 +773,14 @@ def decide(
     ``kind="auto"``: ``"go"`` or ``"wait"`` (memory low/critical now or once
     the warming agents grow; the live cap reached; or within
     :func:`auto_spacing` of the previous automatic launch).
-    ``kind="person"``: ``"go"``, ``"confirm"`` (low) or ``"refuse"``
-    (critical). Both need the person's Start anyway; they differ only in
-    wording. ``level`` is the worse of now and projected. Never raises."""
+    ``kind="person"``: ``"go"``, ``"confirm"`` (low, or no room left in the
+    budget) or ``"refuse"`` (critical). Both need the person's Start anyway;
+    they differ only in wording. ``level`` is the worse of now and
+    projected. Never raises.
+
+    The budget (:func:`budget`): an automatic start also waits (``why``
+    ``"memory"``) while the level reads ok but one more session would not
+    fit above the reserve — checked after the cap."""
     now = time.time() if now is None else now
     a = assess(fresh=fresh, now=now)
     worst = _worst(a)
@@ -373,6 +790,8 @@ def decide(
             out.update(decision="refuse", reason=_memory_reason(a))
         elif worst == "low":
             out.update(decision="confirm", reason=_memory_reason(a))
+        elif _budget_full(a):
+            out.update(decision="confirm", reason=a["budget"]["why"])
         return out
     if worst in ("low", "critical"):
         out.update(
@@ -390,6 +809,9 @@ def decide(
             "machine" % (live, cap),
         )
         return out
+    if _budget_full(a):
+        out.update(decision="wait", why="memory", reason=a["budget"]["why"])
+        return out
     spacing = auto_spacing()
     with _LOCK:
         last = _LAST_AUTO["at"]
@@ -404,28 +826,15 @@ def decide(
 
 
 def room(now: Optional[float] = None) -> Optional[int]:
-    """How many more agents automatic starts may begin now before memory
-    would read low once they (and the agents still warming) have grown, or
-    the live cap is reached. None = no limit known (memory unknown, no cap).
-    For a caller that starts several at once (a team run's pass). Never
-    raises."""
-    a = assess(now=now)
-    snap = a["memory"]
-    out: Optional[int] = None
-    total = float(snap.get("total") or 0)
-    if total and snap.get("level") in ("ok", "low", "critical"):
-        if a["level"] in ("low", "critical"):
-            return 0
-        th = memory_pressure.thresholds()["low"]
-        line = max(th[0] * total, float(th[1]))
-        projected = float(a["projected_available"] or 0)
-        wb = a["warmup_bytes"] or 1
-        out = max(0, int((projected - line) // wb))
-    cap, live = a["cap"], a["live"]
-    if cap and live is not None:
-        left = max(0, cap - live)
-        out = left if out is None else min(out, left)
-    return out
+    """How many more agents automatic starts may begin now (:func:`budget`):
+    the room above the reserve at the learned per-session cost, after the
+    growth still to come of the agents warming, never past the live cap.
+    None = no limit known (memory unknown, no cap). For a caller that starts
+    several at once (a team run's pass). Never raises."""
+    try:
+        return assess(now=now)["budget"]["room"]
+    except Exception:  # noqa: BLE001 — advisory
+        return None
 
 
 def person_refusal(verdict: dict) -> Optional[dict]:
@@ -439,19 +848,30 @@ def person_refusal(verdict: dict) -> Optional[dict]:
     snap = a.get("memory") or {}
     critical = verdict.get("decision") == "refuse"
     free = _gb(snap.get("available"))
-    head = "Memory is %s: %s free." % ("critically low" if critical else "low", free)
+    tight = verdict.get("level") == "ok"  # the budget, not the level
+    head = "Memory is %s: %s free." % (
+        "critically low" if critical else ("tight" if tight else "low"),
+        free,
+    )
     if a.get("warming"):
         head += " %d agent%s still starting will take ~%s more." % (
             a["warming"],
             "" if a["warming"] == 1 else "s",
-            _gb(a["warming"] * a.get("warmup_bytes", 0)),
+            _gb(a.get("to_come", a["warming"] * a.get("warmup_bytes", 0))),
         )
+    head += " " + _room_sentence(a.get("budget") or {})
     tail = (
         " Starting another agent will likely freeze the machine."
         if critical
         else " Starting another agent may freeze the machine."
     )
+    b = a.get("budget") or {}
     return {
+        "capacity": {
+            "room": b.get("room"),
+            "session_mb": b.get("session_mb"),
+            "reserve_mb": b.get("reserve_mb"),
+        },
         # What a client without the app's dialog shows (the phone, the CLI).
         "error": "%s%s (send it again with start_anyway: true to start it "
         "regardless)" % (head, tail),
@@ -464,6 +884,31 @@ def person_refusal(verdict: dict) -> Optional[dict]:
         "live": a.get("live"),
         "memory": snap,
     }
+
+
+def _room_sentence(b: dict) -> str:
+    """The person's dialog line about the room: ``"No room for another
+    session: one needs ~0.7 GB, 0.3 GB is free above the 3.0 GB this
+    machine keeps in reserve."``."""
+    room = b.get("room")
+    each = float(b.get("session_mb") or 0) / 1024.0
+    if room is None or b.get("reserve_mb") is None:
+        return ""
+    if room > 0:
+        return "There is room for %d more session%s (~%.1f GB each)." % (
+            room,
+            "" if room == 1 else "s",
+            each,
+        )
+    return (
+        "No room for another session: one needs ~%.1f GB, %.1f GB is free "
+        "above the %.1f GB this machine keeps in reserve."
+        % (
+            each,
+            max(0.0, float(b.get("free_mb") or 0)) / 1024.0,
+            float(b.get("reserve_mb") or 0) / 1024.0,
+        )
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -957,11 +1402,14 @@ def rename(old: str, new: str) -> None:
 def status() -> dict:
     """For the UI (``GET /api/system/memory`` → ``gate``): ``{"holding",
     "queued": [...], "reason", "live", "cap", "warming",
-    "projected_available", "projected_level"}``. ``holding`` is true
-    while anything waits. Never raises."""
+    "projected_available", "projected_level", "room", "session_mb"}``.
+    ``holding`` is true while anything waits. Never raises."""
     a = assess()
     q = items()
+    b = a.get("budget") or {}
     return {
+        "room": b.get("room"),
+        "session_mb": b.get("session_mb"),
         "holding": bool(q),
         "queued": q,
         "reason": q[0]["reason"] if q else "",
@@ -983,3 +1431,4 @@ def _reset_for_tests() -> None:
         _ADMITTED.clear()
         _LAST_AUTO["at"] = 0.0
     _PROBE_CACHE.update({"at": -1e18, "val": None})
+    set_sizes_source(lambda: ({}, {}))
