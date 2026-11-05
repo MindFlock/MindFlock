@@ -68,7 +68,11 @@ const SOURCE_RUN = DEV || !app.isPackaged
 if (DEV) {
   app.setAppUserModelId(DEV_AUMID) // own taskbar group + icon
   try {
-    app.setPath('userData', path.join(app.getPath('appData'), 'MindFlock (dev)'))
+    // MINDFLOCK_DEV_PROFILE names another dev profile, so two dev shells (the
+    // WSL one and the native-Windows one) can run side by side: one profile
+    // is one single-instance lock.
+    const profile = (process.env.MINDFLOCK_DEV_PROFILE || '').trim() || 'MindFlock (dev)'
+    app.setPath('userData', path.join(app.getPath('appData'), profile))
   } catch (e) { /* fall back to the shared dir if this platform disallows it */ }
 }
 
