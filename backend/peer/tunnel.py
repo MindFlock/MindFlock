@@ -39,6 +39,7 @@ import signal
 import subprocess
 import sys
 
+from backend import compat
 from backend.peer import paths
 
 __all__ = [
@@ -251,7 +252,7 @@ class QuickTunnel:
                 stderr=subprocess.STDOUT,
                 env=env,
                 cwd=self.workdir,
-                start_new_session=True,
+                **compat.detached_kwargs(),
                 limit=MAX_LINE,
             )
         except OSError as e:

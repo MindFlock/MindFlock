@@ -35,6 +35,8 @@ import os
 import subprocess
 from typing import Any, Callable, Iterable, List, Mapping, Optional
 
+from backend import osflags
+
 _log = logging.getLogger(__name__)
 
 __all__ = ["Identity", "is_local_row", "SHELL_SUFFIX"]
@@ -59,7 +61,9 @@ class Identity:
         run: Optional[Callable[..., Any]] = None,
     ) -> None:
         self.env = os.environ if env is None else env
-        self._run = run or subprocess.run
+        # tmux on POSIX; the session host (which sets $TMUX/$TMUX_PANE the
+        # same way) on native Windows.
+        self._run = run or osflags.tmux_run
         self._title: Optional[str] = None
         self._tmux_name: Optional[str] = None
         self._tmux_looked_up = False

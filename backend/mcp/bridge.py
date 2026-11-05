@@ -73,6 +73,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from backend import compat
+
 __all__ = [
     "BRIDGE_FILE",
     "SERVERS_FILE",
@@ -226,6 +228,13 @@ class Upstream:
         env.pop(TOKEN_ENV, None)
         env.update({str(k): str(v) for k, v in (d.get("env") or {}).items()})
         cwd = str(d.get("cwd") or "") or os.path.expanduser("~")
+        if compat.IS_WINDOWS:
+            # CreateProcess finds only .exe on PATH; `npx` & co. are .cmd
+            # shims there (an agent CLI's own launcher resolves them the
+            # same way, through PATHEXT).
+            import shutil
+
+            argv[0] = shutil.which(argv[0], path=env.get("PATH")) or argv[0]
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
         logf: Any = subprocess.DEVNULL
@@ -246,7 +255,7 @@ class Upstream:
                 stderr=logf,
                 cwd=cwd,
                 env=env,
-                start_new_session=True,
+                **compat.detached_kwargs(),
             )
         finally:
             if logf is not subprocess.DEVNULL:
@@ -271,9 +280,9 @@ class Upstream:
             proc.stdin.close()
         except Exception:  # noqa: BLE001
             pass
-        for sig in (signal.SIGTERM, signal.SIGKILL):
+        for sig in (signal.SIGTERM, getattr(signal, "SIGKILL", 9)):
             try:
-                os.killpg(proc.pid, sig)
+                compat.kill_group(proc.pid, sig)
             except (OSError, AttributeError):
                 try:
                     proc.send_signal(sig)
@@ -1149,11 +1158,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     state_dir = os.path.abspath(args.state_dir)
     os.makedirs(state_dir, mode=0o700, exist_ok=True)
 
-    import fcntl  # POSIX only; the launch side never starts us elsewhere
-
     lock_fd = os.open(os.path.join(state_dir, LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        compat.flock(lock_fd, compat.LOCK_EX | compat.LOCK_NB)
     except OSError:
         _log("another bridge holds the lock; exiting")
         return 3

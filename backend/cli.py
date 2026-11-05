@@ -1570,9 +1570,16 @@ def _cmd_attach(args: argparse.Namespace) -> int:
         from backend.session.tmux.tmux import to_mindflock_tmux_name
 
         tmux_name = to_mindflock_tmux_name(str(inst.get("title", "")))
-    if not shutil.which("tmux"):
+    from backend.session import mux
+
+    if not mux.available():
         print(
-            "tmux not found on PATH — run `mindflock doctor` for install hints",
+            (
+                "the MindFlock session host is not installed (pywinpty)"
+                if mux.IS_WINDOWS
+                else "tmux not found on PATH"
+            )
+            + " — run `mindflock doctor` for install hints",
             file=sys.stderr,
         )
         return 1
@@ -1582,8 +1589,12 @@ def _cmd_attach(args: argparse.Namespace) -> int:
         client.post(
             base, "/api/instances/%s/wake" % _quote_title(str(inst.get("title", "")))
         )
-    # Replace this process with tmux so the user lands in the live session.
-    os.execvp("tmux", ["tmux", "attach-session", "-t", tmux_name])
+    # Replace this process with tmux so the user lands in the live session
+    # (on Windows: a session-host client in this console).
+    if mux.IS_WINDOWS:
+        mux.exec_attach(tmux_name)
+    else:
+        os.execvp("tmux", ["tmux", "attach-session", "-t", tmux_name])
     return 0  # pragma: no cover — execvp does not return
 
 
@@ -3223,6 +3234,7 @@ def _start_server_detached(port: Optional[int] = None) -> str:
     Only stderr goes to ~/.mindflock/logs/serve.log: stdout is where the
     startup banner prints the access token and its sign-in QR, which must
     never land in a log file (the server logs a redacted banner itself)."""
+    from backend import compat
     from backend.config.config import GetConfigDir
 
     exe = shutil.which("mindflock")
@@ -3238,8 +3250,8 @@ def _start_server_detached(port: Optional[int] = None) -> str:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=fh,
-            start_new_session=True,
             cwd=os.path.expanduser("~"),
+            **compat.detached_kwargs(),
         )
     return path
 

@@ -44,7 +44,7 @@ import threading
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Tuple
 
-from backend import gitutil
+from backend import compat, gitutil
 from backend.peer import paths
 
 __all__ = [
@@ -195,7 +195,7 @@ def _run(
                 cwd=cwd,
                 env=env,
                 close_fds=True,
-                start_new_session=True,
+                **compat.detached_kwargs(),
             )
         except OSError as e:
             raise ShareError("git unavailable: %s" % e.strerror) from None

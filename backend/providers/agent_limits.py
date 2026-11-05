@@ -178,6 +178,13 @@ def _valid_size(spec: str) -> bool:
 
 
 def _total_memory() -> int:
+    if os.name == "nt":  # no sysconf there
+        try:
+            import psutil
+
+            return int(psutil.virtual_memory().total)
+        except Exception:  # noqa: BLE001
+            return 0
     try:
         return int(os.sysconf("SC_PAGE_SIZE")) * int(os.sysconf("SC_PHYS_PAGES"))
     except (AttributeError, OSError, ValueError):
@@ -485,7 +492,13 @@ def wrap_launch(cmd: str, session_name: str) -> str:
 
     The scope runs ``sh -c <cmd>``: ``systemd-run --scope`` execs it in place,
     so the pane's terminal, environment, working directory and exit status
-    are the agent's own."""
+    are the agent's own.
+
+    Native Windows: neither guard yet — no systemd scopes (a Job Object is
+    the later equivalent, docs/windows.md) and the shim's ``PATH`` splice is
+    POSIX-shaped — so the launch is ``cmd`` itself."""
+    if os.name == "nt":
+        return cmd
     try:
         cfg = config()
         if not cfg.get("enabled", True):

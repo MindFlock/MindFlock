@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import io
+import os
 from unittest.mock import patch
 
 import pytest
@@ -223,6 +224,34 @@ class TestTerminalArgv:
         ):
             assert tl.build_terminal_tab_argv("T", "sess") is None
 
-    def test_native_windows_no_launch(self):
-        with patch.object(osenv, "os_kind", return_value="windows"):
+    def test_native_windows_opens_a_wt_tab_on_the_session_host(self):
+        # No tmux there: the tab runs a session-host client (mux.exec_attach).
+        with (
+            patch.object(osenv, "os_kind", return_value="windows"),
+            patch(
+                "shutil.which", side_effect=lambda c: "C:/wt.exe" if "wt" in c else None
+            ),
+        ):
+            argv = tl.build_terminal_tab_argv("T", "sess")
+        assert argv[:6] == ["C:/wt.exe", "-w", "0", "nt", "--title", "T"]
+        assert argv[-4:] == tl.windows_attach_argv("sess")
+        assert "mux.exec_attach" in argv[-2] and argv[-1] == "sess"
+
+    def test_native_windows_without_wt_opens_a_console(self):
+        with (
+            patch.object(osenv, "os_kind", return_value="windows"),
+            patch("shutil.which", return_value=None),
+            patch.dict(os.environ, {"COMSPEC": "C:/Windows/system32/cmd.exe"}),
+        ):
+            argv = tl.build_terminal_tab_argv("T", "sess")
+        # `start ""`: an empty window title, so the command is not taken for one
+        assert argv[:4] == ["C:/Windows/system32/cmd.exe", "/c", "start", ""]
+        assert argv[-1] == "sess"
+
+    def test_native_windows_nothing_to_open_degrades(self):
+        with (
+            patch.object(osenv, "os_kind", return_value="windows"),
+            patch("shutil.which", return_value=None),
+            patch.dict(os.environ, {"COMSPEC": ""}),
+        ):
             assert tl.build_terminal_tab_argv("T", "sess") is None

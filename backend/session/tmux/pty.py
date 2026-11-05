@@ -39,11 +39,14 @@ The ``cmd`` argument is a :class:`backend.cmd.Cmd` (the Python mirror of
 
 from __future__ import annotations
 
+import os
 import struct
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
 from backend import cmd as cmd_pkg
+
+_IS_WINDOWS = os.name == "nt"
 
 
 class PtyFile:
@@ -60,30 +63,45 @@ class PtyFile:
 
     def __init__(self, proc) -> None:
         self._proc = proc
-        # ptyprocess exposes the master fd as ``.fd``.
-        self._fd: int = proc.fd
+        # ptyprocess exposes the master fd as ``.fd``. A session-host client
+        # (``mux.attach`` on native Windows) has none: ``fd`` is None and
+        # reads/writes go through the client object itself.
+        self._fd: Optional[int] = proc.fd
         self._closed = False
 
     # --- *os.File surface --------------------------------------------------
     def write(self, data: bytes) -> int:
         """Write bytes to the PTY master (mirrors ``(*os.File).Write``)."""
+        if self._fd is None:
+            return self._proc.write(data)
         import os
 
         return os.write(self._fd, data)
 
     def read(self, n: int = 4096) -> bytes:
         """Read up to ``n`` bytes from the PTY master (mirrors ``Read``)."""
+        if self._fd is None:
+            try:
+                return self._proc.read(n)
+            except EOFError:
+                return b""
         import os
 
         return os.read(self._fd, n)
 
-    def fileno(self) -> int:
-        """Return the underlying fd (mirrors ``(*os.File).Fd``)."""
+    def fileno(self) -> Optional[int]:
+        """Return the underlying fd (mirrors ``(*os.File).Fd``); None for a
+        session-host client, which has no selectable fd."""
         return self._fd
 
     # Go uses .Fd(); keep a Pythonic alias too.
-    def fd(self) -> int:
+    def fd(self) -> Optional[int]:
         return self._fd
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        """Resize through the client (the session host's path for
+        :func:`set_size`)."""
+        self._proc.setwinsize(rows, cols)
 
     def close(self) -> None:
         """Close the PTY master and tear down the child (mirrors ``Close``)."""
@@ -98,6 +116,8 @@ class PtyFile:
             else:
                 self._proc.close()
         except Exception:
+            if self._fd is None:
+                return
             # Match Go's master-close which, on a detach, may already be gone.
             import os
 
@@ -149,6 +169,8 @@ class Pty(PtyFactory):
     """
 
     def start(self, cmd: cmd_pkg.Cmd) -> Tuple[Optional[PtyFile], Optional[Exception]]:
+        if _IS_WINDOWS:
+            return _start_windows(cmd)
         try:
             from ptyprocess import PtyProcess
 
@@ -163,6 +185,72 @@ class Pty(PtyFactory):
     def close(self) -> None:
         """No-op (Go ``(pt Pty) Close() {}``); safe to call repeatedly."""
         return None
+
+
+class _Finished:
+    """The PTY handle of a tmux command that already ran to completion (a
+    detached ``new-session`` on the session host): nothing to read, write
+    or reap."""
+
+    fd = None
+    pid = None
+
+    def read(self, size: int = 1024) -> bytes:
+        return b""
+
+    def write(self, data: bytes) -> int:
+        raise OSError("the command has finished; there is no terminal to write to")
+
+    def setwinsize(self, rows: int, cols: int) -> None:
+        return None
+
+    def isalive(self) -> bool:
+        return False
+
+    def close(self, force: bool = True) -> None:
+        return None
+
+
+def _attach_target(args) -> Optional[str]:
+    """The ``-t`` target of a ``tmux attach-session`` argv, else None."""
+    if len(args) < 2 or args[1] not in ("attach-session", "attach", "a"):
+        return None
+    for i, a in enumerate(args):
+        if a == "-t" and i + 1 < len(args):
+            return args[i + 1]
+        if a.startswith("-t") and len(a) > 2:
+            return a[2:].lstrip("=")
+    return None
+
+
+def _start_windows(
+    cmd: cmd_pkg.Cmd,
+) -> Tuple[Optional[PtyFile], Optional[Exception]]:
+    """Native Windows has no POSIX PTY and no tmux: a ``tmux attach-session``
+    becomes a session-host client (:func:`backend.session.mux.attach`), any
+    other tmux command (``new-session -d …``) runs to completion through
+    :func:`backend.session.mux.run`."""
+    from backend.session import mux
+
+    args = list(cmd.args)
+    if not args or args[0] != "tmux":
+        return None, OSError(
+            "a PTY for %r is not available on Windows (only tmux commands are)"
+            % (args[:1],)
+        )
+    try:
+        target = _attach_target(args)
+        if target is not None:
+            return PtyFile(mux.attach(target, readonly="-r" in args)), None
+        res = mux.run(args, cwd=cmd.dir, capture_output=True)
+    except Exception as e:  # noqa: BLE001 - mirror Go error return
+        return None, e
+    if res.returncode != 0:
+        err = (res.stderr or b"").decode("utf-8", "replace").strip()
+        return None, cmd_pkg.ExitError(
+            res.returncode, res.stderr or b"", err or cmd_pkg.to_string(cmd)
+        )
+    return PtyFile(_Finished()), None
 
 
 def MakePtyFactory() -> PtyFactory:
@@ -201,6 +289,14 @@ def set_size(f, ws: Winsize) -> Optional[Exception]:
     each a ``uint16`` (little/native endian via ``struct`` 'H'). Returns
     ``None`` on success or the raised exception (Go's ``error``).
     """
+    if getattr(f, "fileno", None) is not None and f.fileno() is None:
+        # A session-host client (native Windows): no ioctl, the client
+        # carries the resize to the host.
+        try:
+            f.setwinsize(ws.rows, ws.cols)
+        except Exception as e:  # noqa: BLE001 - mirror Go error return
+            return e
+        return None
     import fcntl
     import termios
 
