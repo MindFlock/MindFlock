@@ -32,8 +32,7 @@ import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
-from backend import compat
-from backend.session.winmux import formats, ptys, proto
+from backend.session.winmux import ptys, proto
 from backend.session.winmux.proto import CmdError
 from backend.session.winmux.screen import DEFAULT_HISTORY, Term
 

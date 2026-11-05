@@ -114,6 +114,17 @@ def _root() -> str:
     return os.path.dirname(os.path.dirname(os.path.dirname(here)))
 
 
+_MIDDLEMAN = (
+    "import subprocess, sys\n"
+    "f = int(sys.argv[1])\n"
+    "kw = dict(stdin=-3, stdout=-3, stderr=-3, close_fds=True)\n"
+    "try:\n"
+    "    subprocess.Popen(sys.argv[2:], creationflags=f | 0x01000000, **kw)\n"
+    "except OSError:\n"
+    "    subprocess.Popen(sys.argv[2:], creationflags=f, **kw)\n"
+)
+
+
 def _spawn_host(run_dir: str, env: Dict[str, str]) -> None:
     from backend.session.winmux import _bootstrap
 
@@ -128,15 +139,20 @@ def _spawn_host(run_dir: str, env: Dict[str, str]) -> None:
     )
     if compat.IS_WINDOWS:  # pragma: no cover - Windows
         # No console (DETACHED_PROCESS), own group, and out of the caller's
-        # job when allowed: Electron / a terminal may kill their job on exit,
-        # and the host must outlive them like a tmux server.
+        # job when allowed (Electron / a terminal may kill their job on exit).
+        # And through a short-lived middleman: Windows keeps the parent link,
+        # so `taskkill /T` of the MindFlock server's tree (a restart) would
+        # take a direct child with it. With the middleman gone the chain is
+        # broken — the host outlives the server, as a daemonized tmux does.
         flags = 0x00000008 | 0x00000200 | 0x08000000
-        try:
-            subprocess.Popen(argv, creationflags=flags | 0x01000000, **kw)
-            return
-        except OSError:
-            subprocess.Popen(argv, creationflags=flags, **kw)
-            return
+        subprocess.run(
+            [sys.executable, "-c", _MIDDLEMAN, str(flags)] + argv,
+            creationflags=flags,
+            timeout=60,
+            check=False,
+            **kw,
+        )
+        return
     subprocess.Popen(argv, start_new_session=True, **kw)
 
 

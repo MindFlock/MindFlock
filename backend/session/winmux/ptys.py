@@ -142,8 +142,16 @@ class WinPty(Pty):  # pragma: no cover - exercised on Windows
     def __init__(
         self, argv: List[str], cwd: str, env: Dict[str, str], rows: int, cols: int
     ) -> None:
+        import shutil
+
         import winpty
 
+        argv = list(argv)
+        if not os.path.isabs(argv[0]):
+            # pywinpty searches env["PATH"] only, and a Windows block often
+            # spells it "Path": resolve here, with PATHEXT, like CreateProcess.
+            path = next((v for k, v in env.items() if k.upper() == "PATH"), None)
+            argv[0] = shutil.which(argv[0], path=path) or argv[0]
         self._p = winpty.PtyProcess.spawn(
             argv, cwd=cwd, env=env, dimensions=(rows, cols)
         )
