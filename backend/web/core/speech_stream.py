@@ -29,7 +29,11 @@ the one forced commit is at that edge — before a pass, the tail words that
 start before the last :data:`WINDOW_SECONDS` of audio (a tail that never
 settled) are committed as they leave, and the audio before the edge goes.
 
-Silence costs nothing: a chunk whose RMS is under :data:`SILENCE_RMS`,
+Silence costs nothing: a chunk whose RMS is under the stream's quiet
+level (:data:`SILENCE_RMS`, or :data:`FLOOR_FACTOR` times the room's noise
+floor when that is more — :meth:`Stream.quiet_rms`; a browser's gain control
+lifts the room to well over :data:`SILENCE_RMS` once the person stops, and
+whisper wrote "I'm not listening." into that after "Stop listening."),
 appended to a window with no uncommitted tail, runs no pass (``last_ms`` is
 0) — there is nothing for a pass to settle and nothing new to hear. The
 audio is kept, so a soft start of speech is decoded with the next chunk.
@@ -113,6 +117,7 @@ from array import array
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from backend.web.core import speech_turn as _turn
+from backend.web.core import voice_words as _voice_words
 
 __all__ = [
     "CLIENT_STREAMS",
@@ -170,6 +175,31 @@ MAX_HELD_SECONDS = WINDOW_SECONDS
 #: A chunk quieter than this (RMS, samples in [-1, 1); about -40 dBFS) is
 #: silence: with no uncommitted tail it runs no pass.
 SILENCE_RMS = 0.01
+#: The room's noise floor, learnt per stream: the :data:`FLOOR_PERCENTILE`
+#: of its 100 ms frames' RMS over the last :data:`FLOOR_FRAMES` (3 s: a
+#: browser's gain control lifts the room within seconds of the person
+#: stopping, so the floor follows it), once there
+#: are :data:`FLOOR_MIN_FRAMES`. A frame is loud above :data:`FLOOR_FACTOR`
+#: times it (6 dB; speech is 15–30 dB over a room), never above
+#: :data:`FLOOR_MAX_RMS` (a soft voice stays loud in a loud room).
+FLOOR_FRAMES = 30
+FLOOR_MIN_FRAMES = 10
+FLOOR_PERCENTILE = 0.1
+FLOOR_FACTOR = 2.0
+FLOOR_MAX_RMS = 0.03
+#: After a stop or end phrase, words count only once a loud frame ends this
+#: long after its last word (:meth:`Stream._after_control`).
+CONTROL_GAP_SECONDS = 0.25
+#: …and that frame is speech only within this many dB of the phrase's
+#: speech: a browser's gain control lifts the room after the last word to
+#: well over the floor it learnt while the person spoke.
+CONTROL_SPEECH_DB = 12.0
+_SPEECH_PERCENTILE = 0.9
+#: The committed words a control phrase is looked for in.
+_CONTROL_WORDS = 6
+#: A pass's word repeated more than this many times running is a decoder
+#: loop ("Stop. Stop. Stop. Stop."): the run keeps its first.
+LOOP_RUN = 2
 #: The ``initial_prompt``: this much of the committed text, from its end.
 PROMPT_CHARS = 200
 #: Whether the prompt also carries the committed words still in the window
@@ -294,13 +324,33 @@ def _echo(before: Word, word: Word) -> bool:
     )
 
 
-def _quiet(samples: Sequence[float]) -> bool:
-    """Whether a chunk is silence: its RMS is under :data:`SILENCE_RMS` (an
-    empty chunk is quiet)."""
+def _quiet(samples: Sequence[float], rms: float = SILENCE_RMS) -> bool:
+    """Whether a chunk is silence: its RMS is under ``rms`` (an empty chunk
+    is quiet)."""
     n = len(samples)
     if not n:
         return True
-    return sum(x * x for x in samples) / n < SILENCE_RMS * SILENCE_RMS
+    return sum(x * x for x in samples) / n < rms * rms
+
+
+def _rms(samples: Sequence[float]) -> float:
+    n = len(samples)
+    return (sum(x * x for x in samples) / n) ** 0.5 if n else 0.0
+
+
+def _unloop(hyp: list) -> list:
+    """``hyp`` with any run of the same word longer than :data:`LOOP_RUN`
+    cut to its first (a looping decoder), the rest kept in order."""
+    out: list = []
+    i = 0
+    while i < len(hyp):
+        j = i + 1
+        key = _norm(hyp[i][0])
+        while key and j < len(hyp) and _norm(hyp[j][0]) == key:
+            j += 1
+        out.extend(hyp[i : i + 1] if j - i > LOOP_RUN else hyp[i:j])
+        i = j
+    return out
 
 
 def _voiced(samples: Sequence[float]) -> float:
@@ -308,13 +358,14 @@ def _voiced(samples: Sequence[float]) -> float:
     return _frames(samples)[0] / RATE
 
 
-def _frames(samples: Sequence[float]) -> Tuple[int, int]:
+def _frames(samples: Sequence[float], rms: float = SILENCE_RMS) -> Tuple[int, int]:
     """``(loud samples, the end of the last loud frame)`` of ``samples`` in
-    100 ms frames; the end is -1 when none is loud."""
+    100 ms frames (loud: RMS ``rms`` or more); the end is -1 when none is
+    loud."""
     loud, last = 0, -1
     for i in range(0, len(samples), _FRAME):
         frame = samples[i : i + _FRAME]
-        if not _quiet(frame):
+        if not _quiet(frame, rms):
             loud += len(frame)
             last = i + len(frame)
     return loud, last
@@ -577,6 +628,9 @@ class Stream:
         self._offset = 0.0  # stream seconds before _audio[0]
         self._fed = 0.0  # stream seconds fed so far
         self._loud_end = -1.0  # stream time of the last loud frame's end
+        self._levels: collections.deque = collections.deque(maxlen=FLOOR_FRAMES)
+        # (stream time of a 100 ms frame's end, its RMS), the last 10 s.
+        self._log: collections.deque = collections.deque(maxlen=100)
         self._heard_end = 0.0  # stream time the last fast pass heard up to
         self._committed: List[Word] = []  # stream-absolute times
         self._tail: List[Word] = []  # the last pass's uncommitted words
@@ -589,6 +643,39 @@ class Stream:
         self.touched = _now()
         #: Who opened it (:func:`open_stream`), ``""`` when unknown.
         self.client = ""
+        #: The person's voice words (``voice_words.effective``; None: the
+        #: defaults), for :meth:`_after_control`; the route sets them.
+        self.words: Optional[dict] = None
+
+    def quiet_rms(self) -> float:
+        """The RMS under which a frame is quiet in this stream: the room's
+        noise floor times :data:`FLOOR_FACTOR` (at most
+        :data:`FLOOR_MAX_RMS`) or :data:`SILENCE_RMS`, whichever is more."""
+        if len(self._levels) < FLOOR_MIN_FRAMES:
+            return SILENCE_RMS
+        levels = sorted(self._levels)
+        floor = levels[int(FLOOR_PERCENTILE * (len(levels) - 1))]
+        return max(SILENCE_RMS, min(FLOOR_MAX_RMS, FLOOR_FACTOR * floor))
+
+    def _learn(self, samples: Sequence[float]) -> None:
+        """Note the RMS of each whole 100 ms frame of ``samples``."""
+        for i in range(0, len(samples) - _FRAME + 1, _FRAME):
+            level = _rms(samples[i : i + _FRAME])
+            self._levels.append(level)
+            self._log.append((self._fed + (i + _FRAME) / RATE, level))
+
+    def _spoke_after(self, t: float) -> bool:
+        """Whether a frame ending after stream time ``t`` was speech: louder
+        than :meth:`quiet_rms` and within :data:`CONTROL_SPEECH_DB` of the
+        phrase's speech (the :data:`_SPEECH_PERCENTILE` of the frames kept)."""
+        if self._loud_end <= t:
+            return False
+        levels = sorted(level for _end, level in self._log)
+        if not levels:
+            return True
+        speech = levels[int(_SPEECH_PERCENTILE * (len(levels) - 1))]
+        need = max(self.quiet_rms(), speech * 10 ** (-CONTROL_SPEECH_DB / 20))
+        return any(end > t and level >= need for end, level in self._log)
 
     @property
     def busy(self) -> bool:
@@ -617,7 +704,8 @@ class Stream:
         propagates, with the chunk kept for the next pass."""
         with self._lock:
             self.touched = _now()
-            quiet = _quiet(samples)
+            self._learn(samples)
+            quiet = _quiet(samples, self.quiet_rms())
             self._audio.extend(samples)
             self._keep(samples)
             self._mark(samples)
@@ -722,7 +810,7 @@ class Stream:
     # -- internals (called under the lock) -------------------------------- #
     def _mark(self, samples: Sequence[float]) -> None:
         """Note where the chunk's last loud frame ends, in stream time."""
-        _loud, last = _frames(samples)
+        _loud, last = _frames(samples, self.quiet_rms())
         if last >= 0:
             self._loud_end = self._fed + last / RATE
         self._fed += len(samples) / RATE
@@ -899,8 +987,13 @@ class Stream:
                 hyp.append(
                     (text, float(start) + self._offset, float(end) + self._offset)
                 )
+        hyp = _unloop(hyp)
         if len(hyp) >= 2 and _echo(hyp[-2], hyp[-1]):
             hyp.pop()
+        return self._after_control(self._beyond(hyp))
+
+    def _beyond(self, hyp: List[Word]) -> List[Word]:
+        """``hyp`` less the committed words it hears again."""
         if not self._committed:
             return hyp
         last_end = self._committed[-1][2]
@@ -920,6 +1013,31 @@ class Stream:
                     break
         if len(hyp) == 1 and _echo(self._committed[-1], hyp[0]):
             hyp = []
+        return hyp
+
+    def _after_control(self, hyp: List[Word]) -> List[Word]:
+        """Nothing after a stop or end phrase ("stop listening", "over and
+        out") unless the person spoke again: once the committed words end in
+        one (``voice_words.control_kind``, :attr:`words`) — or the pass's
+        own words up to some word do — the words after it stand only when
+        speech (:meth:`_spoke_after`) ended more than
+        :data:`CONTROL_GAP_SECONDS` after it. Whisper fills the room after
+        "Stop listening." with "I'm not listening." / "in the", and a
+        client reads a control phrase only at the very end."""
+        if not hyp:
+            return hyp
+        said = list(self._committed[-_CONTROL_WORDS:])
+        for i in range(-1, len(hyp) - 1):
+            if i >= 0:
+                said = (said + [hyp[i]])[-_CONTROL_WORDS:]
+            if not said or self._spoke_after(said[-1][2] + CONTROL_GAP_SECONDS):
+                continue
+            try:
+                kind = _voice_words.control_kind(_join(said), self.words)
+            except Exception:  # noqa: BLE001 — a hint, never a failure
+                kind = None
+            if kind in ("stop", "end"):
+                return hyp[: i + 1]
         return hyp
 
     def _reheard(self, hyp: List[Word], last_end: float) -> int:

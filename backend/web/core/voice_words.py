@@ -102,8 +102,9 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "disregards",
         "this is guard",
     ),
-    "stop": ("stock", "stopped"),
+    "stop": ("stock", "stopped", "top"),
     "stop listening": (
+        "top listening",
         "stop listing",
         "stop listen",
         "stopped listening",
@@ -143,6 +144,8 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "minflock",
         "me flock",
         "meeflock",
+        "mindfock",
+        "mind fock",
     ),
 }
 
@@ -451,9 +454,52 @@ _HUSH_LEADS = ("ok", "okay", "hey", "please")
 _HUSH_ENDS = ("please", "now")
 
 
+#: The older wordings a main phrase brings along (the clients' PHRASE_KIN,
+#: lib/voiceWords.ts; mobile.js VOICE_WORD_VARIANTS): while "stop
+#: listening" is a stop phrase, "stop recording" stops too.
+KIN: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "stop": {
+        "stop listening": (
+            "stop recording",
+            "stop dictating",
+            "stop the mic",
+            "stop the microphone",
+        ),
+        "mic off": (
+            "microphone off",
+            "turn mic off",
+            "turn microphone off",
+            "turn off the mic",
+            "turn off the microphone",
+            "turn the mic off",
+        ),
+        "that's all": ("that is all",),
+        "done talking": ("i'm done talking", "i am done talking"),
+    },
+    "hush": {
+        "stop talking": (
+            "stop speaking",
+            "stop reading",
+            "stop saying that",
+            "ok stop",
+            "okay stop",
+        ),
+        "enough": (
+            "that's enough",
+            "that is enough",
+            "enough talking",
+            "enough of that",
+        ),
+    },
+}
+
+
 def _forms(words: dict, kind: str) -> List[str]:
-    """``kind``'s phrases and their heard forms, as served."""
+    """``kind``'s phrases, their kin (:data:`KIN`) and their heard forms,
+    as served."""
     own = [p for p in words.get(kind) or () if isinstance(p, str)]
+    kin = KIN.get(kind) or {}
+    own += [k for p in list(own) for k in kin.get(p, ()) if k not in own]
     more = (words.get("heard") or {}).get(kind) or ()
     return own + [f for f in more if isinstance(f, str) and f not in own]
 
@@ -483,8 +529,10 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
       forms, or sounds like one; an "ok"/"okay"/"hey"/"please" before and a
       "please"/"now" after are allowed;
     - ``"stop"``: it ends in a stop phrase of two words or more, or a heard
-      form of one, word for word (a one-word stop phrase is the router's,
-      said on its own: ``voice_router.command``);
+      form of one, word for word — else, after the radio phrases' exact
+      forms, its last words sound like one ("Dop recording", "stop
+      lisening": :func:`sound_tail`) (a one-word stop phrase is the
+      router's, said on its own: ``voice_router.command``);
     - ``"end"`` / ``"send"`` / ``"clear"``: it ends in one of those phrases
       or heard forms (the longest first, a send or clear phrase followed by
       "that" / "it" / "all" / "everything" too), else its last words sound
@@ -520,6 +568,9 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     for p, kind, tails in radio:
         if _ends_with(ws, p, tails):
             return kind
+    stops = [p for p in _forms(w, "stop") if len(_words(p)) > 1]
+    if sound_tail(text, stops) is not None:
+        return "stop"
     for kind, tails, lead in (
         ("end", (), False),
         ("send", _RADIO_TAILS, False),

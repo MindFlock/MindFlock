@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **"MindFlock" wakes on what sounds next to it.** The wake word's strict
+  rule turned down the owner's own "MindFlock" as the recogniser heard it —
+  "MindFock", "Mind Fuck", "Mindfock.", "Mindful, I'll" (7 of 19 tries one
+  morning). Ours now takes any mind-like start with a flock-, fock-, fog- or
+  ful-like rest, a my-like start with a flock-like one ("My fock"), and
+  anything two letters off the word ("Windlock", "Mild block"); the
+  un-hinted check still turns down a plain "Mind." or "Mine.".
+- **"Stop listening" stops, instead of typing "stop" again and again.** After
+  the last word a browser's gain control lifts the room, and the live
+  recogniser wrote words into it ("Stop listening. I'm not listening.",
+  "Stop recording. //"), so the stop phrase was no longer at the end and
+  listening went on. Now each stream learns the room's noise floor (a frame
+  is speech only over twice it), nothing is taken after a stop or end phrase
+  ("over and out" too) unless you speak again at your own level, and a
+  decoder loop ("Stop. Stop. Stop.") keeps one word.
+- **Commands heard a little off still work.** A stop phrase a letter off
+  stops on the desktop, the phone and the server alike ("Top listening",
+  "Dop recording", "stop lisening"; "Top." on its own is "stop"), the older
+  wordings ("stop recording", "stop dictating", "mic off" variants) count
+  everywhere, and a doubled word is the command said once ("stop stop",
+  "repeat repeat that").
+
 ## [0.12.0] - 2026-11-04
 
 ### Changed

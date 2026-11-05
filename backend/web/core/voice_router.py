@@ -739,6 +739,13 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
     w = _Words(text)
     if not w.text:
         return None
+    # A recogniser's doubled word ("stop stop", "Stop. Stop. Stop.", "repeat
+    # repeat that"): the phrase with each run of one word said once first.
+    once = [x for i, x in enumerate(w.words) if i == 0 or x != w.words[i - 1]]
+    if len(once) < len(w.words):
+        got = command(" ".join(once), words)
+        if got is not None:
+            return got
     for kind, rx in _CMDS[:1]:
         if rx.match(w.text):
             return {"kind": kind, "arg": ""}
@@ -775,7 +782,9 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
         got = (words or {}).get(kind)
         if not isinstance(got, (list, tuple)) or not got:
             got = _voice_words.DEFAULTS[kind]
-        if any(_voice_words.sounds_like(w.text, str(p)) for p in got):
+        kin = _voice_words.KIN.get(kind) or {}
+        said = [str(p) for p in got] + [k for p in got for k in kin.get(str(p), ())]
+        if any(_voice_words.sounds_like(w.text, p) for p in said):
             return {"kind": kind, "arg": ""}
     q = _question_command(w.text) or _help_command(w.text)
     if q is not None:

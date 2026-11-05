@@ -1184,3 +1184,77 @@ class TestTurn:
         st.feed(_secs(1.5))
         assert st.turn()["reason"] == "default"
         assert st.turn({"send": ["roger"]})["reason"] == "control"
+
+
+class TestRoomAndControl:
+    """The room's noise floor, a looping decoder, and nothing after a stop
+    phrase (the owner, 2026-11-05: "Stop listening" typed "stop" again and
+    again; whisper wrote "I'm not listening." into the room after it)."""
+
+    def test_the_floor_follows_the_room(self):
+        st = ss.Stream(Script())
+        assert st.quiet_rms() == ss.SILENCE_RMS  # nothing learnt yet
+        st._learn(_secs(2, level=0.012))  # a browser's gain lifts the room
+        assert st.quiet_rms() == pytest.approx(ss.FLOOR_FACTOR * 0.012)
+        st2 = ss.Stream(Script())
+        st2._learn(_secs(2, level=0.001))  # a quiet room: the fixed level
+        assert st2.quiet_rms() == ss.SILENCE_RMS
+        st3 = ss.Stream(Script())
+        st3._learn(_secs(2, level=0.5))  # never above the cap
+        assert st3.quiet_rms() == ss.FLOOR_MAX_RMS
+
+    def test_a_room_over_the_fixed_level_runs_no_pass_once_learnt(self):
+        fake = Script(_words("hello"), _words("hello"))
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        st.feed(_secs(0.5))
+        assert st.text == "hello"
+        calls = len(fake.calls)
+        st._learn(_secs(2, level=0.02))
+        # The room at 0.02 (over SILENCE_RMS): quiet for this stream.
+        assert st.feed(_secs(0.3, level=0.02)) == ("", "")
+        assert len(fake.calls) == calls
+
+    def test_a_decoder_loop_keeps_one_word(self):
+        loop = [
+            ("Stop.", 0.1, 0.4),
+            ("Stop.", 0.4, 0.5),
+            ("Stop.", 0.5, 0.6),
+            ("Stop.", 0.6, 0.7),
+        ]
+        assert [w[0] for w in ss._unloop(loop)] == ["Stop."]
+        two = [("no", 0.1, 0.3), ("no", 0.3, 0.5), ("way", 0.5, 0.8)]
+        assert ss._unloop(two) == two  # "no no" is said
+
+    def test_nothing_after_a_stop_phrase_without_speech(self):
+        said = [("Stop", 0.1, 0.4), ("listening.", 0.4, 0.9)]
+        junk = said + [("I'm", 1.2, 1.4), ("not", 1.4, 1.6), ("listening.", 1.6, 2.0)]
+        fake = Script(said, junk, junk, junk)
+        st = ss.Stream(fake)
+        st.feed(_secs(1.0))
+        # The room after it: loud by the fixed level, far under the voice.
+        st.feed(_secs(0.5, level=0.015))
+        st.feed(_secs(0.5, level=0.015))
+        st.feed(_secs(0.5, level=0.015))
+        assert st.text == "Stop listening."
+
+    def test_speech_after_a_stop_phrase_stands(self):
+        said = [("Stop", 0.1, 0.4), ("listening", 0.4, 0.9)]
+        more = said + [("to", 1.2, 1.4), ("the", 1.4, 1.6), ("logs", 1.6, 2.0)]
+        fake = Script(said, more, more, more)
+        st = ss.Stream(fake)
+        st.feed(_secs(1.0))
+        st.feed(_secs(0.5))
+        st.feed(_secs(0.5))
+        st.feed(_secs(0.5))
+        assert st.text == "Stop listening to the logs"
+
+    def test_the_persons_own_stop_words_count(self):
+        said = [("Halt", 0.1, 0.4), ("now.", 0.4, 0.9)]
+        junk = said + [("Thank", 1.2, 1.4), ("you.", 1.4, 1.6)]
+        st = ss.Stream(Script(said, junk, junk))
+        st.words = {"stop": ["halt now"]}
+        st.feed(_secs(1.0))
+        st.feed(_secs(0.5, level=0.015))
+        st.feed(_secs(0.5, level=0.015))
+        assert st.text == "Halt now."

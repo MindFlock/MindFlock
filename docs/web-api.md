@@ -2153,8 +2153,10 @@ word) or as the whole utterance (the hush words; the router's one-word
 `stop` / `hush` commands): a sound-alike never fires mid-sentence or with
 more words after it — *over the bridge*, *this regard is important*, *the
 summit meeting* are dictation. The stop phrases at the end of dictation
-(`stop listening`, `mic off` …) stay word for word (the words or a `heard`
-form). `core.voice_words.control_kind(text, words)` is the reference
+(`stop listening`, `mic off` …, with their older wordings: *stop recording*)
+match word for word (the words or a `heard` form) first, then a letter off
+(*Top listening*, *Dop recording*, *hault listening*: each phrase against as
+many words as it has, then `sound_tail`'s split forms). `core.voice_words.control_kind(text, words)` is the reference
 reading of one finished phrase that both clients' matchers follow.
 
 **The regex contract** (`voice_words.phrase_regex(phrases)`): one

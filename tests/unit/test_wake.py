@@ -38,7 +38,9 @@ def test_the_known_forms_are_the_shared_tables():
         assert wake.is_wake(form + " please") is False, form
     # A custom word has no table: the letter slack alone.
     assert wake.is_wake("my flock", "jarvis") is False
-    assert wake.is_wake("mindful") is False  # a real word, not a form
+    # Next to ours counts (the owner's rule): "Mindful" is how a quick
+    # "MindFlock" decodes.
+    assert wake.is_wake("mindful") is True
 
 
 @pytest.mark.parametrize(
@@ -134,14 +136,10 @@ def test_ours_wakes_with_a_lead_a_repeat_or_its_sound(heard, reason):
 @pytest.mark.parametrize(
     "heard",
     [
-        "Windlock",  # two letters off: the old slack woke on it
-        "Wind lock.",
-        "Mild block",
-        "Mindful",
-        "Mindful.",
         "Mind the gap",
-        "Mind fog.",
         "Line clock.",
+        "Minefield.",
+        "My block",
         "My flag.",  # a "my" start takes only a flock-like vowel
         "My plan.",
         "My phone.",
@@ -157,16 +155,38 @@ def test_ours_is_strict(heard):
     assert wake.is_wake(heard) is False
 
 
+@pytest.mark.parametrize(
+    "heard, reason",
+    [
+        # What the owner's "MindFlock" decoded as on 2026-11-05, all turned
+        # down by the strict rule before.
+        ("MindFock", "form"),
+        ("Mind Fuck", "sound"),
+        ("Mindfock.", "form"),
+        ("Mindful", "sound"),
+        ("Mind fog.", "sound"),
+        ("My fock", "sound"),
+        # Two letters off ours.
+        ("Windlock", "near"),
+        ("Wind lock.", "near"),
+        ("Mild block", "near"),
+        ("Bindflock", "near"),
+    ],
+)
+def test_ours_takes_what_sounds_next_to_it(heard, reason):
+    assert wake.judge(heard) == (True, reason)
+
+
 def test_the_reasons_for_a_no():
     assert wake.judge("") == (False, "empty")
     assert wake.judge("...") == (False, "empty")
     assert wake.judge("MindFlock is great") == (False, "long")
-    assert wake.judge("Windlock") == (False, "other")
+    assert wake.judge("Line clock.") == (False, "other")
 
 
 def test_a_custom_word_keeps_the_letter_slack():
-    # Ours turns "Windlock" down; as the person's own word, "Mindlock" is
-    # one letter off it and wakes as before.
+    # As the person's own word, "Mindlock" is one letter off "windlock"
+    # and wakes as before.
     assert wake.judge("Mindlock", "windlock") == (True, "near")
     assert wake.judge("Windlock", "windlock") == (True, "word")
     # A greeting and a repeat are dropped for any word ...
@@ -190,8 +210,6 @@ def test_a_custom_word_keeps_the_letter_slack():
         "Mind field.",
         "mind again.",
         "Mind the gap.",
-        "Mind fog.",
-        "Mindful.",
         "Hey, mine.",
         "Mindhole.",
     ],
@@ -210,6 +228,11 @@ def test_the_veto_turns_down_another_word(plain):
         "mind-tlook",
         "Hey, mind flunk.",
         "My flock",
+        # Next to ours (the owner's "MindFlock" decoded plainly, 2026-11-05).
+        "Mindfock.",
+        "Mindful, I'll",
+        "Mindful.",
+        "Mind fog.",
         # The plain model missing the word is not hearing another one.
         "",
         "Men flat.",
