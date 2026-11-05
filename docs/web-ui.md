@@ -7292,8 +7292,11 @@ every save), then the server's.
   is important* type through). `parseRadio` and `isHushPhrase` still read
   one RegExp: the matchers' `radio` and `hush` are a `RegExp` whose `exec`
   tries the pattern (the words and their heard forms) and then the sound.
-  The stop tail (`stopTail`) stays word for word; a one-word stop or hush
-  word a letter off ("hault") is the router's, said alone.
+  The stop tail (`stopTail`) is word for word first, then a stop phrase of
+  two words or more a letter off (*Top listening*, *Dop recording*); a
+  one-word stop or hush word a letter off ("hault") is the router's, said
+  alone. A doubled word (*Stop. Stop. Stop.*) is the command said once, in
+  `mayBeCommand` as in the router.
 - **The copy follows**: the caption (*Say “over” to send, “over and out” to
   stop, “disregard” to start over*), the ask card's hint, the mic's tooltip
   and *Listen for “MindFlock”* switch, Settings → Voice's hints and the Voice
@@ -8001,7 +8004,8 @@ adds is matched whole, or a letter off (`voiceSoundsLike`, the server's
 `sounds_like` to the letter — *rodger*, *pipe town*): `voiceDictParse`
 falls back to the last words that sound like a send / end / clear phrase
 (`voiceSoundTail`), `voiceIsHush` to the whole phrase sounding like a hush
-one; `voiceTail` (a stop phrase at a phrase's end) stays word for word. The
+one; `voiceTail` (a stop phrase at a phrase's end) is word for word first,
+then a letter off, as the desktop's `stopTail`. The
 shared fixture `tests/unit/data/voice_sounds.json` pins the page against
 the desktop and the server. Every hint and caption
 that names a word — *Say “over” to send…*, *In the box — say “over”…*, the

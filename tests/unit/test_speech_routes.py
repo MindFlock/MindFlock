@@ -1528,7 +1528,7 @@ class TestWakeCheck:
 
     def test_a_no_never_runs_the_plain_pass(self, fakes, monkeypatch):
         self._plain(fakes, monkeypatch, "Mind flock")
-        body = self._wake(fakes, "Windlock")
+        body = self._wake(fakes, "Line clock.")
         assert body["wake"] is False and body["reason"] == "other"
         assert body["plain"] is None and self._plains(fakes) == []
 

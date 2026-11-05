@@ -92,7 +92,8 @@ describe("the heard forms (words.heard)", () => {
     W.resetVoiceWords();
     expect(W.voiceWords().heard).toBeUndefined();
     expect(V.parseRadio("fix the bug ova").kind).toBe("");
-    expect(V.stopTail("fix it stop listing")).toBeNull();
+    // A stop phrase a letter off still stops (the owner, 2026-11-05).
+    expect(V.stopTail("fix it stop listing")).toBe("fix it");
     expect(V.isHushPhrase("a nuff")).toBe(false);
     expect(V.isHushPhrase("be quite")).toBe(true);
   });
@@ -140,9 +141,10 @@ describe("a letter off (soundsLike)", () => {
     expect(V.parseRadio("fix it rogers").kind).toBe("");
     expect(V.isHushPhrase("pipe gown")).toBe(false);
     expect(V.isHushPhrase("silents")).toBe(false);
-    // The stop tail is word for word: a one-word stop word a letter off
-    // is the router's business, said on its own.
-    expect(V.stopTail("fix it hault listening")).toBeNull();
+    // A stop phrase of two words or more a letter off ends the words too
+    // (a one-word one is the router's, said on its own).
+    expect(V.stopTail("fix it hault listening")).toBe("fix it");
+    expect(V.stopTail("fix it hault")).toBeNull();
   });
 
   it("never reaches the defaults a real word is a letter from", () => {

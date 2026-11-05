@@ -494,8 +494,10 @@ def test_heard_forms_and_the_sound_key_are_wired():
     )
     hush = _fn(js, "voiceIsHush")
     assert "voiceSoundsLike(t, p)" in hush and "VOICE_W.hush.test(t)" in hush
-    # The stop tail stays word for word.
-    assert "voiceSound" not in _fn(js, "voiceTail")
+    # The stop tail is word for word first, a sound-alike only after.
+    tail = _fn(js, "voiceTail")
+    assert "voiceSoundTail(text, VOICE_W.stopSaid)" in tail
+    assert tail.index("VOICE_W.stop.test(t)") < tail.index("voiceSoundTail")
     # One rule table, the server's (core.voice_words._SOUND_RULES), in order.
     from backend.web.core import voice_words as vw
 

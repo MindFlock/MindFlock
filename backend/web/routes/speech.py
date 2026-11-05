@@ -1008,9 +1008,14 @@ def _feed(stream: _stream.Stream, samples) -> tuple:
     the person's words; None when that fails — a hint, never a failure),
     together on the recognition pool: the verdict waits on the stream's
     lock, which a pass holds."""
+    try:
+        words: Optional[dict] = _words()
+        stream.words = words
+    except Exception:  # noqa: BLE001
+        words = None
     got = stream.feed(samples)
     try:
-        turn: Optional[dict] = stream.turn(_words())
+        turn: Optional[dict] = stream.turn(words)
     except Exception:  # noqa: BLE001
         turn = None
     return got, turn

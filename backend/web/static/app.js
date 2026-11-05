@@ -44224,7 +44224,7 @@ var ROUTER_LEADS = /* @__PURE__ */ new Set([
 	"please"
 ]);
 function mayBeCommand(text) {
-	let w = routerWords(text);
+	let w = routerWords(text).filter((x, i, a) => i === 0 || x !== a[i - 1]);
 	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
 	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
 	if (!w.length) return true;
@@ -44319,6 +44319,7 @@ function buildMatchers(w, v = -1) {
 	const hushes = [.../* @__PURE__ */ new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
 	const stopAll = [...stops].sort(longestFirst).map(keysOf);
 	const stop = stopAll.filter((p) => p.length > 1);
+	const stopSaid = stops.filter((p) => phraseWords(p).length > 1);
 	const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
 	const hushSounded = (keys) => {
 		let ws = keys.split(" ").filter(Boolean);
@@ -44342,6 +44343,7 @@ function buildMatchers(w, v = -1) {
 		radio,
 		radioKinds,
 		stop,
+		stopSaid,
 		hush,
 		control,
 		maxWords: Math.max(1, ...control.map((p) => p.length)),
@@ -44376,12 +44378,20 @@ function holdBack(text) {
 function stopTail(text) {
 	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
 	const idx = wordIndexes(ws);
-	for (const p of matchers().stop) {
+	const M = matchers();
+	for (const p of M.stop) {
 		if (idx.length < p.length) continue;
 		const tail = idx.slice(-p.length);
 		if (tail.every((i, j) => wordKey(bareWord(ws[i])) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
 	}
-	return null;
+	for (const p of M.stopSaid) {
+		const n = phraseWords(p).length;
+		if (idx.length < n) continue;
+		const tail = idx.slice(-n);
+		if (soundsLikeAny(tail.map((i) => ws[i]).join(" "), [p])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:.!?]+$/, "");
+	}
+	const hit = soundTail(text, M.stopSaid);
+	return hit ? hit.before.replace(/[\s,;:]+$/, "") : null;
 }
 var ANSWER_RE = new RegExp("^(?:(?:um|uh|er|so) )?(?:" + [
 	"yes|yeah|yep|yup|sure|ok|okay|allow|allow it|approve|go ahead|do it",

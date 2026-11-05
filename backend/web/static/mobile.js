@@ -6887,7 +6887,8 @@
     "start|create|make a|another new session *", "spin up new session *", "spin up a|another new session *",
   ].map(function (p) { return p.split(" ").map(function (slot) { return slot.split("|"); }); });
   function voiceMayBeCommand(text) {
-    var w = voiceNorm(text).split(" ").filter(Boolean);
+    // A doubled word ("stop stop") is said once, as the router reads it.
+    var w = voiceNorm(text).split(" ").filter(function (x, i, a) { return x && (i === 0 || x !== a[i - 1]); });
     if (w.length > 1 && VOICE_LEADS.indexOf(w[0]) >= 0) w = w.slice(1);
     if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
     if (!w.length || w.every(function (x) { return VOICE_ANSWER_WORDS.indexOf(x) >= 0 || VOICE_LEADS.indexOf(x) >= 0; })) return true;
@@ -6930,6 +6931,22 @@
         hit.said = words.slice(words.length - k).join(" ").replace(/[.!?]+$/, "");
         return hit;
       }
+    }
+    // Last, a stop phrase heard a little off at the end ("Dop recording",
+    // "stop lisening"; core.voice_words.control_kind reads it the same).
+    // Each phrase against its own number of words first ("fix it, top
+    // listening" keeps "it"), then voiceSoundTail's split forms.
+    var near = null;
+    for (var s = 0; s < VOICE_W.stopSaid.length && !near; s++) {
+      var n = voiceNorm(VOICE_W.stopSaid[s]).split(" ").length;
+      if (words.length >= n && voiceSoundsLike(words.slice(words.length - n).join(" "), VOICE_W.stopSaid[s])) {
+        near = { before: words.slice(0, words.length - n).join(" ") };
+      }
+    }
+    near = near || voiceSoundTail(text, VOICE_W.stopSaid);
+    if (near) {
+      var said = voiceNorm(text).split(" ").slice(voiceNorm(near.before).split(" ").filter(Boolean).length).join(" ");
+      return { kind: "stop", text: near.before.replace(/[\s,;:.!?-]+$/, ""), said: said };
     }
     return null;
   }
@@ -6988,7 +7005,8 @@
   // voiceSoundsLike (a small phonetic key with an edit-distance margin) lets
   // a phrase the owner added be heard a letter off ("rodger") — whole, at
   // the end of a phrase (voiceDictParse) or as the whole phrase
-  // (voiceIsHush); the stop tail (voiceTail) stays word for word.
+  // (voiceIsHush); the stop tail (voiceTail) takes a stop phrase heard a
+  // letter off only after every exact reading (as the server and desktop).
   var VOICE_WORDS_DEFAULT = {
     send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"],
     stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
@@ -7166,6 +7184,8 @@
       // On normalized words: a stop phrase at the end (two words or more),
       // the stop command and the hush phrase (the whole phrase).
       stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0; }), " ", "'") + "$"),
+      // ...and those phrases as said, for voiceTail's sound-alike stop.
+      stopSaid: stop.filter(function (p) { return p.indexOf(" ") > 0; }),
       stopCmd: new RegExp("^" + voiceWordsAlt(stop.concat(w.stop.indexOf("mic off") >= 0 ? VOICE_WORD_CMD_VARIANTS["mic off"] : []), " ", "'") + "$"),
       hush: new RegExp("^" + voiceWordsAlt(hush, " ", "'") + "$"),
       holdStop: voiceWordsBare(stop),

@@ -903,6 +903,9 @@ describe("streaming helpers", () => {
     ["repeat that", true],
     ["turn voice off", true],
     ["", true],
+    // A decoder's doubled word is the command said once.
+    ["Stop. Stop. Stop.", true],
+    ["stop stop listening", true],
     // Prompts: typed as they come.
     ["fix the login bug", false],
     ["go ahead and push", false],
@@ -1963,6 +1966,12 @@ describe("control words at any point", () => {
     ["stop the recording", null],
     ["stop", null],
     ["record it all", null],
+    // Heard a little off (the owner, 2026-11-05: whisper writes "Top").
+    ["Top listening.", ""],
+    ["fix it, top listening", "fix it"],
+    ["Dop recording.", ""],
+    ["fix it stop lisening", "fix it"],
+    ["top of the list", null],
   ] as const)("stopTail(%j) → %j", (text, want) => {
     expect(stopTail(text)).toBe(want);
   });

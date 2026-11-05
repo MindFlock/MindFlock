@@ -147,7 +147,9 @@ const ROUTER_LEADS = new Set(["ok", "okay", "hey", "please"]);
  * phrases); one that can't — almost every prompt — is typed as it comes. The
  * router's lead word and trailing "please" are dropped as it drops them. */
 export function mayBeCommand(text: string): boolean {
-  let w = routerWords(text);
+  // A doubled word ("stop stop", "Stop. Stop.") is said once, as the router
+  // (voice_router.command) reads it.
+  let w = routerWords(text).filter((x, i, a) => i === 0 || x !== a[i - 1]);
   if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
   if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
   if (!w.length) return true;
@@ -235,9 +237,12 @@ export interface VoiceMatchers {
   radioKinds: Array<[RegExp, RadioKind]>;
   /** The stop phrases (their older wordings and heard forms too) of two
    * words or more, longest first, as word keys: they end any committed
-   * words, word for word. A one-word one ("stop") is the router's, said
+   * words, word for word ({@link stopSaid}: a letter off). A one-word one ("stop") is the router's, said
    * as a whole phrase — at the end of words it is a word ("make it stop"). */
   stop: string[][];
+  /** The stop phrases of two words or more as said (kin and heard forms
+   * too), for the sound-alike stop tail ({@link stopTail}). */
+  stopSaid: string[];
   hush: RegExp;
   /** Every phrase the hold-back keeps whole while it may still be said. */
   control: string[][];
@@ -283,6 +288,7 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
   const hushes = [...new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
   const stopAll = [...stops].sort(longestFirst).map(keysOf);
   const stop = stopAll.filter((p) => p.length > 1);
+  const stopSaid = stops.filter((p) => phraseWords(p).length > 1);
   const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
   // A hush a letter off: the whole phrase, its lead and tail word dropped.
   const hushSounded = (keys: string): RegExpExecArray | null => {
@@ -308,7 +314,7 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
     ...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
   ].filter((p) => p.length);
   const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
-  return { v, radio, radioKinds, stop, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };
+  return { v, radio, radioKinds, stop, stopSaid, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };
 }
 
 let built: VoiceMatchers | null = null;
@@ -347,17 +353,29 @@ export function holdBack(text: string): { type: string; held: string } {
 }
 
 /** `text` ends with a stop phrase (of two words or more — {@link
- * VoiceMatchers.stop}): the words before it (maybe ""), else null.
- * "fix the bug, stop recording." → "fix the bug,". */
+ * VoiceMatchers.stop}) word for word, else its last words sound like one
+ * ("Dop recording", "stop lisening": lib/voiceWords soundTail; the server's
+ * core.voice_words.control_kind reads it the same): the words before it
+ * (maybe ""), else null. "fix the bug, stop recording." → "fix the bug,". */
 export function stopTail(text: string): string | null {
   const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
   const idx = wordIndexes(ws);
-  for (const p of matchers().stop) {
+  const M = matchers();
+  for (const p of M.stop) {
     if (idx.length < p.length) continue;
     const tail = idx.slice(-p.length);
     if (tail.every((i, j) => wordKey(bareWord(ws[i])) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
   }
-  return null;
+  // Each phrase against its own number of words first ("fix it, top
+  // listening" keeps "it"), then soundTail's split forms ("stop lis ening").
+  for (const p of M.stopSaid) {
+    const n = phraseWords(p).length;
+    if (idx.length < n) continue;
+    const tail = idx.slice(-n);
+    if (soundsLikeAny(tail.map((i) => ws[i]).join(" "), [p])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:.!?]+$/, "");
+  }
+  const hit = soundTail(text, M.stopSaid);
+  return hit ? hit.before.replace(/[\s,;:]+$/, "") : null;
 }
 
 const ANSWER_RE = new RegExp(

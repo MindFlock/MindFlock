@@ -12,13 +12,15 @@ the prompted decoder loops) are dropped.
 
 How close counts depends on the word (docs/voice-wake.md has the bench):
 
-* OURS ("mindflock", the default) is matched STRICTLY: one of the forms the
-  recogniser is known to write for it (``core.voice_words.HEARD``: "mind
-  flock", "my flock", "mind flunk") or its sound shape (:data:`_SOUND_ONE`: a
-  "mind"-like first part, then an fl/cl/bl/pl/fr onset and a short rest —
-  "Mind Flap", "Minh Flock"; or a "my"-like one with a flock-like vowel
-  after the onset: "My clock", "Mai flock" — never "My flag"). No generic
-  letter slack: two edits let "Windlock" and "Mild block" in.
+* OURS ("mindflock", the default) takes anything next to it (the owner's
+  rule, 2026-11-05: the strict rule turned down his own "MindFlock" heard as
+  "MindFock", "Mind Fuck", "Mindful"): one of the forms the recogniser is
+  known to write for it (``core.voice_words.HEARD``: "mind flock", "my
+  flock", "mindfock"), its sound shape (:data:`_SOUND_ONE`: a "mind"-like
+  first part, then an fl/cl/bl/pl/fr/ph onset and a short rest, or a bare
+  f and o/u — "Mind Flap", "Minh Flock", "Mind fog"; or a "my"-like one with
+  a flock-like vowel after the onset: "My clock", "My fock" — never "My
+  flag"), or two letters off the word ("Windlock", "Mild block").
 * A word of the person's own (``voice.words`` ``wake``) keeps the letter
   slack, shrinking with its length so a short word does not wake on
   everything.
@@ -72,36 +74,32 @@ LEADS = frozenset({"hey", "hi", "ok", "okay", "yo", "hello"})
 _NON_LETTERS = re.compile(r"[^a-z]+")
 _TOKEN_SPLIT = re.compile(r"[^A-Za-z]+")
 
-#: Ours as it sounds: a "mind"-like first part, an fl/cl/bl/pl/fr onset, a
-#: vowel and at most five letters more ("mindflap", "minhflock",
-#: "mendclock"). Matched against one token whole, or two tokens with the
+#: Ours as it sounds: a "mind"-like first part, an fl/cl/bl/pl/kl/gl/fr/ph
+#: onset and a vowel (or a bare f and o/u: "mindfock", "mind fog") and at
+#: most five letters more ("mindflap", "minhflock", "mendclock"). Matched against one token whole, or two tokens with the
 #: first the "mind" part ("mind" + "flunk"), so "mindflock now" never fits.
 _FIRST = r"(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)"
-_SECOND = r"(?:fl|cl|bl|pl|fr)[aeiou][a-z]{0,5}"
+_SECOND = r"(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}"
 _SOUND_ONE = re.compile(r"^%s%s$" % (_FIRST, _SECOND))
 _SOUND_FIRST = re.compile(r"^%s$" % _FIRST)
 _SOUND_SECOND = re.compile(r"^%s$" % _SECOND)
-#: A "my"-like first part ("My clock.", "Mai flock") takes only an fl/cl
-#: onset and a flock-like vowel — "My flag.", "My plan." and "my block"
+#: A "my"-like first part ("My clock.", "Mai flock", "My fock") takes only
+#: an fl/cl/kl/fr/f onset and a flock-like vowel — "My flag.", "My plan." and "my block"
 #: stay out.
 _MY = r"(?:my|mi|mai)"
-_SECOND_OU = r"(?:fl|cl|kl)[ou][a-z]{0,4}"
+_SECOND_OU = r"(?:[fck]l|fr|f)[ou][a-z]{0,4}"
 _MY_ONE = re.compile(r"^%s%s$" % (_MY, _SECOND_OU))
 _MY_FIRST = re.compile(r"^%s$" % _MY)
 _MY_SECOND = re.compile(r"^%s$" % _SECOND_OU)
-#: Real words the sound shape would take for ours.
-_NOT_OURS = frozenset({"mindful", "mindfully"})
 
 #: What the un-prompted decode writes when the clip was another word that
 #: the hint turned into "MindFlock" (:func:`veto`): the word with nothing
 #: flock-like after a "mind"/"mine"/"my" start, or one of these whole.
-_OTHER = frozenset(
-    {"mindful", "mindfully", "mindfulness", "mindthegap", "mindyourstep"}
-)
+_OTHER = frozenset({"mindthegap", "mindyourstep"})
 _OTHER_START = re.compile(r"^(?:mind|mine|mined|my)(?P<rest>[a-z]*)$")
 #: The flock-like onset a rest must have to keep the yes ("Mind Flock",
 #: "Mind clock", "Mine pluck", "mind-tlook").
-_FLOCKISH = re.compile(r"^(?:[fcbpkgt]l|fr)")
+_FLOCKISH = re.compile(r"^(?:[fcbpkgt]l|fr|ph|f[aou])")
 #: The longest plain decode :func:`veto` reads ("mind the gap").
 _VETO_WORDS = 3
 
@@ -203,8 +201,6 @@ def _strict(toks: List[str]) -> str:
     heard = "".join(toks)
     if heard == WAKE_WORD:
         return "word"
-    if heard in _NOT_OURS:
-        return ""
     forms = {normalize(f) for f in _voice_words.heard_of([WAKE_WORD])}
     if heard in forms:
         return "form"
@@ -215,6 +211,14 @@ def _strict(toks: List[str]) -> str:
         or (_MY_FIRST.match(toks[0]) and _MY_SECOND.match(toks[1]))
     ):
         return "sound"
+    # Anything within the letter slack ("Windlock", "Mindlock", "Minflog"):
+    # the owner's rule is that whatever sounds next to the word wakes; the
+    # veto still turns down a plain "Mind." / "Mine.".
+    if (
+        abs(len(heard) - len(WAKE_WORD)) <= _MAX_EDITS
+        and _edits(heard, WAKE_WORD) <= _MAX_EDITS
+    ):
+        return "near"
     return ""
 
 

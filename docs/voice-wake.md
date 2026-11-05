@@ -26,16 +26,20 @@ and how to tune it to a real voice.
      exact repeat of a word ("MindFlock MindFlock");
    - what is left must be the word alone, in at most one token more than it
      has: a sentence never wakes;
-   - **ours** (`mindflock`, the default) is matched **strictly**: the letters
-     (`word`), a known form from `core/voice_words.HEARD["mindflock"]`
-     (`form`: "mind flock", "my flock", "mind flunk", "minh flock" …) or
-     its sound shape (`sound`: a mind-like first part — mind, mine, min,
-     minh, mint, mend, men, myn … — then an fl/cl/bl/pl/fr onset, a vowel
-     and at most five letters, as one token or as "mind" + "flap"; or a
-     my-like first part — my, mi, mai — with only an fl/cl/kl onset and an
-     o/u vowel: "My clock.", "Mai flock", never "My flag" or "my block").
-     There is no generic letter slack: two edits let "Windlock" and "Mild
-     block" in. "mindful" is excluded by name;
+   - **ours** (`mindflock`, the default) takes **anything next to it** —
+     the owner's rule (2026-11-05), after the strict rule of 2026-11-03
+     turned down his own "MindFlock" decoded as "MindFock", "Mind Fuck",
+     "Mindfock." and "Mindful, I'll": the letters (`word`), a known form
+     from `core/voice_words.HEARD["mindflock"]` (`form`: "mind flock", "my
+     flock", "mind flunk", "mindfock" …), its sound shape (`sound`: a
+     mind-like first part — mind, mine, min, minh, mint, mend, men, myn … —
+     then an fl/cl/bl/pl/kl/gl/fr/ph onset and a vowel, or a bare f and an
+     o/u ("fock", "fuck", "fog", "ful"), and at most five letters, as one
+     token or as "mind" + "flap"; or a my-like first part — my, mi, mai —
+     with an fl/cl/kl/fr/f onset and an o/u vowel: "My clock.", "My fock",
+     never "My flag", "My phone" or "my block"), or two letters off the word
+     (`near`: "Windlock", "Mild block", "Bindflock"). The veto below still
+     turns down a plain "Mind." or "Mine.";
    - a **custom** word (`voice.words.wake`) keeps the letter slack (two
      edits for 8+ letters, one for 5–7, none below: `near`).
 3. **The veto** (ours only, and only on a yes). The hint makes whisper write
@@ -46,9 +50,11 @@ and how to tune it to a real voice.
    backends return `None` and the yes stands). `core/wake.py` `veto(plain)`
    turns the yes down (`reason: "plain:<what it heard>"`) when the plain text
    is up to three words that start like mind / mine / my with nothing
-   flock-like after (no fl, cl, bl, pl, kl, gl, tl or fr onset: "mind",
-   "Mindset.", "Minefield.", "mind again", "Mind fog.", "mind the gap"), or
-   is a known other word ("Mindful."). Anything else keeps the yes: an
+   flock-like after (no fl, cl, bl, pl, kl, gl, tl, fr or ph onset, nor an
+   f and o/u: "mind", "Mindset.", "Minefield.", "mind again", "mind the
+   gap"), or is a known other phrase ("Mind the gap."). "Mindful.",
+   "Mindfock." and "Mind fog." keep the yes since 2026-11-05: they are how
+   the plain model hears a quick "MindFlock". Anything else keeps the yes: an
    empty or odd plain decode ("Men flat.", "Amen.", a bare "My") is the plain
    model missing the word, not hearing another one. A failed plain pass
    keeps the yes too.

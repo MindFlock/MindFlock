@@ -57,6 +57,8 @@
    "stop": [
     "stock",
     "stopped",
+    "top",
+    "top listening",
     "stop listing",
     "stop listen",
     "stopped listening",
@@ -108,7 +110,9 @@
     "minh flock",
     "minflock",
     "me flock",
-    "meeflock"
+    "meeflock",
+    "mindfock",
+    "mind fock"
    ]
   }
  },
@@ -741,7 +745,7 @@
   },
   {
    "text": "fix it hault listening",
-   "kind": null,
+   "kind": "stop",
    "words": "custom"
   },
   {
@@ -792,6 +796,46 @@
   {
    "text": "scrap it, disregard",
    "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "Top listening.",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it, top listening",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "Dop recording.",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it stop lisening",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "Stop recording.",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "stop stop listening",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "top of the list",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "drop the listening",
+   "kind": null,
    "words": "default"
   }
  ]
