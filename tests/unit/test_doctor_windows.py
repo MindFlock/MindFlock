@@ -29,7 +29,7 @@ def _which(mapping):
 
 
 def _decode(script: str) -> str:
-    head = "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "
+    head = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "
     assert script.startswith(head)
     return base64.b64decode(script[len(head) :]).decode("utf-16-le")
 

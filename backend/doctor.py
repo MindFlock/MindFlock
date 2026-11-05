@@ -1953,18 +1953,22 @@ def _ps_quote(text: str) -> str:
 #: then re-reads PATH from the registry so the next step finds what this one
 #: installed (winget's Git before npm's CLI, …).
 _PS_HEAD = (
-    "$ErrorActionPreference='Continue';$global:f=@();"
-    "function S($l,$c){Write-Host '';Write-Host ('==> '+$l);"
-    "& powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $c;"
+    "$ErrorActionPreference='Continue';$ProgressPreference='SilentlyContinue';"
+    "$global:f=@();function W($t){[Console]::WriteLine($t)};"
+    "function S($l,$c){W '';W ('==> '+$l);"
+    "& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command $c;"
     "if($LASTEXITCODE -ne 0){$global:f+=$l};"
     "$env:Path=$env:Path+';'+[Environment]::GetEnvironmentVariable('Path','Machine')"
     "+';'+[Environment]::GetEnvironmentVariable('Path','User')}\n"
 )
 
+#: Messages go through ``[Console]::WriteLine`` (``W``), not ``Write-Host``:
+#: with ``-EncodedCommand`` and a redirected stderr, Windows PowerShell 5.1
+#: also serializes every Write-Host record onto stderr as CLIXML.
 _PS_TAIL = (
-    "Write-Host '';if($global:f.Count){Write-Host '[mindflock] these did not install:';"
-    "$global:f|ForEach-Object{Write-Host ('  - '+$_)};exit 1}\n"
-    "Write-Host '[mindflock] everything installed. Open a new terminal if a tool "
+    "W '';if($global:f.Count){W '[mindflock] these did not install:';"
+    "$global:f|ForEach-Object{W ('  - '+$_)};exit 1}\n"
+    "W '[mindflock] everything installed. Open a new terminal if a tool "
     "is still not found (PATH).'\n"
 )
 
@@ -1994,7 +1998,8 @@ def _install_plan_windows(wanted: List[Check]) -> dict:
     ps1 = "".join(body)
     encoded = base64.b64encode(ps1.encode("utf-16-le")).decode("ascii")
     script = (
-        "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand " + encoded
+        "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass"
+        " -EncodedCommand " + encoded
     )
     return {"steps": steps, "packages": [], "script": script, "ps1": ps1}
 
