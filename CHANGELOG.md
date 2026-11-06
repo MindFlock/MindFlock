@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.3] - 2026-11-05
+
 ### Fixed
 
 - **The flight minimap hides under dialogs and menus**, as the off-screen
@@ -4960,7 +4962,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.12.3...HEAD
+[0.12.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.3
 [0.12.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.2
 [0.12.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.1
 [0.12.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.0
