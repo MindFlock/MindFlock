@@ -15784,9 +15784,9 @@ button.sky-held-start:disabled {
 }
 
 /* Any dialog or menu open anywhere on the page — Settings, New, a ⋯ menu, a
-   popover — hides the off-screen pointers: they belong to the board, and they
+   popover — hides the off-screen pointers and the map: they belong to the board, and they
    drew through whatever sat over it. */
-body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], [data-modal], details.vf-menu[open]) .sky-offscreen {
+body:has(.modal:not(.hidden), [role="dialog"], [role="menu"], [role="listbox"], [data-modal], details.vf-menu[open]) :is(.sky-offscreen, .sky-minimap-host) {
   display: none;
 }
 
