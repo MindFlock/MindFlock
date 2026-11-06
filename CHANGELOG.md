@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The flight minimap hides under dialogs and menus**, as the off-screen
+  pointers already did: it drew through Settings, New and ⋯ menus.
+
+### Documentation
+
+- The ticket pipeline across a server re-exec (adopted back, restarted on a
+  settings change, never duplicated) and the automation hand-over while
+  Tailscale is still booting are written up in the configuration,
+  development, ingestion-pipeline and web-api docs.
+
 ## [0.12.2] - 2026-11-05
 
 ### Added

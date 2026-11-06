@@ -731,7 +731,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `CS_WEB_MODE` | `local` | `run.py` — `local` binds 127.0.0.1 (and refuses non-loopback `Host` headers), `tailscale` binds 127.0.0.1 + this node's Tailscale IPs (0.0.0.0 while Tailscale is down or its IPs can't be bound here) and auto-enables the auth-token gate |
 | `PORT` / `UVICORN_PORT` | `8765` | Web server port |
 | `MINDFLOCK_BIND_ALL` | unset | `1` makes tailscale mode bind every interface (`0.0.0.0`, your LAN included) instead of 127.0.0.1 + this node's Tailscale IPs — for a phone reaching the server over the LAN without Tailscale. `run.py`'s positional mode word `all` (`python -m backend.web.run all`) sets it too |
-| `MINDFLOCK_BIND_FALLBACK` | — | **Internal**: set by `run.py` when tailscale mode fell back to `0.0.0.0` because Tailscale wasn't running at boot; the server then re-execs (mode kept, at most twice per boot chain) once Tailscale is up and one of its addresses can be bound |
+| `MINDFLOCK_BIND_FALLBACK` | — | **Internal**: set by `run.py` when tailscale mode fell back to `0.0.0.0` because Tailscale wasn't running at boot; the server then re-execs (mode kept, at most twice per boot chain) once Tailscale is up and one of its addresses can be bound. The ticket pipeline it started survives the re-exec and is adopted back by the new image (not duplicated or orphaned) |
 | `MINDFLOCK_TAILNET_MSS` | auto | The TCP segment size cap on tailnet connections (`web/core/tailnet_mtu.py`). Left unset, MindFlock (Linux only) clamps its tailnet listening sockets and its own outgoing tailnet connections to underlay MTU − 120 when the network adapter's MTU leaves no room for Tailscale's 80 bytes of headers (e.g. `tailscale0` 1280 over a 1280 `eth0` on WSL2 → 1160), and leaves them alone otherwise. `0` (or `off`) turns the clamp off; an integer (88–65535) forces that MSS whatever the MTUs say. `mindflock doctor`'s `tailnet-mtu` row shows the MTUs it found |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
@@ -963,6 +963,13 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   next to the pipeline's `state.json`), so nothing the other device reviewed is
   reviewed again. Intake says *runs on <device>* where this device doesn't
   (`GET /api/mindflock/status` → `automation_here`, `automation_device`).
+  While this device can't yet tell which member it is (Tailscale isn't up,
+  so its key is the OS hostname rather than its roster key), it runs neither,
+  records nothing in `automation_here.json` and Intake names no device; once
+  the roster resolves the pipeline restarts with the real answer within 30 s.
+  A recorded hand-over whose runner is this machine's own hostname is ignored
+  (logged "Ignoring an automation hand-over from <name>: that is this
+  machine"), so it never seeds the processed-PR ledger.
 - **Setup's devices answer** (`general.setup_devices`: `first` · `join` ·
   unset; per device, never synced): the answer to Setup's "First computer, or
   join one you already have?". It orders the first-run plan (`GET
