@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The README's numbers are recomputed through October 2026, and corrected.**
+  The old script diffed each pull request against its target branch's tip instead
+  of its merge-base, which also counted (reversed) whatever landed on the target
+  while the branch was open and inflated the parallel months most. Corrected, the
+  April–July "flock" era is **3.2×**, not 6.3×, and its busiest day had 15
+  branches in flight, not 31. The section now covers four eras: before agents, one
+  at a time, the flock, and a new **auto-start** era (2026-08 → 10), when assigned
+  tickets started their own sessions. The headline is **5.9×** reviewed source per
+  engaged half-hour, from 2,570 merged pull requests, with tests on 96% of changes
+  instead of 4%. The argument moves with the data: a flock alone made changes
+  bigger and better tested but left reviewed code per half-hour flat (190 → 184),
+  and tracker-started sessions are what moved it. The Method section states the
+  merge-base diff and the new exclusions (two bulk-close days, one branch split
+  into 34 one-commit PRs). The branch-ceiling chart is replaced by
+  `docs/img/fig3-tracker-started*.png` (sessions MindFlock started vs how many
+  reached a merged PR, June–October), and "What MindFlock itself has run" now
+  covers 2026-06-22 → 2026-10-31: 245 tickets provisioned, 190 merged, 11.6 h
+  median to merge, 62 PRs triaged.
+- **The demo opens on the Sky.** `docs/demo.gif` is re-cut: tickets from Jira,
+  Linear and Shortcut waiting in the intake lane, then a newly assigned Jira issue
+  starting its own session and route with nothing typed, beside five other
+  ticket-born routes. It replaces the grid-first `pipeline` scene described under
+  0.1.5.
+
 ## [0.12.2] - 2026-11-05
 
 ### Added
@@ -4551,7 +4577,9 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   while diff size and test coverage climb, and a second showing that the average day
   never changed while the ceiling on work in flight went from 16 branches to 31. That
   second chart is the clearest argument for the app rather than for agents in general,
-  and it was previously nowhere.
+  and it was previously nowhere. *(Corrected in [Unreleased]: the per-PR diff used
+  the target tip, not the merge-base; the flock era is 3.2× and peaks at 15
+  branches.)*
 - **The first published productivity figures, measured properly.** An earlier
   draft leaned on volume counts, which turned out to prove nothing: pull requests
   per month actually went *down*, and Shortcut's start→done clock got *longer*
@@ -4565,7 +4593,8 @@ fresh-eyes testers who could only use the UI (never the code or docs).
   generated files, images and DB dumps excluded — under 1% of recent lines),
   medians not means, because a single 1.6 M-line bulk import would otherwise
   dominate every average. The method is documented in the README so the figures
-  can be re-derived.
+  can be re-derived. *(Corrected in [Unreleased]: these figures diffed each PR
+  against the target tip, not the merge-base.)*
 - **Ticket sessions land in the app by default.** `[mindflock].enabled` now
   defaults to `true`, and is exposed in Settings → Advanced instead of being
   file-only. Previously a fresh install that connected a tracker got detached
