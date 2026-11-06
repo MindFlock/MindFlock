@@ -436,7 +436,7 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.useTransition = function() {
 		return ReactSharedInternals.H.useTransition();
 	};
-	exports.version = "19.3.0";
+	exports.version = "19.3.1";
 }));
 //#endregion
 //#region node_modules/react/index.js
@@ -854,7 +854,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.useFormStatus = function() {
 		return ReactSharedInternals.H.useHostTransitionStatus();
 	};
-	exports.version = "19.3.0";
+	exports.version = "19.3.1";
 }));
 //#endregion
 //#region node_modules/react-dom/index.js
@@ -11409,7 +11409,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		}
 	};
 	var isomorphicReactPackageVersion$jscomp$inline_2043 = React.version;
-	if ("19.3.0" !== isomorphicReactPackageVersion$jscomp$inline_2043) throw Error(formatProdErrorMessage(527, isomorphicReactPackageVersion$jscomp$inline_2043, "19.3.0"));
+	if ("19.3.1" !== isomorphicReactPackageVersion$jscomp$inline_2043) throw Error(formatProdErrorMessage(527, isomorphicReactPackageVersion$jscomp$inline_2043, "19.3.1"));
 	ReactDOMSharedInternals.findDOMNode = function(componentOrElement) {
 		var fiber = componentOrElement._reactInternals;
 		if (void 0 === fiber) {
@@ -11424,10 +11424,10 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 	var internals$jscomp$inline_2586 = {
 		bundleType: 0,
-		version: "19.3.0",
+		version: "19.3.1",
 		rendererPackageName: "react-dom",
 		currentDispatcherRef: ReactSharedInternals,
-		reconcilerVersion: "19.3.0"
+		reconcilerVersion: "19.3.1"
 	};
 	if ("undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__) {
 		var hook$jscomp$inline_2587 = __REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -11612,6 +11612,7 @@ function partialMatchKey(a, b) {
 	if (typeof a !== typeof b) return false;
 	if (a && b && typeof a === "object" && typeof b === "object") {
 		if (Array.isArray(a) && Array.isArray(b)) {
+			if (b.length > a.length) return false;
 			for (let i = 0; i < b.length; i++) if (!partialMatchKey(a[i], b[i])) return false;
 			return true;
 		}
@@ -11653,7 +11654,7 @@ function replaceEqualDeep(a, b, depth = 0) {
 }
 function shallowEqualObjects(a, b) {
 	if (!b || Object.keys(a).length !== Object.keys(b).length) return false;
-	for (const key in a) if (a[key] !== b[key]) return false;
+	for (const key of Object.keys(a)) if (!hasOwn.call(b, key) || a[key] !== b[key]) return false;
 	return true;
 }
 function isPlainArray(value) {
@@ -11661,12 +11662,14 @@ function isPlainArray(value) {
 }
 function isPlainObject(o) {
 	if (!hasObjectPrototype(o)) return false;
-	const ctor = o.constructor;
+	const objectPrototype = Object.getPrototypeOf(o);
+	const ctor = objectPrototype?.constructor;
 	if (ctor === void 0) return true;
+	if (typeof ctor !== "function") return false;
 	const prot = ctor.prototype;
 	if (!hasObjectPrototype(prot)) return false;
 	if (!prot.hasOwnProperty("isPrototypeOf")) return false;
-	if (Object.getPrototypeOf(o) !== Object.prototype) return false;
+	if (objectPrototype !== Object.prototype) return false;
 	return true;
 }
 function hasObjectPrototype(o) {
@@ -11684,11 +11687,11 @@ function replaceData(prevData, data, options) {
 }
 function addToEnd(items, item, max = 0) {
 	const newItems = [...items, item];
-	return max && newItems.length > max ? newItems.slice(1) : newItems;
+	return max && newItems.length > max ? newItems.slice(-max) : newItems;
 }
 function addToStart(items, item, max = 0) {
 	const newItems = [item, ...items];
-	return max && newItems.length > max ? newItems.slice(0, -1) : newItems;
+	return max && newItems.length > max ? newItems.slice(0, max) : newItems;
 }
 var skipToken = Symbol();
 function ensureQueryFn(options, fetchOptions) {
@@ -11700,18 +11703,22 @@ function shouldThrowError(throwOnError, params) {
 	if (typeof throwOnError === "function") return throwOnError(...params);
 	return !!throwOnError;
 }
-function addConsumeAwareSignal(object, getSignal, onCancelled) {
+var fetchSignal = Symbol();
+function addConsumeAwareSignal(object, getSignal, onCancelled, internalSignal) {
 	let consumed = false;
 	let signal;
-	Object.defineProperty(object, "signal", {
-		enumerable: true,
-		get: () => {
-			signal ??= getSignal();
-			if (consumed) return signal;
-			consumed = true;
-			if (signal.aborted) onCancelled();
-			else signal.addEventListener("abort", onCancelled, { once: true });
-			return signal;
+	Object.defineProperties(object, {
+		[fetchSignal]: { value: internalSignal },
+		signal: {
+			enumerable: true,
+			get: () => {
+				signal ??= getSignal();
+				if (consumed) return signal;
+				consumed = true;
+				if (signal.aborted) onCancelled();
+				else signal.addEventListener("abort", onCancelled, { once: true });
+				return signal;
+			}
 		}
 	});
 	return object;
@@ -11961,10 +11968,10 @@ function createRetryer(config) {
 			promiseReject(value);
 		}
 	};
-	const pause = () => {
+	const pause = (canResume) => {
 		return new Promise((continueResolve) => {
 			continueFn = (value) => {
-				if (isResolved() || canContinue()) continueResolve(value);
+				if (isResolved() || canResume()) continueResolve(value);
 			};
 			config.onPause?.();
 		}).then(() => {
@@ -11994,7 +12001,7 @@ function createRetryer(config) {
 			failureCount++;
 			config.onFail?.(failureCount, error);
 			sleep$1(delay).then(() => {
-				return canContinue() ? void 0 : pause();
+				return isResolved() || canContinue() ? void 0 : pause(canContinue);
 			}).then(() => {
 				if (isRetryCancelled) reject(error);
 				else run();
@@ -12014,7 +12021,7 @@ function createRetryer(config) {
 		canStart,
 		start: () => {
 			if (canStart()) run();
-			else pause().then(run);
+			else pause(canStart).then(run);
 			return promise;
 		}
 	};
@@ -12057,8 +12064,9 @@ function infiniteQueryBehavior(pages) {
 		let currentPage = 0;
 		const fetchFn = async () => {
 			let cancelled = false;
+			const signalContext = context;
 			const addSignalProperty = (object) => {
-				addConsumeAwareSignal(object, () => context.signal, () => cancelled = true);
+				addConsumeAwareSignal(object, () => context.signal, () => cancelled = true, signalContext[fetchSignal]);
 			};
 			const queryFn = ensureQueryFn(context.options, context.fetchOptions);
 			const fetchPage = async (data, param, previous) => {
@@ -12095,7 +12103,7 @@ function infiniteQueryBehavior(pages) {
 			} else {
 				const remainingPages = pages ?? oldPages.length;
 				do {
-					const param = currentPage === 0 ? oldPageParams[0] ?? options.initialPageParam : getNextPageParam(options, result);
+					const param = currentPage === 0 ? oldPageParams[0] === void 0 ? options.initialPageParam : oldPageParams[0] : getNextPageParam(options, result);
 					if (currentPage > 0 && param == null) break;
 					result = await fetchPage(result, param);
 					currentPage++;
@@ -12130,6 +12138,7 @@ var Query = class extends Removable {
 	#cache;
 	#client;
 	#retryer;
+	#fetchPromise;
 	#defaultOptions;
 	#abortSignalConsumed;
 	constructor(config) {
@@ -12216,6 +12225,7 @@ var Query = class extends Removable {
 		return this.state.dataUpdateCount + this.state.errorUpdateCount > 0;
 	}
 	isStatic() {
+		if (this.state.data === void 0) return false;
 		if (this.getObserversCount() > 0) return this.observers.some((observer) => resolveQueryValue(observer.options.staleTime, this) === "static");
 		return false;
 	}
@@ -12275,9 +12285,9 @@ var Query = class extends Removable {
 	async fetch(options, fetchOptions) {
 		if (this.state.fetchStatus !== "idle" && this.#retryer?.status() !== "rejected") {
 			if (this.state.data !== void 0 && fetchOptions?.cancelRefetch) this.cancel({ silent: true });
-			else if (this.#retryer) {
+			else if (this.#retryer && this.#fetchPromise) {
 				this.#retryer.continueRetry();
-				return this.#retryer.promise;
+				return this.#fetchPromise;
 			}
 		}
 		if (options) this.setOptions(options);
@@ -12287,11 +12297,17 @@ var Query = class extends Removable {
 		}
 		const abortController = new AbortController();
 		const addSignalProperty = (object) => {
-			Object.defineProperty(object, "signal", {
-				enumerable: true,
-				get: () => {
-					this.#abortSignalConsumed = true;
-					return abortController.signal;
+			Object.defineProperties(object, {
+				[fetchSignal]: {
+					value: abortController.signal,
+					enumerable: true
+				},
+				signal: {
+					enumerable: true,
+					get: () => {
+						this.#abortSignalConsumed = true;
+						return abortController.signal;
+					}
 				}
 			});
 		};
@@ -12358,32 +12374,42 @@ var Query = class extends Removable {
 			networkMode: context.options.networkMode,
 			canRun: () => true
 		});
-		try {
-			const data = await retryer.start();
-			if (data === void 0) throw new Error(`${this.queryHash} data is undefined`);
-			this.setData(data);
-			this.#cache.config.onSuccess?.(data, this);
-			this.#cache.config.onSettled?.(data, this.state.error, this);
-			return data;
-		} catch (error) {
-			if (error instanceof CancelledError) {
-				if (error.silent) return this.#retryer.promise;
-				else if (error.revert) {
-					if (this.state.data === void 0) throw error;
-					return this.state.data;
+		const fetchPromise = (async () => {
+			try {
+				const data = await retryer.promise;
+				if (data === void 0) throw new Error(`${this.queryHash} data is undefined`);
+				this.setData(data);
+				this.#cache.config.onSuccess?.(data, this);
+				this.#cache.config.onSettled?.(data, this.state.error, this);
+				return data;
+			} catch (error) {
+				if (error instanceof CancelledError) {
+					if (error.silent) {
+						if (this.#retryer !== retryer && this.#fetchPromise) return this.#fetchPromise;
+						throw error;
+					} else if (error.revert) {
+						if (this.state.data === void 0) throw error;
+						return this.state.data;
+					}
 				}
+				this.#dispatch({
+					type: "error",
+					error
+				});
+				this.#cache.config.onError?.(error, this);
+				this.#cache.config.onSettled?.(this.state.data, error, this);
+				throw error;
+			} finally {
+				if (this.#retryer === retryer) {
+					this.#retryer = void 0;
+					this.#fetchPromise = void 0;
+				}
+				this.scheduleGc();
 			}
-			this.#dispatch({
-				type: "error",
-				error
-			});
-			this.#cache.config.onError?.(error, this);
-			this.#cache.config.onSettled?.(this.state.data, error, this);
-			throw error;
-		} finally {
-			if (this.#retryer === retryer) this.#retryer = void 0;
-			this.scheduleGc();
-		}
+		})();
+		this.#fetchPromise = fetchPromise;
+		retryer.start();
+		return fetchPromise;
 	}
 	#dispatch(action) {
 		const reducer = (state) => {
@@ -12607,7 +12633,7 @@ var QueryObserver = class extends Subscribable {
 				}
 			});
 		});
-		return Promise.race([query.fetch().then(() => {
+		return Promise.race([query.fetch(defaultedOptions).then(() => {
 			const result = this.createResult(query, defaultedOptions);
 			resolveEarly?.(result);
 			return result;
@@ -12643,7 +12669,7 @@ var QueryObserver = class extends Subscribable {
 		}, timeout);
 	}
 	#computeRefetchInterval() {
-		return (typeof this.options.refetchInterval === "function" ? this.options.refetchInterval(this.#currentQuery) : this.options.refetchInterval) ?? false;
+		return resolveQueryValue(this.options.refetchInterval, this.#currentQuery) ?? false;
 	}
 	#updateRefetchInterval(nextInterval) {
 		this.#clearRefetchInterval();
@@ -12770,12 +12796,9 @@ var QueryObserver = class extends Subscribable {
 			const { notifyOnChangeProps } = this.options;
 			const notifyOnChangePropsValue = typeof notifyOnChangeProps === "function" ? notifyOnChangeProps() : notifyOnChangeProps;
 			if (notifyOnChangePropsValue === "all" || !notifyOnChangePropsValue && !this.#trackedProps.size) return true;
-			const includedProps = new Set(notifyOnChangePropsValue ?? this.#trackedProps);
-			if (this.options.throwOnError) includedProps.add("error");
-			return Object.keys(this.#currentResult).some((key) => {
-				const typedKey = key;
-				return this.#currentResult[typedKey] !== prevResult[typedKey] && includedProps.has(typedKey);
-			});
+			if (this.options.throwOnError && this.#currentResult.error !== prevResult.error) return true;
+			for (const key of notifyOnChangePropsValue ?? this.#trackedProps) if (this.#currentResult[key] !== prevResult[key]) return true;
+			return false;
 		};
 		const notifyListeners = shouldNotifyListeners();
 		notifyManager.batch(() => {
@@ -12812,7 +12835,7 @@ function shouldFetchOnMount(query, options) {
 }
 function shouldFetchOn(query, options, field) {
 	if (resolveQueryValue(options.enabled, query) !== false && resolveQueryValue(options.staleTime, query) !== "static") {
-		const value = typeof field === "function" ? field(query) : field;
+		const value = resolveQueryValue(field, query);
 		return value === "always" || value !== false && isStale(query, options);
 	}
 	return false;
@@ -12925,6 +12948,7 @@ var Mutation = class extends Removable {
 					isPaused
 				});
 			}
+			if (this.state.isPaused && retryer.canStart()) onContinue();
 			const data = await retryer.start();
 			await this.#mutationCache.config.onSuccess?.(data, variables, this.state.context, this, mutationFnContext);
 			await this.options.onSuccess?.(data, variables, this.state.context, mutationFnContext);
@@ -13109,14 +13133,15 @@ var MutationCache = class extends Subscribable {
 	}
 	clear() {
 		notifyManager.batch(() => {
-			this.#mutations.forEach((mutation) => {
+			const mutations = this.getAll();
+			this.#mutations.clear();
+			this.#scopes.clear();
+			mutations.forEach((mutation) => {
 				this.notify({
 					type: "removed",
 					mutation
 				});
 			});
-			this.#mutations.clear();
-			this.#scopes.clear();
 		});
 	}
 	getAll() {
@@ -13183,10 +13208,9 @@ var QueryCache = class extends Subscribable {
 		}
 	}
 	remove(query) {
-		const queryInMap = this.#queries.get(query.queryHash);
-		if (queryInMap) {
+		if (this.#queries.get(query.queryHash) === query) {
 			query.destroy();
-			if (queryInMap === query) this.#queries.delete(query.queryHash);
+			this.#queries.delete(query.queryHash);
 			this.notify({
 				type: "removed",
 				query
@@ -13377,8 +13401,9 @@ var QueryClient = class {
 		};
 		const promises = notifyManager.batch(() => this.#queryCache.findAll(filters).filter((query) => !query.isDisabled() && !query.isStatic()).map((query) => {
 			let promise = query.fetch(void 0, fetchOptions);
-			if (!fetchOptions.throwOnError) promise = promise.catch(noop$1);
-			return query.state.fetchStatus === "paused" ? Promise.resolve() : promise;
+			const isPaused = query.state.fetchStatus === "paused";
+			if (!fetchOptions.throwOnError || isPaused) promise = promise.catch(noop$1);
+			return isPaused ? Promise.resolve() : promise;
 		}));
 		return Promise.all(promises).then(noop$1);
 	}
@@ -13514,7 +13539,7 @@ var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBo
 //#endregion
 //#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
-	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
+	const throwOnError = query?.state.status === "error" && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
 		if (!errorResetBoundary.isReset()) options.retryOnMount = false;
 	}
@@ -13557,15 +13582,15 @@ function useBaseQuery(options, Observer, queryClient) {
 	useClearResetErrorBoundary(errorResetBoundary);
 	const [observer] = import_react.useState(() => new Observer(client, defaultedOptions));
 	const result = observer.getOptimisticResult(defaultedOptions);
+	import_react.useEffect(() => {
+		observer.setOptions(defaultedOptions);
+	}, [defaultedOptions, observer]);
 	const shouldSubscribe = !isRestoring && subscribed;
 	import_react.useSyncExternalStore(import_react.useCallback((onStoreChange) => {
 		const unsubscribe = shouldSubscribe ? observer.subscribe(notifyManager.batchCalls(onStoreChange)) : noop$1;
 		observer.updateResult();
 		return unsubscribe;
 	}, [observer, shouldSubscribe]), () => observer.getCurrentResult(), () => observer.getCurrentResult());
-	import_react.useEffect(() => {
-		observer.setOptions(defaultedOptions);
-	}, [defaultedOptions, observer]);
 	if (shouldSuspend(defaultedOptions, result)) throw fetchOptimistic(defaultedOptions, observer, errorResetBoundary);
 	if (getHasError({
 		result,
@@ -26296,7 +26321,7 @@ var createStore = ((createState) => createState ? createStoreImpl(createState) :
 //#region node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
-	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
+	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), () => selector(api.getInitialState()));
 	import_react.useDebugValue(slice);
 	return slice;
 }
