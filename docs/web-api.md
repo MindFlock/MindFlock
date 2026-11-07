@@ -1777,8 +1777,10 @@ must accept the `hints` keyword — the server always passes it to
 The pass decodes greedily and once (temperature 0: no fallback ladder,
 which decoded a low-confidence phrase up to six times) with its new tokens
 capped by the audio's length (`speech.final_tokens`: 20 + 10 a second of
-a 30 s window, at most 220 — what fits beside a full `hotwords` prompt),
-and still costs ~0.5–1 s on `small` — which is why it **starts early**:
+a 30 s window, at most 220 — what fits beside a full `hotwords` prompt)
+on an encoder input padded to 20 s, not Whisper's 30 (`FINAL_PAD_SECONDS`:
+the bench's `/end` wait went from 863/1500 to 519/728 ms p50/p95 for WER
+4.7 → 3.6 %), and still costs ~0.5–0.9 s on `small` — which is why it **starts early**:
 once 0.3 s of quiet (`EARLY_QUIET_SECONDS`) follows the last loud 100 ms
 frame — a sentence's phrase-end quiet is 0.9–1.5 s (`turn.hold_ms`), so
 that is a 0.6 s or longer head start — or, sooner, once a fast pass hears
@@ -1793,8 +1795,8 @@ wasted pass) — unless the fast tier heard no new word since: a cough or a
 click made it stale, and its text still covers the phrase. `/end` also skips its last
 fast pass when nothing loud arrived since the previous one and no tail
 waits. The accurate pass has 1.5 s of waiting (`FINAL_TIMEOUT_S`): the
-bench's `/end` wait is 0.7 s at the median and 1.35 s at p95, against 2.0
-and 6.5 s before the early start; past that, or when it fails, the fast
+bench's `/end` wait is 0.52 s at the median and 0.73 s at p95 (2026-11-07),
+against 2.0 and 6.5 s before the early start; past that, or when it fails, the fast
 text stands. **The two tiers share the CPU, so they are scheduled**
 (`speech_stream.Lane`, one per model, `whisper:<name>`; the caller's own
 thread runs the job, no worker thread): at most one job per model at a

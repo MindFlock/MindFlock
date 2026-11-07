@@ -1225,12 +1225,18 @@ def _shim_av_open() -> None:
 #: 20 ms) and takes a pass from 374 to 155 ms; at 6 s it starts inventing
 #: words. Whisper windows are at most :data:`speech_stream.WINDOW_SECONDS`.
 STREAM_PAD_SECONDS = 10.0
-#: The same for the accurate pass over a whole phrase — 0: Whisper's own
-#: 30 s. Its text is the one sent, and with the vocabulary as ``hotwords``
-#: a shorter input costs words: small on the 48 clips, WER 4.8% at 30 s,
+#: The same for the accurate pass over a whole phrase (a longer phrase
+#: pads to itself plus a little quiet: :func:`_pad_frames`). It was 0
+#: (Whisper's own 30 s): small on the 48 clips then gave WER 4.8% at 30 s,
 #: 5.9% at 20 s (644 vs 1150 ms p50), 8.5% at 10 s — where a low-confidence
-#: lone word also set off faster-whisper's temperature fallback for 28 s.
-FINAL_PAD_SECONDS = 0.0
+#: lone word set off faster-whisper's temperature fallback for 28 s. With
+#: the fallback off and the tokens capped (:data:`FINAL_TOKENS`), 20 s
+#: measured (voice_bench, base.en+small, 2026-11-07): finish 519/728 ms
+#: p50/p95 and WER 3.6% against 863/1500 ms (4 of 48 timed out) and 4.7%
+#: at 30 s — the 1 s the person waits after "over" is worth more than the
+#: odd word, and a pass that lands beats one that times out to the fast
+#: text. 10 s stays out: it starts inventing words.
+FINAL_PAD_SECONDS = 20.0
 #: The accurate pass decodes greedily, once (temperature 0: no fallback
 #: ladder — a low-confidence phrase decoded up to six times), and its new
 #: tokens are capped at this many plus :data:`FINAL_TOKENS_PER_S` per second
