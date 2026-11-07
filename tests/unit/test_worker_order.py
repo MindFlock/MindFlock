@@ -23,6 +23,7 @@ from backend.providers import activity_markers as am
 from backend.web import server
 from backend.web.core import mailbox, prompt_queue, team_runs, thread
 from backend.web.core import worker_order as wo
+from backend.web.core.engine import DiskView
 from backend.web.core import worker_order_driver as drv
 
 
@@ -307,8 +308,12 @@ def fake(monkeypatch, tmp_path):
     srv.runs = runs
     srv.told, srv.events, srv.reports, srv.tmp = told, events, reports, tmp_path
     # Live titles on disk (every server's): never the real state.json.
-    srv.disk = set()
-    monkeypatch.setattr(drv, "_live_elsewhere", lambda: set(srv.disk))
+    srv.disk, srv.tombs = set(), set()
+    monkeypatch.setattr(
+        drv,
+        "_live_elsewhere",
+        lambda: DiskView(frozenset(srv.disk), frozenset(srv.tombs)),
+    )
     return srv
 
 
@@ -421,6 +426,70 @@ def test_another_servers_new_worker_is_not_forgotten(fake, monkeypatch):
     assert prompt_queue.get_state("w2")["enabled"] is True
 
 
+def test_a_slow_start_elsewhere_is_not_gone_but_a_tombstone_is(fake):
+    """A session reaches state.json only once it has STARTED — minutes for a
+    provisioned workspace. Past a short grace, a worker the other server was
+    still provisioning read as gone; only a tombstone (delete/close) proves
+    that, and it does at once."""
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    ten_min_ago = time.time() - 600
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}}, created=ten_min_ago)
+    _spawn(fake, "w2", "orch", repo, {"after": ["w1"]}, created=ten_min_ago)
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "running"
+    fake.ENGINE.instances.pop("w1")  # not here, not on disk, 10 min old
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "running"
+    assert prompt_queue.get_state("w2")["enabled"] is False
+    fake.tombs.add("w1")  # deleted
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "done"
+    assert prompt_queue.get_state("w2")["enabled"] is True
+
+
+def test_a_fence_of_a_worker_still_being_created_elsewhere_stays(fake):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}}, created=time.time())
+    drv.tick()
+    assert list(rz.session_fences(repo)) == ["mindflock_w1"]
+    fake.ENGINE.instances.pop("w1")  # the other server's, not saved yet
+    drv.tick()
+    assert list(rz.session_fences(repo)) == ["mindflock_w1"]
+    assert drv.alive_anywhere(["orch"]) == {"orch", "w1"}
+    fake.tombs.add("w1")
+    assert drv.alive_anywhere(["orch"]) == {"orch"}
+
+
+def test_the_store_lock_is_shared_with_other_processes(fake):
+    """Two servers rewrite the order store every few seconds: its edits hold
+    an flock another process can't take meanwhile (reentrant here)."""
+    import sys
+
+    probe = (
+        "import fcntl, os, sys\n"
+        "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR)\n"
+        "try:\n"
+        "    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "    print('free')\n"
+        "except OSError:\n"
+        "    print('held')\n"
+    )
+    lock = wo.store_path() + ".lock"
+
+    def other():
+        return subprocess.run(
+            [sys.executable, "-c", probe, lock], capture_output=True, text=True
+        ).stdout.strip()
+
+    with wo.edit():
+        with wo.edit():  # reentrant
+            assert other() == "held"
+        assert other() == "held"
+    assert other() == "free"
+
+
 def test_an_orchestrator_another_server_owns_keeps_its_order(fake, monkeypatch):
     repo = _repo(str(fake.tmp / "r"))
     fake.ENGINE.instances["orch"] = _Inst("orch", repo)
@@ -469,7 +538,7 @@ def test_start_now_releases_a_worker_with_no_order_record(fake):
     assert prompt_queue.get_state("x")["held"]
 
 
-def test_disk_titles_skips_tombstoned(monkeypatch):
+def test_disk_view_splits_live_and_tombstoned(monkeypatch):
     from backend.web.core import engine as eng
 
     items = [
@@ -484,9 +553,9 @@ def test_disk_titles_skips_tombstoned(monkeypatch):
     )
     monkeypatch.setattr(eng.config, "LoadState", lambda: st)
     monkeypatch.setattr(eng.time, "time", lambda: 1794092600.0)
-    assert eng.disk_titles() == {"a", "c"}
+    assert eng.disk_view() == eng.DiskView(frozenset({"a", "c"}), frozenset({"b"}))
     monkeypatch.setattr(eng.config, "LoadState", lambda: 1 / 0)
-    assert eng.disk_titles() == set()
+    assert eng.disk_view() == eng.DiskView(frozenset(), frozenset())
 
 
 def test_a_spawn_held_by_a_full_cap_says_so(fake):

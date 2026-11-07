@@ -43,7 +43,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, NamedTuple, Optional
 
 from backend import config, log
 from backend import session
@@ -386,12 +386,21 @@ def get_engine() -> Engine:
     return _ENGINE
 
 
-def disk_titles() -> set:
-    """Titles state.json holds that no tombstone has deleted — every server's
-    live sessions, including ones this process has not adopted yet (the sync
-    loop runs every few seconds). A loop that judges "is this session gone?"
-    from its own ``engine.instances`` alone mistakes a co-running server's
-    brand-new session for a deleted one. Never raises (unreadable → empty)."""
+class DiskView(NamedTuple):
+    """What state.json says about every server's sessions."""
+
+    live: frozenset  # saved and not deleted since
+    tombstoned: frozenset  # deleted (or closed) by some server, still on record
+
+
+def disk_view() -> DiskView:
+    """Every server's saved, undeleted session titles plus the tombstoned
+    ones. A loop that judges "is this session gone?" from its own
+    ``engine.instances`` alone mistakes a co-running server's brand-new
+    session for a deleted one — but a session reaches state.json only once
+    it has STARTED (minutes for a provisioned workspace), so absence here is
+    not proof either: only a tombstone is. Never raises (unreadable →
+    empty)."""
     try:
         state = config.LoadState()
         tombs = _load_disk_tombstones(state)
@@ -400,8 +409,8 @@ def disk_titles() -> set:
             raw = bytes(raw).decode("utf-8")
         items = json.loads(raw) if raw else []
     except Exception:  # noqa: BLE001
-        return set()
-    out = set()
+        return DiskView(frozenset(), frozenset())
+    live = set()
     for x in items or []:
         title = x.get("title") if isinstance(x, dict) else None
         if not title:
@@ -416,8 +425,8 @@ def disk_titles() -> set:
                     pass
             if float(ts) > seen:
                 continue
-        out.add(title)
-    return out
+        live.add(title)
+    return DiskView(frozenset(live), frozenset(set(tombs) - live))
 
 
 # (mtime_ns, size) of state.json at the last sync, plus the tombstones parsed

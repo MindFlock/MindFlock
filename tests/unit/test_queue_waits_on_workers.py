@@ -549,7 +549,9 @@ def test_drain_keeps_queues_of_another_servers_new_sessions(fl, monkeypatch):
     monkeypatch.setattr(qd, "_watch_limited_sessions", lambda: None)
     monkeypatch.setattr(qd, "_drain_mailboxes", lambda: None)
     disk = {"elsewhere"}
-    monkeypatch.setattr(eng, "disk_titles", lambda: set(disk))
+    monkeypatch.setattr(
+        eng, "disk_view", lambda: eng.DiskView(frozenset(disk), frozenset())
+    )
     pq.set_flags("elsewhere", enabled=False, held=True)
     pq.enqueue("elsewhere", "the task")
     ports.allocate("elsewhere")
@@ -561,6 +563,32 @@ def test_drain_keeps_queues_of_another_servers_new_sessions(fl, monkeypatch):
     disk.clear()
     qd._drain_prompt_queues()
     assert "elsewhere" not in pq.all_titles() and ports.get("elsewhere") is None
+
+
+def test_drain_keeps_the_queue_of_a_worker_still_being_created(fl, monkeypatch):
+    """A session reaches state.json only once it has started (minutes for a
+    provisioned workspace); a held worker's queue must survive that window
+    on the server that did not create it."""
+    from backend.web.core import engine as eng
+    from backend.web.core import worker_order as wo
+
+    monkeypatch.setattr(qd, "_drain_one_queue", lambda t: None)
+    monkeypatch.setattr(qd, "_watch_limited_sessions", lambda: None)
+    monkeypatch.setattr(qd, "_drain_mailboxes", lambda: None)
+    tombs = set()
+    monkeypatch.setattr(
+        eng, "disk_view", lambda: eng.DiskView(frozenset(), frozenset(tombs))
+    )
+    with wo.edit() as data:
+        rec = wo.parent_rec(data, "orch", None, make=True)
+        wo.add_worker(rec, "new-w", created=T0)
+    pq.set_flags("new-w", enabled=False, held=True)
+    pq.enqueue("new-w", "the task")
+    qd._drain_prompt_queues()
+    assert [i["text"] for i in pq.list_queue("new-w")] == ["the task"]
+    tombs.add("new-w")  # deleted before it ever started
+    qd._drain_prompt_queues()
+    assert "new-w" not in pq.all_titles()
 
 
 # --------------------------------------------------------------------------- #

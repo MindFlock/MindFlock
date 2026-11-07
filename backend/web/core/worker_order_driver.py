@@ -26,7 +26,7 @@ import asyncio
 import os
 import threading
 import time
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from backend.web.core import worker_order as _order
 
@@ -437,7 +437,7 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
     from backend.web.core import thread as _thread
 
     obs: Dict[str, dict] = {}
-    disk: List[set] = []  # read once, only when a worker is missing here
+    disk: list = []  # read once, only when a worker is missing here
     names = set(rec.get("workers") or {})
     for w in (rec.get("workers") or {}).values():
         if isinstance(w, dict):
@@ -457,7 +457,7 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
             if w is not None:
                 if not disk:
                     disk.append(_live_elsewhere())
-                if t in disk[0] or _young(w):
+                if _alive_elsewhere(t, w, disk[0]):
                     obs[t] = {"exists": None, "elsewhere": True}
                 else:
                     obs[t] = {"exists": False}
@@ -488,16 +488,19 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
     return obs
 
 
-#: A worker this young is never judged gone from its absence here alone: its
-#: creating server may not have saved it to state.json yet.
-ELSEWHERE_GRACE_S = 120.0
+#: A session reaches state.json only once it has STARTED, which for a
+#: provisioned workspace can take minutes: until then a worker missing from
+#: this server's engine, from the disk, and not tombstoned is the other
+#: server's work in progress for this long. A deleted (or closed) session is
+#: tombstoned, so it reads gone at once whatever its age.
+ELSEWHERE_GRACE_S = 3600.0
 
 
-def _live_elsewhere() -> set:
-    """Live session titles on disk (every server's), for :func:`observe`."""
+def _live_elsewhere():
+    """state.json's view of every server's sessions (``engine.DiskView``)."""
     from backend.web.core import engine as _engine
 
-    return _engine.disk_titles()
+    return _engine.disk_view()
 
 
 def _young(w: Mapping) -> bool:
@@ -506,6 +509,31 @@ def _young(w: Mapping) -> bool:
     except (TypeError, ValueError):
         return False
     return time.time() - born < ELSEWHERE_GRACE_S
+
+
+def _alive_elsewhere(t: str, w: Optional[Mapping], view) -> bool:
+    """``t`` (missing from this engine) is still some server's session."""
+    if t in view.tombstoned:
+        return False
+    return t in view.live or (w is not None and _young(w))
+
+
+def alive_anywhere(local: Iterable[str]) -> set:
+    """``local`` (this engine's titles) plus every title another server
+    still holds: saved and undeleted, or an unfinished worker of an order
+    that is not tombstoned (one still being created is on no disk yet). For
+    the loops that prune per-title stores (prompt queues, port blocks)."""
+    view = _live_elsewhere()
+    out = set(local) | set(view.live)
+    for rec in (_order.load().get("parents") or {}).values():
+        for t, w in ((rec or {}).get("workers") or {}).items():
+            if (
+                isinstance(w, dict)
+                and w.get("state") in ("held", "running")
+                and t not in view.tombstoned
+            ):
+                out.add(t)
+    return out
 
 
 def _branch_of(inst) -> str:
@@ -737,9 +765,9 @@ def _pass_sync() -> None:
             if (not parent or parent not in fresh) and not alive:
                 # Gone here — but maybe only not adopted YET (another server's
                 # orchestrator, or its brand-new workers): ask the disk.
-                disk = _live_elsewhere()
-                if (not parent or parent not in disk) and not any(
-                    t in disk or _young(w)
+                view = _live_elsewhere()
+                if (not parent or parent not in view.live) and not any(
+                    _alive_elsewhere(t, w, view)
                     for t, w in (live.get("workers") or {}).items()
                     if isinstance(w, dict)
                 ):
@@ -797,13 +825,15 @@ def _sweep_fences(srv, instances: Mapping) -> None:
     """Drop every orchestrator-set fence whose session is gone (a new session
     that reuses the tmux name must not inherit it). Gone means gone from the
     disk too: a co-running server's new worker is not in this engine yet,
-    and dropping its fence left it working unfenced."""
+    and dropping its fence left it working unfenced (:func:`alive_anywhere`)."""
     try:
         live = {srv._red_zones._session_key(_tmux_of(t)) for t in instances}
         found = srv._red_zones.fences_by_owner_prefix(FENCE_OWNER)
         if any(key not in live for _wt, key in found):
+            # Not in this engine: alive elsewhere (saved, or a worker still
+            # being created — its fence lands before its first save)?
             live |= {
-                srv._red_zones._session_key(_tmux_of(t)) for t in _live_elsewhere()
+                srv._red_zones._session_key(_tmux_of(t)) for t in alive_anywhere(())
             }
         for wt, key in found:
             if key not in live:
