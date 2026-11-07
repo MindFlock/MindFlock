@@ -489,6 +489,17 @@ def test_disk_titles_skips_tombstoned(monkeypatch):
     assert eng.disk_titles() == set()
 
 
+def test_a_spawn_held_by_a_full_cap_says_so(fake):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    drv.set_order("orch", {"max_parallel": 1})
+    o1, _ = _spawn(fake, "w1", "orch", repo, {})
+    assert "waits_for_slot" not in o1  # a slot is free
+    drv.tick()
+    o2, _ = _spawn(fake, "w2", "orch", repo, {})
+    assert o2["waits_for_slot"] == {"cap": 1, "mode": "parallel", "running": 1}
+
+
 def test_unknown_after_and_cycles_are_refused(fake):
     repo = _repo(str(fake.tmp / "r"))
     fake.ENGINE.instances["orch"] = _Inst("orch", repo)

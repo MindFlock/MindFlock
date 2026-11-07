@@ -407,6 +407,20 @@ def on_create(
             "why": dict(w["why"]),
             "fence": fence,
         }
+        # The cap is the orchestrator's standing policy — often set for an
+        # earlier batch and forgotten. Say so when it is what holds this one.
+        cap = _order.cap_of(live)
+        busy = sum(
+            1
+            for _s, t, x in _order._unfinished(live, but=title)
+            if x.get("state") == "running"
+        )
+        if parked and cap and busy >= cap:
+            out["waits_for_slot"] = {
+                "cap": cap,
+                "mode": str(live.get("mode") or "parallel"),
+                "running": busy,
+            }
     wake()
     return out, None
 

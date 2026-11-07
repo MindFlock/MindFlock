@@ -284,6 +284,33 @@ class TestSpawnOrder:
         assert out["order"]["after"] == ["w1"]
         assert any("held until w1 is done" in w for w in out["warnings"])
 
+    def test_a_leftover_cap_is_named_with_how_to_lift_it(self):
+        box, api, clock = make_box(_tree())
+        api.created_status = "running"
+        original = api._create
+        slot = {"cap": 3, "mode": "parallel", "running": 3}
+
+        def create(payload):
+            out = original(payload)
+            out["order"] = {"held": True, "after": [], "why": {}, "fence": None}
+            if slot:
+                out["order"]["waits_for_slot"] = dict(slot)
+            return out
+
+        api._create = create
+        out = box.spawn_session({"prompt": "x", "title": "w3"}, FakeCtx(clock))
+        (w,) = [w for w in out["warnings"] if "free slot" in w]
+        assert "at most 3 at a time (3 running now)" in w
+        assert "set_order(max_parallel=0)" in w
+        slot.update(mode="serial", cap=1, running=1)
+        out = box.spawn_session({"prompt": "x", "title": "w4"}, FakeCtx(clock))
+        (w,) = [w for w in out["warnings"] if "free slot" in w]
+        assert "one at a time" in w and 'mode="parallel"' in w
+        # A free slot: released on the next pass, nothing to warn about.
+        slot.clear()
+        out = box.spawn_session({"prompt": "x", "title": "w5"}, FakeCtx(clock))
+        assert not [w for w in out.get("warnings") or [] if "free slot" in w]
+
     def test_an_unordered_spawn_sends_nothing_new(self):
         box, api, clock = make_box(_tree())
         api.created_status = "running"
