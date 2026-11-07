@@ -1349,7 +1349,7 @@ describe("a dialog is answered only by words begun after it was there (R8-bis)",
     expect(MIC).toContain("route: (t, s, at) => routePhrase(t, s, undefined, at)");
     expect(MIC).toContain('dialogSeen.rows(queryClient.getQueryData<Instance[]>(["instances"]) || [])');
     const VD = code("lib/voiceDesktop.ts");
-    expect(VD).toContain("hh.onFlush?.(wordsOf(r.j.committed), final || undefined, c.spokeAt || undefined)");
+    expect(VD).toContain("hh.onFlush?.(committed, final || undefined, c.spokeAt || undefined)");
     expect(VD).toContain("if (text) hh.onFinal(text, spokeAt || undefined)");
     expect(VD).toContain("if (d?.id) dialogSeen.note(title, d.id)");
   });

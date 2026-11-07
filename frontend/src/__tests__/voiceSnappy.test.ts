@@ -164,7 +164,7 @@ describe("“over” waits for the final only as long as finals take", () => {
     expect(overWaitMs(2000)).toBe(OVER_FINAL_WAIT_MS); // a slow final is not waited for
   });
 
-  it("FinalClock: the server's pass seeds it (plus the round trip), the measured round trips take over and follow the last few", () => {
+  it("FinalClock: the server's pass seeds it (plus the round trip), the measured round trips take over: the median of the last few", () => {
     const c = new FinalClock();
     expect(c.typical()).toBeNull();
     expect(c.typical(null)).toBeNull();
@@ -172,7 +172,9 @@ describe("“over” waits for the final only as long as finals take", () => {
     c.note(300);
     expect(c.typical(500)).toBe(300); // measured beats the seed
     c.note(700);
-    expect(c.typical()).toBe(460); // 0.6 × 300 + 0.4 × 700
+    expect(c.typical()).toBe(500); // the median of 300 and 700
+    c.note(320);
+    expect(c.typical()).toBe(320); // one slow final moves it not at all
     for (let i = 0; i < 10; i++) c.note(200);
     expect(c.typical()).toBeLessThan(210); // a slow moment is forgotten
     c.note(-1);
@@ -206,7 +208,7 @@ describe("“over” waits for the final only as long as finals take", () => {
       expect(t.keys).toEqual(["ship it"]);
     });
 
-    it("a final that comes back is measured: the next “over” waits its round trip and a half, and a final within it sends at once", async () => {
+    it("a measured round trip sets the wait: the next “over” waits it and a half, and a final within it sends at once", async () => {
       const t = session();
       const k = fast();
       const d = new LiveDictation(t, k.h, { continuous: true });
@@ -214,8 +216,10 @@ describe("“over” waits for the final only as long as finals take", () => {
       quiet = CONTROL_TAIL_MS;
       await vi.advanceTimersByTimeAsync(50);
       expect(k.ends()).toBe(1);
-      // /end answers 300 ms after the phrase was ended: measured.
+      // /end answers 300 ms after the phrase was ended (the recognizer
+      // measures it: it alone knows a final from a timeout).
       await vi.advanceTimersByTimeAsync(300);
+      finalClock.note(300);
       const flushed = d.flush("", "run the tests over");
       await vi.advanceTimersByTimeAsync(SUBMIT_SETTLE_MS + 10); // the correction settles before Enter
       await flushed;
@@ -230,11 +234,10 @@ describe("“over” waits for the final only as long as finals take", () => {
       expect(mocks.instApi).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(60);
       expect(mocks.instApi).toHaveBeenCalledTimes(2);
-      // Its late final is still measured (the clock follows a slow moment)…
+      // Its late final is never sent twice.
       await vi.advanceTimersByTimeAsync(1000);
       await d.flush("", "and push it over");
-      expect(mocks.instApi).toHaveBeenCalledTimes(2); // …but never sent twice
-      expect(finalClock.typical()).toBeGreaterThan(300);
+      expect(mocks.instApi).toHaveBeenCalledTimes(2);
     });
 
     it("a final matching the fast words types nothing: Enter goes without the settle", async () => {
