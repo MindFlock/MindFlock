@@ -605,6 +605,11 @@ def test_jumping_back_over_a_running_review_closes_its_reviewer(srv, monkeypatch
     D.operate(f["id"], "resume")
     D.operate(f["id"], "jump", "s1")
     assert closed == [("s", "review-1")]
+    # Cancelling the route leaves the stop "running" with its reviewer, but
+    # nothing will read the verdict any more: it is closed too.
+    F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-3"))
+    D.operate(f["id"], "cancel")
+    assert closed[-1] == ("s", "review-3")
 
 
 def test_operate_done_on_a_verify_failure_handed_to_you_still_works(srv):

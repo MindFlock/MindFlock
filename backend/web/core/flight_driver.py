@@ -2510,11 +2510,14 @@ def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
             continue
         now = (after.get("step_states") or {}).get(s["id"]) or {}
         if (
-            now.get("state") == "running"
+            after.get("state") not in _flights.FINAL
+            and now.get("state") == "running"
             and [str(k) for k in (now.get("detail") or {}).get("children") or []]
             == kids
         ):
-            continue  # still its reviewer
+            # Still its reviewer. A cancelled route leaves the stop "running"
+            # with its child, but nothing will read that verdict any more.
+            continue
         for k in kids:
             try:
                 if _review._close(title, k):
