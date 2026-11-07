@@ -2085,7 +2085,7 @@ def take_off(
     now: Optional[float] = None,
     replaced: Optional[list] = None,
     start_on: str = "now",
-    busy: bool = False,
+    busy: str = "",
 ) -> dict:
     """Create a ``running`` flight of ``plan`` bound to ``session``.
 
@@ -2100,7 +2100,9 @@ def take_off(
       ``busy`` (that work is still going: the agent is working, still
       loading, or its task waits in its queue): the leading agent step is
       that work — it starts ``running`` (nothing is sent) and ends when the
-      turn settles. Skipping it started a review of a branch with nothing on
+      turn settles. ``busy`` says why (``"working"``: the turn is under way,
+      so the stop counts it as started — a turn that ended a moment before
+      the row said so must not wait two hours for "the agent to start"). Skipping it started a review of a branch with nothing on
       it yet.
     * ``seeded`` (the session was created — or is being created by intake —
       with the plan's first agent step as its INITIAL prompt): that step is
@@ -2166,6 +2168,8 @@ def take_off(
         ss["state"] = "running"
         ss["since"] = ts
         ss["detail"] = {"seeded": True}
+        if busy == "working":
+            ss["detail"]["worked_at"] = ts
         _hist(flight, ts, steps[0]["id"], "started", "the session's work in progress")
     elif seeded and not attach and first_agent == cursor and cursor < len(steps):
         ss = flight["step_states"][steps[cursor]["id"]]

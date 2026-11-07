@@ -441,21 +441,33 @@ def test_pass_prunes_and_announces_gone_flights(srv, emitted, monkeypatch):
 # Operations
 # --------------------------------------------------------------------------- #
 def test_start_on_a_busy_session_keeps_its_agent_step(srv, row):
+    from backend.web.core import prompt_queue as pq
+
     plan = F.save_plan({"name": "P", "steps": [{"kind": "agent"}, {"kind": "notify"}]})
     row["activity"] = "working"
     f = run(D.start({"plan_id": plan["id"], "title": "s"}))
-    assert f["cursor"] == 0 and f["step_states"]["s1"]["state"] == "running"
+    ss = f["step_states"]["s1"]
+    assert f["cursor"] == 0 and ss["state"] == "running"
+    # Working counts as started: a turn that ended just before take-off must
+    # not wait hours for "the agent to start".
+    assert ss["detail"]["worked_at"] > 0
     # Idle with nothing queued: the work so far is the agent step, as before.
     srv.ENGINE.instances["idle"] = FakeInst()
     row["activity"] = "idle"
-    row["queue_pending"] = False
     f = run(D.start({"plan_id": plan["id"], "title": "idle"}))
     assert f["cursor"] == 1
-    # Idle but its task still waits in its queue (a just-spawned worker).
+    # Idle but its task still waits (held) in its queue: a just-spawned worker.
     srv.ENGINE.instances["queued"] = FakeInst()
-    row["queue_pending"] = True
+    pq.set_flags("queued", enabled=False, held=True)
+    pq.enqueue("queued", "the task")
     f = run(D.start({"plan_id": plan["id"], "title": "queued"}))
-    assert f["cursor"] == 0
+    assert f["cursor"] == 0 and "worked_at" not in f["step_states"]["s1"]["detail"]
+    # A LOOPING queue always has items: idle, it is not a task waiting.
+    srv.ENGINE.instances["looping"] = FakeInst()
+    pq.enqueue("looping", "check the build")
+    pq.set_flags("looping", enabled=True, loop=True)
+    f = run(D.start({"plan_id": plan["id"], "title": "looping"}))
+    assert f["cursor"] == 1
 
 
 def test_start_attach_and_create(srv, monkeypatch):

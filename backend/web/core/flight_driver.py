@@ -2230,12 +2230,9 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
         )
     replaced: list = []
     if title:
-        busy = (
-            not ready
-            and not start_at
-            and rec is None
-            and await asyncio.to_thread(_session_busy, title)
-        )
+        busy = ""
+        if not ready and not start_at and rec is None:
+            busy = await asyncio.to_thread(_session_busy, title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
                 plan,
@@ -2299,20 +2296,28 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     return flight
 
 
-def _session_busy(title: str) -> bool:
-    """The session's agent is on a turn right now — working, still starting
-    (a just-spawned worker), or with its task waiting in its prompt queue —
-    so a route attached to it must not count that unfinished work as its
-    agent stop (blocking)."""
+def _session_busy(title: str) -> str:
+    """Why the session's agent is on a turn right now (blocking) —
+    ``"working"``, ``"loading"`` (a just-spawned worker still starting) or
+    ``"queued"`` (its task waits in its prompt queue) — or "" when it is not:
+    a route attached to a busy session must not count that unfinished work
+    as its agent stop. A LOOPING queue is not a task waiting: it always has
+    items, and an idle looping session would hold the stop for ever."""
     try:
         obs = _session_obs({"session": title}, time.time(), agent=True)
     except Exception:  # noqa: BLE001 — unreadable: today's behaviour
-        return False
+        return ""
     if obs.get("pending") or obs.get("status") == "loading":
-        return True
+        return "loading"
     if obs.get("activity") == "working":
-        return True
-    return bool(obs.get("queue_pending"))
+        return "working"
+    try:
+        q = _prompt_queue.get_state(title)
+    except Exception:  # noqa: BLE001
+        return ""
+    if q.get("items") and not q.get("loop") and (q.get("enabled") or q.get("held")):
+        return "queued"
+    return ""
 
 
 def _fasttrack_to_absorb(title: str) -> Optional[dict]:

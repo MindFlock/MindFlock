@@ -325,7 +325,7 @@ def test_attach_to_a_busy_session_runs_its_agent_step_on_that_work():
     """Attached while the agent is still on its task: that unfinished work is
     the agent step, still running — skipping it started a review of an
     empty branch."""
-    f = fly(step("agent", prompt="go"), step("review"), attach=True, busy=True)
+    f = fly(step("agent", prompt="go"), step("review"), attach=True, busy="queued")
     assert f["cursor"] == 0
     ss = f["step_states"]["s1"]
     assert ss["state"] == "running" and ss["detail"] == {"seeded": True}
@@ -338,11 +338,11 @@ def test_attach_to_a_busy_session_runs_its_agent_step_on_that_work():
         step("review"),
         session="t2",
         attach=True,
-        busy=True,
+        busy="working",
         start_at="s2",
     )
     assert f2["cursor"] == 1
-    f3 = fly(step("notify"), step("agent"), session="t3", attach=True, busy=True)
+    f3 = fly(step("notify"), step("agent"), session="t3", attach=True, busy="working")
     assert f3["cursor"] == 0 and f3["step_states"]["s1"]["state"] == "pending"
 
 
