@@ -47,6 +47,8 @@ __all__ = [
 #: The owner tag on every fence an orchestrator set (bulk drop, the sweep).
 FENCE_OWNER = "orch:"
 TICK_S = 3.0
+#: A held task with no order record is released once its session is this old.
+ORPHAN_GRACE_S = 30.0
 
 _LOOP: Optional[asyncio.AbstractEventLoop] = None
 _WAKE: Optional[asyncio.Event] = None
@@ -421,6 +423,7 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
     from backend.web.core import thread as _thread
 
     obs: Dict[str, dict] = {}
+    disk: List[set] = []  # read once, only when a worker is missing here
     names = set(rec.get("workers") or {})
     for w in (rec.get("workers") or {}).values():
         if isinstance(w, dict):
@@ -431,9 +434,19 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
         inst = instances.get(t)
         if inst is None:
             # A worker that was registered and is gone now is gone; a name
-            # no session ever had is "missing" (not spawned yet).
+            # no session ever had is "missing" (not spawned yet). But "not in
+            # THIS server's engine" is not "gone": a co-running server (the
+            # dev launcher next to the service) shares this store, and it
+            # created the worker a moment ago — it reaches our engine only
+            # on the next state sync. Reading that as gone forgot a held
+            # worker (its task parked for ever) and finished a running one.
             if w is not None:
-                obs[t] = {"exists": False}
+                if not disk:
+                    disk.append(_live_elsewhere())
+                if t in disk[0] or _young(w):
+                    obs[t] = {"exists": None, "elsewhere": True}
+                else:
+                    obs[t] = {"exists": False}
             continue
         if w is not None and not _order._same(w.get("created"), _created(inst)):
             obs[t] = {"exists": False}  # its namesake, not it
@@ -459,6 +472,26 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
             "fenced": not fence or bool(fence.get("applied")),
         }
     return obs
+
+
+#: A worker this young is never judged gone from its absence here alone: its
+#: creating server may not have saved it to state.json yet.
+ELSEWHERE_GRACE_S = 120.0
+
+
+def _live_elsewhere() -> set:
+    """Live session titles on disk (every server's), for :func:`observe`."""
+    from backend.web.core import engine as _engine
+
+    return _engine.disk_titles()
+
+
+def _young(w: Mapping) -> bool:
+    try:
+        born = float(w.get("created") or w.get("held_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    return time.time() - born < ELSEWHERE_GRACE_S
 
 
 def _branch_of(inst) -> str:
@@ -688,8 +721,54 @@ def _pass_sync() -> None:
             fresh = srv.ENGINE.instances
             alive = [t for t in live.get("workers") or {} if t in fresh]
             if (not parent or parent not in fresh) and not alive:
-                d2["parents"].pop(parent, None)
+                # Gone here — but maybe only not adopted YET (another server's
+                # orchestrator, or its brand-new workers): ask the disk.
+                disk = _live_elsewhere()
+                if (not parent or parent not in disk) and not any(
+                    t in disk or _young(w)
+                    for t, w in (live.get("workers") or {}).items()
+                    if isinstance(w, dict)
+                ):
+                    d2["parents"].pop(parent, None)
+    _heal_orphans(srv, _order.load(), instances, now)
     _sweep_fences(srv, dict(srv.ENGINE.instances))
+
+
+def _orphan(srv, data: Mapping, title: str, inst, now: float) -> bool:
+    """``title``'s task is parked (queue held) but no order holds it: its
+    record is gone, so no pass will ever release it. A just-created one is
+    not an orphan yet — ``on_create`` parks the task a moment before it
+    writes the record."""
+    if _order.parent_of_worker(dict(data), title) is not None:
+        return False
+    born = _created(inst) or 0.0
+    if born and now - born < ORPHAN_GRACE_S:
+        return False
+    try:
+        return bool(srv._prompt_queue.get_state(title).get("held"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _heal_orphans(srv, data: Mapping, instances: Mapping, now: float) -> None:
+    """Hand every orphaned held task over (its queue switched on): a task
+    parked for an order that no longer exists would otherwise wait for ever —
+    a worker spawned with a fence sat idle until its orchestrator re-sent the
+    task by message."""
+    try:
+        snap = srv._prompt_queue.snapshot()
+    except Exception:  # noqa: BLE001
+        return
+    for title, entry in snap.items():
+        inst = instances.get(title)
+        if inst is None or not entry.get("held"):
+            continue
+        if not _orphan(srv, data, title, inst, now):
+            continue
+        try:
+            srv._prompt_queue.set_flags(title, enabled=True, held=False)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _fence_key(f: Mapping) -> Tuple:
@@ -774,6 +853,25 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
     start_now = payload.get("start_now") or []
     if isinstance(start_now, str):
         start_now = [start_now]
+    # A worker of this orchestrator whose order record is gone but whose task
+    # is still parked: "start it now" releases it directly (the order has
+    # nothing left to say about it).
+    started: List[str] = []
+    data0 = _order.load()
+    for t in [str(x or "").strip() for x in start_now]:
+        inst = srv.ENGINE.instances.get(t)
+        if (
+            inst is not None
+            and str(getattr(inst, "Parent", "") or "") == parent
+            and _order.parent_of_worker(data0, t) is None
+        ):
+            try:
+                if srv._prompt_queue.get_state(t).get("held"):
+                    srv._prompt_queue.set_flags(t, enabled=True, held=False)
+                    started.append(t)
+            except Exception:  # noqa: BLE001
+                pass
+    start_now = [t for t in start_now if str(t or "").strip() not in started]
     with _order.edit() as data:
         rec = _order.parent_rec(data, parent, _created(pinst), make=True)
         problems = _order.set_policy(
@@ -787,7 +885,10 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
     if problems:
         return 400, {"error": "; ".join(problems), "problems": problems}
     tick()
-    return 200, {"ok": True, "order": order_view(parent)}
+    body = {"ok": True, "order": order_view(parent)}
+    if started:
+        body["started"] = started
+    return 200, body
 
 
 def order_view(parent: str) -> Optional[dict]:

@@ -453,6 +453,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
     """The actions one pass takes for an orchestrator: ``[(kind, title,
     detail)]`` with kind ``release`` / ``done`` / ``stopped`` / ``resumed`` /
     ``forget``. PURE: ``obs`` maps worker title → ``{"exists": bool,
+    "elsewhere": bool (alive, but not in this server's engine yet: left
+    alone),
     "report": "done"|"blocked"|"failed"|None (since it was created/released),
     "fenced": bool (its fence is in place, or it has none)}``.
 
@@ -467,6 +469,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
             continue
         o = obs.get(t) or {}
         st = states[t]
+        if o.get("elsewhere"):
+            continue  # another server's session, not adopted here yet
         if o.get("exists") is False:
             if st == "held":
                 acts.append(("forget", t, "deleted before it started"))
@@ -499,6 +503,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
         if not isinstance(w, dict) or states.get(t) != "held":
             continue
         o = obs.get(t) or {}
+        if o.get("elsewhere"):
+            continue  # nothing to release it into here: its own server does
         if not o.get("fenced", True):
             continue  # its fence lands first — never a minute unfenced
         if w.get("start_now"):

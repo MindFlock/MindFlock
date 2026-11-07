@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -305,6 +306,9 @@ def fake(monkeypatch, tmp_path):
     monkeypatch.setattr(thread, "report_json", lambda m: m)
     srv.runs = runs
     srv.told, srv.events, srv.reports, srv.tmp = told, events, reports, tmp_path
+    # Live titles on disk (every server's): never the real state.json.
+    srv.disk = set()
+    monkeypatch.setattr(drv, "_live_elsewhere", lambda: set(srv.disk))
     return srv
 
 
@@ -378,6 +382,111 @@ def test_a_fenced_session_without_a_parent_is_held_until_fenced(fake):
     drv.tick()
     assert wo.load()["parents"] == {}
     assert rz.session_fences(repo) == {}
+
+
+def test_another_servers_new_worker_is_not_forgotten(fake, monkeypatch):
+    """Two servers share the order store; the one that did not create a
+    worker has not adopted it yet. Its pass must not read that as "deleted":
+    that forgot a fenced worker (task parked for ever) and finished a running
+    one a second after spawn."""
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    now = time.time()
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}}, created=now)
+    _spawn(fake, "w2", "orch", repo, {"after": ["w1"]}, created=now)
+    # This server does not know them yet (created elsewhere, a moment ago).
+    other = {t: fake.ENGINE.instances.pop(t) for t in ("w1", "w2")}
+    drv.tick()
+    workers = wo.load()["parents"]["orch"]["workers"]
+    assert workers["w1"]["state"] == "held" and workers["w2"]["state"] == "held"
+    # Past the grace it is still alive on disk: still kept.
+    monkeypatch.setattr(drv, "ELSEWHERE_GRACE_S", -1.0)
+    fake.disk.update(other)
+    drv.tick()
+    assert set(wo.load()["parents"]["orch"]["workers"]) == {"w1", "w2"}
+    # Adopted: released as usual, the task arrives.
+    fake.ENGINE.instances.update(other)
+    drv.tick()
+    assert prompt_queue.get_state("w1")["enabled"] is True
+    assert prompt_queue.list_queue("w1")[0]["text"].endswith("TASK w1")
+    # A running worker missing here (but on disk) is not "done".
+    fake.ENGINE.instances.pop("w1")
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "running"
+    assert prompt_queue.get_state("w2")["enabled"] is False
+    # Really gone (not on disk either, past the grace): done, w2 goes.
+    fake.disk.discard("w1")
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "done"
+    assert prompt_queue.get_state("w2")["enabled"] is True
+
+
+def test_an_orchestrator_another_server_owns_keeps_its_order(fake, monkeypatch):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    _spawn(fake, "w1", "orch", repo, {"after": [], "fence": {"only": ["a/**"]}})
+    monkeypatch.setattr(drv, "ELSEWHERE_GRACE_S", -1.0)
+    fake.disk.update({"orch", "w1"})
+    fake.ENGINE.instances.clear()
+    drv.tick()
+    assert "w1" in wo.load()["parents"]["orch"]["workers"]
+    fake.disk.clear()
+    drv.tick()
+    assert wo.load()["parents"] == {}
+
+
+def test_an_orphaned_held_task_is_handed_over(fake):
+    """A task parked for an order record that no longer exists (lost before
+    this fix, or a hand-edited store) is released, after a short grace."""
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    fake.ENGINE.instances["w1"] = _Inst("w1", repo, parent="orch", created=9e18)
+    prompt_queue.set_flags("w1", enabled=False, held=True)
+    prompt_queue.enqueue("w1", "TASK w1")
+    drv.tick()
+    assert prompt_queue.get_state("w1")["held"]  # just created: on_create's gap
+    fake.ENGINE.instances["w1"].created = 100.0
+    drv.tick()
+    st = prompt_queue.get_state("w1")
+    assert st["enabled"] is True and not st.get("held")
+    assert prompt_queue.list_queue("w1")[0]["text"] == "TASK w1"
+
+
+def test_start_now_releases_a_worker_with_no_order_record(fake):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    fake.ENGINE.instances["w1"] = _Inst("w1", repo, parent="orch", created=9e18)
+    fake.ENGINE.instances["x"] = _Inst("x", repo, parent="someone", created=9e18)
+    for t in ("w1", "x"):
+        prompt_queue.set_flags(t, enabled=False, held=True)
+        prompt_queue.enqueue(t, "TASK " + t)
+    code, body = drv.set_order("orch", {"start_now": ["w1"]})
+    assert code == 200 and body["started"] == ["w1"]
+    assert prompt_queue.get_state("w1")["enabled"] is True
+    # Not its worker: still refused, its task untouched.
+    code, body = drv.set_order("orch", {"start_now": ["x"]})
+    assert code == 400 and "not one of your workers" in body["error"]
+    assert prompt_queue.get_state("x")["held"]
+
+
+def test_disk_titles_skips_tombstoned(monkeypatch):
+    from backend.web.core import engine as eng
+
+    items = [
+        {"title": "a", "created_at": "2026-11-07T18:00:00-05:00"},
+        {"title": "b", "created_at": "2026-11-07T18:00:00-05:00"},
+        {"title": "c", "created_at": "2026-11-07T18:00:00-05:00"},
+    ]
+    st = SimpleNamespace(
+        GetInstances=lambda: json.dumps(items),
+        # b deleted after it was made; c's tombstone predates it (re-created).
+        tombstones={"b": 1794092500.0, "c": 1794000000.0},
+    )
+    monkeypatch.setattr(eng.config, "LoadState", lambda: st)
+    monkeypatch.setattr(eng.time, "time", lambda: 1794092600.0)
+    assert eng.disk_titles() == {"a", "c"}
+    monkeypatch.setattr(eng.config, "LoadState", lambda: 1 / 0)
+    assert eng.disk_titles() == set()
 
 
 def test_unknown_after_and_cycles_are_refused(fake):

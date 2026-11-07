@@ -37,6 +37,7 @@ delete routes do.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -383,6 +384,40 @@ def get_engine() -> Engine:
     if _ENGINE is None:
         _ENGINE = Engine()
     return _ENGINE
+
+
+def disk_titles() -> set:
+    """Titles state.json holds that no tombstone has deleted — every server's
+    live sessions, including ones this process has not adopted yet (the sync
+    loop runs every few seconds). A loop that judges "is this session gone?"
+    from its own ``engine.instances`` alone mistakes a co-running server's
+    brand-new session for a deleted one. Never raises (unreadable → empty)."""
+    try:
+        state = config.LoadState()
+        tombs = _load_disk_tombstones(state)
+        raw = state.GetInstances()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8")
+        items = json.loads(raw) if raw else []
+    except Exception:  # noqa: BLE001
+        return set()
+    out = set()
+    for x in items or []:
+        title = x.get("title") if isinstance(x, dict) else None
+        if not title:
+            continue
+        ts = tombs.get(title)
+        if ts is not None:
+            seen = 0.0
+            for k in ("created_at", "updated_at"):
+                try:
+                    seen = max(seen, _dt.datetime.fromisoformat(str(x[k])).timestamp())
+                except (KeyError, TypeError, ValueError):
+                    pass
+            if float(ts) > seen:
+                continue
+        out.add(title)
+    return out
 
 
 # (mtime_ns, size) of state.json at the last sync, plus the tombstones parsed
