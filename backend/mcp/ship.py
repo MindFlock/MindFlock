@@ -1048,8 +1048,10 @@ class ShipTools:
             )
         if queued:
             out["hint"] = (
-                "MindFlock starts it once memory allows (one at a time, oldest "
-                "first); wait_for_session waits through the queue"
+                "MindFlock starts it on its own — `reason` says what it waits "
+                "for (memory, the agent cap, or starts spaced a few seconds "
+                "apart); one at a time, oldest first. wait_for_session waits "
+                "through the queue"
             )
         elif not ready:
             out["hint"] = (
