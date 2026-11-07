@@ -31,6 +31,10 @@ flows. Never redo a FIXED item.
 | 13 | 2 | med | `start_flight(dry_run)` reads back "Agent: next pass → Review …" on an existing session as if the agent stop would be sent; it isn't. | `mcp/flights.py` dry run | FIXED 7a991e96 (`first_stop` note + `at='s1'`) |
 | 14 | 2 | low | Sentence says "Notify you: done" while the stop's title is "Notify me". | `flights` read-back vs default titles | DEFERRED (nit) |
 | 15 | 2 | low | The real start_flight response shows only "s1 skipped" with no why (history has "started at …"). | `mcp/flights.py` start response | DEFERRED (dry run now explains) |
+| R2-1 | review-2 | high | 709cba8a regression: a LOOPING prompt queue always has items, so an idle looping session read "busy" and the route never left its first agent stop. | `flight_driver._session_busy` | FIXED (busy ignores looping queues) |
+| R2-2 | review-2 | med | 709cba8a: the in-progress stop had no `worked_at`; a stale "working" row (turn just ended) left it "waiting for the agent to start" for 2 h, then failed. | `flights.take_off` | FIXED (`busy="working"` stamps `worked_at`) |
+| R2-3 | review-2 | high | Finding #1 incomplete: the drain prunes `prompt_queues.json` and `ports.json` to THIS engine's titles every 5 s, deleting a co-running server's new worker's queue (held task and all) before adoption. | `queue_driver._drain_prompt_queues` | FIXED (spares `engine.disk_titles()`; new `ports.titles()`) |
+| R2-4 | review-2 | low | 6cd79d7b's ticket-start hint points at `reason`, but a queued ticket start carries the cause in `memory_reason`. | `mcp/ship.py` | FIXED |
 
 ## Notes for later passes
 - Sandbox: `env -u CS_WEB_MODE -u MINDFLOCK_REPO_ROOT -u PORT -u TMUX … uv run python ~/MindFlock/ux-lab/sandbox.py --scratch <dir>`; create a session with `POST /api/instances {"title","repo_path","program":"claude"}`; drive MCP with `MINDFLOCK_SESSION_TITLE=<title> MINDFLOCK_PORT=<port> HOME=<sandbox home> python -P -m backend.mcp` over stdio.
