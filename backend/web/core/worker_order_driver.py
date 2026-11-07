@@ -781,10 +781,17 @@ def _fence_key(f: Mapping) -> Tuple:
 
 def _sweep_fences(srv, instances: Mapping) -> None:
     """Drop every orchestrator-set fence whose session is gone (a new session
-    that reuses the tmux name must not inherit it)."""
+    that reuses the tmux name must not inherit it). Gone means gone from the
+    disk too: a co-running server's new worker is not in this engine yet,
+    and dropping its fence left it working unfenced."""
     try:
         live = {srv._red_zones._session_key(_tmux_of(t)) for t in instances}
-        for wt, key in srv._red_zones.fences_by_owner_prefix(FENCE_OWNER):
+        found = srv._red_zones.fences_by_owner_prefix(FENCE_OWNER)
+        if any(key not in live for _wt, key in found):
+            live |= {
+                srv._red_zones._session_key(_tmux_of(t)) for t in _live_elsewhere()
+            }
+        for wt, key in found:
             if key not in live:
                 if srv._red_zones.drop_session_fence(wt, key, cause="ended"):
                     try:

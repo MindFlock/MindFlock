@@ -566,7 +566,12 @@ def test_sweep_drops_fences_of_sessions_gone(fake):
     fake.ENGINE.instances["w1"] = _Inst("w1", repo, parent="orch", in_place=True)
     drv.set_fence("w1", {"keep_out": ["b/"], "by": "orch"})
     rz.set_session_fence(repo, "mindflock_piece", ["a/**"], owner="run:r1")
+    # Not in this server's engine, but alive on disk (another server's): kept.
     del fake.ENGINE.instances["w1"]
+    fake.disk.add("w1")
+    drv.tick()
+    assert sorted(rz.session_fences(repo)) == ["mindflock_piece", "mindflock_w1"]
+    fake.disk.clear()
     drv.tick()
     # Only the orchestrator's fence goes; a split's is the run's to drop.
     assert list(rz.session_fences(repo)) == ["mindflock_piece"]
