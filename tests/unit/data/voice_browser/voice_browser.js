@@ -3044,7 +3044,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const sentGB = posts("/send").slice(sendsG2);
     check("guess: /end slower than its budget (" + budgetGB + " ms) → the fast words sent as the budget runs out (" + tookGB + " ms after the voice stopped: the 250 ms tail, the last chunk, the budget) — not after a fixed 2.5 s", sentGB.length === 1 && sentGB[0].body.text === "ship it" && tookGB >= budgetGB + 200 && tookGB < budgetGB + 1100 && tookGB < 2400, JSON.stringify([tookGB, budgetGB, sentGB.map((x) => x.body.text)]));
     const endMsGB = await pageG.evaluate(() => window.mfVoice.rec.endMs);
-    check("budget: a late /end grows the next budget (it took at least this long)", endMsGB > endMsGA, JSON.stringify([endMsGA, endMsGB]));
+    check("budget: a late /end counts as a sample (the median of returned finals never drops for it)", endMsGB >= endMsGA, JSON.stringify([endMsGA, endMsGB]));
     await sleep(2000);
     check("guess: …and the late final changed nothing (no second send)", posts("/send").length === sendsG2 + 1 && (await vstate(pageG)) === "listening");
     // "disregard": acts on the guess, the stream dropped (never ended).
