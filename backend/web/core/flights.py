@@ -2085,6 +2085,7 @@ def take_off(
     now: Optional[float] = None,
     replaced: Optional[list] = None,
     start_on: str = "now",
+    busy: bool = False,
 ) -> dict:
     """Create a ``running`` flight of ``plan`` bound to ``session``.
 
@@ -2096,6 +2097,11 @@ def take_off(
 
     * ``attach`` (an EXISTING session): the cursor starts at ``start_at`` or at
       the first non-``agent`` step — the work the agent did is the agent step.
+      ``busy`` (that work is still going: the agent is working, still
+      loading, or its task waits in its queue): the leading agent step is
+      that work — it starts ``running`` (nothing is sent) and ends when the
+      turn settles. Skipping it started a review of a branch with nothing on
+      it yet.
     * ``seeded`` (the session was created — or is being created by intake —
       with the plan's first agent step as its INITIAL prompt): that step is
       already running, so the driver never sends it a second time.
@@ -2109,6 +2115,15 @@ def take_off(
     steps = copy.deepcopy(plan["steps"])
     ready = start_on in ("prompt", "run")
     cursor = 0 if ready else start_cursor(plan, start_at, attach)
+    in_progress = bool(
+        busy
+        and attach
+        and not ready
+        and not start_at
+        and _first_agent_index(steps) == 0
+    )
+    if in_progress:
+        cursor = 0
     flight = _normalize_flight(
         "pending",
         {
@@ -2146,7 +2161,13 @@ def take_off(
             % (steps[cursor]["title"] if cursor < len(steps) else "the end"),
         )
     first_agent = _first_agent_index(flight["steps"])
-    if seeded and not attach and first_agent == cursor and cursor < len(steps):
+    if in_progress:
+        ss = flight["step_states"][steps[0]["id"]]
+        ss["state"] = "running"
+        ss["since"] = ts
+        ss["detail"] = {"seeded": True}
+        _hist(flight, ts, steps[0]["id"], "started", "the session's work in progress")
+    elif seeded and not attach and first_agent == cursor and cursor < len(steps):
         ss = flight["step_states"][steps[cursor]["id"]]
         ss["state"] = "running"
         ss["since"] = ts

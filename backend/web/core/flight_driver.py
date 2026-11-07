@@ -2230,6 +2230,12 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
         )
     replaced: list = []
     if title:
+        busy = (
+            not ready
+            and not start_at
+            and rec is None
+            and await asyncio.to_thread(_session_busy, title)
+        )
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
                 plan,
@@ -2241,6 +2247,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
                 repo_root=_repo_root(title),
                 replaced=replaced,
                 start_on=start_on,
+                busy=busy,
             )
         )
     else:
@@ -2290,6 +2297,22 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     _emit("flight.changed", flight)
     wake()
     return flight
+
+
+def _session_busy(title: str) -> bool:
+    """The session's agent is on a turn right now — working, still starting
+    (a just-spawned worker), or with its task waiting in its prompt queue —
+    so a route attached to it must not count that unfinished work as its
+    agent stop (blocking)."""
+    try:
+        obs = _session_obs({"session": title}, time.time(), agent=True)
+    except Exception:  # noqa: BLE001 — unreadable: today's behaviour
+        return False
+    if obs.get("pending") or obs.get("status") == "loading":
+        return True
+    if obs.get("activity") == "working":
+        return True
+    return bool(obs.get("queue_pending"))
 
 
 def _fasttrack_to_absorb(title: str) -> Optional[dict]:

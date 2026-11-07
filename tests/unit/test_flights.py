@@ -321,6 +321,31 @@ def test_attach_starts_at_the_first_non_agent_step():
     assert f["history"][-1]["event"] == "jumped"
 
 
+def test_attach_to_a_busy_session_runs_its_agent_step_on_that_work():
+    """Attached while the agent is still on its task: that unfinished work is
+    the agent step, still running — skipping it started a review of an
+    empty branch."""
+    f = fly(step("agent", prompt="go"), step("review"), attach=True, busy=True)
+    assert f["cursor"] == 0
+    ss = f["step_states"]["s1"]
+    assert ss["state"] == "running" and ss["detail"] == {"seeded": True}
+    assert f["history"][-1]["note"] == "the session's work in progress"
+    a = F.next_action(f, {"session": sess(activity="working")}, NOW + 1)
+    assert a["action"] == "wait"  # never "run": nothing is typed on top
+    # start_at wins; a route that doesn't open with an agent step is as before.
+    f2 = fly(
+        step("agent"),
+        step("review"),
+        session="t2",
+        attach=True,
+        busy=True,
+        start_at="s2",
+    )
+    assert f2["cursor"] == 1
+    f3 = fly(step("notify"), step("agent"), session="t3", attach=True, busy=True)
+    assert f3["cursor"] == 0 and f3["step_states"]["s1"]["state"] == "pending"
+
+
 def test_start_at_and_unknown_step():
     f = fly(step("agent"), step("notify"), step("wait"), start_at="s3")
     assert f["cursor"] == 2
