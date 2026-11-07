@@ -23,6 +23,7 @@ flows. Never redo a FIXED item.
 | 6 | 1 | low | Order row detail has a trailing space: "MindFlock held this task until w-fence finished. " (empty carry). | `worker_order_driver._release` | DEFERRED (cosmetic) |
 | 7 | 1 | low | `wait_for_session` rejects `timeout` ("accepted: … timeout_s") — clear error, but other tools take `timeout`? | MCP | DEFERRED (error already names the fix) |
 | 8 | 1 | ? | Other loops may judge "gone" from their own engine only: `flight_driver.py` ~2214/~2679, `team_run_driver.py` ~978, `red_zone_monitor.py` ~474. Not walked yet. | | TO CHECK (go deeper next (h) visit) |
+| 9 | 1 | med | The route's review step (`review-1`) started about 73 s after polish-loop spawned, while pass 1 was still reading code with nothing committed, so it reviewed an empty diff. Possible causes: the flight treated an early idle/turn end as "agent step done", or the same two-server race (finding 1) marked polish-loop done/gone at +1.07 s. Not confirmed. | review-1 result m1794092720671_3556; `flight_driver.py` step advance | TO CHECK (area (g) flights/routes) |
 
 ## Notes for later passes
 - Sandbox: `env -u CS_WEB_MODE -u MINDFLOCK_REPO_ROOT -u PORT -u TMUX … uv run python ~/MindFlock/ux-lab/sandbox.py --scratch <dir>`; create a session with `POST /api/instances {"title","repo_path","program":"claude"}`; drive MCP with `MINDFLOCK_SESSION_TITLE=<title> MINDFLOCK_PORT=<port> HOME=<sandbox home> python -P -m backend.mcp` over stdio.
