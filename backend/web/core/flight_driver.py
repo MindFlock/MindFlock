@@ -2301,21 +2301,22 @@ def _session_busy(title: str) -> str:
     ``"working"``, ``"loading"`` (a just-spawned worker still starting) or
     ``"queued"`` (its task waits in its prompt queue) — or "" when it is not:
     a route attached to a busy session must not count that unfinished work
-    as its agent stop. A LOOPING queue is not a task waiting: it always has
-    items, and an idle looping session would hold the stop for ever."""
+    as its agent stop. A session with a LOOPING queue is never in progress:
+    that queue always has items, so the stop would never settle."""
     try:
+        q = _prompt_queue.get_state(title)
         obs = _session_obs({"session": title}, time.time(), agent=True)
     except Exception:  # noqa: BLE001 — unreadable: today's behaviour
+        return ""
+    if q.get("loop") and q.get("items"):
+        # Its queue never empties, so an agent stop on it never settles:
+        # never call a looping session's work "in progress".
         return ""
     if obs.get("pending") or obs.get("status") == "loading":
         return "loading"
     if obs.get("activity") == "working":
         return "working"
-    try:
-        q = _prompt_queue.get_state(title)
-    except Exception:  # noqa: BLE001
-        return ""
-    if q.get("items") and not q.get("loop") and (q.get("enabled") or q.get("held")):
+    if q.get("items") and (q.get("enabled") or q.get("held")):
         return "queued"
     return ""
 

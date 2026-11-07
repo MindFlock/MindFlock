@@ -462,12 +462,16 @@ def test_start_on_a_busy_session_keeps_its_agent_step(srv, row):
     pq.enqueue("queued", "the task")
     f = run(D.start({"plan_id": plan["id"], "title": "queued"}))
     assert f["cursor"] == 0 and "worked_at" not in f["step_states"]["s1"]["detail"]
-    # A LOOPING queue always has items: idle, it is not a task waiting.
-    srv.ENGINE.instances["looping"] = FakeInst()
-    pq.enqueue("looping", "check the build")
-    pq.set_flags("looping", enabled=True, loop=True)
-    f = run(D.start({"plan_id": plan["id"], "title": "looping"}))
-    assert f["cursor"] == 1
+    # A LOOPING queue never empties, so a stop on it would never settle: a
+    # looping session is never "in progress", idle or working.
+    for activity in ("idle", "working"):
+        name = "looping-" + activity
+        srv.ENGINE.instances[name] = FakeInst()
+        pq.enqueue(name, "check the build")
+        pq.set_flags(name, enabled=True, loop=True)
+        row["activity"] = activity
+        f = run(D.start({"plan_id": plan["id"], "title": name}))
+        assert f["cursor"] == 1
 
 
 def test_start_attach_and_create(srv, monkeypatch):
