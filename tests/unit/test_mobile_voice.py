@@ -2025,15 +2025,15 @@ def test_guess_control_under_node():
     fire = fire[: fire.index("\n    }\n") + 6]
     assert "streamDrop(g);" in fire and "streamDone(g, mine, c.text);" in fire
     # The wait for /end is a budget that follows how long /end takes here
-    # (voiceEndBudgetMs), never a fixed 2.5 s; a late /end grows the next one.
-    assert "var budget = voiceEndBudgetMs(voice.rec.endMs);" in fire
-    assert "voice.rec.ctl.budget = budget;" in fire
-    assert "}, budget);" in fire and "finish();" in fire
+    # (voiceEndBudgetMs), never a fixed 2.5 s — none when the fast words
+    # settled and the finals here seldom change them (voiceFastStands).
     assert (
-        "voice.rec.endMs = Math.round(((voice.rec.endMs || budget) + budget * 1.2) / 2);"
+        "var budget = !g.partial && voiceFastStands(voice.rec.finals) ? 0 : voiceEndBudgetMs(voice.rec.endMs);"
         in fire
     )
-    assert "}, VOICE_CONTROL_END_MS);" not in fire
+    assert "voice.rec.ctl.budget = budget;" in fire
+    assert "g.endTimer = setTimeout(g.endFire, budget);" in fire and "finish();" in fire
+    assert "VOICE_CONTROL_END_MS" not in fire
     # The Enter is timed from the word's end: "over → sent 0.9 s".
     assert "voiceCtlSent();" in _fn(js, "voiceSendOn") and "voiceCtlSent();" in _fn(
         js, "voiceSend"

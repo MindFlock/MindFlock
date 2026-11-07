@@ -55,6 +55,8 @@ import {
   KEEP_STREAM_MS,
   MicKeeper,
   PRE_ROLL_MS,
+  audioCtxRunning,
+  preloadCapture,
   PRE_ROLL_ONSET_S,
   isLoud,
   noiseFloor,
@@ -840,28 +842,71 @@ export function overWaitMs(typical: number | null): number {
   return Math.min(OVER_FINAL_WAIT_MS, Math.max(OVER_FINAL_MIN_MS, Math.round(typical * 1.5 + 100)));
 }
 
+/** The finals' round trips the typical one is the median of: the last this
+ * many (one slow moment moves it not at all; a slow spell in a few phrases). */
+export const FINAL_SAMPLES = 7;
+/** The fast words stand without waiting for the final ({@link
+ * FinalClock.fastStands}) once at least this many finals were heard… */
+export const FAST_TRUST_MIN = 3;
+/** …of the last this many… */
+export const FAST_TRUST_WINDOW = 12;
+/** …and at most this share of them changed a word. */
+export const FAST_TRUST_MAX_CHANGED = 1 / 3;
+
+/** The words a final is compared on: case, punctuation and spacing aside
+ * (the server's `same`). */
+export const plainWords = (t: string) =>
+  String(t || "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 /** What the finals' round trip has been: from a phrase ended at the
- * recognizer ({@link LiveHooks.endPhrase}) to its /end back ({@link
- * LiveDictation.flush}), as an average that follows the last few (a slow
- * moment is forgotten in a few phrases). Until one was measured, the
- * server's own measure of its accurate pass ({@link LiveHooks.finalMs}) with
- * {@link FINAL_ROUND_TRIP_MS} on top stands in. One per page: a dictation
- * learns from the ones before it. */
+ * recognizer for a control word ({@link LiveHooks.endPhrase}) to its /end
+ * back with a final in it — the median of the last {@link FINAL_SAMPLES}
+ * (the recognizer notes them: it alone knows a final from a timeout, which
+ * says nothing of how long a final takes and is never a sample). Until one
+ * was measured, the server's own measure of its accurate pass ({@link
+ * LiveHooks.finalMs}) with {@link FINAL_ROUND_TRIP_MS} on top stands in.
+ * It also keeps whether the last finals changed the fast words ({@link
+ * verdict}): when they seldom do, a phrase whose fast words all settled
+ * goes without waiting for its final ({@link fastStands}). One per page: a
+ * dictation learns from the ones before it. */
 export class FinalClock {
-  private ema: number | null = null;
+  private times: number[] = [];
+  private changes: boolean[] = [];
   /** One final came back `ms` after its phrase was ended. */
   note(ms: number): void {
     if (!(ms >= 0) || ms > 60_000) return;
-    this.ema = this.ema == null ? ms : this.ema * 0.6 + ms * 0.4;
+    this.times.push(ms);
+    if (this.times.length > FINAL_SAMPLES) this.times.shift();
+  }
+  /** One final came back: `changed`, it heard other words than the fast tier. */
+  verdict(changed: boolean): void {
+    this.changes.push(changed);
+    if (this.changes.length > FAST_TRUST_WINDOW) this.changes.shift();
+  }
+  /** The finals lately seldom changed a word ({@link FAST_TRUST_MAX_CHANGED}
+   * of at least {@link FAST_TRUST_MIN}): waiting for one buys little. */
+  fastStands(): boolean {
+    const n = this.changes.length;
+    if (n < FAST_TRUST_MIN) return false;
+    return this.changes.filter(Boolean).length / n <= FAST_TRUST_MAX_CHANGED;
   }
   /** The typical round trip (ms); `seed`: the server's pass time, used while
    * nothing was measured; null: unknown. */
   typical(seed?: number | null): number | null {
-    if (this.ema != null) return Math.round(this.ema);
+    const n = this.times.length;
+    if (n) {
+      const s = [...this.times].sort((a, b) => a - b);
+      return Math.round(n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2);
+    }
     return seed != null && seed > 0 ? seed + FINAL_ROUND_TRIP_MS : null;
   }
   reset(): void {
-    this.ema = null;
+    this.times = [];
+    this.changes = [];
   }
 }
 export const finalClock = new FinalClock();
@@ -1580,9 +1625,10 @@ export class LiveDictation {
   private wordEnd = 0;
   /** When words last came in (ms) — or the mic was keyed. */
   private wordsAt = Date.now();
-  /** When the phrase was ended at the recognizer for a control word (ms):
-   * its /end back is one round trip for {@link finalClock}. */
-  private endedAt = 0;
+  /** "Over" waits for its final ({@link sendWait}): what it does when the
+   * wait is over — or at once, when the fast words settle meanwhile and the
+   * finals lately seldom change them ({@link fastStands}). */
+  private sendNow: (() => void) | null = null;
   /** "Over" ended its phrase before {@link CONTROL_TAIL_MS} of quiet
    * ({@link OVER_EARLY_QUIET_MS}): when, and what the voice has done since —
    * "met" (the quiet came: "over" is the radio word), "resumed" (the voice
@@ -1718,13 +1764,26 @@ export class LiveDictation {
   }
 
   /** Streaming: one answer — committed words `w` and the unstable tail `p`,
-   * typed as you speak and corrected as the recognizer changes its mind. */
+   * typed as you speak and corrected as the recognizer changes its mind.
+   * "Over" waiting for its final ({@link sendNow}) goes now once this
+   * settled the last of its words and finals seldom change them. */
   stream(w: string, p: string): Promise<void> {
     if (w.trim() || p.trim()) this.heardAnything = true;
     if (w.trim() || p.trim()) this.wordsAt = Date.now();
     if (w.trim() || p.trim()) this.notePhrase();
     if (this.swallowing) return this.chain;
-    return this.step(() => this.dict.stream(w, p));
+    return this.step(() => this.dict.stream(w, p)).then(() => {
+      if (this.sendNow && this.fastStands()) this.sendNow();
+    });
+  }
+
+  /** The phrase's fast words all settled (no unstable tail: two passes
+   * agreed on every word) from a recognizer whose finals are measured
+   * (the server's stream), and its finals lately seldom changed a word
+   * ({@link FinalClock.fastStands}): the final would buy little — the
+   * words go without waiting for it. */
+  private fastStands(): boolean {
+    return !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
   }
 
   /** Streaming: committed words with no unstable tail. */
@@ -1771,11 +1830,8 @@ export class LiveDictation {
   private phraseEnded(): boolean {
     clearTimeout(this.sendWait);
     this.sendWait = undefined;
+    this.sendNow = null;
     this.early = null;
-    if (this.endedAt) {
-      finalClock.note(Date.now() - this.endedAt);
-      this.endedAt = 0;
-    }
     if (!this.swallowing) return false;
     clearTimeout(this.swallowing);
     this.swallowing = undefined;
@@ -1861,7 +1917,6 @@ export class LiveDictation {
     // The word's end: the meter's last loud block (the quiet it heard can
     // lag the clock by a block).
     this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 60_000);
-    this.endedAt = Date.now();
     // The phrase is taken from its guess: when it began (its end, swallowed,
     // brings nothing more).
     const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
@@ -1869,17 +1924,23 @@ export class LiveDictation {
     if (radio) {
       const e = early ? this.watchQuiet() : null;
       // The accurate final, if /end brings it within the finals' usual round
-      // trip (overWaitMs); else the fast words.
-      this.sendWait = setTimeout(
-        () => {
-          this.sendWait = undefined;
-          this.early = null;
-          this.swallow();
-          if (e) void this.afterQuiet(e, (r) => this.dict.heard(t.text, r), spoke);
-          else void this.step(() => this.dict.heard(t.text), spoke);
-        },
-        overWaitMs(finalClock.typical(this.hooks.finalMs?.()))
-      );
+      // trip (overWaitMs); else the fast words — at once when they settled
+      // already and the finals lately seldom change them (fastStands).
+      const fire = () => {
+        clearTimeout(this.sendWait);
+        this.sendWait = undefined;
+        this.sendNow = null;
+        this.early = null;
+        this.swallow();
+        // The words as they stand now (the phrase's last chunk may have
+        // settled them since), while they still end in the radio word.
+        const now = this.dict.tail();
+        const text = now && (now.kind === "over" || now.kind === "out") ? now.text : t.text;
+        if (e) void this.afterQuiet(e, (r) => this.dict.heard(text, r), spoke);
+        else void this.step(() => this.dict.heard(text), spoke);
+      };
+      this.sendNow = fire;
+      this.sendWait = setTimeout(fire, this.fastStands() ? 0 : overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
       return;
     }
     // "Disregard", a stop, "stop talking", a switch: no accurate text needed.
@@ -1978,6 +2039,7 @@ export class LiveDictation {
     this.unsent = "";
     clearInterval(this.tailTimer);
     clearTimeout(this.sendWait);
+    this.sendNow = null;
     clearTimeout(this.swallowing);
     clearInterval(this.early?.timer);
     this.early = null;
@@ -3940,6 +4002,12 @@ export function voiceAudioCtx(): AudioContext | null {
     } catch {
       return null;
     }
+    const ctx = audioCtx;
+    // The capture worklet loads now, alongside the microphone's start (the
+    // first recording never waits on it), and the open microphone's
+    // pre-roll starts the moment the context runs.
+    preloadCapture(ctx);
+    ctx.addEventListener?.("statechange", () => audioCtxRunning(ctx));
   }
   if (audioCtx.state === "suspended") void audioCtx.resume().catch(() => {});
   return audioCtx;
@@ -4431,6 +4499,21 @@ export const TURN_MAX_MS = 3000;
  * full stop at a breath ("…so far. [pause] over and out") must not cut a
  * command in half. Words typed already: the verdict's own (900). */
 export const FIRST_PHRASE_HOLD_MS = 1100;
+/** …but this, when the words so far can't be the start of a command (the
+ * router would type them anyway: a cut there costs nothing). */
+export const FIRST_PHRASE_PLAIN_HOLD_MS = 900;
+/** A `sentence` / `question` verdict's quiet once the phrase has settled —
+ * every word agreed by two passes and the last pass heard the quiet after
+ * them — with words already typed: nothing is left for more quiet to tell. */
+export const SETTLED_HOLD_MS = 600;
+
+/** What the recognizer has of the phrase so far, for {@link turnHoldMs}:
+ * its words (committed, then the unstable tail), and whether they settled
+ * (no unstable tail, the last pass after the last loud block). */
+export interface PhraseHeard {
+  text: string;
+  settled: boolean;
+}
 
 /** The server's end-of-turn verdict on a streamed phrase (each chunk's
  * `turn`: core/speech_turn.py) — how much quiet ends it now (`hold`, ms),
@@ -4461,11 +4544,18 @@ export function parseTurn(v: unknown, at: number): TurnVerdict | null {
  * words), nor for a lone command once words are typed (`blank` false: the
  * server can't see the box — "next session" mid-message is words); a
  * sentence or question into an empty box (`blank`: the first phrase, which
- * is routed alone) waits at least {@link FIRST_PHRASE_HOLD_MS}. */
-export function turnHoldMs(turn: TurnVerdict | null, loudAt: number, blank: boolean): number {
+ * is routed alone) waits at least {@link FIRST_PHRASE_HOLD_MS} —
+ * {@link FIRST_PHRASE_PLAIN_HOLD_MS} when its words (`heard`) can't begin a
+ * command. A sentence or question after words were typed whose words
+ * settled (`heard.settled`) ends after {@link SETTLED_HOLD_MS}. */
+export function turnHoldMs(turn: TurnVerdict | null, loudAt: number, blank: boolean, heard?: PhraseHeard | null): number {
   if (!turn) return SILENCE_MS;
   let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
-  if (blank && (turn.reason === "sentence" || turn.reason === "question")) hold = Math.max(hold, FIRST_PHRASE_HOLD_MS);
+  const sentence = turn.reason === "sentence" || turn.reason === "question";
+  if (blank && sentence) {
+    const plain = !!heard?.text && !mayBeCommand(heard.text) && !mayBeCommand(holdBack(heard.text).type);
+    hold = Math.max(hold, plain ? FIRST_PHRASE_PLAIN_HOLD_MS : FIRST_PHRASE_HOLD_MS);
+  } else if (sentence && heard?.settled && heard.text) hold = Math.min(hold, SETTLED_HOLD_MS);
   if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
   return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
 }
@@ -4622,6 +4712,22 @@ interface Phrase {
   /** The pre-roll (16 kHz) its speech began in — sent in front of its first
    * audio ({@link PRE_ROLL_ONSET_S}); null once sent, or none. */
   pre: Float32Array | null;
+  /** Its committed words so far, and the latest unstable tail (streaming). */
+  said: string;
+  partial: string;
+  /** When the last chunk with an answer was taken (ms; 0: none yet). */
+  passAt: number;
+  /** Ended for a control word ({@link Recognizer.endPhrase}): its /end's
+   * round trip is a sample for {@link finalClock}. */
+  byWord: boolean;
+  /** When it was ended (ms; 0: not yet). */
+  endAt: number;
+  /** Its end went to the handlers (onFlush) — by its /end, or ahead of it
+   * when the next phrase's words came first ({@link settleBefore}). */
+  flushed: boolean;
+  /** Resolves once its words are all in (its last chunk back) or it has no
+   * more to give; null before it ends. */
+  heardAll: Promise<void> | null;
 }
 
 /** A response's words (the server joins them with spaces). */
@@ -4698,9 +4804,11 @@ export function serverRecognizer(
   const aborters = new Set<AbortController>();
   /** This dictation streams (until a failure falls back to clips). */
   let streaming = false;
-  /** The previous phrase's /end: the next stream opens after it, so words
-   * arrive in order and one stream at a time is open. */
-  let lastEnd: Promise<void> = Promise.resolve();
+  /** Phrases ended whose end has not gone to the handlers yet, oldest
+   * first: the next phrase's stream opens at once (never behind their /end
+   * and its accurate pass), and its words wait only for theirs to be in
+   * ({@link settleBefore}) — so phrases still reach the handlers in order. */
+  const ending: Phrase[] = [];
   /** Streams open now, abandoned by stop(). */
   const open = new Set<string>();
   /** Barge-in: audio before this (ms) is the app's own voice dying away. */
@@ -4896,12 +5004,12 @@ export function serverRecognizer(
     });
   };
 
-  /** As the phrase starts: open its stream (after the previous phrase's /end). */
+  /** As the phrase starts: open its stream — at once, alongside the
+   * previous phrase's /end (the server keeps two per page,
+   * speech_stream.CLIENT_STREAMS; the one ending is no longer counted). */
   const openStream = (c: Phrase) => {
     const hh = h;
-    const before = lastEnd;
     run(c, async () => {
-      await before;
       if (h !== hh || !c.stream) return;
       try {
         const r = await call("/api/voice/stream", {
@@ -4955,6 +5063,12 @@ export function serverRecognizer(
       c.turn = parseTurn(r.j.turn, takenAt);
       const w = wordsOf(r.j.committed);
       const p = wordsOf(r.j.partial);
+      c.said = joinWords(c.said, w);
+      c.partial = p;
+      c.passAt = takenAt;
+      // The phrases before this one go to the handlers first.
+      await settleBefore(c, hh);
+      if (h !== hh || !c.stream) return;
       if (hh.onStream) hh.onStream(w, p);
       else {
         if (w) hh.onWords?.(w);
@@ -4979,6 +5093,26 @@ export function serverRecognizer(
     run(c, () => sendChunk(c, blob, hh, takenAt));
   };
 
+  /** The phrases ended before `c` whose end has not reached the handlers:
+   * each, once its words are all in, ends now with its fast words (its
+   * committed words and last unstable tail) — the person talks again, and
+   * their new words never wait on an earlier phrase's accurate pass; that
+   * final, when it comes, is only measured. */
+  const settleBefore = async (c: Phrase, hh: RecognizerHandlers) => {
+    for (const p of [...ending]) {
+      if (p === c) return;
+      await p.heardAll;
+      if (h !== hh) return;
+      if (p.flushed) continue;
+      p.flushed = true;
+      const i = ending.indexOf(p);
+      if (i >= 0) ending.splice(i, 1);
+      if (!p.stream) continue; // fell back: its words went with the fall-back
+      hh.onPartial?.("");
+      hh.onFlush?.(p.partial, undefined, p.spokeAt || undefined);
+    }
+  };
+
   /** A streamed phrase is over (a pause, or finish()): the next starts
    * recording at once; this one's last chunk (when it holds speech not sent
    * yet — at a pause it is usually just the quiet) and its /end follow the
@@ -4988,8 +5122,13 @@ export function serverRecognizer(
     const mine = token;
     c.ending = true;
     uploads++;
-    let release = () => {};
-    lastEnd = new Promise<void>((r) => (release = r));
+    let heard = () => {};
+    c.heardAll = new Promise<void>((r) => (heard = r));
+    ending.push(c);
+    const unlist = () => {
+      const i = ending.indexOf(c);
+      if (i >= 0) ending.splice(i, 1);
+    };
     try {
       const tail = await c.rec!.stop().catch(() => null);
       if (token !== mine) return; // stop(): dropped
@@ -5009,6 +5148,7 @@ export function serverRecognizer(
         return;
       }
       if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+      heard(); // its words are all in: a next phrase's may go once it is flushed
       if (h !== hh || !c.stream || !c.sid) return;
       const sid = c.sid;
       c.sid = null;
@@ -5018,25 +5158,43 @@ export function serverRecognizer(
         setLoading(false);
         if (h !== hh) return;
         if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
-        c.stream = false;
         // The accurate pass over the whole phrase: only when it heard it
-        // otherwise (`same`: nothing to correct; absent: the fast words stand).
+        // otherwise (`same`: nothing to correct; absent — off, skipped,
+        // failed or timed out — the fast words stand).
+        const ran = typeof r.j.final === "string";
         const fms = Number(r.j.final_ms);
-        if (fms > 0) {
+        if (ran && fms > 0) {
           self.finalMs = fms;
           voiceMark("final");
         }
-        const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
+        const committed = wordsOf(r.j.committed);
+        if (ran) {
+          // Measured only when a final came (a timeout says nothing of how
+          // long one takes), late or not; and whether it changed a word.
+          if (c.byWord && c.endAt) finalClock.note(Date.now() - c.endAt);
+          const fast = joinWords(c.said, committed);
+          finalClock.verdict(r.j.same !== true && plainWords(wordsOf(r.j.final)) !== plainWords(fast));
+        }
+        if (c.flushed) return; // the next phrase's words came first: it ended with its fast words
+        await settleBefore(c, hh);
+        if (h !== hh || c.flushed) return;
+        c.flushed = true;
+        unlist();
+        c.stream = false;
+        const final = ran && r.j.same !== true ? wordsOf(r.j.final) : "";
         hh.onPartial?.("");
-        hh.onFlush?.(wordsOf(r.j.committed), final || undefined, c.spokeAt || undefined);
+        hh.onFlush?.(committed, final || undefined, c.spokeAt || undefined);
       } catch (err) {
-        if (h !== hh) return;
+        if (h !== hh || c.flushed) return;
         // Its held words still go in (fallBack flushes a phrase with a stream).
         c.sid = sid;
+        c.flushed = true;
+        unlist();
         streamFailed(c, err);
       }
     } finally {
-      release();
+      heard();
+      unlist();
       uploads--;
       if (h === hh) maybeEnd();
     }
@@ -5067,6 +5225,7 @@ export function serverRecognizer(
     cur = null;
     clearTimeout(capTimer);
     if (!c?.rec) return;
+    c.endAt = Date.now();
     // What the microphone heard so far goes with this phrase: the next
     // one's pre-roll starts after it (never its tail twice).
     mic.cut();
@@ -5112,6 +5271,13 @@ export function serverRecognizer(
       loudAt: 0,
       turn: null,
       pre: null,
+      said: "",
+      partial: "",
+      passAt: 0,
+      byWord: false,
+      endAt: 0,
+      flushed: false,
+      heardAll: null,
     };
     // Its stream opens while the microphone and the audio engine get ready.
     if (c.stream) openStream(c);
@@ -5213,7 +5379,10 @@ export function serverRecognizer(
       }
       // The quiet heard that ends it: the server's verdict on the words so
       // far while it streams (fallen back to a clip: the fixed quiet).
-      if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true)) endClip();
+      const heardSoFar = c.stream
+        ? { text: joinWords(c.said, c.partial), settled: !c.partial && c.passAt > c.loudAt }
+        : null;
+      if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true, heardSoFar)) endClip();
       else pump(c);
     };
     try {
@@ -5287,7 +5456,10 @@ export function serverRecognizer(
       cur?.clock.reset();
     },
     endPhrase() {
-      if (cur?.heard && want) endClip();
+      if (cur?.heard && want) {
+        cur.byWord = true;
+        endClip();
+      }
     },
     start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
       self.stop();
@@ -5310,7 +5482,9 @@ export function serverRecognizer(
       holding = true;
       mic.hold();
       streaming = !!opts.stream?.();
-      lastEnd = Promise.resolve();
+      ending.length = 0;
+      // Voice is used here: a later load or focus warms recognition (warmStt).
+      noteVoiceUsed();
       void clip();
       return true;
     },
@@ -5342,6 +5516,7 @@ export function serverRecognizer(
       aborters.forEach((a) => a.abort());
       aborters.clear();
       open.forEach(abandon);
+      ending.length = 0;
       unhold();
     },
     release() {
@@ -5382,12 +5557,84 @@ export interface VoiceCfg {
     stt_detail?: string;
     /** The ready recognizer streams (POST /api/voice/stream): words as you speak. */
     stt_stream?: boolean;
+    /** Local recognition is in memory now (absent: an older server). */
+    stt_loaded?: boolean;
     tts_backend?: string;
     tts_detail?: string;
   };
   system: VoiceSystem;
 }
 export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_ready: {}, system: {} };
+
+/** localStorage: when this device last listened with the server's
+ * recognizer (ms). */
+export const VOICE_USED_KEY = "cs_voice_used_at";
+/** Voice used here within this long: reading the config (a load, a focus)
+ * warms the server's recognition when it is not in memory ({@link
+ * sttWarmWanted}) — it unloads after idle minutes, and reloading costs the
+ * first words of the next press 1–7 s. Not used lately: nothing is loaded
+ * for nobody (local whisper is ~1 GB). */
+export const STT_WARM_RECENT_MS = 3 * 24 * 3600_000;
+/** At most one warm-up this often. */
+export const STT_WARM_EVERY_MS = 60_000;
+
+/** Note that this device listened with the server's recognizer now. */
+export function noteVoiceUsed(now = Date.now()): void {
+  try {
+    localStorage.setItem(VOICE_USED_KEY, String(now));
+  } catch {
+    /* storage off: no warm-ups */
+  }
+}
+
+function voiceUsedAt(): number {
+  try {
+    return Number(localStorage.getItem(VOICE_USED_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Whether to warm the server's recognition now: speech runs there, it
+ * streams, it says it is NOT in memory (an older server says nothing: never),
+ * this device used it within {@link STT_WARM_RECENT_MS}, and the last
+ * warm-up was over {@link STT_WARM_EVERY_MS} ago. Pure. */
+export function sttWarmWanted(cfg: VoiceCfg, usedAt: number, lastWarm: number, now = Date.now()): boolean {
+  const r = cfg.server_ready || {};
+  return (
+    cfg.stt === "server" &&
+    r.stt_stream === true &&
+    r.stt_loaded === false &&
+    usedAt > 0 &&
+    now - usedAt < STT_WARM_RECENT_MS &&
+    now - lastWarm >= STT_WARM_EVERY_MS
+  );
+}
+
+let sttWarmedAt = 0;
+/** Warm the server's recognition ahead of the press ({@link sttWarmWanted}):
+ * a stream opened and dropped at once — opening one is what loads it
+ * (POST /api/voice/stream, `loading`), in the background on the server.
+ * True when it asked. Never throws. */
+export function warmStt(cfg: VoiceCfg, now = Date.now()): boolean {
+  if (!sttWarmWanted(cfg, voiceUsedAt(), sttWarmedAt, now)) return false;
+  sttWarmedAt = now;
+  void (async () => {
+    try {
+      const r = await apiRaw("/api/voice/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: String(navigator.language || "en").split(";")[0], client: VOICE_CLIENT_ID }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { id?: unknown };
+      const id = String(j.id || "");
+      if (r.ok && id) await apiRaw("/api/voice/stream/" + encodeURIComponent(id), { method: "DELETE" });
+    } catch {
+      /* the press loads it then, as before */
+    }
+  })();
+  return true;
+}
 
 /** Where speech runs (Settings → Voice), and the voice words (lib/voiceWords
  * takes them). Unreachable / older server: `prev`
@@ -5402,7 +5649,7 @@ export async function loadVoiceCfg(prev: VoiceCfg | null, warm = true): Promise<
     applyVoiceView(j);
     setPronounce((j as { pronounce?: unknown } | null)?.pronounce);
     if (j && typeof j === "object") {
-      return {
+      const cfg: VoiceCfg = {
         stt: j.stt === "server" ? "server" : "phone",
         tts: j.tts === "server" ? "server" : "phone",
         approve_dialogs: j.approve_dialogs === true,
@@ -5410,6 +5657,10 @@ export async function loadVoiceCfg(prev: VoiceCfg | null, warm = true): Promise<
         server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
         system: j.system && typeof j.system === "object" ? j.system : {},
       };
+      // The voice UI is up (a load, a focus): recognition warms while the
+      // person reaches for the mic, when they use it here.
+      warmStt(cfg);
+      return cfg;
     }
   } catch {
     /* below */

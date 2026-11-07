@@ -42141,6 +42141,13 @@ async function micGranted() {
 		return false;
 	}
 }
+var keepers = /* @__PURE__ */ new Set();
+function audioCtxRunning(ctx) {
+	if (ctx.state === "running") keepers.forEach((k) => k.roll(ctx));
+}
+function preloadCapture(ctx) {
+	if (ctx) loadCapture(ctx).catch(() => false);
+}
 var MicKeeper = class {
 	keepMs;
 	open;
@@ -42158,6 +42165,7 @@ var MicKeeper = class {
 		this.keepMs = keepMs;
 		this.open = open;
 		this.ringCtx = ringCtx;
+		keepers.add(this);
 		if (typeof navigator !== "undefined") navigator.mediaDevices?.addEventListener?.("devicechange", () => {
 			const st = this.stream;
 			if (st && (st.active === false || st.getTracks().some((t) => t.readyState === "ended"))) this.lost(st);
@@ -44674,18 +44682,39 @@ function overWaitMs(typical) {
 	if (typical == null || !(typical > 0)) return OVER_FINAL_WAIT_MS;
 	return Math.min(OVER_FINAL_WAIT_MS, Math.max(OVER_FINAL_MIN_MS, Math.round(typical * 1.5 + 100)));
 }
+var FINAL_SAMPLES = 7;
+var FAST_TRUST_MIN = 3;
+var FAST_TRUST_WINDOW = 12;
+var FAST_TRUST_MAX_CHANGED = 1 / 3;
+var plainWords = (t) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, " ").replace(/\s+/g, " ").trim();
 var FinalClock = class {
-	ema = null;
+	times = [];
+	changes = [];
 	note(ms) {
 		if (!(ms >= 0) || ms > 6e4) return;
-		this.ema = this.ema == null ? ms : this.ema * .6 + ms * .4;
+		this.times.push(ms);
+		if (this.times.length > FINAL_SAMPLES) this.times.shift();
+	}
+	verdict(changed) {
+		this.changes.push(changed);
+		if (this.changes.length > FAST_TRUST_WINDOW) this.changes.shift();
+	}
+	fastStands() {
+		const n = this.changes.length;
+		if (n < FAST_TRUST_MIN) return false;
+		return this.changes.filter(Boolean).length / n <= FAST_TRUST_MAX_CHANGED;
 	}
 	typical(seed) {
-		if (this.ema != null) return Math.round(this.ema);
+		const n = this.times.length;
+		if (n) {
+			const s = [...this.times].sort((a, b) => a - b);
+			return Math.round(n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2);
+		}
 		return seed != null && seed > 0 ? seed + FINAL_ROUND_TRIP_MS : null;
 	}
 	reset() {
-		this.ema = null;
+		this.times = [];
+		this.changes = [];
 	}
 };
 var finalClock = new FinalClock();
@@ -45136,7 +45165,7 @@ var LiveDictation = class {
 	swallowing;
 	wordEnd = 0;
 	wordsAt = Date.now();
-	endedAt = 0;
+	sendNow = null;
 	early = null;
 	bargeAt = 0;
 	startedAt = Date.now();
@@ -45217,7 +45246,12 @@ var LiveDictation = class {
 		if (w.trim() || p.trim()) this.wordsAt = Date.now();
 		if (w.trim() || p.trim()) this.notePhrase();
 		if (this.swallowing) return this.chain;
-		return this.step(() => this.dict.stream(w, p));
+		return this.step(() => this.dict.stream(w, p)).then(() => {
+			if (this.sendNow && this.fastStands()) this.sendNow();
+		});
+	}
+	fastStands() {
+		return !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
 	}
 	words(w) {
 		return this.stream(w, "");
@@ -45246,11 +45280,8 @@ var LiveDictation = class {
 	phraseEnded() {
 		clearTimeout(this.sendWait);
 		this.sendWait = void 0;
+		this.sendNow = null;
 		this.early = null;
-		if (this.endedAt) {
-			finalClock.note(Date.now() - this.endedAt);
-			this.endedAt = 0;
-		}
 		if (!this.swallowing) return false;
 		clearTimeout(this.swallowing);
 		this.swallowing = void 0;
@@ -45313,18 +45344,23 @@ var LiveDictation = class {
 		clearInterval(this.tailTimer);
 		this.tailTimer = void 0;
 		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
-		this.endedAt = Date.now();
 		const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
 		this.hooks.endPhrase?.();
 		if (radio) {
 			const e = early ? this.watchQuiet() : null;
-			this.sendWait = setTimeout(() => {
+			const fire = () => {
+				clearTimeout(this.sendWait);
 				this.sendWait = void 0;
+				this.sendNow = null;
 				this.early = null;
 				this.swallow();
-				if (e) this.afterQuiet(e, (r) => this.dict.heard(t.text, r), spoke);
-				else this.step(() => this.dict.heard(t.text), spoke);
-			}, overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
+				const now = this.dict.tail();
+				const text = now && (now.kind === "over" || now.kind === "out") ? now.text : t.text;
+				if (e) this.afterQuiet(e, (r) => this.dict.heard(text, r), spoke);
+				else this.step(() => this.dict.heard(text), spoke);
+			};
+			this.sendNow = fire;
+			this.sendWait = setTimeout(fire, this.fastStands() ? 0 : overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
 			return;
 		}
 		this.swallow();
@@ -45394,6 +45430,7 @@ var LiveDictation = class {
 		this.unsent = "";
 		clearInterval(this.tailTimer);
 		clearTimeout(this.sendWait);
+		this.sendNow = null;
 		clearTimeout(this.swallowing);
 		clearInterval(this.early?.timer);
 		this.early = null;
@@ -46677,10 +46714,15 @@ var audioCtx = null;
 function voiceAudioCtx() {
 	const AC = audioCtxCtor();
 	if (!AC) return null;
-	if (!audioCtx) try {
-		audioCtx = new AC();
-	} catch {
-		return null;
+	if (!audioCtx) {
+		try {
+			audioCtx = new AC();
+		} catch {
+			return null;
+		}
+		const ctx = audioCtx;
+		preloadCapture(ctx);
+		ctx.addEventListener?.("statechange", () => audioCtxRunning(ctx));
 	}
 	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 	return audioCtx;
@@ -46993,6 +47035,8 @@ var SILENCE_MS = 1100;
 var TURN_MIN_MS = 300;
 var TURN_MAX_MS = 3e3;
 var FIRST_PHRASE_HOLD_MS = 1100;
+var FIRST_PHRASE_PLAIN_HOLD_MS = 900;
+var SETTLED_HOLD_MS = 600;
 function parseTurn(v, at) {
 	if (!v || typeof v !== "object") return null;
 	const o = v;
@@ -47004,10 +47048,14 @@ function parseTurn(v, at) {
 		at
 	};
 }
-function turnHoldMs(turn, loudAt, blank) {
+function turnHoldMs(turn, loudAt, blank, heard) {
 	if (!turn) return SILENCE_MS;
 	let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
-	if (blank && (turn.reason === "sentence" || turn.reason === "question")) hold = Math.max(hold, FIRST_PHRASE_HOLD_MS);
+	const sentence = turn.reason === "sentence" || turn.reason === "question";
+	if (blank && sentence) {
+		const plain = !!heard?.text && !mayBeCommand(heard.text) && !mayBeCommand(holdBack(heard.text).type);
+		hold = Math.max(hold, plain ? FIRST_PHRASE_PLAIN_HOLD_MS : FIRST_PHRASE_HOLD_MS);
+	} else if (sentence && heard?.settled && heard.text) hold = Math.min(hold, SETTLED_HOLD_MS);
 	if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
 	return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
 }
@@ -47093,7 +47141,7 @@ function serverRecognizer(opts = {}) {
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
 	let streaming = false;
-	let lastEnd = Promise.resolve();
+	const ending = [];
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
 	let firstSkipMs = 0;
@@ -47264,9 +47312,7 @@ function serverRecognizer(opts = {}) {
 	};
 	const openStream = (c) => {
 		const hh = h;
-		const before = lastEnd;
 		run(c, async () => {
-			await before;
 			if (h !== hh || !c.stream) return;
 			try {
 				const r = await call("/api/voice/stream", {
@@ -47318,6 +47364,11 @@ function serverRecognizer(opts = {}) {
 			c.turn = parseTurn(r.j.turn, takenAt);
 			const w = wordsOf(r.j.committed);
 			const p = wordsOf(r.j.partial);
+			c.said = joinWords(c.said, w);
+			c.partial = p;
+			c.passAt = takenAt;
+			await settleBefore(c, hh);
+			if (h !== hh || !c.stream) return;
 			if (hh.onStream) hh.onStream(w, p);
 			else {
 				if (w) hh.onWords?.(w);
@@ -47338,13 +47389,32 @@ function serverRecognizer(opts = {}) {
 		const hh = h;
 		run(c, () => sendChunk(c, blob, hh, takenAt));
 	};
+	const settleBefore = async (c, hh) => {
+		for (const p of [...ending]) {
+			if (p === c) return;
+			await p.heardAll;
+			if (h !== hh) return;
+			if (p.flushed) continue;
+			p.flushed = true;
+			const i = ending.indexOf(p);
+			if (i >= 0) ending.splice(i, 1);
+			if (!p.stream) continue;
+			hh.onPartial?.("");
+			hh.onFlush?.(p.partial, void 0, p.spokeAt || void 0);
+		}
+	};
 	const endStream = async (c) => {
 		const hh = h;
 		const mine = token;
 		c.ending = true;
 		uploads++;
-		let release = () => {};
-		lastEnd = new Promise((r) => release = r);
+		let heard = () => {};
+		c.heardAll = new Promise((r) => heard = r);
+		ending.push(c);
+		const unlist = () => {
+			const i = ending.indexOf(c);
+			if (i >= 0) ending.splice(i, 1);
+		};
 		try {
 			const tail = await c.rec.stop().catch(() => null);
 			if (token !== mine) return;
@@ -47362,6 +47432,7 @@ function serverRecognizer(opts = {}) {
 				return;
 			}
 			if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+			heard();
 			if (h !== hh || !c.stream || !c.sid) return;
 			const sid = c.sid;
 			c.sid = null;
@@ -47371,22 +47442,37 @@ function serverRecognizer(opts = {}) {
 				setLoading(false);
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
-				c.stream = false;
+				const ran = typeof r.j.final === "string";
 				const fms = Number(r.j.final_ms);
-				if (fms > 0) {
+				if (ran && fms > 0) {
 					self.finalMs = fms;
 					voiceMark("final");
 				}
-				const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
+				const committed = wordsOf(r.j.committed);
+				if (ran) {
+					if (c.byWord && c.endAt) finalClock.note(Date.now() - c.endAt);
+					const fast = joinWords(c.said, committed);
+					finalClock.verdict(r.j.same !== true && plainWords(wordsOf(r.j.final)) !== plainWords(fast));
+				}
+				if (c.flushed) return;
+				await settleBefore(c, hh);
+				if (h !== hh || c.flushed) return;
+				c.flushed = true;
+				unlist();
+				c.stream = false;
+				const final = ran && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(wordsOf(r.j.committed), final || void 0, c.spokeAt || void 0);
+				hh.onFlush?.(committed, final || void 0, c.spokeAt || void 0);
 			} catch (err) {
-				if (h !== hh) return;
+				if (h !== hh || c.flushed) return;
 				c.sid = sid;
+				c.flushed = true;
+				unlist();
 				streamFailed(c, err);
 			}
 		} finally {
-			release();
+			heard();
+			unlist();
 			uploads--;
 			if (h === hh) maybeEnd();
 		}
@@ -47407,6 +47493,7 @@ function serverRecognizer(opts = {}) {
 		cur = null;
 		clearTimeout(capTimer);
 		if (!c?.rec) return;
+		c.endAt = Date.now();
 		mic.cut();
 		if (c.stream) {
 			endStream(c);
@@ -47444,7 +47531,14 @@ function serverRecognizer(opts = {}) {
 			clock: new RecordingClock(),
 			loudAt: 0,
 			turn: null,
-			pre: null
+			pre: null,
+			said: "",
+			partial: "",
+			passAt: 0,
+			byWord: false,
+			endAt: 0,
+			flushed: false,
+			heardAll: null
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -47520,7 +47614,11 @@ function serverRecognizer(opts = {}) {
 			} else if (!c.heard && c.stream) {
 				if (c.rec?.take()) c.trimS = blockAt;
 			}
-			if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true)) endClip();
+			const heardSoFar = c.stream ? {
+				text: joinWords(c.said, c.partial),
+				settled: !c.partial && c.passAt > c.loudAt
+			} : null;
+			if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true, heardSoFar)) endClip();
 			else pump(c);
 		};
 		try {
@@ -47583,7 +47681,10 @@ function serverRecognizer(opts = {}) {
 			cur?.clock.reset();
 		},
 		endPhrase() {
-			if (cur?.heard && want) endClip();
+			if (cur?.heard && want) {
+				cur.byWord = true;
+				endClip();
+			}
 		},
 		start(handlers, o = {}) {
 			self.stop();
@@ -47604,7 +47705,8 @@ function serverRecognizer(opts = {}) {
 			holding = true;
 			mic.hold();
 			streaming = !!opts.stream?.();
-			lastEnd = Promise.resolve();
+			ending.length = 0;
+			noteVoiceUsed();
 			clip();
 			return true;
 		},
@@ -47634,6 +47736,7 @@ function serverRecognizer(opts = {}) {
 			aborters.forEach((a) => a.abort());
 			aborters.clear();
 			open.forEach(abandon);
+			ending.length = 0;
 			unhold();
 		},
 		release() {
@@ -47649,19 +47752,63 @@ var DEFAULT_VOICE_CFG = {
 	server_ready: {},
 	system: {}
 };
+var VOICE_USED_KEY = "cs_voice_used_at";
+var STT_WARM_RECENT_MS = 2592e5;
+var STT_WARM_EVERY_MS = 6e4;
+function noteVoiceUsed(now = Date.now()) {
+	try {
+		localStorage.setItem(VOICE_USED_KEY, String(now));
+	} catch {}
+}
+function voiceUsedAt() {
+	try {
+		return Number(localStorage.getItem(VOICE_USED_KEY)) || 0;
+	} catch {
+		return 0;
+	}
+}
+function sttWarmWanted(cfg, usedAt, lastWarm, now = Date.now()) {
+	const r = cfg.server_ready || {};
+	return cfg.stt === "server" && r.stt_stream === true && r.stt_loaded === false && usedAt > 0 && now - usedAt < STT_WARM_RECENT_MS && now - lastWarm >= STT_WARM_EVERY_MS;
+}
+var sttWarmedAt = 0;
+function warmStt(cfg, now = Date.now()) {
+	if (!sttWarmWanted(cfg, voiceUsedAt(), sttWarmedAt, now)) return false;
+	sttWarmedAt = now;
+	(async () => {
+		try {
+			const r = await apiRaw("/api/voice/stream", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					lang: String(navigator.language || "en").split(";")[0],
+					client: VOICE_CLIENT_ID
+				})
+			});
+			const j = await r.json().catch(() => ({}));
+			const id = String(j.id || "");
+			if (r.ok && id) await apiRaw("/api/voice/stream/" + encodeURIComponent(id), { method: "DELETE" });
+		} catch {}
+	})();
+	return true;
+}
 async function loadVoiceCfg(prev, warm = true) {
 	try {
 		const j = await api(warm ? "/api/voice" : "/api/voice?warm=0");
 		applyVoiceView(j);
 		setPronounce(j?.pronounce);
-		if (j && typeof j === "object") return {
-			stt: j.stt === "server" ? "server" : "phone",
-			tts: j.tts === "server" ? "server" : "phone",
-			approve_dialogs: j.approve_dialogs === true,
-			...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
-			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
-			system: j.system && typeof j.system === "object" ? j.system : {}
-		};
+		if (j && typeof j === "object") {
+			const cfg = {
+				stt: j.stt === "server" ? "server" : "phone",
+				tts: j.tts === "server" ? "server" : "phone",
+				approve_dialogs: j.approve_dialogs === true,
+				...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
+				server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
+				system: j.system && typeof j.system === "object" ? j.system : {}
+			};
+			warmStt(cfg);
+			return cfg;
+		}
 	} catch {}
 	return prev || DEFAULT_VOICE_CFG;
 }

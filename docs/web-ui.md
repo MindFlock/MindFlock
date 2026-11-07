@@ -337,10 +337,17 @@ a session first*).
   300 ms..1.5 s (`overWaitMs`; `OVER_FINAL_WAIT_MS` is the most, for the
   first "over" of a page before anything is known — `/end`'s `final_ms`,
   the server's own measure of its accurate pass, plus 150 ms stands in
-  until a round trip was measured, from the phrase's end at the recogniser
-  to its `/end` back, `FinalClock`), then sends the fast words and ignores a
-  later final — never the other way round: a slow final never holds the
-  words. A final that matches the fast words types nothing, so Enter goes
+  until a round trip was measured: the median of the last 7, from the
+  phrase's end at the recogniser to an `/end` back **with a final in it**,
+  late or not — a timeout brings no final and is never a sample,
+  `FinalClock`), then sends the fast words and ignores a later final —
+  never the other way round: a slow final never holds the words. **No wait
+  at all when the final would buy little**: the phrase's fast words all
+  settled (no unstable tail: two passes agreed on every word) and, of at
+  least the last 3 finals (`FAST_TRUST_MIN`, out of 12), at most a third
+  changed a word (`FinalClock.fastStands`, compared case, punctuation and
+  spacing aside) — then "over" sends at once, or the moment the phrase's
+  last chunk settles its words; its final is still measured, never typed. A final that matches the fast words types nothing, so Enter goes
   at once (no trailing space is typed before Enter, and nothing settles);
   only a correction waits 250 ms for its keys to land. The time from the
   word's end to Enter is the Diagnostics line's *over → sent 0.9 s* (and
@@ -399,10 +406,21 @@ a session first*).
   repeating words. The silence detector's and the
   meter's noise floor start from the ring's quietest block rather than the
   first block (a press that lands mid-word would make the word the floor).
+  The ring starts the moment the page's AudioContext runs
+  (`audioCtxRunning`, on its `statechange`), not when the first recording
+  asks for the capture, and the capture worklet's module loads as that
+  context is made (`preloadCapture`) — so a cold press neither waits for the
+  module nor loses the syllables said while the recording is set up.
   The microphone is opened with `{echoCancellation: true,
   noiseSuppression: true}` asked for explicitly (`MIC_CONSTRAINTS` in
   `lib/voiceMic.ts`; the Settings mic test still asks `{audio: true}`), so
   the reply playing from the speakers is not what the recorder hears.
+- **Recognition is warm before the press.** Reading the voice config (a
+  load, a focus) on a device that listened with the server's recognizer in
+  the last 3 days (`cs_voice_used_at`) opens and drops a stream when the
+  server says `server_ready.stt_loaded` is false (`warmStt`, at most once a
+  minute): local whisper loads in the background instead of costing the
+  next press 1–7 s. An older server (no `stt_loaded`) is never asked.
 - **A microphone that goes away** (unplugged, taken by the OS: the track's
   `ended`, or a `devicechange` that leaves no live track — a merely
   `muted` track is not counted) is noticed
@@ -665,7 +683,10 @@ chunk's `turn` verdict sets the quiet that ends the phrase (`turnHoldMs`):
 about 350 ms after a radio word, stop phrase or lone command, 900 ms after a
 sentence or question — but at least 1100 ms (`FIRST_PHRASE_HOLD_MS`) for a
 first phrase into an empty box, so "…so far. [0.9 s] over and out" is not
-routed in halves — 1500 ms after a comma or trailing connector, clamped to
+routed in halves (900 ms, `FIRST_PHRASE_PLAIN_HOLD_MS`, when its words
+can't begin a command), and only 600 ms (`SETTLED_HOLD_MS`) once words are
+typed and the phrase has **settled** — no unstable tail, the last pass
+taken after the last loud block — 1500 ms after a comma or trailing connector, clamped to
 300–3000 ms (`TURN_MIN_MS` / `TURN_MAX_MS`). It falls back to clip mode's
 1.1 s (`SILENCE_MS`) when there is no verdict (an older server, a malformed
 `turn`), when the voice was heard after the audio the verdict judged, and for
@@ -674,7 +695,12 @@ box: “next session” mid-message is words; `RecognizerHandlers.blank()`). The
 `…/end` flushes its last words (the
 phrase's radio word, if any, is read off the whole phrase then — "over" and
 "disregard" act exactly as in clip mode), and the next phrase opens a
-new stream; there is no 12 s cap. Letting go (or the second click) sends what
+new stream **at once**, alongside that `/end` (the server keeps two per page,
+`CLIENT_STREAMS`) — never behind its accurate pass. Its words are handed
+over the moment they are back; when the phrase before is still waiting for
+its `/end`, that phrase ends first with its fast words (its final, when it
+comes, is only measured), so phrases still reach the dictation in order
+and speaking again after a pause shows words at once. There is no 12 s cap. Letting go (or the second click) sends what
 was said since the last chunk, flushes, and stops — waiting for the final
 only the finals' usual round trip (`finishWaitMs`, as for "over"; a clip
 waits for its transcript, up to 45 s; Web Speech 1.5 s), then stops with the
@@ -7811,9 +7837,15 @@ standby 680 (as `VOICE_WAKE_BLOCK` 2048) — through a ScriptProcessor-shaped
 event, so nothing downstream changed and no graph is made or torn down
 between a standby and a listen. With no tap for 1 s (`VOICE_CAP_IDLE_MS`)
 the worklet stops posting until the next tap. The module is added once per
-AudioContext (`capLoad`, alongside `getUserMedia`); the first start waits for
-it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and records with the fallback past
-that (the next start gets the worklet). A busy main thread now delays the
+AudioContext (`capLoad`) — already in the gesture that primes voice
+(`voicePrime`, when the page may record), so the first press finds it
+loaded; a start still waits for it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and
+records with the fallback past that (the next start gets the worklet).
+Recognition is warmed on a config read too: with voice on, a streaming
+server recognizer and `server_ready.stt_loaded` false, a stream is opened
+and DELETEd at once (`voiceSttWarm`, at most once a minute), which loads
+the model in the background — an older server, without `stt_loaded`, is
+left alone. A busy main thread now delays the
 blocks but never drops them. **The ScriptProcessor fallback** — the old
 code path unchanged, one `ScriptProcessorNode(4096, 1, 1)` graph per
 consumer — runs with no `AudioWorkletNode` / `ctx.audioWorklet` (iOS Safari
@@ -7881,11 +7913,18 @@ stream DELETEd, never ended. *Over* / *over and out* end the phrase there
 when `/end` takes longer than its **budget** the fast words go and a later
 final is ignored. The budget follows how long `/end` takes on this server
 (`voiceEndBudgetMs`): **1.5 s** (`VOICE_CONTROL_END_MS`) only while nothing
-is known; once `/end` has been timed here (a running mean of its round
-trips, seeded by the advisory `final_ms` when `GET /api/voice` carries one)
-**1.5× that plus 100 ms**, held to **0.3–1.5 s** (the desktop app's rule)
-— so a whisper that answers in 300 ms is waited for 550 ms at most, and a
-late `/end` grows the next budget (it took at least that). The Enter itself waits for no round
+is known; once `/end` has been timed here (`voiceEndTypicalMs`: the median
+of the last 7 `/end`s that brought a `final`, late ones included — a
+timeout brings none and is never a sample; seeded by the advisory
+`final_ms` when `GET /api/voice` carries one) **1.5× that plus 100 ms**,
+held to **0.3–1.5 s** (the desktop app's rule) — so a whisper that answers
+in 300 ms is waited for 550 ms at most. **No budget at all** when the fast
+words settled (no unstable tail) and at most a third of the last finals
+(at least 3) changed a word (`voiceFastStands`, `voice.rec.finals`): the
+send goes at once, or the moment the phrase's last chunk settles them; its
+`/end` still comes back to be measured (`g.late`), never typed. A settled
+sentence with words in the box already ends after 600 ms
+(`VOICE_SETTLED_HOLD_MS`) instead of the verdict's 900. The Enter itself waits for no round
 trip: the ack's baseline read goes out alongside `POST /send`, not before
 it. The trace and Diagnostics time it: *Last control: over → sent 0.9 s
 (waited for /end up to 1.2 s; /end takes ~0.7 s here)* (the word's last
