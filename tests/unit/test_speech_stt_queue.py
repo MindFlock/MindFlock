@@ -349,9 +349,9 @@ class TestStreamScheduling:
         final = Final("x")
         st = ss.Stream(Fast("a"), final)
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))
+        st.feed(_secs(0.2, level=0.0))  # under EARLY_QUIET_SECONDS
         st.feed(_secs(0.5))
-        st.feed(_secs(0.4, level=0.0))
+        st.feed(_secs(0.2, level=0.0))
         assert st._early is None and final.calls == []
 
     def test_a_queued_early_pass_is_withdrawn_when_speech_resumes(self):
@@ -530,6 +530,32 @@ class TestThreads:
         job = lane.submit(ss.FINAL, "me")
         assert lane.run_job(job, lambda: run(array("f", [0.0] * 10))) == "part 0"
         assert read == [0]  # the other windows were never decoded
+
+    def test_the_final_decodes_once_with_its_tokens_capped(self, loads, monkeypatch):
+        """Temperature 0 (no fallback ladder: a low-confidence phrase decoded
+        up to six times) and ``max_new_tokens`` by the audio's length, never
+        past what fits beside a full hotwords prompt."""
+        got: list = []
+
+        class _Model:
+            def transcribe(
+                self, audio, language=None, beam_size=5, temperature=None,
+                max_new_tokens=None, hotwords=None, initial_prompt=None,
+                condition_on_previous_text=True, vad_filter=False,
+            ):  # fmt: skip
+                got.append((temperature, max_new_tokens))
+                return iter([SimpleNamespace(text="hi")]), None
+
+        monkeypatch.setattr(speech.LocalSTT, "_model", lambda self, name="": _Model())
+        np = SimpleNamespace(
+            float32="f4", frombuffer=lambda raw, dtype: memoryview(raw).cast("f")
+        )
+        monkeypatch.setattr(speech, "_import", lambda name: np)
+        run = speech.LocalSTT().final_transcriber("en", "MindFlock")
+        assert run(bytes(4 * 16000 * 2)) == "hi"  # 2 s of float32
+        assert got == [(0.0, speech.FINAL_TOKENS + 2 * speech.FINAL_TOKENS_PER_S)]
+        assert speech.final_tokens(0.5) == 25
+        assert speech.final_tokens(60) == speech.FINAL_TOKENS_MAX <= 448 - 228
 
     def test_transcribers_name_their_lane(self, loads):
         stt = speech.LocalSTT()

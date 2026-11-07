@@ -79,9 +79,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import copy
 import hashlib
 import logging
+import os
 import re
 import threading
 import time
@@ -102,8 +104,26 @@ from backend.web.core import voice as _voice
 from backend.web.core import voice_words as _voice_words
 from backend.web.core import wake as _wake
 
-router = APIRouter()
 _logger = logging.getLogger(__name__)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    """Boot: load ``local`` recognition in the background a few seconds in
+    (:func:`core.speech.warm_stt_at_boot`), so the first phrase does not
+    wait for its models. FastAPI runs an included router's lifespan inside
+    the app's. ``MINDFLOCK_VOICE_WARM=0`` skips it, as it does the server's
+    own voice warm (the test suite: a warm thread left by one app's
+    lifespan would load a model into the next test)."""
+    if os.environ.get("MINDFLOCK_VOICE_WARM", "1") != "0":
+        try:
+            _speech.warm_stt_at_boot()
+        except Exception:  # noqa: BLE001 — warming is best effort
+            _logger.debug("voice: the boot warm of recognition failed", exc_info=True)
+    yield
+
+
+router = APIRouter(lifespan=_lifespan)
 
 #: The raw clip cap (413 above). A minute of webm/opus is well under 1 MB;
 #: 10 MB leaves room for an uncompressed WAV of the same length.
@@ -1050,7 +1070,9 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
     if isinstance(audio, Response):
         return audio
     try:
-        samples = _stream.decode_wav(audio)
+        # Off the event loop (a per-sample conversion): the default pool,
+        # not the recognition one, so it never queues behind a pass.
+        samples = await asyncio.to_thread(_stream.decode_wav, audio)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=415)
     try:
