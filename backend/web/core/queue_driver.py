@@ -1336,8 +1336,16 @@ def _drain_prompt_queues() -> None:
         _watch_limited_sessions()
         _drain_mailboxes()
         return
-    _prompt_queue.prune(list(srv.ENGINE.instances.keys()))
-    _ports.prune(list(srv.ENGINE.instances.keys()))
+    live = set(srv.ENGINE.instances.keys())
+    if (set(titles) | set(_ports.titles())) - live:
+        # Not in THIS engine is not gone: a co-running server's brand-new
+        # session reaches it only on the next state sync, and pruning its
+        # queue dropped a held worker's task before it was ever released.
+        from backend.web.core import engine as _engine
+
+        live |= _engine.disk_titles()
+    _prompt_queue.prune(list(live))
+    _ports.prune(list(live))
     for title in titles:
         try:
             _drain_one_queue(title)

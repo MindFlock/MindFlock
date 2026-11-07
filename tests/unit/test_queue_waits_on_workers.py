@@ -538,6 +538,31 @@ def test_drain_prunes_holds_of_vanished_sessions(fl, monkeypatch):
         qd._WORKER_HOLD.pop("ghost", None)
 
 
+def test_drain_keeps_queues_of_another_servers_new_sessions(fl, monkeypatch):
+    """Two servers share the stores; a session the other one just created is
+    not in this engine until the next state sync. Pruning its queue dropped a
+    held worker's task before it was ever released."""
+    from backend.web.core import engine as eng
+    from backend.web.core import ports
+
+    monkeypatch.setattr(qd, "_drain_one_queue", lambda t: None)
+    monkeypatch.setattr(qd, "_watch_limited_sessions", lambda: None)
+    monkeypatch.setattr(qd, "_drain_mailboxes", lambda: None)
+    disk = {"elsewhere"}
+    monkeypatch.setattr(eng, "disk_titles", lambda: set(disk))
+    pq.set_flags("elsewhere", enabled=False, held=True)
+    pq.enqueue("elsewhere", "the task")
+    ports.allocate("elsewhere")
+    pq.enqueue("ghost", "stale")
+    qd._drain_prompt_queues()
+    assert [i["text"] for i in pq.list_queue("elsewhere")] == ["the task"]
+    assert ports.get("elsewhere") is not None
+    assert "ghost" not in pq.all_titles()
+    disk.clear()
+    qd._drain_prompt_queues()
+    assert "elsewhere" not in pq.all_titles() and ports.get("elsewhere") is None
+
+
 # --------------------------------------------------------------------------- #
 # The drain's dwell and the hold's announcements
 # --------------------------------------------------------------------------- #
