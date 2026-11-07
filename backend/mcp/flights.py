@@ -819,6 +819,21 @@ class FlightTools:
         if args.get("dry_run"):
             out = dict(view, dry_run=True, session=title or None)
             out["lines"] = [step_line(s) for s in check]
+            if (
+                title
+                and check
+                and str(check[0].get("kind") or "") == "agent"
+                and not args.get("at")
+                and args.get("start_on") not in ("prompt", "run")
+            ):
+                # The read-back lists the agent stop as if it will be sent; on
+                # an existing session it is not — say what happens instead.
+                out["first_stop"] = (
+                    "not sent: on %s the work so far is the first Agent stop "
+                    "(still on its turn, the route waits for it to end; idle, "
+                    "it goes straight on to the next stop). To send its "
+                    "prompt, pass at=%r." % (title, check[0].get("id") or "s1")
+                )
             bad = _irreversible(check, self._kinds_by_name())
             nxt = (
                 "read the sentence back to your user; on their OK call "
