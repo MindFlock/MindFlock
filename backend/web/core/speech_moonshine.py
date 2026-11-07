@@ -196,7 +196,8 @@ class MoonshineEngine:
         self.transcriber = transcriber
         #: ONNX Runtime threads it loaded with (1, or 0: the library's pool).
         self.threads = threads
-        self.lock = threading.Lock()
+        # Re-entrant: a stream's __del__ (GC, any thread) closes under it.
+        self.lock = threading.RLock()
         self._terms: Optional[Tuple[str, ...]] = None
 
     def set_keyterms(self, terms: Sequence[str]) -> None:

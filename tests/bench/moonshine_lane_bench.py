@@ -43,6 +43,26 @@ counts). Per setting and set:
 from ``$STT_BENCH_MODELS/mfvoice``), which runs only on phrases with
 ``POLISH_MIN_SECONDS`` of speech or more — **polished** counts them.
 
+Results 2026-11-07 (8-core Core Ultra 9 275HX under WSL2, 0.8–2.9 other
+cores busy at each start; moonshine-voice 0.1.6, tiny-streaming, keyterms
+from the manifest's production hints):
+
+| threads | set | finish p50/p95 ms | first word p50/p90 | pass p50/p95 | WER final / typed | ctl | same | cores | RSS MB |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | piper | **27 / 45** | 1309 / 1323 | 3 / 46 | 8.3 / 8.7% | 45/48 | 46/48 | **0.97** | 195 |
+| pool | piper | 73 / 185 | 1365 / 1457 | 6 / 150 | 8.3 / 8.7% | 45/48 | 46/48 | 6.19 | 199 |
+| 1 | libri | **9 / 48** | 1641 / 1803 | 6 / 64 | 13.4 / 14.4% | — | 53/73 | **0.97** | 229 |
+| pool | libri | 34 / 384 | 1788 / 1941 | 15 / 240 | 13.4 / 14.4% | — | 53/73 | 6.45 | 237 |
+| 1 + polish | libri | 1270 / 1525 | 1712 / 1817 | 6 / 71 | 12.7 / 14.4% | — | 50/73 | 2.46 | 1298 |
+
+One thread is faster AND ~6x cheaper than the pool, with identical text.
+Today's whisper pipeline on piper: finish 1022 / 1500 ms, WER 8.7%, ctl
+44/48. The polish row: only 8 of the long phrases got whisper's text inside
+``FINAL_TIMEOUT_S`` (this bench calls ``finish`` the instant the clip's
+audio is in, so the early pass never gets the client's phrase-end silence
+to run in), and it costs the ~1.2 s wait again — a synchronous polish
+undoes the lane's point; deliver it after the Moonshine final instead.
+
 Before every process ``all`` waits until the machine's other processes use
 fewer than :data:`MAX_LOAD` cores (``/proc/stat``). Results go to
 ``$STT_BENCH_RESULTS/moonshine-lane-<threads>-<set>[-polish].json``.
