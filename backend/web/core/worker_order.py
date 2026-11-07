@@ -137,10 +137,47 @@ def load() -> dict:
         return copy.deepcopy(_CACHE["data"])
 
 
+#: The cross-process lock's depth and fd (reentrant within this process).
+_FLOCK: Dict[str, object] = {"depth": 0, "fd": None}
+
+
+@contextmanager
+def _file_lock() -> Iterator[None]:
+    """An exclusive ``flock`` on ``<store>.lock`` for a whole read-modify-
+    write: the service and the dev launcher share this store and both pass
+    every few seconds, and an unlocked whole-file rewrite by one dropped a
+    worker the other had just registered (its task then started early and
+    unfenced). Reentrant; the kernel releases it if the holder dies."""
+    from backend import compat
+
+    with _LOCK:
+        if not _FLOCK["depth"]:
+            path = store_path() + ".lock"
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                compat.flock(fd, compat.LOCK_EX)
+            except Exception:
+                os.close(fd)
+                raise
+            _FLOCK["fd"] = fd
+        _FLOCK["depth"] = int(_FLOCK["depth"]) + 1
+        try:
+            yield
+        finally:
+            _FLOCK["depth"] = int(_FLOCK["depth"]) - 1
+            if not _FLOCK["depth"] and _FLOCK["fd"] is not None:
+                try:
+                    os.close(int(_FLOCK["fd"]))  # closing releases the flock
+                finally:
+                    _FLOCK["fd"] = None
+
+
 @contextmanager
 def edit() -> Iterator[dict]:
-    """Read-modify-write the store under the lock (saved on a clean exit)."""
-    with _LOCK:
+    """Read-modify-write the store under the lock (saved on a clean exit) —
+    this process's and every co-running server's (:func:`_file_lock`)."""
+    with _LOCK, _file_lock():
         data = _load_raw()
         yield data
         _save(data)
