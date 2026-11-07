@@ -2475,9 +2475,47 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     after = _flights.mutate(flight_id, _do)
     if after is None:
         raise _flights.FlightError("unknown_flight", 404, "no such route")
+    _close_abandoned_reviewers(before, after)
     _announce(before, after)
     wake()
     return after
+
+
+def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
+    """Close the reviewer of every ``review`` stop that was waiting on one
+    and no longer is — jumped back over, skipped, retried, cancelled or
+    removed (blocking). Left open, it ran on with no stop to read its
+    verdict, and the agent stop the route went back to counted it as one of
+    its own workers. Closed the way the stop closes a finished one (its
+    worktree goes only when clean and with no commits of its own); ``keep``
+    leaves it. → the titles closed."""
+    from backend.web.core.flight_kinds import review as _review
+
+    title = str(before.get("session") or "")
+    out: List[str] = []
+    if not title:
+        return out
+    for s in before.get("steps") or []:
+        if s.get("kind") != "review" or (s.get("config") or {}).get("keep"):
+            continue
+        was = before["step_states"].get(s["id"]) or {}
+        kids = [str(k) for k in (was.get("detail") or {}).get("children") or [] if k]
+        if was.get("state") != "running" or not kids:
+            continue
+        now = (after.get("step_states") or {}).get(s["id"]) or {}
+        if (
+            now.get("state") == "running"
+            and [str(k) for k in (now.get("detail") or {}).get("children") or []]
+            == kids
+        ):
+            continue  # still its reviewer
+        for k in kids:
+            try:
+                if _review._close(title, k):
+                    out.append(k)
+            except Exception as err:  # noqa: BLE001 — never fails the op
+                _log("flight %s: closing reviewer %s: %v", after.get("id"), k, err)
+    return out
 
 
 def _changed(flight_id: str, fn) -> dict:
@@ -2494,6 +2532,7 @@ def _changed(flight_id: str, fn) -> dict:
         _emit("flight.changed", after)
     _announce(before, after)
     _stop_removed(before, after)
+    _close_abandoned_reviewers(before, after)
     wake()
     return after
 
@@ -2563,6 +2602,7 @@ def split_off(flight_id: str, sid: str, pos=None) -> Tuple[dict, dict]:
         _emit("flight.changed", after)
     _announce(before, after)
     _stop_removed(before, after)
+    _close_abandoned_reviewers(before, after)
     _emit("flight.changed", chain)
     wake()
     return after, chain

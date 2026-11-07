@@ -558,6 +558,39 @@ def test_operate_done_on_verify_is_refused_no_blanket_done(srv, monkeypatch):
     assert D.operate(f["id"], "skip", "s1")["state"] == "done"
 
 
+def test_jumping_back_over_a_running_review_closes_its_reviewer(srv, monkeypatch):
+    """The route started at Review by mistake and was moved back to the agent
+    stop: the reviewer it had spawned ran on with nothing to read its verdict,
+    and the agent stop counted it as one of its own workers."""
+    from backend.web.core.flight_kinds import review as rv
+
+    closed = []
+    monkeypatch.setattr(
+        rv, "_close", lambda parent, t: closed.append((parent, t)) or "deleted"
+    )
+    f = fly(
+        {"kind": "agent", "config": {"prompt": "go"}},
+        {"kind": "review"},
+        {"kind": "review", "config": {"keep": True}},
+        start_at="s2",
+    )
+
+    def reviewing(x, sid, who):
+        ss = x["step_states"][sid]
+        ss.update(state="running", since=NOW)
+        ss["detail"] = {"children": [who], "base": "abc"}
+
+    F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-1"))
+    D.operate(f["id"], "jump", "s1")
+    assert closed == [("s", "review-1")]
+    # Ops that leave it its reviewer close nothing; keep=true is never closed.
+    F.mutate(f["id"], lambda x: reviewing(x, "s3", "review-2"))
+    D.operate(f["id"], "pause")
+    D.operate(f["id"], "resume")
+    D.operate(f["id"], "jump", "s1")
+    assert closed == [("s", "review-1")]
+
+
 def test_operate_done_on_a_verify_failure_handed_to_you_still_works(srv):
     f = fly({"kind": "verify", "config": {"who": "both"}, "on_fail": "you"})
     F.mutate(
