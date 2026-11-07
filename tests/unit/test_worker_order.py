@@ -308,11 +308,11 @@ def fake(monkeypatch, tmp_path):
     srv.runs = runs
     srv.told, srv.events, srv.reports, srv.tmp = told, events, reports, tmp_path
     # Live titles on disk (every server's): never the real state.json.
-    srv.disk, srv.tombs = set(), set()
+    srv.disk, srv.tombs = set(), {}
     monkeypatch.setattr(
         drv,
         "_live_elsewhere",
-        lambda: DiskView(frozenset(srv.disk), frozenset(srv.tombs)),
+        lambda: DiskView(frozenset(srv.disk), dict(srv.tombs)),
     )
     return srv
 
@@ -442,10 +442,58 @@ def test_a_slow_start_elsewhere_is_not_gone_but_a_tombstone_is(fake):
     drv.tick()
     assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "running"
     assert prompt_queue.get_state("w2")["enabled"] is False
-    fake.tombs.add("w1")  # deleted
+    fake.tombs["w1"] = time.time()  # deleted
     drv.tick()
     assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "done"
     assert prompt_queue.get_state("w2")["enabled"] is True
+
+
+def test_a_namesakes_old_tombstone_says_nothing_about_a_new_worker(fake):
+    """review-1 / review-2 are deleted and spawned again every pass: a
+    tombstone from before this worker was created is its namesake's."""
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    now = time.time()
+    fake.tombs["w1"] = now - 300  # the last w1, deleted 5 min ago
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}}, created=now)
+    fake.ENGINE.instances.pop("w1")  # the other server's, not saved yet
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "held"
+    assert "w1" in drv.alive_anywhere(())
+    fake.tombs["w1"] = now + 1  # this one deleted
+    drv.tick()
+    assert "w1" not in wo.load()["parents"]["orch"]["workers"]
+    assert "w1" not in drv.alive_anywhere(())
+
+
+def test_a_removal_here_settles_the_order_at_once(fake):
+    """A failed start never reaches the disk, so no tombstone says it is gone:
+    the removal hook settles its order record instead of an hour's grace
+    holding its slot."""
+    from backend.web.core import session_removal
+
+    assert (
+        session_removal._settle_worker_order in session_removal._SESSION_REMOVED_HOOKS
+    )
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    drv.set_order("orch", {"mode": "serial"})
+    now = time.time()
+    _spawn(fake, "w1", "orch", repo, {}, created=now)
+    _spawn(fake, "w2", "orch", repo, {}, created=now)
+    _spawn(fake, "w3", "orch", repo, {}, created=now)
+    drv.tick()
+    workers = wo.load()["parents"]["orch"]["workers"]
+    assert (workers["w1"]["state"], workers["w2"]["state"]) == ("running", "held")
+    fake.ENGINE.instances.pop("w1")
+    drv.on_removed("w1")  # its start failed
+    fake.ENGINE.instances.pop("w3")
+    drv.on_removed("w3")  # deleted while held
+    workers = wo.load()["parents"]["orch"]["workers"]
+    assert workers["w1"]["state"] == "done" and workers["w1"]["how"] == "gone"
+    assert "w3" not in workers
+    drv.tick()
+    assert prompt_queue.get_state("w2")["enabled"] is True  # its slot freed
 
 
 def test_a_fence_of_a_worker_still_being_created_elsewhere_stays(fake):
@@ -458,7 +506,7 @@ def test_a_fence_of_a_worker_still_being_created_elsewhere_stays(fake):
     drv.tick()
     assert list(rz.session_fences(repo)) == ["mindflock_w1"]
     assert drv.alive_anywhere(["orch"]) == {"orch", "w1"}
-    fake.tombs.add("w1")
+    fake.tombs["w1"] = time.time()
     assert drv.alive_anywhere(["orch"]) == {"orch"}
 
 
@@ -553,9 +601,9 @@ def test_disk_view_splits_live_and_tombstoned(monkeypatch):
     )
     monkeypatch.setattr(eng.config, "LoadState", lambda: st)
     monkeypatch.setattr(eng.time, "time", lambda: 1794092600.0)
-    assert eng.disk_view() == eng.DiskView(frozenset({"a", "c"}), frozenset({"b"}))
+    assert eng.disk_view() == eng.DiskView(frozenset({"a", "c"}), {"b": 1794092500.0})
     monkeypatch.setattr(eng.config, "LoadState", lambda: 1 / 0)
-    assert eng.disk_view() == eng.DiskView(frozenset(), frozenset())
+    assert eng.disk_view() == eng.DiskView(frozenset(), {})
 
 
 def test_a_spawn_held_by_a_full_cap_says_so(fake):

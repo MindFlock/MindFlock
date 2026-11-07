@@ -549,9 +549,7 @@ def test_drain_keeps_queues_of_another_servers_new_sessions(fl, monkeypatch):
     monkeypatch.setattr(qd, "_watch_limited_sessions", lambda: None)
     monkeypatch.setattr(qd, "_drain_mailboxes", lambda: None)
     disk = {"elsewhere"}
-    monkeypatch.setattr(
-        eng, "disk_view", lambda: eng.DiskView(frozenset(disk), frozenset())
-    )
+    monkeypatch.setattr(eng, "disk_view", lambda: eng.DiskView(frozenset(disk), {}))
     pq.set_flags("elsewhere", enabled=False, held=True)
     pq.enqueue("elsewhere", "the task")
     ports.allocate("elsewhere")
@@ -575,9 +573,9 @@ def test_drain_keeps_the_queue_of_a_worker_still_being_created(fl, monkeypatch):
     monkeypatch.setattr(qd, "_drain_one_queue", lambda t: None)
     monkeypatch.setattr(qd, "_watch_limited_sessions", lambda: None)
     monkeypatch.setattr(qd, "_drain_mailboxes", lambda: None)
-    tombs = set()
+    tombs = {}
     monkeypatch.setattr(
-        eng, "disk_view", lambda: eng.DiskView(frozenset(), frozenset(tombs))
+        eng, "disk_view", lambda: eng.DiskView(frozenset(), dict(tombs))
     )
     with wo.edit() as data:
         rec = wo.parent_rec(data, "orch", None, make=True)
@@ -586,7 +584,7 @@ def test_drain_keeps_the_queue_of_a_worker_still_being_created(fl, monkeypatch):
     pq.enqueue("new-w", "the task")
     qd._drain_prompt_queues()
     assert [i["text"] for i in pq.list_queue("new-w")] == ["the task"]
-    tombs.add("new-w")  # deleted before it ever started
+    tombs["new-w"] = T0 + 1  # deleted before it ever started
     qd._drain_prompt_queues()
     assert "new-w" not in pq.all_titles()
 

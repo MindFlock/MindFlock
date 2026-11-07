@@ -503,17 +503,30 @@ def _live_elsewhere():
     return _engine.disk_view()
 
 
-def _young(w: Mapping) -> bool:
+def _born(w: Mapping) -> float:
     try:
-        born = float(w.get("created") or w.get("held_at") or 0)
+        return float(w.get("created") or w.get("held_at") or 0)
     except (TypeError, ValueError):
-        return False
-    return time.time() - born < ELSEWHERE_GRACE_S
+        return 0.0
+
+
+def _young(w: Mapping) -> bool:
+    return time.time() - _born(w) < ELSEWHERE_GRACE_S
+
+
+def _deleted(t: str, w: Mapping, view) -> bool:
+    """``t``'s tombstone is THIS worker's: newer than its creation. Titles are
+    reused (review-1, review-2 every pass): an older tombstone belongs to a
+    namesake and says nothing about a worker created since."""
+    ts = view.tombstoned.get(t)
+    return ts is not None and float(ts) > _born(w)
 
 
 def _alive_elsewhere(t: str, w: Optional[Mapping], view) -> bool:
     """``t`` (missing from this engine) is still some server's session."""
-    if t in view.tombstoned:
+    if w is not None and _deleted(t, w, view):
+        return False
+    if w is None and t in view.tombstoned:
         return False
     return t in view.live or (w is not None and _young(w))
 
@@ -530,10 +543,32 @@ def alive_anywhere(local: Iterable[str]) -> set:
             if (
                 isinstance(w, dict)
                 and w.get("state") in ("held", "running")
-                and t not in view.tombstoned
+                and not _deleted(t, w, view)
             ):
                 out.add(t)
     return out
+
+
+def on_removed(title: str) -> None:
+    """A session left THIS server's engine (deleted, closed, or its start
+    failed — that last one never reaches the disk, so no tombstone says it
+    is gone): settle its order record now. A held worker is forgotten, a
+    running or stopped one is done ("gone") and frees its slot — instead of
+    reading as the other server's work in progress for an hour."""
+    now = time.time()
+    hit = False
+    with _order.edit() as data:
+        for rec in (data.get("parents") or {}).values():
+            w = _order.worker_rec(rec, title)
+            if w is None:
+                continue
+            hit = True
+            if w.get("state") == "held":
+                rec["workers"].pop(title, None)
+            elif w.get("state") in ("running", "stopped"):
+                w.update(state="done", ended_at=now, how="gone")
+    if hit:
+        wake()
 
 
 def _branch_of(inst) -> str:

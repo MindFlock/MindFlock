@@ -43,7 +43,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Callable, Dict, Iterable, List, NamedTuple, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional
 
 from backend import config, log
 from backend import session
@@ -390,7 +390,9 @@ class DiskView(NamedTuple):
     """What state.json says about every server's sessions."""
 
     live: frozenset  # saved and not deleted since
-    tombstoned: frozenset  # deleted (or closed) by some server, still on record
+    #: title -> epoch it was deleted (or closed) by some server; a session
+    #: created AFTER that epoch under the same title is a new one.
+    tombstoned: Mapping[str, float]
 
 
 def disk_view() -> DiskView:
@@ -409,7 +411,7 @@ def disk_view() -> DiskView:
             raw = bytes(raw).decode("utf-8")
         items = json.loads(raw) if raw else []
     except Exception:  # noqa: BLE001
-        return DiskView(frozenset(), frozenset())
+        return DiskView(frozenset(), {})
     live = set()
     for x in items or []:
         title = x.get("title") if isinstance(x, dict) else None
@@ -426,7 +428,9 @@ def disk_view() -> DiskView:
             if float(ts) > seen:
                 continue
         live.add(title)
-    return DiskView(frozenset(live), frozenset(set(tombs) - live))
+    return DiskView(
+        frozenset(live), {t: float(ts) for t, ts in tombs.items() if t not in live}
+    )
 
 
 # (mtime_ns, size) of state.json at the last sync, plus the tombstones parsed

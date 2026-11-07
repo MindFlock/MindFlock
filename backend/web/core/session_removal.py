@@ -182,6 +182,17 @@ def _forget_mcp_run_file(title: str) -> None:
 _SESSION_REMOVED_HOOKS.append(_forget_mcp_run_file)
 
 
+def _settle_worker_order(title: str) -> None:
+    """Settle the removed session's place in its orchestrator's order (a
+    failed start never reaches the disk, so nothing else says it is gone)."""
+    from backend.web.core import worker_order_driver as _wod
+
+    _wod.on_removed(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_settle_worker_order)
+
+
 def _forget_voice(title: str) -> None:
     """A removed session's voice flag, reply file and announced-reply memory
     go with it: a closed session leaves no flag behind (its hook would keep
