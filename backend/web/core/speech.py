@@ -458,14 +458,20 @@ def stt_loaded() -> bool:
 
 
 def _resident() -> frozenset:
-    """The cache keys :func:`sweep_idle` never drops: the whisper models of
-    ``local`` recognition while it is the configured backend AND a client is
-    listening (:func:`listening`: the wake-word standby is on somewhere).
-    With nobody listening they unload after :data:`IDLE_SECONDS` unused."""
+    """The cache keys :func:`sweep_idle` and :func:`shed_for_memory` never
+    drop while ``local`` recognition is the configured backend: its English
+    streaming model always (``base.en``, ~150 MB: reloading it cost the
+    person's next phrase ~2 s, and the server warms it at boot), and all of
+    its whisper models while a client is listening (:func:`listening`: the
+    wake-word standby is on somewhere). The rest unload after
+    :data:`IDLE_SECONDS` unused."""
     try:
-        if _configured("stt") != "local" or not listening():
+        if _configured("stt") != "local":
             return frozenset()
         backend = get("stt", "local")
+        if not listening():
+            name = getattr(backend, "stream_model_name", None)
+            return frozenset({"whisper:" + name()}) if name else frozenset()
         keys = getattr(backend, "resident_keys", None)
         return frozenset(keys()) if keys else frozenset()
     except Exception:  # noqa: BLE001 — an unreadable setting pins nothing
@@ -493,9 +499,9 @@ def sweep_idle(now: Optional[float] = None) -> List[str]:
 
 def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:
     """Memory reads low (the server's memory watch calls this): drop every
-    cached model unused for ``min_idle_s`` — the RESIDENT whisper models too,
-    which :func:`sweep_idle` keeps (``small`` + the stream model are ~1 GB of
-    the server's memory). One in use right now stays. The warm-up record of
+    cached model unused for ``min_idle_s`` but the resident ones
+    (:func:`_resident`: the streaming model, and with a listening lease all
+    of recognition's). One in use right now stays. The warm-up record of
     the dropped kind is forgotten, so the next warm loads again — once
     :func:`_memory_block` lets it. → the keys dropped. Never raises."""
     stamp = _now()
@@ -552,7 +558,8 @@ def unload_all() -> None:
 def _arm_timer() -> None:
     """Make sure a sweep is scheduled while something is loaded: one daemon
     timer at a time, re-armed by its own firing while the cache is non-empty,
-    so an idle model is gone within 10–20 minutes of its last call."""
+    so an idle model is gone within one to two :data:`IDLE_SECONDS` of its
+    last call."""
     global _TIMER
     with _LOCK:
         if _TIMER is not None and _TIMER.is_alive():
@@ -1224,6 +1231,16 @@ STREAM_PAD_SECONDS = 10.0
 #: 5.9% at 20 s (644 vs 1150 ms p50), 8.5% at 10 s — where a low-confidence
 #: lone word also set off faster-whisper's temperature fallback for 28 s.
 FINAL_PAD_SECONDS = 0.0
+#: The accurate pass decodes greedily, once (temperature 0: no fallback
+#: ladder — a low-confidence phrase decoded up to six times), and its new
+#: tokens are capped at this many plus :data:`FINAL_TOKENS_PER_S` per second
+#: of a 30 s window's audio (a fast speaker says ~6.5 tokens a second, a
+#: code word more) — at most :data:`FINAL_TOKENS_MAX`: the ``hotwords``
+#: prompt may take 228 of Whisper's 448 positions, and faster-whisper
+#: refuses a cap that does not fit beside it.
+FINAL_TOKENS = 20
+FINAL_TOKENS_PER_S = 10
+FINAL_TOKENS_MAX = 220
 #: A fast pass decodes greedily, once: faster-whisper's temperature
 #: fallback (5 samples at each of 5 temperatures) takes seconds — never
 #: worth it to a pass the next chunk replaces — and its tokens are capped
@@ -1323,6 +1340,13 @@ def _padded(seconds: float, decode: Callable[[], object]) -> object:
     return out
 
 
+def final_tokens(seconds: float) -> int:
+    """The accurate pass's ``max_new_tokens`` for ``seconds`` of phrase
+    (per 30 s window: see :data:`FINAL_TOKENS`)."""
+    per_window = min(max(0.0, seconds), 30.0)
+    return min(FINAL_TOKENS_MAX, int(FINAL_TOKENS + FINAL_TOKENS_PER_S * per_window))
+
+
 def whisper_threads(role: str, cores: Optional[int] = None) -> int:
     """The CPU threads a whisper model decodes with (CTranslate2's
     ``cpu_threads``, fixed when it loads), for ``role`` ``fast`` (the live
@@ -1392,7 +1416,7 @@ class LocalSTT(Backend):
     def ready(self) -> Tuple[bool, str]:
         if not _installed("faster_whisper"):
             return False, NOT_INSTALLED
-        low = _memory_block()
+        low = "" if self._stream_loaded() else _memory_block()
         if low:
             return False, "local recognition held back: " + low
         detail = "faster-whisper %s on this computer" % self._model_name()
@@ -1428,17 +1452,34 @@ class LocalSTT(Backend):
             num_workers=1,
         )
 
+    def _stream_loaded(self) -> bool:
+        """Whether the English streaming model is in memory: a stream needs
+        no load to start (the memory check guards LOADS only)."""
+        try:
+            key = "whisper:" + self.stream_model_name()
+        except Exception:  # noqa: BLE001 — unreadable settings: not loaded
+            return False
+        with _LOCK:
+            return key in _CACHE
+
     def _model(self, name: str = ""):
         """The cached model ``name`` (default: the one-shot one), after the
-        install and memory checks."""
+        install check and — only when it must be LOADED — the memory check:
+        a model already in memory costs nothing more to use, and refusing
+        it under pressure only dropped every pass to clip mode, whose clips
+        were refused the same way."""
         if not _installed("faster_whisper"):
             raise SpeechError(NOT_INSTALLED)
-        low = _memory_block()
-        if low:
-            raise SpeechError("local recognition held back: " + low)
         name = name or self._model_name()
+
+        def load():
+            low = _memory_block()
+            if low:
+                raise SpeechError("local recognition held back: " + low)
+            return self._load(name)
+
         try:
-            return _cached("whisper:" + name, lambda: self._load(name))
+            return _cached("whisper:" + name, load)
         except SpeechError:
             raise
         except Exception as err:  # noqa: BLE001 — download, CPU feature, …
@@ -1574,7 +1615,8 @@ class LocalSTT(Backend):
 
     def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
         """The accurate pass at a stream's end: the whole phrase (float32)
-        into :meth:`final_model_name`, greedy, no conditioning, the VAD, and
+        into :meth:`final_model_name`, greedy, once (temperature 0), its
+        tokens capped (:func:`final_tokens`), no conditioning, the VAD, and
         ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
         on a faster-whisper too old for them: :func:`_hotwords_supported`) —
         the vocabulary, never the fast words (those may be the wrong ones) →
@@ -1593,6 +1635,10 @@ class LocalSTT(Backend):
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
             kw = _bias(model, hints, "")
+            if _takes(model, "temperature"):
+                kw["temperature"] = 0.0
+            if _takes(model, "max_new_tokens"):
+                kw["max_new_tokens"] = final_tokens(len(samples) / 16000.0)
 
             def decode() -> List[str]:
                 segments, _info = model.transcribe(
@@ -2823,13 +2869,35 @@ def _warm_due(kind: str) -> bool:
     return _now() - last[2] >= window
 
 
+#: How long after boot :func:`warm_stt_at_boot` loads local recognition:
+#: after the server's own startup work and the voice's 6 s warm.
+BOOT_WARM_STT_S = 8.0
+
+
+def warm_stt_at_boot(delay_s: float = BOOT_WARM_STT_S) -> Optional[threading.Thread]:
+    """Load ``local`` recognition (:meth:`LocalSTT.warm`) ``delay_s`` after
+    boot when it is the configured backend, so the first phrase of the day
+    does not wait 2 to 7 s for its models — the streaming one then stays
+    (:func:`_resident`), the accurate one until :data:`IDLE_SECONDS` idle.
+    Skipped under memory pressure (:func:`_memory_block`), for any other
+    backend, or when the settings can't be read. The thread, or None."""
+    try:
+        if _configured("stt") != "local":
+            return None
+    except Exception:  # noqa: BLE001 — warming is best effort
+        return None
+    return warm_in_background("stt", delay_s=delay_s)
+
+
 def warm_in_background(
     kind: str = "stt", delay_s: float = 0.0
 ) -> Optional[threading.Thread]:
     """Run :func:`warm` on a daemon thread unless there is nothing to do
     (:func:`_warm_due`) or a warm-up of ``kind`` is already running: the
-    server calls this at boot for both kinds and whenever a voice client
-    fetches ``GET /api/voice`` (the mic UI mounting). Returns the thread it
+    server calls this at boot (the voice when everything is read aloud;
+    local recognition: :func:`warm_stt_at_boot`), for the voice whenever a
+    voice client fetches ``GET /api/voice`` (the mic UI mounting), and for
+    recognition when a stream opens on it unloaded. Returns the thread it
     started, or None. With ``delay_s`` (boot) the check runs on the thread
     after the delay — choosing the voice backend may probe the OS engine,
     which the event loop must not wait for."""
