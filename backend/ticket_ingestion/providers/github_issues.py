@@ -24,6 +24,7 @@ directly. Pull requests (which the issues endpoint also returns) are filtered ou
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -58,6 +59,23 @@ PER_SOURCE_TOKEN_NOTICE = (
 )
 
 
+#: What a GitHub token looks like: the prefixed kinds (``ghp_``, ``gho_``,
+#: ``ghu_``, ``ghs_``, ``ghr_``, ``github_pat_``) or a classic 40-hex one.
+_GITHUB_TOKEN_RE = re.compile(r"^(gh[pousr]_|github_pat_)[A-Za-z0-9_]+$|^[0-9a-f]{40}$")
+
+
+def looks_like_github_token(token: str) -> bool:
+    """Whether ``token`` is shaped like a GitHub token.
+
+    The per-source fallback below is fed whatever the settings layer put in
+    ``api_token``, and a request with no token of its own is filled from the
+    PRIMARY source — a Shortcut UUID or a ``lin_api_`` key when the user adds
+    GitHub Issues next to one. Sending that to api.github.com hands another
+    vendor's secret to GitHub, and the answer ("GitHub rejected the token")
+    names a token the user never typed. Only a GitHub-shaped one is used."""
+    return bool(_GITHUB_TOKEN_RE.match((token or "").strip()))
+
+
 class GithubIssuesProvider(TicketProvider):
     name = "github_issues"
     label = "GitHub"
@@ -73,6 +91,8 @@ class GithubIssuesProvider(TicketProvider):
         per-source ``api_token`` as the last fallback."""
         global _PER_SOURCE_TOKEN_NOTICED
         per_source = (self.cfg.api_token or "").strip()
+        if not looks_like_github_token(per_source):
+            per_source = ""
         if per_source and not _PER_SOURCE_TOKEN_NOTICED:
             _PER_SOURCE_TOKEN_NOTICED = True
             _logger.warning(PER_SOURCE_TOKEN_NOTICE)
@@ -153,9 +173,9 @@ class GithubIssuesProvider(TicketProvider):
         parts = slug.split("/")
         if len(parts) != 2 or not all(parts):
             raise ProviderError(
-                "github_issues could not work out which repository to read. Set "
-                "the source's Repo URL (or its Repository field to 'owner/repo'), "
-                "or run MindFlock from a GitHub clone so `origin` can be used."
+                "Which repository? Type it as owner/repo in the source's "
+                "Repository field (e.g. acme/app), or give the source a GitHub "
+                "Repo URL."
             )
         return parts[0], parts[1]
 
@@ -290,7 +310,12 @@ class GithubIssuesProvider(TicketProvider):
             async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
                 async with session.get(f"{_API}/user", headers=headers) as resp:
                     if resp.status in (401, 403):
-                        return None, f"GitHub rejected the token (HTTP {resp.status})"
+                        # There is no token field on this source: the token is
+                        # the GitHub connection, so say where that is.
+                        return None, (
+                            f"GitHub rejected the token (HTTP {resp.status}) — "
+                            "reconnect GitHub under Settings → Connections → GitHub"
+                        )
                     if resp.status != 200:
                         return None, f"GitHub API returned HTTP {resp.status}"
                     me = await resp.json()
