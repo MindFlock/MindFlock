@@ -52,6 +52,29 @@ from backend.web.core import (
 # "no-tailnet", "unbindable"; "" for local), read back by core/fleet.bind_reason.
 BIND_WHY_ENV = "MINDFLOCK_BIND_WHY"
 
+# Set when the preflight block below prints the local-mode phone hint itself,
+# so the server's startup banner (server.py) doesn't print it again, racing
+# the three-steps block and landing in the middle of it.
+PHONE_HINT_ENV = "MINDFLOCK_PREFLIGHT_PHONE_HINT"
+#: The line a local-mode server prints about phone access (the same words
+#: core/mobile_access._mobile_banner returns when no shared link is set).
+LOCAL_PHONE_HINT = "  Phone: mindflock serve tailscale"
+
+
+def _phone_hint_here(mode: str) -> bool:
+    """Whether the preflight owns the phone hint: local mode with no shared
+    phone link configured (a shared link prints its own box, which works in
+    local mode too)."""
+    if mode != "local":
+        return False
+    try:
+        from backend.web.core import shared_link as _shared_link
+
+        return not _shared_link.configured_name()
+    except Exception:  # noqa: BLE001 — advisory only; leave it to the server
+        return False
+
+
 # Distribution packages of the web dependency group; a ModuleNotFoundError for
 # one of these means "web extras not installed", not a bug — say so plainly.
 _WEB_DEPS = ("uvicorn", "fastapi", "starlette", "ptyprocess", "pyperclip", "segno")
@@ -398,6 +421,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     # and a serve that waited on stdin before binding its port would look like
     # a hung app. `mindflock serve --setup` runs the wizard above instead.
     first_run = not _is_onboarded()
+    phone_hint = _phone_hint_here(mode)
+    if phone_hint:
+        os.environ[PHONE_HINT_ENV] = "1"
+    else:
+        os.environ.pop(PHONE_HINT_ENV, None)
 
     # On a background thread so binding isn't delayed: even the `run` checks
     # shell out (git, tmux, the agent and its sign-in), and on a cold box or a
@@ -428,6 +456,10 @@ def main(argv: Optional[List[str]] = None) -> None:
                     setup_steps.set_first_run_report(text)
                 except Exception:  # noqa: BLE001 — the report is advice
                     pass
+            if phone_hint:
+                # In this one write, not from the server's startup banner:
+                # that runs concurrently and split the block (server.py).
+                text = text.rstrip("\n") + "\n" + LOCAL_PHONE_HINT + "\n"
             sys.stdout.write("\n" + text)
             sys.stdout.flush()
         except Exception:  # noqa: BLE001 — preflight must never break serving
@@ -436,7 +468,12 @@ def main(argv: Optional[List[str]] = None) -> None:
             # wording here would only rot out of sync with it. This catch is
             # what keeps an unwritable stdout or a failed import from throwing a
             # thread traceback across the banner.
-            pass
+            if phone_hint:  # the server left this line to us; still say it
+                try:
+                    sys.stdout.write(LOCAL_PHONE_HINT + "\n")
+                    sys.stdout.flush()
+                except Exception:  # noqa: BLE001
+                    pass
 
     threading.Thread(target=_preflight, daemon=True).start()
 

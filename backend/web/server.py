@@ -734,6 +734,20 @@ def _register_task(coro):
     return t
 
 
+def _banner_for_stdout(banner: str) -> bool:
+    """Whether the startup banner goes to stdout. Local mode prints no mobile
+    box (see _mobile_banner), only a one-line phone hint — and run.py's
+    preflight prints that inside its three-steps block when it says so
+    (``MINDFLOCK_PREFLIGHT_PHONE_HINT``): printed here too, it raced that
+    block and landed in the middle of it."""
+    if not banner:
+        return False
+    return not (
+        os.environ.get("MINDFLOCK_PREFLIGHT_PHONE_HINT") == "1"
+        and banner.strip().startswith("Phone:")
+    )
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start background loops + addon startup hooks; tear everything down on exit.
@@ -925,7 +939,7 @@ async def lifespan(app: FastAPI):
         # the access token (or a QR encoding it) must never land there.
         try:
             banner = await asyncio.to_thread(_mobile_banner)
-            if banner:  # local mode prints no mobile box (see _mobile_banner)
+            if _banner_for_stdout(banner):
                 print(banner, flush=True)
             if log.ErrorLog is not None:
                 try:

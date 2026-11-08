@@ -928,6 +928,54 @@ class TestServeBanner:
         assert "Three steps to your first agent:\nsecond line\n" in out
         assert out.index("Press Ctrl-C") < out.index("Three steps")
 
+    def test_local_phone_line_rides_inside_the_block(
+        self, monkeypatch, capsys, uvicorn_spy, quiet_checks
+    ):
+        # The server's startup banner printed "Phone: mindflock serve
+        # tailscale" from a warmup task racing this thread; now the preflight
+        # writes it in its one write and tells the server to leave it out.
+        from backend.web import server
+        from backend.web.core import mobile_access, shared_link
+
+        def _report(stream=None, **kw):
+            stream.write("Three steps to your first agent:\nlast line\n")
+
+        monkeypatch.setattr(shared_link, "configured_name", lambda: "")
+        monkeypatch.setattr(run, "_is_onboarded", lambda: True)
+        monkeypatch.setattr(init_wizard, "report", _report)
+        monkeypatch.setenv(run.PHONE_HINT_ENV, "")
+        run.main(["local"])
+        out = _drain(capsys, "Phone:")
+        assert "last line\n" + run.LOCAL_PHONE_HINT + "\n" in out
+        assert os.environ.get(run.PHONE_HINT_ENV) == "1"
+        # ...and the server's banner stays out of stdout (the same words).
+        monkeypatch.setattr(mobile_access, "_local_only_mode", lambda: True)
+        monkeypatch.setattr(shared_link, "advertised_url", lambda: None)
+        banner = mobile_access._mobile_banner()
+        assert banner == run.LOCAL_PHONE_HINT
+        assert server._banner_for_stdout(banner) is False
+        # A tailscale-mode box is never swallowed.
+        assert server._banner_for_stdout("\n  ┌─ MindFlock mobile view") is True
+
+    def test_a_shared_link_leaves_the_phone_line_to_the_server(
+        self, monkeypatch, capsys, uvicorn_spy, quiet_checks
+    ):
+        from backend.web import server
+        from backend.web.core import shared_link
+
+        monkeypatch.setattr(shared_link, "configured_name", lambda: "mindflock")
+        monkeypatch.setattr(run, "_is_onboarded", lambda: True)
+        monkeypatch.setattr(
+            init_wizard, "report", lambda stream=None, **kw: stream.write("steps\n")
+        )
+        monkeypatch.setenv(run.PHONE_HINT_ENV, "")
+        run.main(["local"])
+        out = _drain(capsys, "steps")
+        assert "Phone:" not in out
+        assert not os.environ.get(run.PHONE_HINT_ENV)
+        # (if the shared link then fails to come up, the server says it)
+        assert server._banner_for_stdout(run.LOCAL_PHONE_HINT) is True
+
     def test_the_real_block_on_a_first_serve(self, monkeypatch, capsys, uvicorn_spy):
         from backend.web.core import setup_steps
 

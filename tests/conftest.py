@@ -327,6 +327,10 @@ def _no_tailnet_side_effects(monkeypatch):
     # and the fallback flag it exports never outlives the test.
     monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: [])
     monkeypatch.setenv(tailnet_bind.FALLBACK_ENV, "")
+    # Nor do run.main's other exports: the bind reason (/api/fleet's `bind`)
+    # and the "the preflight prints the phone line" flag.
+    monkeypatch.setenv("MINDFLOCK_BIND_WHY", "")
+    monkeypatch.setenv("MINDFLOCK_PREFLIGHT_PHONE_HINT", "")
     # No machine MTUs either: the tailnet MSS clamp (and its doctor row) see
     # no Tailscale interface unless a test hands in a fake tree.
     from backend.web.core import tailnet_mtu
