@@ -14,7 +14,10 @@ import { reprobeDoctor, useDoctor } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { InstallMissing } from "../dialogs/InstallTerminal";
 import { AgentSignIn, signInTarget } from "../dialogs/AgentSignIn";
-import { consumeSetupIntent, requiredChecks, stepProblems } from "./setupModel";
+import { api } from "../../api/client";
+import { toast } from "../../lib/toast";
+import { asksGitIdentity, checkLabel, consumeSetupIntent, requiredChecks, stepProblems } from "./setupModel";
+import "./setup.css";
 
 // --- Doctor model -------------------------------------------------------------
 
@@ -75,20 +78,94 @@ export function plainDetail(text: string | undefined): string {
   return (text || "").replace(/`([^`]*)`/g, "$1");
 }
 
-/** One doctor row: icon, label, detail, the fix, and a sign-in button on an
- * agent row. */
+/** The git identity row's own fix in a browser: the name and email, written
+ * to the global git config (the endpoint Connect GitHub's "Use these" uses).
+ * Its terminal command stays folded underneath for whoever prefers it. */
+export function GitIdentityForm({ fix, onSaved }: { fix?: string; onSaved(): void }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const ready = !!name.trim() && !!email.trim();
+  return (
+    <span className="doctor-identity">
+      <span className="doctor-identity-row">
+        <input
+          className="doctor-ident-name"
+          placeholder="Your Name"
+          aria-label="Your name for commits"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <input
+          className="doctor-ident-email"
+          placeholder="you@example.com"
+          aria-label="Your email for commits"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <button
+          type="button"
+          className="doctor-ident-save"
+          disabled={busy || !ready}
+          title={ready ? undefined : "Fill in both your name and email"}
+          onClick={(e) => {
+            e.stopPropagation();
+            setBusy(true);
+            setError("");
+            api("/api/github/identity", { json: { name: name.trim(), email: email.trim() } }).then(
+              () => {
+                setBusy(false);
+                toast("git now knows who you are");
+                onSaved();
+              },
+              (err) => {
+                setBusy(false);
+                setError((err as Error).message || "couldn't save");
+              }
+            );
+          }}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </span>
+      {error ? <span className="error doctor-ident-error">{error}</span> : null}
+      <span className="set-hint">
+        The name and email your commits carry — saved in your global git config (~/.gitconfig).
+      </span>
+      {fix ? (
+        <details className="doctor-ident-cli" onClick={(e) => e.stopPropagation()}>
+          <summary>Or in a terminal</summary>
+          <code>{plainDetail(fix)}</code>
+        </details>
+      ) : null}
+    </span>
+  );
+}
+
+/** One doctor row: icon, label, detail, the fix, a sign-in button on an
+ * agent row, and the name/email form on the git identity row. */
 function CheckRow({ c, onSignedIn }: { c: DoctorCheckItem; onSignedIn(): void }) {
+  const identity = asksGitIdentity(c);
   return (
     <li className={"doctor-check st-" + (c.status || "info")}>
       <span className="doctor-ico">{DOCTOR_ICON[c.status || ""] || "•"}</span>
-      <span className="doctor-label">{c.label || c.id || ""}</span>
+      <span className="doctor-label">{checkLabel(c)}</span>
       <span className="doctor-detail">
         {plainDetail(c.detail)}
-        {c.fix && c.status !== "ok" && (
-          <span className="doctor-fix">
-            {" "}
-            fix: <code>{plainDetail(c.fix)}</code>
-          </span>
+        {identity ? (
+          <GitIdentityForm fix={c.fix} onSaved={onSignedIn} />
+        ) : (
+          c.fix &&
+          c.status !== "ok" && (
+            <span className="doctor-fix">
+              {" "}
+              fix: <code>{plainDetail(c.fix)}</code>
+            </span>
+          )
         )}
         {signInTarget(c) && (
           <AgentSignIn provider={signInTarget(c) as string} className="doctor-signin" onDone={onSignedIn} />
