@@ -73,3 +73,23 @@ describe("the pane header's account-swap chip", () => {
     expect(ALL_CODE).not.toContain("conversations live per account");
   });
 });
+
+describe("adding an account (polish pass 3, area c)", () => {
+  it("makes the id from the label when it is left empty", async () => {
+    const { accountId } = await import("../components/settings/screens/Accounts");
+    // A newcomer types a label and leaves the id alone — that used to fail
+    // with "id must be lowercase letters/digits/-/_ (max 64)".
+    expect(accountId("", "Work laptop")).toBe("work-laptop");
+    expect(accountId("", "  My Claude (personal) ")).toBe("my-claude-personal");
+    expect(accountId("Mine", "Work")).toBe("mine"); // a typed id wins
+    expect(accountId("", "")).toBe("");
+    expect(accountId("", "x".repeat(80))).toHaveLength(64);
+  });
+
+  it("names agents by product, not CLI id", () => {
+    const acc = src("components/settings/screens/Accounts.tsx");
+    expect(acc).toContain('{a ? agentName(a) : "any (route by session\'s CLI)"}');
+    expect(acc).toContain("{agentName(p.provider || \"claude\")}");
+    expect(acc).not.toContain('<span className="set-label">Id</span>');
+  });
+});

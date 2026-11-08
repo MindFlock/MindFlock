@@ -98,6 +98,7 @@ import {
   requiredMarker,
   savedStates,
   shouldAutoTest,
+  shownFieldError,
   sourceTestState,
   splitForSave,
   withLastTest,
@@ -1071,8 +1072,9 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
   return (
     <>
       <p className="set-hint set-block-hint">
-        Connect a tracker. Tickets in the states you pick start as sessions — on their own
-        while auto-start is on, or when you press <strong>Start</strong>.
+        {/* "Connect a tracker." is the ask only until one is connected. */}
+        {stored.length ? null : "Connect a tracker. "}Tickets in the states you pick start as
+        sessions — on their own while auto-start is on, or when you press <strong>Start</strong>.
       </p>
       {/* The switch itself lives on the Auto-start tab, beside the other two. */}
       <AutoStartLink kind="tickets" gotoTab={gotoTab} />
@@ -1288,8 +1290,12 @@ function StatePicker({
               {st.name || String(st.id)}
             </option>
           ))}
-          {/* The explicit opt-in to the old wide default — kept, never the default. */}
-          {safe && !selected.length && !hasLabels ? (
+          {/* The explicit opt-in to the old wide default — kept, never the
+              default. Not on an Anyone's source: "every ticket assigned to
+              me" is not what it takes, and the server refuses it there (an
+              Anyone's source needs a state or label), so picking it only
+              ever bounced back as "Not saved". */}
+          {safe && !selected.length && !hasLabels && source.assignee_scope !== "anyone" ? (
             <option value={ANY_STATE}>{"Any " + noun + " — start every ticket assigned to me"}</option>
           ) : null}
         </select>
@@ -2166,6 +2172,19 @@ function AssignedTicketRow({
 /** The source editor's three parts — the add flow's steps, minus picking
  * the tracker (that is fixed once it exists). */
 type EditPart = "connect" | "takes" | "goes";
+
+/** The edit step a field is drawn on: the credentials before the first
+ * whose-tickets / state field are Connect, those are What it takes, anything
+ * else Where it goes. Exported for tests. */
+export function fieldPart(
+  key: string | undefined,
+  credFields: Array<{ key: string }>,
+  filterFields: Array<{ key: string }>
+): EditPart {
+  if (key && credFields.some((f) => f.key === key)) return "connect";
+  if (key && filterFields.some((f) => f.key === key)) return "takes";
+  return key ? "goes" : "connect";
+}
 const EDIT_PARTS: Array<[EditPart, string]> = [
   ["connect", "Connect"],
   ["takes", "What it takes"],
@@ -2420,8 +2439,14 @@ function TicketSourceEditor({
   // Connect, What it takes, Where it goes — a source that can't connect opens
   // on Connect, a working one on what it takes (the heading's note is a
   // shortcut there). Round 5: all of it on one scroll was ~17 controls.
+  // "Not saved" sits on the step whose field the server refused (and the
+  // editor opens there): an Anyone's source with no state is a What it takes
+  // problem, not a Connect one. Fields of neither step (repos, agent, the
+  // folded ones) are Where it goes.
+  const errPart: EditPart | null = unsaved ? fieldPart(Object.keys(errs)[0], credFields, filterFields) : null;
+  const pillPart: EditPart = errPart || "connect";
   const [part, setPart] = useState<EditPart>(() =>
-    pillState === "connected" && !unsaved ? "takes" : "connect"
+    errPart || (pillState === "connected" ? "takes" : "connect")
   );
   const heads = section === "edit";
   const showConnect = section === "connect" || (heads && part === "connect");
@@ -2450,7 +2475,7 @@ function TicketSourceEditor({
             >
               <span className="ik-step-num">{i + 1}</span>
               {label}
-              {key === "connect" ? (
+              {key === pillPart ? (
                 <SourcePill state={pillState} label={pillLabel} message={pillMessage} />
               ) : null}
             </button>
@@ -2527,6 +2552,7 @@ function TicketSourceEditor({
             }}
             onPending={() => onDirty("repos", true)}
             onSettled={() => onDirty("repos", false)}
+            error={errs.repo_url || errs.repos}
           />
           </div>
           <div className="ik-grid ik-grid-2">
@@ -2710,6 +2736,10 @@ function CatalogInput({
 }) {
   // Sent when typing pauses, on blur, on Enter and when the card goes away —
   // a typed value never sits unsaved under "Saved ✓".
+  // What is in the box right now (null = untouched since mount), so a
+  // "Required" goes the moment text is typed (shownFieldError).
+  const [typed, setTyped] = useState<string | null>(null);
+  const shownError = shownFieldError(error, typed);
   const save = useAutosave<string>(
     (v) => {
       onDirty?.(false);
@@ -2754,11 +2784,14 @@ function CatalogInput({
       type={f.secret ? "password" : "text"}
       autoComplete="off"
       data-tk-field={f.key}
-      className={error ? "field-missing" : ""}
-      aria-invalid={error ? true : undefined}
+      className={shownError ? "field-missing" : ""}
+      aria-invalid={shownError ? true : undefined}
       placeholder={f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || ""}
       defaultValue={f.secret && saved ? "" : source[f.key] || ""}
-      onChange={(e) => save.schedule(e.target.value)}
+      onChange={(e) => {
+        setTyped(e.target.value);
+        save.schedule(e.target.value);
+      }}
       onBlur={save.flush}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
@@ -2791,7 +2824,7 @@ function CatalogInput({
       ) : (
         input
       )}
-      <FieldNote field={f} error={error} />
+      <FieldNote field={f} error={shownError} />
       {tokenUrl ? (
         <a
           className="ik-token-link"

@@ -310,12 +310,15 @@ class TestMarking:
         assert setup_steps.state()["tools"]["done"] is True
         assert setup_steps.state()["agent_login"]["done"] is True
 
-    def test_doctor_strings_say_agent_cli(self):
+    def test_doctor_strings_name_the_agents_screen(self):
+        # The screen is "Agents" (SettingsDialog's label); the older names
+        # "Coding CLI" / "Agent CLI" point at nothing a new user can find.
         import inspect
 
         src = inspect.getsource(doctor)
         assert "Settings → Coding CLI" not in src
-        assert "Settings → Agent CLI" in src
+        assert "Settings → Agent CLI" not in src
+        assert "Settings → Agents" in src
 
     def test_first_session_create_starts_repo(self):
         server._mark_onboarded()

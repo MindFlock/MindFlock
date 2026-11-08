@@ -1023,8 +1023,9 @@ def _agent_exited(name: str, session_created) -> bool:
     tmux session ``name`` has ENDED (any recorded code — natural or not).
 
     Guarded by the marker's mtime vs the session's creation time: a leftover
-    marker from a previous same-named session (which the engine's first launch
-    doesn't clear) must not make a freshly started agent read as ended."""
+    marker from a previous same-named session must not make a freshly started
+    agent read as ended (the first launch now clears it too, but a marker can
+    still predate this session's creation)."""
     if _server()._read_exit_marker(name) is None:
         return False
     try:

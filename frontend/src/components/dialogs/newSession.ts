@@ -4,6 +4,7 @@
  * written against can be replayed in a test. */
 
 import type { PlanAnswer } from "../../api/types";
+import { agentName } from "../../lib/agentNames";
 import { isWindowsFullPath, serverIsWindows } from "../../lib/serverPaths";
 
 /** The two things New makes. Session is the landing tab and stays that way:
@@ -978,9 +979,11 @@ export type InstalledMap = Record<string, boolean>;
 export function agentMissingReason(agent: string, installed: InstalledMap | null): string {
   if (!installed || !agent) return "";
   if (installed[agent] !== false) return "";
+  // Get set up's step ① installs it in one click (pick it there); Settings →
+  // Agents only shows the command to copy.
   return (
-    agent +
-    " isn't installed on this device. Install it in Settings → Agents, or pick another agent."
+    agentName(agent) +
+    " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent."
   );
 }
 

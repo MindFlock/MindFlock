@@ -20,9 +20,11 @@
  * synced pref, never a per-browser flag), and is replayable from the palette
  * ("Replay welcome tour"), the ? sheet and Settings → General → Tours. */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useUi } from "../../state/store";
-import { useConfig, useInstances } from "../../state/queries";
+import { useConfig, useDoctor, useInstances } from "../../state/queries";
+import { isReleaseVersion, laterVersion } from "../../lib/whatsNew";
+import { readLocalSeen, saveSeen, useWhatsNew } from "../whatsNew/seen";
 import { useSetup } from "../setup/useSetup";
 import { firstLaunchTour } from "../../lib/calm";
 import { firstPrefsPull } from "../../lib/prefsSync";
@@ -56,6 +58,27 @@ function Logo() {
   return <div className="wt-logo" role="img" aria-label="MindFlock" />;
 }
 
+/** The What's new version a newcomer's first welcome settles on: the
+ * version they just installed (never lower than one already seen), so What's
+ * new doesn't then list every release up to it as news. `null` = nothing to
+ * record (a source tree, or the version isn't known). */
+export function newcomerSeen(running: string | null | undefined, seen: string | null | undefined): string | null {
+  return isReleaseVersion(running) ? laterVersion(running, seen) : null;
+}
+
+/** Record that a newcomer has nothing new to read (see newcomerSeen). Why it
+ * is needed: What's new decides once GET /api/doctor gives it the running
+ * version, which on a first launch takes seconds — and by then the welcome
+ * has usually been closed, which makes What's new read the person as someone
+ * who used MindFlock before and pop the whole 0.11–0.12 changelog over the
+ * Get set up checklist. */
+export function settleWhatsNewForNewcomer(running: string | null | undefined): void {
+  const seen = newcomerSeen(running, laterVersion(useWhatsNew.getState().seen, readLocalSeen()));
+  if (!seen) return;
+  saveSeen(seen);
+  useWhatsNew.setState({ seen });
+}
+
 /** Open the card by itself once, on a first launch (lib/calm firstLaunchTour),
  * after this page's first prefs pull — so "seen on another device" is known
  * before anything opens — and remember it as seen once it closes. */
@@ -76,21 +99,37 @@ function useFirstLaunchTour() {
     pulled &&
     !!instances &&
     firstLaunchTour({ seen, sessions: instances.length, status, onboarded: config?.onboarded });
+  // Opened by itself (a first launch), not replayed by hand.
+  const firstLaunch = useRef(false);
   useEffect(() => {
     if (!due) return;
+    firstLaunch.current = true;
     const ui = useUi.getState();
     if (!ui.tourOpen) useUi.setState({ tourOpen: true });
   }, [due]);
   // Seen once it is CLOSED, by any exit (Let's go, Skip, Esc, the backdrop).
   const open = useUi((s) => s.tourOpen);
   const [wasOpen, setWasOpen] = useState(false);
+  const [settle, setSettle] = useState(false);
   useEffect(() => {
     if (open) setWasOpen(true);
     else if (wasOpen) {
       setWasOpen(false);
       useUi.getState().markWelcomeTourSeen();
+      if (firstLaunch.current) {
+        firstLaunch.current = false;
+        setSettle(true);
+      }
     }
   }, [open, wasOpen]);
+  // A first launch's welcome closed: nothing in What's new is news to them
+  // (settleWhatsNewForNewcomer) — recorded as soon as the version is known.
+  const version = useDoctor().data?.version;
+  useEffect(() => {
+    if (!settle || version === undefined) return;
+    setSettle(false);
+    settleWhatsNewForNewcomer(version);
+  }, [settle, version]);
 }
 
 export function WelcomeTour() {

@@ -19,6 +19,7 @@ def _env(monkeypatch):
     # a delenv of an absent key restores nothing — it leaked into later tests.
     monkeypatch.setenv(tailnet_bind.BIND_ALL_ENV, "")
     monkeypatch.setenv(tailnet_bind._REBINDS_ENV, "")
+    monkeypatch.setenv("MINDFLOCK_BIND_WHY", "")  # run.main exports it
 
 
 def _status(monkeypatch, payload):
@@ -227,6 +228,8 @@ def run_mod(monkeypatch, isolate_settings_store):
 
 
 def test_run_tailscale_serves_on_loopback_plus_tailnet(monkeypatch, run_mod):
+    import os
+
     import uvicorn
 
     monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: ["100.64.0.7"])
@@ -246,6 +249,7 @@ def test_run_tailscale_serves_on_loopback_plus_tailnet(monkeypatch, run_mod):
     assert opened == {"hosts": ["127.0.0.1", "100.64.0.7"], "port": 8765}
     assert served == [["s1", "s2"]]
     assert not tailnet_bind.fell_back()
+    assert os.environ.get(run_mod.BIND_WHY_ENV) == tailnet_bind.WHY_TAILNET
 
 
 def test_run_tailscale_without_tailnet_falls_back_and_arms_rebind(monkeypatch, run_mod):
@@ -259,6 +263,26 @@ def test_run_tailscale_without_tailnet_falls_back_and_arms_rebind(monkeypatch, r
     assert seen["host"] == "0.0.0.0"
     assert os.environ.get(tailnet_bind.FALLBACK_ENV) == "1"
     assert tailnet_bind.fell_back() is True
+    assert os.environ.get(run_mod.BIND_WHY_ENV) == tailnet_bind.WHY_NO_TAILNET
+
+
+def test_run_unbindable_tailnet_exports_why_for_your_devices(monkeypatch, run_mod):
+    """Userspace networking / WSL: the addresses exist but can't be bound, so
+    it binds 0.0.0.0 — and says so to /api/fleet, not only to the console."""
+    import os
+
+    import uvicorn
+
+    from backend.web.core import fleet
+
+    monkeypatch.setattr(tailnet_bind, "tailnet_ips", lambda: ["100.64.0.7"])
+    monkeypatch.setattr(tailnet_bind, "bindable", lambda h: False)
+    seen = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
+    run_mod.main(["tailscale"])
+    assert seen["host"] == "0.0.0.0"
+    assert os.environ.get(run_mod.BIND_WHY_ENV) == tailnet_bind.WHY_UNBINDABLE
+    assert fleet.bind_reason() == "unbindable"
 
 
 def test_run_all_binds_every_interface(monkeypatch, run_mod):

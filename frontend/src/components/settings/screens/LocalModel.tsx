@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../../api/client";
 import { toast } from "../../../lib/toast";
+import { agentName } from "../../../lib/agentNames";
 import { useSettings } from "../useSettings";
 import type { ScreenProps } from "../SettingsDialog";
 
@@ -83,7 +84,8 @@ export function LocalModel(_: ScreenProps) {
       <p className="set-hint set-block-hint">
         Point your agent CLI at a model running on this machine. No subscription and no
         API key — and nothing you type, no diff and no file ever leaves the box. Works
-        with <strong>codex</strong>, <strong>aider</strong> and <strong>goose</strong>,
+        with <strong>{agentName("codex")}</strong>, <strong>{agentName("aider")}</strong> and{" "}
+        <strong>{agentName("goose")}</strong>,
         each of which has native local-model support; Claude Code talks only to the
         Anthropic API, so a session on it keeps using that.
       </p>
@@ -200,7 +202,7 @@ export function LocalModel(_: ScreenProps) {
         </span>
         <span className="set-hint">
           {supported.length
-            ? `Installed CLIs that can use it: ${supported.join(", ")}. ` +
+            ? `Installed agents that can use it: ${supported.map(agentName).join(", ")}. ` +
               "Set a session's agent (or a ticketing source's) to one of those."
             : "Test also reports which of your installed CLIs can be pointed at it."}
         </span>

@@ -25227,8 +25227,8 @@ function heldWasQueued(err) {
 function heldQueuedText(name, queued = true) {
 	return queued ? "Queued — " + name + " is offline; press Start to send it." : name + " is offline since a crash — press Start, then send it again.";
 }
-function heldRows(instances) {
-	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i));
+function heldRows(instances, missing) {
+	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i) && !(missing && missing(i)));
 }
 function heldNoticeText(n) {
 	const who = n === 1 ? "1 session stayed" : n + " sessions stayed";
@@ -36642,6 +36642,11 @@ var SKY_MODES = [
 		title: "Only the routes that need you"
 	}
 ];
+function groundedLanding(mode, noSessions) {
+	if (mode === "all" || mode === "mine") return "shown";
+	return mode === "one" && noSessions ? "switch" : "say";
+}
+var GROUNDED_HIDDEN_LINE = "Your routes with no session yet show under All.";
 var inSky = (r) => !r.hidden_by;
 function linePerched(r) {
 	const fl = r.flight;
@@ -40607,12 +40612,21 @@ function routeCode(text) {
 		device: ""
 	};
 }
+var BIND_ALL_WHY = {
+	all: "you asked for every interface",
+	unbindable: "Tailscale's addresses can't be bound here",
+	"no-tailnet": "Tailscale wasn't running when it started"
+};
 function thisDeviceLine(st) {
 	if (st.listening === void 0 || st.listening === "") return "";
 	const name = st.self.host || st.self.key;
-	const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+	const port = st.self.port || 8765;
+	const where = st.self.ip ? st.self.ip + ":" + port : "port " + port;
 	if (st.self_reachable === false) return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
-	return name + " listens on your tailnet (" + where + ") · access gate " + (st.gate_on ? "on" : "off");
+	const gate = " · access gate " + (st.gate_on ? "on" : "off");
+	const why = BIND_ALL_WHY[st.bind || ""];
+	if (why) return name + " listens on every interface (port " + port + ", " + why + ") — your LAN can reach it too, not only your tailnet" + gate;
+	return name + " listens on your tailnet (" + where + ")" + gate;
 }
 var MAKE_REACHABLE_TEXT = "MindFlock restarts listening on your tailnet (Tailscale mode) with the access gate on — your other devices and your phone can reach it, nothing else can without the access token. This browser stays signed in.";
 function matchText(match) {
@@ -54261,7 +54275,7 @@ function plainDetail$1(c) {
 		if (/^no sign-in needed/i.test(d)) return "No sign-in needed";
 		if (/can't be checked/i.test(d)) return "Installed. MindFlock can't check its sign-in from here.";
 		if (/not signed in/i.test(d)) return "Installed, not signed in";
-		if (/^not installed/i.test(d)) return "Not installed";
+		if (/^not installed/i.test(d)) return "Not on this computer yet. Install it, then press Check again.";
 		return d;
 	}
 	if (c.kind === "github") {
@@ -54408,7 +54422,8 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 	const copyIsFix = a?.kind === "copy" && (!fixCmd || a.target === fixCmd);
 	const handler = a && !copyIsFix && a.target !== "agent-sign-in" && a.target !== "agent-install" ? actionHandler(a, deps) : null;
 	const legacy = a === void 0 ? configureAction(c, deps.gotoScreen) : null;
-	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
+	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test" || stage === "install");
+	const testLabel = stage === "install" ? testing ? "Checking…" : "Check again" : testing ? "Testing…" : "Test";
 	const githubOnButton = c.kind === "github" && !!handler && !tourNext;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "conn-row",
@@ -54468,7 +54483,7 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 						className: "test-btn conn-test",
 						disabled: testing,
 						onClick: onTest,
-						children: testing ? "Testing…" : "Test"
+						children: testLabel
 					}),
 					a?.kind === "dialog" && a.target === "agent-sign-in" && a.provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
 						provider: a.provider,
@@ -55573,7 +55588,7 @@ function WindowRefresh() {
 			return "soon";
 		}
 	};
-	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => o.name + ": next ~" + fmtWhen(o.next_fire));
+	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => agentName(o.name) + ": next ~" + fmtWhen(o.next_fire));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -55681,7 +55696,7 @@ function WindowRefresh() {
 									}
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									title: o.window?.note || "",
-									children: o.name + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
+									children: agentName(o.name) + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
 								})]
 							}, o.name))
 						}),
@@ -58615,6 +58630,7 @@ function GuestLinks() {
 		copyText(l.url).then((ok) => toast(ok ? "Guest link copied — send it to them" : "Copy failed"));
 	};
 	const copyLocal = (l) => void copyText(l.local_url).then((ok) => toast(ok ? "On-your-network link copied" : "Copy failed"));
+	const localLive = (l) => l.local_live !== false;
 	const off = gateOn === false || gateOn === null && config?.auth_enabled === false;
 	const live = (links?.length || 0) > 0 || tunnel?.state === "up" || tunnel?.state === "starting";
 	const madeRow = made ? links?.find((l) => l.id === made) || null : null;
@@ -58790,11 +58806,18 @@ function GuestLinks() {
 								onClick: () => copy(madeRow),
 								children: "Copy link"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							localLive(madeRow) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "test-btn",
 								onClick: () => copyLocal(madeRow),
 								children: "Copy on-your-network link"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-guests-local-reach",
+								title: "MindFlock only listens on this computer, so an on-your-network link wouldn't open for anyone else. Make it reachable in Your devices first.",
+								onClick: () => openSettings("devices"),
+								children: "On-your-network link: Make reachable first"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -59222,12 +59245,15 @@ function sweepToast(r, offline) {
 	}
 	return line;
 }
-function offlineRows(instances) {
+function offlineRows(instances, logins) {
 	return instances.filter((i) => {
-		if (i.device || i.pending || i.sleeping) return false;
+		if (i.device || i.pending || i.sleeping || missingAgent$1(i, logins)) return false;
 		const ss = deriveSessionState(i);
 		return ss.state === "offline" && ss.restartable && i.status !== "paused";
 	});
+}
+function missingAgent$1(i, logins) {
+	return !!agentMissing(i, logins, "offline");
 }
 var LOW_MEMORY_LINE = "Memory is low — starting them all may fill it again.";
 var DISMISS_KEY = "mf.heldNotice.dismissed";
@@ -59246,10 +59272,11 @@ function writeDismissed(v) {
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
+	const logins = useSetup().data?.logins;
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [dismissed, setDismissed] = (0, import_react.useState)(readDismissed);
-	const offline = offlineRows(instances);
-	const held = heldRows(instances);
+	const offline = offlineRows(instances, logins);
+	const held = heldRows(instances, (i) => missingAgent$1(i, logins));
 	const heldKey = heldNoticeKey(held);
 	const notice = held.length > 0 && !heldNoticeHidden(dismissed, heldKey);
 	if (!notice && offline.length < 2 && !busy) return null;
@@ -61325,6 +61352,15 @@ function isRequiredCheck(c) {
 	if (typeof c.required === "boolean") return c.required;
 	return !EXTRA_CHECKS.has(String(c.id || ""));
 }
+function checkLabel(c) {
+	const id = String(c.id || "");
+	if (id === "agent-cli" && c.provider) return `agent (${c.provider})`;
+	if (id === "agent-auth" && c.provider) return `agent sign-in (${c.provider})`;
+	return c.label || id;
+}
+function asksGitIdentity(c) {
+	return c.id === "git-identity" && (c.status === "warn" || c.status === "fail");
+}
 function requiredChecks(checks) {
 	return (checks || []).filter(isRequiredCheck);
 }
@@ -61377,7 +61413,78 @@ function useDoctorAutoShow() {
 function plainDetail(text) {
 	return (text || "").replace(/`([^`]*)`/g, "$1");
 }
+function GitIdentityForm({ fix, onSaved }) {
+	const [name, setName] = (0, import_react.useState)("");
+	const [email, setEmail] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const ready = !!name.trim() && !!email.trim();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "doctor-identity",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "doctor-identity-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "doctor-ident-name",
+						placeholder: "Your Name",
+						"aria-label": "Your name for commits",
+						value: name,
+						onChange: (e) => setName(e.target.value),
+						onClick: (e) => e.stopPropagation()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "doctor-ident-email",
+						placeholder: "you@example.com",
+						"aria-label": "Your email for commits",
+						type: "email",
+						value: email,
+						onChange: (e) => setEmail(e.target.value),
+						onClick: (e) => e.stopPropagation()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "doctor-ident-save",
+						disabled: busy || !ready,
+						title: ready ? void 0 : "Fill in both your name and email",
+						onClick: (e) => {
+							e.stopPropagation();
+							setBusy(true);
+							setError("");
+							api("/api/github/identity", { json: {
+								name: name.trim(),
+								email: email.trim()
+							} }).then(() => {
+								setBusy(false);
+								toast("git now knows who you are");
+								onSaved();
+							}, (err) => {
+								setBusy(false);
+								setError(err.message || "couldn't save");
+							});
+						},
+						children: busy ? "Saving…" : "Save"
+					})
+				]
+			}),
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "error doctor-ident-error",
+				children: error
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The name and email your commits carry — saved in your global git config (~/.gitconfig)."
+			}),
+			fix ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "doctor-ident-cli",
+				onClick: (e) => e.stopPropagation(),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or in a terminal" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(fix) })]
+			}) : null
+		]
+	});
+}
 function CheckRow({ c, onSignedIn }) {
+	const identity = asksGitIdentity(c);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "doctor-check st-" + (c.status || "info"),
 		children: [
@@ -61387,13 +61494,16 @@ function CheckRow({ c, onSignedIn }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "doctor-label",
-				children: c.label || c.id || ""
+				children: checkLabel(c)
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "doctor-detail",
 				children: [
 					plainDetail(c.detail),
-					c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					identity ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitIdentityForm, {
+						fix: c.fix,
+						onSaved: onSignedIn
+					}) : c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "doctor-fix",
 						children: [
 							" ",
@@ -64421,38 +64531,70 @@ function PausedBody({ title, hidden }) {
 }
 //#endregion
 //#region src/components/grid/HeldBody.tsx
+function heldMissingLine(name) {
+	return agentName(name) + " isn't installed on this computer, so this session's agent couldn't start. Install it, then Start it here.";
+}
+function useMissingAgent(title) {
+	const { data: setup } = useQuery({
+		queryKey: SETUP_KEY,
+		queryFn: () => api("/api/setup"),
+		staleTime: 3e4
+	}, queryClient);
+	const inst = (queryClient.getQueryData(["instances"]) || []).find((r) => r.title === title);
+	if (!inst) return null;
+	const name = agentMissing(inst, setup?.logins, "offline");
+	if (!name) return null;
+	return {
+		name,
+		isDefault: installTarget(name, setup?.default_provider || "") === "setup"
+	};
+}
 function HeldBody({ title, reason, hidden, onStarted }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const missing = useMissingAgent(title);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-term agent-term pane-paused pane-held" + (hidden ? " hidden" : ""),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "paused-body held-body",
 			role: "status",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "paused-head",
-					children: "Offline"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "paused-text",
-					children: heldLine(reason)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "paused-resume held-start",
-					type: "button",
-					disabled: busy,
-					title: "Start the agent again in the same worktree, resuming its conversation",
-					onClick: (e) => {
-						e.stopPropagation();
-						setBusy(true);
-						startSession(title).then((r) => {
-							setBusy(false);
-							if (r) onStarted?.();
-						});
-					},
-					children: busy ? "Starting…" : "▶ Start"
-				})
-			]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-head",
+				children: "Offline"
+			}), missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-text",
+				children: heldMissingLine(missing.name)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				className: "paused-resume held-install",
+				type: "button",
+				title: "Open " + (missing.isDefault ? "Setup" : "Settings → Agents") + " to install " + agentName(missing.name),
+				onClick: (e) => {
+					e.stopPropagation();
+					if (missing.isDefault) useUi.getState().openDialogFor("setup");
+					else openAgentSettings(missing.name);
+				},
+				children: [
+					"Install ",
+					agentName(missing.name),
+					"…"
+				]
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-text",
+				children: heldLine(reason)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				className: "paused-resume held-start",
+				type: "button",
+				disabled: busy,
+				title: "Start the agent again in the same worktree, resuming its conversation",
+				onClick: (e) => {
+					e.stopPropagation();
+					setBusy(true);
+					startSession(title).then((r) => {
+						setBusy(false);
+						if (r) onStarted?.();
+					});
+				},
+				children: busy ? "Starting…" : "▶ Start"
+			})] })]
 		})
 	});
 }
@@ -86334,6 +86476,11 @@ var VERIFY_WHO = {
 	agent: "by the agent",
 	you: "by you"
 };
+var YOU_WAITS = "waits for your Done";
+function youFlownSub(step, state) {
+	if (step.kind !== "you" || state !== "done" && state !== "skipped") return "";
+	return stopSummary(step) === YOU_WAITS ? state : "";
+}
 function stopSummary(step) {
 	const c = step.config || {};
 	switch (step.kind) {
@@ -86351,7 +86498,7 @@ function stopSummary(step) {
 			const items = youItems(step);
 			if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
 			const t = String(c.text ?? "").trim();
-			return t ? clip(t) : "waits for your Done";
+			return t ? clip(t) : YOU_WAITS;
 		}
 		case "wait": {
 			const until = String(c.until ?? "").trim();
@@ -86781,7 +86928,7 @@ function flightStops(f, kinds) {
 			kind: "stop",
 			row: "main",
 			title: stopTitle(s, kinds),
-			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), stopSummary(s)),
+			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s)),
 			state,
 			icon: s.kind,
 			perch: stepActor(s, kinds) === "you",
@@ -100574,7 +100721,7 @@ function otherSessionsLine(titles, worktree) {
 function agentMissingReason(agent, installed) {
 	if (!installed || !agent) return "";
 	if (installed[agent] !== false) return "";
-	return agent + " isn't installed on this device. Install it in Settings → Agents, or pick another agent.";
+	return agentName(agent) + " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
 }
 function preferInstalled(agent, names, installed) {
 	if (!installed || installed[agent] !== false) return agent;
@@ -109631,6 +109778,7 @@ function settleSave(seqs, seq, ids, ok) {
 //#endregion
 //#region src/components/intake/sourceForm.ts
 var TEST_FRESH_MS = 864e5;
+var REQUIRED = "Required";
 function lastTestOf(source) {
 	const raw = source?.last_test;
 	if (!raw || typeof raw !== "object") return null;
@@ -109696,13 +109844,17 @@ function splitForSave(sources, catalog, storedIds) {
 	for (const s of sources) {
 		const meta = catalog.find((p) => p.id === s.provider) || null;
 		const missing = storedIds.has(s.id) ? [] : missingRequiredFields(meta, s);
-		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, "Required"]));
+		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, REQUIRED]));
 		else send.push(s);
 	}
 	return {
 		send,
 		held
 	};
+}
+function shownFieldError(error, typed) {
+	if (error === REQUIRED && typed !== null && typed.trim() !== "") return void 0;
+	return error;
 }
 function fieldErrorsFrom(body) {
 	if (!body || typeof body !== "object") return {};
@@ -110057,11 +110209,12 @@ function rowsFor(source) {
 		hint: ""
 	}];
 }
-function RepoListField({ source, onChange, onPending, onSettled }) {
+function RepoListField({ source, onChange, onPending, onSettled, error }) {
 	const stored = sourceRepos(source);
 	const storedRef = (0, import_react.useRef)(stored);
 	storedRef.current = stored;
 	const [rows, setRows] = (0, import_react.useState)(() => rowsFor(source));
+	const [touched, setTouched] = (0, import_react.useState)(false);
 	const save = useAutosave((next) => {
 		if (!sameRepos(cleanRepos(next), storedRef.current)) onChange(reposPatch(next));
 		else onSettled?.();
@@ -110091,7 +110244,7 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 		}
 	};
 	const many = rows.length > 1;
-	const missing = cleanRepos(rows).length === 0;
+	const red = cleanRepos(rows).length === 0 && (touched || !!error);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row tk-repos",
 		role: "group",
@@ -110114,11 +110267,15 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 						required: i === 0,
 						"data-tk-field": i === 0 ? "repo_url" : void 0,
 						"aria-label": many ? `Repo ${i + 1} URL` : "Repo URL",
-						className: "tk-repo-url" + (i === 0 && missing ? " field-missing" : ""),
+						className: "tk-repo-url" + (i === 0 && red ? " field-missing" : ""),
+						"aria-invalid": i === 0 && red ? true : void 0,
 						placeholder: "git@github.com:org/repo.git",
 						value: r.url,
 						onChange: (e) => edit(i, { url: e.target.value }),
-						onBlur: save.flush,
+						onBlur: () => {
+							setTouched(true);
+							save.flush();
+						},
 						onKeyDown: onKey
 					}),
 					many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -111215,6 +111372,7 @@ function AutoStartLink({ kind }) {
 	if (kind === "tickets" && (!m.status || !m.status.available)) return null;
 	if (!(kind === "tickets" ? m.ticketSources > 0 : kind === "prs" ? m.repos > 0 : m.issueRepos > 0)) return null;
 	const on = kind === "tickets" ? m.ticketsOn : kind === "prs" ? m.prsOn : m.issuesOn;
+	if (!m.ticketsOn && !m.prsOn && !m.issuesOn) return null;
 	const state = kind === "tickets" && on && broken.length ? "on, but " + listNames(broken.map((b) => b.name)) + " can't connect" : kind !== "tickets" && m.runsOn && on ? "runs on " + m.runsOn : on ? "on — " + everyText(m.every[kind]) : "off";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-autostart-link",
@@ -111977,7 +112135,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
-				"Connect a tracker. Tickets in the states you pick start as sessions — on their own while auto-start is on, or when you press ",
+				stored.length ? null : "Connect a tracker. ",
+				"Tickets in the states you pick start as sessions — on their own while auto-start is on, or when you press ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 				"."
 			]
@@ -112121,7 +112280,7 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 						value: String(st.id),
 						children: st.name || String(st.id)
 					}, String(st.id))),
-					safe && !selected.length && !hasLabels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					safe && !selected.length && !hasLabels && source.assignee_scope !== "anyone" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: ANY_STATE,
 						children: "Any " + noun + " — start every ticket assigned to me"
 					}) : null
@@ -112651,6 +112810,11 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		}
 	});
 }
+function fieldPart(key, credFields, filterFields) {
+	if (key && credFields.some((f) => f.key === key)) return "connect";
+	if (key && filterFields.some((f) => f.key === key)) return "takes";
+	return key ? "goes" : "connect";
+}
 var EDIT_PARTS = [
 	["connect", "Connect"],
 	["takes", "What it takes"],
@@ -112755,7 +112919,9 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 	const paired = filterFields.length >= 2 && filterFields[0].key === "assignee_scope" && filterFields[1].type === "state";
 	const saveLine = !saved ? unsaved ? "Not saved — fill in the marked fields" : dirty ? "Saving…" : "Not saved yet" : dirty || save?.state === "saving" || save?.state === "pending" ? "Saving…" : save?.state === "failed" ? "Not saved" : save?.state === "saved" ? "Saved ✓" : "";
 	const name = sourceDisplayName(source, catalog);
-	const [part, setPart] = (0, import_react.useState)(() => pillState === "connected" && !unsaved ? "takes" : "connect");
+	const errPart = unsaved ? fieldPart(Object.keys(errs)[0], credFields, filterFields) : null;
+	const pillPart = errPart || "connect";
+	const [part, setPart] = (0, import_react.useState)(() => errPart || (pillState === "connected" ? "takes" : "connect"));
 	const heads = section === "edit";
 	const showConnect = section === "connect" || heads && part === "connect";
 	const showTakes = section === "setup" || heads && part === "takes";
@@ -112784,7 +112950,7 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 							children: i + 1
 						}),
 						label,
-						key === "connect" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
+						key === pillPart ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
 							state: pillState,
 							label: pillLabel,
 							message: pillMessage
@@ -112866,7 +113032,8 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 							onChange(patch);
 						},
 						onPending: () => onDirty("repos", true),
-						onSettled: () => onDirty("repos", false)
+						onSettled: () => onDirty("repos", false),
+						error: errs.repo_url || errs.repos
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -113021,6 +113188,8 @@ function FieldNote({ field, error }) {
 	}) : null;
 }
 function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty }) {
+	const [typed, setTyped] = (0, import_react.useState)(null);
+	const shownError = shownFieldError(error, typed);
 	const save = useAutosave((v) => {
 		onDirty?.(false);
 		if (f.secret && v === "") return;
@@ -113058,11 +113227,14 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 		type: f.secret ? "password" : "text",
 		autoComplete: "off",
 		"data-tk-field": f.key,
-		className: error ? "field-missing" : "",
-		"aria-invalid": error ? true : void 0,
+		className: shownError ? "field-missing" : "",
+		"aria-invalid": shownError ? true : void 0,
 		placeholder: f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || "",
 		defaultValue: f.secret && saved ? "" : source[f.key] || "",
-		onChange: (e) => save.schedule(e.target.value),
+		onChange: (e) => {
+			setTyped(e.target.value);
+			save.schedule(e.target.value);
+		},
 		onBlur: save.flush,
 		onKeyDown: (e) => {
 			if (e.key === "Enter") {
@@ -113093,7 +113265,7 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 			}) : input,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldNote, {
 				field: f,
-				error
+				error: shownError
 			}),
 			tokenUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
 				className: "ik-token-link",
@@ -114228,7 +114400,7 @@ function AutoStartLine({ ticketSources, gotoTab }) {
 			className: "linklike",
 			title: "The switches for tickets, PR comments and new issues",
 			onClick: () => gotoTab("autostart"),
-			children: p.onKinds.length ? "Auto-start switches ›" : "Turn on ›"
+			children: "Auto-start switches ›"
 		}) : null]
 	});
 }
@@ -115434,7 +115606,7 @@ function Mobile(p) {
 								dangerouslySetInnerHTML: { __html: data.qr_svg }
 							}),
 							data.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: data.note }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: phoneUrls(data.urls) }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								id: "mobile-sign-in-hint",
 								children: "Scanning signs the phone in. Opening a link by hand asks for the access token (Settings → Security)."
@@ -115490,6 +115662,16 @@ function PhoneAppRow({ app }) {
 			className: "qr-card ts-app-qr",
 			dangerouslySetInnerHTML: { __html: app.qr_svg }
 		})]
+	});
+}
+function phoneUrls(urls) {
+	return (urls || []).filter((u) => {
+		try {
+			const h = new URL(u.url).hostname;
+			return !(h === "localhost" || h === "[::1]" || h.startsWith("127."));
+		} catch {
+			return true;
+		}
 	});
 }
 function UrlList({ urls }) {
@@ -119893,6 +120075,7 @@ function PeerLinkCard(props) {
 			})
 		]
 	}, "talk");
+	const mayDelete = confirm === "unshare" || confirm === "unlink" && !!link.shared;
 	const confirmView = confirm === "mismatch" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		title: `It doesn't match — remove the connection to ${link.peer_name}?`,
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Someone may be between you. Remove it, then make a new invite and send it a different way (a call, another chat), and compare again." }),
@@ -119906,22 +120089,22 @@ function PeerLinkCard(props) {
 	}) : confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		title: confirm === "unlink" ? `Remove the connection to ${link.peer_name}?` : "Stop sharing this folder?",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? `${link.peer_name} can no longer reach you. Their shared session is closed, not deleted; yours too unless you tick delete.` : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? unlinkText(link) : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
 			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			mayDelete && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "check",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
 					checked: deleteFiles,
 					onChange: (e) => setDeleteFiles(e.target.checked)
-				}), "also delete the sandbox copy of the shared folder"]
+				}), "Also delete the sandbox copy of the shared folder"]
 			})
 		] }),
 		confirmLabel: confirm === "unlink" ? "Remove connection" : "Stop sharing",
 		busy: !!busy,
 		onCancel: () => setConfirm(""),
 		onConfirm: () => {
-			const q = deleteFiles ? "?delete_files=1" : "";
+			const q = deleteFiles && mayDelete ? "?delete_files=1" : "";
 			const path = confirm === "unlink" ? base + q : base + "/share" + q;
 			const unlinking = confirm === "unlink";
 			setConfirm("");
@@ -119999,6 +120182,16 @@ function PeerLinkCard(props) {
 			confirmView
 		]
 	});
+}
+function unlinkText(link) {
+	const name = link.peer_name;
+	const theirs = !!link.their_share?.shared;
+	const mine = !!link.shared;
+	let text = `${name} can no longer reach you.`;
+	if (theirs && mine) text += " Their shared session is closed, not deleted; yours too unless you tick delete.";
+	else if (theirs) text += " Their shared session is closed, not deleted.";
+	else if (mine) text += " Your shared session is closed, not deleted, unless you tick delete.";
+	return text;
 }
 //#endregion
 //#region src/components/settings/screens/PeerLinks.tsx
@@ -121142,6 +121335,11 @@ var AGENTS_BY_KIND = {
 	]
 };
 var ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+function accountId(id, label) {
+	const typed = (id || "").trim().toLowerCase();
+	if (typed) return typed;
+	return (label || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|-+$/g, "").slice(0, 64);
+}
 function Accounts(_) {
 	const { data } = useAuthProfiles();
 	const [profiles, setProfiles] = (0, import_react.useState)([]);
@@ -121200,9 +121398,9 @@ function Accounts(_) {
 		...p
 	} : x));
 	const addDraft = () => {
-		const id = (draft.id || "").trim().toLowerCase();
+		const id = accountId(draft.id, draft.label || "");
 		if (!ID_RE.test(id)) {
-			setError("id must be lowercase letters/digits/-/_ (max 64)");
+			setError(id ? "The short name can only use lowercase letters, digits, - and _ (64 at most)." : "Give the account a label or a short name.");
 			return;
 		}
 		if (profiles.some((p) => p.id === id)) {
@@ -121309,7 +121507,7 @@ function Accounts(_) {
 								}),
 								p.kind !== "openrouter" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge prov-badge-src",
-									children: p.provider || "claude"
+									children: agentName(p.provider || "claude")
 								}),
 								p.id === defaultId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge",
@@ -121471,22 +121669,6 @@ function Accounts(_) {
 					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
-						children: "Id"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						autoComplete: "off",
-						placeholder: "work",
-						value: draft.id,
-						onChange: (e) => setDraft((d) => ({
-							...d,
-							id: e.target.value
-						}))
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
 						children: "Label"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "text",
@@ -121501,6 +121683,29 @@ function Accounts(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Short name"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "text",
+							autoComplete: "off",
+							value: draft.id,
+							placeholder: accountId("", draft.label || "") || "work",
+							onChange: (e) => setDraft((d) => ({
+								...d,
+								id: e.target.value
+							}))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Optional: names the account's folder. Made from the label when empty."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
 						children: "Agent"
@@ -121512,7 +121717,7 @@ function Accounts(_) {
 						})),
 						children: (AGENTS_BY_KIND[draft.kind] || ["claude"]).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: a,
-							children: a || "any (route by session's CLI)"
+							children: a ? agentName(a) : "any (route by session's CLI)"
 						}, a || "any"))
 					})]
 				}),
@@ -121645,11 +121850,12 @@ function LocalModel(_) {
 			className: "set-hint set-block-hint",
 			children: [
 				"Point your agent CLI at a model running on this machine. No subscription and no API key — and nothing you type, no diff and no file ever leaves the box. Works with ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "codex" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("codex") }),
 				", ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "aider" }),
-				" and ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "goose" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("aider") }),
+				" and",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("goose") }),
 				", each of which has native local-model support; Claude Code talks only to the Anthropic API, so a session on it keeps using that."
 			]
 		}),
@@ -121766,7 +121972,7 @@ function LocalModel(_) {
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
-				children: supported.length ? `Installed CLIs that can use it: ${supported.join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it."
+				children: supported.length ? `Installed agents that can use it: ${supported.map(agentName).join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it."
 			})]
 		})
 	] });
@@ -122764,6 +122970,14 @@ var EMPTY_FORM = {
 	resume: "",
 	skip: ""
 };
+function editingAfterSave(name, warning) {
+	return warning ? name : null;
+}
+function sourceBadge(source) {
+	if (source === "builtin") return "built in";
+	if (source === "user") return "custom";
+	return source;
+}
 function toForm(p) {
 	return {
 		name: p.name,
@@ -122787,7 +123001,7 @@ function BinaryPathField({ row, onSaved }) {
 				json: { path }
 			});
 			setWarning(r?.warning || "");
-			toast(path ? "Binary path saved for " + row.name : "Binary path cleared for " + row.name);
+			toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
 			if (r?.status) onSaved(r.status);
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
@@ -122830,6 +123044,7 @@ function BinaryPathField({ row, onSaved }) {
 function Providers({ gotoScreen }) {
 	const [statuses, setStatuses] = (0, import_react.useState)([]);
 	const [loadErrors, setLoadErrors] = (0, import_react.useState)([]);
+	const [tomlDir, setTomlDir] = (0, import_react.useState)("");
 	const [managed, setManaged] = (0, import_react.useState)({});
 	const [form, setForm] = (0, import_react.useState)(EMPTY_FORM);
 	const [editing, setEditing] = (0, import_react.useState)(null);
@@ -122840,6 +123055,7 @@ function Providers({ gotoScreen }) {
 		const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
 		setStatuses(statusList);
 		setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
+		setTomlDir(s.status === "fulfilled" ? s.value?.providers_dir || "" : "");
 		const byName = {};
 		if (m.status === "fulfilled") for (const p of m.value?.providers || []) byName[p.name] = p;
 		setManaged(byName);
@@ -122856,8 +123072,10 @@ function Providers({ gotoScreen }) {
 	const del = async (name) => {
 		try {
 			await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-			toast("Removed agent " + name);
+			toast("Removed " + agentName(name));
+			if (editing === name) cancelEdit();
 			load();
+			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
@@ -122898,13 +123116,13 @@ function Providers({ gotoScreen }) {
 				method: "PUT",
 				json: body
 			}) : api("/api/providers", { json: body }));
-			toast((editing ? "Saved agent " : "Added agent ") + body.name);
+			toast((editing ? "Saved " : "Added ") + agentName(body.name));
 			setWarning(res?.warning || "");
-			if (!res?.warning) {
-				setEditing(null);
-				setForm(EMPTY_FORM);
-			}
+			const next = editingAfterSave(body.name, res?.warning || "");
+			setEditing(next);
+			if (!next) setForm(EMPTY_FORM);
 			load();
+			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
@@ -122925,6 +123143,180 @@ function Providers({ gotoScreen }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			children: "Every agent MindFlock knows and where it runs from. Point one at a build MindFlock can't find, or add an agent MindFlock doesn't ship."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			id: "prov-add",
+			open: !!editing,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: editing ? "Edit " + editing : "+ Add a custom agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prov-form",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Name"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-name",
+								placeholder: "mycli",
+								autoComplete: "off",
+								value: form.name,
+								onChange: set("name"),
+								disabled: !!editing
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: editing ? "Fixed once saved — delete and add it again to rename." : "What you pick in the New dialog. Also the command MindFlock runs, unless you set a binary path."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Binary path"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-binary",
+								placeholder: "/home/me/bin/mycli",
+								autoComplete: "off",
+								value: form.binary,
+								onChange: set("binary")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "set-hint",
+								children: [
+									"Optional: the executable to run. Needed when the name is a shell alias or function (",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "type mycli" }),
+									" says “aliased to”) — sessions start in a plain shell that has none of those."
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Launch flags"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-args",
+								placeholder: "--model fast",
+								autoComplete: "off",
+								value: form.args,
+								onChange: set("args")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: added every time it starts, right after the command."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Resume flag"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-resume",
+								placeholder: "--continue",
+								autoComplete: "off",
+								value: form.resume,
+								onChange: set("resume")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: continues the last conversation when a session restarts. Leave empty if it can't."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Skip-permissions flag"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-skip",
+								placeholder: "--yolo",
+								autoComplete: "off",
+								value: form.skip,
+								onChange: set("skip")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: added only to sessions started with permission prompts skipped."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Also matches"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-program",
+								placeholder: "my-cli mycli-beta",
+								autoComplete: "off",
+								value: form.program,
+								onChange: set("program")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: other command names that mean this agent, space-separated. It doesn't change what runs — that's the binary path."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "prov-form-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "prov-add-btn",
+							onClick: save,
+							children: editing ? "Save changes" : "Add agent"
+						}), editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "prov-cancel-btn",
+							onClick: cancelEdit,
+							children: "Cancel"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						id: "prov-error",
+						className: "error",
+						children: error
+					}),
+					warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						id: "prov-warning",
+						className: "prov-launch-hint",
+						children: warning
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						id: "prov-toml-hint",
+						children: [
+							"Each custom agent is a TOML file in ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tomlDir || "~/.mindflock-assistant/providers/" }),
+							tomlDir ? "" : " (or $MINDFLOCK_PROVIDERS_DIR)",
+							". Edit it for what this form doesn't cover — busy/idle screen patterns, trust prompts, effort levels, sign-in — as docs/providers.md describes; saving here keeps those keys."
+						]
+					})
+				]
+			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "prov-conn-list",
@@ -122972,7 +123364,7 @@ function Providers({ gotoScreen }) {
 								}),
 								mgr?.source && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge prov-badge-src",
-									children: mgr.source
+									children: sourceBadge(mgr.source)
 								})
 							]
 						}),
@@ -122985,10 +123377,6 @@ function Providers({ gotoScreen }) {
 						row.installed && row.installTitle && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "set-hint prov-path",
 							children: ["Runs ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: row.installTitle })]
-						}),
-						row.launchHint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "prov-launch-hint",
-							children: row.launchHint
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BinaryPathField, {
 							row,
@@ -123009,88 +123397,6 @@ function Providers({ gotoScreen }) {
 					]
 				}, row.name);
 			})
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			id: "prov-add",
-			open: !!editing,
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: editing ? "Edit " + editing : "+ Add a custom agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "prov-form",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-name",
-						placeholder: "name (e.g. mycli)",
-						autoComplete: "off",
-						value: form.name,
-						onChange: set("name"),
-						disabled: !!editing
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-program",
-						placeholder: "program (default: name)",
-						autoComplete: "off",
-						value: form.program,
-						onChange: set("program")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-binary",
-						placeholder: "binary path (optional, e.g. /home/me/bin/mycli)",
-						autoComplete: "off",
-						value: form.binary,
-						onChange: set("binary")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-args",
-						placeholder: "saved args (e.g. --dangerously-skip-permissions)",
-						autoComplete: "off",
-						value: form.args,
-						onChange: set("args")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-resume",
-						placeholder: "resume flag (e.g. --continue)",
-						autoComplete: "off",
-						value: form.resume,
-						onChange: set("resume")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-skip",
-						placeholder: "skip-perms flag (e.g. --yolo)",
-						autoComplete: "off",
-						value: form.skip,
-						onChange: set("skip")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "prov-form-actions",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prov-add-btn",
-							onClick: save,
-							children: editing ? "Save changes" : "Add agent"
-						}), editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prov-cancel-btn",
-							onClick: cancelEdit,
-							children: "Cancel"
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "prov-error",
-						className: "error",
-						children: error
-					}),
-					warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "prov-warning",
-						className: "prov-launch-hint",
-						children: warning
-					})
-				]
-			})]
 		})
 	] });
 }
@@ -123472,7 +123778,7 @@ function PersonCardView({ person, draft, busy, error, onChange, onSave, onCopyId
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "What MindFlock's own commits (Goes as far as, team-run merges, peer exports) are authored as. Blank: the repo's git config decides. Your agents' commits are never changed."
+						children: "Who the commits MindFlock makes for you are authored as — when a session is set to commit or open a PR by itself, team-run merges, peer exports. Blank: the repo's git config decides. Your agents' commits are never changed."
 					})
 				]
 			}),
@@ -124566,7 +124872,7 @@ function Devices(p) {
 					className: "set-row set-switch-row",
 					id: "devices-reachable-row",
 					"data-control": "tailscale-mode",
-					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't",
+					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it. Where Tailscale's addresses can't be bound (userspace networking, WSL) it listens on every interface instead, and the line above says so",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
@@ -125305,11 +125611,6 @@ function Devices(p) {
 			revision: linkRev
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAdvanced, { focusDevice }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			id: "devices-you-intro",
-			children: "You — the same on every device you pair."
-		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCard, {})
 	] });
 }
@@ -133212,6 +133513,15 @@ function Logo() {
 		"aria-label": "MindFlock"
 	});
 }
+function newcomerSeen(running, seen) {
+	return isReleaseVersion(running) ? laterVersion(running, seen) : null;
+}
+function settleWhatsNewForNewcomer(running) {
+	const seen = newcomerSeen(running, laterVersion(useWhatsNew.getState().seen, readLocalSeen()));
+	if (!seen) return;
+	saveSeen(seen);
+	useWhatsNew.setState({ seen });
+}
 function useFirstLaunchTour() {
 	const seen = useUi((s) => s.welcomeTourSeen);
 	const { data: instances } = useInstances();
@@ -133231,19 +133541,32 @@ function useFirstLaunchTour() {
 		status,
 		onboarded: config?.onboarded
 	});
+	const firstLaunch = (0, import_react.useRef)(false);
 	(0, import_react.useEffect)(() => {
 		if (!due) return;
+		firstLaunch.current = true;
 		if (!useUi.getState().tourOpen) useUi.setState({ tourOpen: true });
 	}, [due]);
 	const open = useUi((s) => s.tourOpen);
 	const [wasOpen, setWasOpen] = (0, import_react.useState)(false);
+	const [settle, setSettle] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
 		if (open) setWasOpen(true);
 		else if (wasOpen) {
 			setWasOpen(false);
 			useUi.getState().markWelcomeTourSeen();
+			if (firstLaunch.current) {
+				firstLaunch.current = false;
+				setSettle(true);
+			}
 		}
 	}, [open, wasOpen]);
+	const version = useDoctor().data?.version;
+	(0, import_react.useEffect)(() => {
+		if (!settle || version === void 0) return;
+		setSettle(false);
+		settleWhatsNewForNewcomer(version);
+	}, [settle, version]);
 }
 function WelcomeTour() {
 	useFirstLaunchTour();
@@ -143591,6 +143914,15 @@ function SkyView() {
 			y: at.y,
 			pinned: true
 		}));
+		groundedLanded(f);
+	};
+	const groundedLanded = (f) => {
+		const how = groundedLanding(useUi.getState().skyMode, instQ.data?.length === 0);
+		if (how === "switch") setSkyMode("all");
+		else if (how === "say") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it", { action: {
+			label: "Show all",
+			onClick: () => setSkyMode("all")
+		} });
 	};
 	const spotRef = (0, import_react.useRef)(() => ({
 		x: 0,
@@ -143648,14 +143980,13 @@ function SkyView() {
 			pinned: true
 		}));
 		placing.current.set(groundedKey(f.id), near);
-		const m = useUi.getState().skyMode;
-		if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+		groundedLanded(f);
 	};
 	const editDefault = (ref) => void openDefaultEditor(ref, flights, {
 		existing: (f) => {
 			const key = groundedKey(f.id);
 			if (rectOf(key)) jumpTo(key);
-			else toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+			else groundedLanded(f);
 		},
 		made: (f) => {
 			if (!alive.current) return;
@@ -143668,8 +143999,7 @@ function SkyView() {
 			}));
 			placing.current.set(key, "lane");
 			setGroundFocus(key);
-			const m = useUi.getState().skyMode;
-			if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+			groundedLanded(f);
 		}
 	});
 	const pinAt = (key, at) => {
@@ -144590,8 +144920,9 @@ function SkyView() {
 		};
 	}, [narrow]);
 	const noSessions = instQ.data !== void 0 && instQ.data.length === 0;
-	const empty = lines.length > 0 ? "" : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
-	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);
+	const groundedHidden = mode === "one" && groundedIds.size > 0;
+	const empty = lines.length > 0 ? "" : groundedHidden && noSessions && !focused && !query ? GROUNDED_HIDDEN_LINE : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -145278,7 +145609,7 @@ function SkyView() {
 								onClose: () => setShortcutsOpen(false),
 								groups: SKY_SHORTCUT_GROUPS
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
+							!(paletteOn && blank) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
 								blank,
 								newSession: noSessions && !lines.length,
 								className: "sky-empty muted",

@@ -15,6 +15,7 @@ stranger), and it learns the code from the fragment alone.
 from __future__ import annotations
 
 import asyncio
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -66,7 +67,7 @@ async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
         await _service().reconcile()
     except Exception as err:  # noqa: BLE001 — report, never 500 the status page
         if log.ErrorLog is not None:
-            log.ErrorLog.Printf("peer service reconcile failed: %v", err)
+            log.ErrorLog.Printf("peer service reconcile failed: %s", err)
     try:
         out = fn(*args, **kwargs)
         if asyncio.iscoroutine(out):
@@ -75,7 +76,13 @@ async def _peer_call(request: Request, fn, *args, status: int = 200, **kwargs):
         return JSONResponse({"error": err.message}, status_code=err.status)
     except Exception as err:  # noqa: BLE001 — say what broke, never a bare 500
         if log.ErrorLog is not None:
-            log.ErrorLog.Printf("peer %s failed: %v", request.url.path, err)
+            # With the traceback: the answer carries only the one line.
+            log.ErrorLog.Printf(
+                "peer %s failed: %s\n%s",
+                request.url.path,
+                err,
+                traceback.format_exc(),
+            )
         return JSONResponse(
             {"error": "%s: %s" % (type(err).__name__, str(err)[:400] or "failed")},
             status_code=500,
@@ -111,7 +118,9 @@ def _invite_base(request: Request) -> str:
             _tunnel.ensure()
     except Exception:  # noqa: BLE001 — a link is still a link without it
         pass
-    return _tunnel.url() or _local_base(request)
+    # _local_base answers (address, live): the invite link wants the address
+    # even when it isn't live — the code in the message still works.
+    return _tunnel.url() or _local_base(request)[0]
 
 
 def _with_invite_url(request: Request, out):

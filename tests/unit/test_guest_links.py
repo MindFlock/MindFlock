@@ -524,6 +524,56 @@ def no_tunnel(monkeypatch):
     monkeypatch.setattr(guest_tunnel, "_HOST", "")
 
 
+def _make_link(owner, monkeypatch):
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    r = owner.post("/api/guests", json={"sessions": ["alpha"]})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_local_link_not_live_while_only_on_this_computer(owner, no_tunnel, monkeypatch):
+    """Local mode + Tailscale up: the tailnet URL is right but nothing answers
+    it (bound to 127.0.0.1), so the row says so — the UI asks for Make
+    reachable instead of copying a link that hangs."""
+    from backend.web.core import mobile_access
+
+    monkeypatch.setattr(
+        mobile_access, "tailnet_url", lambda: ("http://box.tail1.ts.net:8765/m", False)
+    )
+    row = _make_link(owner, monkeypatch)
+    assert row["local_url"].startswith("http://box.tail1.ts.net:8765/?token=")
+    assert row["local_live"] is False
+    assert owner.get("/api/guests").json()["links"][0]["local_live"] is False
+
+
+def test_local_link_live_once_reachable(owner, no_tunnel, monkeypatch):
+    from backend.web.core import mobile_access
+
+    monkeypatch.setattr(
+        mobile_access, "tailnet_url", lambda: ("https://box.tail1.ts.net/m", True)
+    )
+    row = _make_link(owner, monkeypatch)
+    assert row["local_url"].startswith("https://box.tail1.ts.net/?token=")
+    assert row["local_live"] is True
+
+
+def test_local_link_from_a_loopback_origin_is_not_live(owner, no_tunnel, monkeypatch):
+    # No Tailscale: the fallback is the request's own origin, and 127.0.0.1
+    # on someone else's machine is their machine.
+    from backend.web.core import mobile_access
+
+    monkeypatch.setattr(mobile_access, "tailnet_url", lambda: (None, False))
+    owner.base_url = "http://127.0.0.1:8765"
+    row = _make_link(owner, monkeypatch)
+    assert row["local_url"].startswith("http://127.0.0.1:8765/?token=")
+    assert row["local_live"] is False
+    owner.base_url = "http://192.168.1.20:8765"
+    assert owner.get("/api/guests").json()["links"][0]["local_live"] is True
+
+
 def test_urls_come_from_the_tunnel(owner, no_tunnel, monkeypatch):
     async def _yes(scope):
         return True
@@ -813,3 +863,42 @@ def test_the_owners_socket_keeps_its_writable_attach(owner, link, ptys, pane):
         assert ptys["owner"][0].received() == b"pwd\r"
     assert "-r" not in ptys["owner"][0].argv
     assert ptys["readonly"] == [] and ptys["keys"] == []
+
+
+@pytest.mark.parametrize(
+    "reason, retried", [("failed", False), ("timeout", False), ("exited", True)]
+)
+def test_a_failed_tunnel_is_not_restarted_by_every_look(
+    owner, no_tunnel, monkeypatch, reason, retried
+):
+    """The People screen polls GET /api/guests every 2 s while the tunnel says
+    ``starting``. A start that failed must stay ``failed`` (with its reason)
+    until Try again — restarting it from the GET respawned cloudflared on
+    every poll and the screen read "Starting…" for ever. A tunnel that was up
+    and dropped (``exited``) is still brought back by a look."""
+    guests.create("a", ["alpha"])
+    monkeypatch.setattr(no_tunnel, "_binary", lambda: "/usr/bin/cloudflared")
+    monkeypatch.setattr(no_tunnel, "_ERROR", "the Cloudflare tunnel didn't start")
+    monkeypatch.setattr(no_tunnel, "_REASON", reason)
+    starts = []
+
+    def _ensure():
+        starts.append(True)
+        return no_tunnel.status()
+
+    monkeypatch.setattr(no_tunnel, "ensure", _ensure)
+    for _ in range(3):
+        r = owner.get("/api/guests")
+        assert r.status_code == 200
+        assert r.json()["tunnel"]["state"] == "failed"
+        assert r.json()["tunnel"]["error"] == "the Cloudflare tunnel didn't start"
+    assert bool(starts) is retried
+
+    # Try again is the owner's way back.
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    starts.clear()
+    assert owner.post("/api/guests/tunnel", json={}).status_code == 200
+    assert starts == [True]

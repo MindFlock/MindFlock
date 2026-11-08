@@ -23,6 +23,22 @@ from __future__ import annotations
 from backend import cmd as cmd_pkg
 from backend.session.tmux import pty as pty_pkg
 from backend.session.tmux import tmux
+from backend.web.core import terminal as _terminal
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _markers_in_tmp(monkeypatch, tmp_path):
+    """The create path records the agent's exit code like a relaunch does:
+    keep those markers out of the real home."""
+    monkeypatch.setattr(_terminal, "_EXIT_MARKER_DIR", tmp_path / "exit-markers")
+
+
+def _marked(launch: str, name: str = "mindflock_demo") -> str:
+    """``launch`` inside the exit-recording wrapper (terminal._wrap_launch_cmd)."""
+    m = str(_terminal._exit_marker_path(name))
+    return "rm -f %s; %s; echo $? > %s" % (m, launch, m)
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +468,9 @@ def test_start_env_prefix_and_launch_command(monkeypatch):
     launch = new_session_cmd.args[-1]
     # The shell tmux runs it through raises its OOM score first
     # (launch_script.OOM_SCORE_ADJ), then the env(1) block + command.
-    assert launch == (
+    # The whole of it records its exit code (rm -f <marker>; …; echo $? >
+    # <marker>), as a relaunch's does, so a first-launch 127 is recognised.
+    assert launch == _marked(
         "{ echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :; "
         "env HOST='x y' PORT=8080 claude --continue"
     )
@@ -724,9 +742,10 @@ def test_a_session_with_no_credentials_is_byte_identical(monkeypatch, tmp_path):
     _sess, factory, _ran = _started_session(
         monkeypatch, {"PORT": "8080", "HOST": "x y"}, tmp_path
     )
-    assert factory.started_cmds[0].args[-1] == (
+    assert factory.started_cmds[0].args[-1] == _marked(
         "{ echo 500 >/proc/self/oom_score_adj; } 2>/dev/null || :; "
-        "env HOST='x y' PORT=8080 claude --continue"
+        "env HOST='x y' PORT=8080 claude --continue",
+        "mindflock_secretdemo",
     )
     # ...and nothing was written to the run dir.
     assert not (tmp_path / "run").exists() or not list((tmp_path / "run").iterdir())
@@ -755,3 +774,37 @@ def test_closing_the_session_removes_its_credential_file(monkeypatch, tmp_path):
     assert envfile.exists()
     sess.close()
     assert not envfile.exists()
+
+
+def test_a_first_launch_records_its_exit_code_for_real(tmp_path):
+    """The create-path launch string, run by a real shell on a CLI that isn't
+    installed: the marker says 127, which revive's `agent not installed`
+    check and the held pane's Install read."""
+    import subprocess
+
+    exist_state = {"created": False}
+
+    def run_func(c):
+        if c.args[:2] == ["tmux", "has-session"]:
+            return None if exist_state["created"] else Exception("nope")
+        return None
+
+    factory = _FakePtyFactory([(_FakePtmx(), None)])
+    orig_start = factory.start
+
+    def wrapped_start(cmd):
+        exist_state["created"] = True
+        return orig_start(cmd)
+
+    factory.start = wrapped_start
+    sess = tmux.NewTmuxSessionWithDeps(
+        "demo", "claude", factory, cmd_pkg.MockCmdExec(run_func=run_func)
+    )
+    sess.launch_command = "mindflock-no-such-cli-xyz"
+    marker = _terminal._exit_marker_path("mindflock_demo")
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("0")  # a stale "natural" marker from an older same-named run
+    assert sess.start(str(tmp_path)) is None
+    launch = factory.started_cmds[0].args[-1]
+    subprocess.run(["sh", "-c", launch], cwd=tmp_path, capture_output=True, timeout=30)
+    assert _terminal._read_exit_marker("mindflock_demo") == 127

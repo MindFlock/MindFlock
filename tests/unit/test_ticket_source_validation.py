@@ -682,3 +682,21 @@ def test_connections_endpoint_exposes_the_three_states_and_the_message(
     assert row["legacy_status"] == "attention"
     assert "run Test" in row["message"]
     assert "tok2" not in str(row)
+
+
+def test_every_token_field_says_where_to_get_one_and_what_it_needs():
+    """The Connect step had only a "Create a token ↗" link: nothing said
+    which button on the tracker's page, or what the token must be allowed to
+    do (polish pass 3-d). Each typed secret carries a hint naming both."""
+    from backend.ticket_ingestion.providers import PROVIDER_META
+
+    for meta in PROVIDER_META:
+        for f in meta["fields"]:
+            if not f.get("secret"):
+                continue
+            hint = f.get("hint") or ""
+            assert "→" in hint, (meta["id"], "where to create it")
+            assert "as you" in hint or "read and write" in hint, (
+                meta["id"],
+                "what it is allowed to do",
+            )

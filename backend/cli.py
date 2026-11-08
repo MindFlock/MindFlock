@@ -1298,6 +1298,38 @@ def _sign_in(
     return fresh
 
 
+def _ask_git_identity() -> Optional[Check]:
+    """`doctor --fix` for the git identity row. It has no command to run —
+    the name and email are the person's to give — so it used to be passed
+    over in silence, leaving the first commit to fail with "Please tell me
+    who you are". Ask for both (Enter skips), write them to the global git
+    config the way the browser's checklist does, and re-probe the row.
+    Returns the fresh row, or ``None`` when skipped or refused."""
+    from backend import doctor
+    from backend.web.core import github_auth
+
+    print("\n  git identity: commits on this computer need your name and email.")
+    try:
+        name = input("    Your name (Enter skips): ").strip()
+        email = input("    Your email: ").strip() if name else ""
+    except EOFError:
+        name = email = ""
+    if not name or not email:
+        print(
+            '  skipped — later: git config --global user.name "Your Name" '
+            "&& git config --global user.email you@example.com"
+        )
+        return None
+    out = github_auth.set_git_identity(name, email)
+    if not out.get("ok"):
+        print(f"  not saved — {out.get('error') or 'git config failed'}")
+        return None
+    fresh = doctor.check_git_identity()
+    if fresh is not None:
+        print(f"  {_GLYPHS.get(fresh.status, '?')} {_row_label(fresh)}  {fresh.detail}")
+    return fresh
+
+
 def _fix_checks(
     checks: list[Check], groups: Tuple[str, ...] = ("run", "ship")
 ) -> list[Check]:
@@ -1333,7 +1365,19 @@ def _fix_checks(
     planned = [
         c for c in checks if c.group in groups and c.group != doctor.GROUP_OPTIONAL
     ]
-    if not doctor.install_plan(planned)["steps"] and not _rest(checks):
+    identity = next(
+        (
+            c
+            for c in checks
+            if c.id == "git-identity" and c.group in groups and c.status == "warn"
+        ),
+        None,
+    )
+    if (
+        not doctor.install_plan(planned)["steps"]
+        and not _rest(checks)
+        and identity is None
+    ):
         return checks
     if not sys.stdin.isatty():
         print()
@@ -1343,6 +1387,10 @@ def _fix_checks(
         )
         return checks
     checks = _install_all(list(checks), groups)
+    if identity is not None and identity in checks:
+        fresh = _ask_git_identity()
+        if fresh is not None:
+            checks[checks.index(identity)] = fresh
     fixable = _rest(checks)
     if not fixable:
         return checks

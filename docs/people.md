@@ -160,6 +160,9 @@ sessions, name who it's for, **Make a link**. The public address takes a few
 seconds (Cloudflare mints a random `https://<label>.trycloudflare.com` name;
 the block polls and copies the link when it's there), and needs
 `cloudflared` — missing, the block offers the doctor's one-click install.
+If Cloudflare can't start it (offline, rate-limited), the block says why
+with a **Try again**; it doesn't retry by itself (a tunnel that was up and
+dropped is restarted the next time the block loads).
 Send them the URL (`https://<label>.trycloudflare.com/?token=…`; the same
 link opens the phone page at `/m`). The name is minted per server process:
 after a restart the URL changes, so copy it again from the block (the token

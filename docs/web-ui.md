@@ -3167,9 +3167,10 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
-  when another is installed. Picking a missing one shows *<agent> isn't
-  installed on this device. Install it in Settings → Agents, or pick another
-  agent.* under the field, and **Start** (on either page)
+  when another is installed. Picking a missing one shows *<Agent> isn't
+  installed on this device. Install it in one click from Get set up (step ①;
+  a custom agent: Settings → Custom agents), or pick another agent.* under
+  the field, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
   installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
@@ -3334,10 +3335,10 @@ and *To send text to a session that's already running, use Prompts.*, with
   last, as cards with a template's anatomy: the bird and the name, *2 stops ·
   app · claude*, the strip's schedule line (`runs.schedule_label`) and how far
   off the next run is (*Paused*, *Starts on mac-mini*), then the last run or
-  *Last run failed: …* and **Recent runs**. Two actions: **Fly now** (`POST
+  *Last run failed: …* and **Recent runs**. Two actions: **Run now** (`POST
   /api/flights/start {plan_id}` — the new session is selected once its row
-  exists, and Schedule closes) and **Edit in the Sky** (closes Schedule and
-  opens that flyway's card on the Sky's shelf, its **Takes off** section
+  exists, and Schedule closes) and **Edit** (closes Schedule and
+  opens that saved route's card on the Sky's shelf, its **Starts:** section
   open on the schedule). With no scheduled flyway the section is not drawn
   at all (`scheduledFlyways` / `flywayNextLine` in `TemplatesDialog.tsx`).
 
@@ -4035,7 +4036,9 @@ saved routes shelf, the Behaviors board, Settings → Agents); **Got it**, ×,
 `prefs.whats_new_seen`, so the tab, the desktop app and the phone share it, with
 this browser's localStorage (`mf_whats_new_seen`) as the fallback. It never
 opens on a fresh install (the version is marked seen; the welcome tour is
-theirs), never before onboarding is done or over the welcome card, a tour or a
+theirs — and closing a first launch's welcome marks it seen too, so a
+newcomer who closes it before the slow first doctor probe tells What's new
+the version is not read as an upgrader), never before onboarding is done or over the welcome card, a tour or a
 dialog, and never lists an entry above the running version. Reopen it from the
 palette (**What's new**), **Settings → General → Help**, or a click on the
 version beside the wordmark. Details: `docs/vision/whats-new.md`.
@@ -4306,8 +4309,8 @@ and the waiting items from that source (the sky's intake lane and its drawer)
 start on it unless their own chips say otherwise
 (`components/flights/PlanSelect.tsx`; hidden on a server without flights).
 
-**Scheduled flyways** are listed on [Schedule](#schedule) under their own
-heading, with **Fly now** and **Edit in the Sky**.
+**Scheduled saved routes** are listed on [Schedule](#schedule) under their own
+heading, with **Run now** and **Edit** (opens it in the Sky).
 
 **The pane's Flight tab** (`SessionFlight.tsx`; header item `flight` in
 Customize → Pane header, after Map). It shows once the session has a diagram
@@ -4653,13 +4656,15 @@ starts**, and **Ticket sessions in MindFlock** (`engine.enabled`); Settings
 keeps a **Set in Intake ›** row under each old name.
 The Tickets / GitHub PRs / GitHub issues tabs show one status line where their
 switch used to be — *Auto-start: on — checks every 20 s* — and the dialog
-header's **Auto-start switches ›** goes to the switches.
+header's **Auto-start switches ›** goes to the switches. While all three are
+off that line is left out: the header already says *Auto-start is off
+everywhere.*
 
 **What auto-starts, in one line.** A line above the tabs says what starts on its
 own right now across the three switches (*Auto-start is on for tickets and PR
 comments.*, *Auto-start is off everywhere.*) and the next scheduled template
 (*Next to start on its own: nightly tests, Fri 07:30 — tomorrow's run
-skipped.*); its link (**Turn on ›** / **Auto-start switches ›**) goes to the
+skipped.*); its link, **Auto-start switches ›**, goes to the
 switches (`intake/switches.ts` reads the three together, for this line, the
 row chips and New → Ticket alike). It is hidden until something is set up, so a
 first open shows only the add flow. **New → Ticket** reads the same ticket switch, so it never says
@@ -4854,7 +4859,12 @@ source** / **+ Add a repository**). The tracker and repository halves:
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
   credentials, each tracker's **API token** with a **Create a token ↗** link to
-  the tracker's own token page; **Test & continue** tests the typed values
+  the tracker's own token page and a one-line hint naming the button there and
+  what the token must be allowed to do (the catalog field's `hint`); a red
+  **Required** under a box goes as soon as text is typed in it, not when the
+  value is next sent — sent on blur, it went on the mousedown of the button
+  reached for, the page moved under the pointer and that first press did
+  nothing; **Test & continue** tests the typed values
   WITHOUT saving anything (`POST /api/settings/test/ticketing` with no
   `record`) — the draft stays local, and the verdict, member id and state list
   land on it so step 3's pickers fill in. A failed Test stays on the step with a
@@ -4922,7 +4932,8 @@ buckets inside a source, and only the two GitHub tabs share one credential.
   the picker says *None picked — nothing auto-starts from this source yet*, rows say *no
   auto-start state picked yet*, and the pipeline's scan skips the source —
   `providers.base.auto_start_waiting`). **Any state — start every ticket assigned
-  to me** stays in the state menu as an explicit choice; sources saved before
+  to me** stays in the state menu as an explicit choice (not on an Anyone's
+  source, where the server refuses it — it needs a state or label); sources saved before
   this keep their old "empty = every state" rule. Until a Test has passed a
   state can be **typed** (*Type a state name*); it is swapped for the tracker's
   real state once a Test lists one by that name, a typed name the tracker lacks
@@ -6161,7 +6172,10 @@ A few screens got quieter:
   GitHub's row is a plain status ("Not connected. Agents can't open pull
   requests yet." / "Connected as @you"), with no `gh` output or Copy chip and
   no Test until something is connected. A failing Test outranks an agent
-  row's stored Connected.
+  row's stored Connected. A not-installed agent says **Not installed** once
+  (the pill; its line says *Install it, then press Check again.*) and its
+  Test reads **Check again**, so a CLI installed in a terminal shows up
+  without a reload.
 - **Connect GitHub** never shows "device flow is not configured": without a
   device flow the token path leads (the `repo` and `read:org` scopes named,
   the link opening GitHub's token page with both ticked), with the gh CLI
@@ -6412,17 +6426,18 @@ labels above the inputs.
   back**, **Revive sessions after a restart** and **Put idle agents to sleep
   after** sit in General's Advanced fold (advanced mode) with the plan window
   budget and scroll speed; their keys are unchanged.
-- **Agent CLI → scheduled window refresh** — a keepalive that periodically
+- **Agents → Keep usage windows warm** (under Advanced) — a keepalive that periodically
   pokes each provider's CLI so usage windows stay warm
   (`GET/POST /api/window-refresh`). Its **Default provider** picker reads
   `GET /api/providers/status` and lists **every** provider, the absent ones
   disabled as *<name> — not installed* (*A CLI that isn't installed can't be
-  picked — install or sign in to it under Agent providers.*) — you can't make
+  picked — install or sign in to it under Custom agents.*) — you can't make
   a CLI that isn't there the launch default; if the stored default is missing it
   falls back to the first installed CLI and **persists the correction** (the
   backend rejects the save otherwise — see [web-api.md](web-api.md)). Under
-  the picker is the default agent's card; the Advanced fold's **Set up another
-  agent** picker (product names) shows any other agent's card.
+  the picker, **Not installed — how to install** unfolds a **Set up another
+  agent** picker (product names) that shows any other agent's card; the
+  default agent's card follows.
 - **Custom agents** — one row per CLI, built-in or custom
   (`GET /api/providers/status`), named by its product name: its agent card
   (status + Install / Sign in / Test — the sign-in runs the CLI's own login
@@ -6433,12 +6448,19 @@ labels above the inputs.
   `PUT /api/providers/<name>/binary-path`) for a claude or codex that lives
   off PATH; one pinned by the server's environment says so and wins. A custom
   TOML that fails to load is a red row with the file name, *failed to load*
-  and the parse error. Below the rows is the custom-provider **manager**
-  (**+ Add a custom agent**, Edit, Delete): add/edit/delete user-TOML
-  providers via the `/api/providers` CRUD, including each provider's saved
-  **launch flags** (`[launch] args`). The per-provider **default launch flags**
-  (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
-  also edited here.
+  and the parse error. ABOVE the rows is **+ Add a custom agent** (each row
+  of a custom one has Edit and Delete): add/edit user-TOML providers via the
+  `/api/providers` CRUD. Every field is labelled with a hint — Name, Binary
+  path (*needed when the name is a shell alias or function — sessions start
+  in a plain shell that has none of those*), Launch flags (`[launch] args`),
+  Resume flag, Skip-permissions flag and *Also matches* (`program`; *it
+  doesn't change what runs*) — and a note points at the TOML file for what
+  the form doesn't cover. A save that answers with a launch warning stays
+  open as an **Edit** of that agent, so the fix is *Save changes* (a second
+  Add would 409 "already exists"). Source badges read *built in* / *custom*.
+  The per-provider **default launch flags** (`coding_cli.default_launch_args`)
+  that pre-fill the New-session dialog are set on **Agents** (*Extra flags
+  for new sessions*).
 - **Your devices** (screen key `devices`; was Devices) is the one place for
   your own machines. The **You** card (*You — the same on every device you
   pair.*: name, git author name and email for MindFlock's own commits, the

@@ -188,7 +188,8 @@ export function plainDetail(c: ConnectionRow): string {
     if (/^no sign-in needed/i.test(d)) return "No sign-in needed";
     if (/can't be checked/i.test(d)) return "Installed. MindFlock can't check its sign-in from here.";
     if (/not signed in/i.test(d)) return "Installed, not signed in";
-    if (/^not installed/i.test(d)) return "Not installed";
+    // The pill already says "Not installed": the line says what to do.
+    if (/^not installed/i.test(d)) return "Not on this computer yet. Install it, then press Check again.";
     return d;
   }
   if (c.kind === "github") {
@@ -412,10 +413,15 @@ export function ConnectionRowView({
   // Only a row from an older server has no `action` field at all; `null` is
   // a server saying "nothing to do here".
   const legacy = a === undefined ? configureAction(c, deps.gotoScreen) : null;
-  // Test is the agent card's action only once there is nothing to install or
-  // sign in to; GitHub with no credential has nothing to test yet.
+  // Test is the agent card's action once there is nothing to sign in to; a
+  // not-installed agent's is "Check again" (installed in a terminal since?).
+  // GitHub with no credential has nothing to test yet.
   const showTest =
-    !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
+    !!c.test &&
+    !!onTest &&
+    !(c.kind === "github" && status === "off") &&
+    (stage === null || stage === "test" || stage === "install");
+  const testLabel = stage === "install" ? (testing ? "Checking…" : "Check again") : testing ? "Testing…" : "Test";
   // The Settings tour's GitHub step (lib/tours/settings.ts) rings Connect;
   // with no Connect showing (connected, or Connect is the Get set up
   // checklist's next step) it rings the whole card instead.
@@ -460,7 +466,7 @@ export function ConnectionRowView({
       <div className="conn-actions">
         {showTest && (
           <button type="button" className="test-btn conn-test" disabled={testing} onClick={onTest}>
-            {testing ? "Testing…" : "Test"}
+            {testLabel}
           </button>
         )}
         {a?.kind === "dialog" && a.target === "agent-sign-in" && a.provider ? (

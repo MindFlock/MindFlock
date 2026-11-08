@@ -1034,6 +1034,9 @@ export interface GuestLink {
   /** The same link on this device's tailnet/LAN address — only for someone
    * already on your network. */
   local_url: string;
+  /** Whether `local_url` answers yet (false while MindFlock listens only on
+   * 127.0.0.1: "Make reachable" first). Absent on older servers. */
+  local_live?: boolean;
   /** Where the guest's page is right now — the session it has selected —
    * or null when they are not here (no report for 90 s). lib/guestFocus
    * draws it as a pill on that rail row. */
@@ -1294,6 +1297,9 @@ export interface FleetStatus {
   /** The other devices can reach this one (false = bound to 127.0.0.1). */
   self_reachable?: boolean;
   listening?: "local" | "tailnet" | "";
+  /** Why the server bound where it did ("unbindable" = asked for the tailnet
+   * but listens on every interface). Absent on older servers. */
+  bind?: string;
   gate_on?: boolean;
   admitted?: FleetAdmit[];
   tailnet_peers?: FleetPeer[];

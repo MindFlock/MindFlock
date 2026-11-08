@@ -362,10 +362,18 @@ User TOML providers opt in with the `[activity]` table (below).
 Drop a file in `$MINDFLOCK_PROVIDERS_DIR` (default
 `~/.mindflock-assistant/providers/`, i.e. `<MINDFLOCK_ASSISTANT_DIR>/providers`).
 A file that fails to parse or validate is skipped — logged at load time, and
-listed as a red row on Settings → Agent providers with the error — so one bad
-TOML never breaks startup and never vanishes silently either. Editing a
+listed as a red row on Settings → Custom agents with the error — so one bad
+TOML never breaks startup and never vanishes silently either. That screen's
+**+ Add a custom agent** form (at the top) writes the file for you — Name,
+Binary path, Launch flags, Resume flag, Skip-permissions flag and *Also
+matches* (`program`: other names that select the provider; it never changes
+what runs — that is `binary_path`, else `command`, else `name`). Editing a
 provider from that screen patches only the fields the form shows; every other
-key and table in the file is kept as written:
+key and table in the file is kept as written. A save the server warns about
+(the executable can't be found — typically a shell alias, since sessions
+start through a plain `sh -c` with no aliases or functions) is still saved,
+and the form stays open as an edit of it, so filling in the binary path is a
+**Save changes**:
 
 ```toml
 [provider]
@@ -956,8 +964,9 @@ live plan usage (see **Live usage & limit state** below). Install detection is
 the same `shutil.which` / explicit-path check the backend uses to gate the
 default provider (below). Settings → **Agents**' default picker lists every
 provider too (product names), with the absent ones disabled and saying why;
-under it sits the default's agent card, and its Advanced fold's **Set up
-another agent** picker shows any other agent's card. A card's **Test** is
+right under it **Not installed — how to install** (*Set up another agent*
+once everything is installed) unfolds a picker that shows any other agent's
+card, then the default's own agent card. A card's **Test** is
 `POST /api/connections/test/agent {provider}`, which answers in words (*Signed
 in as you@example.com*) rather than with the file the login was found in.
 

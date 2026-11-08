@@ -418,6 +418,9 @@ export function PeerLinkCard(props: {
     </section>
   );
 
+  // Only a folder of yours has a sandbox copy to delete: removing a
+  // connection that never shared one asks nothing about it.
+  const mayDelete = confirm === "unshare" || (confirm === "unlink" && !!link.shared);
   const confirmView =
     confirm === "mismatch" ? (
       <InlineConfirm
@@ -443,20 +446,22 @@ export function PeerLinkCard(props: {
           <>
             <span>
               {confirm === "unlink"
-                ? `${link.peer_name} can no longer reach you. Their shared session is closed, not deleted; yours too unless you tick delete.`
+                ? unlinkText(link)
                 : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched."}
             </span>{" "}
-            <label className="check">
-              <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
-              also delete the sandbox copy of the shared folder
-            </label>
+            {mayDelete && (
+              <label className="check">
+                <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
+                Also delete the sandbox copy of the shared folder
+              </label>
+            )}
           </>
         }
         confirmLabel={confirm === "unlink" ? "Remove connection" : "Stop sharing"}
         busy={!!busy}
         onCancel={() => setConfirm("")}
         onConfirm={() => {
-          const q = deleteFiles ? "?delete_files=1" : "";
+          const q = deleteFiles && mayDelete ? "?delete_files=1" : "";
           const path = confirm === "unlink" ? base + q : base + "/share" + q;
           const unlinking = confirm === "unlink";
           setConfirm("");
@@ -509,4 +514,18 @@ export function PeerLinkCard(props: {
       {confirmView}
     </div>
   );
+}
+
+/** The Remove connection… confirm: what removing it closes — only the
+ * shared folders that exist (theirs, yours), never one neither of you
+ * shared. Exported for the test. */
+export function unlinkText(link: Pick<PeerLink, "peer_name" | "shared" | "their_share">): string {
+  const name = link.peer_name;
+  const theirs = !!link.their_share?.shared;
+  const mine = !!link.shared;
+  let text = `${name} can no longer reach you.`;
+  if (theirs && mine) text += " Their shared session is closed, not deleted; yours too unless you tick delete.";
+  else if (theirs) text += " Their shared session is closed, not deleted.";
+  else if (mine) text += " Your shared session is closed, not deleted, unless you tick delete.";
+  return text;
 }

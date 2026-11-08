@@ -209,6 +209,20 @@ class TestLoadErrors:
         assert "name" in errors["noname.toml"]
         assert "good" in {p["name"] for p in body["providers"]}
 
+    def test_status_names_the_resolved_providers_dir(
+        self, client, isolated, monkeypatch
+    ):
+        # MINDFLOCK_PROVIDERS_DIR (the fixture's) wins, so the TOML note
+        # names that folder, not the default ~/.mindflock-assistant one.
+        body = client.get("/api/providers/status").json()
+        assert body["providers_dir"] == str(isolated / "providers") + "/"
+        # Under $HOME it reads as ~/...
+        monkeypatch.setenv("HOME", str(isolated))
+        assert (
+            client.get("/api/providers/status").json()["providers_dir"]
+            == "~/providers/"
+        )
+
     def test_status_carries_sign_in_and_override_fields(self, client, monkeypatch):
         import backend.web.addons.settings as settings_addon
 

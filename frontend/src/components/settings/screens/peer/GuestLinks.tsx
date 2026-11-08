@@ -30,6 +30,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../../../../api/client";
 import type { GuestLink, GuestTunnel } from "../../../../api/types";
 import { copyText } from "../../../../lib/clipboard";
+import { openSettings } from "../../../../lib/openSettings";
 import { GATE_ON_NOTE, turnGateOn } from "../../../../lib/gateOn";
 import { toast } from "../../../../lib/toast";
 import { refreshConfig, reprobeDoctor, useConfig, useInstances } from "../../../../state/queries";
@@ -241,6 +242,9 @@ export function GuestLinks() {
   };
   const copyLocal = (l: GuestLink) =>
     void copyText(l.local_url).then((ok) => toast(ok ? "On-your-network link copied" : "Copy failed"));
+  // false: MindFlock only listens on this computer, so the on-your-network
+  // link would hang for whoever opens it (Make reachable fixes that).
+  const localLive = (l: GuestLink) => (l as GuestLink & { local_live?: boolean }).local_live !== false;
 
   const off = gateOn === false || (gateOn === null && config?.auth_enabled === false);
   const live = (links?.length || 0) > 0 || tunnel?.state === "up" || tunnel?.state === "starting";
@@ -399,9 +403,21 @@ export function GuestLinks() {
             >
               Copy link
             </button>
-            <button type="button" className="test-btn" onClick={() => copyLocal(madeRow)}>
-              Copy on-your-network link
-            </button>
+            {localLive(madeRow) ? (
+              <button type="button" className="test-btn" onClick={() => copyLocal(madeRow)}>
+                Copy on-your-network link
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="test-btn"
+                id="peer-guests-local-reach"
+                title="MindFlock only listens on this computer, so an on-your-network link wouldn't open for anyone else. Make it reachable in Your devices first."
+                onClick={() => openSettings("devices")}
+              >
+                On-your-network link: Make reachable first
+              </button>
+            )}
             <button type="button" className="test-btn" onClick={() => setMade(null)}>
               Done
             </button>

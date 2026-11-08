@@ -551,14 +551,64 @@ class TestPerSourceToken:
         monkeypatch.setattr(ghm, "_PER_SOURCE_TOKEN_NOTICED", False)
         prov = ghm.GithubIssuesProvider(
             TicketProviderConfig(
-                provider="github_issues", project="o/r", api_token="per-source"
+                provider="github_issues", project="o/r", api_token="ghp_per_source"
             )
         )
-        assert await prov._resolve_token() == "per-source"
-        assert await prov._resolve_token() == "per-source"
+        assert await prov._resolve_token() == "ghp_per_source"
+        assert await prov._resolve_token() == "ghp_per_source"
         notices = [r for r in caplog.records if "deprecated" in r.getMessage()]
         assert len(notices) == 1
         assert ONE_PLACE in notices[0].getMessage()
+
+    async def test_another_trackers_token_is_never_sent_to_github(self, monkeypatch):
+        """A request with no token of its own is filled from the PRIMARY
+        source — adding GitHub Issues next to a Shortcut source handed the
+        Shortcut token to api.github.com (polish pass 3-d). The fallback only
+        takes a GitHub-shaped token; anything else reads as "no token"."""
+        from backend.ticket_ingestion import github_auth as chain
+        from backend.ticket_ingestion.config import TicketProviderConfig
+        from backend.ticket_ingestion.providers import github_issues as ghm
+
+        async def none(_cfg=None):
+            raise chain.GithubAuthError("none")
+
+        monkeypatch.setattr(chain, "resolve_token", none)
+        for foreign in (
+            "11111111-aaaa-bbbb-cccc-000000000001",  # a Shortcut token
+            "lin_api_abc123",  # a Linear key
+            "2/1201234567890/1209876543210:abc",  # an Asana PAT
+        ):
+            prov = ghm.GithubIssuesProvider(
+                TicketProviderConfig(
+                    provider="github_issues", project="o/r", api_token=foreign
+                )
+            )
+            with pytest.raises(ghm.ProviderError, match="No GitHub token"):
+                await prov._resolve_token()
+
+    def test_github_token_shapes(self):
+        from backend.ticket_ingestion.providers.github_issues import (
+            looks_like_github_token as ok,
+        )
+
+        assert ok("ghp_abc") and ok("gho_x") and ok("github_pat_11AB_cd")
+        assert ok("0123456789abcdef" * 2 + "01234567")  # classic 40-hex
+        assert not ok("") and not ok("lin_api_x") and not ok("per-source")
+        assert not ok("11111111-aaaa-bbbb-cccc-000000000001")
+
+    def test_no_repo_asks_for_one_in_the_users_words(self, monkeypatch):
+        """Shown on Intake's Connect step, where the only field is Repository:
+        no internal provider id, no doubled full stop."""
+        from backend.ticket_ingestion.config import TicketProviderConfig
+        from backend.ticket_ingestion.providers import github_issues as ghm
+
+        prov = ghm.GithubIssuesProvider(TicketProviderConfig(provider="github_issues"))
+        monkeypatch.setattr(prov, "resolve_repo", lambda: "")
+        with pytest.raises(ghm.ProviderError) as err:
+            prov._repo()
+        msg = str(err.value)
+        assert "Repository field" in msg and "owner/repo" in msg
+        assert "github_issues" not in msg and ".." not in msg
 
     async def test_the_one_chain_beats_a_stored_per_source_token(self, monkeypatch):
         from backend.ticket_ingestion.config import TicketProviderConfig
@@ -568,7 +618,7 @@ class TestPerSourceToken:
         S.update_settings(github={"token": "from-settings"})
         prov = ghm.GithubIssuesProvider(
             TicketProviderConfig(
-                provider="github_issues", project="o/r", api_token="per-source"
+                provider="github_issues", project="o/r", api_token="ghp_per_source"
             )
         )
         assert await prov._resolve_token() == "from-settings"

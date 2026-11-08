@@ -83,13 +83,18 @@ re-check matches a configured state against `state_id` or the state name,
 case-folded, and fails open when the ticket reports neither.
 
 **`github_issues` is the zero-config on-ramp** and therefore leads both the
-registry and the UI catalog (the Intake → Tickets tab seeds a newly added source
-with the catalog's first entry). It is the only source that needs **no fields
-at all**:
+registry and the UI catalog (it is the first tile of Intake → Tickets → **Add
+source**; nothing is picked for you — the flow starts on "Pick your tracker").
+It is the only source that needs **no fields at all**:
 
-- its **token** comes from the shared GitHub auth chain — `ticketing.api_token`,
-  else `github.token` in settings, else `$GH_TOKEN`/`$GITHUB_TOKEN`, else
-  `gh auth token` — so anyone who has run `gh auth login` is already done;
+- its **token** comes from the shared GitHub auth chain — `github.token` in
+  settings (Connect GitHub), else `$GH_TOKEN`/`$GITHUB_TOKEN`, else
+  `gh auth token` — so anyone who has run `gh auth login` is already done. A
+  per-source `api_token` an older release stored is read only after all of
+  those, and only when it is shaped like a GitHub token (`ghp_…`,
+  `github_pat_…`, 40 hex): a Test or listing with no token of its own is
+  filled from the *primary* source, so anything else would be another
+  tracker's secret on its way to api.github.com;
 - its **repository** resolves through `GithubIssuesProvider.resolve_repo()`:
   explicit `project` → the source's `repo_url` → the global `[repository].url` →
   this checkout's `origin` remote.
@@ -303,7 +308,9 @@ ticketing source first and by workflow-state bucket *within* the source, so
 same-named states from two sources are no longer merged; `GET /api/tickets`
 carries a `source_labels` entry for EVERY configured source — including ones
 that returned nothing or errored — because a source with no tickets still needs
-a heading to say so under.
+a heading to say so under. With NO source configured the listing asks no tracker at all
+(`PipelineConfig.ticketing_sources` stays empty — it used to hold a blank
+Shortcut stand-in, which the panel searched with an empty token on every open).
 
 Shortcut's `search_assigned_all()` applies the **same archived story + archived
 epic filter** as its poll (on both the owner-scoped and the any-assignee
@@ -755,8 +762,9 @@ plus one repo check, and a repository's **Test access** checks that the
 resolved credential reaches that particular repo
 (`POST /api/settings/test/github-repo`). The GitHub Issues source resolves
 through the same chain; a per-source `api_token` an older release stored is
-read as the last fallback this release only, with a one-time log notice and
-an *Action needed* row in Settings → Connections.
+read as the last fallback this release only (GitHub-shaped tokens only — see
+the on-ramp above), with a one-time log notice and an *Action needed* row in
+Settings → Connections.
 
 ## Issue-handling flow
 

@@ -21,7 +21,7 @@ vi.mock("../components/settings/useServerRestart", () => ({
   useServerRestart: () => ({ restarting: false, restart: vi.fn() }),
 }));
 
-const { PhoneAppRow, UrlList, computerRow, reachableRow } = await import("../components/settings/screens/Mobile");
+const { PhoneAppRow, UrlList, computerRow, phoneUrls, reachableRow } = await import("../components/settings/screens/Mobile");
 const { SetupChecklist } = await import("../components/settings/screens/SharedLink");
 type Shared = import("../components/settings/screens/SharedLink").SharedLinkState;
 type Step = import("../components/settings/screens/SharedLink").SharedLinkStep;
@@ -169,6 +169,19 @@ describe("UrlList", () => {
 
   it("renders nothing for no URLs", () => {
     expect(renderToStaticMarkup(createElement(UrlList, { urls: [] }))).toBe("");
+  });
+});
+
+describe("phoneUrls", () => {
+  it("drops this computer's loopback: a phone can't open it", () => {
+    const urls = [
+      { label: "Local", url: "http://127.0.0.1:8765/m" },
+      { label: "Localhost", url: "http://localhost:8765/m" },
+      { label: "Tailscale", url: "http://box.tail0000.ts.net:8765/m" },
+      { label: "Tailscale (IP)", url: "http://100.64.0.7:8765/m" },
+    ];
+    expect(phoneUrls(urls).map((u) => u.label)).toEqual(["Tailscale", "Tailscale (IP)"]);
+    expect(phoneUrls(undefined)).toEqual([]);
   });
 });
 

@@ -50,6 +50,12 @@ describe("PersonCardView", () => {
     expect(html).toContain(`data-person="${ID}"`);
   });
 
+  it("the git-author hint says which commits in plain words, not an internal label", () => {
+    const html = render(person());
+    expect(html).not.toContain("Goes as far as");
+    expect(html).toContain("when a session is set to commit or open a PR by itself");
+  });
+
   it("disables Save until something changed", () => {
     const p = person();
     expect(render(p)).toMatch(/id="person-save" disabled/);

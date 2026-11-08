@@ -19,6 +19,7 @@ import {
   sameRepos,
   sourceRepos,
 } from "../components/intake/repoList";
+import { code } from "./sourceText";
 
 const BACK = "git@github.com:acme/vnext-backend.git";
 const FRONT = "git@github.com:acme/vnext-frontend.git";
@@ -92,9 +93,16 @@ describe("the field", () => {
     expect(html).toContain(REPO_HELP_ONE.replace(/'/g, "&#x27;").slice(0, 40));
   });
 
-  it("flags a missing repo", () => {
-    expect(render(src())).toContain("tk-repo-url field-missing");
+  it("flags a missing repo only once it is refused — never red on arrival", () => {
+    expect(render(src())).not.toContain("field-missing");
+    const refused = renderToStaticMarkup(
+      createElement(RepoListField, { source: src(), onChange() {}, error: "Required" })
+    );
+    expect(refused).toContain("tk-repo-url field-missing");
+    expect(refused).toContain('aria-invalid="true"');
     expect(render(src({ repo_url: BACK }))).not.toContain("field-missing");
+    // Leaving it blank (blur) is the other way it turns red.
+    expect(code("components/intake/RepoListField.tsx")).toMatch(/onBlur=\{\(\) => \{\s*setTouched\(true\)/);
   });
 
   it("with several repos: one row each, with a hint and a Remove", () => {
