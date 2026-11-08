@@ -100,6 +100,7 @@ class TestGet:
             "p95_ms": 0,
             "expect_ms": speech_stream.FINAL_EXPECT_MS,
             "timeout_ms": int(speech_stream.FINAL_TIMEOUT_S * 1000),
+            "timeouts": 0,
         }
         assert sr["final_ms"] == speech_stream.FINAL_EXPECT_MS
 
@@ -292,7 +293,7 @@ class TestGet:
         monkeypatch.setattr(server._voice, "say_all", lambda: True)
         with TestClient(server.app):
             pass
-        # Recognition is never loaded at boot: it waits for a listening mode.
+        # Recognition is not local here: only the voice is warmed.
         assert calls == [("tts", 6.0)]
         calls.clear()
         monkeypatch.setattr(server._voice, "say_all", lambda: False)
@@ -300,9 +301,25 @@ class TestGet:
             pass
         assert calls == []  # Voice Lab waits for a voice client
 
+    def test_boot_warms_local_recognition(self, fakes, monkeypatch):
+        """``stt_backend = "local"``: its models load a few seconds after
+        boot (the router's lifespan), so the first phrase does not wait."""
+        monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")
+        calls: list = []
+        monkeypatch.setattr(
+            speech,
+            "warm_in_background",
+            lambda kind, delay_s=0.0: calls.append((kind, delay_s)),
+        )
+        monkeypatch.setattr(server._voice, "say_all", lambda: False)
+        _voice(stt_backend="local")
+        with TestClient(server.app):
+            pass
+        assert calls == [("stt", speech.BOOT_WARM_STT_S)]
+
     def test_boot_survives_a_failing_say_all(self, fakes, monkeypatch):
         """A marker that can't be read costs only the voice warm — never
-        startup (and recognition is not warmed at boot at all)."""
+        startup (and recognition is not local here: not warmed)."""
         monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")
         calls: list = []
         monkeypatch.setattr(
@@ -1136,18 +1153,19 @@ class TestStream:
         streaming.final_transcriber = final_transcriber
         sid = _open().json()["id"]
         streaming.passes += [_words("over")] * 2
-        _chunk(sid)  # loud: "over" is the tail
-        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # a pause: settles it
-        assert heard == []  # 0.3 s of quiet is not yet the end
-        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # 0.6 s: it starts
+        _chunk(sid)  # loud: "over" is the tail, but no quiet after it yet
+        assert heard == []
+        # A pause: "over" + quiet → it starts (before the pass that settles it).
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))
         for _ in range(200):  # the pass runs on its own thread
             if heard:
                 break
             time.sleep(0.005)
-        assert heard == [int(1.1 * 16000)]  # the phrase so far
+        assert heard == [int(0.8 * 16000)]  # the phrase so far
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))
         body = client.post("/api/voice/stream/%s/end" % sid).json()
         assert body["final"] == "Over." and body["final_early"] is True
-        assert heard == [int(1.1 * 16000)]  # not run again
+        assert heard == [int(0.8 * 16000)]  # not run again
         assert [c for c in streaming.calls if c[0] == "pass"][-1][1] == 12800
         # No fast pass after the final started, nor at the end.
         assert len([c for c in streaming.calls if c[0] == "pass"]) == 2
@@ -1285,11 +1303,12 @@ class TestInstallLocal:
             "error": "",
         }
 
-        def start():
+        def start(what=si.LOCAL):
             if box["running"]:
                 return False
             box["running"] = True
             box["starts"] += 1
+            box["what"] = what
             state.update(state="running", step="installing packages", started=1.0)
             return True
 
@@ -1327,6 +1346,21 @@ class TestInstallLocal:
         monkeypatch.setattr(_auth, "may_configure", _refuse)
         r = client.post("/api/voice/install-local")
         assert r.status_code == 403
+        assert install.box["starts"] == 0
+
+    def test_post_without_a_body_installs_the_local_models(self, install):
+        assert client.post("/api/voice/install-local").status_code == 200
+        assert install.box["what"] == "local"
+
+    def test_post_what_moonshine_installs_moonshine(self, install):
+        r = client.post("/api/voice/install-local", json={"what": "moonshine"})
+        assert r.status_code == 200
+        assert install.box["what"] == "moonshine"
+
+    def test_post_an_unknown_what_is_400(self, install):
+        r = client.post("/api/voice/install-local", json={"what": "parakeet"})
+        assert r.status_code == 400
+        assert "moonshine" in r.json()["error"]
         assert install.box["starts"] == 0
 
 

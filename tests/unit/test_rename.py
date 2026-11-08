@@ -460,6 +460,7 @@ NOT_SESSION_KEYED = {
     "state.json": "the engine itself — renamed by core.rename directly",
     "instances.json": "engine (legacy name)",
     "config.json": "engine config",
+    "streaming_config.json": "a Moonshine model file in the voice dir (core.speech_moonshine.MODEL_FILES), not a store",
     "settings.json": "settings (no per-session keys)",
     "install.json": "install record",
     "pricing.json": "model prices",

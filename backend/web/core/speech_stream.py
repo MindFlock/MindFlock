@@ -58,21 +58,27 @@ punctuation). The accurate pass is skipped for a phrase with less than
 final would not cover what was typed); one that fails or takes longer than
 :data:`FINAL_TIMEOUT_S` leaves the fast text standing.
 
-The accurate pass starts EARLY. Whisper's encoder costs the same for a
-second of speech as for thirty, so the pass is ~1 s on ``small`` whatever
-the phrase, and a client that acts on a radio word waits for it. Once
+The accurate pass starts EARLY. The pass is ~0.5–1 s on ``small``, and a
+client that acts on a radio word waits for it. Once
 :data:`EARLY_QUIET_SECONDS` of quiet follow the last loud frame the person
-has most likely finished — a pause between words is shorter — so
-:meth:`Stream.feed` starts the accurate pass on the phrase so far right then
-(``_start_early``, one per stream at a time), while the client waits out its
-own phrase-end silence. :meth:`Stream.finish` takes that result when no
-speech arrived after it started (``final_early``; ``final_wait_ms`` is how
-long it still had to wait, often 0) and starts a fresh pass otherwise.
-Speech after it makes it stale (withdrawn if it has not started yet).
+has most likely finished — or, sooner, once a fast pass hears the words end
+in a send, end or stop phrase ("…, over": ``voice_words.control_kind``) with
+:data:`RADIO_QUIET_SECONDS` of quiet after it — :meth:`Stream.feed` starts
+the accurate pass on the phrase so far right then (``_start_early``, one per
+stream at a time), while the client waits out its own phrase-end silence.
+:meth:`Stream.finish` takes that result when no speech arrived after it
+started (``final_early``; ``final_wait_ms`` is how long it still had to
+wait, often 0) and starts a fresh pass otherwise. Speech after it makes it
+stale: withdrawn if it has not started yet; a running one is left to finish
+(nothing stops a CTranslate2 call part-way) and still serves ``finish``
+when the fast tier heard no new word after it (a cough, a click).
 
 The two tiers share the CPU, so they are scheduled (:class:`Lane`, one per
 model: one job at a time, the accurate pass first, a stale job dropped
-before it runs), and once a phrase's accurate pass has started no fast
+before it runs — never two accurate passes at once: a stale or timed-out
+one that is running keeps its lane until it returns, and the next queues
+behind it rather than splitting the cores with it), and once a phrase's
+accurate pass has started no fast
 pass runs for it once one has heard :data:`SETTLE_SECONDS` of the quiet
 after the last loud frame (the pass that completes the last word): the
 fast words are only the fallback now, and the tail stands as last heard —
@@ -81,7 +87,10 @@ so a quiet chunk then runs no pass, and neither does ``finish``. Likewise
 previous one and no tail waits: there is nothing new to hear.
 
 The measured wait of recent finishes is kept (:func:`final_stats`) so
-``GET /api/voice`` can tell a client how long ``/end`` typically takes.
+``GET /api/voice`` can tell a client how long ``/end`` typically takes —
+the waits of passes that returned; a timed-out one is counted apart, never
+as its deadline. Every finish that ran the accurate pass logs one INFO line
+of its timings (fast passes, the final, the wait) to mine p50/p95 from.
 
 Pure: a stream is built on a ``transcribe(audio, prompt)`` callable
 (``core.speech.LocalSTT.stream_transcriber`` in the server, a scripted fake
@@ -133,6 +142,7 @@ __all__ = [
     "Lane",
     "MAX_STREAMS",
     "PHRASE_MAX_SECONDS",
+    "RADIO_QUIET_SECONDS",
     "RATE",
     "SILENCE_RMS",
     "SILENCE_SLACK",
@@ -267,11 +277,22 @@ ECHO_SECONDS = 0.2
 _ECHO_GAP = 0.1
 
 #: The quiet that must follow the last loud frame before the accurate pass
-#: starts early: longer than most pauses between words (so a breath
-#: mid-sentence does not start a pass that the next word makes stale), and
-#: well short of the clients' 1.1 s phrase-end silence (``SILENCE_MS`` in
-#: voiceDesktop.ts / mobile.js), so the pass still gets ~0.6 s head start.
-EARLY_QUIET_SECONDS = 0.5
+#: starts early. The clients end a phrase without a radio word after 0.9 to
+#: 1.5 s of quiet (``turn.hold_ms``, ``core.speech_turn``), so 0.3 s gives
+#: the pass a 0.6 s or longer head start; a pause between words that starts
+#: one costs nothing but the cores (the next word makes it stale, and it
+#: keeps the accurate lane only until it returns). It was 0.5 s, which the
+#: "over" path, ended by the clients after 100 to 250 ms, never reached.
+EARLY_QUIET_SECONDS = 0.3
+#: The quiet after the last loud frame that starts the accurate pass when
+#: a fast pass heard the words end in a send, end or stop phrase
+#: (:data:`_RADIO_KINDS`): one 100 ms frame, so the radio word's own last
+#: syllable is in the audio. The desktop ends such a phrase after 100 ms of
+#: quiet, the phone after 250 ms, the server's turn verdict after 350 ms.
+RADIO_QUIET_SECONDS = 0.1
+#: The ``voice_words.control_kind`` kinds that start the accurate pass at
+#: once: those whose words the client sends (or keeps) and waits on.
+_RADIO_KINDS = frozenset({"send", "end", "stop"})
 #: How far past the last loud frame a fast pass must have heard before no
 #: more are run once the accurate pass started (``Stream._all_heard``): the
 #: bench's fast-tier WER went 28% → 36% when the pass over the speech's own
@@ -451,11 +472,15 @@ class Lane:
       the accurate pass is on its way, the fast words are only a fallback;
     * :meth:`cancel` withdraws a queued job (a finish that stopped waiting,
       an early pass the speech made stale), and ABANDONS a running one: the
-      lane is free for the next job at once (a final that timed out on a
-      long phrase blocked the next phrase's final for seconds), and the
       call stops at its next check of :func:`abandoned`, if it makes one.
-      The abandoned call still uses the cores until then — the price of
-      not waiting for it;
+      With ``release`` the lane is free for the next job at once; without
+      it (the accurate passes: ``_Early``) the abandoned call keeps the
+      lane until it returns. A CTranslate2 call on a short phrase makes no
+      check — it is one segment — so a released lane only ran the next
+      pass beside it, both at half speed (the audit's 99 logged "accurate
+      pass took over 1.5s"); the accurate pass's decoding is bounded
+      instead (``core.speech.FINAL_TOKENS``, temperature 0), so the wait
+      behind one is short;
     * no wait is unbounded: a job gives up after :data:`LANE_WAIT_S` of its
       kind (withdrawn, :class:`Skipped`), and a running job older than
       :data:`LANE_STUCK_S` is abandoned by the next waiter."""
@@ -545,13 +570,14 @@ class Lane:
         """:meth:`submit` then :meth:`run_job`."""
         return self.run_job(self.submit(kind, owner), fn)
 
-    def cancel(self, job: Job, why: str = "withdrawn") -> bool:
+    def cancel(self, job: Job, why: str = "withdrawn", release: bool = True) -> bool:
         """Drop ``job`` if it has not started → ``True``; abandon it if it
-        is running (see the class doc) → ``False``."""
+        is running (see the class doc; ``release``: free the lane now, not
+        when the call returns) → ``False``."""
         with self._cond:
             if job.state == "running" and not job.abandoned:
                 job.abandoned, job.why = True, why
-                if self._running is job:
+                if release and self._running is job:
                     self._running = None
                 self._cond.notify_all()
             if job.state != "queued":
@@ -640,6 +666,11 @@ class Stream:
         self.last_ms = 0
         #: Seconds of audio the last feed's pass decoded (0 when it ran none).
         self.last_window_s = 0.0
+        #: Every fast pass's ms this phrase (the finish's timing log).
+        self.pass_ms: List[int] = []
+        #: How the last finish's accurate pass ended: ``ok``, ``timeout``,
+        #: ``skipped``, ``error`` or ``""`` (none ran).
+        self.final_outcome = ""
         self.touched = _now()
         #: Who opened it (:func:`open_stream`), ``""`` when unknown.
         self.client = ""
@@ -714,7 +745,7 @@ class Stream:
                 return "", ""
             self._cap()
             if quiet:
-                self._start_early()
+                self._start_early(RADIO_QUIET_SECONDS if self._radio_end() else None)
             else:
                 self._unheard = True
                 self._stale_early()
@@ -729,6 +760,8 @@ class Stream:
             self._remember(n)
             self._tail = hyp[n:]
             self._prune()
+            if self._radio_end():
+                self._start_early(RADIO_QUIET_SECONDS)
             self.touched = _now()
             return self._pay(new), _join(self._tail)
 
@@ -765,9 +798,9 @@ class Stream:
             run = run and not self.phrase_trimmed
             run = run and self.voiced_s >= FINAL_MIN_SECONDS
             job: Optional[_Early] = None
-            if run and (early is None or early.stale):
+            if run and not self._covers(early):
                 # The accurate pass first: the fast flush is only its fallback.
-                job = _Early(self._accurate, phrase, owner=self)  # type: ignore[arg-type]
+                job = self._fresh(phrase, early)
             if run and self._all_heard():
                 # Every loud frame was heard by a fast pass and the accurate
                 # pass is on its way: the tail stands as heard, no flush.
@@ -788,7 +821,11 @@ class Stream:
             self._audio = array("f")
             out: dict = {"committed": self._pay(rest), "partial": ""}
             fast = self.text
+            if run and job is None and not self._covers(early):
+                # The flush heard a word the stale pass's audio has not.
+                job = self._fresh(phrase, early)
         self.final_early = False
+        self.final_outcome = ""
         if not run:
             final = ""
         elif job is None:
@@ -796,7 +833,9 @@ class Stream:
         else:
             final = self._final(job)
         if run:
-            _record(self.final_wait_ms)
+            _record(self.final_wait_ms, self.final_outcome)
+            self._log_timing(len(phrase) / RATE)
+        self.pass_ms = []
         if final:
             out.update(
                 final=final,
@@ -806,6 +845,47 @@ class Stream:
                 same=same_text(final, fast),
             )
         return out
+
+    def _fresh(self, phrase: array, early: Optional["_Early"]) -> "_Early":
+        """A new accurate pass over ``phrase`` for :meth:`finish`; the early
+        one it replaces is withdrawn if it has not started (a running one
+        keeps the lane: the new one queues behind it)."""
+        if early is not None:
+            early.withdraw("a fresh pass replaced it")
+        return _Early(self._accurate, phrase, owner=self)  # type: ignore[arg-type]
+
+    def _covers(self, early: Optional["_Early"]) -> bool:
+        """Whether the early pass ``early`` serves :meth:`finish`: it is not
+        stale, or it went stale yet the fast tier has heard no word since
+        (the words now are the words then: what made it stale was a cough,
+        a click, the room) and it was not withdrawn before it ran."""
+        if early is None:
+            return False
+        if not early.stale:
+            return True
+        if early.heard is None or early.job.state == "dropped":
+            return False
+        return self._heard_words() == early.heard
+
+    def _heard_words(self) -> List[str]:
+        return [_norm(w[0]) for w in self._committed + self._tail]
+
+    def _log_timing(self, seconds: float) -> None:
+        """One INFO line per finish that ran the accurate pass: the
+        phrase's fast passes and the final, to mine p50/p95 from the log."""
+        ms = sorted(self.pass_ms)
+        _logger.info(
+            "voice stream timing: phrase %.1fs, %d fast passes (p50 %d, max %d ms),"
+            " final %s %d ms, waited %d ms%s",
+            seconds,
+            len(ms),
+            ms[len(ms) // 2] if ms else 0,
+            ms[-1] if ms else 0,
+            self.final_outcome or "none",
+            self.final_ms,
+            self.final_wait_ms,
+            ", early" if self.final_early else "",
+        )
 
     # -- internals (called under the lock) -------------------------------- #
     def _mark(self, samples: Sequence[float]) -> None:
@@ -832,29 +912,52 @@ class Stream:
                 )
             self.phrase_trimmed = True
 
-    def _start_early(self) -> None:
-        """A quiet chunk arrived: start the accurate pass on the phrase so
-        far (a copy) once :data:`EARLY_QUIET_SECONDS` of quiet follow the
-        last loud frame — unless one that is still good is queued, running
-        or done, the phrase is too short or too long for a pass, or there is
-        none. A stale one still running keeps the lane; the new one queues
-        behind it. Under the lock; the pass runs on its own daemon thread."""
+    def _start_early(self, quiet: Optional[float] = None) -> None:
+        """Start the accurate pass on the phrase so far (a copy) once
+        ``quiet`` seconds (default :data:`EARLY_QUIET_SECONDS`; a quiet
+        chunk, or :data:`RADIO_QUIET_SECONDS` after a pass heard a radio
+        word: :meth:`_radio_end`) follow the last loud frame — unless one
+        that is still good is queued, running or done, the phrase is too
+        short or too long for a pass, or there is none. A stale one still
+        running keeps the lane; the new one queues behind it. Under the
+        lock; the pass runs on its own daemon thread."""
         if self._accurate is None or self.phrase_trimmed:
             return
-        if self.voiced_s < FINAL_MIN_SECONDS:
+        if self.voiced_s < FINAL_MIN_SECONDS or self._loud_end < 0:
             return
-        if self._fed - self._loud_end < EARLY_QUIET_SECONDS:
+        need = EARLY_QUIET_SECONDS if quiet is None else quiet
+        if self._fed - self._loud_end < need - 1e-6:  # float stream times
             return
         if self._early is not None and not self._early.stale:
             return
+        if self._early is not None:
+            self._early.withdraw("a newer early pass replaced it")
         self._early = _Early(self._accurate, array("f", self._phrase), owner=self)
 
     def _stale_early(self) -> None:
-        """Speech arrived after the early pass started: its text would not
-        cover the phrase. Withdrawn if it has not started yet."""
+        """Speech arrived after the early pass started: its text may not
+        cover the phrase. Withdrawn if it has not started yet; a running
+        one is left to finish (it keeps its lane: see :class:`Lane`) with
+        the words heard so far noted — :meth:`finish` still takes it when
+        no new word follows (:meth:`_covers`)."""
         if self._early is not None and not self._early.stale:
             self._early.stale = True
-            self._early.cancel("the speech went on")
+            self._early.heard = self._heard_words()
+            self._early.withdraw("the speech went on")
+
+    def _radio_end(self) -> bool:
+        """Whether the words so far end in a send, end or stop phrase
+        (:data:`_RADIO_KINDS`, ``voice_words.control_kind`` with
+        :attr:`words`): the person is done, and the client will act on it
+        within 100–350 ms — the accurate pass should start now."""
+        if self._accurate is None or not (self._tail or self._committed):
+            return False
+        said = (self._committed + self._tail)[-_CONTROL_WORDS:]
+        try:
+            kind = _voice_words.control_kind(_join(said), self.words)
+        except Exception:  # noqa: BLE001 — a hint, never a failure
+            return False
+        return kind in _RADIO_KINDS
 
     def _all_heard(self) -> bool:
         """A fast pass heard every loud frame so far and
@@ -870,52 +973,64 @@ class Stream:
         (it would only re-agree on the tail, on the cores the final needs)."""
         return self._early is not None and not self._early.stale and self._all_heard()
 
-    def _await(self, early: "_Early") -> str:
-        """The early pass's text, waited for at most :data:`FINAL_TIMEOUT_S`
-        more → ``""`` when it failed or timed out (logged). Not under the
-        lock. Sets ``final_ms`` (its whole duration), ``final_wait_ms`` and
+    def _await(self, early: "_Early", wait: Optional[float] = None) -> str:
+        """The early pass's text, waited for at most ``wait`` seconds more
+        (default :data:`FINAL_TIMEOUT_S`) → ``""`` when it failed or timed
+        out (logged). Not under the lock. Sets ``final_ms`` (its own run
+        time once it ran, else its whole age), ``final_wait_ms`` and
         ``final_early``."""
         started = time.monotonic()
-        early.thread.join(FINAL_TIMEOUT_S)
+        self._wait_cap = FINAL_TIMEOUT_S if wait is None else wait
+        early.thread.join(self._wait_cap)
         self.final_wait_ms = int((time.monotonic() - started) * 1000)
-        self.final_ms = int((time.monotonic() - early.started) * 1000)
+        self.final_ms = early.ms()
         self.final_early = True
-        return self._outcome(early, early.seconds)
+        return self._outcome(early)
 
     def _final(self, job: "_Early") -> str:
         """The accurate pass ``finish`` started (``job``), waited for at most
         :data:`FINAL_TIMEOUT_S` from its start → its text, ``""`` when it
         failed or timed out (logged; a late result is dropped). Not under
         the lock."""
+        self._wait_cap = FINAL_TIMEOUT_S
         job.thread.join(max(0.0, FINAL_TIMEOUT_S - (time.monotonic() - job.started)))
-        self.final_ms = int((time.monotonic() - job.started) * 1000)
-        self.final_wait_ms = self.final_ms
-        return self._outcome(job, job.seconds)
+        self.final_wait_ms = int((time.monotonic() - job.started) * 1000)
+        self.final_ms = job.ms()
+        return self._outcome(job)
 
-    @staticmethod
-    def _outcome(early: "_Early", seconds: float) -> str:
+    def _outcome(self, early: "_Early") -> str:
+        """``early``'s text, or ``""`` with :attr:`final_outcome` saying why
+        (logged): ``timeout`` (still queued or running: withdrawn, or
+        abandoned keeping its lane), ``skipped``, ``error``."""
         if early.thread.is_alive():
             queued = early.cancel("its finish stopped waiting")
+            self.final_outcome = "timeout"
             _logger.warning(
-                "voice stream: the accurate pass took over %.1fs on %.1fs of"
-                " audio (%s); the fast text stands",
-                FINAL_TIMEOUT_S,
-                seconds,
+                "voice stream: no accurate pass within %.1fs of the end on %.1fs"
+                " of audio (%s, %s; %d ms since it was asked for); the fast text"
+                " stands",
+                getattr(self, "_wait_cap", FINAL_TIMEOUT_S),
+                early.seconds,
+                "the early one" if self.final_early else "a fresh one",
                 "never started: the model was busy" if queued else "still running",
+                int((time.monotonic() - early.started) * 1000),
             )
             return ""
         if "skipped" in early.box:
+            self.final_outcome = "skipped"
             _logger.info(
                 "voice stream: the accurate pass was dropped (%s); the fast text stands",
                 early.box["skipped"],
             )
             return ""
         if "error" in early.box:
+            self.final_outcome = "error"
             _logger.warning(
                 "voice stream: the accurate pass failed (%s); the fast text stands",
                 early.box["error"],
             )
             return ""
+        self.final_outcome = "ok"
         return str(early.box.get("text") or "").strip()
 
     def _agreed(self, hyp: List[Word]) -> int:
@@ -977,6 +1092,7 @@ class Stream:
         finally:
             if self.last_window_s:
                 self.last_ms = int((time.monotonic() - started) * 1000)
+                self.pass_ms.append(self.last_ms)
         self._unheard = False  # a failed pass leaves the audio unheard
         self._heard_end = self._fed
         hyp: List[Word] = []
@@ -1113,13 +1229,15 @@ class _Early:
     :data:`FINAL` of ``owner``) and run on its own daemon thread: ``box``
     gets ``text``, ``error`` or ``skipped`` (the lane dropped it before it
     ran); ``stale`` is set when speech arrives after it started (its text
-    would not cover the phrase)."""
+    may not cover the phrase), ``heard`` to the fast words then."""
 
     def __init__(self, accurate: Accurate, phrase: array, owner: object = None):
         self.box: dict = {}
         self.stale = False
+        self.heard: Optional[List[str]] = None
         self.seconds = len(phrase) / RATE
         self.started = time.monotonic()
+        self.ended = 0.0
         self.lane = _lane_of(accurate, "final")
         self.job = self.lane.submit(FINAL, owner)
 
@@ -1130,6 +1248,8 @@ class _Early:
                 self.box["skipped"] = str(err) or "dropped"
             except Exception as err:  # noqa: BLE001 — the fast text stands
                 self.box["error"] = err
+            finally:
+                self.ended = time.monotonic()
 
         self.thread = threading.Thread(target=run, name="voice-final", daemon=True)
         self.thread.start()
@@ -1138,23 +1258,52 @@ class _Early:
     def done(self) -> bool:
         return not self.thread.is_alive()
 
-    def cancel(self, why: str) -> bool:
-        """Withdraw the pass if it has not started → whether it was."""
+    def ms(self) -> int:
+        """The pass's own run time (to now while it runs); its age when it
+        never started."""
+        began = self.job.started or self.started
+        end = self.ended or time.monotonic()
+        return int(max(0.0, end - began) * 1000)
+
+    def withdraw(self, why: str) -> bool:
+        """Drop the pass if it has not started → whether it was; a running
+        one is left alone (its result may still serve)."""
+        if self.job.state != "queued":
+            return False
         return self.lane.cancel(self.job, why)
 
+    def cancel(self, why: str) -> bool:
+        """Withdraw the pass if it has not started → whether it was; else
+        abandon it (it stops at its next segment), KEEPING its lane until it
+        returns: two accurate passes never run at once (:class:`Lane`)."""
+        return self.lane.cancel(self.job, why, release=False)
 
+
+#: The waits of the last :data:`STATS_KEEP` accurate passes that returned.
 _WAITS: "collections.deque[int]" = collections.deque(maxlen=STATS_KEEP)
+#: Whether each of the last :data:`STATS_KEEP` finishes that asked for an
+#: accurate pass timed out (``True``) or not.
+_TIMEOUTS: "collections.deque[bool]" = collections.deque(maxlen=STATS_KEEP)
 
 
-def _record(wait_ms: int) -> None:
-    _WAITS.append(int(wait_ms))
+def _record(wait_ms: int, outcome: str = "ok") -> None:
+    """Note one finish's accurate pass: its wait when it returned (``ok``,
+    ``error``: a failure is quick), a timeout only as a count — recording
+    the deadline as a wait pinned :func:`final_stats`'s median, and the
+    clients' "over" wait with it, at the timeout. A ``skipped`` pass (the
+    lane dropped it) records nothing but the miss."""
+    _TIMEOUTS.append(outcome == "timeout")
+    if outcome in ("ok", "error"):
+        _WAITS.append(int(wait_ms))
 
 
 def final_stats() -> dict:
     """How long :meth:`Stream.finish` waited for the accurate pass over the
-    last :data:`STATS_KEEP` phrases that ran one → ``{"samples", "typical_ms"
-    (the median), "p95_ms", "expect_ms", "timeout_ms"}``; the two percentiles
-    are 0 before the first. ``expect_ms`` is what a client should budget for
+    last :data:`STATS_KEEP` phrases whose pass returned → ``{"samples",
+    "typical_ms" (the median), "p95_ms", "expect_ms", "timeout_ms",
+    "timeouts" (how many of the last :data:`STATS_KEEP` finishes gave up on
+    it: counted, never as a wait)}``; the two percentiles are 0 before the
+    first. ``expect_ms`` is what a client should budget for
     ``/end``: once :data:`STATS_MIN` phrases are in, the median plus
     :data:`EXPECT_MARGIN_MS` or twice the median absolute deviation, whichever
     is more — robust, where the p95 sits at the timeout as soon as one wait
@@ -1181,6 +1330,7 @@ def final_stats() -> dict:
         "p95_ms": pct(0.95),
         "expect_ms": max(min(EXPECT_FLOOR_MS, timeout), min(expect, timeout)),
         "timeout_ms": timeout,
+        "timeouts": sum(_TIMEOUTS),
     }
 
 
@@ -1286,6 +1436,7 @@ def clear() -> None:
     with _REG_LOCK:
         _STREAMS.clear()
         _WAITS.clear()
+        _TIMEOUTS.clear()
         if _TIMER is not None:
             _TIMER.cancel()
             _TIMER = None

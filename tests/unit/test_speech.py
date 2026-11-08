@@ -1664,15 +1664,16 @@ class TestResident:
         speech.unload_all()
         assert speech.loaded() == []
 
-    def test_nobody_listening_unloads_it(self, both, clock):
+    def test_nobody_listening_unloads_all_but_the_stream_model(self, both, clock):
         speech._LISTENING.clear()
         _set(stt_backend="local")
         speech.warm("stt")
         clock[0] += speech.IDLE_SECONDS - 1
         assert speech.sweep_idle() == []  # a recent phrase keeps it a while
         clock[0] += 2
-        assert speech.sweep_idle() == self.WHISPERS
-        assert speech.loaded() == []
+        # The streaming model (~150 MB) stays: reloading it cost ~2 s.
+        assert speech.sweep_idle() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:base.en"]
 
     def test_a_lapsed_lease_unloads_it(self, both, clock):
         speech._LISTENING.clear()
@@ -1684,8 +1685,9 @@ class TestResident:
         assert speech.listening() is True
         clock[0] += speech.IDLE_SECONDS  # the page went away long ago
         assert speech.listening() is False
-        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.sweep_idle() == ["whisper:small"]
         assert speech.stt_loaded() is False
+        assert speech.loaded() == ["whisper:base.en"]
 
     def test_a_lease_ends_on_off_and_on_unload_all(self, both):
         speech._LISTENING.clear()
@@ -1710,6 +1712,28 @@ class TestResident:
         monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
         assert "memory is low" in speech.warm("stt")
         assert speech.loaded() == []
+        assert speech.LocalSTT().ready()[0] is False
+
+    def test_the_memory_guard_never_refuses_a_loaded_model(self, both, monkeypatch):
+        """Under pressure every fast pass raised, so the client dropped to
+        clip mode — whose clips were refused the same way — though nothing
+        needed loading."""
+        _set(stt_backend="local")
+        speech.warm("stt")
+        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
+        stt = speech.LocalSTT()
+        assert stt.ready()[0] is True
+        assert stt._model("base.en") is not None
+        with pytest.raises(speech.SpeechError, match="memory is low"):
+            stt._model("medium")  # not loaded: the guard holds
+
+    def test_shedding_keeps_the_stream_model(self, both, clock):
+        speech._LISTENING.clear()
+        _set(stt_backend="local")
+        speech.warm("stt")
+        clock[0] += 500
+        assert speech.shed_for_memory() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:base.en"]
 
 
 class TestWarmVoice:

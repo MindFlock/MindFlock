@@ -62,6 +62,17 @@ const {
   INSTALL_DONE,
   INSTALL_LABEL,
   INSTALL_REFUSED,
+  MOONSHINE_DONE,
+  MOONSHINE_LABEL,
+  MOONSHINE_NEXT,
+  INSTALL_NEXT_NET,
+  installNextDisk,
+  installNextStep,
+  hereDetail,
+  MOONSHINE_WHY,
+  liveWordsLine,
+  moonshineOffer,
+  moonshineView,
   basicRecognizer,
   installLocalModels,
   installOffer,
@@ -99,13 +110,13 @@ function model(voice: Record<string, unknown>): Model {
   };
 }
 
-function render(voice: Record<string, unknown>, view: VoiceView | null = null, install?: InstallProps): string {
+function render(voice: Record<string, unknown>, view: VoiceView | null = null, install?: InstallProps, fast?: InstallProps): string {
   const m = model(voice);
   return renderToStaticMarkup(
     createElement(
       SettingsCtx.Provider,
       { value: m },
-      createElement(VoiceSectionView, { model: m, view, onClearKey: () => {}, install })
+      createElement(VoiceSectionView, { model: m, view, onClearKey: () => {}, install, fast })
     )
   );
 }
@@ -201,13 +212,19 @@ describe("readinessLine", () => {
     });
   });
 
-  it("the built-in engine's own sentence is the detail", () => {
-    expect(readinessLine("tts", BUILTIN, "server", "system").text).toBe(
-      "Server voice ready (system): Windows via WSL — recognizer en-US, voices David, Zira."
-    );
+  it("the built-in engine: each kind's own detail, never the sentence about both", () => {
+    expect(readinessLine("tts", BUILTIN, "server", "system").text).toBe("Server voice ready (system): Windows voices.");
     // A blank backend the server resolved to the built-in engine reads the same.
     expect(readinessLine("stt", BUILTIN, "server").text).toBe(
-      "Server recognition ready (system): Windows via WSL — recognizer en-US, voices David, Zira."
+      "Server recognition ready (system): Windows speech recognizer en-US."
+    );
+    // The real server's sentence covers both kinds: neither line repeats it.
+    const both: VoiceView = { ...BUILTIN, system: { ...SYSTEM, detail: "Recognition: Windows (from WSL) speech recognition (en-US). Voice: Windows (from WSL) voices: David, Zira." } };
+    for (const kind of ["stt", "tts"] as const) expect(readinessLine(kind, both, "server", "system").text).not.toContain("Recognition: ");
+    // No per-kind detail: the built-in engine's sentence is all there is.
+    const bare: VoiceView = { server_ready: { tts: true, tts_backend: "system" }, system: SYSTEM };
+    expect(readinessLine("tts", bare, "server", "system").text).toBe(
+      "Server voice ready (system): Windows via WSL — recognizer en-US, voices David, Zira."
     );
     const linux: VoiceView = {
       server_ready: { stt: false, stt_detail: "nothing ready" },
@@ -324,7 +341,7 @@ describe("VoiceSectionView", () => {
     expect(html).toMatch(
       /<select data-group="voice" data-field="tts_voice"><option value="" selected="">The system&#x27;s default<\/option><option value="Microsoft David Desktop">/
     );
-    expect(html).toContain("Server voice ready (system): Windows via WSL — recognizer en-US, voices David, Zira.");
+    expect(html).toContain("Server voice ready (system): Windows voices.");
     expect(tag(html, "voice-try-say")).not.toContain("disabled");
     expect(html).toContain("Say a test sentence");
     expect(html).toContain("Try recognition");
@@ -632,7 +649,10 @@ describe("the local-models installer", () => {
     it("a failed install ends with the server's error", async () => {
       const { call } = server(() => ({}), [{ state: "failed", error: "No space left on device", log: [] }]);
       const end = await installLocalModels(() => {}, { call, wait: noWait });
-      expect(installView(end, true)).toMatchObject({ button: "retry", text: "Couldn't install: No space left on device." });
+      expect(installView(end, true)).toMatchObject({
+        button: "retry",
+        text: "Couldn't install: No space left on device. " + installNextDisk("about 300 MB"),
+      });
     });
 
     it("409: says it is already installing and follows that install", async () => {
@@ -772,7 +792,8 @@ describe("Try it → Recognition offers the install when missing local models ar
     for (const html of [hearRow(render({ stt_backend: "local" }, MISSING)), hearRow(render({ stt_backend: "local" }, MISSING, inst({ state: "idle" }, { supported: false })))]) {
       expect(html).not.toContain("voice-try-install");
       expect(tag(html, "voice-try-hear")).toContain("disabled");
-      expect(html).toContain("No recognition is ready on the server: local models not installed: Settings → Voice installs them.");
+      // On Settings → Voice itself the server's "Settings → Voice installs them" points at the button.
+      expect(html).toContain("No recognition is ready on the server: local models not installed — install them under Recognition.");
     }
   });
 
@@ -793,5 +814,156 @@ describe("Try it → Recognition offers the install when missing local models ar
     expect(html).toContain('id="voice-try-hear"');
     // (Disabled here only because node has no microphone.)
     expect(tag(html, "voice-try-hear")).toContain("can&#x27;t record");
+  });
+});
+
+describe("Live words: Moonshine or whisper, and the fast-recognition installer", () => {
+  /** Local recognition streams on whisper; Moonshine is not installed. */
+  const WHISPER: VoiceView = {
+    ...BUILTIN,
+    server_ready: { ...BUILTIN.server_ready, stt: true, stt_backend: "local", stt_detail: "faster-whisper small", stt_stream: true },
+    stream_engine: "whisper",
+    stream_model: "base.en",
+    stream_label: "Whisper base.en",
+    moonshine: { available: false, reason: "moonshine-voice is not installed" },
+  };
+  const MOON: VoiceView = {
+    ...WHISPER,
+    stream_engine: "moonshine",
+    stream_model: "tiny-streaming",
+    stream_label: "Moonshine",
+    moonshine: { available: true, reason: "" },
+  };
+  const fast = (status: InstallStatus = { state: "idle" }, more: Partial<InstallProps> = {}): InstallProps => ({
+    supported: true,
+    status,
+    touched: false,
+    onInstall: () => {},
+    ...more,
+  });
+  const esc = (t: string) => t.replace(/'/g, "&#x27;");
+
+  it("liveWordsLine names the engine that types the words, nothing when recognition doesn't stream", () => {
+    expect(liveWordsLine(MOON)).toBe("Live words: Moonshine");
+    expect(liveWordsLine(WHISPER)).toBe("Live words: Whisper base.en");
+    // A server with the engine but no label.
+    expect(liveWordsLine({ ...MOON, stream_label: undefined })).toBe("Live words: Moonshine");
+    expect(liveWordsLine({ ...WHISPER, stream_label: undefined })).toBe("Live words: Whisper base.en");
+    expect(liveWordsLine(BUILTIN)).toBe("");
+    expect(liveWordsLine(null)).toBe("");
+  });
+
+  it("moonshineOffer: local streaming without Moonshine, unless a whisper model was picked", () => {
+    expect(moonshineOffer(WHISPER, "")).toBe(true);
+    expect(moonshineOffer(WHISPER, undefined)).toBe(true);
+    expect(moonshineOffer(WHISPER, "moonshine")).toBe(true);
+    expect(moonshineOffer(WHISPER, "base.en")).toBe(false);
+    expect(moonshineOffer(MOON, "")).toBe(false);
+    expect(moonshineOffer({ ...WHISPER, moonshine: undefined }, "")).toBe(false); // an older server
+    expect(moonshineOffer(BUILTIN, "")).toBe(false);
+  });
+
+  it("whisper live: the line, why, and the one-click install under Recognition", () => {
+    const html = render({ stt_backend: "local" }, WHISPER, undefined, fast());
+    expect(html).toMatch(/data-kind="stt"[\s\S]*id="voice-live-words"[^>]*>Live words: Whisper base.en<[\s\S]*data-kind="tts"/);
+    expect(html).toContain(esc(MOONSHINE_WHY));
+    expect(tag(html, "voice-moonshine-btn")).not.toContain("disabled");
+    expect(html).toContain(MOONSHINE_LABEL);
+  });
+
+  it("Moonshine live: only the line, no button", () => {
+    const html = render({ stt_backend: "local" }, MOON, undefined, fast());
+    expect(html).toMatch(/id="voice-live-words"[^>]*>Live words: Moonshine</);
+    expect(html).not.toContain('id="voice-moonshine-btn"');
+  });
+
+  it("an explicit whisper model shows the line without the offer", () => {
+    const html = render({ stt_backend: "local", stt_stream_model: "small.en" }, { ...WHISPER, stream_label: "Whisper small.en" }, undefined, fast());
+    expect(html).toContain("Live words: Whisper small.en");
+    expect(html).not.toContain('id="voice-moonshine-btn"');
+  });
+
+  it("no line and no button when recognition doesn't stream", () => {
+    const html = render({}, BUILTIN, undefined, fast());
+    expect(html).not.toContain("voice-live-words");
+    expect(html).not.toContain("voice-moonshine");
+  });
+
+  it("running, failed with a next step, done", () => {
+    const running = render({ stt_backend: "local" }, WHISPER, undefined, fast({ state: "running", step: "downloading streaming model (moonshine tiny-streaming)" }, { touched: true }));
+    expect(tag(running, "voice-moonshine-btn")).toContain("disabled");
+    expect(running).toContain("Installing: downloading streaming model (moonshine tiny-streaming)");
+    const failed = render({ stt_backend: "local" }, WHISPER, undefined, fast({ state: "failed", error: "uv exited 1" }, { touched: true }));
+    expect(failed).toContain(esc("Couldn't install: uv exited 1. " + MOONSHINE_NEXT));
+    // Never sends you to doctor (whose fix is this very button).
+    expect(failed).not.toContain("doctor");
+    // A network failure says what to check, at Moonshine's size for a full disk.
+    const net = render({ stt_backend: "local" }, WHISPER, undefined, fast({ state: "failed", error: "installing packages failed: dns error: failed to lookup address information" }, { touched: true }));
+    expect(net).toContain(esc(INSTALL_NEXT_NET + " " + MOONSHINE_NEXT));
+    expect(moonshineView({ state: "failed", error: "No space left on device" }, true).text).toContain(installNextDisk("about 200 MB"));
+    expect(running).toContain('aria-label="Installing fast recognition"');
+    expect(failed).toMatch(/id="voice-moonshine-btn"[^>]*>Try again</);
+    // Done: the verdict re-read says Moonshine is live; the outcome stays said.
+    const done = render({ stt_backend: "local" }, MOON, undefined, fast({ state: "done" }, { touched: true }));
+    expect(done).toContain(MOONSHINE_DONE + ".");
+    expect(done).toContain("Live words: Moonshine");
+    expect(done).not.toContain('id="voice-moonshine-btn"');
+  });
+
+  it("a non-owner gets the refusal, not the next step", () => {
+    expect(moonshineView({ state: "idle" }, false)).toMatchObject({ button: "install", disabled: true });
+    expect(moonshineView({ state: "failed", error: "x" }, false).text).not.toContain(MOONSHINE_NEXT);
+    const html = render({ stt_backend: "local" }, { ...WHISPER, configure_allowed: false }, undefined, fast());
+    expect(tag(html, "voice-moonshine-btn")).toContain("disabled");
+  });
+
+  it("installLocalModels({what: 'moonshine'}) posts what, the local install posts no body", async () => {
+    const calls: Array<[string, unknown]> = [];
+    const call = (async (path: string, opts?: unknown) => {
+      calls.push([path, opts]);
+      return (opts as RequestInit | undefined)?.method === "POST" ? {} : { state: "done", what: "moonshine" };
+    }) as NonNullable<NonNullable<Parameters<typeof installLocalModels>[1]>["call"]>;
+    const end = await installLocalModels(() => {}, { call, wait: async () => {}, what: "moonshine" });
+    expect(calls[0]).toEqual(["/api/voice/install-local", { method: "POST", json: { what: "moonshine" } }]);
+    expect(end.state).toBe("done");
+    calls.length = 0;
+    await installLocalModels(() => {}, { call, wait: async () => {} });
+    expect(calls[0]).toEqual(["/api/voice/install-local", { method: "POST" }]);
+  });
+});
+
+describe("polish pass 5: what a failed install and a missing engine say next", () => {
+  it("installNextStep reads the error: network, a full disk, or nothing to add", () => {
+    expect(installNextStep("installing packages failed: dns error: failed to lookup address information", "x")).toBe(INSTALL_NEXT_NET);
+    expect(installNextStep("downloading voice failed: error: Connection refused", "x")).toBe(INSTALL_NEXT_NET);
+    expect(installNextStep("installing packages failed: OSError: [Errno 28] No space left on device", "about 300 MB")).toBe(
+      installNextDisk("about 300 MB")
+    );
+    expect(installNextStep("uv exited 1", "x")).toBe("");
+    expect(installNextStep(null, "x")).toBe("");
+  });
+
+  it("the server's 'Settings → Voice installs them' points at the button on this screen", () => {
+    const d = "local models not installed: Settings → Voice installs them";
+    expect(hereDetail("stt", d)).toBe("local models not installed — install them below");
+    expect(hereDetail("tts", d)).toBe("local models not installed — install them under Recognition");
+    expect(hereDetail("tts", "gpt-4o-mini-tts at api.openai.com")).toBe("gpt-4o-mini-tts at api.openai.com");
+    const view: VoiceView = {
+      server_ready: { stt: false, stt_backend: "local", stt_detail: d, tts: false, tts_backend: "local", tts_detail: d },
+    };
+    expect(readinessLine("tts", view, "server", "local").text).toBe(
+      "Server voice not ready: local models not installed — install them under Recognition."
+    );
+    expect(tryState(view, true).say.why).not.toContain("Settings → Voice");
+  });
+
+  it("the voice alone on missing local models still gets the installer under Recognition", () => {
+    const view: VoiceView = {
+      ...BUILTIN,
+      system: { ...SYSTEM, stt_quality: "good" },
+      server_ready: { ...BUILTIN.server_ready, tts: false, tts_backend: "local", tts_detail: "local models not installed: Settings → Voice installs them" },
+    };
+    expect(installOffer("system", view)).toBe("local");
+    expect(installOffer("system", { ...view, server_ready: { ...view.server_ready, tts: true } })).toBeNull();
   });
 });

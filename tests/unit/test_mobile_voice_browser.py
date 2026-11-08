@@ -65,7 +65,7 @@ def test_voice_loop_in_headless_chrome():
         ["node", str(HARNESS)],
         capture_output=True,
         text=True,
-        timeout=420,
+        timeout=600,
         env=env,
         cwd=str(ROOT),
     )

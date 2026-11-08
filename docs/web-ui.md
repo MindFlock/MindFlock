@@ -337,10 +337,17 @@ a session first*).
   300 ms..1.5 s (`overWaitMs`; `OVER_FINAL_WAIT_MS` is the most, for the
   first "over" of a page before anything is known — `/end`'s `final_ms`,
   the server's own measure of its accurate pass, plus 150 ms stands in
-  until a round trip was measured, from the phrase's end at the recogniser
-  to its `/end` back, `FinalClock`), then sends the fast words and ignores a
-  later final — never the other way round: a slow final never holds the
-  words. A final that matches the fast words types nothing, so Enter goes
+  until a round trip was measured: the median of the last 7, from the
+  phrase's end at the recogniser to an `/end` back **with a final in it**,
+  late or not — a timeout brings no final and is never a sample,
+  `FinalClock`), then sends the fast words and ignores a later final —
+  never the other way round: a slow final never holds the words. **No wait
+  at all when the final would buy little**: the phrase's fast words all
+  settled (no unstable tail: two passes agreed on every word) and, of at
+  least the last 3 finals (`FAST_TRUST_MIN`, out of 12), at most a third
+  changed a word (`FinalClock.fastStands`, compared case, punctuation and
+  spacing aside) — then "over" sends at once, or the moment the phrase's
+  last chunk settles its words; its final is still measured, never typed. A final that matches the fast words types nothing, so Enter goes
   at once (no trailing space is typed before Enter, and nothing settles);
   only a correction waits 250 ms for its keys to land. The time from the
   word's end to Enter is the Diagnostics line's *over → sent 0.9 s* (and
@@ -399,10 +406,21 @@ a session first*).
   repeating words. The silence detector's and the
   meter's noise floor start from the ring's quietest block rather than the
   first block (a press that lands mid-word would make the word the floor).
+  The ring starts the moment the page's AudioContext runs
+  (`audioCtxRunning`, on its `statechange`), not when the first recording
+  asks for the capture, and the capture worklet's module loads as that
+  context is made (`preloadCapture`) — so a cold press neither waits for the
+  module nor loses the syllables said while the recording is set up.
   The microphone is opened with `{echoCancellation: true,
   noiseSuppression: true}` asked for explicitly (`MIC_CONSTRAINTS` in
   `lib/voiceMic.ts`; the Settings mic test still asks `{audio: true}`), so
   the reply playing from the speakers is not what the recorder hears.
+- **Recognition is warm before the press.** Reading the voice config (a
+  load, a focus) on a device that listened with the server's recognizer in
+  the last 3 days (`cs_voice_used_at`) opens and drops a stream when the
+  server says `server_ready.stt_loaded` is false (`warmStt`, at most once a
+  minute): local whisper loads in the background instead of costing the
+  next press 1–7 s. An older server (no `stt_loaded`) is never asked.
 - **A microphone that goes away** (unplugged, taken by the OS: the track's
   `ended`, or a `devicechange` that leaves no live track — a merely
   `muted` track is not counted) is noticed
@@ -665,7 +683,10 @@ chunk's `turn` verdict sets the quiet that ends the phrase (`turnHoldMs`):
 about 350 ms after a radio word, stop phrase or lone command, 900 ms after a
 sentence or question — but at least 1100 ms (`FIRST_PHRASE_HOLD_MS`) for a
 first phrase into an empty box, so "…so far. [0.9 s] over and out" is not
-routed in halves — 1500 ms after a comma or trailing connector, clamped to
+routed in halves (900 ms, `FIRST_PHRASE_PLAIN_HOLD_MS`, when its words
+can't begin a command), and only 600 ms (`SETTLED_HOLD_MS`) once words are
+typed and the phrase has **settled** — no unstable tail, the last pass
+taken after the last loud block — 1500 ms after a comma or trailing connector, clamped to
 300–3000 ms (`TURN_MIN_MS` / `TURN_MAX_MS`). It falls back to clip mode's
 1.1 s (`SILENCE_MS`) when there is no verdict (an older server, a malformed
 `turn`), when the voice was heard after the audio the verdict judged, and for
@@ -674,7 +695,12 @@ box: “next session” mid-message is words; `RecognizerHandlers.blank()`). The
 `…/end` flushes its last words (the
 phrase's radio word, if any, is read off the whole phrase then — "over" and
 "disregard" act exactly as in clip mode), and the next phrase opens a
-new stream; there is no 12 s cap. Letting go (or the second click) sends what
+new stream **at once**, alongside that `/end` (the server keeps two per page,
+`CLIENT_STREAMS`) — never behind its accurate pass. Its words are handed
+over the moment they are back; when the phrase before is still waiting for
+its `/end`, that phrase ends first with its fast words (its final, when it
+comes, is only measured), so phrases still reach the dictation in order
+and speaking again after a pause shows words at once. There is no 12 s cap. Letting go (or the second click) sends what
 was said since the last chunk, flushes, and stops — waiting for the final
 only the finals' usual round trip (`finishWaitMs`, as for "over"; a clip
 waits for its transcript, up to 45 s; Web Speech 1.5 s), then stops with the
@@ -6745,11 +6771,19 @@ labels above the inputs.
     `POST /api/voice/clear-key`) and **Model**; local models add a whisper
     size for recognition and a piper voice name. Under each block a
     readiness line from `GET /api/voice` (*Server recognition ready
-    (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
-    *Server voice not ready: …*): with the built-in engine picked its own
-    sentence is the detail (the Linux one, macOS' permission one); a server
-    too old to report `system` says it has no built-in engine yet. A saved
-    key's **Clear** sits in the key's hint line.
+    (system): Windows (from WSL) speech recognition (en-US): basic accuracy
+    — install local models for better recognition.* / *Server voice ready
+    (system): Windows (from WSL) voices: Microsoft David Desktop, Microsoft
+    Zira Desktop.* / *Server voice not ready: …*): each line carries its own
+    kind's detail (`stt_detail` / `tts_detail`), never the built-in
+    engine's sentence about both; that sentence (`system.detail`) is the
+    detail only when the kind has none, and on Linux (its *no built-in
+    speech engine* why). The server's *local models not installed: Settings
+    → Voice installs them* reads, on this screen, *— install them below*
+    under Recognition and *— install them under Recognition* under Voice
+    and in Try it. A server too old to report `system` says it has no
+    built-in engine yet. A saved key's **Clear** sits in the key's hint
+    line.
   - **The local-models installer** (`#voice-install`, under Recognition: a
     *Local models* action row, its status in the hint).
     Windows' built-in recognizer is the old desktop (SAPI) one —
@@ -6760,7 +6794,7 @@ labels above the inputs.
     (faster-whisper) recognise far better and stay on this computer.* with
     an **Install local models (about 300 MB)** button. The same button
     sits by the readiness line whenever *Local models* is picked but not
-    ready, on every platform. It `POST`s `/api/voice/install-local`
+    ready — for recognition or for the voice — on every platform. It `POST`s `/api/voice/install-local`
     (faster-whisper and piper into the server's own environment, then the
     whisper model — `voice.stt_model`, default `small` — and the piper
     voice), then polls `GET /api/voice/install-local` every 2 s while it is
@@ -6768,13 +6802,41 @@ labels above the inputs.
     a `<progress>` (the server reports no percentage) and the install's
     last log line. *done* → *Installed — recognition now uses local models.* (the
     server switched `voice.stt_backend` to `local` itself; the screen
-    re-reads the settings and `GET /api/voice`); *failed* → the error and
-    **Try again**; a 409 → *Already installing* and that install is
+    re-reads the settings and `GET /api/voice`); *failed* → the error (a
+    failed step's last output line, without uv's *Caused by:* lead-in), the
+    next step it points at — a network error: *This computer couldn't reach
+    the download servers: check that it is online (and any proxy or VPN),
+    then try again.*; a full disk: *The disk is full: free about 300 MB,
+    then try again.*; nothing more for any other — and **Try again**; a 409 → *Already installing* and that install is
     followed. Reopening the screen mid-install resumes following it. The
     button is gone once local models recognise, and on a server without the
     installer (its `GET` fails). A viewer who may not change the server
     (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
     gets it disabled with the reason.
+  - **Live words** (`#voice-live-words`, under Recognition, only while the
+    ready recognition streams — `server_ready.stt_stream`, i.e. local
+    models): which engine types the words as you speak, from
+    `GET /api/voice`'s `stream_label` — *Live words: Moonshine* or *Live
+    words: Whisper base.en*. While Moonshine can't run on the server
+    (`moonshine.available: false`) and `voice.stt_stream_model` would use
+    it (blank or `moonshine`; a whisper size there is a choice, so no
+    offer), the line becomes an action row (`#voice-moonshine`): *Moonshine
+    types your words as you say them and has the text ready about 30 ms
+    after you stop (whisper takes about a second). English only; long
+    dictation is still polished by whisper.* with an **Install fast
+    recognition (Moonshine, ~200 MB)** button (`#voice-moonshine-btn`). It
+    `POST`s `/api/voice/install-local {"what": "moonshine"}` and is
+    followed like the local-models install (the same poll, progress, last
+    log line, 409 and 403 handling — the one installer runs one install at
+    a time, and each row shows only its own, by the status's `what`).
+    *done* → *Installed — live words now use Moonshine.* and the screen
+    re-reads `GET /api/voice`, so the line reads *Live words: Moonshine*;
+    *failed* → the error and its next step (as the local-models install's,
+    at about 200 MB for a full disk), then *Live words keep using whisper
+    meanwhile.* with **Try again** (no pointer to `mindflock doctor`: its
+    *Fast recognition* row's fix is this button). The progress bar is
+    named *Installing fast recognition*. An older server (no
+    `moonshine` in `GET /api/voice`) gets no offer.
   - **On the phone page** (`#voice-phone`): *The desktop app always uses
     this computer.* under the title, then where recognition and the voice
     run for the phone (`voice.stt` / `voice.tts`: *The phone* · *This
@@ -7811,9 +7873,15 @@ standby 680 (as `VOICE_WAKE_BLOCK` 2048) — through a ScriptProcessor-shaped
 event, so nothing downstream changed and no graph is made or torn down
 between a standby and a listen. With no tap for 1 s (`VOICE_CAP_IDLE_MS`)
 the worklet stops posting until the next tap. The module is added once per
-AudioContext (`capLoad`, alongside `getUserMedia`); the first start waits for
-it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and records with the fallback past
-that (the next start gets the worklet). A busy main thread now delays the
+AudioContext (`capLoad`) — already in the gesture that primes voice
+(`voicePrime`, when the page may record), so the first press finds it
+loaded; a start still waits for it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and
+records with the fallback past that (the next start gets the worklet).
+Recognition is warmed on a config read too: with voice on, a streaming
+server recognizer and `server_ready.stt_loaded` false, a stream is opened
+and DELETEd at once (`voiceSttWarm`, at most once a minute), which loads
+the model in the background — an older server, without `stt_loaded`, is
+left alone. A busy main thread now delays the
 blocks but never drops them. **The ScriptProcessor fallback** — the old
 code path unchanged, one `ScriptProcessorNode(4096, 1, 1)` graph per
 consumer — runs with no `AudioWorkletNode` / `ctx.audioWorklet` (iOS Safari
@@ -7881,11 +7949,18 @@ stream DELETEd, never ended. *Over* / *over and out* end the phrase there
 when `/end` takes longer than its **budget** the fast words go and a later
 final is ignored. The budget follows how long `/end` takes on this server
 (`voiceEndBudgetMs`): **1.5 s** (`VOICE_CONTROL_END_MS`) only while nothing
-is known; once `/end` has been timed here (a running mean of its round
-trips, seeded by the advisory `final_ms` when `GET /api/voice` carries one)
-**1.5× that plus 100 ms**, held to **0.3–1.5 s** (the desktop app's rule)
-— so a whisper that answers in 300 ms is waited for 550 ms at most, and a
-late `/end` grows the next budget (it took at least that). The Enter itself waits for no round
+is known; once `/end` has been timed here (`voiceEndTypicalMs`: the median
+of the last 7 `/end`s that brought a `final`, late ones included — a
+timeout brings none and is never a sample; seeded by the advisory
+`final_ms` when `GET /api/voice` carries one) **1.5× that plus 100 ms**,
+held to **0.3–1.5 s** (the desktop app's rule) — so a whisper that answers
+in 300 ms is waited for 550 ms at most. **No budget at all** when the fast
+words settled (no unstable tail) and at most a third of the last finals
+(at least 3) changed a word (`voiceFastStands`, `voice.rec.finals`): the
+send goes at once, or the moment the phrase's last chunk settles them; its
+`/end` still comes back to be measured (`g.late`), never typed. A settled
+sentence with words in the box already ends after 600 ms
+(`VOICE_SETTLED_HOLD_MS`) instead of the verdict's 900. The Enter itself waits for no round
 trip: the ack's baseline read goes out alongside `POST /send`, not before
 it. The trace and Diagnostics time it: *Last control: over → sent 0.9 s
 (waited for /end up to 1.2 s; /end takes ~0.7 s here)* (the word's last
