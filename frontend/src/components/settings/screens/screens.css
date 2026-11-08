@@ -697,6 +697,11 @@
   border-color: var(--accent);
 }
 
+/* The add form leads the Custom agents screen, above the provider rows. */
+#prov-add {
+  margin: 4px 0 16px;
+}
+
 #prov-add summary {
   cursor: pointer;
   font-size: 13px;
