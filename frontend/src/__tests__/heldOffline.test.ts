@@ -191,6 +191,33 @@ describe("HeldBody", () => {
     expect(html).toContain("Offline since a crash.");
   });
 
+  it("an agent that isn't installed: says so and offers Install, not a Start that fails again", async () => {
+    const { queryClient } = await import("../state/queries");
+    queryClient.setQueryData(["instances"], [row({ title: "s", program: "codex", ...HELD })]);
+    queryClient.setQueryData(["setup"], {
+      default_provider: "claude",
+      logins: [{ name: "codex", installed: false, logged_in: null, login_cmd: "", default: false }],
+    });
+    try {
+      let html = renderToStaticMarkup(createElement(HeldBody, { title: "s", reason: "the agent crashed", hidden: false }));
+      expect(html).toContain("Codex isn&#x27;t installed on this computer");
+      expect(html).toContain("Install Codex…");
+      expect(html).not.toContain("▶ Start");
+      expect(html).not.toContain("crashed");
+      // Installed since (Setup re-read): Start is back.
+      queryClient.setQueryData(["setup"], {
+        default_provider: "claude",
+        logins: [{ name: "codex", installed: true, logged_in: true, login_cmd: "", default: false }],
+      });
+      html = renderToStaticMarkup(createElement(HeldBody, { title: "s", reason: "the agent crashed", hidden: false }));
+      expect(html).toContain("▶ Start");
+      expect(html).not.toContain("Install Codex");
+    } finally {
+      queryClient.removeQueries({ queryKey: ["instances"] });
+      queryClient.removeQueries({ queryKey: ["setup"] });
+    }
+  });
+
   it("starts through the same POST as the chip, asking nothing through window dialogs", () => {
     const src = code("components/grid/HeldBody.tsx");
     expect(src).toContain("startSession(title)");

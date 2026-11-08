@@ -492,6 +492,53 @@ def test_a_start_that_fails_keeps_the_session_held(h, monkeypatch):
     assert held.info("h")["reason"] == held.REASON_KILLED
 
 
+# --------------------------------------------------------------------------- #
+# an agent whose CLI isn't installed: Start says so instead of failing again
+# --------------------------------------------------------------------------- #
+def _no_cli(monkeypatch, found=None):
+    """``shutil.which`` finds only the binaries in ``found``."""
+    import shutil
+
+    monkeypatch.setattr(
+        shutil, "which", lambda b, *a, **k: b if b in (found or ()) else None
+    )
+
+
+@pytest.mark.parametrize("code", [127, 126])
+def test_start_all_skips_a_session_whose_cli_is_not_installed(wt, monkeypatch, code):
+    _no_cli(monkeypatch)
+    srv = _Srv({"a": _Inst(wt, program="codex")}, markers={"a": code})
+    held.hold("a", held.REASON_CRASH)
+    out = _run(revive.sweep(srv, gap=0, release_held=True))
+    assert out["skipped"] == {"a": revive.SKIP_MISSING}
+    assert srv.launched == [] and held.is_held("a")
+
+
+def test_once_installed_or_with_another_exit_start_all_launches_it(wt, monkeypatch):
+    # Installed since: the stale 127 marker no longer refuses it.
+    _no_cli(monkeypatch, found={"codex"})
+    srv = _Srv({"a": _Inst(wt, program="codex")}, markers={"a": 127})
+    held.hold("a", held.REASON_CRASH)
+    assert _run(revive.sweep(srv, gap=0, release_held=True))["revived"] == ["a"]
+    # Not installed, but it died some other way: a real crash, so try it.
+    _no_cli(monkeypatch)
+    srv = _Srv({"b": _Inst(wt, program="codex")}, markers={"b": 1})
+    held.hold("b", held.REASON_CRASH)
+    assert _run(revive.sweep(srv, gap=0, release_held=True))["revived"] == ["b"]
+
+
+def test_start_on_a_missing_cli_says_what_is_wrong_and_stays_held(h, monkeypatch):
+    _no_cli(monkeypatch)
+    h.Program = "codex"
+    monkeypatch.setattr(server, "_ensure_agent_session", h.ensure)
+    monkeypatch.setattr(server, "_read_exit_marker", lambda name: 127)
+    r = TestClient(server.app).post("/api/instances/h/revive")
+    assert r.status_code == 409
+    err = r.json()["error"]
+    assert "Codex isn't installed" in err and "Settings → Agents" in err
+    assert h.launched == [] and held.info("h")["reason"] == held.REASON_KILLED
+
+
 @pytest.mark.parametrize("only", [None, ["a"]])
 def test_start_all_releases_and_starts_held_sessions(wt, only):
     srv = _Srv({"a": _Inst(wt)})
