@@ -1303,11 +1303,12 @@ class TestInstallLocal:
             "error": "",
         }
 
-        def start():
+        def start(what=si.LOCAL):
             if box["running"]:
                 return False
             box["running"] = True
             box["starts"] += 1
+            box["what"] = what
             state.update(state="running", step="installing packages", started=1.0)
             return True
 
@@ -1345,6 +1346,21 @@ class TestInstallLocal:
         monkeypatch.setattr(_auth, "may_configure", _refuse)
         r = client.post("/api/voice/install-local")
         assert r.status_code == 403
+        assert install.box["starts"] == 0
+
+    def test_post_without_a_body_installs_the_local_models(self, install):
+        assert client.post("/api/voice/install-local").status_code == 200
+        assert install.box["what"] == "local"
+
+    def test_post_what_moonshine_installs_moonshine(self, install):
+        r = client.post("/api/voice/install-local", json={"what": "moonshine"})
+        assert r.status_code == 200
+        assert install.box["what"] == "moonshine"
+
+    def test_post_an_unknown_what_is_400(self, install):
+        r = client.post("/api/voice/install-local", json={"what": "parakeet"})
+        assert r.status_code == 400
+        assert "moonshine" in r.json()["error"]
         assert install.box["starts"] == 0
 
 

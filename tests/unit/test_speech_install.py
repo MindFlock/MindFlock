@@ -139,6 +139,7 @@ class TestInstall:
     def test_idle_shape(self):
         assert si.status() == {
             "state": "idle",
+            "what": "",
             "step": "",
             "log": [],
             "started": None,

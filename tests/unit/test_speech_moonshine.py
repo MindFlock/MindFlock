@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import time
 import types
 from array import array
 
@@ -365,13 +366,16 @@ class TestWakeJoin:
 # The final: Moonshine's for a short phrase, whisper's for a long one
 # --------------------------------------------------------------------------- #
 class Accurate:
-    def __init__(self, text="whisper text", fail=False):
+    def __init__(self, text="whisper text", fail=False, delay=0.0):
         self.text = text
         self.fail = fail
+        self.delay = delay
         self.calls: list = []
 
     def __call__(self, audio):
         self.calls.append(len(audio))
+        if self.delay:
+            time.sleep(self.delay)
         if self.fail:
             raise speech.SpeechError("whisper broke")
         return self.text
@@ -397,11 +401,49 @@ class TestFinalPolicy:
         )
         for _ in range(3):
             st.feed(loud(1.5))
+        st.feed(quiet(0.6))  # the quiet tail starts the early pass
         assert st.wants_polish
         out = st.finish()
-        assert len(acc.calls) == 1 and acc.calls[0] == int(4.5 * RATE)
+        assert len(acc.calls) == 1 and acc.calls[0] >= int(4.5 * RATE)
         assert out["final"] == "Run the tests again and show me the failures."
         assert out["final_by"] == "whisper" and out["same"] is False
+
+    def test_no_polish_is_started_at_the_end(self):
+        # Cut off mid-speech: no early pass ran, and a fresh one would cost
+        # the whole pass again (~1 s+) — Moonshine's final, at once.
+        acc = Accurate("whisper's text")
+        st, _t = make([[(1, "Long dictation cut off.", True)]], accurate=acc)
+        for _ in range(3):
+            st.feed(loud(1.5))
+        assert st.wants_polish
+        out = st.finish()
+        assert acc.calls == []
+        assert out["final"] == "Long dictation cut off."
+        assert out["final_by"] == "moonshine"
+
+    def test_a_stale_early_pass_does_not_polish(self):
+        acc = Accurate("only the first half")
+        st, _t = make([[(1, "First half and the second half.", True)]], accurate=acc)
+        for _ in range(3):
+            st.feed(loud(1.5))
+        st.feed(quiet(0.6))  # early pass on the first half…
+        st.feed(loud(1.0))  # …then more speech: it no longer covers the phrase
+        out = st.finish()
+        assert out["final"] == "First half and the second half."
+        assert out["final_by"] == "moonshine"
+
+    def test_a_slow_polish_is_waited_for_at_most_polish_wait_s(self, monkeypatch):
+        monkeypatch.setattr(sm, "POLISH_WAIT_S", 0.05)
+        acc = Accurate("too late", delay=0.5)
+        st, _t = make([[(1, "Long dictation here.", True)]], accurate=acc)
+        for _ in range(3):
+            st.feed(loud(1.5))
+        st.feed(quiet(0.6))
+        t0 = time.monotonic()
+        out = st.finish()
+        assert time.monotonic() - t0 < 0.4
+        assert out["final"] == "Long dictation here." and out["final_by"] == "moonshine"
+        assert st.final_outcome == "timeout"
 
     def test_the_polish_starts_early_on_the_quiet_tail(self):
         acc = Accurate("Long dictation.")
@@ -418,7 +460,9 @@ class TestFinalPolicy:
         st, _t = make([[(1, "Long dictation here.", True)]], accurate=acc)
         for _ in range(3):
             st.feed(loud(1.5))
+        st.feed(quiet(0.6))
         out = st.finish()
+        assert len(acc.calls) == 1
         assert out["final"] == "Long dictation here." and out["final_by"] == "moonshine"
 
     def test_whispers_text_gets_the_wake_join_too(self):
@@ -428,7 +472,10 @@ class TestFinalPolicy:
         )
         for _ in range(3):
             st.feed(loud(1.5))
-        assert st.finish()["final"] == "Mindflock, summarise the long thread."
+        st.feed(quiet(0.6))
+        out = st.finish()
+        assert out["final_by"] == "whisper"
+        assert out["final"] == "Mindflock, summarise the long thread."
 
     def test_the_wait_is_recorded_for_final_stats(self):
         before = ss.final_stats()["samples"]

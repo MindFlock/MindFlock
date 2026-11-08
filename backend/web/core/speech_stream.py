@@ -973,13 +973,15 @@ class Stream:
         (it would only re-agree on the tail, on the cores the final needs)."""
         return self._early is not None and not self._early.stale and self._all_heard()
 
-    def _await(self, early: "_Early") -> str:
-        """The early pass's text, waited for at most :data:`FINAL_TIMEOUT_S`
-        more → ``""`` when it failed or timed out (logged). Not under the
-        lock. Sets ``final_ms`` (its own run time once it ran, else its
-        whole age), ``final_wait_ms`` and ``final_early``."""
+    def _await(self, early: "_Early", wait: Optional[float] = None) -> str:
+        """The early pass's text, waited for at most ``wait`` seconds more
+        (default :data:`FINAL_TIMEOUT_S`) → ``""`` when it failed or timed
+        out (logged). Not under the lock. Sets ``final_ms`` (its own run
+        time once it ran, else its whole age), ``final_wait_ms`` and
+        ``final_early``."""
         started = time.monotonic()
-        early.thread.join(FINAL_TIMEOUT_S)
+        self._wait_cap = FINAL_TIMEOUT_S if wait is None else wait
+        early.thread.join(self._wait_cap)
         self.final_wait_ms = int((time.monotonic() - started) * 1000)
         self.final_ms = early.ms()
         self.final_early = True
@@ -990,6 +992,7 @@ class Stream:
         :data:`FINAL_TIMEOUT_S` from its start → its text, ``""`` when it
         failed or timed out (logged; a late result is dropped). Not under
         the lock."""
+        self._wait_cap = FINAL_TIMEOUT_S
         job.thread.join(max(0.0, FINAL_TIMEOUT_S - (time.monotonic() - job.started)))
         self.final_wait_ms = int((time.monotonic() - job.started) * 1000)
         self.final_ms = job.ms()
@@ -1006,7 +1009,7 @@ class Stream:
                 "voice stream: no accurate pass within %.1fs of the end on %.1fs"
                 " of audio (%s, %s; %d ms since it was asked for); the fast text"
                 " stands",
-                FINAL_TIMEOUT_S,
+                getattr(self, "_wait_cap", FINAL_TIMEOUT_S),
                 early.seconds,
                 "the early one" if self.final_early else "a fresh one",
                 "never started: the model was busy" if queued else "still running",

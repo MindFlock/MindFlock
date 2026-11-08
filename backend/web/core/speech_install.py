@@ -229,6 +229,7 @@ def _download_main(argv: Optional[List[str]] = None) -> None:
 _LOCK = threading.Lock()
 _STATE: dict = {
     "state": "idle",
+    "what": "",
     "step": "",
     "started": None,
     "finished": None,
@@ -241,9 +242,10 @@ _HEAL_TRIED = False
 
 
 def status() -> dict:
-    """``{"state": "idle"|"running"|"done"|"failed", "step", "log": [the
-    last LOG_LINES lines], "started", "finished", "error"}`` (epoch seconds
-    or None)."""
+    """``{"state": "idle"|"running"|"done"|"failed", "what": "local"|
+    "moonshine"|"" (the last install's :func:`start` ``what``), "step",
+    "log": [the last LOG_LINES lines], "started", "finished", "error"}``
+    (epoch seconds or None)."""
     with _LOCK:
         return {**_STATE, "log": list(_LOG)}
 
@@ -274,6 +276,7 @@ def start(heal: bool = False, what: str = LOCAL) -> bool:
             return False
         _STATE.update(
             state="running",
+            what=what,
             step=STEP_HEAL if heal else STEP_PACKAGES,
             started=time.time(),
             finished=None,
@@ -343,7 +346,9 @@ def reset() -> None:
     with _LOCK:
         if _STATE["state"] == "running":
             return
-        _STATE.update(state="idle", step="", started=None, finished=None, error="")
+        _STATE.update(
+            state="idle", what="", step="", started=None, finished=None, error=""
+        )
         _LOG.clear()
         _HEAL_TRIED = False
 

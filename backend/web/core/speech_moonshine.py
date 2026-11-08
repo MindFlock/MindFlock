@@ -34,10 +34,12 @@ less than :data:`POLISH_MIN_SECONDS` of speech. A longer one (dictation,
 where Moonshine tiny makes ~13% word errors on real speech against whisper
 ``small``'s ~8%) still gets the whisper accurate pass when the stream was
 opened with an ``accurate(audio)`` callable (``LocalSTT.final_transcriber``):
-the same early start on the quiet tail, the same lane and timeout as
+the same early start on the quiet tail and the same lane as
 ``speech_stream.Stream``, and its text replaces Moonshine's when it lands
-(``final_by: "whisper"``); a pass that fails or times out leaves Moonshine's
-final standing. :attr:`MoonshineStream.wants_polish` says beforehand whether
+(``final_by: "whisper"``). Only that early pass polishes: ``finish`` never
+starts one (a phrase cut off mid-speech, or one whose early pass went stale,
+keeps Moonshine's final at once) and waits at most :data:`POLISH_WAIT_S` for
+it; a pass that fails or runs past that leaves Moonshine's final standing. :attr:`MoonshineStream.wants_polish` says beforehand whether
 a phrase qualifies.
 
 Keyterms. Moonshine streaming models take a list of terms to bias towards
@@ -82,6 +84,7 @@ __all__ = [
     "MoonshineStream",
     "PACKAGE",
     "POLISH_MIN_SECONDS",
+    "POLISH_WAIT_S",
     "available",
     "engine",
     "fetch_model",
@@ -114,6 +117,15 @@ MODEL_FILES = (
 #: Seconds of speech (loud 100 ms frames, ``Stream.voiced_s``) from which a
 #: phrase still gets the whisper accurate pass after Moonshine's final.
 POLISH_MIN_SECONDS = 4.0
+#: How long ``finish`` waits for a long phrase's whisper polish (the early
+#: pass, already running since the quiet tail) before Moonshine's text
+#: stands. A polish is never STARTED at the end: no early pass (the phrase
+#: was cut off mid-speech) or a stale one (speech after it began) → the
+#: Moonshine final, at once. Real-time bench (20 LibriSpeech phrases of
+#: 5-30 s, 900 ms turn hold): /end p50 349 ms; 6-13 s phrases 0.1-0.8 s;
+#: 16-19 s ~0.8-1.1 s; a 30 s one sat out the whole 1.5 s timeout for
+#: nothing. WER 12.5% typed → 8.2% polished.
+POLISH_WAIT_S = 1.0
 #: Load the model with ONNX Runtime on one thread (see the module doc).
 SINGLE_THREAD = True
 _THREAD_ENV = "MOONSHINE_ORT_SINGLE_THREAD"
@@ -443,18 +455,23 @@ class MoonshineStream(_stream.Stream):
             self.touched = _stream._now()
             phrase, self._phrase = self._phrase, array("f")
             early, self._early = self._early, None
-            polish = self.wants_polish and bool(phrase)
-            job: Optional[_stream._Early] = None
-            if polish and (early is None or early.stale):
-                job = _stream._Early(self._accurate, phrase, owner=self)  # type: ignore[arg-type]
-            elif early is not None and not polish:
+            # Polish rides the EARLY pass only (started on the quiet tail):
+            # a fresh one started here would cost the whole pass again,
+            # ~1 s+ on a long phrase (see POLISH_WAIT_S).
+            polish = (
+                self.wants_polish
+                and bool(phrase)
+                and early is not None
+                and not early.stale
+            )
+            if early is not None and not polish:
                 early.cancel("the Moonshine final stands")
             started = time.monotonic()
             try:
                 rest = self._update(final=True)
             except BaseException:
-                if job is not None:
-                    job.cancel("the Moonshine flush failed")
+                if early is not None and polish:
+                    early.cancel("the Moonshine flush failed")
                 raise
             finally:
                 self._close()
@@ -465,7 +482,7 @@ class MoonshineStream(_stream.Stream):
         self.final_early = False
         final, self.final_by = "", ""
         if polish:
-            final = self._await(early) if job is None else self._final(job)  # type: ignore[arg-type]
+            final = self._await(early, POLISH_WAIT_S)  # type: ignore[arg-type]
             if final:
                 final, self.final_by = join_wake(final, _wake_of(self.words)), "whisper"
         if not final and spoken:

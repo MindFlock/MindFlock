@@ -11,7 +11,10 @@
  * each, with the server's readiness line under it — `#voice-engines`, where
  * the mic and the phone page deep-link — and, under Recognition, the
  * one-click local-models installer when the built-in recognizer is basic or
- * local models are picked but missing); **On the phone page**, where the
+ * local models are picked but missing; once local recognition streams, the
+ * **Live words** row: which engine types the words — Moonshine or whisper —
+ * and the one-click "Install fast recognition (Moonshine)" when it is
+ * missing); **On the phone page**, where the
  * phone page runs each (`voice.stt` / `voice.tts`, phone | server); **This
  * computer's mic** (per-browser prefs, and "Show me how" — the Voice tour);
  * **Voice words** (`voice.words`, ./VoiceWords.tsx); **Permission dialogs** (the approve-by-voice switch); **Try it** (speak a
@@ -64,7 +67,19 @@ export interface VoiceView {
     stt_detail?: string;
     tts_backend?: string;
     tts_detail?: string;
+    /** The ready recognition streams (POST /api/voice/stream: `local`). */
+    stt_stream?: boolean;
   };
+  /** The live transcript's engine for English while recognition streams
+   * (core/speech.py describe(): "moonshine" | "whisper"; "" otherwise), its
+   * model ("tiny-streaming", "base.en") and the label people read
+   * ("Moonshine", "Whisper base.en"); absent on a server older than them. */
+  stream_engine?: string;
+  stream_model?: string;
+  stream_label?: string;
+  /** Whether the Moonshine streaming lane could run on the server, and why
+   * not (`speech_moonshine.unavailable_reason`); absent on an older server. */
+  moonshine?: { available?: boolean; reason?: string };
   /** The built-in engine; absent on a server older than it. */
   system?: {
     available?: boolean;
@@ -304,6 +319,9 @@ export function VoiceSection({ active }: { active: boolean }) {
   const [installSupported, setInstallSupported] = useState(false);
   const [installStatus, setInstallStatus] = useState<InstallStatus>({ state: "idle" });
   const [installTouched, setInstallTouched] = useState(false);
+  // Which install the status is about: the local models or Moonshine (one
+  // runs at a time; each row shows only its own).
+  const [installWhat, setInstallWhat] = useState<InstallWhat>("local");
   const following = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -315,8 +333,9 @@ export function VoiceSection({ active }: { active: boolean }) {
   const alive = () => mounted.current;
   const settle = async (s: InstallStatus) => {
     following.current = false;
-    // On success the server switched voice.stt_backend to "local" itself:
-    // re-read the settings and the verdict, the way a save does.
+    // On success the server switched voice.stt_backend to "local" itself
+    // (Moonshine's changes no setting, but the live engine changed): re-read
+    // the settings and the verdict, the way a save does.
     if (s.state === "done" && mounted.current) {
       await model.reload();
       setReread((n) => n + 1);
@@ -330,6 +349,7 @@ export function VoiceSection({ active }: { active: boolean }) {
       .then((s) => {
         if (!mounted.current) return;
         setInstallSupported(true);
+        if (s?.what === "moonshine" || s?.what === "local") setInstallWhat(s.what);
         if (s?.state === "running" && !following.current) {
           following.current = true;
           setInstallTouched(true);
@@ -342,13 +362,26 @@ export function VoiceSection({ active }: { active: boolean }) {
     // re-ask the server on every save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
-  const onInstall = () => {
+  const start = (what: InstallWhat) => {
     if (following.current) return;
     following.current = true;
+    setInstallWhat(what);
     setInstallTouched(true);
-    void installLocalModels(setInstallStatus, { alive }).then(settle);
+    void installLocalModels(setInstallStatus, { alive, what }).then(settle);
   };
-  const install: InstallProps = { supported: installSupported, status: installStatus, touched: installTouched, onInstall };
+  const idle: InstallStatus = { state: "idle" };
+  const install: InstallProps = {
+    supported: installSupported,
+    status: installWhat === "local" ? installStatus : idle,
+    touched: installTouched && installWhat === "local",
+    onInstall: () => start("local"),
+  };
+  const fast: InstallProps = {
+    supported: installSupported,
+    status: installWhat === "moonshine" ? installStatus : idle,
+    touched: installTouched && installWhat === "moonshine",
+    onInstall: () => start("moonshine"),
+  };
 
   const clearKey = async (kind: VoiceKind) => {
     // POST /api/settings keeps a secret sent blank (the app-wide convention),
@@ -368,6 +401,7 @@ export function VoiceSection({ active }: { active: boolean }) {
       view={view}
       onClearKey={clearKey}
       install={install}
+      fast={fast}
       tryRow={<TryRow view={view} install={install} />}
     />
   );
@@ -381,6 +415,7 @@ export function VoiceSectionView({
   view,
   onClearKey,
   install,
+  fast,
   tryRow,
 }: {
   model: SettingsModel;
@@ -388,6 +423,8 @@ export function VoiceSectionView({
   onClearKey(kind: VoiceKind): void;
   /** The local-models installer; none (a test, an older server) draws no button. */
   install?: InstallProps;
+  /** The Moonshine installer (the Live words row's button); none draws no button. */
+  fast?: InstallProps;
   tryRow?: ReactNode;
 }) {
   const approve = model.get("voice", "approve_dialogs") !== false;
@@ -411,6 +448,7 @@ export function VoiceSectionView({
       </p>
       <div className="set-section" id="voice-engines">
         <VoiceKindBlock kind="stt" title="Recognition" model={model} view={view} onClearKey={onClearKey} install={install} />
+        <LiveWordsRow model={model} view={view} fast={fast} />
         <VoiceKindBlock kind="tts" title="Voice" model={model} view={view} onClearKey={onClearKey} />
       </div>
       <div className="set-section" id="voice-phone">
@@ -810,6 +848,8 @@ export function systemVoiceOptions(voices: string[], saved: unknown): Array<{ va
  * 409 (someone else's install is running) or a 403 (not the owner). */
 export interface InstallStatus {
   state: "idle" | "running" | "done" | "failed" | string;
+  /** Which install (core/speech_install.py start's `what`); absent on an older server. */
+  what?: InstallWhat | string;
   step?: string;
   log?: string[];
   started?: number | string | null;
@@ -836,6 +876,45 @@ export const INSTALL_BASIC_LINE =
 export const INSTALL_DONE = "Installed — recognition now uses local models";
 export const INSTALL_REFUSED = "Only the owner can install models: do it on that computer itself.";
 export const INSTALL_POLL_MS = 2000;
+
+/** What the one installer puts in: the local models or Moonshine. */
+export type InstallWhat = "local" | "moonshine";
+export const MOONSHINE_LABEL = "Install fast recognition (Moonshine, ~200 MB)";
+export const MOONSHINE_WHY =
+  "Moonshine types your words as you say them and has the text ready about 30 ms after you stop (whisper takes about a second). English only; long dictation is still polished by whisper.";
+export const MOONSHINE_DONE = "Installed — live words now use Moonshine";
+export const MOONSHINE_NEXT =
+  "Live words keep using whisper meanwhile. Try again; if it fails again, mindflock doctor --all on the server says why.";
+
+/** The Live words row's first line: the engine that types the words while
+ * recognition streams ("" when it does not, or an older server didn't say). */
+export function liveWordsLine(view: VoiceView | null | undefined): string {
+  if (!view?.server_ready?.stt_stream) return "";
+  if (view.stream_label) return "Live words: " + view.stream_label;
+  if (view.stream_engine === "moonshine") return "Live words: Moonshine";
+  return view.stream_model ? "Live words: Whisper " + view.stream_model : "";
+}
+
+/** Whether the Live words row offers the Moonshine install: local
+ * recognition streams on whisper, the server says Moonshine can't run there
+ * (an older server doesn't say: no offer), and `voice.stt_stream_model`
+ * would use it (blank or "moonshine"; a whisper name is a choice). */
+export function moonshineOffer(view: VoiceView | null | undefined, streamSetting: unknown): boolean {
+  const sr = view?.server_ready;
+  if (!sr?.stt_stream || sr.stt_backend !== "local") return false;
+  if (!view?.moonshine || view.moonshine.available) return false;
+  const s = String(streamSetting ?? "").trim().toLowerCase();
+  return s === "" || s === "moonshine";
+}
+
+/** The Moonshine installer's button and line: `installView`'s, with its own
+ * done line and a next step after a failure. */
+export function moonshineView(st: InstallStatus, allowed: boolean): ReturnType<typeof installView> {
+  const v = installView(st, allowed);
+  if (st.state === "done") return { ...v, text: MOONSHINE_DONE + "." };
+  if (st.state === "failed" && !st.refused && allowed) return { ...v, text: v.text + " " + MOONSHINE_NEXT };
+  return v;
+}
 
 /** Whether the built-in recognizer is the basic one: the server says so in
  * `system.stt_quality`, or (a server between the two) in the built-in
@@ -935,16 +1014,27 @@ export async function pollInstall(
   }
 }
 
-/** The button: POST /api/voice/install-local, then follow it. A 409 means an
- * install is already running — follow that one; a 403 is the owner check. */
+/** The button: POST /api/voice/install-local (`what: "moonshine"`: the
+ * fast streaming recognizer instead of the local models), then follow it. A
+ * 409 means an install is already running — follow that one; a 403 is the
+ * owner check. */
 export async function installLocalModels(
   onStatus: (s: InstallStatus) => void,
-  opts: { call?: Call; wait?: (ms: number) => Promise<void>; every?: number; alive?: () => boolean } = {}
+  opts: {
+    call?: Call;
+    wait?: (ms: number) => Promise<void>;
+    every?: number;
+    alive?: () => boolean;
+    what?: InstallWhat;
+  } = {}
 ): Promise<InstallStatus> {
   const call = opts.call || (api as Call);
   let already = false;
   try {
-    await call("/api/voice/install-local", { method: "POST" });
+    await call(
+      "/api/voice/install-local",
+      opts.what === "moonshine" ? { method: "POST", json: { what: "moonshine" } } : { method: "POST" }
+    );
     onStatus({ state: "running", step: "Starting" });
   } catch (err) {
     const status = (err as { status?: number })?.status;
@@ -988,6 +1078,36 @@ function InstallRow({ offer, install, allowed }: { offer: "basic" | "local" | nu
   );
 }
 
+/** Under Recognition while it streams: which engine types the live words
+ * (`liveWordsLine`), and — when Moonshine is missing and the setting would
+ * use it — the one-click install, its progress and how it ended. A
+ * Moonshine install this page ran stays shown with its outcome. */
+function LiveWordsRow({ model, view, fast }: { model: SettingsModel; view: VoiceView | null; fast?: InstallProps }) {
+  const line = liveWordsLine(view);
+  if (!line) return null;
+  const offer = moonshineOffer(view, model.get("voice", "stt_stream_model"));
+  const showInstall = !!fast?.supported && (offer || fast.status.state === "running" || fast.touched);
+  if (!showInstall || !fast) {
+    return (
+      <p className="set-hint" id="voice-live-words">
+        {line}
+      </p>
+    );
+  }
+  const v = moonshineView(fast.status, view?.configure_allowed !== false);
+  return (
+    <div className="set-row onboarding-action" id="voice-moonshine">
+      <div className="onboarding-action-text">
+        <span className="set-label" id="voice-live-words">
+          {line}
+        </span>
+        <InstallStatus v={v} state={fast.status.state} idle={MOONSHINE_WHY} idPrefix="voice-moonshine" />
+      </div>
+      <InstallButton v={v} install={fast} id="voice-moonshine-btn" label={MOONSHINE_LABEL} />
+    </div>
+  );
+}
+
 /** The installer's lines in a row's hint position: how it ended (✓ / ✗),
  * the step while it runs (with the progress bar and the last log line), or
  * `idle` before it was started ("" draws nothing). */
@@ -1022,7 +1142,17 @@ function InstallStatus({
 }
 
 /** The installer's button for a status (none once it is done). */
-function InstallButton({ v, install, id }: { v: ReturnType<typeof installView>; install: InstallProps; id: string }) {
+function InstallButton({
+  v,
+  install,
+  id,
+  label = INSTALL_LABEL,
+}: {
+  v: ReturnType<typeof installView>;
+  install: InstallProps;
+  id: string;
+  label?: string;
+}) {
   if (!v.button) return null;
   return (
     <button
@@ -1033,7 +1163,7 @@ function InstallButton({ v, install, id }: { v: ReturnType<typeof installView>; 
       title={v.disabled && v.button === "install" ? v.text : undefined}
       onClick={install.onInstall}
     >
-      {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL}
+      {v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : label}
     </button>
   );
 }

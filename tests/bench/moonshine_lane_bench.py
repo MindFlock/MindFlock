@@ -13,6 +13,7 @@ Runs in the scratch venv that has ``moonshine-voice`` (never the server's)::
     $B all                    # every thread setting × set, one process each
     $B run --threads 1 --set piper
     $B run --threads 1 --set libri --polish   # + the whisper pass on long phrases
+    $B run --threads 1 --set libri --polish --realtime --hold-ms 900 --min-dur 4.5 --limit 20
 
 Threads. moonshine-voice 0.1.6 exposes no ONNX Runtime thread COUNT: its
 only knob is ``MOONSHINE_ORT_SINGLE_THREAD`` (one thread) — otherwise ORT's
@@ -62,6 +63,29 @@ Today's whisper pipeline on piper: finish 1022 / 1500 ms, WER 8.7%, ctl
 audio is in, so the early pass never gets the client's phrase-end silence
 to run in), and it costs the ~1.2 s wait again — a synchronous polish
 undoes the lane's point; deliver it after the Moonshine final instead.
+
+``--realtime`` feeds each chunk at real-time pace on the wall clock and,
+after the clip, quiet chunks until the quiet after the last loud frame
+reaches ``--hold-ms`` (the client's end-of-turn hold: 900 after a sentence,
+350 after "over"), as the phone and the desktop mic do — so the early
+accurate pass gets the quiet tail it starts on, and **finish call** is what
+``/end`` costs. ``--min-dur`` keeps clips at least that long.
+
+Results 2026-11-07, ``--polish --realtime``, 20 LibriSpeech clips of
+5–30 s (``--min-dur 4.5``):
+
+| polish rule | hold ms | finish call p50/p95 ms | WER final / typed | polished |
+|---|---|---|---|---|
+| start one at the end, wait ≤ 1.5 s (before) | 900 | 349 / 1078 | 8.2 / 12.5% | 13/20 |
+| start one at the end, wait ≤ 1.5 s (before) | 350 | 296 / 1344 | 8.2 / 12.5% | 13/20 |
+| ride the early pass only, wait ≤ 1 s (``POLISH_WAIT_S``) | 900 | 207 / 905 | 8.2 / 12.5% | 13/20 |
+| ride the early pass only, wait ≤ 1 s (``POLISH_WAIT_S``) | 350 | 258 / 1017 | 9.7 / 12.5% | 10/20 |
+
+Per phrase (before, 900 ms hold): the 5–6 s clips stay under 4 s of loud
+speech (Moonshine's final, ~10 ms); 6–13 s clips wait 0.1–0.8 s for the
+polish; 16–19 s clips 0.8–1.1 s; a 30 s clip sat out the whole 1.5 s and
+got Moonshine's text anyway. Hence ``POLISH_WAIT_S``: polish only rides the
+early pass and is waited for at most 1 s.
 
 Before every process ``all`` waits until the machine's other processes use
 fewer than :data:`MAX_LOAD` cores (``/proc/stat``). Results go to
@@ -122,6 +146,14 @@ def _pct(values: List[float], q: float) -> int:
     return int(round(s[min(len(s) - 1, int(round(q * (len(s) - 1))))]))
 
 
+def _pace(t0: float, at: float) -> None:
+    """--realtime: wait until ``at`` seconds of audio have been spoken
+    since the wall-clock ``t0`` (a chunk is never sent before it exists)."""
+    ahead = t0 + at - time.monotonic()
+    if ahead > 0:
+        time.sleep(ahead)
+
+
 def _link_models() -> None:
     """``$VOICE/moonshine`` → the candidates bench's model cache."""
     VOICE.mkdir(parents=True, exist_ok=True)
@@ -146,7 +178,14 @@ def cmd_run(args) -> int:
         return 1
     folder = DATA / args.set
     manifest = json.loads((folder / "manifest.json").read_text())
-    items = manifest["items"][: args.limit or None]
+    items = manifest["items"]
+    if args.min_dur:
+        items = [
+            it
+            for it in items
+            if len(_read_wav(folder / it["wav"])) / 16000.0 >= args.min_dur
+        ]
+    items = items[: args.limit or None]
     words = manifest.get("words") or vb.voice_words.effective({})
     hints = manifest.get("hints") or speech.recognition_hints(words, vb.TITLES)
 
@@ -170,12 +209,16 @@ def cmd_run(args) -> int:
         st = sm.MoonshineStream(engine, accurate, hints)
         st.words = words
         clock = 0.0  # simulated time the engine is free
+        t_wall = time.monotonic()  # --realtime: the clip's wall-clock start
         first = None
         passes: List[float] = []
         step = int(CHUNK_S * vb.RATE)
         for i in range(0, len(samples), step):
             chunk = samples[i : i + step]
             spoken = (i + len(chunk)) / vb.RATE
+            if args.realtime:
+                _pace(t_wall, spoken)
+                clock = max(clock, time.monotonic() - t_wall)
             start = max(clock, spoken)
             w = time.monotonic()
             committed, tail = st.feed(chunk)
@@ -185,7 +228,20 @@ def cmd_run(args) -> int:
                 passes.append(took * 1000)
             if first is None and (committed or tail):
                 first = clock
-        start = max(clock, end)
+        if args.realtime:
+            # The client's turn hold: quiet chunks, at real-time pace, until
+            # the quiet after the last loud frame reaches --hold-ms (the
+            # early accurate pass starts on the first of them).
+            quiet = array("f", bytes(4 * step))
+            fed = end
+            while (st._fed - st._loud_end) * 1000.0 < args.hold_ms:
+                fed += CHUNK_S
+                _pace(t_wall, fed)
+                st.feed(quiet)
+            end = fed
+            start = max(clock, end)
+        else:
+            start = max(clock, end)
         w = time.monotonic()
         out = st.finish()
         call = time.monotonic() - w
@@ -225,6 +281,8 @@ def cmd_run(args) -> int:
         "engine_threads": engine.threads,
         "set": args.set,
         "polish": bool(args.polish),
+        "realtime": bool(args.realtime),
+        "hold_ms": args.hold_ms if args.realtime else 0,
         "n": len(rows),
         "finish_p50": _pct([r["finish_ms"] for r in rows], 0.5),
         "finish_p95": _pct([r["finish_ms"] for r in rows], 0.95),
@@ -244,10 +302,11 @@ def cmd_run(args) -> int:
         "load_s": round(load_s, 2),
     }
     RESULTS.mkdir(parents=True, exist_ok=True)
-    name = "moonshine-lane-%s-%s%s.json" % (
+    name = "moonshine-lane-%s-%s%s%s.json" % (
         args.threads,
         args.set,
         "-polish" if args.polish else "",
+        "-rt%d" % args.hold_ms if args.realtime else "",
     )
     (RESULTS / name).write_text(
         json.dumps({"summary": summary, "rows": rows}, indent=1)
@@ -357,6 +416,9 @@ def main(argv=None) -> int:
     run.add_argument("--set", default="piper")
     run.add_argument("--limit", type=int, default=0)
     run.add_argument("--polish", action="store_true")
+    run.add_argument("--realtime", action="store_true")
+    run.add_argument("--hold-ms", type=int, default=900)
+    run.add_argument("--min-dur", type=float, default=0.0)
     run.set_defaults(fn=cmd_run)
     every = sub.add_parser("all")
     every.add_argument("--sets", default="piper,libri")
