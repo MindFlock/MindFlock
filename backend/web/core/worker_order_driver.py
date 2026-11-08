@@ -549,18 +549,24 @@ def alive_anywhere(local: Iterable[str]) -> set:
     return out
 
 
-def on_removed(title: str) -> None:
-    """A session left THIS server's engine (deleted, closed, or its start
-    failed — that last one never reaches the disk, so no tombstone says it
-    is gone): settle its order record now. A held worker is forgotten, a
-    running or stopped one is done ("gone") and frees its slot — instead of
-    reading as the other server's work in progress for an hour."""
+def on_failed_start(title: str, created: Optional[float]) -> None:
+    """``title``'s background start failed and its instance is gone: settle
+    ITS order record now — a failed start never reaches the disk, so no
+    tombstone says it is gone and it would read as the other server's work
+    in progress for an hour, holding a cap slot. Only the record of THIS
+    instance (same creation time): titles are reused, and a newer namesake's
+    record must not be popped or finished. A held worker is forgotten, a
+    running or stopped one is done ("gone")."""
     now = time.time()
     hit = False
     with _order.edit() as data:
         for rec in (data.get("parents") or {}).values():
             w = _order.worker_rec(rec, title)
-            if w is None:
+            if (
+                w is None
+                or created is None
+                or not _order._same(w.get("created"), created)
+            ):
                 continue
             hit = True
             if w.get("state") == "held":
@@ -763,7 +769,14 @@ def _pass_sync() -> None:
                     note = ""
                 inst = instances.get(t)
                 notes[t] = (note, _branch_of(inst) if inst is not None else "")
-        # 3. Write back.
+        # 3. Write back. The disk view a drop needs is read BEFORE the store
+        # lock (the other server waits on that lock): only when this record
+        # looks gone from here.
+        view = None
+        if (not parent or parent not in instances) and not any(
+            t in instances for t in rec.get("workers") or {}
+        ):
+            view = _live_elsewhere()
         with _order.edit() as d2:
             live = (d2.get("parents") or {}).get(parent)
             if not isinstance(live, dict):
@@ -797,10 +810,9 @@ def _pass_sync() -> None:
                         w["branch"] = _branch_of(inst)
             fresh = srv.ENGINE.instances
             alive = [t for t in live.get("workers") or {} if t in fresh]
-            if (not parent or parent not in fresh) and not alive:
+            if (not parent or parent not in fresh) and not alive and view is not None:
                 # Gone here — but maybe only not adopted YET (another server's
                 # orchestrator, or its brand-new workers): ask the disk.
-                view = _live_elsewhere()
                 if (not parent or parent not in view.live) and not any(
                     _alive_elsewhere(t, w, view)
                     for t, w in (live.get("workers") or {}).items()
@@ -941,8 +953,9 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
         start_now = [start_now]
     # A worker of this orchestrator whose order record is gone but whose task
     # is still parked: "start it now" releases it directly (the order has
-    # nothing left to say about it).
-    started: List[str] = []
+    # nothing left to say about it) — only once the rest of the change is
+    # valid, so a 400 never leaves workers started behind it.
+    orphans: List[str] = []
     data0 = _order.load()
     for t in [str(x or "").strip() for x in start_now]:
         inst = srv.ENGINE.instances.get(t)
@@ -953,11 +966,10 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
         ):
             try:
                 if srv._prompt_queue.get_state(t).get("held"):
-                    srv._prompt_queue.set_flags(t, enabled=True, held=False)
-                    started.append(t)
+                    orphans.append(t)
             except Exception:  # noqa: BLE001
                 pass
-    start_now = [t for t in start_now if str(t or "").strip() not in started]
+    start_now = [t for t in start_now if str(t or "").strip() not in orphans]
     with _order.edit() as data:
         rec = _order.parent_rec(data, parent, _created(pinst), make=True)
         problems = _order.set_policy(
@@ -970,6 +982,13 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
         )
     if problems:
         return 400, {"error": "; ".join(problems), "problems": problems}
+    started: List[str] = []
+    for t in orphans:
+        try:
+            srv._prompt_queue.set_flags(t, enabled=True, held=False)
+            started.append(t)
+        except Exception:  # noqa: BLE001
+            pass
     tick()
     body = {"ok": True, "order": order_view(parent)}
     if started:

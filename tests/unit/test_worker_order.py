@@ -466,17 +466,18 @@ def test_a_namesakes_old_tombstone_says_nothing_about_a_new_worker(fake):
     assert "w1" not in drv.alive_anywhere(())
 
 
-def test_a_removal_here_settles_the_order_at_once(fake):
+def test_a_failed_start_settles_its_own_order_record_at_once(fake, monkeypatch):
     """A failed start never reaches the disk, so no tombstone says it is gone:
-    the removal hook settles its order record instead of an hour's grace
-    holding its slot."""
+    _drop_failed_start settles THAT instance's record (by creation time)
+    instead of an hour's grace holding its slot — and never a newer
+    namesake's (titles like review-2 are re-spawned every pass)."""
     from backend.web.core import session_removal
 
-    assert (
-        session_removal._settle_worker_order in session_removal._SESSION_REMOVED_HOOKS
-    )
     repo = _repo(str(fake.tmp / "r"))
     fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    fake.ENGINE.lock = __import__("threading").RLock()
+    monkeypatch.setattr(session_removal, "_server", lambda: fake)
+    monkeypatch.setattr(session_removal, "_on_session_removed", lambda t: None)
     drv.set_order("orch", {"mode": "serial"})
     now = time.time()
     _spawn(fake, "w1", "orch", repo, {}, created=now)
@@ -485,15 +486,73 @@ def test_a_removal_here_settles_the_order_at_once(fake):
     drv.tick()
     workers = wo.load()["parents"]["orch"]["workers"]
     assert (workers["w1"]["state"], workers["w2"]["state"]) == ("running", "held")
-    fake.ENGINE.instances.pop("w1")
-    drv.on_removed("w1")  # its start failed
-    fake.ENGINE.instances.pop("w3")
-    drv.on_removed("w3")  # deleted while held
+    # An OLDER w3 instance's failed start: the record is a newer namesake's.
+    old_w3 = _Inst("w3", repo, parent="orch", created=now - 600)
+    drv.on_failed_start("w3", drv._created(old_w3))
+    assert "w3" in wo.load()["parents"]["orch"]["workers"]
+    # w1's own start failed (running → done), w3's (held → forgotten).
+    assert session_removal._drop_failed_start("w1", fake.ENGINE.instances["w1"])
+    assert session_removal._drop_failed_start("w3", fake.ENGINE.instances["w3"])
     workers = wo.load()["parents"]["orch"]["workers"]
     assert workers["w1"]["state"] == "done" and workers["w1"]["how"] == "gone"
     assert "w3" not in workers
     drv.tick()
     assert prompt_queue.get_state("w2")["enabled"] is True  # its slot freed
+
+
+def test_a_writer_waiting_on_the_other_server_never_blocks_reads(fake):
+    """While another server holds the store's flock, this server's writer
+    waits — but its row builds (load) must not wait with it."""
+    import sys
+    import threading
+
+    lock = wo.store_path() + ".lock"
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import fcntl, os, sys, time\n"
+            "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "print('held', flush=True)\n"
+            "time.sleep(30)\n",
+            lock,
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        entered = threading.Event()
+
+        def writer():
+            with wo.edit():
+                entered.set()
+
+        t = threading.Thread(target=writer, daemon=True)
+        t.start()
+        time.sleep(0.3)
+        assert not entered.is_set()  # waiting on the other server
+        done = threading.Event()
+        threading.Thread(target=lambda: (wo.load(), done.set()), daemon=True).start()
+        assert done.wait(5), "load() blocked behind a writer waiting on the flock"
+    finally:
+        holder.kill()
+        holder.wait()
+    t.join(10)
+    assert entered.is_set()
+
+
+def test_set_order_starts_no_orphan_when_the_rest_is_refused(fake):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    fake.ENGINE.instances["w1"] = _Inst("w1", repo, parent="orch", created=9e18)
+    prompt_queue.set_flags("w1", enabled=False, held=True)
+    prompt_queue.enqueue("w1", "TASK w1")
+    code, body = drv.set_order("orch", {"start_now": ["w1"], "steps": [["a"], ["a"]]})
+    assert code == 400 and "started" not in body
+    assert prompt_queue.get_state("w1")["held"]
 
 
 def test_a_fence_of_a_worker_still_being_created_elsewhere_stays(fake):

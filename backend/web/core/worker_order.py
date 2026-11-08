@@ -137,8 +137,11 @@ def load() -> dict:
         return copy.deepcopy(_CACHE["data"])
 
 
-#: The cross-process lock's depth and fd (reentrant within this process).
+#: The cross-process lock's depth and fd (reentrant within this process),
+#: guarded by its OWN mutex: waiting on the other server's flock must never
+#: hold ``_LOCK``, which every row build's :func:`load` takes.
 _FLOCK: Dict[str, object] = {"depth": 0, "fd": None}
+_FLOCK_MUTEX = threading.RLock()
 
 
 @contextmanager
@@ -150,7 +153,7 @@ def _file_lock() -> Iterator[None]:
     unfenced). Reentrant; the kernel releases it if the holder dies."""
     from backend import compat
 
-    with _LOCK:
+    with _FLOCK_MUTEX:
         if not _FLOCK["depth"]:
             path = store_path() + ".lock"
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -177,7 +180,9 @@ def _file_lock() -> Iterator[None]:
 def edit() -> Iterator[dict]:
     """Read-modify-write the store under the lock (saved on a clean exit) —
     this process's and every co-running server's (:func:`_file_lock`)."""
-    with _LOCK, _file_lock():
+    # The flock FIRST, then _LOCK: while the other server holds the store,
+    # this one's reads (load) carry on; only its writers wait.
+    with _file_lock(), _LOCK:
         data = _load_raw()
         yield data
         _save(data)

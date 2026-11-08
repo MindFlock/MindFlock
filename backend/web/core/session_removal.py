@@ -107,6 +107,17 @@ def _drop_failed_start(title: str, inst) -> bool:
             srv.ENGINE.instances.pop(title, None)
     if popped:
         _on_session_removed(title)
+        # It never reached the disk, so no tombstone tells the worker order it
+        # is gone: settle its record (this instance's, by creation time).
+        try:
+            from backend.web.core import worker_order_driver as _wod
+
+            _wod.on_failed_start(title, _wod._created(inst))
+        except Exception as err:  # noqa: BLE001 — a cleanup, never fatal
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf(
+                    "worker order after failed start %s: %v", title, err
+                )
         return True
     return current is None
 
@@ -180,17 +191,6 @@ def _forget_mcp_run_file(title: str) -> None:
 
 
 _SESSION_REMOVED_HOOKS.append(_forget_mcp_run_file)
-
-
-def _settle_worker_order(title: str) -> None:
-    """Settle the removed session's place in its orchestrator's order (a
-    failed start never reaches the disk, so nothing else says it is gone)."""
-    from backend.web.core import worker_order_driver as _wod
-
-    _wod.on_removed(title)
-
-
-_SESSION_REMOVED_HOOKS.append(_settle_worker_order)
 
 
 def _forget_voice(title: str) -> None:
