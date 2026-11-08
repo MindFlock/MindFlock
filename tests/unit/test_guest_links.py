@@ -524,6 +524,56 @@ def no_tunnel(monkeypatch):
     monkeypatch.setattr(guest_tunnel, "_HOST", "")
 
 
+def _make_link(owner, monkeypatch):
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    r = owner.post("/api/guests", json={"sessions": ["alpha"]})
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_local_link_not_live_while_only_on_this_computer(owner, no_tunnel, monkeypatch):
+    """Local mode + Tailscale up: the tailnet URL is right but nothing answers
+    it (bound to 127.0.0.1), so the row says so — the UI asks for Make
+    reachable instead of copying a link that hangs."""
+    from backend.web.core import mobile_access
+
+    monkeypatch.setattr(
+        mobile_access, "tailnet_url", lambda: ("http://box.tail1.ts.net:8765/m", False)
+    )
+    row = _make_link(owner, monkeypatch)
+    assert row["local_url"].startswith("http://box.tail1.ts.net:8765/?token=")
+    assert row["local_live"] is False
+    assert owner.get("/api/guests").json()["links"][0]["local_live"] is False
+
+
+def test_local_link_live_once_reachable(owner, no_tunnel, monkeypatch):
+    from backend.web.core import mobile_access
+
+    monkeypatch.setattr(
+        mobile_access, "tailnet_url", lambda: ("https://box.tail1.ts.net/m", True)
+    )
+    row = _make_link(owner, monkeypatch)
+    assert row["local_url"].startswith("https://box.tail1.ts.net/?token=")
+    assert row["local_live"] is True
+
+
+def test_local_link_from_a_loopback_origin_is_not_live(owner, no_tunnel, monkeypatch):
+    # No Tailscale: the fallback is the request's own origin, and 127.0.0.1
+    # on someone else's machine is their machine.
+    from backend.web.core import mobile_access
+
+    monkeypatch.setattr(mobile_access, "tailnet_url", lambda: (None, False))
+    owner.base_url = "http://127.0.0.1:8765"
+    row = _make_link(owner, monkeypatch)
+    assert row["local_url"].startswith("http://127.0.0.1:8765/?token=")
+    assert row["local_live"] is False
+    owner.base_url = "http://192.168.1.20:8765"
+    assert owner.get("/api/guests").json()["links"][0]["local_live"] is True
+
+
 def test_urls_come_from_the_tunnel(owner, no_tunnel, monkeypatch):
     async def _yes(scope):
         return True

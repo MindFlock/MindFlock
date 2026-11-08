@@ -13,7 +13,7 @@ this hands the owner to copy; the list never carries it on its own.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -42,21 +42,28 @@ async def _refusal(request: Request) -> Optional[JSONResponse]:
     return None
 
 
-def _local_base(request: Request) -> str:
-    """This device's own address — the tailnet/shared phone URL it advertises
-    (its root, not ``/m``), else the origin this request came in on. Only for
-    someone already on the owner's network."""
+_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
+def _local_base(request: Request) -> Tuple[str, bool]:
+    """``(this device's own address, whether it answers another device now)``
+    — the tailnet/shared phone URL it advertises (its root, not ``/m``), else
+    the origin this request came in on. Only for someone already on the
+    owner's network. Not live while the server only listens on 127.0.0.1
+    (local mode): the tailnet address is right but hangs until Make
+    reachable, and a loopback origin points at the guest's own machine."""
     try:
         from backend.web.core import mobile_access as _mobile
 
-        url, _live = _mobile.tailnet_url()
+        url, live = _mobile.tailnet_url()
     except Exception:  # noqa: BLE001
-        url = None
+        url, live = None, False
     if url:
         base = url[:-2] if url.endswith("/m") else url
     else:
         base = str(request.base_url)
-    return base.rstrip("/") + "/"
+        live = (request.url.hostname or "") not in _LOOPBACK_HOSTS
+    return base.rstrip("/") + "/", bool(live)
 
 
 def _with_urls(request: Request, row: dict, token: str) -> dict:
@@ -64,11 +71,14 @@ def _with_urls(request: Request, row: dict, token: str) -> dict:
 
     q = "?token=" + quote(token, safe="")
     public = _tunnel.url()
+    local, local_live = _local_base(request)
     return {
         **row,
         "url": public + q if public else None,
         "phone_url": public + "m" + q if public else None,
-        "local_url": _local_base(request) + q,
+        "local_url": local + q,
+        # False: nobody else can open local_url yet (Make reachable first).
+        "local_live": local_live,
     }
 
 
