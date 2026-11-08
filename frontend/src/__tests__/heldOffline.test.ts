@@ -124,6 +124,17 @@ describe("isHeldOffline / heldRows", () => {
     ];
     expect(heldRows(rows).map((r) => r.title)).toEqual(["a"]);
   });
+
+  it("leaves out a row whose agent isn't installed: its pane offers Install, not Start", () => {
+    const rows = [row({ ...HELD, title: "a" }), row({ ...HELD, title: "nocli" })];
+    expect(heldRows(rows, (i) => i.title === "nocli").map((r) => r.title)).toEqual(["a"]);
+  });
+
+  it("the rail's OfflineBar passes Setup's install read to both counts", () => {
+    const src = code("components/sidebar/OfflineBar.tsx");
+    expect(src).toMatch(/heldRows\(instances, \(i\) => missingAgent\(i, logins\)\)/);
+    expect(src).toMatch(/offlineRows\(instances, logins\)/);
+  });
 });
 
 describe("the notice's ×", () => {

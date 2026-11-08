@@ -117,6 +117,20 @@ describe("offlineRows — the Start all bar", () => {
     ];
     expect(offlineRows(rows).map((i) => i.title)).toEqual(["h1", "dead"]);
   });
+
+  it("leaves out a session whose agent CLI isn't installed (Start all skips it)", () => {
+    const rows = [
+      row({ title: "h1", activity: "offline", ...HELD } as Partial<Instance>),
+      row({ title: "nocli", program: "codex", provider: "codex", activity: "offline", ...HELD } as Partial<Instance>),
+    ];
+    const logins = [
+      { name: "claude", installed: true },
+      { name: "codex", installed: false },
+    ];
+    expect(offlineRows(rows, logins).map((i) => i.title)).toEqual(["h1"]);
+    // Setup not read yet: nothing is judged missing.
+    expect(offlineRows(rows, undefined).map((i) => i.title)).toEqual(["h1", "nocli"]);
+  });
 });
 
 describe("the bell", () => {
