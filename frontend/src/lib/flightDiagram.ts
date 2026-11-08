@@ -281,6 +281,17 @@ const num = (v: unknown, d: number) => {
  * internal `who: both`). */
 export const VERIFY_WHO: Readonly<Record<string, string>> = { both: "by the agent and you", agent: "by the agent", you: "by you" };
 
+/** A bare Wait for me stop's line while it is ahead or waiting. */
+export const YOU_WAITS = "waits for your Done";
+
+/** A bare Wait for me stop's line once it has flown (polish pass 5): "waits
+ * for your Done" is a promise, wrong under a ✓ — a done one says "done", a
+ * skipped one "skipped". "" for every other stop (its summary stays). */
+export function youFlownSub(step: Pick<FlightStep, "kind" | "config">, state: string): string {
+  if (step.kind !== "you" || (state !== "done" && state !== "skipped")) return "";
+  return stopSummary(step) === YOU_WAITS ? state : "";
+}
+
 /** A stop's config in one line, the way its box says it: "push", "10 min
  * quiet", "by the agent", "3 to tick". Never an internal id: a kind it has
  * no words for says nothing (round 21: the judges saw "land"). */
@@ -304,7 +315,7 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
       const items = youItems(step as FlightStep);
       if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
       const t = String(c.text ?? "").trim();
-      return t ? clip(t) : "waits for your Done";
+      return t ? clip(t) : YOU_WAITS;
     }
     case "wait": {
       const until = String(c.until ?? "").trim();
@@ -836,7 +847,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
-      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), stopSummary(s)),
+      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s)),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",

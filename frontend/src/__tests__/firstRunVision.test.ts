@@ -135,8 +135,9 @@ describe("the empty Sky", () => {
     expect(SKYVIEW_SRC).toContain('import { SkyEmpty } from "../onboarding/SkyEmpty";');
     expect(SKYVIEW_SRC.match(/<SkyEmpty blank=\{blank\}/g)).toHaveLength(2);
     expect(SKYVIEW_SRC).toContain(
-      // Round 21: This session too (no dead end), unless a session it can't show is focused.
-      'const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);'
+      // Round 21: This session too (no dead end), unless a session it can't show is focused;
+      // pass 5: or a route with no session is there, hidden by This session.
+      'const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;'
     );
     expect(SKYVIEW_SRC).toContain("const noSessions = instQ.data !== undefined && instQ.data.length === 0;");
   });
