@@ -61,7 +61,7 @@ describe("save as you type (M1: never 'Saved ✓' over unsent text)", () => {
   });
 
   it("every text field on the card uses it, and the card reads 'Saving…' while one is dirty", () => {
-    expect(TICKETS).toContain("onChange={(e) => save.schedule(e.target.value)}");
+    expect(TICKETS).toMatch(/onChange=\{\(e\) => \{\s*setTyped\(e.target.value\);\s*save.schedule\(e.target.value\);/);
     expect(TICKETS).toContain("onBlur={save.flush}");
     expect(TICKETS).toContain("onChange={(e) => labelSave.schedule(e.target.value)}");
     expect(code(REPO_FIELD_RAW)).toContain("onBlur={save.flush}");
