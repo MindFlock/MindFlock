@@ -914,3 +914,39 @@ def test_the_force_start_route_moves_the_ticket_after_the_launch():
     src = inspect.getsource(server._ticket_start.launch)
     assert "move_to_start_state" in src
     assert src.index("inst.Start") < src.index("move_to_start_state")
+
+
+async def test_list_assigned_tickets_with_no_source_calls_no_tracker(
+    monkeypatch, tmp_path
+):
+    """A fresh install has no ticket source. The pipeline config used to stand
+    a blank Shortcut source in for "none", so every open of the Intake panel
+    searched api.app.shortcut.com with an empty token (HTTP 401) and listed
+    a "Shortcut" heading nobody added. Nothing configured = nothing asked."""
+    from pathlib import Path
+
+    from backend.ticket_ingestion import providers as providers_mod
+    from backend.ticket_ingestion.config import PipelineConfig
+
+    monkeypatch.setattr(ticket_start, "_REPO_ROOT", tmp_path)
+    cfg = PipelineConfig(
+        repo_url="",
+        workspace_dir=tmp_path,
+        min_description_length=20,
+        log_file=Path("l"),
+        log_level="INFO",
+        ticketing_sources=[],
+    )
+    assert cfg.ticketing_sources == []
+    assert cfg.ticketing is not None  # the primary's defaults stay readable
+    monkeypatch.setattr(ticket_start, "_load_config", lambda: cfg)
+
+    def _no_provider(src):  # pragma: no cover — the assertion is that it never runs
+        raise AssertionError(f"asked a tracker with no source configured: {src!r}")
+
+    monkeypatch.setattr(providers_mod, "get_provider", _no_provider)
+
+    out = await ticket_start.list_assigned_tickets()
+    assert out["tickets"] == []
+    assert out["errors"] == []
+    assert out["source_labels"] == {}
