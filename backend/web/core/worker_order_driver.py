@@ -49,6 +49,10 @@ FENCE_OWNER = "orch:"
 TICK_S = 3.0
 #: A held task with no order record is released once its session is this old.
 ORPHAN_GRACE_S = 30.0
+#: A running worker whose queue is still parked is healed (switched on) only
+#: this long after its release was claimed: until then the claiming pass may
+#: still be writing the preface (a fast-forward can take a minute).
+RELEASE_GRACE_S = 120.0
 
 _LOOP: Optional[asyncio.AbstractEventLoop] = None
 _WAKE: Optional[asyncio.Event] = None
@@ -749,8 +753,15 @@ def _pass_sync() -> None:
                 continue
             if w.get("state") == "held" and q.get("held") and q.get("enabled"):
                 w["start_now"] = True
-            elif w.get("state") == "running" and q.get("held"):
-                heal.append(t)  # released, but its queue is still parked
+            elif (
+                w.get("state") == "running"
+                and q.get("held")
+                and now - float(w.get("released_at") or 0) > RELEASE_GRACE_S
+            ):
+                # Released, but its queue is still parked (a release that
+                # died half-way). Not one under way: the claiming pass —
+                # maybe the other server's — is still writing its preface.
+                heal.append(t)
         for t in heal:
             try:
                 srv._prompt_queue.set_flags(t, enabled=True, held=False)
@@ -758,10 +769,13 @@ def _pass_sync() -> None:
                 pass
         # 2. Plan, and carry out releases (git + the queue) outside the lock.
         acts = _order.plan(rec, observe(rec, instances, parent))
+        claimed = _claim_releases(
+            parent, [t for kind, t, _d in acts if kind == "release"], now
+        )
         notes: Dict[str, Tuple[str, str]] = {}
         for kind, t, detail in acts:
             w = _order.worker_rec(rec, t)
-            if kind == "release" and w is not None:
+            if kind == "release" and w is not None and t in claimed:
                 note = ""
                 try:
                     note = _release(srv, t, rec, w, detail)
@@ -798,10 +812,10 @@ def _pass_sync() -> None:
                 inst = instances.get(t)
                 if kind == "forget":
                     live["workers"].pop(t, None)
-                elif kind == "release" and w.get("state") == "held":
-                    note, branch = notes.get(t, ("", ""))
-                    w.update(state="running", released_at=now, note=note)
-                    w.pop("start_now", None)
+                elif kind == "release" and t in notes:
+                    # Claimed (state running) before _release ran.
+                    note, branch = notes[t]
+                    w.update(note=note)
                     if branch:
                         w["branch"] = branch
                 elif kind in ("done", "stopped"):
@@ -858,6 +872,25 @@ def _heal_orphans(srv, data: Mapping, instances: Mapping, now: float) -> None:
             srv._prompt_queue.set_flags(title, enabled=True, held=False)
         except Exception:  # noqa: BLE001
             pass
+
+
+def _claim_releases(parent: str, titles: List[str], now: float) -> set:
+    """Mark ``titles`` running under the store lock BEFORE releasing them →
+    the ones this pass won. Both servers plan from their own snapshot: without
+    the claim both released the same worker (two fast-forwards, the held /
+    fence preface written in front of its task twice)."""
+    if not titles:
+        return set()
+    won = set()
+    with _order.edit() as data:
+        live = (data.get("parents") or {}).get(parent)
+        for t in titles:
+            w = _order.worker_rec(live, t) if isinstance(live, dict) else None
+            if w is not None and w.get("state") == "held":
+                w.update(state="running", released_at=now)
+                w.pop("start_now", None)
+                won.add(t)
+    return won
 
 
 def _fence_key(f: Mapping) -> Tuple:

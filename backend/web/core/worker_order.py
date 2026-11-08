@@ -142,6 +142,10 @@ def load() -> dict:
 #: hold ``_LOCK``, which every row build's :func:`load` takes.
 _FLOCK: Dict[str, object] = {"depth": 0, "fd": None}
 _FLOCK_MUTEX = threading.RLock()
+#: How long a writer waits for the other server's hold on the store before
+#: going on without it. An edit takes milliseconds: only a wedged holder
+#: keeps it this long.
+FLOCK_WAIT_S = 5.0
 
 
 @contextmanager
@@ -158,11 +162,23 @@ def _file_lock() -> Iterator[None]:
             path = store_path() + ".lock"
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
-            try:
-                compat.flock(fd, compat.LOCK_EX)
-            except Exception:
-                os.close(fd)
-                raise
+            deadline = time.monotonic() + FLOCK_WAIT_S
+            while True:
+                try:
+                    compat.flock(fd, compat.LOCK_EX | compat.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        # The other server has held it this long (wedged?):
+                        # go on unlocked rather than freeze this one — a spawn
+                        # calls this on the event loop.
+                        os.close(fd)
+                        fd = None
+                        break
+                    time.sleep(0.05)
+                except Exception:
+                    os.close(fd)
+                    raise
             _FLOCK["fd"] = fd
         _FLOCK["depth"] = int(_FLOCK["depth"]) + 1
         try:

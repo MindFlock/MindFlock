@@ -544,6 +544,74 @@ def test_a_writer_waiting_on_the_other_server_never_blocks_reads(fake):
     assert entered.is_set()
 
 
+def test_two_servers_planning_one_release_release_it_once(fake, monkeypatch):
+    """Both servers plan from their own snapshot; the claim under the store
+    lock lets only one release a worker (one preface, one fast-forward)."""
+    import copy as _copy
+
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}})
+    drv.tick()  # lands the fence (released on this pass or the next)
+    stale = _copy.deepcopy(wo.load())  # the other server's snapshot: held
+    stale["parents"]["orch"]["workers"]["w1"]["state"] = "held"
+    stale["parents"]["orch"]["workers"]["w1"]["fence"]["applied"] = True
+    drv.tick()
+    text = prompt_queue.list_queue("w1")[0]["text"]
+    assert text.count("MindFlock fence") == 1
+    prompt_queue.set_flags("w1", held=True)  # as if parked again
+    real_load = wo.load
+    calls = {"n": 0}
+
+    def load_once_stale():
+        calls["n"] += 1
+        return _copy.deepcopy(stale) if calls["n"] == 1 else real_load()
+
+    monkeypatch.setattr(drv._order, "load", load_once_stale)
+    drv.tick()  # the other server: plans a release, loses the claim
+    assert prompt_queue.list_queue("w1")[0]["text"].count("MindFlock fence") == 1
+    # ...and a release claimed moments ago is not "healed" behind its back.
+    assert prompt_queue.get_state("w1")["held"]
+    monkeypatch.setattr(drv._order, "load", real_load)
+    with wo.edit() as data:
+        data["parents"]["orch"]["workers"]["w1"]["released_at"] = time.time() - 600
+    drv.tick()
+    assert not prompt_queue.get_state("w1").get("held")
+
+
+def test_a_wedged_holder_never_freezes_a_writer(fake, monkeypatch):
+    """A spawn edits the store on the event loop: if the other server holds
+    the store's lock for ever, this one goes on unlocked after a bound."""
+    import sys
+
+    monkeypatch.setattr(wo, "FLOCK_WAIT_S", 0.3)
+    lock = wo.store_path() + ".lock"
+    os.makedirs(os.path.dirname(lock), exist_ok=True)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import fcntl, os, sys, time\n"
+            "fd = os.open(sys.argv[1], os.O_CREAT | os.O_RDWR)\n"
+            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "print('held', flush=True)\n"
+            "time.sleep(30)\n",
+            lock,
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        t0 = time.monotonic()
+        with wo.edit() as data:
+            data.setdefault("parents", {})
+        assert time.monotonic() - t0 < 3
+    finally:
+        holder.kill()
+        holder.wait()
+
+
 def test_set_order_starts_no_orphan_when_the_rest_is_refused(fake):
     repo = _repo(str(fake.tmp / "r"))
     fake.ENGINE.instances["orch"] = _Inst("orch", repo)
