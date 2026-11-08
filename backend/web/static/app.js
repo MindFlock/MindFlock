@@ -116085,6 +116085,11 @@ function voiceFields(kind, where, backend) {
 	};
 }
 var noDot = (s) => s.replace(/\.\s*$/, "");
+var HERE_POINTER = /:\s*Settings → Voice installs them\b/;
+function hereDetail(kind, detail) {
+	if (!HERE_POINTER.test(detail)) return detail;
+	return detail.replace(HERE_POINTER, kind === "stt" ? " — install them below" : " — install them under Recognition");
+}
 var VOICE_HOST_ON_USE = "starts when you use voice, stops when idle";
 function readinessLine(kind, view, where, backend = "") {
 	if (where !== "server") return {
@@ -116101,10 +116106,11 @@ function readinessLine(kind, view, where, backend = "") {
 	const id = (kind === "stt" ? sr.stt_backend : sr.tts_backend) || "";
 	let detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
 	if (backend === "system" || !backend && id === "system") {
-		if (view.system?.detail) detail = view.system.detail;
-		else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
+		if (view.system?.detail) {
+			if (!detail || view.system.platform === "none") detail = view.system.detail;
+		} else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
 	}
-	detail = noDot(detail);
+	detail = hereDetail(kind, noDot(detail));
 	if (ok && kind === "tts" && id === "openai" && localVoice({
 		...DEFAULT_VOICE_CFG,
 		server_ready: sr
@@ -116139,11 +116145,11 @@ function tryState(view, canRecord) {
 			why: ""
 		} : {
 			ok: false,
-			why: "No voice is ready on the server" + (sr.tts_detail ? ": " + noDot(sr.tts_detail) : "") + "."
+			why: "No voice is ready on the server" + (sr.tts_detail ? ": " + hereDetail("try", noDot(sr.tts_detail)) : "") + "."
 		},
 		hear: !sr.stt ? {
 			ok: false,
-			why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + noDot(sr.stt_detail) : "") + "."
+			why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + hereDetail("try", noDot(sr.stt_detail)) : "") + "."
 		} : !canRecord ? {
 			ok: false,
 			why: "This browser can't record from a microphone."
@@ -116912,6 +116918,14 @@ var INSTALL_REFUSED = "Only the owner can install models: do it on that computer
 var INSTALL_POLL_MS = 2e3;
 var MOONSHINE_LABEL = "Install fast recognition (Moonshine, ~200 MB)";
 var MOONSHINE_WHY = "Moonshine types your words as you say them and has the text ready about 30 ms after you stop (whisper takes about a second). English only; long dictation is still polished by whisper.";
+var INSTALL_NEXT_NET = "This computer couldn't reach the download servers: check that it is online (and any proxy or VPN), then try again.";
+var installNextDisk = (size) => `The disk is full: free ${size}, then try again.`;
+function installNextStep(error, size) {
+	const e = String(error || "");
+	if (/no space left|disk (is )?full|ENOSPC|not enough space/i.test(e)) return installNextDisk(size);
+	if (/dns error|lookup address|name resolution|could not resolve|failed to fetch|connection (refused|reset|error)|timed? ?out|network is unreachable|certificate|SSL|proxy/i.test(e)) return INSTALL_NEXT_NET;
+	return "";
+}
 function liveWordsLine(view) {
 	if (!view?.server_ready?.stt_stream) return "";
 	if (view.stream_label) return "Live words: " + view.stream_label;
@@ -116926,14 +116940,14 @@ function moonshineOffer(view, streamSetting) {
 	return s === "" || s === "moonshine";
 }
 function moonshineView(st, allowed) {
-	const v = installView(st, allowed);
+	const v = installView(st, allowed, "about 200 MB");
 	if (st.state === "done") return {
 		...v,
 		text: "Installed — live words now use Moonshine."
 	};
 	if (st.state === "failed" && !st.refused && allowed) return {
 		...v,
-		text: v.text + " Live words keep using whisper meanwhile. Try again; if it fails again, mindflock doctor --all on the server says why."
+		text: v.text + " Live words keep using whisper meanwhile."
 	};
 	return v;
 }
@@ -116945,6 +116959,7 @@ function basicRecognizer(view) {
 function installOffer(backend, view) {
 	if (!view) return null;
 	const sr = view.server_ready || {};
+	if (!sr.tts && /local models not installed/i.test(sr.tts_detail || "")) return "local";
 	if (sr.stt_backend === "local" && sr.stt) return null;
 	if (backend === "local") return "local";
 	if (backend === "system" && basicRecognizer(view)) return "basic";
@@ -116962,7 +116977,7 @@ function tryInstallFix(view, install) {
 	return localModelsMissing(view) || st === "failed" && install.touched;
 }
 var TRY_INSTALL_LINE = "Local models aren't installed on the server yet. Install them here; they run on this computer.";
-function installView(st, allowed) {
+function installView(st, allowed, size = "about 300 MB") {
 	const last = st.state === "running" ? (st.log || []).filter(Boolean).slice(-1)[0] || "" : "";
 	if (st.state === "running") {
 		const head = st.already ? "Already installing" : "Installing";
@@ -116991,12 +117006,15 @@ function installView(st, allowed) {
 		text: INSTALL_REFUSED,
 		last
 	};
-	if (st.state === "failed") return {
-		button: "retry",
-		disabled: false,
-		text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + ".",
-		last
-	};
+	if (st.state === "failed") {
+		const next = installNextStep(st.error, size);
+		return {
+			button: "retry",
+			disabled: false,
+			text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + "." + (next ? " " + next : ""),
+			last
+		};
+	}
 	return {
 		button: "install",
 		disabled: false,
@@ -117124,7 +117142,8 @@ function LiveWordsRow({ model, view, fast }) {
 				v,
 				state: fast.status.state,
 				idle: MOONSHINE_WHY,
-				idPrefix: "voice-moonshine"
+				idPrefix: "voice-moonshine",
+				busyLabel: "Installing fast recognition"
 			})]
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallButton, {
 			v,
@@ -117134,7 +117153,7 @@ function LiveWordsRow({ model, view, fast }) {
 		})]
 	});
 }
-function InstallStatus({ v, state, idle, idPrefix }) {
+function InstallStatus({ v, state, idle, idPrefix, busyLabel = "Installing local models" }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		v.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "set-hint",
@@ -117150,7 +117169,7 @@ function InstallStatus({ v, state, idle, idPrefix }) {
 		}),
 		v.button === "busy" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
 			className: "voice-install-progress",
-			"aria-label": "Installing local models"
+			"aria-label": busyLabel
 		}),
 		v.last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "set-hint voice-install-log",
