@@ -94,6 +94,14 @@ describe("the safe default (M2): a new source starts nothing until a state is pi
     expect(TICKETS).toContain('if (v === ANY_STATE) onChange({ needs_filter: "" });');
   });
 
+  it("never offers 'Any state — every ticket assigned to me' on an Anyone's source", () => {
+    // The server refuses an Anyone's source with no state or label, so the
+    // choice could only bounce back as "Not saved" (polish pass 3-d).
+    const at = TICKETS.indexOf("<option value={ANY_STATE}>");
+    const guard = TICKETS.slice(TICKETS.lastIndexOf("{safe && !selected.length", at), at);
+    expect(guard).toContain('source.assignee_scope !== "anyone"');
+  });
+
   it("a state can be typed before Test, and is swapped for the real id once listed", () => {
     expect(TICKETS).toContain('placeholder={"Type a " + noun + " name, e.g. Ready for dev"}');
     expect(TICKETS).toContain("byName.get(v.trim().toLowerCase())");

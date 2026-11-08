@@ -1289,8 +1289,12 @@ function StatePicker({
               {st.name || String(st.id)}
             </option>
           ))}
-          {/* The explicit opt-in to the old wide default — kept, never the default. */}
-          {safe && !selected.length && !hasLabels ? (
+          {/* The explicit opt-in to the old wide default — kept, never the
+              default. Not on an Anyone's source: "every ticket assigned to
+              me" is not what it takes, and the server refuses it there (an
+              Anyone's source needs a state or label), so picking it only
+              ever bounced back as "Not saved". */}
+          {safe && !selected.length && !hasLabels && source.assignee_scope !== "anyone" ? (
             <option value={ANY_STATE}>{"Any " + noun + " — start every ticket assigned to me"}</option>
           ) : null}
         </select>
