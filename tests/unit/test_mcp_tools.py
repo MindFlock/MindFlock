@@ -1003,6 +1003,10 @@ class TestSpawn:
         assert out["queued"] is True and out["ready"] is False
         assert out["reason"] == reason and out["position"] == 1
         assert "wait_for_session" in out["hint"]
+        # The gate also queues for the agent cap and start spacing: the hint
+        # points at `reason` instead of always blaming memory.
+        assert "`reason` says what it waits for" in out["hint"]
+        assert "once memory allows" not in out["hint"]
         assert "orch-w1" in box.policy.spawned_by_me
         assert ctx.progress_total is None or ctx.progress_total == 0
         # wait_for_session knows the queued worker and waits through it.

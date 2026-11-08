@@ -37,12 +37,13 @@ delete routes do.
 from __future__ import annotations
 
 import asyncio
+import datetime as _dt
 import json
 import os
 import subprocess
 import threading
 import time
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional
 
 from backend import config, log
 from backend import session
@@ -383,6 +384,74 @@ def get_engine() -> Engine:
     if _ENGINE is None:
         _ENGINE = Engine()
     return _ENGINE
+
+
+class DiskView(NamedTuple):
+    """What state.json says about every server's sessions."""
+
+    live: frozenset  # saved and not deleted since
+    #: title -> epoch it was deleted (or closed) by some server; a session
+    #: created AFTER that epoch under the same title is a new one.
+    tombstoned: Mapping[str, float]
+
+
+def disk_view() -> DiskView:
+    """Every server's saved, undeleted session titles plus the tombstoned
+    ones. A loop that judges "is this session gone?" from its own
+    ``engine.instances`` alone mistakes a co-running server's brand-new
+    session for a deleted one — but a session reaches state.json only once
+    it has STARTED (minutes for a provisioned workspace), so absence here is
+    not proof either: only a tombstone is. Never raises (unreadable →
+    empty)."""
+    try:
+        state = config.LoadState()
+        tombs = _load_disk_tombstones(state)
+        raw = state.GetInstances()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8")
+        items = json.loads(raw) if raw else []
+    except Exception:  # noqa: BLE001
+        return DiskView(frozenset(), {})
+    live = set()
+    for x in items or []:
+        title = x.get("title") if isinstance(x, dict) else None
+        if not title:
+            continue
+        ts = tombs.get(title)
+        if ts is not None:
+            seen = 0.0
+            for k in ("created_at", "updated_at"):
+                try:
+                    seen = max(seen, _dt.datetime.fromisoformat(str(x[k])).timestamp())
+                except (KeyError, TypeError, ValueError):
+                    pass
+            if float(ts) > seen:
+                continue
+        live.add(title)
+    return DiskView(
+        frozenset(live), {t: float(ts) for t, ts in tombs.items() if t not in live}
+    )
+
+
+def looks_dead_on_disk(title: str) -> bool:
+    """``title``'s state.json entry is one :func:`_sync_external_instances`
+    never adopts: its workspace AND its tmux session are gone (past the
+    adopt grace). :func:`disk_view` still lists it as live — it stays until
+    some server saves the file again — so a loop asking "is this other
+    server's session alive?" checks this too. Costs a state read and a tmux
+    probe: call it for a few titles, not every entry. Never raises."""
+    from backend.session.storage import InstanceData
+
+    try:
+        raw = config.LoadState().GetInstances()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8")
+        for x in json.loads(raw) if raw else []:
+            if isinstance(x, dict) and x.get("title") == title:
+                return _data_looks_dead(InstanceData.from_dict(x), time.time())
+    except Exception:  # noqa: BLE001 — when in doubt, alive
+        return False
+    return False
 
 
 # (mtime_ns, size) of state.json at the last sync, plus the tombstones parsed

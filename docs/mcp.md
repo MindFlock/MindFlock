@@ -1242,8 +1242,11 @@ absorbed?, note?}`. Sends `POST /api/flights/start`.
   the route's leading ship stops and lists them in `absorbed`.
 - `dry_run: true` starts nothing and sends nothing: `{dry_run, session,
   sentence, lines, problems?, warnings?, needs_confirm_merge?,
-  merge_blocked?, next}` — the route read back in one sentence for the agent
-  to say to its user before starting it for real. `merge_blocked` says up
+  merge_blocked?, first_stop?, next}` — the route read back in one sentence
+  for the agent to say to its user before starting it for real. `first_stop`
+  (a route that opens with an agent stop, on a session, without `at` /
+  `start_on`) says that stop is NOT sent: the session's work so far is it —
+  and `at='s1'` sends it. `merge_blocked` says up
   front that this session may not run the merge itself (under `children`
   scope a session never merges ITSELF) and that the way is the same steps
   with `grounded: true`: they wait on the user's Sky until the user attaches

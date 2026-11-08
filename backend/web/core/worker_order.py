@@ -137,10 +137,68 @@ def load() -> dict:
         return copy.deepcopy(_CACHE["data"])
 
 
+#: The cross-process lock's depth and fd (reentrant within this process),
+#: guarded by its OWN mutex: waiting on the other server's flock must never
+#: hold ``_LOCK``, which every row build's :func:`load` takes.
+_FLOCK: Dict[str, object] = {"depth": 0, "fd": None}
+_FLOCK_MUTEX = threading.RLock()
+#: How long a writer waits for the other server's hold on the store before
+#: going on without it. An edit takes milliseconds: only a wedged holder
+#: keeps it this long.
+FLOCK_WAIT_S = 5.0
+
+
+@contextmanager
+def _file_lock() -> Iterator[None]:
+    """An exclusive ``flock`` on ``<store>.lock`` for a whole read-modify-
+    write: the service and the dev launcher share this store and both pass
+    every few seconds, and an unlocked whole-file rewrite by one dropped a
+    worker the other had just registered (its task then started early and
+    unfenced). Reentrant; the kernel releases it if the holder dies."""
+    from backend import compat
+
+    with _FLOCK_MUTEX:
+        if not _FLOCK["depth"]:
+            path = store_path() + ".lock"
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+            deadline = time.monotonic() + FLOCK_WAIT_S
+            while True:
+                try:
+                    compat.flock(fd, compat.LOCK_EX | compat.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        # The other server has held it this long (wedged?):
+                        # go on unlocked rather than freeze this one — a spawn
+                        # calls this on the event loop.
+                        os.close(fd)
+                        fd = None
+                        break
+                    time.sleep(0.05)
+                except Exception:
+                    os.close(fd)
+                    raise
+            _FLOCK["fd"] = fd
+        _FLOCK["depth"] = int(_FLOCK["depth"]) + 1
+        try:
+            yield
+        finally:
+            _FLOCK["depth"] = int(_FLOCK["depth"]) - 1
+            if not _FLOCK["depth"] and _FLOCK["fd"] is not None:
+                try:
+                    os.close(int(_FLOCK["fd"]))  # closing releases the flock
+                finally:
+                    _FLOCK["fd"] = None
+
+
 @contextmanager
 def edit() -> Iterator[dict]:
-    """Read-modify-write the store under the lock (saved on a clean exit)."""
-    with _LOCK:
+    """Read-modify-write the store under the lock (saved on a clean exit) —
+    this process's and every co-running server's (:func:`_file_lock`)."""
+    # The flock FIRST, then _LOCK: while the other server holds the store,
+    # this one's reads (load) carry on; only its writers wait.
+    with _file_lock(), _LOCK:
         data = _load_raw()
         yield data
         _save(data)
@@ -453,6 +511,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
     """The actions one pass takes for an orchestrator: ``[(kind, title,
     detail)]`` with kind ``release`` / ``done`` / ``stopped`` / ``resumed`` /
     ``forget``. PURE: ``obs`` maps worker title → ``{"exists": bool,
+    "elsewhere": bool (alive, but not in this server's engine yet: left
+    alone),
     "report": "done"|"blocked"|"failed"|None (since it was created/released),
     "fenced": bool (its fence is in place, or it has none)}``.
 
@@ -467,6 +527,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
             continue
         o = obs.get(t) or {}
         st = states[t]
+        if o.get("elsewhere"):
+            continue  # another server's session, not adopted here yet
         if o.get("exists") is False:
             if st == "held":
                 acts.append(("forget", t, "deleted before it started"))
@@ -499,6 +561,8 @@ def plan(rec: dict, obs: Mapping[str, dict]) -> List[Tuple[str, str, str]]:
         if not isinstance(w, dict) or states.get(t) != "held":
             continue
         o = obs.get(t) or {}
+        if o.get("elsewhere"):
+            continue  # nothing to release it into here: its own server does
         if not o.get("fenced", True):
             continue  # its fence lands first — never a minute unfenced
         if w.get("start_now"):
