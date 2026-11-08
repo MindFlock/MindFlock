@@ -584,6 +584,16 @@ def test_jumping_back_over_a_running_review_closes_its_reviewer(srv, monkeypatch
     monkeypatch.setattr(
         rv, "_close", lambda parent, t: closed.append((parent, t)) or "deleted"
     )
+    srv._created_epoch = lambda inst: getattr(inst, "created", 0.0)
+    for name, parent in (
+        ("review-1", "s"),
+        ("review-2", "s"),
+        ("review-3", "s"),
+        ("review-4", "someone-else"),
+    ):
+        inst = FakeInst()
+        inst.Parent, inst.created = parent, NOW
+        srv.ENGINE.instances[name] = inst
     f = fly(
         {"kind": "agent", "config": {"prompt": "go"}},
         {"kind": "review"},
@@ -607,6 +617,10 @@ def test_jumping_back_over_a_running_review_closes_its_reviewer(srv, monkeypatch
     assert closed == [("s", "review-1")]
     # Cancelling the route leaves the stop "running" with its reviewer, but
     # nothing will read the verdict any more: it is closed too.
+    # A title that now names another session's reviewer is never closed.
+    F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-4"))
+    D.operate(f["id"], "jump", "s1")
+    assert closed == [("s", "review-1")]
     F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-3"))
     D.operate(f["id"], "cancel")
     assert closed[-1] == ("s", "review-3")

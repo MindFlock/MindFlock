@@ -2487,6 +2487,22 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     return after
 
 
+def _is_its_reviewer(session: str, title: str, since: float) -> bool:
+    """``title`` is still the reviewer that stop spawned: a child of the
+    route's session, created once the stop started. Reviewer titles are
+    reused (review-N): a namesake under another session — or one made after a
+    hand-deleted reviewer — must never be closed by a stale route."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None or str(getattr(inst, "Parent", "") or "") != session:
+        return False
+    try:
+        born = float(srv._created_epoch(inst) or 0.0)
+    except Exception:  # noqa: BLE001
+        return False
+    return not since or born >= since - 5.0
+
+
 def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
     """Close the reviewer of every ``review`` stop that was waiting on one
     and no longer is — jumped back over, skipped, retried, cancelled or
@@ -2519,6 +2535,8 @@ def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
             # with its child, but nothing will read that verdict any more.
             continue
         for k in kids:
+            if not _is_its_reviewer(title, k, float(was.get("since") or 0.0)):
+                continue  # gone, or the title now names someone else's session
             try:
                 if _review._close(title, k):
                     out.append(k)
