@@ -72,9 +72,23 @@ def _with_urls(request: Request, row: dict, token: str) -> dict:
     }
 
 
+#: Failures a plain look at the screen may retry: cloudflared missing (it
+#: shows up by itself once installed) and a tunnel that was up and dropped.
+_RETRY_ON_LOOK = ("not_installed", "exited")
+
+
 def _tunnel_status() -> dict:
-    """The tunnel, kept up while links exist and the gate is on."""
+    """The tunnel, kept up while links exist and the gate is on.
+
+    A start that FAILED stays failed until the owner presses Try again
+    (``POST /api/guests/tunnel``) or makes another link. Restarting it from
+    this GET — which the People screen polls every 2 s while the state is
+    ``starting`` — spawned cloudflared again on every poll, and the screen
+    read "Starting the public link…" for ever instead of why it failed."""
     if _auth.auth_enabled() and _guests.any_links():
+        st = _tunnel.status()
+        if st["state"] == "failed" and st["reason"] not in _RETRY_ON_LOOK:
+            return st
         return _tunnel.ensure()
     return _tunnel.status()
 

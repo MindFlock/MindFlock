@@ -813,3 +813,42 @@ def test_the_owners_socket_keeps_its_writable_attach(owner, link, ptys, pane):
         assert ptys["owner"][0].received() == b"pwd\r"
     assert "-r" not in ptys["owner"][0].argv
     assert ptys["readonly"] == [] and ptys["keys"] == []
+
+
+@pytest.mark.parametrize(
+    "reason, retried", [("failed", False), ("timeout", False), ("exited", True)]
+)
+def test_a_failed_tunnel_is_not_restarted_by_every_look(
+    owner, no_tunnel, monkeypatch, reason, retried
+):
+    """The People screen polls GET /api/guests every 2 s while the tunnel says
+    ``starting``. A start that failed must stay ``failed`` (with its reason)
+    until Try again — restarting it from the GET respawned cloudflared on
+    every poll and the screen read "Starting…" for ever. A tunnel that was up
+    and dropped (``exited``) is still brought back by a look."""
+    guests.create("a", ["alpha"])
+    monkeypatch.setattr(no_tunnel, "_binary", lambda: "/usr/bin/cloudflared")
+    monkeypatch.setattr(no_tunnel, "_ERROR", "the Cloudflare tunnel didn't start")
+    monkeypatch.setattr(no_tunnel, "_REASON", reason)
+    starts = []
+
+    def _ensure():
+        starts.append(True)
+        return no_tunnel.status()
+
+    monkeypatch.setattr(no_tunnel, "ensure", _ensure)
+    for _ in range(3):
+        r = owner.get("/api/guests")
+        assert r.status_code == 200
+        assert r.json()["tunnel"]["state"] == "failed"
+        assert r.json()["tunnel"]["error"] == "the Cloudflare tunnel didn't start"
+    assert bool(starts) is retried
+
+    # Try again is the owner's way back.
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    starts.clear()
+    assert owner.post("/api/guests/tunnel", json={}).status_code == 200
+    assert starts == [True]
