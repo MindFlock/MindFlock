@@ -1241,10 +1241,9 @@ export function Devices(p: ScreenProps) {
       {/* 8. The older ways to trust a machine, folded. */}
       <DevicesAdvanced focusDevice={focusDevice} />
       {/* The person behind every device here — what pairing shares. Last:
-          you come to this screen to add a device, not to fill in a form. */}
-      <p className="set-hint" id="devices-you-intro">
-        You — the same on every device you pair.
-      </p>
+          you come to this screen to add a device, not to fill in a form. The
+          card's own "You" heading and line introduce it (a hint above it read
+          as part of the folded Advanced block). */}
       <PersonCard />
     </>
   );
