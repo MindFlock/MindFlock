@@ -443,7 +443,7 @@ export function Devices(p: ScreenProps) {
           className="set-row set-switch-row"
           id="devices-reachable-row"
           data-control="tailscale-mode"
-          title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't"
+          title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it. Where Tailscale's addresses can't be bound (userspace networking, WSL) it listens on every interface instead, and the line above says so"
         >
           <span className="set-label">Make reachable — from your other devices and phone, over Tailscale</span>
           {/* label wraps only the switch, so clicking the row text doesn't flip it */}

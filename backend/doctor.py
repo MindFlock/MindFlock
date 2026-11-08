@@ -724,14 +724,14 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
             label,
             missing,
             f"configured binary {binary} is missing or not executable",
-            "fix the binary path in Settings → Agent CLI",
+            "fix the binary path in Settings → Agents",
             provider=name,
         )
     path = shutil.which(binary)
     if path:
         return Check(cid, label, "ok", _with_version(name, path), provider=name)
     cmd = _agent_install_cmd(name, binary)
-    fix = cmd or f"install `{binary}` or set a binary path in Settings → Agent CLI"
+    fix = cmd or f"install `{binary}` or set a binary path in Settings → Agents"
     return Check(
         cid,
         label,
@@ -747,21 +747,21 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
 
 def check_agent_cli() -> Check:
     """Check the default coding-agent CLI is available — whichever provider is
-    the default (Settings → Agent CLI), with that provider's own installer as
+    the default (Settings → Agents), with that provider's own installer as
     the fix. A missing binary is a ``fail``: sessions launch it."""
     return check_agent_cli_for(_default_provider_name())
 
 
 def check_agent_cli_for(name: str) -> Check:
     """The ``agent-cli`` row for provider ``name`` instead of the default —
-    Settings → Agent CLI's **Test agent CLI** with a provider picked."""
+    Settings → Agents's **Test agent CLI** with a provider picked."""
     return _agent_cli_check(
         "agent-cli", name or _default_provider_name(), "agent CLI", "fail"
     )
 
 
 def _assistant_provider_name() -> str:
-    """Settings → Agent CLI's Assistant provider, or ``""`` when unset."""
+    """Settings → Agents's Assistant provider, or ``""`` when unset."""
     try:
         from backend.config.settings import load_settings
 
@@ -1071,7 +1071,7 @@ def check_agent_auth() -> Check:
 def check_agent_auth_for(name: str) -> Check:
     """:func:`check_agent_auth` for provider ``name`` instead of the default —
     the same ``agent-auth`` id, so the Setup / Settings sign-in button reads
-    it the same way (Settings → Agent CLI's test with a provider picked)."""
+    it the same way (Settings → Agents's test with a provider picked)."""
     name = name or _default_provider_name()
     return _agent_auth_check("agent-auth", name, f"agent auth ({name})")
 
