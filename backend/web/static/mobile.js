@@ -1632,10 +1632,32 @@
   // arrows/ctrl always act on the PTY directly, even while composing.
   var composeEl = document.getElementById("compose");
   var sendBtn = document.getElementById("send");
+  // Where Send takes the draft (pure: tests run it under node). "new" — no
+  // session yet: what you typed is what to work on, so it opens the new-
+  // session sheet with it filled in; "hold" — the terminal isn't connected
+  // (reconnecting, paused): the draft stays in the box; "send" — down the PTY.
+  // Both used to clear the box with nothing sent, so the words just vanished.
+  function composeTarget(hasSession, connected) {
+    if (!hasSession) return "new";
+    return connected ? "send" : "hold";
+  }
   function sendCompose() {
     if (voiceTakesSend()) return;   // voice mode: the draft goes through POST /send
     if (everythingTakesSend()) return;   // Everything: so does a typed one (say:true)
     var text = composeEl.value;
+    var target = composeTarget(!!current, !!(ws && ws.readyState === WebSocket.OPEN));
+    if (target === "new") {
+      openNewSheet();
+      newTextEl.value = text.trim();
+      composeEl.value = "";
+      autosizeCompose();
+      return;
+    }
+    if (target === "hold") {
+      if (text && statusEl.classList.contains("hidden"))
+        setStatus("not connected — your message is still here; Send again once it's back");
+      return;
+    }
     if (text) {
       // Type the draft, then press Enter as a SEPARATE keystroke a beat
       // later: a TUI like claude treats a rapid burst as a paste, and a \r
