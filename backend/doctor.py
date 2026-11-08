@@ -793,9 +793,11 @@ def check_git_identity() -> Optional[Check]:
         "git identity",
         "warn",
         f"{unset} not set — commits will fail on this computer",
+        # The fix is the bare command, so it pastes as is; the browser's
+        # checklist asks for the two values in place, and `doctor --fix`
+        # asks for them in the terminal.
         'git config --global user.name "Your Name" && '
-        "git config --global user.email you@example.com "
-        "(or Connect GitHub in the browser fills it in from your account)",
+        "git config --global user.email you@example.com",
     )
 
 

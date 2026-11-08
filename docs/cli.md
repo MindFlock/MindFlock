@@ -134,8 +134,11 @@ pymysql (mysql)` — the ones updates carry along.
 
 `--fix` installs every missing `run` tool in one go (one confirmation, one sudo
 prompt), then offers each remaining fix one at a time: a `run` row with
-Enter = yes, a `ship` row (`gh auth login`) with Enter = no. Optional fixes are
-offered only with `--fix --all`, and always with Enter = no.
+Enter = yes, a `ship` row (`gh auth login`) with Enter = no. A missing git
+identity has no command to run, so `--fix` asks for your name and email
+(Enter skips) and writes them to the global git config — the same thing the
+browser checklist's row does. Optional fixes are offered only with
+`--fix --all`, and always with Enter = no.
 
 ### `mindflock update [--check] [--ref REF] [--yes] [--all-devices]`
 

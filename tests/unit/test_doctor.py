@@ -1505,3 +1505,27 @@ class TestBuiltinSpeech:
     def test_registered_and_optional(self):
         assert doctor.CHECKS_BY_ID["builtin-speech"] is doctor.check_builtin_speech
         assert doctor.group_of("builtin-speech") == "optional"
+
+
+class TestGitIdentity:
+    def test_unset_fix_is_a_bare_pasteable_command(self, monkeypatch):
+        # The fix line is shown as code (terminal and browser): prose in it
+        # ("(or Connect GitHub in the browser …)") broke copy-paste.
+        monkeypatch.setattr(doctor.shutil, "which", _which({"git": "/usr/bin/git"}))
+        monkeypatch.setattr(doctor, "_run", lambda argv: (1, ""))
+        c = doctor.check_git_identity()
+        assert c.status == "warn" and "user.name and user.email" in c.detail
+        assert c.fix == (
+            'git config --global user.name "Your Name" && '
+            "git config --global user.email you@example.com"
+        )
+        assert "(" not in c.fix
+        # No auto-run command: the values are the person's to give.
+        assert not c.cmd
+
+    def test_set_is_ok(self, monkeypatch):
+        monkeypatch.setattr(doctor.shutil, "which", _which({"git": "/usr/bin/git"}))
+        vals = {"user.name": "Ada", "user.email": "ada@example.com"}
+        monkeypatch.setattr(doctor, "_run", lambda argv: (0, vals[argv[-1]]))
+        c = doctor.check_git_identity()
+        assert c.status == "ok" and c.detail == "Ada <ada@example.com>"
