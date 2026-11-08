@@ -532,7 +532,18 @@ def _alive_elsewhere(t: str, w: Optional[Mapping], view) -> bool:
         return False
     if w is None and t in view.tombstoned:
         return False
-    return t in view.live or (w is not None and _young(w))
+    if t in view.live:
+        # Saved — unless it is an entry no server will ever adopt again
+        # (workspace and tmux both gone), which state.json keeps listing
+        # until the next save.
+        return not _looks_dead(t)
+    return w is not None and _young(w)
+
+
+def _looks_dead(t: str) -> bool:
+    from backend.web.core import engine as _engine
+
+    return _engine.looks_dead_on_disk(t)
 
 
 def alive_anywhere(local: Iterable[str]) -> set:

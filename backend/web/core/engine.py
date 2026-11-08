@@ -433,6 +433,27 @@ def disk_view() -> DiskView:
     )
 
 
+def looks_dead_on_disk(title: str) -> bool:
+    """``title``'s state.json entry is one :func:`_sync_external_instances`
+    never adopts: its workspace AND its tmux session are gone (past the
+    adopt grace). :func:`disk_view` still lists it as live — it stays until
+    some server saves the file again — so a loop asking "is this other
+    server's session alive?" checks this too. Costs a state read and a tmux
+    probe: call it for a few titles, not every entry. Never raises."""
+    from backend.session.storage import InstanceData
+
+    try:
+        raw = config.LoadState().GetInstances()
+        if isinstance(raw, (bytes, bytearray)):
+            raw = bytes(raw).decode("utf-8")
+        for x in json.loads(raw) if raw else []:
+            if isinstance(x, dict) and x.get("title") == title:
+                return _data_looks_dead(InstanceData.from_dict(x), time.time())
+    except Exception:  # noqa: BLE001 — when in doubt, alive
+        return False
+    return False
+
+
 # (mtime_ns, size) of state.json at the last sync, plus the tombstones parsed
 # from that same read — the fast path below still needs them.
 _LAST_STATE_SIG: list = [None, None]

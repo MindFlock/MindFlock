@@ -308,7 +308,8 @@ def fake(monkeypatch, tmp_path):
     srv.runs = runs
     srv.told, srv.events, srv.reports, srv.tmp = told, events, reports, tmp_path
     # Live titles on disk (every server's): never the real state.json.
-    srv.disk, srv.tombs = set(), {}
+    srv.disk, srv.tombs, srv.dead = set(), {}, set()
+    monkeypatch.setattr(drv, "_looks_dead", lambda t: t in srv.dead)
     monkeypatch.setattr(
         drv,
         "_live_elsewhere",
@@ -577,6 +578,42 @@ def test_two_servers_planning_one_release_release_it_once(fake, monkeypatch):
         data["parents"]["orch"]["workers"]["w1"]["released_at"] = time.time() - 600
     drv.tick()
     assert not prompt_queue.get_state("w1").get("held")
+
+
+def test_a_dead_entry_still_on_disk_frees_its_slot(fake):
+    """state.json keeps listing a session whose workspace and tmux are gone
+    until some server saves again; no server adopts it, so it must not hold
+    its order slot as "the other server's"."""
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    drv.set_order("orch", {"mode": "serial"})
+    _spawn(fake, "w1", "orch", repo, {}, created=time.time())
+    _spawn(fake, "w2", "orch", repo, {}, created=time.time())
+    drv.tick()
+    fake.ENGINE.instances.pop("w1")
+    fake.disk.add("w1")
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "running"
+    fake.dead.add("w1")
+    drv.tick()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "done"
+    assert prompt_queue.get_state("w2")["enabled"] is True
+
+
+def test_looks_dead_on_disk_reads_the_entry(monkeypatch):
+    from backend.web.core import engine as eng
+
+    items = [{"title": "a", "created_at": "2026-11-07T18:00:00-05:00"}]
+    st = SimpleNamespace(GetInstances=lambda: json.dumps(items), tombstones={})
+    monkeypatch.setattr(eng.config, "LoadState", lambda: st)
+    seen = []
+    monkeypatch.setattr(
+        eng, "_data_looks_dead", lambda data, now: seen.append(data.title) or True
+    )
+    assert eng.looks_dead_on_disk("a") is True and seen == ["a"]
+    assert eng.looks_dead_on_disk("zz") is False
+    monkeypatch.setattr(eng.config, "LoadState", lambda: 1 / 0)
+    assert eng.looks_dead_on_disk("a") is False
 
 
 def test_a_wedged_holder_never_freezes_a_writer(fake, monkeypatch):
