@@ -667,9 +667,12 @@ server merges on save so multiple processes can share it.
   (`backend/web/core/speech.py`, `voice.stt_backend` / `tts_backend` =
   `"local"`; the built-in `system` engine keeps nothing here): `whisper/` (faster-whisper's download root — the CTranslate2
   models: `small` unless `voice.stt_model` names another size, and the live
-  transcript's `base.en` unless `voice.stt_stream_model` names one) and
+  transcript's `base.en` unless `voice.stt_stream_model` names one),
+  `moonshine/` (the Moonshine `tiny-streaming` model, ~200 MB, that types
+  the live words in English once installed — Settings → Voice → *Install
+  fast recognition*) and
   `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
-  Face on first use or by the one-click install (Settings → Voice, `POST
+  Face on first use or by the one-click installs (Settings → Voice, `POST
   /api/voice/install-local`), never at server start. Override with
   `$MINDFLOCK_VOICE_DIR`. See
   [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone).
@@ -1369,11 +1372,12 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
-    low). With `stt_backend = "local"` the whisper models (`stt_model` for a
-    phrase sent whole and the accurate pass, `stt_stream_model` for the live
-    transcript and the wake word, `stt_final` when it names a third) are
-    **loaded only while a listening mode is on** (~1.1 GB): never at boot
-    nor by a status read, but when the wake-word standby turns on (it holds
+    low). With `stt_backend = "local"` the recognition models (`stt_model` for a
+    phrase sent whole and the accurate pass, the live transcript's — Moonshine
+    or `stt_stream_model`, below — `stt_stream_model`'s whisper model for the
+    wake word, `stt_final` when it names a third) are loaded 8 s after boot
+    and otherwise **only while a listening mode is on** (~1.1 GB): never by
+    a status read, but when the wake-word standby turns on (it holds
     a listening lease, `POST /api/voice/listen`, renewed every minute —
     while any page holds one the models stay resident, so a wake is answered
     at once) or when a phrase's stream opens. With nobody listening they are
@@ -1434,10 +1438,25 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     default `small`, and the piper voice, default `en_US-lessac-medium` —
     the fields are shared, so a name that is not a faster-whisper size or a
     piper voice (`whisper-1`, `Microsoft Zira Desktop`) reads as the default
-    there; `stt_stream_model` — the live transcript's faster-whisper model
-    on `local` (blank = `base.en` for English, `base` for any other
-    language: ~5× faster than `small` on a CPU at a small accuracy cost; a
-    non-size name reads as the default too); `stt_final` — **the balance
+    there; `stt_stream_model` — the live transcript's engine on `local`:
+    blank = **Moonshine** `tiny-streaming` for English when it is installed
+    (`moonshine-voice` and its model, ~200 MB: Settings → Voice → *Install
+    fast recognition (Moonshine, ~200 MB)*, `POST /api/voice/install-local
+    {"what": "moonshine"}`; it changes no setting) — a true streaming model
+    whose own text is a short phrase's final, ready ~30 ms after the person
+    stops instead of the ~0.5–1 s of the whisper accurate pass, with the
+    accurate pass (`stt_final`) still polishing a phrase of 4 s of speech
+    or more when its early pass lands within 1 s of the end — else
+    `base.en`, and `base` for any other language (Moonshine is English
+    only); `"moonshine"` asks for Moonshine explicitly (still whisper while
+    it is not installed, and for other languages); any faster-whisper size
+    or `org/repo` id keeps that whisper model (~5× faster than `small` on a
+    CPU at a small accuracy cost; any other name reads as the default).
+    `GET /api/voice`'s `stream_engine` / `stream_label` say which is live,
+    Settings → Voice shows it as *Live words: Moonshine* or *Live words:
+    Whisper base.en*, and `mindflock doctor --all` warns (*Fast
+    recognition*) while local recognition is on without Moonshine;
+    `stt_final` — **the balance
     between speed and accuracy**: the live transcript types the fast
     model's words as the person speaks, then at the end of the phrase the
     accurate pass re-decodes the whole phrase and corrects it (blank = with

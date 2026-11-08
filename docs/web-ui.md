@@ -6775,6 +6775,28 @@ labels above the inputs.
     installer (its `GET` fails). A viewer who may not change the server
     (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
     gets it disabled with the reason.
+  - **Live words** (`#voice-live-words`, under Recognition, only while the
+    ready recognition streams — `server_ready.stt_stream`, i.e. local
+    models): which engine types the words as you speak, from
+    `GET /api/voice`'s `stream_label` — *Live words: Moonshine* or *Live
+    words: Whisper base.en*. While Moonshine can't run on the server
+    (`moonshine.available: false`) and `voice.stt_stream_model` would use
+    it (blank or `moonshine`; a whisper size there is a choice, so no
+    offer), the line becomes an action row (`#voice-moonshine`): *Moonshine
+    types your words as you say them and has the text ready about 30 ms
+    after you stop (whisper takes about a second). English only; long
+    dictation is still polished by whisper.* with an **Install fast
+    recognition (Moonshine, ~200 MB)** button (`#voice-moonshine-btn`). It
+    `POST`s `/api/voice/install-local {"what": "moonshine"}` and is
+    followed like the local-models install (the same poll, progress, last
+    log line, 409 and 403 handling — the one installer runs one install at
+    a time, and each row shows only its own, by the status's `what`).
+    *done* → *Installed — live words now use Moonshine.* and the screen
+    re-reads `GET /api/voice`, so the line reads *Live words: Moonshine*;
+    *failed* → the error, then the next step: *Live words keep using
+    whisper meanwhile. Try again; if it fails again, mindflock doctor --all
+    on the server says why.* with **Try again**. An older server (no
+    `moonshine` in `GET /api/voice`) gets no offer.
   - **On the phone page** (`#voice-phone`): *The desktop app always uses
     this computer.* under the title, then where recognition and the voice
     run for the phone (`voice.stt` / `voice.tts`: *The phone* · *This
