@@ -4828,7 +4828,12 @@ source** / **+ Add a repository**). The tracker and repository halves:
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
   credentials, each tracker's **API token** with a **Create a token ↗** link to
-  the tracker's own token page; **Test & continue** tests the typed values
+  the tracker's own token page and a one-line hint naming the button there and
+  what the token must be allowed to do (the catalog field's `hint`); a red
+  **Required** under a box goes as soon as text is typed in it, not when the
+  value is next sent — sent on blur, it went on the mousedown of the button
+  reached for, the page moved under the pointer and that first press did
+  nothing; **Test & continue** tests the typed values
   WITHOUT saving anything (`POST /api/settings/test/ticketing` with no
   `record`) — the draft stays local, and the verdict, member id and state list
   land on it so step 3's pickers fill in. A failed Test stays on the step with a
@@ -4896,7 +4901,8 @@ buckets inside a source, and only the two GitHub tabs share one credential.
   the picker says *None picked — nothing auto-starts from this source yet*, rows say *no
   auto-start state picked yet*, and the pipeline's scan skips the source —
   `providers.base.auto_start_waiting`). **Any state — start every ticket assigned
-  to me** stays in the state menu as an explicit choice; sources saved before
+  to me** stays in the state menu as an explicit choice (not on an Anyone's
+  source, where the server refuses it — it needs a state or label); sources saved before
   this keep their old "empty = every state" rule. Until a Test has passed a
   state can be **typed** (*Type a state name*); it is swapped for the tracker's
   real state once a Test lists one by that name, a typed name the tracker lacks
