@@ -4630,13 +4630,15 @@ starts**, and **Ticket sessions in MindFlock** (`engine.enabled`); Settings
 keeps a **Set in Intake ›** row under each old name.
 The Tickets / GitHub PRs / GitHub issues tabs show one status line where their
 switch used to be — *Auto-start: on — checks every 20 s* — and the dialog
-header's **Auto-start switches ›** goes to the switches.
+header's **Auto-start switches ›** goes to the switches. While all three are
+off that line is left out: the header already says *Auto-start is off
+everywhere.*
 
 **What auto-starts, in one line.** A line above the tabs says what starts on its
 own right now across the three switches (*Auto-start is on for tickets and PR
 comments.*, *Auto-start is off everywhere.*) and the next scheduled template
 (*Next to start on its own: nightly tests, Fri 07:30 — tomorrow's run
-skipped.*); its link (**Turn on ›** / **Auto-start switches ›**) goes to the
+skipped.*); its link, **Auto-start switches ›**, goes to the
 switches (`intake/switches.ts` reads the three together, for this line, the
 row chips and New → Ticket alike). It is hidden until something is set up, so a
 first open shows only the add flow. **New → Ticket** reads the same ticket switch, so it never says

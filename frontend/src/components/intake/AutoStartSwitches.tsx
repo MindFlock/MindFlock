@@ -408,6 +408,9 @@ export function AutoStartLink({
   const configured = kind === "tickets" ? m.ticketSources > 0 : kind === "prs" ? m.repos > 0 : m.issueRepos > 0;
   if (!configured) return null;
   const on = kind === "tickets" ? m.ticketsOn : kind === "prs" ? m.prsOn : m.issuesOn;
+  // Everything off: the header line right above already says "Auto-start is
+  // off everywhere." — a second "Auto-start: off" box under it said it twice.
+  if (!m.ticketsOn && !m.prsOn && !m.issuesOn) return null;
   const state =
     kind === "tickets" && on && broken.length
       ? "on, but " + listNames(broken.map((b) => b.name)) + " can't connect"
