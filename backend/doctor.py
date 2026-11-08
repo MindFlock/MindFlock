@@ -594,18 +594,45 @@ def check_gh() -> Check:
             docs=_DOCS["gh"],
             cmd=_pkg_fix("gh"),
         )
-    code, out = _run(["gh", "auth", "status"])
+    code, _out = _run(["gh", "auth", "status"])
     if code == 0:
         return Check("gh", "GitHub CLI (gh)", "ok", "installed and authenticated")
+    if _github_token_connected():
+        # A token MindFlock already uses (Connect GitHub, $GH_TOKEN) does gh's
+        # whole job — an unsigned gh is nothing to attend to.
+        return Check(
+            "gh",
+            "GitHub CLI (gh)",
+            "info",
+            "installed, not signed in — not needed: MindFlock uses your "
+            "connected GitHub token",
+            docs=_DOCS["gh"],
+        )
+    # gh's own words ("You are not logged into any GitHub hosts. To log in,
+    # run: gh auth login") repeated the fix line below and read as a
+    # requirement; gh is optional, so say what it is for instead.
     return Check(
         "gh",
         "GitHub CLI (gh)",
         "warn",
-        _first_line(out) or "installed but not authenticated",
+        "installed but not signed in (optional — only Open PR / Merge use it; "
+        "Connect GitHub in the app works too, and pushing uses plain git)",
         "run `gh auth login`",
         docs=_DOCS["gh"],
         cmd="gh auth login",
     )
+
+
+def _github_token_connected() -> bool:
+    """Whether MindFlock already has a GitHub token of its own (Settings, or
+    ``$GH_TOKEN``/``$GITHUB_TOKEN``) — never the ``gh auth token`` rung, which
+    is exactly what an unsigned gh lacks."""
+    try:
+        from backend.web.core import github_auth
+
+        return bool(github_auth.resolve_token(gh=False)[1])
+    except Exception:  # noqa: BLE001 — a probe never breaks the doctor
+        return False
 
 
 def _default_provider_name() -> str:

@@ -231,9 +231,23 @@ class TestGh:
             "_run",
             lambda argv: (1, "You are not logged into any GitHub hosts."),
         )
+        monkeypatch.setattr(doctor, "_github_token_connected", lambda: False)
         c = doctor.check_gh()
         assert c.status == "warn"
         assert "gh auth login" in c.fix
+        # Not gh's own sentence (which repeats the fix and reads as a must):
+        # what gh is for, and that it is optional.
+        assert "not logged into" not in c.detail
+        assert "optional" in c.detail and "Connect GitHub" in c.detail
+
+    def test_unauthenticated_with_a_mindflock_token_is_info(self, monkeypatch):
+        # Connect GitHub (or $GH_TOKEN) already does gh's job: nothing to fix.
+        monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))
+        monkeypatch.setattr(doctor, "_run", lambda argv: (1, "not logged in"))
+        monkeypatch.setenv("GH_TOKEN", "ghp_test")
+        c = doctor.check_gh()
+        assert c.status == "info"
+        assert "not needed" in c.detail and not c.cmd
 
     def test_authenticated_is_ok(self, monkeypatch):
         monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))
