@@ -911,6 +911,21 @@ _REPLY_HINT = re.compile(
     re.S,
 )
 _WORKER = re.compile(r'from worker "([^"]+)"')
+#: MindFlock's own wrapping around a worker's task (``mcp.tools._FOOTER`` and
+#: ``core.worker_order``): the report-back footer after a ``---`` rule, and
+#: the paragraphs a held or fenced worker's task starts with. Read the task,
+#: not the contract around it — a fenced worker's row read "Call
+#: mcpmindflockreport_result".
+_WORKER_FOOTER = re.compile(
+    r"\n\s*-{3,}\s*\n\s*You are MindFlock worker session\b.*\Z", re.S
+)
+_WRAP_HEADS = (
+    "mindflock held this task until",
+    "mindflock: started by hand",
+    "mindflock fence (",
+    "your branch was fast-forwarded",
+    "not in your tree yet:",
+)
 _BLOCK_TAGS = re.compile(
     r"<(pasted_content|system-reminder|command-[\w-]+|local-command-[\w-]+|"
     r"bash-[\w-]+|task-notification|user-prompt-submit-hook)\b[^>]*>.*?"
@@ -2726,6 +2741,7 @@ def _headline(text: Optional[str]) -> Headline:
         if kind == "note":
             meaningful = False  # MindFlock's own bookkeeping
         raw = _REPLY_HINT.sub("", raw[m.end() :]).strip()
+    raw = _unwrap(raw)
     if raw.lower().startswith(_RESUME_HEADS):
         return Headline("Continue", False)
     if raw.lower().startswith(_COMPACTION_HEAD):
@@ -2756,6 +2772,16 @@ def _headline(text: Optional[str]) -> Headline:
         if words:
             return Headline(words, meaningful and not weak, False)
     return Headline(out, meaningful and not weak, confident)
+
+
+def _unwrap(raw: str) -> str:
+    """``raw`` without MindFlock's worker wrapping (:data:`_WORKER_FOOTER`,
+    :data:`_WRAP_HEADS`); unchanged when nothing but the wrapping is there."""
+    raw = _WORKER_FOOTER.sub("", raw)
+    paras = re.split(r"\n\s*\n", raw)
+    while len(paras) > 1 and paras[0].strip().lower().startswith(_WRAP_HEADS):
+        paras.pop(0)
+    return "\n\n".join(paras).strip()
 
 
 def _echoes_its_verb(out: str, clean: str) -> bool:

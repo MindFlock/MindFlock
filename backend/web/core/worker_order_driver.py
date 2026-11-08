@@ -26,7 +26,7 @@ import asyncio
 import os
 import threading
 import time
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from backend.web.core import worker_order as _order
 
@@ -47,6 +47,12 @@ __all__ = [
 #: The owner tag on every fence an orchestrator set (bulk drop, the sweep).
 FENCE_OWNER = "orch:"
 TICK_S = 3.0
+#: A held task with no order record is released once its session is this old.
+ORPHAN_GRACE_S = 30.0
+#: A running worker whose queue is still parked is healed (switched on) only
+#: this long after its release was claimed: until then the claiming pass may
+#: still be writing the preface (a fast-forward can take a minute).
+RELEASE_GRACE_S = 120.0
 
 _LOOP: Optional[asyncio.AbstractEventLoop] = None
 _WAKE: Optional[asyncio.Event] = None
@@ -405,6 +411,20 @@ def on_create(
             "why": dict(w["why"]),
             "fence": fence,
         }
+        # The cap is the orchestrator's standing policy — often set for an
+        # earlier batch and forgotten. Say so when it is what holds this one.
+        cap = _order.cap_of(live)
+        busy = sum(
+            1
+            for _s, t, x in _order._unfinished(live, but=title)
+            if x.get("state") == "running"
+        )
+        if parked and cap and busy >= cap:
+            out["waits_for_slot"] = {
+                "cap": cap,
+                "mode": str(live.get("mode") or "parallel"),
+                "running": busy,
+            }
     wake()
     return out, None
 
@@ -421,6 +441,7 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
     from backend.web.core import thread as _thread
 
     obs: Dict[str, dict] = {}
+    disk: list = []  # read once, only when a worker is missing here
     names = set(rec.get("workers") or {})
     for w in (rec.get("workers") or {}).values():
         if isinstance(w, dict):
@@ -431,12 +452,34 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
         inst = instances.get(t)
         if inst is None:
             # A worker that was registered and is gone now is gone; a name
-            # no session ever had is "missing" (not spawned yet).
+            # no session ever had is "missing" (not spawned yet). But "not in
+            # THIS server's engine" is not "gone": a co-running server (the
+            # dev launcher next to the service) shares this store, and it
+            # created the worker a moment ago — it reaches our engine only
+            # on the next state sync. Reading that as gone forgot a held
+            # worker (its task parked for ever) and finished a running one.
             if w is not None:
-                obs[t] = {"exists": False}
+                if not disk:
+                    disk.append(_live_elsewhere())
+                if _alive_elsewhere(t, w, disk[0]):
+                    obs[t] = {"exists": None, "elsewhere": True}
+                else:
+                    obs[t] = {"exists": False}
             continue
         if w is not None and not _order._same(w.get("created"), _created(inst)):
-            obs[t] = {"exists": False}  # its namesake, not it
+            if _born(w) > float(_created(inst) or 0):
+                # The RECORD is the newer one: the title was deleted and spawned
+                # again on the other server, and this engine still holds the
+                # old copy until its next sync. Judge the record as a missing
+                # worker, never as gone.
+                if not disk:
+                    disk.append(_live_elsewhere())
+                if _alive_elsewhere(t, w, disk[0], local_stale=True):
+                    obs[t] = {"exists": None, "elsewhere": True}
+                else:
+                    obs[t] = {"exists": False}
+            else:
+                obs[t] = {"exists": False}  # its namesake, not it
             continue
         rep = None
         try:
@@ -459,6 +502,116 @@ def observe(rec: dict, instances: Mapping, parent: str = "") -> Dict[str, dict]:
             "fenced": not fence or bool(fence.get("applied")),
         }
     return obs
+
+
+#: A session reaches state.json only once it has STARTED, which for a
+#: provisioned workspace can take minutes: until then a worker missing from
+#: this server's engine, from the disk, and not tombstoned is the other
+#: server's work in progress for this long. A deleted (or closed) session is
+#: tombstoned, so it reads gone at once whatever its age.
+ELSEWHERE_GRACE_S = 3600.0
+
+
+def _live_elsewhere():
+    """state.json's view of every server's sessions (``engine.DiskView``)."""
+    from backend.web.core import engine as _engine
+
+    return _engine.disk_view()
+
+
+def _born(w: Mapping) -> float:
+    try:
+        return float(w.get("created") or w.get("held_at") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _young(w: Mapping) -> bool:
+    return time.time() - _born(w) < ELSEWHERE_GRACE_S
+
+
+def _deleted(t: str, w: Mapping, view) -> bool:
+    """``t``'s tombstone is THIS worker's: newer than its creation. Titles are
+    reused (review-1, review-2 every pass): an older tombstone belongs to a
+    namesake and says nothing about a worker created since."""
+    ts = view.tombstoned.get(t)
+    return ts is not None and float(ts) > _born(w)
+
+
+def _alive_elsewhere(
+    t: str,
+    w: Optional[Mapping],
+    view,
+    dead: Optional[set] = None,
+    local_stale: bool = False,
+) -> bool:
+    """``t`` (missing from this engine, or held here only as an older copy:
+    ``local_stale``) is still some server's session. ``dead``: the titles
+    :func:`_looks_dead` already answered for (worked out before a lock)."""
+    if w is not None and _deleted(t, w, view):
+        return False
+    if w is None and t in view.tombstoned:
+        return False
+    if t in view.live and not local_stale:
+        # Saved — unless it is an entry no server will ever adopt again
+        # (workspace and tmux both gone), which state.json keeps listing
+        # until the next save.
+        return not (t in dead if dead is not None else _looks_dead(t))
+    if t in view.live:
+        return True  # the disk entry may be the old copy or the new one
+    return w is not None and _young(w)
+
+
+def _looks_dead(t: str) -> bool:
+    from backend.web.core import engine as _engine
+
+    return _engine.looks_dead_on_disk(t)
+
+
+def alive_anywhere(local: Iterable[str]) -> set:
+    """``local`` (this engine's titles) plus every title another server
+    still holds: saved and undeleted, or an unfinished worker of an order
+    that is not tombstoned (one still being created is on no disk yet). For
+    the loops that prune per-title stores (prompt queues, port blocks)."""
+    view = _live_elsewhere()
+    out = set(local) | set(view.live)
+    for rec in (_order.load().get("parents") or {}).values():
+        for t, w in ((rec or {}).get("workers") or {}).items():
+            if (
+                isinstance(w, dict)
+                and w.get("state") in ("held", "running")
+                and not _deleted(t, w, view)
+            ):
+                out.add(t)
+    return out
+
+
+def on_failed_start(title: str, created: Optional[float]) -> None:
+    """``title``'s background start failed and its instance is gone: settle
+    ITS order record now — a failed start never reaches the disk, so no
+    tombstone says it is gone and it would read as the other server's work
+    in progress for an hour, holding a cap slot. Only the record of THIS
+    instance (same creation time): titles are reused, and a newer namesake's
+    record must not be popped or finished. A held worker is forgotten, a
+    running or stopped one is done ("gone")."""
+    now = time.time()
+    hit = False
+    with _order.edit() as data:
+        for rec in (data.get("parents") or {}).values():
+            w = _order.worker_rec(rec, title)
+            if (
+                w is None
+                or created is None
+                or not _order._same(w.get("created"), created)
+            ):
+                continue
+            hit = True
+            if w.get("state") == "held":
+                rec["workers"].pop(title, None)
+            elif w.get("state") in ("running", "stopped"):
+                w.update(state="done", ended_at=now, how="gone")
+    if hit:
+        wake()
 
 
 def _branch_of(inst) -> str:
@@ -613,6 +766,8 @@ def _pass_sync() -> None:
             f = w.get("fence") if isinstance(w, dict) else None
             if not f or f.get("applied") or instances.get(t) is None:
                 continue
+            if not _order._same(w.get("created"), _created(instances[t])):
+                continue  # this engine holds a namesake, not this worker
             ok, problems, where = _apply_fence(
                 srv, t, instances[t], f, str(f.get("by") or parent)
             )
@@ -633,8 +788,15 @@ def _pass_sync() -> None:
                 continue
             if w.get("state") == "held" and q.get("held") and q.get("enabled"):
                 w["start_now"] = True
-            elif w.get("state") == "running" and q.get("held"):
-                heal.append(t)  # released, but its queue is still parked
+            elif (
+                w.get("state") == "running"
+                and q.get("held")
+                and now - float(w.get("released_at") or 0) > RELEASE_GRACE_S
+            ):
+                # Released, but its queue is still parked (a release that
+                # died half-way). Not one under way: the claiming pass —
+                # maybe the other server's — is still writing its preface.
+                heal.append(t)
         for t in heal:
             try:
                 srv._prompt_queue.set_flags(t, enabled=True, held=False)
@@ -642,10 +804,19 @@ def _pass_sync() -> None:
                 pass
         # 2. Plan, and carry out releases (git + the queue) outside the lock.
         acts = _order.plan(rec, observe(rec, instances, parent))
+        claimed = _claim_releases(
+            parent,
+            {
+                t: (_order.worker_rec(rec, t) or {}).get("created")
+                for kind, t, _d in acts
+                if kind == "release"
+            },
+            now,
+        )
         notes: Dict[str, Tuple[str, str]] = {}
         for kind, t, detail in acts:
             w = _order.worker_rec(rec, t)
-            if kind == "release" and w is not None:
+            if kind == "release" and w is not None and t in claimed:
                 note = ""
                 try:
                     note = _release(srv, t, rec, w, detail)
@@ -653,13 +824,39 @@ def _pass_sync() -> None:
                     note = ""
                 inst = instances.get(t)
                 notes[t] = (note, _branch_of(inst) if inst is not None else "")
-        # 3. Write back.
+        # 3. Write back. The disk view a drop needs is read BEFORE the store
+        # lock (the other server waits on that lock): only when this record
+        # looks gone from here.
+        view = None
+        dead: set = set()
+        if (not parent or parent not in instances) and not any(
+            t in instances for t in rec.get("workers") or {}
+        ):
+            view = _live_elsewhere()
+            # Its tmux probes too: nothing slow runs under the store lock.
+            dead = {
+                t for t in rec.get("workers") or {} if t in view.live and _looks_dead(t)
+            }
         with _order.edit() as d2:
             live = (d2.get("parents") or {}).get(parent)
             if not isinstance(live, dict):
                 continue
+
+            def _same_worker(t: str, w: Optional[dict]) -> bool:
+                # The record still describes the worker this pass planned for
+                # (a namesake may have registered meanwhile — a release's git
+                # work for its siblings can take seconds).
+                snap = _order.worker_rec(rec, t)
+                return (
+                    w is None
+                    or snap is None
+                    or _order._same(w.get("created"), snap.get("created"))
+                )
+
             for t, (key, upd) in landed.items():
                 w = _order.worker_rec(live, t)
+                if not _same_worker(t, w):
+                    continue
                 lf = (w or {}).get("fence")
                 if not isinstance(lf, dict):
                     # Cleared while this pass landed the old one: lift it.
@@ -670,15 +867,15 @@ def _pass_sync() -> None:
                 # else: replaced meanwhile — left unapplied, next pass lands it
             for kind, t, detail in acts:
                 w = _order.worker_rec(live, t)
-                if w is None:
+                if w is None or not _same_worker(t, w):
                     continue
                 inst = instances.get(t)
                 if kind == "forget":
                     live["workers"].pop(t, None)
-                elif kind == "release" and w.get("state") == "held":
-                    note, branch = notes.get(t, ("", ""))
-                    w.update(state="running", released_at=now, note=note)
-                    w.pop("start_now", None)
+                elif kind == "release" and t in notes:
+                    # Claimed (state running) before _release ran.
+                    note, branch = notes[t]
+                    w.update(note=note)
                     if branch:
                         w["branch"] = branch
                 elif kind in ("done", "stopped"):
@@ -687,9 +884,80 @@ def _pass_sync() -> None:
                         w["branch"] = _branch_of(inst)
             fresh = srv.ENGINE.instances
             alive = [t for t in live.get("workers") or {} if t in fresh]
-            if (not parent or parent not in fresh) and not alive:
-                d2["parents"].pop(parent, None)
+            if (not parent or parent not in fresh) and not alive and view is not None:
+                # Gone here — but maybe only not adopted YET (another server's
+                # orchestrator, or its brand-new workers): ask the disk.
+                if (not parent or parent not in view.live) and not any(
+                    _alive_elsewhere(t, w, view, dead=dead)
+                    for t, w in (live.get("workers") or {}).items()
+                    if isinstance(w, dict)
+                ):
+                    d2["parents"].pop(parent, None)
+    _heal_orphans(srv, _order.load(), instances, now)
     _sweep_fences(srv, dict(srv.ENGINE.instances))
+
+
+def _orphan(srv, data: Mapping, title: str, inst, now: float) -> bool:
+    """``title``'s task is parked (queue held) but no order holds it: its
+    record is gone, so no pass will ever release it. A just-created one is
+    not an orphan yet — ``on_create`` parks the task a moment before it
+    writes the record."""
+    if _order.parent_of_worker(dict(data), title) is not None:
+        return False
+    born = _created(inst) or 0.0
+    if born and now - born < ORPHAN_GRACE_S:
+        return False
+    try:
+        return bool(srv._prompt_queue.get_state(title).get("held"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _heal_orphans(srv, data: Mapping, instances: Mapping, now: float) -> None:
+    """Hand every orphaned held task over (its queue switched on): a task
+    parked for an order that no longer exists would otherwise wait for ever —
+    a worker spawned with a fence sat idle until its orchestrator re-sent the
+    task by message."""
+    try:
+        snap = srv._prompt_queue.snapshot()
+    except Exception:  # noqa: BLE001
+        return
+    for title, entry in snap.items():
+        inst = instances.get(title)
+        if inst is None or not entry.get("held"):
+            continue
+        if not _orphan(srv, data, title, inst, now):
+            continue
+        try:
+            srv._prompt_queue.set_flags(title, enabled=True, held=False)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _claim_releases(
+    parent: str, titles: Mapping[str, Optional[float]], now: float
+) -> set:
+    """Mark ``titles`` (title → the creation time planned for) running under
+    the store lock BEFORE releasing them → the ones this pass won. Both
+    servers plan from their own snapshot: without the claim both released
+    the same worker (two fast-forwards, the held / fence preface written in
+    front of its task twice). A namesake registered since is not claimed."""
+    if not titles:
+        return set()
+    won = set()
+    with _order.edit() as data:
+        live = (data.get("parents") or {}).get(parent)
+        for t, created in titles.items():
+            w = _order.worker_rec(live, t) if isinstance(live, dict) else None
+            if (
+                w is not None
+                and w.get("state") == "held"
+                and _order._same(w.get("created"), created)
+            ):
+                w.update(state="running", released_at=now)
+                w.pop("start_now", None)
+                won.add(t)
+    return won
 
 
 def _fence_key(f: Mapping) -> Tuple:
@@ -702,10 +970,19 @@ def _fence_key(f: Mapping) -> Tuple:
 
 def _sweep_fences(srv, instances: Mapping) -> None:
     """Drop every orchestrator-set fence whose session is gone (a new session
-    that reuses the tmux name must not inherit it)."""
+    that reuses the tmux name must not inherit it). Gone means gone from the
+    disk too: a co-running server's new worker is not in this engine yet,
+    and dropping its fence left it working unfenced (:func:`alive_anywhere`)."""
     try:
         live = {srv._red_zones._session_key(_tmux_of(t)) for t in instances}
-        for wt, key in srv._red_zones.fences_by_owner_prefix(FENCE_OWNER):
+        found = srv._red_zones.fences_by_owner_prefix(FENCE_OWNER)
+        if any(key not in live for _wt, key in found):
+            # Not in this engine: alive elsewhere (saved, or a worker still
+            # being created — its fence lands before its first save)?
+            live |= {
+                srv._red_zones._session_key(_tmux_of(t)) for t in alive_anywhere(())
+            }
+        for wt, key in found:
             if key not in live:
                 if srv._red_zones.drop_session_fence(wt, key, cause="ended"):
                     try:
@@ -774,6 +1051,25 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
     start_now = payload.get("start_now") or []
     if isinstance(start_now, str):
         start_now = [start_now]
+    # A worker of this orchestrator whose order record is gone but whose task
+    # is still parked: "start it now" releases it directly (the order has
+    # nothing left to say about it) — only once the rest of the change is
+    # valid, so a 400 never leaves workers started behind it.
+    orphans: List[str] = []
+    data0 = _order.load()
+    for t in [str(x or "").strip() for x in start_now]:
+        inst = srv.ENGINE.instances.get(t)
+        if (
+            inst is not None
+            and str(getattr(inst, "Parent", "") or "") == parent
+            and _order.parent_of_worker(data0, t) is None
+        ):
+            try:
+                if srv._prompt_queue.get_state(t).get("held"):
+                    orphans.append(t)
+            except Exception:  # noqa: BLE001
+                pass
+    start_now = [t for t in start_now if str(t or "").strip() not in orphans]
     with _order.edit() as data:
         rec = _order.parent_rec(data, parent, _created(pinst), make=True)
         problems = _order.set_policy(
@@ -786,8 +1082,18 @@ def set_order(parent: str, payload: Mapping) -> Tuple[int, dict]:
         )
     if problems:
         return 400, {"error": "; ".join(problems), "problems": problems}
+    started: List[str] = []
+    for t in orphans:
+        try:
+            srv._prompt_queue.set_flags(t, enabled=True, held=False)
+            started.append(t)
+        except Exception:  # noqa: BLE001
+            pass
     tick()
-    return 200, {"ok": True, "order": order_view(parent)}
+    body = {"ok": True, "order": order_view(parent)}
+    if started:
+        body["started"] = started
+    return 200, body
 
 
 def order_view(parent: str) -> Optional[dict]:
