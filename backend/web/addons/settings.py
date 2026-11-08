@@ -442,6 +442,19 @@ def _provider_view(p) -> dict:
     return view
 
 
+def _providers_dir_shown() -> str:
+    """The resolved custom-provider TOML folder, ``$HOME`` as ``~``, with a
+    trailing ``/``. ``""`` if it can't be resolved. Never raises."""
+    try:
+        d = str(provider_config._providers_dir())
+        home = os.path.expanduser("~")
+        if home and home != "/" and (d == home or d.startswith(home + os.sep)):
+            d = "~" + d[len(home) :]
+        return d.rstrip("/\\") + "/"
+    except Exception:  # noqa: BLE001 — a hint, never a failure
+        return ""
+
+
 def _default_provider_name() -> str:
     """The configured default provider (falls back to the registry default, or
     to the first installed agent when that one's CLI is missing)."""
@@ -2189,6 +2202,10 @@ class SettingsAddon(Addon):
                     # Custom TOMLs that didn't load — a red row each, instead
                     # of a provider that silently isn't there.
                     "errors": provider_config.load_errors(),
+                    # Where custom-agent TOMLs live on THIS server (env
+                    # overrides honoured), ``~``-shortened: the screen's
+                    # "edit the TOML" note names the real folder.
+                    "providers_dir": _providers_dir_shown(),
                 }
             )
 
