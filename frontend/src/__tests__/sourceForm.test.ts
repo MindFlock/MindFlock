@@ -15,7 +15,9 @@ import {
   putBody,
   requiredMarker,
   savedStates,
+  REQUIRED,
   shouldAutoTest,
+  shownFieldError,
   sourceTestState,
   splitForSave,
   withLastTest,
@@ -374,5 +376,30 @@ describe("Basic vs Advanced (the source form's fold)", () => {
     expect(css).toMatch(/#intake-panel \.tk-source \.tk-body \{ gap: 18px;/);
     expect(css).toContain("#intake-panel .tk-source .set-row { gap: 5px; }");
     expect(css).toMatch(/#intake-panel \.tk-advanced-body \{[^}]*gap: 18px;/);
+  });
+});
+
+describe("shownFieldError — a Required goes as you type", () => {
+  it("hides Required once the box holds text, before the value is sent", () => {
+    expect(shownFieldError(REQUIRED, "sc-token")).toBeUndefined();
+  });
+  it("keeps Required while the box is untouched, empty or blank", () => {
+    expect(shownFieldError(REQUIRED, null)).toBe(REQUIRED);
+    expect(shownFieldError(REQUIRED, "")).toBe(REQUIRED);
+    expect(shownFieldError(REQUIRED, "   ")).toBe(REQUIRED);
+  });
+  it("keeps a shape error until the value is judged again", () => {
+    expect(shownFieldError("Must be a full URL starting with https://", "x")).toBe(
+      "Must be a full URL starting with https://"
+    );
+  });
+  it("splitForSave marks a missing field with the same REQUIRED", () => {
+    const { held } = splitForSave([{ id: "sc", provider: "shortcut" } as TicketingSource], [shortcut], new Set());
+    expect(held.sc.api_token).toBe(REQUIRED);
+  });
+  it("the catalog input renders the shown error, not the raw one", () => {
+    const body = TICKETS_TAB.slice(TICKETS_TAB.indexOf("function CatalogInput("));
+    expect(body).toContain("shownFieldError(error, typed)");
+    expect(body).toContain("<FieldNote field={f} error={shownError} />");
   });
 });

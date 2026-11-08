@@ -61,7 +61,7 @@ describe("save as you type (M1: never 'Saved ✓' over unsent text)", () => {
   });
 
   it("every text field on the card uses it, and the card reads 'Saving…' while one is dirty", () => {
-    expect(TICKETS).toContain("onChange={(e) => save.schedule(e.target.value)}");
+    expect(TICKETS).toMatch(/onChange=\{\(e\) => \{\s*setTyped\(e.target.value\);\s*save.schedule\(e.target.value\);/);
     expect(TICKETS).toContain("onBlur={save.flush}");
     expect(TICKETS).toContain("onChange={(e) => labelSave.schedule(e.target.value)}");
     expect(code(REPO_FIELD_RAW)).toContain("onBlur={save.flush}");
@@ -92,6 +92,14 @@ describe("the safe default (M2): a new source starts nothing until a state is pi
   it("says so on the card, and offers 'Any state' only as an explicit choice", () => {
     expect(TICKETS).toContain("None picked — nothing auto-starts from this source yet.");
     expect(TICKETS).toContain('if (v === ANY_STATE) onChange({ needs_filter: "" });');
+  });
+
+  it("never offers 'Any state — every ticket assigned to me' on an Anyone's source", () => {
+    // The server refuses an Anyone's source with no state or label, so the
+    // choice could only bounce back as "Not saved" (polish pass 3-d).
+    const at = TICKETS.indexOf("<option value={ANY_STATE}>");
+    const guard = TICKETS.slice(TICKETS.lastIndexOf("{safe && !selected.length", at), at);
+    expect(guard).toContain('source.assignee_scope !== "anyone"');
   });
 
   it("a state can be typed before Test, and is swapped for the real id once listed", () => {

@@ -98,6 +98,7 @@ import {
   requiredMarker,
   savedStates,
   shouldAutoTest,
+  shownFieldError,
   sourceTestState,
   splitForSave,
   withLastTest,
@@ -1288,8 +1289,12 @@ function StatePicker({
               {st.name || String(st.id)}
             </option>
           ))}
-          {/* The explicit opt-in to the old wide default — kept, never the default. */}
-          {safe && !selected.length && !hasLabels ? (
+          {/* The explicit opt-in to the old wide default — kept, never the
+              default. Not on an Anyone's source: "every ticket assigned to
+              me" is not what it takes, and the server refuses it there (an
+              Anyone's source needs a state or label), so picking it only
+              ever bounced back as "Not saved". */}
+          {safe && !selected.length && !hasLabels && source.assignee_scope !== "anyone" ? (
             <option value={ANY_STATE}>{"Any " + noun + " — start every ticket assigned to me"}</option>
           ) : null}
         </select>
@@ -2710,6 +2715,10 @@ function CatalogInput({
 }) {
   // Sent when typing pauses, on blur, on Enter and when the card goes away —
   // a typed value never sits unsaved under "Saved ✓".
+  // What is in the box right now (null = untouched since mount), so a
+  // "Required" goes the moment text is typed (shownFieldError).
+  const [typed, setTyped] = useState<string | null>(null);
+  const shownError = shownFieldError(error, typed);
   const save = useAutosave<string>(
     (v) => {
       onDirty?.(false);
@@ -2754,11 +2763,14 @@ function CatalogInput({
       type={f.secret ? "password" : "text"}
       autoComplete="off"
       data-tk-field={f.key}
-      className={error ? "field-missing" : ""}
-      aria-invalid={error ? true : undefined}
+      className={shownError ? "field-missing" : ""}
+      aria-invalid={shownError ? true : undefined}
       placeholder={f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || ""}
       defaultValue={f.secret && saved ? "" : source[f.key] || ""}
-      onChange={(e) => save.schedule(e.target.value)}
+      onChange={(e) => {
+        setTyped(e.target.value);
+        save.schedule(e.target.value);
+      }}
       onBlur={save.flush}
       onKeyDown={(e) => {
         if (e.key === "Enter") {
@@ -2791,7 +2803,7 @@ function CatalogInput({
       ) : (
         input
       )}
-      <FieldNote field={f} error={error} />
+      <FieldNote field={f} error={shownError} />
       {tokenUrl ? (
         <a
           className="ik-token-link"

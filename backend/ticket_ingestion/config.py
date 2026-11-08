@@ -439,7 +439,7 @@ class PipelineConfig:
     # The *primary* (first) ticketing source; ``ticketing_sources`` is the full
     # list the pipeline polls.
     ticketing: TicketProviderConfig | None = None
-    #: All configured ticketing sources (>=1). Multiple different providers AND
+    #: All configured ticketing sources (empty = none configured). Multiple different providers AND
     #: multiple of the same provider (distinct ``id``/credentials) are allowed.
     ticketing_sources: list[TicketProviderConfig] = field(default_factory=list)
     #: Sources the layered loader skipped (:class:`SourceConfigError`) — a
@@ -449,10 +449,19 @@ class PipelineConfig:
     source_errors: list[SourceConfigError] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if not self.ticketing_sources:
-            self.ticketing_sources = [self.ticketing or TicketProviderConfig()]
-        # The primary source is always the first configured one.
-        self.ticketing = self.ticketing_sources[0]
+        if not self.ticketing_sources and self.ticketing is not None:
+            self.ticketing_sources = [self.ticketing]
+        # The primary source is always the first configured one. With none
+        # configured the list stays EMPTY: every listing/claim loop walks it,
+        # and a stand-in source there was a token-less Shortcut that the
+        # Intake panel searched (api.app.shortcut.com, HTTP 401) each time a
+        # fresh install opened it. ``ticketing`` keeps a blank stand-in for
+        # the readers of the primary's defaults (poll interval, …).
+        self.ticketing = (
+            self.ticketing_sources[0]
+            if self.ticketing_sources
+            else TicketProviderConfig()
+        )
         _assign_source_ids(self.ticketing_sources)
 
     def agent_for(self, source_id: str = "") -> str:

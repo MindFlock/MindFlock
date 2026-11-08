@@ -1758,7 +1758,7 @@ class TestGithubResolveToken:
         monkeypatch.setattr(ghm, "_PER_SOURCE_TOKEN_NOTICED", True)
         prov = GithubIssuesProvider(
             TicketProviderConfig(
-                provider="github_issues", project="o/r", api_token="per-source"
+                provider="github_issues", project="o/r", api_token="ghp_per_source"
             )
         )
 
@@ -1766,7 +1766,7 @@ class TestGithubResolveToken:
             raise chain.GithubAuthError("none")
 
         monkeypatch.setattr(chain, "resolve_token", none)
-        assert await prov._resolve_token() == "per-source"
+        assert await prov._resolve_token() == "ghp_per_source"
 
 
 class TestGithubLogin:
