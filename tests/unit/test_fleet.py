@@ -1439,6 +1439,8 @@ async def test_status_payload(world, monkeypatch):
         "readmitted_elsewhere",
         "self_reachable",
         "listening",
+        # Why it bound there ("unbindable" = listens on every interface).
+        "bind",
         "gate_on",
         "admitted",
         "tailnet_peers",
