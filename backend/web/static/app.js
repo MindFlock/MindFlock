@@ -40607,12 +40607,21 @@ function routeCode(text) {
 		device: ""
 	};
 }
+var BIND_ALL_WHY = {
+	all: "you asked for every interface",
+	unbindable: "Tailscale's addresses can't be bound here",
+	"no-tailnet": "Tailscale wasn't running when it started"
+};
 function thisDeviceLine(st) {
 	if (st.listening === void 0 || st.listening === "") return "";
 	const name = st.self.host || st.self.key;
-	const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+	const port = st.self.port || 8765;
+	const where = st.self.ip ? st.self.ip + ":" + port : "port " + port;
 	if (st.self_reachable === false) return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
-	return name + " listens on your tailnet (" + where + ") · access gate " + (st.gate_on ? "on" : "off");
+	const gate = " · access gate " + (st.gate_on ? "on" : "off");
+	const why = BIND_ALL_WHY[st.bind || ""];
+	if (why) return name + " listens on every interface (port " + port + ", " + why + ") — your LAN can reach it too, not only your tailnet" + gate;
+	return name + " listens on your tailnet (" + where + ")" + gate;
 }
 var MAKE_REACHABLE_TEXT = "MindFlock restarts listening on your tailnet (Tailscale mode) with the access gate on — your other devices and your phone can reach it, nothing else can without the access token. This browser stays signed in.";
 function matchText(match) {
@@ -54114,7 +54123,7 @@ function plainDetail$1(c) {
 		if (/^no sign-in needed/i.test(d)) return "No sign-in needed";
 		if (/can't be checked/i.test(d)) return "Installed. MindFlock can't check its sign-in from here.";
 		if (/not signed in/i.test(d)) return "Installed, not signed in";
-		if (/^not installed/i.test(d)) return "Not installed";
+		if (/^not installed/i.test(d)) return "Not on this computer yet. Install it, then press Check again.";
 		return d;
 	}
 	if (c.kind === "github") {
@@ -54261,7 +54270,8 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 	const copyIsFix = a?.kind === "copy" && (!fixCmd || a.target === fixCmd);
 	const handler = a && !copyIsFix && a.target !== "agent-sign-in" && a.target !== "agent-install" ? actionHandler(a, deps) : null;
 	const legacy = a === void 0 ? configureAction(c, deps.gotoScreen) : null;
-	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
+	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test" || stage === "install");
+	const testLabel = stage === "install" ? testing ? "Checking…" : "Check again" : testing ? "Testing…" : "Test";
 	const githubOnButton = c.kind === "github" && !!handler && !tourNext;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "conn-row",
@@ -54321,7 +54331,7 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 						className: "test-btn conn-test",
 						disabled: testing,
 						onClick: onTest,
-						children: testing ? "Testing…" : "Test"
+						children: testLabel
 					}),
 					a?.kind === "dialog" && a.target === "agent-sign-in" && a.provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
 						provider: a.provider,
@@ -58468,6 +58478,7 @@ function GuestLinks() {
 		copyText(l.url).then((ok) => toast(ok ? "Guest link copied — send it to them" : "Copy failed"));
 	};
 	const copyLocal = (l) => void copyText(l.local_url).then((ok) => toast(ok ? "On-your-network link copied" : "Copy failed"));
+	const localLive = (l) => l.local_live !== false;
 	const off = gateOn === false || gateOn === null && config?.auth_enabled === false;
 	const live = (links?.length || 0) > 0 || tunnel?.state === "up" || tunnel?.state === "starting";
 	const madeRow = made ? links?.find((l) => l.id === made) || null : null;
@@ -58643,11 +58654,18 @@ function GuestLinks() {
 								onClick: () => copy(madeRow),
 								children: "Copy link"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							localLive(madeRow) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "test-btn",
 								onClick: () => copyLocal(madeRow),
 								children: "Copy on-your-network link"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-guests-local-reach",
+								title: "MindFlock only listens on this computer, so an on-your-network link wouldn't open for anyone else. Make it reachable in Your devices first.",
+								onClick: () => openSettings("devices"),
+								children: "On-your-network link: Make reachable first"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -64357,38 +64375,70 @@ function PausedBody({ title, hidden }) {
 }
 //#endregion
 //#region src/components/grid/HeldBody.tsx
+function heldMissingLine(name) {
+	return agentName(name) + " isn't installed on this computer, so this session's agent couldn't start. Install it, then Start it here.";
+}
+function useMissingAgent(title) {
+	const { data: setup } = useQuery({
+		queryKey: SETUP_KEY,
+		queryFn: () => api("/api/setup"),
+		staleTime: 3e4
+	}, queryClient);
+	const inst = (queryClient.getQueryData(["instances"]) || []).find((r) => r.title === title);
+	if (!inst) return null;
+	const name = agentMissing(inst, setup?.logins, "offline");
+	if (!name) return null;
+	return {
+		name,
+		isDefault: installTarget(name, setup?.default_provider || "") === "setup"
+	};
+}
 function HeldBody({ title, reason, hidden, onStarted }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const missing = useMissingAgent(title);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-term agent-term pane-paused pane-held" + (hidden ? " hidden" : ""),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "paused-body held-body",
 			role: "status",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "paused-head",
-					children: "Offline"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "paused-text",
-					children: heldLine(reason)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "paused-resume held-start",
-					type: "button",
-					disabled: busy,
-					title: "Start the agent again in the same worktree, resuming its conversation",
-					onClick: (e) => {
-						e.stopPropagation();
-						setBusy(true);
-						startSession(title).then((r) => {
-							setBusy(false);
-							if (r) onStarted?.();
-						});
-					},
-					children: busy ? "Starting…" : "▶ Start"
-				})
-			]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-head",
+				children: "Offline"
+			}), missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-text",
+				children: heldMissingLine(missing.name)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				className: "paused-resume held-install",
+				type: "button",
+				title: "Open " + (missing.isDefault ? "Setup" : "Settings → Agents") + " to install " + agentName(missing.name),
+				onClick: (e) => {
+					e.stopPropagation();
+					if (missing.isDefault) useUi.getState().openDialogFor("setup");
+					else openAgentSettings(missing.name);
+				},
+				children: [
+					"Install ",
+					agentName(missing.name),
+					"…"
+				]
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-text",
+				children: heldLine(reason)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				className: "paused-resume held-start",
+				type: "button",
+				disabled: busy,
+				title: "Start the agent again in the same worktree, resuming its conversation",
+				onClick: (e) => {
+					e.stopPropagation();
+					setBusy(true);
+					startSession(title).then((r) => {
+						setBusy(false);
+						if (r) onStarted?.();
+					});
+				},
+				children: busy ? "Starting…" : "▶ Start"
+			})] })]
 		})
 	});
 }
@@ -100510,7 +100560,7 @@ function otherSessionsLine(titles, worktree) {
 function agentMissingReason(agent, installed) {
 	if (!installed || !agent) return "";
 	if (installed[agent] !== false) return "";
-	return agent + " isn't installed on this device. Install it in Settings → Agents, or pick another agent.";
+	return agentName(agent) + " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
 }
 function preferInstalled(agent, names, installed) {
 	if (!installed || installed[agent] !== false) return agent;
@@ -122702,6 +122752,7 @@ function BinaryPathField({ row, onSaved }) {
 function Providers({ gotoScreen }) {
 	const [statuses, setStatuses] = (0, import_react.useState)([]);
 	const [loadErrors, setLoadErrors] = (0, import_react.useState)([]);
+	const [tomlDir, setTomlDir] = (0, import_react.useState)("");
 	const [managed, setManaged] = (0, import_react.useState)({});
 	const [form, setForm] = (0, import_react.useState)(EMPTY_FORM);
 	const [editing, setEditing] = (0, import_react.useState)(null);
@@ -122712,6 +122763,7 @@ function Providers({ gotoScreen }) {
 		const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
 		setStatuses(statusList);
 		setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
+		setTomlDir(s.status === "fulfilled" ? s.value?.providers_dir || "" : "");
 		const byName = {};
 		if (m.status === "fulfilled") for (const p of m.value?.providers || []) byName[p.name] = p;
 		setManaged(byName);
@@ -122966,11 +123018,9 @@ function Providers({ gotoScreen }) {
 						id: "prov-toml-hint",
 						children: [
 							"Each custom agent is a TOML file in ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "~/.mindflock-assistant/providers/" }),
-							" ",
-							"(or ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "$MINDFLOCK_PROVIDERS_DIR" }),
-							"). Edit it for what this form doesn't cover — busy/idle screen patterns, trust prompts, effort levels, sign-in — as docs/providers.md describes; saving here keeps those keys."
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tomlDir || "~/.mindflock-assistant/providers/" }),
+							tomlDir ? "" : " (or $MINDFLOCK_PROVIDERS_DIR)",
+							". Edit it for what this form doesn't cover — busy/idle screen patterns, trust prompts, effort levels, sign-in — as docs/providers.md describes; saving here keeps those keys."
 						]
 					})
 				]
@@ -123436,7 +123486,7 @@ function PersonCardView({ person, draft, busy, error, onChange, onSave, onCopyId
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "What MindFlock's own commits (Goes as far as, team-run merges, peer exports) are authored as. Blank: the repo's git config decides. Your agents' commits are never changed."
+						children: "Who the commits MindFlock makes for you are authored as — when a session is set to commit or open a PR by itself, team-run merges, peer exports. Blank: the repo's git config decides. Your agents' commits are never changed."
 					})
 				]
 			}),
@@ -124530,7 +124580,7 @@ function Devices(p) {
 					className: "set-row set-switch-row",
 					id: "devices-reachable-row",
 					"data-control": "tailscale-mode",
-					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't",
+					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it. Where Tailscale's addresses can't be bound (userspace networking, WSL) it listens on every interface instead, and the line above says so",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
