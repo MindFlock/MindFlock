@@ -868,6 +868,21 @@ export const SKY_MODES: ReadonlyArray<{ id: SkyMode; label: string; title: strin
   { id: "perched", label: "Needs you", title: "Only the routes that need you" },
 ];
 
+/** A route with no session (a stop placed on the Sky, a source's default
+ * stops) just made, and the view hiding such routes (This session, Needs
+ * you): what the Sky does so it never vanishes without a word (polish pass 5).
+ * "shown" — All / Mine draw it; "switch" — This session with no session at
+ * all has nothing else to show, so the view moves to All; "say" — a toast
+ * names where it went, with a Show all button. */
+export function groundedLanding(mode: SkyMode, noSessions: boolean): "shown" | "switch" | "say" {
+  if (mode === "all" || mode === "mine") return "shown";
+  return mode === "one" && noSessions ? "switch" : "say";
+}
+
+/** The plain line for This session / Needs you on a sky whose only routes
+ * have no session yet: where they are, instead of "Nothing in the Sky yet". */
+export const GROUNDED_HIDDEN_LINE = "Your routes with no session yet show under All.";
+
 /** Drawn in the sky at all: not a hidden helper (a verify run). */
 export const inSky = (r: Pick<Instance, "hidden_by">) => !r.hidden_by;
 

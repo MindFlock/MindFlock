@@ -87,6 +87,24 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
 
 ## Using Flights
 
+### On the Sky: build, run, and a stop that fails
+
+- **Build a route from nothing.** Right-click empty sky and type in **Add a
+  stop…** (Enter places it where you clicked), drag a chip from the
+  **Stops** shelf at the bottom, or open **All stops…** for every kind and the
+  **saved routes** (Ticket to merge, Nightly chores, …) at its foot. A route
+  with no session yet shows under **All** and **Mine**. **This session** (the
+  default) shows one session's route only: with no session at all, placing a
+  stop moves the view to All; otherwise a toast says where it went, with
+  **Show all**.
+- **Run it.** A route on a session runs its stops in order; the bird shows
+  where the work is, and a stop with a ✓ is done.
+- **Wait for me** stops the route until you press **Done** (or **Skip**) on
+  the stop or in the bell; the route then **Needs you**.
+- **A stop that fails halts the route** (its *If it fails* option, Halt by
+  default): the stop turns red with the reason, and offers **Retry**, **Skip**
+  and **Let the agent fix it**.
+
 ### How a ticket gets its route
 
 Every way work arrives ends in the same start path, and every one of them can
@@ -148,8 +166,8 @@ failed run with the reason. The saved-route list (`GET /api/flights/plans`)
 shows a scheduled one's next run, last run and history under `runs`; the
 record is `~/.mindflock/flights/schedule_runs.json`, on this device only (the
 saved routes themselves sync). The Schedule dialog lists templates and these
-saved routes — with that record (next run, last result, history), **Run now**
-and **Edit in the Sky**.
+saved routes — with that record (next run, last result, history), **Run now**,
+**Schedule…** (an unscheduled one) and **Edit** (opens it in the Sky).
 
 ### Verify stops
 

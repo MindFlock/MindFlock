@@ -228,6 +228,8 @@ import {
   intakeFrame,
   withLiveFlights,
   clearRightColumn,
+  groundedLanding,
+  GROUNDED_HIDDEN_LINE,
 } from "../../lib/skyLayout";
 import {
   MARQUEE_MIN,
@@ -1485,6 +1487,17 @@ export function SkyView() {
     const f = await makeGrounded(d);
     if (!f || !alive.current) return;
     setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
+    groundedLanded(f);
+  };
+  /** A route with no session just made or asked for: the view that hides
+   * such routes (This session, Needs you) moves to All when it has nothing
+   * else to show, else says where it went with a Show all button (lib/skyLayout
+   * `groundedLanding`) — a right-click or a drop never vanishes silently. */
+  const groundedLanded = (f: Flight) => {
+    const how = groundedLanding(useUi.getState().skyMode, instQ.data?.length === 0);
+    if (how === "switch") setSkyMode("all");
+    else if (how === "say")
+      toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it", { action: { label: "Show all", onClick: () => setSkyMode("all") } });
   };
   /** Where a palette click puts its block (lib/skyLayout `spotNear`): the free
    * spot nearest just above the shelf's middle, or right of the floating
@@ -1530,9 +1543,8 @@ export function SkyView() {
     const at = spotRef.current(f, near);
     setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
     placing.current.set(groundedKey(f.id), near);
-    // This session and Perched on you draw no grounded line: say where it went.
-    const m = useUi.getState().skyMode;
-    if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+    // This session and Needs you draw no grounded line: say where it went.
+    groundedLanded(f);
   };
   /** The intake lane's stops chip: that source's default stops as an editor
    * chain on the board (IntakeLane `openDefaultEditor`) — placed right of the
@@ -1543,7 +1555,7 @@ export function SkyView() {
       existing: (f) => {
         const key = groundedKey(f.id);
         if (rectOf(key)) jumpTo(key);
-        else toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+        else groundedLanded(f);
       },
       made: (f) => {
         if (!alive.current) return;
@@ -1552,8 +1564,7 @@ export function SkyView() {
         setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
         placing.current.set(key, "lane");
         setGroundFocus(key);
-        const m = useUi.getState().skyMode;
-        if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+        groundedLanded(f);
       },
     });
   /** Pin a line at `at` — through the layout store even when the sky has
@@ -2470,9 +2481,14 @@ export function SkyView() {
   // calm card shows instead); with sessions but none it can show, it points
   // at where one is picked (round 21: never a dead end).
   const noSessions = instQ.data !== undefined && instQ.data.length === 0;
+  // Routes with no session yet, hidden by This session: the sky is not
+  // empty, they are under All (polish pass 5).
+  const groundedHidden = mode === "one" && groundedIds.size > 0;
   const empty =
     lines.length > 0
       ? ""
+      : groundedHidden && noSessions && !focused && !query
+        ? GROUNDED_HIDDEN_LINE
       : mode === "one" && focused
         ? "“" + windowName(focused) + "” isn't in the sky right now."
         : mode === "one" && !noSessions
@@ -2490,7 +2506,7 @@ export function SkyView() {
                 : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
 
   // Nothing at all on an unfiltered sky: SkyEmpty's calm card instead of the line.
-  const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);
+  const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;
 
   const toolbar = (
     <div className="sky-toolbar" role="toolbar" aria-label="The sky">
@@ -3115,7 +3131,9 @@ export function SkyView() {
               </div>
             )}
             <SkyShortcuts open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} groups={SKY_SHORTCUT_GROUPS} />
-            <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="sky-empty muted">{empty}</SkyEmpty>
+            {/* Not under the floating palette (or All stops, which floats it):
+                the card draws above the plane, so it covered the catalog. */}
+            {!(paletteOn && blank) && <SkyEmpty blank={blank} newSession={noSessions && !lines.length} className="sky-empty muted">{empty}</SkyEmpty>}
           </div>
           {shelf}
         </div>

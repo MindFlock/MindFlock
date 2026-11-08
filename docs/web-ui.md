@@ -3309,10 +3309,10 @@ and *To send text to a session that's already running, use Prompts.*, with
   last, as cards with a template's anatomy: the bird and the name, *2 stops ·
   app · claude*, the strip's schedule line (`runs.schedule_label`) and how far
   off the next run is (*Paused*, *Starts on mac-mini*), then the last run or
-  *Last run failed: …* and **Recent runs**. Two actions: **Fly now** (`POST
+  *Last run failed: …* and **Recent runs**. Two actions: **Run now** (`POST
   /api/flights/start {plan_id}` — the new session is selected once its row
-  exists, and Schedule closes) and **Edit in the Sky** (closes Schedule and
-  opens that flyway's card on the Sky's shelf, its **Takes off** section
+  exists, and Schedule closes) and **Edit** (closes Schedule and
+  opens that saved route's card on the Sky's shelf, its **Starts:** section
   open on the schedule). With no scheduled flyway the section is not drawn
   at all (`scheduledFlyways` / `flywayNextLine` in `TemplatesDialog.tsx`).
 
@@ -4283,8 +4283,8 @@ and the waiting items from that source (the sky's intake lane and its drawer)
 start on it unless their own chips say otherwise
 (`components/flights/PlanSelect.tsx`; hidden on a server without flights).
 
-**Scheduled flyways** are listed on [Schedule](#schedule) under their own
-heading, with **Fly now** and **Edit in the Sky**.
+**Scheduled saved routes** are listed on [Schedule](#schedule) under their own
+heading, with **Run now** and **Edit** (opens it in the Sky).
 
 **The pane's Flight tab** (`SessionFlight.tsx`; header item `flight` in
 Customize → Pane header, after Map). It shows once the session has a diagram
