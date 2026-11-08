@@ -55426,7 +55426,7 @@ function WindowRefresh() {
 			return "soon";
 		}
 	};
-	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => o.name + ": next ~" + fmtWhen(o.next_fire));
+	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => agentName(o.name) + ": next ~" + fmtWhen(o.next_fire));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -55534,7 +55534,7 @@ function WindowRefresh() {
 									}
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									title: o.window?.note || "",
-									children: o.name + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
+									children: agentName(o.name) + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
 								})]
 							}, o.name))
 						}),
@@ -61178,6 +61178,15 @@ function isRequiredCheck(c) {
 	if (typeof c.required === "boolean") return c.required;
 	return !EXTRA_CHECKS.has(String(c.id || ""));
 }
+function checkLabel(c) {
+	const id = String(c.id || "");
+	if (id === "agent-cli" && c.provider) return `agent (${c.provider})`;
+	if (id === "agent-auth" && c.provider) return `agent sign-in (${c.provider})`;
+	return c.label || id;
+}
+function asksGitIdentity(c) {
+	return c.id === "git-identity" && (c.status === "warn" || c.status === "fail");
+}
 function requiredChecks(checks) {
 	return (checks || []).filter(isRequiredCheck);
 }
@@ -61230,7 +61239,78 @@ function useDoctorAutoShow() {
 function plainDetail(text) {
 	return (text || "").replace(/`([^`]*)`/g, "$1");
 }
+function GitIdentityForm({ fix, onSaved }) {
+	const [name, setName] = (0, import_react.useState)("");
+	const [email, setEmail] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const ready = !!name.trim() && !!email.trim();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "doctor-identity",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "doctor-identity-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "doctor-ident-name",
+						placeholder: "Your Name",
+						"aria-label": "Your name for commits",
+						value: name,
+						onChange: (e) => setName(e.target.value),
+						onClick: (e) => e.stopPropagation()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "doctor-ident-email",
+						placeholder: "you@example.com",
+						"aria-label": "Your email for commits",
+						type: "email",
+						value: email,
+						onChange: (e) => setEmail(e.target.value),
+						onClick: (e) => e.stopPropagation()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "doctor-ident-save",
+						disabled: busy || !ready,
+						title: ready ? void 0 : "Fill in both your name and email",
+						onClick: (e) => {
+							e.stopPropagation();
+							setBusy(true);
+							setError("");
+							api("/api/github/identity", { json: {
+								name: name.trim(),
+								email: email.trim()
+							} }).then(() => {
+								setBusy(false);
+								toast("git now knows who you are");
+								onSaved();
+							}, (err) => {
+								setBusy(false);
+								setError(err.message || "couldn't save");
+							});
+						},
+						children: busy ? "Saving…" : "Save"
+					})
+				]
+			}),
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "error doctor-ident-error",
+				children: error
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The name and email your commits carry — saved in your global git config (~/.gitconfig)."
+			}),
+			fix ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "doctor-ident-cli",
+				onClick: (e) => e.stopPropagation(),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or in a terminal" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(fix) })]
+			}) : null
+		]
+	});
+}
 function CheckRow({ c, onSignedIn }) {
+	const identity = asksGitIdentity(c);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "doctor-check st-" + (c.status || "info"),
 		children: [
@@ -61240,13 +61320,16 @@ function CheckRow({ c, onSignedIn }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "doctor-label",
-				children: c.label || c.id || ""
+				children: checkLabel(c)
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "doctor-detail",
 				children: [
 					plainDetail(c.detail),
-					c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					identity ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitIdentityForm, {
+						fix: c.fix,
+						onSaved: onSignedIn
+					}) : c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "doctor-fix",
 						children: [
 							" ",
@@ -109484,6 +109567,7 @@ function settleSave(seqs, seq, ids, ok) {
 //#endregion
 //#region src/components/intake/sourceForm.ts
 var TEST_FRESH_MS = 864e5;
+var REQUIRED = "Required";
 function lastTestOf(source) {
 	const raw = source?.last_test;
 	if (!raw || typeof raw !== "object") return null;
@@ -109549,13 +109633,17 @@ function splitForSave(sources, catalog, storedIds) {
 	for (const s of sources) {
 		const meta = catalog.find((p) => p.id === s.provider) || null;
 		const missing = storedIds.has(s.id) ? [] : missingRequiredFields(meta, s);
-		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, "Required"]));
+		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, REQUIRED]));
 		else send.push(s);
 	}
 	return {
 		send,
 		held
 	};
+}
+function shownFieldError(error, typed) {
+	if (error === REQUIRED && typed !== null && typed.trim() !== "") return void 0;
+	return error;
 }
 function fieldErrorsFrom(body) {
 	if (!body || typeof body !== "object") return {};
@@ -111974,7 +112062,7 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 						value: String(st.id),
 						children: st.name || String(st.id)
 					}, String(st.id))),
-					safe && !selected.length && !hasLabels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					safe && !selected.length && !hasLabels && source.assignee_scope !== "anyone" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: ANY_STATE,
 						children: "Any " + noun + " — start every ticket assigned to me"
 					}) : null
@@ -112874,6 +112962,8 @@ function FieldNote({ field, error }) {
 	}) : null;
 }
 function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty }) {
+	const [typed, setTyped] = (0, import_react.useState)(null);
+	const shownError = shownFieldError(error, typed);
 	const save = useAutosave((v) => {
 		onDirty?.(false);
 		if (f.secret && v === "") return;
@@ -112911,11 +113001,14 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 		type: f.secret ? "password" : "text",
 		autoComplete: "off",
 		"data-tk-field": f.key,
-		className: error ? "field-missing" : "",
-		"aria-invalid": error ? true : void 0,
+		className: shownError ? "field-missing" : "",
+		"aria-invalid": shownError ? true : void 0,
 		placeholder: f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || "",
 		defaultValue: f.secret && saved ? "" : source[f.key] || "",
-		onChange: (e) => save.schedule(e.target.value),
+		onChange: (e) => {
+			setTyped(e.target.value);
+			save.schedule(e.target.value);
+		},
 		onBlur: save.flush,
 		onKeyDown: (e) => {
 			if (e.key === "Enter") {
@@ -112946,7 +113039,7 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 			}) : input,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldNote, {
 				field: f,
-				error
+				error: shownError
 			}),
 			tokenUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
 				className: "ik-token-link",
@@ -115287,7 +115380,7 @@ function Mobile(p) {
 								dangerouslySetInnerHTML: { __html: data.qr_svg }
 							}),
 							data.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: data.note }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: phoneUrls(data.urls) }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								id: "mobile-sign-in-hint",
 								children: "Scanning signs the phone in. Opening a link by hand asks for the access token (Settings → Security)."
@@ -115343,6 +115436,16 @@ function PhoneAppRow({ app }) {
 			className: "qr-card ts-app-qr",
 			dangerouslySetInnerHTML: { __html: app.qr_svg }
 		})]
+	});
+}
+function phoneUrls(urls) {
+	return (urls || []).filter((u) => {
+		try {
+			const h = new URL(u.url).hostname;
+			return !(h === "localhost" || h === "[::1]" || h.startsWith("127."));
+		} catch {
+			return true;
+		}
 	});
 }
 function UrlList({ urls }) {
@@ -120891,6 +120994,11 @@ var AGENTS_BY_KIND = {
 	]
 };
 var ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+function accountId(id, label) {
+	const typed = (id || "").trim().toLowerCase();
+	if (typed) return typed;
+	return (label || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|-+$/g, "").slice(0, 64);
+}
 function Accounts(_) {
 	const { data } = useAuthProfiles();
 	const [profiles, setProfiles] = (0, import_react.useState)([]);
@@ -120949,9 +121057,9 @@ function Accounts(_) {
 		...p
 	} : x));
 	const addDraft = () => {
-		const id = (draft.id || "").trim().toLowerCase();
+		const id = accountId(draft.id, draft.label || "");
 		if (!ID_RE.test(id)) {
-			setError("id must be lowercase letters/digits/-/_ (max 64)");
+			setError(id ? "The short name can only use lowercase letters, digits, - and _ (64 at most)." : "Give the account a label or a short name.");
 			return;
 		}
 		if (profiles.some((p) => p.id === id)) {
@@ -121058,7 +121166,7 @@ function Accounts(_) {
 								}),
 								p.kind !== "openrouter" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge prov-badge-src",
-									children: p.provider || "claude"
+									children: agentName(p.provider || "claude")
 								}),
 								p.id === defaultId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge",
@@ -121220,22 +121328,6 @@ function Accounts(_) {
 					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
-						children: "Id"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						autoComplete: "off",
-						placeholder: "work",
-						value: draft.id,
-						onChange: (e) => setDraft((d) => ({
-							...d,
-							id: e.target.value
-						}))
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
 						children: "Label"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "text",
@@ -121250,6 +121342,29 @@ function Accounts(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Short name"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "text",
+							autoComplete: "off",
+							value: draft.id,
+							placeholder: accountId("", draft.label || "") || "work",
+							onChange: (e) => setDraft((d) => ({
+								...d,
+								id: e.target.value
+							}))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Optional: names the account's folder. Made from the label when empty."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
 						children: "Agent"
@@ -121261,7 +121376,7 @@ function Accounts(_) {
 						})),
 						children: (AGENTS_BY_KIND[draft.kind] || ["claude"]).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: a,
-							children: a || "any (route by session's CLI)"
+							children: a ? agentName(a) : "any (route by session's CLI)"
 						}, a || "any"))
 					})]
 				}),
@@ -122513,6 +122628,14 @@ var EMPTY_FORM = {
 	resume: "",
 	skip: ""
 };
+function editingAfterSave(name, warning) {
+	return warning ? name : null;
+}
+function sourceBadge(source) {
+	if (source === "builtin") return "built in";
+	if (source === "user") return "custom";
+	return source;
+}
 function toForm(p) {
 	return {
 		name: p.name,
@@ -122536,7 +122659,7 @@ function BinaryPathField({ row, onSaved }) {
 				json: { path }
 			});
 			setWarning(r?.warning || "");
-			toast(path ? "Binary path saved for " + row.name : "Binary path cleared for " + row.name);
+			toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
 			if (r?.status) onSaved(r.status);
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
@@ -122605,8 +122728,10 @@ function Providers({ gotoScreen }) {
 	const del = async (name) => {
 		try {
 			await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-			toast("Removed agent " + name);
+			toast("Removed " + agentName(name));
+			if (editing === name) cancelEdit();
 			load();
+			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
@@ -122647,13 +122772,13 @@ function Providers({ gotoScreen }) {
 				method: "PUT",
 				json: body
 			}) : api("/api/providers", { json: body }));
-			toast((editing ? "Saved agent " : "Added agent ") + body.name);
+			toast((editing ? "Saved " : "Added ") + agentName(body.name));
 			setWarning(res?.warning || "");
-			if (!res?.warning) {
-				setEditing(null);
-				setForm(EMPTY_FORM);
-			}
+			const next = editingAfterSave(body.name, res?.warning || "");
+			setEditing(next);
+			if (!next) setForm(EMPTY_FORM);
 			load();
+			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
@@ -122674,6 +122799,182 @@ function Providers({ gotoScreen }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			children: "Every agent MindFlock knows and where it runs from. Point one at a build MindFlock can't find, or add an agent MindFlock doesn't ship."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			id: "prov-add",
+			open: !!editing,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: editing ? "Edit " + editing : "+ Add a custom agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prov-form",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Name"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-name",
+								placeholder: "mycli",
+								autoComplete: "off",
+								value: form.name,
+								onChange: set("name"),
+								disabled: !!editing
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: editing ? "Fixed once saved — delete and add it again to rename." : "What you pick in the New dialog. Also the command MindFlock runs, unless you set a binary path."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Binary path"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-binary",
+								placeholder: "/home/me/bin/mycli",
+								autoComplete: "off",
+								value: form.binary,
+								onChange: set("binary")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "set-hint",
+								children: [
+									"Optional: the executable to run. Needed when the name is a shell alias or function (",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "type mycli" }),
+									" says “aliased to”) — sessions start in a plain shell that has none of those."
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Launch flags"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-args",
+								placeholder: "--model fast",
+								autoComplete: "off",
+								value: form.args,
+								onChange: set("args")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: added every time it starts, right after the command."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Resume flag"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-resume",
+								placeholder: "--continue",
+								autoComplete: "off",
+								value: form.resume,
+								onChange: set("resume")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: continues the last conversation when a session restarts. Leave empty if it can't."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Skip-permissions flag"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-skip",
+								placeholder: "--yolo",
+								autoComplete: "off",
+								value: form.skip,
+								onChange: set("skip")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: added only to sessions started with permission prompts skipped."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Also matches"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-program",
+								placeholder: "my-cli mycli-beta",
+								autoComplete: "off",
+								value: form.program,
+								onChange: set("program")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: other command names that mean this agent, space-separated. It doesn't change what runs — that's the binary path."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "prov-form-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "prov-add-btn",
+							onClick: save,
+							children: editing ? "Save changes" : "Add agent"
+						}), editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "prov-cancel-btn",
+							onClick: cancelEdit,
+							children: "Cancel"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						id: "prov-error",
+						className: "error",
+						children: error
+					}),
+					warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						id: "prov-warning",
+						className: "prov-launch-hint",
+						children: warning
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						id: "prov-toml-hint",
+						children: [
+							"Each custom agent is a TOML file in ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "~/.mindflock-assistant/providers/" }),
+							" ",
+							"(or ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "$MINDFLOCK_PROVIDERS_DIR" }),
+							"). Edit it for what this form doesn't cover — busy/idle screen patterns, trust prompts, effort levels, sign-in — as docs/providers.md describes; saving here keeps those keys."
+						]
+					})
+				]
+			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "prov-conn-list",
@@ -122721,7 +123022,7 @@ function Providers({ gotoScreen }) {
 								}),
 								mgr?.source && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge prov-badge-src",
-									children: mgr.source
+									children: sourceBadge(mgr.source)
 								})
 							]
 						}),
@@ -122734,10 +123035,6 @@ function Providers({ gotoScreen }) {
 						row.installed && row.installTitle && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "set-hint prov-path",
 							children: ["Runs ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: row.installTitle })]
-						}),
-						row.launchHint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "prov-launch-hint",
-							children: row.launchHint
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BinaryPathField, {
 							row,
@@ -122758,88 +123055,6 @@ function Providers({ gotoScreen }) {
 					]
 				}, row.name);
 			})
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			id: "prov-add",
-			open: !!editing,
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: editing ? "Edit " + editing : "+ Add a custom agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "prov-form",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-name",
-						placeholder: "name (e.g. mycli)",
-						autoComplete: "off",
-						value: form.name,
-						onChange: set("name"),
-						disabled: !!editing
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-program",
-						placeholder: "program (default: name)",
-						autoComplete: "off",
-						value: form.program,
-						onChange: set("program")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-binary",
-						placeholder: "binary path (optional, e.g. /home/me/bin/mycli)",
-						autoComplete: "off",
-						value: form.binary,
-						onChange: set("binary")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-args",
-						placeholder: "saved args (e.g. --dangerously-skip-permissions)",
-						autoComplete: "off",
-						value: form.args,
-						onChange: set("args")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-resume",
-						placeholder: "resume flag (e.g. --continue)",
-						autoComplete: "off",
-						value: form.resume,
-						onChange: set("resume")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-skip",
-						placeholder: "skip-perms flag (e.g. --yolo)",
-						autoComplete: "off",
-						value: form.skip,
-						onChange: set("skip")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "prov-form-actions",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prov-add-btn",
-							onClick: save,
-							children: editing ? "Save changes" : "Add agent"
-						}), editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prov-cancel-btn",
-							onClick: cancelEdit,
-							children: "Cancel"
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "prov-error",
-						className: "error",
-						children: error
-					}),
-					warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "prov-warning",
-						className: "prov-launch-hint",
-						children: warning
-					})
-				]
-			})]
 		})
 	] });
 }
@@ -125054,11 +125269,6 @@ function Devices(p) {
 			revision: linkRev
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAdvanced, { focusDevice }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			id: "devices-you-intro",
-			children: "You — the same on every device you pair."
-		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCard, {})
 	] });
 }
@@ -132961,6 +133171,15 @@ function Logo() {
 		"aria-label": "MindFlock"
 	});
 }
+function newcomerSeen(running, seen) {
+	return isReleaseVersion(running) ? laterVersion(running, seen) : null;
+}
+function settleWhatsNewForNewcomer(running) {
+	const seen = newcomerSeen(running, laterVersion(useWhatsNew.getState().seen, readLocalSeen()));
+	if (!seen) return;
+	saveSeen(seen);
+	useWhatsNew.setState({ seen });
+}
 function useFirstLaunchTour() {
 	const seen = useUi((s) => s.welcomeTourSeen);
 	const { data: instances } = useInstances();
@@ -132980,19 +133199,32 @@ function useFirstLaunchTour() {
 		status,
 		onboarded: config?.onboarded
 	});
+	const firstLaunch = (0, import_react.useRef)(false);
 	(0, import_react.useEffect)(() => {
 		if (!due) return;
+		firstLaunch.current = true;
 		if (!useUi.getState().tourOpen) useUi.setState({ tourOpen: true });
 	}, [due]);
 	const open = useUi((s) => s.tourOpen);
 	const [wasOpen, setWasOpen] = (0, import_react.useState)(false);
+	const [settle, setSettle] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
 		if (open) setWasOpen(true);
 		else if (wasOpen) {
 			setWasOpen(false);
 			useUi.getState().markWelcomeTourSeen();
+			if (firstLaunch.current) {
+				firstLaunch.current = false;
+				setSettle(true);
+			}
 		}
 	}, [open, wasOpen]);
+	const version = useDoctor().data?.version;
+	(0, import_react.useEffect)(() => {
+		if (!settle || version === void 0) return;
+		setSettle(false);
+		settleWhatsNewForNewcomer(version);
+	}, [settle, version]);
 }
 function WelcomeTour() {
 	useFirstLaunchTour();

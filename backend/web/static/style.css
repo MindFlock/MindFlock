@@ -1685,6 +1685,40 @@
   flex-basis: 100%;
   margin: 0;
 }
+
+/* The git identity row asks for the name and email in place (DoctorList's
+   GitIdentityForm) instead of handing a browser user a shell command. */
+.doctor-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.doctor-identity-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.doctor-identity-row input {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.doctor-identity-row button {
+  flex: none;
+}
+.doctor-identity .set-hint {
+  font-size: 11px;
+}
+.doctor-ident-cli > summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+}
+.doctor-ident-cli code {
+  display: block;
+  margin-top: 4px;
+  word-break: break-word;
+}
 /* Getting-started hint callout. Uses the accent tint so it reads as a friendly
    nudge, not a warning. Inline in the layout flow — see Hint.tsx. */
 
@@ -18659,6 +18693,11 @@ p.set-hint {
 
 .prov-item button:hover {
   border-color: var(--accent);
+}
+
+/* The add form leads the Custom agents screen, above the provider rows. */
+#prov-add {
+  margin: 4px 0 16px;
 }
 
 #prov-add summary {
