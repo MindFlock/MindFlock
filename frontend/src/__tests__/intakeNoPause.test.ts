@@ -144,6 +144,11 @@ describe("the Intake dialog has no Pause/Resume", () => {
     const html = renderIntake({ desired: false, legacy: true });
     expect(html).toContain("Auto-start is off everywhere.");
     expect(html).toContain('id="ik-turn-on-btn"');
+    // It names where it goes — it never turned anything on by itself.
+    expect(html).toContain("Auto-start switches ›");
+    expect(html).not.toContain("Turn on ›");
+    // Said once: no second "Auto-start: off" box under the header line.
+    expect(html).not.toContain('id="ik-autostart-link-tickets"');
     expect(html).not.toMatch(PAUSE_WORDS);
     expect(html).not.toContain("ik-switch paused");
     expect(html).not.toContain("data-paused");

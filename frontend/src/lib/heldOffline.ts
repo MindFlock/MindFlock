@@ -68,9 +68,13 @@ export function heldQueuedText(name: string, queued = true): string {
   return queued ? "Queued — " + name + " is offline; press Start to send it." : name + " is offline since a crash — press Start, then send it again.";
 }
 
-/** The rows the rail's notice counts (this device's held sessions). */
-export function heldRows(instances: Instance[]): Instance[] {
-  return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i));
+/** The rows the rail's notice counts (this device's held sessions).
+ * `missing` = the session's agent CLI isn't installed here (sessionState's
+ * `agentMissing`, passed in: that module imports this one): Start all skips
+ * such a row (`agent not installed`) and its pane offers Install instead, so
+ * the notice doesn't count it or offer to Start it. */
+export function heldRows(instances: Instance[], missing?: (i: Instance) => boolean): Instance[] {
+  return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i) && !(missing && missing(i)));
 }
 
 /** The rail notice's sentence for `n` held sessions (n ≥ 1). */

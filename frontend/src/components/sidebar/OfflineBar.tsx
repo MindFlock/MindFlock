@@ -21,7 +21,8 @@ import { isMemoryCancel, sleptLine, withMemoryConfirm } from "../../lib/memoryCo
 import { useState } from "react";
 import { api } from "../../api/client";
 import { refreshInstances, useInstances, useMemory } from "../../state/queries";
-import { deriveSessionState, forceActivity } from "../../lib/sessionState";
+import { agentMissing, deriveSessionState, forceActivity, type AgentInstallRow } from "../../lib/sessionState";
+import { useSetup } from "../setup/useSetup";
 import { toast } from "../../lib/toast";
 import { errMsg } from "../../lib/format";
 import { heldNoticeHidden, heldNoticeKey, heldNoticeText, heldRows } from "../../lib/heldOffline";
@@ -64,13 +65,21 @@ export function sweepToast(r: SweepResult, offline: string[]): string {
  * whose chip offers Restart or Start (a held one too). A sleeping agent
  * (backend core/sleep.py) reads "offline" but is not: it was stopped on
  * purpose, and wakes when it is opened or sent anything — never counted.
+ * A row whose agent CLI isn't installed here is left out too: Start all
+ * skips it (`agent not installed`), and its own pane offers Install.
  * Exported for tests. */
-export function offlineRows(instances: Instance[]): Instance[] {
+export function offlineRows(instances: Instance[], logins?: AgentInstallRow[] | null): Instance[] {
   return instances.filter((i) => {
-    if (i.device || i.pending || i.sleeping) return false;
+    if (i.device || i.pending || i.sleeping || missingAgent(i, logins)) return false;
     const ss = deriveSessionState(i);
     return ss.state === "offline" && ss.restartable && i.status !== "paused";
   });
+}
+
+/** Setup reads this row's agent CLI as not installed (lib/sessionState's
+ * `agentMissing`, read as offline: the agent isn't running). */
+function missingAgent(i: Instance, logins: AgentInstallRow[] | null | undefined): boolean {
+  return !!agentMissing(i, logins, "offline");
 }
 
 /** The line under the bar while memory is low: starting everything is how
@@ -98,10 +107,11 @@ function writeDismissed(v: string) {
 export function OfflineBar() {
   const { data: instances = [] } = useInstances();
   const memory = useMemory().data;
+  const logins = useSetup().data?.logins;
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(readDismissed);
-  const offline = offlineRows(instances);
-  const held = heldRows(instances);
+  const offline = offlineRows(instances, logins);
+  const held = heldRows(instances, (i) => missingAgent(i, logins));
   const heldKey = heldNoticeKey(held);
   const notice = held.length > 0 && !heldNoticeHidden(dismissed, heldKey);
   if (!notice && offline.length < 2 && !busy) return null;

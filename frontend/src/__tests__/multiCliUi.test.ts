@@ -38,3 +38,11 @@ describe("Settings → Local model", () => {
     expect(squash(LOCAL)).toContain("Anthropic API, so a session on it keeps using that.");
   });
 });
+
+describe("Settings → Local model names agents, not CLI ids", () => {
+  it("the intro and the Test line use product names (lib/agentNames)", () => {
+    expect(LOCAL).not.toMatch(/<strong>(codex|aider|goose)<\/strong>/);
+    expect(LOCAL).toContain('<strong>{agentName("codex")}</strong>');
+    expect(LOCAL).toContain("supported.map(agentName)");
+  });
+});

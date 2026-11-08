@@ -249,7 +249,9 @@ function AutoStartLine({
           title="The switches for tickets, PR comments and new issues"
           onClick={() => gotoTab("autostart")}
         >
-          {p.onKinds.length ? "Auto-start switches ›" : "Turn on ›"}
+          {/* It opens the switches; it never turns anything on itself — a
+              "Turn on ›" that only switched tabs read as a broken button. */}
+          Auto-start switches ›
         </button>
       ) : null}
     </div>

@@ -769,3 +769,13 @@ def test_status_policy_uses_the_server_port(fake_ts, captured, monkeypatch):
     fake_ts["status"] = copy.deepcopy(captured["status_pending"])
     st = shared_link.apply(9123)
     assert '"tcp:9123"' in st["policy"]
+
+
+def test_the_operator_refusal_reads_as_plain_text_with_a_pasteable_command():
+    """The UI shows this as plain text: no Markdown backticks, and the command
+    last with nothing after it, so it can be copied as-is."""
+    kind, msg = shared_link._explain("Access denied: serve config denied")
+    assert kind == "operator"
+    assert "`" not in msg
+    assert msg.endswith(": " + shared_link.OPERATOR_FIX)
+    assert "Re-check" in msg

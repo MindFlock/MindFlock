@@ -112,7 +112,9 @@ describe("one truth for auto-start (M4, M5)", () => {
   // "Pause intake" (and its server-side record) is gone — intakeNoPause.test.
   it("the Intake header says what auto-starts, and leads to the switches", () => {
     // Round 5: its link goes to the Auto-start tab's switches, whatever is on.
-    expect(DIALOG).toContain('"Turn on ›"');
+    // Pass 5: "Turn on ›" only switched tabs — the link names where it goes.
+    expect(DIALOG).toContain("Auto-start switches ›");
+    expect(DIALOG).not.toContain("Turn on ›");
     expect(DIALOG).toContain('onClick={() => gotoTab("autostart")}');
     expect(DIALOG).not.toContain("Pause intake");
     const bar = code(AUTOMATION_BAR_RAW);
