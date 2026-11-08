@@ -736,6 +736,13 @@ def _source_cfg_from_body(body: dict):
     stored = next((s for s in all_sources if s.id == src_id), None)
     if stored is None:
         stored = all_sources[0] if all_sources else None
+    # A stored source lends its fields (its token above all) only to a request
+    # for the SAME provider: a new GitHub Issues source tested next to a saved
+    # Shortcut one must never send the Shortcut token to api.github.com.
+    asked = str(body.get("provider") or "").strip().lower()
+    if stored is not None and asked:
+        if str(getattr(stored, "provider", "") or "").strip().lower() != asked:
+            stored = None
 
     def sp(attr: str) -> str:
         return getattr(stored, attr, "") if stored else ""

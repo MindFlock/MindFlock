@@ -127,6 +127,25 @@ class TestSourceCfgFromBody:
         assert cfg.provider == "linear"
         assert cfg.api_token == "new"
 
+    def test_another_providers_token_is_never_borrowed(self):
+        # A new GitHub Issues source tested next to a saved Shortcut one must
+        # not send the Shortcut token to GitHub (polish pass 3, intake).
+        S.set_ticketing_sources(
+            [{"id": "sc", "provider": "shortcut", "api_token": "sc-secret"}]
+        )
+        cfg = SA._source_cfg_from_body({"provider": "github_issues"})
+        assert cfg.provider == "github_issues"
+        assert cfg.api_token == ""
+        cfg = SA._source_cfg_from_body({"id": "sc", "provider": "linear"})
+        assert cfg.api_token == ""
+
+    def test_same_providers_primary_still_lends_its_token(self):
+        S.set_ticketing_sources(
+            [{"id": "j", "provider": "jira", "api_token": "stored"}]
+        )
+        cfg = SA._source_cfg_from_body({"provider": "jira"})
+        assert cfg.api_token == "stored"
+
 
 class TestGhCliStatus:
     def test_ok_means_installed_and_authenticated(self, monkeypatch):
