@@ -35,13 +35,15 @@ so — rather than launched with invented env.
 
 ## Setting it up
 
-**Web UI** — Settings → **Accounts**: add a profile, pick the default, test an
+**Web UI** — Settings → **Accounts**: add a profile (a **Label** is enough —
+the optional **Short name**, the profile's `id` and folder name, is made from
+the label when left empty: *Personal Max* → `personal-max`), pick the default, test an
 OpenRouter key (the Test button reports the key's real spend and lists the
 models it can reach, turning the model field into a picker). An
 `account`-kind profile's card has a **Sign in** button: the CLI's own
 interactive login, in an in-app terminal, scoped to that account's config dir
 (`WS /api/providers/{name}/login-terminal?profile=<id>`, the same window
-Setup's and the Providers screen's sign-in use). The login command stays
+Setup's and the Custom agents screen's sign-in use). The login command stays
 next to it as a copyable fallback for a terminal of your own.
 
 **CLI** — the same store, scriptable:

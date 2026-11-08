@@ -13,6 +13,7 @@ import { takeAccountsIntent } from "../../setup/accountsIntent";
 import { api } from "../../../api/client";
 import type { AuthProfile, AuthProfilesResponse } from "../../../api/types";
 import { toast } from "../../../lib/toast";
+import { agentName } from "../../../lib/agentNames";
 import { refreshAuthProfiles, useAuthProfiles } from "../../../state/queries";
 import { AgentSignIn } from "../../dialogs/AgentSignIn";
 import { InlineConfirm, SECRET_MASK } from "../useSettings";
@@ -51,6 +52,21 @@ interface OrProbe {
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/** The id a new account is saved under: what was typed, else one made from
+ * its label ("Work laptop" → "work-laptop"). A newcomer fills in the label
+ * and leaves the id alone; that used to fail with "id must be lowercase
+ * letters/digits/-/_ (max 64)". */
+export function accountId(id: string, label: string): string {
+  const typed = (id || "").trim().toLowerCase();
+  if (typed) return typed;
+  return (label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^[-_]+|-+$/g, "")
+    .slice(0, 64);
+}
 
 export function Accounts(_: ScreenProps) {
   const { data } = useAuthProfiles();
@@ -123,9 +139,13 @@ export function Accounts(_: ScreenProps) {
     save(profiles.map((x) => (x.id === id ? { ...x, ...p } : x)));
 
   const addDraft = () => {
-    const id = (draft.id || "").trim().toLowerCase();
+    const id = accountId(draft.id, draft.label || "");
     if (!ID_RE.test(id)) {
-      setError("id must be lowercase letters/digits/-/_ (max 64)");
+      setError(
+        id
+          ? "The short name can only use lowercase letters, digits, - and _ (64 at most)."
+          : "Give the account a label or a short name."
+      );
       return;
     }
     if (profiles.some((p) => p.id === id)) {
@@ -207,7 +227,7 @@ export function Accounts(_: ScreenProps) {
                 <span className="prov-name">{p.label || p.id}</span>
                 <span className="prov-badge">{kindMeta[p.kind]?.label || p.kind}</span>
                 {p.kind !== "openrouter" && (
-                  <span className="prov-badge prov-badge-src">{p.provider || "claude"}</span>
+                  <span className="prov-badge prov-badge-src">{agentName(p.provider || "claude")}</span>
                 )}
                 {p.id === defaultId && <span className="prov-badge">default</span>}
               </div>
@@ -363,16 +383,6 @@ export function Accounts(_: ScreenProps) {
             <span className="set-hint">{kindMeta[draft.kind]?.hint || ""}</span>
           </label>
           <label className="set-row">
-            <span className="set-label">Id</span>
-            <input
-              type="text"
-              autoComplete="off"
-              placeholder="work"
-              value={draft.id}
-              onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))}
-            />
-          </label>
-          <label className="set-row">
             <span className="set-label">Label</span>
             <input
               type="text"
@@ -383,6 +393,17 @@ export function Accounts(_: ScreenProps) {
             />
           </label>
           <label className="set-row">
+            <span className="set-label">Short name</span>
+            <input
+              type="text"
+              autoComplete="off"
+              value={draft.id}
+              placeholder={accountId("", draft.label || "") || "work"}
+              onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))}
+            />
+            <span className="set-hint">Optional: names the account's folder. Made from the label when empty.</span>
+          </label>
+          <label className="set-row">
             <span className="set-label">Agent</span>
             <select
               value={draft.provider || ""}
@@ -390,7 +411,7 @@ export function Accounts(_: ScreenProps) {
             >
               {(AGENTS_BY_KIND[draft.kind] || ["claude"]).map((a) => (
                 <option key={a || "any"} value={a}>
-                  {a || "any (route by session's CLI)"}
+                  {a ? agentName(a) : "any (route by session's CLI)"}
                 </option>
               ))}
             </select>
