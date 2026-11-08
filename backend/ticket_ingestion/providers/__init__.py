@@ -208,6 +208,10 @@ PROVIDER_META: list[dict] = [
                 "secret": True,
                 "required": True,
                 "placeholder": "Shortcut API token",
+                "hint": (
+                    "Shortcut → Settings → API Tokens → Generate Token. It acts "
+                    "as you — there are no scopes to pick."
+                ),
             },
             {
                 "key": "member_id",
@@ -282,6 +286,11 @@ PROVIDER_META: list[dict] = [
                 "secret": True,
                 "required": True,
                 "placeholder": "Atlassian API token",
+                "hint": (
+                    "Atlassian account → Security → Create API token, used with "
+                    "the email above. It acts as you: MindFlock sees the issues "
+                    "you can see."
+                ),
             },
             {
                 "key": "member_id",
@@ -340,6 +349,11 @@ PROVIDER_META: list[dict] = [
                 "secret": True,
                 "required": True,
                 "placeholder": "lin_api_…",
+                "hint": (
+                    "Linear → Settings → Security & access → New API key. Give "
+                    "it read and write: MindFlock moves, labels and comments "
+                    "on the issues it starts."
+                ),
             },
             {
                 "key": "member_id",
@@ -399,6 +413,10 @@ PROVIDER_META: list[dict] = [
                 "secret": True,
                 "required": True,
                 "placeholder": "Asana personal access token",
+                "hint": (
+                    "Asana → My apps → Create new token (a personal access "
+                    "token). It acts as you — there are no scopes to pick."
+                ),
             },
             {
                 "key": "project",
