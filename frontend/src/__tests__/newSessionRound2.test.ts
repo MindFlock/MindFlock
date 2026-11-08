@@ -93,7 +93,9 @@ describe("uninstalled agents", () => {
   const have = { claude: true, codex: false };
   it("are refused at Create, with the way out", () => {
     expect(agentMissingReason("codex", have)).toContain("isn't installed on this device");
-    expect(agentMissingReason("codex", have)).toContain("Settings → Agents");
+    // The one-click Install (Get set up's step ①), not the copy-a-command card.
+    expect(agentMissingReason("codex", have)).toContain("Codex isn't installed");
+    expect(agentMissingReason("codex", have)).toContain("one click from Get set up");
     expect(agentMissingReason("claude", have)).toBe("");
     // Unknown never blocks: another device, an older server, a custom name.
     expect(agentMissingReason("codex", null)).toBe("");

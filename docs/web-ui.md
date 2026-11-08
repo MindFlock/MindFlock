@@ -3141,9 +3141,10 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
-  when another is installed. Picking a missing one shows *<agent> isn't
-  installed on this device. Install it in Settings → Agents, or pick another
-  agent.* under the field, and **Start** (on either page)
+  when another is installed. Picking a missing one shows *<Agent> isn't
+  installed on this device. Install it in one click from Get set up (step ①;
+  a custom agent: Settings → Custom agents), or pick another agent.* under
+  the field, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
   installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
