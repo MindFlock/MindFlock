@@ -448,7 +448,10 @@ def test_a_cut_off_code_is_called_cut_off(engine):
 
 def test_the_invite_message_says_where_to_paste_and_who_it_reaches():
     relay = svc_mod.invite_message("mfp2:abc-defg", 600)
-    assert "Settings → People" in relay and 'type "people"' in relay
+    # People is an ADVANCED Settings screen (hidden in a fresh install's
+    # nav): the message names the palette, like the /join page.
+    assert "Settings → People" not in relay
+    assert 'press Ctrl+P, type "people"' in relay
     assert "Join someone" in relay and "Join a peer" not in relay
     assert "same network" not in relay  # a relay invite reaches anywhere
     direct = svc_mod.invite_message("mfp1:abc-defg", 600, direct=True)

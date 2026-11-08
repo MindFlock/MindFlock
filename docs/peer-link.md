@@ -19,7 +19,9 @@ appear on their rail at once. Then either of you can share more sessions, or
 > [people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions).
 
 1. **Invite — with the sessions you want them in.** Settings → People
-   (or the command palette's *People…*) → **Invite someone**. It works like
+   (People is an advanced screen: **Show advanced settings** at the foot of
+   the Settings nav reveals it; or the command palette's *People…*, which
+   always works) → **Invite someone**. It works like
    a guest link: a red warning says what an invite gives away; tick **I
    understand** and a picker opens with this device's root sessions. Tick the
    ones they should get and, per session, how — **Gated to its folder** (a
@@ -86,7 +88,8 @@ appear on their rail at once. Then either of you can share more sessions, or
 6. **Verify the safety number.** Both sides show one like `482-019-337-5`
    (People, `mindflock peer links`). Read it to each other by
    voice or chat and press **It matches**. If it differs, someone is in the
-   middle: **unlink now**. Until *you* press it, nothing in your shared
+   middle: press **It doesn't match**, which removes the connection — then
+   make a new invite and send it a different way. Until *you* press it, nothing in your shared
    folder goes to them — its diff, files, screen and mirror answer "safety
    number not confirmed" — and you can't share, mirror or export on that link
    ("Confirm the safety number with *B* first"); messages work, so you can
@@ -119,8 +122,9 @@ appear on their rail at once. Then either of you can share more sessions, or
    their diff. A line at the bottom messages them (their agent sees it too).
    Their permissions decide each tab: the screen follows *see my diff*, the
    files *read my files*. Both of you need this MindFlock version or newer.
-9. **Choose what the peer may do to you.** Per link: *send messages*, *see my
-   diff*, *read my files* (`POST /api/peer/links/<id>/perms`).
+9. **Choose what the peer may do to you.** Per link, "In the folder you
+   share, they may": *message me*, *see my changes*, *read my files*
+   (`POST /api/peer/links/<id>/perms`).
 10. **Bring the work home.** *Export* (or `mindflock peer export <link>
    <your repo> peer/<branch>`) checkpoints the shared folder and fetches it into
    your own repo as a `peer/…` branch, and says how many commits came (0:
@@ -142,9 +146,11 @@ appear on their rail at once. Then either of you can share more sessions, or
    need this MindFlock version or newer — an older peer never reports a
    head, so its mirror simply never updates. **Stop mirroring** keeps the
    branch.
-11. **Stop.** *Unshare* closes the shared session — its agent stops, its
-   folder stays, like Close — unless you tick *delete*; *Unlink* does the
-   same and also forgets the peer's key and closes the connection. Either
+11. **Stop.** **Stop sharing…** closes the shared session — its agent
+   stops, its folder stays, like Close — unless you tick *Also delete the
+   sandbox copy*; **Remove connection…** (in Trust) does the same and also
+   forgets the peer's key and closes the connection (it offers the delete
+   tick only when you have a shared folder). Either
    side can unlink at any time, and **an unlink never destroys the other
    side's work**: when *they* unlink, your shared session is closed (never
    deleted) and the bell says "*B* unlinked — your shared folder is kept at
