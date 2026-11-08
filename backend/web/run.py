@@ -48,6 +48,10 @@ from backend.web.core import (
     tailnet_bind as _tailnet_bind,
 )  # noqa: E402 — after sys.path
 
+# What the bind plan decided (core/tailnet_bind ``WHY_*``: "tailnet", "all",
+# "no-tailnet", "unbindable"; "" for local), read back by core/fleet.bind_reason.
+BIND_WHY_ENV = "MINDFLOCK_BIND_WHY"
+
 # Distribution packages of the web dependency group; a ModuleNotFoundError for
 # one of these means "web extras not installed", not a bug — say so plainly.
 _WEB_DEPS = ("uvicorn", "fastapi", "starlette", "ptyprocess", "pyperclip", "segno")
@@ -286,6 +290,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         os.environ.pop(_tailnet_bind.FALLBACK_ENV, None)
     host = hosts[0] if len(hosts) == 1 else ""
     bind = _tailnet_bind.describe(hosts)
+    # Why it bound what it bound, for /api/fleet (core/fleet.bind_reason):
+    # Your devices must not say "listens on your tailnet" while the fallback
+    # put this port on every interface, LAN included.
+    os.environ[BIND_WHY_ENV] = why or ""
 
     # Friendly double-launch handling: if the port is already taken, say what
     # is squatting on it instead of dying in uvicorn's raw "address already in

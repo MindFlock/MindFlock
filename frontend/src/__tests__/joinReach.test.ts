@@ -92,6 +92,22 @@ describe("This device", () => {
       "Laptop listens on your tailnet (100.64.0.1:8765) · access gate on"
     );
   });
+  it("a fallback to every interface says the LAN can reach it, not 'your tailnet'", () => {
+    const line = thisDeviceLine({
+      ...status({ self_reachable: true, listening: "tailnet", gate_on: true }),
+      bind: "unbindable",
+    });
+    expect(line).toBe(
+      "Laptop listens on every interface (port 8765, Tailscale's addresses can't be bound here) — your LAN can reach it too, not only your tailnet · access gate on"
+    );
+    expect(line).not.toMatch(/listens on your tailnet/);
+    expect(
+      thisDeviceLine({ ...status({ self_reachable: true, listening: "tailnet", gate_on: true }), bind: "no-tailnet" })
+    ).toMatch(/Tailscale wasn't running/);
+    expect(
+      thisDeviceLine({ ...status({ self_reachable: true, listening: "tailnet", gate_on: true }), bind: "tailnet" })
+    ).toMatch(/listens on your tailnet \(100\.64\.0\.1:8765\)/);
+  });
   it("an older server that doesn't say shows nothing", () => {
     expect(thisDeviceLine(status({}))).toBe("");
   });

@@ -1205,6 +1205,15 @@ def listening() -> str:
         return ""
 
 
+def bind_reason() -> str:
+    """Why the launcher bound what it bound (``run.py`` exports it): the
+    ``core/tailnet_bind`` ``WHY_*`` word — ``"tailnet"`` (loopback + this
+    node's Tailscale addresses), ``"all"`` (every interface, asked for),
+    ``"no-tailnet"`` / ``"unbindable"`` (every interface as a fallback) — or
+    ``""`` (local, or nothing exported it)."""
+    return (os.environ.get("MINDFLOCK_BIND_WHY") or "").strip().lower()
+
+
 def self_reachable() -> bool:
     """Whether the other devices can reach this one's server: not bound to
     127.0.0.1. A device that only answers the shared phone link does NOT
@@ -3203,6 +3212,9 @@ def status(privileged: bool) -> dict:
         # gate, together); the gate as it is now.
         "self_reachable": reachable_here,
         "listening": listening(),
+        # Why it listens where it does: "no-tailnet" / "unbindable" / "all"
+        # mean every interface (LAN included), not only the tailnet.
+        "bind": bind_reason(),
         "gate_on": gate_on(),
         "members": members,
         "invites": invites() if privileged else [],
