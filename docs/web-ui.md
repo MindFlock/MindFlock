@@ -4009,7 +4009,9 @@ saved routes shelf, the Behaviors board, Settings → Agents); **Got it**, ×,
 `prefs.whats_new_seen`, so the tab, the desktop app and the phone share it, with
 this browser's localStorage (`mf_whats_new_seen`) as the fallback. It never
 opens on a fresh install (the version is marked seen; the welcome tour is
-theirs), never before onboarding is done or over the welcome card, a tour or a
+theirs — and closing a first launch's welcome marks it seen too, so a
+newcomer who closes it before the slow first doctor probe tells What's new
+the version is not read as an upgrader), never before onboarding is done or over the welcome card, a tour or a
 dialog, and never lists an entry above the running version. Reopen it from the
 palette (**What's new**), **Settings → General → Help**, or a click on the
 version beside the wordmark. Details: `docs/vision/whats-new.md`.
