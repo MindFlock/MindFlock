@@ -78,6 +78,27 @@ describe("one agent card: status + ONE next action", () => {
     expect(html).not.toContain(">Test</button>");
   });
 
+  it("not installed: says it once, and Check again re-tests after an install in a terminal", () => {
+    doctorData.current = { checks: [], install: { steps: [] } };
+    const html = render(
+      agent({
+        id: "agent:codex",
+        name: "Coding agent · Codex",
+        status: "off",
+        default: false,
+        provider: "codex",
+        detail: "not installed — `codex` not found on PATH",
+        action: { label: "Copy install command", kind: "copy", target: "npm i -g @openai/codex" },
+        fix_command: "npm i -g @openai/codex",
+        test: { endpoint: "/api/connections/test/agent", method: "POST", body: { provider: "codex" } },
+      })
+    );
+    expect(html.match(/Not installed/g) || []).toHaveLength(1);
+    expect(html).toContain("Install it, then press Check again.");
+    expect(html).toContain(">Check again</button>");
+    expect(html).toContain("<code>npm i -g @openai/codex</code>");
+  });
+
   it("installed, not signed in → Sign in, and no Test or login command beside it", () => {
     const c = agent({
       status: "needs_attention",

@@ -6143,7 +6143,10 @@ A few screens got quieter:
   GitHub's row is a plain status ("Not connected. Agents can't open pull
   requests yet." / "Connected as @you"), with no `gh` output or Copy chip and
   no Test until something is connected. A failing Test outranks an agent
-  row's stored Connected.
+  row's stored Connected. A not-installed agent says **Not installed** once
+  (the pill; its line says *Install it, then press Check again.*) and its
+  Test reads **Check again**, so a CLI installed in a terminal shows up
+  without a reload.
 - **Connect GitHub** never shows "device flow is not configured": without a
   device flow the token path leads (the `repo` and `read:org` scopes named,
   the link opening GitHub's token page with both ticked), with the gh CLI
