@@ -504,8 +504,8 @@ def _explain(output: str) -> Tuple[str, str]:
     low = output.lower()
     if "access denied" in low or "permission" in low or "operator" in low:
         return "operator", (
-            "Tailscale refused to change serve config for this user. Run "
-            "`%s` once, then press Re-check." % OPERATOR_FIX
+            "Tailscale won't let MindFlock change its serve settings as this "
+            "user. Run this once in a terminal, then press Re-check: %s" % OPERATOR_FIX
         )
     if "tag" in low and ("service" in low or "host" in low):
         return "tag", (
