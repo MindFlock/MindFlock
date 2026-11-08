@@ -97,8 +97,8 @@ D_START = (
     "(from describe_flight, or by hand from its cookbook) and/or plan_id (a "
     "saved route's id or name; its steps come first). title: the session that runs it — "
     "default yourself; else one of your descendants. On an existing session "
-    "the work so far counts as the first agent stop and the route runs on at "
-    "once — right when that work is DONE. Work still ahead? at='s1' (the agent "
+    "the work so far counts as the first agent stop (still on its turn: the "
+    "stop waits for it to end). Work still ahead? at='s1' (the agent "
     "stop's prompt is queued to that session and sent when its turn ends), or "
     "start_on='prompt' (takes off with your user's next prompt) / 'run' "
     "(waits for Run). grounded=true puts the stops on your user's Sky with no "
@@ -819,6 +819,21 @@ class FlightTools:
         if args.get("dry_run"):
             out = dict(view, dry_run=True, session=title or None)
             out["lines"] = [step_line(s) for s in check]
+            if (
+                title
+                and check
+                and str(check[0].get("kind") or "") == "agent"
+                and not args.get("at")
+                and args.get("start_on") not in ("prompt", "run")
+            ):
+                # The read-back lists the agent stop as if it will be sent; on
+                # an existing session it is not — say what happens instead.
+                out["first_stop"] = (
+                    "not sent: on %s the work so far is the first Agent stop "
+                    "(still on its turn, the route waits for it to end; idle, "
+                    "it goes straight on to the next stop). To send its "
+                    "prompt, pass at=%r." % (title, check[0].get("id") or "s1")
+                )
             bad = _irreversible(check, self._kinds_by_name())
             nxt = (
                 "read the sentence back to your user; on their OK call "

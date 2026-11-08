@@ -1881,8 +1881,9 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         self.policy.spawned_by_me.add(title)
         self._note_dispatch(title)
         if created.get("queued"):
-            # Memory is short (the server's launch gate): the worker is
-            # queued, not failed. The server creates it once memory allows.
+            # The server's launch gate queued it (memory is short, the agent
+            # cap is reached, or the last start was seconds ago): queued, not
+            # failed. The server creates it once the gate lets it.
             queued: Dict[str, Any] = {
                 "title": title,
                 "status": "queued: waiting for memory",
@@ -1893,8 +1894,10 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                 "base_sha": base_sha,
                 "report_back": footer,
                 "hint": (
-                    "MindFlock starts it once memory allows (one at a time, "
-                    "oldest first) — keep working, or wait_for_session, which "
+                    "MindFlock starts it on its own — `reason` says what it "
+                    "waits for (memory, the agent cap, or starts spaced a few "
+                    "seconds apart); one at a time, oldest first. Keep "
+                    "working, or wait_for_session, which "
                     "waits through the queue. Don't spawn more workers to make "
                     "up for it: they would only queue behind it."
                 ),
@@ -1962,10 +1965,26 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
                             "is" if len(order["after"]) == 1 else "are",
                         )
                     )
-                elif not order.get("fence"):
+                elif isinstance(order.get("waits_for_slot"), dict):
+                    slot = order["waits_for_slot"]
                     warnings.append(
-                        "its task waits for a free slot (set_order); MindFlock "
-                        "starts it then"
+                        "its task waits for a free slot: your order runs %s "
+                        "(%s running now), set by an earlier set_order; "
+                        "MindFlock starts it then. Not meant for this batch? "
+                        "set_order(%s) lifts it"
+                        % (
+                            (
+                                "one at a time"
+                                if slot.get("mode") == "serial"
+                                else "at most %s at a time" % slot.get("cap")
+                            ),
+                            slot.get("running"),
+                            (
+                                'mode="parallel", max_parallel=0'
+                                if slot.get("mode") == "serial"
+                                else "max_parallel=0"
+                            ),
+                        )
                     )
         elif created.get("prompt_delivery") == "queued":
             out["prompt_delivery"] = "queued"

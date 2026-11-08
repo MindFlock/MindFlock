@@ -2042,7 +2042,7 @@ class _Slow(SpeechError):
 
 class _Line:
     """One request of ours in a serial host's lane (:meth:`TtsChain.send`).
-    ``deadline`` (``time.monotonic``) is when a waiting LINE gives up on the
+    ``deadline`` (:meth:`LaneClock.now`) is when a waiting LINE gives up on the
     host — None for one that waits for the answer (the probe, a warm, a line
     with no fallback). ``live`` turns false when it gave up: an orphan if
     the host has it (``started``), dropped from the lane if not. ``learn``:
@@ -2078,6 +2078,19 @@ class _Lane:
         self.queue: List[_Line] = []  # in order; the head is at the host
         self.busy = False  # a drain thread is running
         self.key = key  # the host's health key
+
+
+class LaneClock:
+    """What :class:`TtsChain`'s lanes tell time and wait with: the real
+    monotonic clock and a real :class:`threading.Condition`. A seam: a test
+    hands :class:`TtsChain` a virtual clock, so a line's budget races its
+    host's answer in virtual seconds instead of on a loaded runner."""
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def condition(self, lock: threading.Lock) -> threading.Condition:
+        return threading.Condition(lock)
 
 
 def _lane_thread(target: Callable[[], None], name: str) -> None:
@@ -2199,12 +2212,13 @@ class TtsChain:
       The prewarm asks only past :meth:`idle_for`'s quiet, one at a time.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Optional[LaneClock] = None) -> None:
+        self._clock = clock or LaneClock()  # the lanes' time (budgets, waits)
         self._lock = threading.Lock()
         self._down: Dict[str, _Health] = {}
         self._replies: Dict[str, _Reply] = {}
         self._speed: Dict[str, _Speed] = {}
-        self._cond = threading.Condition(self._lock)
+        self._cond = self._clock.condition(self._lock)
         self._lanes: Dict[str, _Lane] = {}
         self._gen = 0  # bumped by reset(): an old orphan changes nothing
         self._real_at = 0.0  # _now(): a real line was last asked for / said
@@ -2503,7 +2517,7 @@ class TtsChain:
             if lane is None:
                 lane = self._lanes[key] = _Lane(key)
             if budget is not None:
-                now = time.monotonic()
+                now = self._clock.now()
                 ahead = [
                     ln.deadline
                     for ln in lane.queue
@@ -2539,7 +2553,7 @@ class TtsChain:
                 if line.deadline is None:
                     self._cond.wait(1.0)
                     continue
-                left = line.deadline - time.monotonic()
+                left = line.deadline - self._clock.now()
                 reply = self._replies.get(listener)
                 if left <= 0 or (
                     reply is not None and reply.sticky and not line.started
@@ -2552,7 +2566,7 @@ class TtsChain:
                     lane.queue.remove(line)
                 elif learn and line.gen == self._gen:
                     # At the host past its budget: at least this slow.
-                    self._learn(key, text, time.monotonic() - line.sent_at, True)
+                    self._learn(key, text, self._clock.now() - line.sent_at, True)
                 waited = budget or 0.0
                 where = "is still on it" if line.started else "had lines ahead of it"
                 raise _Slow(
@@ -2601,7 +2615,7 @@ class TtsChain:
                     lane.busy = False
                     return
                 line = lane.queue[0]
-                line.started, line.sent_at = True, time.monotonic()
+                line.started, line.sent_at = True, self._clock.now()
             try:
                 line.result = line.engine.speak_within(
                     line.text, line.voice, line.timeout
@@ -2612,7 +2626,7 @@ class TtsChain:
                 with self._lock:
                     if lane.queue and lane.queue[0] is line:
                         lane.queue.pop(0)
-                    line.took = time.monotonic() - line.sent_at
+                    line.took = self._clock.now() - line.sent_at
                     if line.error is None:
                         self._answered[lane.key] = _now()  # it is up (cold)
                     if line.learn and line.error is None and line.gen == self._gen:

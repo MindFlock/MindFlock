@@ -505,3 +505,34 @@ def test_an_object_that_is_only_the_opening_verb_falls_back_to_own_words():
     assert h.text == "Find out why and fix it" and h.confident is False
     assert headline("find out why the build fails").text == "Investigate build fails"
     assert headline("Fix the build").text == "Fix build"
+
+
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_a_workers_wrapping_is_not_its_task(provider):
+    """A spawned worker's prompt is its task wrapped by MindFlock: the fence
+    contract and the "held until" note in front, the report-back footer
+    behind. The row reads the task — a fenced worker read "Call
+    mcpmindflockreport_result", a held one "Commit changes on current branch"."""
+    from backend.mcp.tools import report_footer
+    from backend.web.core.worker_order import fence_text
+
+    task = "fix the flaky retry in the upload worker"
+    fence = fence_text({"only": ["src/upload/**"], "keep_out": ["docs/"]}, "orch")
+    footer = report_footer("w1", "orch", provider)
+    for prompt in (
+        task + footer,
+        fence + "\n\n" + task + footer,
+        "MindFlock held this task until w0 finished. Your branch was "
+        "fast-forwarded to orch's current HEAD (abc1234).\n\n"
+        + fence
+        + "\n\n"
+        + task
+        + footer,
+        "MindFlock: started by hand before w0 finished — it may still be "
+        "changing related code.\n\n" + task + footer,
+    ):
+        got = headline(prompt)
+        assert got.text == "Fix flaky retry in upload worker", prompt
+        assert got.meaningful
+    # Nothing but the wrapping: still read, never emptied.
+    assert headline(fence).text

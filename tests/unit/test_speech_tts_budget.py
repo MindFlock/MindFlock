@@ -1,23 +1,33 @@
-"""``core.speech.TtsChain``'s host budget against a REAL OpenAI-compatible
-voice host (a fake one on loopback, port band 7230-7259): a slow-but-alive
-host is never marked down, our lines go to a serial host one at a time (its
-lane), time spent behind our own lines does not eat a line's budget, and a
-dead host (refused, 5xx, reset, hung) is still marked down at once.
+"""``core.speech.TtsChain``'s host budget against an OpenAI-compatible
+voice host: a slow-but-alive host is never marked down, our lines go to a
+serial host one at a time (its lane), time spent behind our own lines does
+not eat a line's budget, and a dead host (refused, 5xx, reset, hung) is
+still marked down at once.
 
 Voice Lab's F5 renders one request at a time and its first byte comes after
 the whole clip (synth ≈ max(1.4 s, 0.52 × audio)); :class:`_FakeHost`
 models that with a floor per line, optionally serial.
+
+Every budget here races a host's answer, so all of it runs on a VIRTUAL
+clock (:class:`_VirtualClock`, handed to the chain as its
+:class:`speech.LaneClock`): the fake host renders in virtual seconds and a
+line gives up in virtual seconds, and time only moves once every thread of
+the test is blocked on that clock — so the outcome depends on the budgets
+and the host's floor alone, never on how loaded the runner is. A DEAD host
+(5xx, reset) is a real one on loopback (port band 7230-7259): the
+connection failing is what is under test there, and it races nothing.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import socket
 import struct
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
+from typing import Callable, List, Optional
 
 import pytest
 
@@ -28,20 +38,295 @@ from backend.web.core import speech
 PORTS = range(7230, 7260)
 
 
+# --------------------------------------------------------------------------- #
+# The virtual clock
+# --------------------------------------------------------------------------- #
+class _Wait:
+    """One thread blocked on the clock: until ``deadline`` (virtual; None =
+    only a notify ends it), or a notify. ``notify`` wakes a waiter that
+    sleeps on a condition of its own (a :class:`_VCond`); ``on_exit``: a
+    join, woken whenever a clock thread ends."""
+
+    __slots__ = ("deadline", "seq", "notify", "woken", "notified", "on_exit")
+
+    def __init__(self, deadline: Optional[float], seq: int, notify) -> None:
+        self.deadline, self.seq, self.notify = deadline, seq, notify
+        self.woken = self.notified = self.on_exit = False
+
+
+class _Thread:
+    __slots__ = ("done",)
+
+    def __init__(self) -> None:
+        self.done = False
+
+
+class _VirtualClock(speech.LaneClock):
+    """Virtual seconds for a test (:class:`speech.LaneClock`'s seam).
+
+    Every thread that takes part is an ACTOR: the test's own (counted from
+    the start), and each one started by :meth:`spawn` — the lines asked at
+    once, the lane's drain (``speech._lane_thread``), the fake host's
+    renders. An actor blocked on this clock (:meth:`sleep`, :meth:`join`,
+    a :meth:`condition`'s wait) is idle; a notify makes its waiters busy
+    again at once (before they even run). Time moves only while no actor is
+    busy, and then straight to the earliest deadline, waking that ONE
+    waiter (ties in the order they blocked). So events happen in the order
+    of their virtual times, one at a time, whatever the runner's load."""
+
+    def __init__(self, start: float = 100.0) -> None:
+        self._lock = threading.Lock()
+        self._kick = threading.Condition(self._lock)  # the advancer's
+        self._ring = threading.Condition(self._lock)  # sleep / join waiters'
+        self._t = start
+        self._busy = 1  # the test's own thread
+        self._live = 0  # spawned threads not yet done
+        self._waits: List[_Wait] = []
+        self._seq = itertools.count()
+        self._closed = False
+        threading.Thread(
+            target=self._advance, name="virtual-clock", daemon=True
+        ).start()
+
+    # -- LaneClock ------------------------------------------------------- #
+    def now(self) -> float:
+        return self._t
+
+    def condition(self, lock) -> "_VCond":
+        return _VCond(self, lock)
+
+    # -- actors ---------------------------------------------------------- #
+    def spawn(self, target: Callable[[], object], name: str = "actor") -> _Thread:
+        handle = _Thread()
+        with self._lock:
+            self._busy += 1
+            self._live += 1
+
+        def run() -> None:
+            try:
+                target()
+            finally:
+                with self._lock:
+                    handle.done = True
+                    self._live -= 1
+                    self._busy -= 1
+                    for w in [w for w in self._waits if w.on_exit]:
+                        self._wake(w)  # a join: busy again before we are not
+                    self._ring.notify_all()
+                    if self._busy == 0:
+                        self._kick.notify()
+
+        threading.Thread(target=run, name=name, daemon=True).start()
+        return handle
+
+    def sleep(self, seconds: float) -> None:
+        with self._lock:
+            w = self._block(self._t + max(0.0, seconds), None)
+            while not w.woken and not self._closed:
+                self._ring.wait()
+
+    def join(self, threads: List[_Thread], timeout: float = 10.0) -> None:
+        with self._lock:
+            end = self._t + timeout
+            while not all(t.done for t in threads) and self._t < end:
+                w = self._block(end, None)
+                w.on_exit = True
+                while not w.woken and not self._closed:
+                    self._ring.wait()
+
+    def settle(self, limit: float = 3600.0) -> None:
+        """Let every spawned thread finish (the orphans' renders, the
+        drains): the test's thread idles in virtual time until none is
+        left."""
+        end = self._t + limit
+        while self._live and self._t < end and not self._closed:
+            self.sleep(1.0)
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            outside = [w.notify for w in self._waits if w.notify]
+            self._ring.notify_all()
+            self._kick.notify_all()
+        for fn in outside:
+            fn()
+
+    # -- the mechanism (under self._lock) -------------------------------- #
+    def _block(self, deadline: Optional[float], notify) -> _Wait:
+        w = _Wait(deadline, next(self._seq), notify)
+        self._waits.append(w)
+        self._busy -= 1
+        if self._busy == 0:
+            self._kick.notify()
+        return w
+
+    def _wake(self, w: _Wait) -> None:
+        if not w.woken:
+            w.woken = True
+            self._waits.remove(w)
+            self._busy += 1
+
+    def _advance(self) -> None:
+        with self._lock:
+            while not self._closed:
+                timed = [w for w in self._waits if w.deadline is not None]
+                if self._busy > 0 or not timed:
+                    self._kick.wait()
+                    continue
+                w = min(timed, key=lambda w: (w.deadline, w.seq))
+                self._t = max(self._t, w.deadline)
+                self._wake(w)
+                if w.notify is None:
+                    self._ring.notify_all()
+                else:
+                    self._lock.release()
+                    try:
+                        w.notify()
+                    finally:
+                        self._lock.acquire()
+
+
+class _VCond:
+    """A :class:`threading.Condition` on ``lock`` whose ``wait(timeout)``
+    runs in the clock's virtual seconds — what the chain's lanes wait on."""
+
+    def __init__(self, clock: _VirtualClock, lock) -> None:
+        self._clock = clock
+        self._real = threading.Condition(lock)
+        self._waits: List[_Wait] = []
+
+    def _ring(self) -> None:
+        with self._real:
+            self._real.notify_all()
+
+    def wait(self, timeout: Optional[float] = None) -> bool:  # lock held
+        clock = self._clock
+        with clock._lock:
+            w = clock._block(
+                None if timeout is None else clock._t + timeout, self._ring
+            )
+        self._waits.append(w)
+        try:
+            while not w.woken and not clock._closed:
+                self._real.wait()
+        finally:
+            self._waits.remove(w)
+        return w.notified
+
+    def notify_all(self) -> None:  # lock held
+        with self._clock._lock:
+            for w in self._waits:
+                if not w.woken:
+                    w.notified = True
+                    self._clock._wake(w)
+        self._real.notify_all()
+
+    def notify(self, n: int = 1) -> None:  # lock held
+        with self._clock._lock:
+            for w in [w for w in self._waits if not w.woken][:n]:
+                w.notified = True
+                self._clock._wake(w)
+        self._real.notify_all()  # the others find themselves not woken
+
+
+# --------------------------------------------------------------------------- #
+# The hosts
+# --------------------------------------------------------------------------- #
 class _FakeHost:
-    """``POST /v1/audio/speech`` → mp3 bytes after ``delay(text)`` seconds.
+    """``POST /v1/audio/speech`` → mp3 bytes after ``delay(text)`` VIRTUAL
+    seconds, answered in-process (the fixture routes ``speech._http`` for
+    its URL here; its port in the band is held, so nothing else gets it).
 
-    ``mode``: "ok" (concurrent), "serial" (one synthesis at a time, the
-    rest queue inside the host — Voice Lab's shape), "500", "reset" (the
-    connection is torn down with an RST)."""
+    ``mode``: "ok" (concurrent) or "serial" (one synthesis at a time, the
+    rest queue inside the host — Voice Lab's shape). Each request renders
+    on a thread of its own, so a client that stops waiting (its socket
+    timeout: ``TimeoutError``, as urllib raises it) leaves the host
+    rendering on, as a real one does. ``seen`` gets a request's
+    ``(text, arrived, finished)`` BEFORE its client is answered."""
 
-    def __init__(self, mode: str = "ok", floor: float = 0.0, per_char: float = 0.0):
+    virtual = True
+
+    def __init__(
+        self, clock: _VirtualClock, mode: str = "ok", floor: float = 0.0,
+        per_char: float = 0.0,
+    ) -> None:  # fmt: skip
+        assert mode in ("ok", "serial"), mode
+        self.clock = clock
         self.mode, self.floor, self.per_char = mode, floor, per_char
         self.seen: list = []  # (text, arrived, finished)
         self.active = 0
         self.max_active = 0  # concurrent requests the host held at once
-        self._gate = threading.Lock()
-        self._count = threading.Lock()
+        self._lock = threading.Lock()
+        self._turn = clock.condition(self._lock)
+        self._rendering = False  # serial: a synthesis holds the host
+        self._sock = None
+        for port in PORTS:
+            s = socket.socket()
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                s.close()
+                continue
+            self._sock, self.port = s, port
+            break
+        assert self._sock is not None, "no free port in 7230-7259"
+        self.base = "http://127.0.0.1:%d/" % self.port
+
+    def delay(self, text: str) -> float:
+        return self.floor + self.per_char * len(text)
+
+    def call(self, text: str, timeout: float) -> bytes:
+        """The exchange as the client sees it (on the client's thread)."""
+        clock = self.clock
+        done: list = []
+
+        def render() -> None:
+            arrived = clock.now()
+            with self._lock:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                if self.mode == "serial":
+                    while self._rendering:
+                        self._turn.wait()
+                    self._rendering = True
+            try:
+                clock.sleep(self.delay(text))
+            finally:
+                with self._lock:
+                    self.active -= 1
+                    if self.mode == "serial":
+                        self._rendering = False
+                    self.seen.append((text, arrived, clock.now()))
+                    done.append(True)
+                    self._turn.notify_all()
+
+        clock.spawn(render, "fake-voice-host")
+        give_up = clock.now() + timeout
+        with self._lock:
+            while not done:
+                left = give_up - clock.now()
+                if left <= 0:
+                    raise TimeoutError("timed out")  # nothing back in time
+                self._turn.wait(left)
+        return b"ID3" + text.encode()
+
+    def texts(self) -> list:
+        return [t for t, _a, _f in self.seen]
+
+    def close(self) -> None:
+        self._sock.close()
+
+
+class _DeadHost:
+    """A REAL host on loopback that fails every ``POST``: "500" (a CUDA
+    error) or "reset" (the connection torn down with an RST)."""
+
+    virtual = False
+
+    def __init__(self, mode: str) -> None:
+        assert mode in ("500", "reset"), mode
+        self.mode = mode
+        self.seen: list = []
         host = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -51,40 +336,19 @@ class _FakeHost:
             def do_POST(self):
                 n = int(self.headers.get("Content-Length") or 0)
                 text = json.loads(self.rfile.read(n) or b"{}").get("input", "")
-                arrived = time.monotonic()
-                with host._count:
-                    host.active += 1
-                    host.max_active = max(host.max_active, host.active)
-                try:
-                    if host.mode == "reset":
-                        self.connection.setsockopt(
-                            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
-                        )
-                        self.connection.close()
-                        return
-                    if host.mode == "500":
-                        body = b'{"error": "CUDA error: unknown error"}'
-                        self.send_response(500)
-                        self.send_header("Content-Type", "application/json")
-                        self.send_header("Content-Length", str(len(body)))
-                        self.end_headers()
-                        self.wfile.write(body)
-                        return
-                    if host.mode == "serial":
-                        with host._gate:
-                            time.sleep(host.delay(text))
-                    else:
-                        time.sleep(host.delay(text))
-                    body = b"ID3" + text.encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "audio/mpeg")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                finally:
-                    with host._count:
-                        host.active -= 1
-                    host.seen.append((text, arrived, time.monotonic()))
+                host.seen.append(text)
+                if host.mode == "reset":
+                    self.connection.setsockopt(
+                        socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+                    )
+                    self.connection.close()
+                    return
+                body = b'{"error": "CUDA error: unknown error"}'
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
 
         self.server = None
         for port in PORTS:
@@ -97,12 +361,6 @@ class _FakeHost:
         self.server.daemon_threads = True
         self.port = self.server.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def delay(self, text: str) -> float:
-        return self.floor + self.per_char * len(text)
-
-    def texts(self) -> list:
-        return [t for t, _a, _f in self.seen]
 
     def close(self) -> None:
         self.server.shutdown()
@@ -147,8 +405,9 @@ def _free_band_port() -> int:
 @pytest.fixture
 def chain(isolate_settings_store, monkeypatch, tmp_path):
     """The configured voice is an OpenAI-compatible host on loopback, piper
-    the fallback; the health clock (``_now``) is ours, the lane's is real;
-    probes run inline, lanes on real threads."""
+    the fallback; the health clock (``_now``) is ours, by hand, and the
+    lanes' is a :class:`_VirtualClock` (``clock``) on a chain of this test's
+    own; probes run inline, lanes and lines on the clock's threads."""
     monkeypatch.setenv("MINDFLOCK_VOICE_DIR", str(tmp_path / "voice"))
     monkeypatch.setattr(speech, "_arm_timer", lambda: None)
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
@@ -162,11 +421,27 @@ def chain(isolate_settings_store, monkeypatch, tmp_path):
     now = [1000.0]
     monkeypatch.setattr(speech, "_now", lambda: now[0])
     monkeypatch.setattr(speech, "_WARMED", {})  # a warm here stays here
-    speech.TTS_CHAIN.reset()
+    clock = _VirtualClock()
+    tts_chain = speech.TtsChain(clock=clock)
+    monkeypatch.setattr(speech, "TTS_CHAIN", tts_chain)
+    monkeypatch.setattr(speech, "_lane_thread", clock.spawn)
     made: list = []
+    real_http = speech._http
 
-    def serve(*a, **kw) -> _FakeHost:
-        fake = _FakeHost(*a, **kw)
+    def routed(method, url, headers, body, timeout):
+        for fake in made:
+            if fake.virtual and url.startswith(fake.base):
+                text = json.loads(body or b"{}").get("input", "")
+                return 200, "audio/mpeg", fake.call(text, timeout)
+        return real_http(method, url, headers, body, timeout)
+
+    monkeypatch.setattr(speech, "_http", routed)
+
+    def serve(mode: str = "ok", **kw):
+        if mode in ("500", "reset"):
+            fake = _DeadHost(mode)
+        else:
+            fake = _FakeHost(clock, mode, **kw)
         made.append(fake)
         point(fake.port)
         return fake
@@ -182,9 +457,11 @@ def chain(isolate_settings_store, monkeypatch, tmp_path):
         S.invalidate()
 
     yield SimpleNamespace(
-        c=speech.TTS_CHAIN, host=host, piper=piper, now=now, serve=serve, point=point
-    )
-    speech.TTS_CHAIN.reset()
+        c=tts_chain, host=host, piper=piper, now=now, serve=serve, point=point,
+        clock=clock,
+    )  # fmt: skip
+    clock.settle()  # the orphans' renders and the drains finish
+    clock.close()
     for fake in made:
         fake.close()
 
@@ -194,10 +471,10 @@ def _budget(monkeypatch, base: float, per_char: float = 0.0) -> None:
     monkeypatch.setattr(speech, "HOST_BUDGET_PER_CHAR", per_char)
 
 
-def _at_once(fn, args_list, stagger: float = 0.02) -> list:
-    """Run ``fn(*args)`` for each, on threads started ``stagger`` apart (in
-    order, as a client pipelining a reply's sentences): the results in the
-    same order."""
+def _at_once(clock: _VirtualClock, fn, args_list, stagger: float = 0.02) -> list:
+    """Run ``fn(*args)`` for each, on threads started ``stagger`` (virtual)
+    seconds apart (in order, as a client pipelining a reply's sentences):
+    the results in the same order."""
     out: list = [None] * len(args_list)
 
     def run(i, args):
@@ -208,20 +485,17 @@ def _at_once(fn, args_list, stagger: float = 0.02) -> list:
 
     threads = []
     for i, args in enumerate(args_list):
-        t = threading.Thread(target=run, args=(i, args))
-        t.start()
-        threads.append(t)
-        time.sleep(stagger)
-    for t in threads:
-        t.join(10)
+        threads.append(clock.spawn(lambda i=i, args=args: run(i, args), "line"))
+        clock.sleep(stagger)
+    clock.join(threads)
     return out
 
 
-def _wait(cond, timeout: float = 5.0) -> None:
-    end = time.monotonic() + timeout
+def _wait(clock: _VirtualClock, cond, timeout: float = 5.0) -> None:
+    end = clock.now() + timeout
     while not cond():
-        assert time.monotonic() < end, "timed out waiting"
-        time.sleep(0.02)
+        assert clock.now() < end, "timed out waiting"
+        clock.sleep(0.02)
 
 
 class TestSerialHostQueue:
@@ -234,7 +508,7 @@ class TestSerialHostQueue:
         _budget(monkeypatch, 0.6)
         fake = chain.serve("serial", floor=0.4)
         lines = [(chain.host, "Yes."), (chain.host, "Okay."), (chain.host, "Done.")]
-        out = _at_once(chain.c.speak, lines)
+        out = _at_once(chain.clock, chain.c.speak, lines)
         for r in out:
             assert not isinstance(r, Exception), r
             assert r[2] is chain.host and r[3] is False
@@ -247,7 +521,7 @@ class TestSerialHostQueue:
         _budget(monkeypatch, 1.0)
         fake = chain.serve("serial", floor=0.15)
         lines = [(chain.host, "Line %d." % i) for i in range(4)]
-        out = _at_once(chain.c.speak, lines, stagger=0.03)
+        out = _at_once(chain.clock, chain.c.speak, lines, stagger=0.03)
         assert all(r[2] is chain.host for r in out)
         assert fake.texts() == ["Line 0.", "Line 1.", "Line 2.", "Line 3."]
 
@@ -257,6 +531,7 @@ class TestSerialHostQueue:
         _budget(monkeypatch, 1.0)
         fake = chain.serve("serial", floor=0.3)
         out = _at_once(
+            chain.clock,
             lambda f, *a: f(*a),
             [(speech.warm, "tts"), (chain.c.speak, chain.host, "Hi."),
              (chain.c.speak, chain.host, "There.")],
@@ -276,15 +551,16 @@ class TestSlowIsNotDown:
         marked down: the next reply is the host's again."""
         _budget(monkeypatch, 0.3)
         fake = chain.serve("ok", floor=0.8)
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         _a, _m, engine, fb = chain.c.speak(chain.host, "One.")
-        took = time.monotonic() - t0
+        took = chain.clock.now() - t0
         assert engine is chain.piper and fb is True
         assert 0.25 <= took < 0.7  # the budget, not the host's 0.8 s
         assert chain.c.down_reason(chain.host) == ""  # slow is not down
         _a, _m, engine, fb = chain.c.speak(chain.host, "Two.")  # same reply
         assert engine is chain.piper and fb is True
-        _wait(lambda: len(fake.seen) == 1)  # the orphan finished at the host
+        # The orphan finished at the host:
+        _wait(chain.clock, lambda: len(fake.seen) == 1)
         assert fake.texts() == ["One."]  # "Two." never went there
         assert chain.c.down_reason(chain.host) == ""
         # The reply plays out, the pause between replies passes …
@@ -300,19 +576,19 @@ class TestSlowIsNotDown:
         the switch."""
         _budget(monkeypatch, 0.3)
         fake = chain.serve("serial", floor=1.5)
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         lines = [
             (chain.host, "First."),
             (chain.host, "Second."),
             (chain.host, "Third."),
         ]
-        out = _at_once(chain.c.speak, lines, stagger=0.02)
-        took = time.monotonic() - t0
+        out = _at_once(chain.clock, chain.c.speak, lines, stagger=0.02)
+        took = chain.clock.now() - t0
         assert [r[2] for r in out] == [chain.piper] * 3
         assert all(r[3] is True for r in out)
         assert took < 1.0  # the first line's budget, not 3 × 0.3 s, not 1.5 s
         assert chain.c.down_reason(chain.host) == ""
-        _wait(lambda: len(fake.seen) == 1)
+        _wait(chain.clock, lambda: len(fake.seen) == 1)
         assert fake.texts() == ["First."]
 
     def test_a_line_behind_an_orphan_goes_to_piper_at_once(self, chain, monkeypatch):
@@ -325,14 +601,14 @@ class TestSlowIsNotDown:
         fake = chain.serve("serial", floor=1.2)
         chain.c.speak(chain.host, "Slow one.")  # gives up at 0.3 s
         chain.now[0] += 10 + speech.REPLY_GAP_SECONDS  # a new reply
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         _a, _m, engine, _fb = chain.c.speak(chain.host, "Next.")
-        took = time.monotonic() - t0
+        took = chain.clock.now() - t0
         assert engine is chain.piper
         assert took < 0.15
         assert chain.c.down_reason(chain.host) == ""
-        _wait(lambda: len(fake.seen) == 1)
-        time.sleep(0.1)
+        _wait(chain.clock, lambda: len(fake.seen) == 1)
+        chain.clock.sleep(0.1)
         assert fake.texts() == ["Slow one."]  # "Next." never went there
 
     def test_no_fallback_waits_for_a_slow_host(self, chain, monkeypatch):
@@ -355,9 +631,9 @@ class TestDeadIsDown:
             chain.point(_free_band_port())
         else:
             chain.serve(mode)
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         _a, _m, engine, fb = chain.c.speak(chain.host, "Hello.")
-        assert time.monotonic() - t0 < 1.0  # no budget spent
+        assert chain.clock.now() - t0 < 1.0  # no budget spent
         assert engine is chain.piper and fb is True
         assert chain.c.down_reason(chain.host)
         # Down: the next line goes straight to piper, not to the host.
@@ -373,7 +649,7 @@ class TestDeadIsDown:
         _a, _m, engine, _fb = chain.c.speak(chain.host, "Hello.")
         assert engine is chain.piper
         assert chain.c.down_reason(chain.host) == ""
-        _wait(lambda: bool(chain.c.down_reason(chain.host)))
+        _wait(chain.clock, lambda: bool(chain.c.down_reason(chain.host)))
         assert "sent nothing back" in chain.c.down_reason(chain.host)
 
 
@@ -423,7 +699,9 @@ class TestColdStart:
     def test_lines_asked_while_it_starts_wait_with_it(self, chain, monkeypatch):
         _budget(monkeypatch, 0.2)
         chain.serve("serial", floor=0.6)
-        out = _at_once(chain.c.speak, [(chain.host, "One."), (chain.host, "Two.")])
+        out = _at_once(
+            chain.clock, chain.c.speak, [(chain.host, "One."), (chain.host, "Two.")]
+        )
         assert [r[2] for r in out] == [chain.host, chain.host]
         assert chain.piper.spoken == []
 
@@ -441,9 +719,9 @@ class TestColdStart:
         """Waiting is for a host that is STARTING (the connection is held);
         one that refuses is down, as before."""
         chain.point(_free_band_port())
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         _a, _m, engine, fb = chain.c.speak(chain.host, "Hello.")
-        assert time.monotonic() - t0 < 1.0
+        assert chain.clock.now() - t0 < 1.0
         assert engine is chain.piper and fb is True
         assert chain.c.down_reason(chain.host)
 
@@ -451,9 +729,9 @@ class TestColdStart:
         monkeypatch.setattr(speech, "COLD_START_TIMEOUT", 0.4)
         monkeypatch.setattr(speech, "TTS_TIMEOUT", 0.4)
         chain.serve("ok", floor=3.0)
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         _a, _m, engine, fb = chain.c.speak(chain.host, "Hello.")
-        assert 0.3 < time.monotonic() - t0 < 2.5
+        assert 0.3 < chain.clock.now() - t0 < 2.5
         assert engine is chain.piper and fb is True
         assert "sent nothing back" in chain.c.down_reason(chain.host)
 
@@ -497,14 +775,16 @@ class TestBudgetMath:
 
     def test_a_line_budget_chains_off_the_live_line_ahead(self, chain, monkeypatch):
         """budget = host_budget(this) + the budgets of the live lines ahead:
-        three 0.5 s lines on a serial host with a 0.8 s budget each. Alone,
-        the third (answered at ~1.5 s) would be cut at 0.8 s; chained it has
-        2.4 s, and all three come back in the host's voice. (0.8, not 0.55:
-        a slow CI runner ate the 50 ms of slack per line.)"""
-        _budget(monkeypatch, 0.8)
+        three 0.5 s lines on a serial host with a 0.55 s budget each. Alone,
+        the third (answered at 1.5 s) would be cut at 0.59 s; chained it has
+        until 1.65 s, and all three come back in the host's voice. (50 ms of
+        slack per line is enough: the clock is virtual, no runner eats it.)"""
+        _budget(monkeypatch, 0.55)
         fake = chain.serve("serial", floor=0.5)
         out = _at_once(
-            chain.c.speak, [(chain.host, "A."), (chain.host, "B."), (chain.host, "C.")]
+            chain.clock,
+            chain.c.speak,
+            [(chain.host, "A."), (chain.host, "B."), (chain.host, "C.")],
         )
         assert [r[2] for r in out] == [chain.host] * 3
         assert fake.max_active == 1
@@ -526,8 +806,9 @@ class TestLearnedSpeed:
     def _slow_reply(self, chain, fake):
         _a, _m, engine, _fb = chain.c.speak(chain.host, "One.")
         assert engine is chain.piper
-        _wait(lambda: len(fake.seen) == 1)  # the orphan's answer: a sample
-        time.sleep(0.05)
+        # The orphan's answer: a sample.
+        _wait(chain.clock, lambda: len(fake.seen) == 1)
+        chain.clock.sleep(0.05)
 
     def test_a_slow_host_costs_one_reply_then_none(self, chain, monkeypatch):
         _budget(monkeypatch, 0.3)
@@ -539,9 +820,9 @@ class TestLearnedSpeed:
         assert chain.c.down_reason(chain.host) == ""  # too slow is not down
         for n in range(3):  # the next replies: piper at once, nothing sent
             chain.now[0] += 5 + speech.REPLY_GAP_SECONDS
-            t0 = time.monotonic()
+            t0 = chain.clock.now()
             _a, _m, engine, fb = chain.c.speak(chain.host, "Reply %d." % n)
-            assert time.monotonic() - t0 < 0.1
+            assert chain.clock.now() - t0 < 0.1
             assert engine is chain.piper and fb is True
         assert fake.texts() == ["One."]
         assert probes  # the recheck came due and asked for a probe
@@ -594,9 +875,9 @@ class TestLearnedSpeed:
         assert chain.host.warm() == "loaded"
         assert fake.texts() == [speech.WARM_TEXT, speech.WARM_TEXT]
         assert chain.c.speed(chain.host)["slow"]
-        t0 = time.monotonic()
+        t0 = chain.clock.now()
         _a, _m, engine, _fb = chain.c.speak(chain.host, "First reply.")
-        assert time.monotonic() - t0 < 0.1 and engine is chain.piper
+        assert chain.clock.now() - t0 < 0.1 and engine is chain.piper
 
     def test_a_cold_warm_on_a_fast_host_is_not_held_against_it(
         self, chain, monkeypatch
@@ -626,7 +907,9 @@ class TestLearnedSpeed:
         fake = chain.serve("serial", floor=0.4)
         chain.host.warm()
         out = _at_once(
-            chain.c.speak, [(chain.host, "A."), (chain.host, "B."), (chain.host, "C.")]
+            chain.clock,
+            chain.c.speak,
+            [(chain.host, "A."), (chain.host, "B."), (chain.host, "C.")],
         )
         assert [r[2] for r in out] == [chain.host] * 3
         assert fake.texts()[1:] == ["A.", "B.", "C."]
@@ -640,16 +923,17 @@ class TestLearnedSpeed:
         _budget(monkeypatch, 0.5)
         fake = chain.serve("serial", floor=0.4)
         chain.host.warm()  # ratio ≈ 0.8: keeps up
-        probe = threading.Thread(
-            target=chain.c.send,
-            args=(chain.host, speech.WARM_TEXT, speech.host_hung_after("")),
+        probe = chain.clock.spawn(
+            lambda: chain.c.send(
+                chain.host, speech.WARM_TEXT, speech.host_hung_after("")
+            ),
+            "probe",
         )
-        probe.start()
-        _wait(lambda: fake.active == 1)
-        t0 = time.monotonic()
+        _wait(chain.clock, lambda: fake.active == 1)
+        t0 = chain.clock.now()
         _a, _m, engine, _fb = chain.c.speak(chain.host, "Now.")
-        assert time.monotonic() - t0 < 0.1 and engine is chain.piper
-        probe.join(5)
+        assert chain.clock.now() - t0 < 0.1 and engine is chain.piper
+        chain.clock.join([probe], 5)
         assert "Now." not in fake.texts()
 
     def test_learning_math(self, chain, monkeypatch):
@@ -686,7 +970,7 @@ class TestListeners:
             (chain.host, "Phone three.", "", "phone"),
             (chain.host, "The desktop's whole reply.", "", "desktop"),
         ]
-        out = _at_once(chain.c.speak, calls, stagger=0.03)
+        out = _at_once(chain.clock, chain.c.speak, calls, stagger=0.03)
         assert [r[2] for r in out[:3]] == [chain.host] * 3
         assert out[3][2] is chain.piper and out[3][3] is True
         assert "The desktop's whole reply." not in fake.texts()

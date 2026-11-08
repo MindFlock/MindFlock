@@ -440,6 +440,40 @@ def test_pass_prunes_and_announces_gone_flights(srv, emitted, monkeypatch):
 # --------------------------------------------------------------------------- #
 # Operations
 # --------------------------------------------------------------------------- #
+def test_start_on_a_busy_session_keeps_its_agent_step(srv, row):
+    from backend.web.core import prompt_queue as pq
+
+    plan = F.save_plan({"name": "P", "steps": [{"kind": "agent"}, {"kind": "notify"}]})
+    row["activity"] = "working"
+    f = run(D.start({"plan_id": plan["id"], "title": "s"}))
+    ss = f["step_states"]["s1"]
+    assert f["cursor"] == 0 and ss["state"] == "running"
+    # Working counts as started: a turn that ended just before take-off must
+    # not wait hours for "the agent to start".
+    assert ss["detail"]["worked_at"] > 0
+    # Idle with nothing queued: the work so far is the agent step, as before.
+    srv.ENGINE.instances["idle"] = FakeInst()
+    row["activity"] = "idle"
+    f = run(D.start({"plan_id": plan["id"], "title": "idle"}))
+    assert f["cursor"] == 1
+    # Idle but its task still waits (held) in its queue: a just-spawned worker.
+    srv.ENGINE.instances["queued"] = FakeInst()
+    pq.set_flags("queued", enabled=False, held=True)
+    pq.enqueue("queued", "the task")
+    f = run(D.start({"plan_id": plan["id"], "title": "queued"}))
+    assert f["cursor"] == 0 and "worked_at" not in f["step_states"]["s1"]["detail"]
+    # A LOOPING queue never empties, so a stop on it would never settle: a
+    # looping session is never "in progress", idle or working.
+    for activity in ("idle", "working"):
+        name = "looping-" + activity
+        srv.ENGINE.instances[name] = FakeInst()
+        pq.enqueue(name, "check the build")
+        pq.set_flags(name, enabled=True, loop=True)
+        row["activity"] = activity
+        f = run(D.start({"plan_id": plan["id"], "title": name}))
+        assert f["cursor"] == 1
+
+
 def test_start_attach_and_create(srv, monkeypatch):
     plan = F.save_plan(
         {
@@ -538,6 +572,58 @@ def test_operate_done_on_verify_is_refused_no_blanket_done(srv, monkeypatch):
     assert F.get(f["id"])["state"] == "waiting_you"
     # Skip still moves it on.
     assert D.operate(f["id"], "skip", "s1")["state"] == "done"
+
+
+def test_jumping_back_over_a_running_review_closes_its_reviewer(srv, monkeypatch):
+    """The route started at Review by mistake and was moved back to the agent
+    stop: the reviewer it had spawned ran on with nothing to read its verdict,
+    and the agent stop counted it as one of its own workers."""
+    from backend.web.core.flight_kinds import review as rv
+
+    closed = []
+    monkeypatch.setattr(
+        rv, "_close", lambda parent, t: closed.append((parent, t)) or "deleted"
+    )
+    srv._created_epoch = lambda inst: getattr(inst, "created", 0.0)
+    for name, parent in (
+        ("review-1", "s"),
+        ("review-2", "s"),
+        ("review-3", "s"),
+        ("review-4", "someone-else"),
+    ):
+        inst = FakeInst()
+        inst.Parent, inst.created = parent, NOW
+        srv.ENGINE.instances[name] = inst
+    f = fly(
+        {"kind": "agent", "config": {"prompt": "go"}},
+        {"kind": "review"},
+        {"kind": "review", "config": {"keep": True}},
+        start_at="s2",
+    )
+
+    def reviewing(x, sid, who):
+        ss = x["step_states"][sid]
+        ss.update(state="running", since=NOW)
+        ss["detail"] = {"children": [who], "base": "abc"}
+
+    F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-1"))
+    D.operate(f["id"], "jump", "s1")
+    assert closed == [("s", "review-1")]
+    # Ops that leave it its reviewer close nothing; keep=true is never closed.
+    F.mutate(f["id"], lambda x: reviewing(x, "s3", "review-2"))
+    D.operate(f["id"], "pause")
+    D.operate(f["id"], "resume")
+    D.operate(f["id"], "jump", "s1")
+    assert closed == [("s", "review-1")]
+    # Cancelling the route leaves the stop "running" with its reviewer, but
+    # nothing will read the verdict any more: it is closed too.
+    # A title that now names another session's reviewer is never closed.
+    F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-4"))
+    D.operate(f["id"], "jump", "s1")
+    assert closed == [("s", "review-1")]
+    F.mutate(f["id"], lambda x: reviewing(x, "s2", "review-3"))
+    D.operate(f["id"], "cancel")
+    assert closed[-1] == ("s", "review-3")
 
 
 def test_operate_done_on_a_verify_failure_handed_to_you_still_works(srv):
