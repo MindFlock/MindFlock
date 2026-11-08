@@ -10075,6 +10075,10 @@ details.fl-group-waiting > summary {
   padding: 3px 0;
 }
 .peer-guest-warn {
+  /* The screen's body size: unset, it inherited the page's 16px and the
+     warning (and its "I understand") read larger than every other line. */
+  font-size: 13px;
+  line-height: 1.45;
   margin: 8px 0 6px;
   padding: 8px 10px;
   border-radius: 6px;
@@ -10087,6 +10091,7 @@ details.fl-group-waiting > summary {
 }
 .peer-guest-ack {
   display: block;
+  font-size: 13px;
   margin: 0 0 8px;
   cursor: pointer;
 }

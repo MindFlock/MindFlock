@@ -25227,8 +25227,8 @@ function heldWasQueued(err) {
 function heldQueuedText(name, queued = true) {
 	return queued ? "Queued — " + name + " is offline; press Start to send it." : name + " is offline since a crash — press Start, then send it again.";
 }
-function heldRows(instances) {
-	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i));
+function heldRows(instances, missing) {
+	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i) && !(missing && missing(i)));
 }
 function heldNoticeText(n) {
 	const who = n === 1 ? "1 session stayed" : n + " sessions stayed";
@@ -36642,6 +36642,11 @@ var SKY_MODES = [
 		title: "Only the routes that need you"
 	}
 ];
+function groundedLanding(mode, noSessions) {
+	if (mode === "all" || mode === "mine") return "shown";
+	return mode === "one" && noSessions ? "switch" : "say";
+}
+var GROUNDED_HIDDEN_LINE = "Your routes with no session yet show under All.";
 var inSky = (r) => !r.hidden_by;
 function linePerched(r) {
 	const fl = r.flight;
@@ -59093,12 +59098,15 @@ function sweepToast(r, offline) {
 	}
 	return line;
 }
-function offlineRows(instances) {
+function offlineRows(instances, logins) {
 	return instances.filter((i) => {
-		if (i.device || i.pending || i.sleeping) return false;
+		if (i.device || i.pending || i.sleeping || missingAgent$1(i, logins)) return false;
 		const ss = deriveSessionState(i);
 		return ss.state === "offline" && ss.restartable && i.status !== "paused";
 	});
+}
+function missingAgent$1(i, logins) {
+	return !!agentMissing(i, logins, "offline");
 }
 var LOW_MEMORY_LINE = "Memory is low — starting them all may fill it again.";
 var DISMISS_KEY = "mf.heldNotice.dismissed";
@@ -59117,10 +59125,11 @@ function writeDismissed(v) {
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
+	const logins = useSetup().data?.logins;
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [dismissed, setDismissed] = (0, import_react.useState)(readDismissed);
-	const offline = offlineRows(instances);
-	const held = heldRows(instances);
+	const offline = offlineRows(instances, logins);
+	const held = heldRows(instances, (i) => missingAgent$1(i, logins));
 	const heldKey = heldNoticeKey(held);
 	const notice = held.length > 0 && !heldNoticeHidden(dismissed, heldKey);
 	if (!notice && offline.length < 2 && !busy) return null;
@@ -86320,6 +86329,11 @@ var VERIFY_WHO = {
 	agent: "by the agent",
 	you: "by you"
 };
+var YOU_WAITS = "waits for your Done";
+function youFlownSub(step, state) {
+	if (step.kind !== "you" || state !== "done" && state !== "skipped") return "";
+	return stopSummary(step) === YOU_WAITS ? state : "";
+}
 function stopSummary(step) {
 	const c = step.config || {};
 	switch (step.kind) {
@@ -86337,7 +86351,7 @@ function stopSummary(step) {
 			const items = youItems(step);
 			if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
 			const t = String(c.text ?? "").trim();
-			return t ? clip(t) : "waits for your Done";
+			return t ? clip(t) : YOU_WAITS;
 		}
 		case "wait": {
 			const until = String(c.until ?? "").trim();
@@ -86767,7 +86781,7 @@ function flightStops(f, kinds) {
 			kind: "stop",
 			row: "main",
 			title: stopTitle(s, kinds),
-			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), stopSummary(s)),
+			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s)),
 			state,
 			icon: s.kind,
 			perch: stepActor(s, kinds) === "you",
@@ -110048,11 +110062,12 @@ function rowsFor(source) {
 		hint: ""
 	}];
 }
-function RepoListField({ source, onChange, onPending, onSettled }) {
+function RepoListField({ source, onChange, onPending, onSettled, error }) {
 	const stored = sourceRepos(source);
 	const storedRef = (0, import_react.useRef)(stored);
 	storedRef.current = stored;
 	const [rows, setRows] = (0, import_react.useState)(() => rowsFor(source));
+	const [touched, setTouched] = (0, import_react.useState)(false);
 	const save = useAutosave((next) => {
 		if (!sameRepos(cleanRepos(next), storedRef.current)) onChange(reposPatch(next));
 		else onSettled?.();
@@ -110082,7 +110097,7 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 		}
 	};
 	const many = rows.length > 1;
-	const missing = cleanRepos(rows).length === 0;
+	const red = cleanRepos(rows).length === 0 && (touched || !!error);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row tk-repos",
 		role: "group",
@@ -110105,11 +110120,15 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 						required: i === 0,
 						"data-tk-field": i === 0 ? "repo_url" : void 0,
 						"aria-label": many ? `Repo ${i + 1} URL` : "Repo URL",
-						className: "tk-repo-url" + (i === 0 && missing ? " field-missing" : ""),
+						className: "tk-repo-url" + (i === 0 && red ? " field-missing" : ""),
+						"aria-invalid": i === 0 && red ? true : void 0,
 						placeholder: "git@github.com:org/repo.git",
 						value: r.url,
 						onChange: (e) => edit(i, { url: e.target.value }),
-						onBlur: save.flush,
+						onBlur: () => {
+							setTouched(true);
+							save.flush();
+						},
 						onKeyDown: onKey
 					}),
 					many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -111206,6 +111225,7 @@ function AutoStartLink({ kind }) {
 	if (kind === "tickets" && (!m.status || !m.status.available)) return null;
 	if (!(kind === "tickets" ? m.ticketSources > 0 : kind === "prs" ? m.repos > 0 : m.issueRepos > 0)) return null;
 	const on = kind === "tickets" ? m.ticketsOn : kind === "prs" ? m.prsOn : m.issuesOn;
+	if (!m.ticketsOn && !m.prsOn && !m.issuesOn) return null;
 	const state = kind === "tickets" && on && broken.length ? "on, but " + listNames(broken.map((b) => b.name)) + " can't connect" : kind !== "tickets" && m.runsOn && on ? "runs on " + m.runsOn : on ? "on — " + everyText(m.every[kind]) : "off";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-autostart-link",
@@ -111968,7 +111988,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
-				"Connect a tracker. Tickets in the states you pick start as sessions — on their own while auto-start is on, or when you press ",
+				stored.length ? null : "Connect a tracker. ",
+				"Tickets in the states you pick start as sessions — on their own while auto-start is on, or when you press ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 				"."
 			]
@@ -112642,6 +112663,11 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		}
 	});
 }
+function fieldPart(key, credFields, filterFields) {
+	if (key && credFields.some((f) => f.key === key)) return "connect";
+	if (key && filterFields.some((f) => f.key === key)) return "takes";
+	return key ? "goes" : "connect";
+}
 var EDIT_PARTS = [
 	["connect", "Connect"],
 	["takes", "What it takes"],
@@ -112746,7 +112772,9 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 	const paired = filterFields.length >= 2 && filterFields[0].key === "assignee_scope" && filterFields[1].type === "state";
 	const saveLine = !saved ? unsaved ? "Not saved — fill in the marked fields" : dirty ? "Saving…" : "Not saved yet" : dirty || save?.state === "saving" || save?.state === "pending" ? "Saving…" : save?.state === "failed" ? "Not saved" : save?.state === "saved" ? "Saved ✓" : "";
 	const name = sourceDisplayName(source, catalog);
-	const [part, setPart] = (0, import_react.useState)(() => pillState === "connected" && !unsaved ? "takes" : "connect");
+	const errPart = unsaved ? fieldPart(Object.keys(errs)[0], credFields, filterFields) : null;
+	const pillPart = errPart || "connect";
+	const [part, setPart] = (0, import_react.useState)(() => errPart || (pillState === "connected" ? "takes" : "connect"));
 	const heads = section === "edit";
 	const showConnect = section === "connect" || heads && part === "connect";
 	const showTakes = section === "setup" || heads && part === "takes";
@@ -112775,7 +112803,7 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 							children: i + 1
 						}),
 						label,
-						key === "connect" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
+						key === pillPart ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
 							state: pillState,
 							label: pillLabel,
 							message: pillMessage
@@ -112857,7 +112885,8 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 							onChange(patch);
 						},
 						onPending: () => onDirty("repos", true),
-						onSettled: () => onDirty("repos", false)
+						onSettled: () => onDirty("repos", false),
+						error: errs.repo_url || errs.repos
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -114224,7 +114253,7 @@ function AutoStartLine({ ticketSources, gotoTab }) {
 			className: "linklike",
 			title: "The switches for tickets, PR comments and new issues",
 			onClick: () => gotoTab("autostart"),
-			children: p.onKinds.length ? "Auto-start switches ›" : "Turn on ›"
+			children: "Auto-start switches ›"
 		}) : null]
 	});
 }
@@ -119795,6 +119824,7 @@ function PeerLinkCard(props) {
 			})
 		]
 	}, "talk");
+	const mayDelete = confirm === "unshare" || confirm === "unlink" && !!link.shared;
 	const confirmView = confirm === "mismatch" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		title: `It doesn't match — remove the connection to ${link.peer_name}?`,
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Someone may be between you. Remove it, then make a new invite and send it a different way (a call, another chat), and compare again." }),
@@ -119808,22 +119838,22 @@ function PeerLinkCard(props) {
 	}) : confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		title: confirm === "unlink" ? `Remove the connection to ${link.peer_name}?` : "Stop sharing this folder?",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? `${link.peer_name} can no longer reach you. Their shared session is closed, not deleted; yours too unless you tick delete.` : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? unlinkText(link) : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
 			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			mayDelete && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "check",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
 					checked: deleteFiles,
 					onChange: (e) => setDeleteFiles(e.target.checked)
-				}), "also delete the sandbox copy of the shared folder"]
+				}), "Also delete the sandbox copy of the shared folder"]
 			})
 		] }),
 		confirmLabel: confirm === "unlink" ? "Remove connection" : "Stop sharing",
 		busy: !!busy,
 		onCancel: () => setConfirm(""),
 		onConfirm: () => {
-			const q = deleteFiles ? "?delete_files=1" : "";
+			const q = deleteFiles && mayDelete ? "?delete_files=1" : "";
 			const path = confirm === "unlink" ? base + q : base + "/share" + q;
 			const unlinking = confirm === "unlink";
 			setConfirm("");
@@ -119901,6 +119931,16 @@ function PeerLinkCard(props) {
 			confirmView
 		]
 	});
+}
+function unlinkText(link) {
+	const name = link.peer_name;
+	const theirs = !!link.their_share?.shared;
+	const mine = !!link.shared;
+	let text = `${name} can no longer reach you.`;
+	if (theirs && mine) text += " Their shared session is closed, not deleted; yours too unless you tick delete.";
+	else if (theirs) text += " Their shared session is closed, not deleted.";
+	else if (mine) text += " Your shared session is closed, not deleted, unless you tick delete.";
+	return text;
 }
 //#endregion
 //#region src/components/settings/screens/PeerLinks.tsx
@@ -121559,11 +121599,12 @@ function LocalModel(_) {
 			className: "set-hint set-block-hint",
 			children: [
 				"Point your agent CLI at a model running on this machine. No subscription and no API key — and nothing you type, no diff and no file ever leaves the box. Works with ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "codex" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("codex") }),
 				", ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "aider" }),
-				" and ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "goose" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("aider") }),
+				" and",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("goose") }),
 				", each of which has native local-model support; Claude Code talks only to the Anthropic API, so a session on it keeps using that."
 			]
 		}),
@@ -121680,7 +121721,7 @@ function LocalModel(_) {
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
-				children: supported.length ? `Installed CLIs that can use it: ${supported.join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it."
+				children: supported.length ? `Installed agents that can use it: ${supported.map(agentName).join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it."
 			})]
 		})
 	] });
@@ -143622,6 +143663,15 @@ function SkyView() {
 			y: at.y,
 			pinned: true
 		}));
+		groundedLanded(f);
+	};
+	const groundedLanded = (f) => {
+		const how = groundedLanding(useUi.getState().skyMode, instQ.data?.length === 0);
+		if (how === "switch") setSkyMode("all");
+		else if (how === "say") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it", { action: {
+			label: "Show all",
+			onClick: () => setSkyMode("all")
+		} });
 	};
 	const spotRef = (0, import_react.useRef)(() => ({
 		x: 0,
@@ -143679,14 +143729,13 @@ function SkyView() {
 			pinned: true
 		}));
 		placing.current.set(groundedKey(f.id), near);
-		const m = useUi.getState().skyMode;
-		if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+		groundedLanded(f);
 	};
 	const editDefault = (ref) => void openDefaultEditor(ref, flights, {
 		existing: (f) => {
 			const key = groundedKey(f.id);
 			if (rectOf(key)) jumpTo(key);
-			else toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+			else groundedLanded(f);
 		},
 		made: (f) => {
 			if (!alive.current) return;
@@ -143699,8 +143748,7 @@ function SkyView() {
 			}));
 			placing.current.set(key, "lane");
 			setGroundFocus(key);
-			const m = useUi.getState().skyMode;
-			if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+			groundedLanded(f);
 		}
 	});
 	const pinAt = (key, at) => {
@@ -144621,8 +144669,9 @@ function SkyView() {
 		};
 	}, [narrow]);
 	const noSessions = instQ.data !== void 0 && instQ.data.length === 0;
-	const empty = lines.length > 0 ? "" : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
-	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);
+	const groundedHidden = mode === "one" && groundedIds.size > 0;
+	const empty = lines.length > 0 ? "" : groundedHidden && noSessions && !focused && !query ? GROUNDED_HIDDEN_LINE : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -145309,7 +145358,7 @@ function SkyView() {
 								onClose: () => setShortcutsOpen(false),
 								groups: SKY_SHORTCUT_GROUPS
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
+							!(paletteOn && blank) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
 								blank,
 								newSession: noSessions && !lines.length,
 								className: "sky-empty muted",
