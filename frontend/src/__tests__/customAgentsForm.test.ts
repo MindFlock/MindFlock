@@ -7,6 +7,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { Providers, editingAfterSave, sourceBadge } from "../components/settings/screens/Providers";
+import src from "../components/settings/screens/Providers.tsx?raw";
 
 const html = () =>
   renderToStaticMarkup(
@@ -57,6 +58,11 @@ describe("the add form", () => {
   it("points at the TOML file for what the form doesn't cover", () => {
     expect(html()).toContain('id="prov-toml-hint"');
     expect(html()).toContain("~/.mindflock-assistant/providers/");
+  });
+
+  it("names the folder the server actually reads (providers_dir), the default only until it answers", () => {
+    expect(src).toContain("s.value?.providers_dir");
+    expect(src).toContain('{tomlDir || "~/.mindflock-assistant/providers/"}');
   });
 
   it("sits above the provider rows, not after eight built-ins", () => {

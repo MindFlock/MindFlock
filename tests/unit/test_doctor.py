@@ -240,6 +240,26 @@ class TestGh:
         assert "not logged into" not in c.detail
         assert "optional" in c.detail and "Connect GitHub" in c.detail
 
+    def test_troubleshooting_heading_matches_the_unsigned_line(self, monkeypatch):
+        # TROUBLESHOOTING.md is indexed by what the doctor prints; its gh
+        # heading said "installed but not authenticated" long after the line
+        # became "installed but not signed in (optional — …)".
+        from pathlib import Path
+
+        monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))
+        monkeypatch.setattr(doctor, "_run", lambda argv: (1, "not logged in"))
+        monkeypatch.setattr(doctor, "_github_token_connected", lambda: False)
+        detail = doctor.check_gh().detail
+        doc = (Path(__file__).resolve().parents[2] / "TROUBLESHOOTING.md").read_text(
+            encoding="utf-8"
+        )
+        heads = [
+            ln for ln in doc.splitlines() if ln.startswith("### `GitHub CLI (gh)`")
+        ]
+        quoted = [h.split("— `", 1)[1].rstrip("`").split("…")[0] for h in heads]
+        assert any(q and detail.startswith(q) for q in quoted), (quoted, detail)
+        assert "not authenticated" not in doc
+
     def test_unauthenticated_with_a_mindflock_token_is_info(self, monkeypatch):
         # Connect GitHub (or $GH_TOKEN) already does gh's job: nothing to fix.
         monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))

@@ -3141,9 +3141,10 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
-  when another is installed. Picking a missing one shows *<agent> isn't
-  installed on this device. Install it in Settings → Agents, or pick another
-  agent.* under the field, and **Start** (on either page)
+  when another is installed. Picking a missing one shows *<Agent> isn't
+  installed on this device. Install it in one click from Get set up (step ①;
+  a custom agent: Settings → Custom agents), or pick another agent.* under
+  the field, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
   installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
@@ -6143,7 +6144,10 @@ A few screens got quieter:
   GitHub's row is a plain status ("Not connected. Agents can't open pull
   requests yet." / "Connected as @you"), with no `gh` output or Copy chip and
   no Test until something is connected. A failing Test outranks an agent
-  row's stored Connected.
+  row's stored Connected. A not-installed agent says **Not installed** once
+  (the pill; its line says *Install it, then press Check again.*) and its
+  Test reads **Check again**, so a CLI installed in a terminal shows up
+  without a reload.
 - **Connect GitHub** never shows "device flow is not configured": without a
   device flow the token path leads (the `repo` and `read:org` scopes named,
   the link opening GitHub's token page with both ticked), with the gh CLI

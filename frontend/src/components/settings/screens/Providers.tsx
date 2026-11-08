@@ -142,6 +142,8 @@ function BinaryPathField({
 export function Providers({ gotoScreen }: ScreenProps) {
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
   const [loadErrors, setLoadErrors] = useState<ProvidersStatusResponse["errors"]>([]);
+  /** Where this server reads custom-agent TOMLs ("" = an older server). */
+  const [tomlDir, setTomlDir] = useState("");
   const [managed, setManaged] = useState<Record<string, ManagedProvider>>({});
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   /** null = the Add form; a name = editing that existing provider (PUT). */
@@ -154,12 +156,13 @@ export function Providers({ gotoScreen }: ScreenProps) {
     // server that predates it (not yet restarted) the manage list must still
     // render instead of the whole screen blanking to "add a provider".
     const [s, m] = await Promise.allSettled([
-      api<ProvidersStatusResponse>("/api/providers/status"),
+      api<ProvidersStatusResponse & { providers_dir?: string }>("/api/providers/status"),
       api<{ providers?: ManagedProvider[] }>("/api/providers/manage"),
     ]);
     const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
     setStatuses(statusList);
     setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
+    setTomlDir(s.status === "fulfilled" ? s.value?.providers_dir || "" : "");
     const byName: Record<string, ManagedProvider> = {};
     if (m.status === "fulfilled") {
       for (const p of m.value?.providers || []) byName[p.name] = p;
@@ -334,8 +337,8 @@ export function Providers({ gotoScreen }: ScreenProps) {
           {/* Saved, but it won't start as written — the fix is one field up. */}
           {warning && <p id="prov-warning" className="prov-launch-hint">{warning}</p>}
           <p className="set-hint" id="prov-toml-hint">
-            Each custom agent is a TOML file in <code>~/.mindflock-assistant/providers/</code>{" "}
-            (or <code>$MINDFLOCK_PROVIDERS_DIR</code>). Edit it for what this form doesn't
+            Each custom agent is a TOML file in <code>{tomlDir || "~/.mindflock-assistant/providers/"}</code>
+            {tomlDir ? "" : " (or $MINDFLOCK_PROVIDERS_DIR)"}. Edit it for what this form doesn't
             cover — busy/idle screen patterns, trust prompts, effort levels, sign-in — as
             docs/providers.md describes; saving here keeps those keys.
           </p>
