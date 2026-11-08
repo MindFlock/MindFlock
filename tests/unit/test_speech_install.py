@@ -233,6 +233,21 @@ class TestInstall:
         S.invalidate()
         assert S.load_settings().voice.stt_backend == ""  # not switched
 
+    def test_uv_caused_by_lead_in_is_dropped_from_the_reason(self, spawn):
+        # uv ends its error chain on "  Caused by: <root cause>": the reason
+        # a person reads (and Settings picks the next step from) is the cause.
+        spawn.script["packages"] = (
+            [
+                "error: Failed to fetch: https://pypi.org/simple/faster-whisper/",
+                "  Caused by: dns error: failed to lookup address information",
+            ],
+            2,
+        )
+        st = _run()
+        assert st["error"] == (
+            "installing packages failed: dns error: failed to lookup address information"
+        )
+
     def test_install_failure_without_output(self, spawn):
         spawn.script["packages"] = ([], 2)
         st = _run()

@@ -397,7 +397,14 @@ def _run_step(step: str, argv: Sequence[str]) -> None:
     if timed_out.is_set():
         raise _StepFailed("%s took longer than %d minutes" % (step, STEP_TIMEOUT // 60))
     if code != 0:
-        raise _StepFailed("%s failed: %s" % (step, last or "exit %d" % code))
+        raise _StepFailed("%s failed: %s" % (step, _reason(last) or "exit %d" % code))
+
+
+def _reason(last: str) -> str:
+    """A failed step's last output line as its reason, without uv's
+    ``Caused by:`` lead-in (its error chain ends on the root cause, which is
+    the part a person can act on: "dns error: …", "No space left …")."""
+    return re.sub(r"^\s*Caused by:\s*", "", last or "").strip()
 
 
 def _install(heal: bool = False) -> None:

@@ -143,6 +143,15 @@ export function voiceFields(
 
 const noDot = (s: string) => s.replace(/\.\s*$/, "");
 
+/** The server's pointer to this very screen (core/speech's "local models
+ * not installed: Settings → Voice installs them", right for the mic and the
+ * phone page), as this screen says it: the button under Recognition. */
+const HERE_POINTER = /:\s*Settings → Voice installs them\b/;
+export function hereDetail(kind: VoiceKind | "try", detail: string): string {
+  if (!HERE_POINTER.test(detail)) return detail;
+  return detail.replace(HERE_POINTER, kind === "stt" ? " — install them below" : " — install them under Recognition");
+}
+
 /** What the readiness line adds for a local voice host: it is not probed. */
 export const VOICE_HOST_ON_USE = "starts when you use voice, stops when idle";
 
@@ -165,10 +174,15 @@ export function readinessLine(
   const id = (kind === "stt" ? sr.stt_backend : sr.tts_backend) || "";
   let detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
   if (backend === "system" || (!backend && id === "system")) {
-    if (view.system?.detail) detail = view.system.detail;
-    else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
+    // The built-in engine's sentence covers both kinds ("Recognition: … .
+    // Voice: … ."): the kind's own detail says only this kind, so it wins
+    // when the server gave one — except on Linux, where the system's "why
+    // there is none" is the useful part.
+    if (view.system?.detail) {
+      if (!detail || view.system.platform === "none") detail = view.system.detail;
+    } else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
   }
-  detail = noDot(detail);
+  detail = hereDetail(kind, noDot(detail));
   // A voice host on this machine or network (Voice Lab) is never asked from
   // here — it may be stopped while idle, and asking would start it: it
   // starts on its own with the first line said ("Say a test sentence" tries it).
@@ -190,9 +204,9 @@ export function tryState(
   const sr = view.server_ready || {};
   const say = sr.tts
     ? { ok: true, why: "" }
-    : { ok: false, why: "No voice is ready on the server" + (sr.tts_detail ? ": " + noDot(sr.tts_detail) : "") + "." };
+    : { ok: false, why: "No voice is ready on the server" + (sr.tts_detail ? ": " + hereDetail("try", noDot(sr.tts_detail)) : "") + "." };
   const hear = !sr.stt
-    ? { ok: false, why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + noDot(sr.stt_detail) : "") + "." }
+    ? { ok: false, why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + hereDetail("try", noDot(sr.stt_detail)) : "") + "." }
     : !canRecord
       ? { ok: false, why: "This browser can't record from a microphone." }
       : { ok: true, why: "" };
@@ -883,8 +897,23 @@ export const MOONSHINE_LABEL = "Install fast recognition (Moonshine, ~200 MB)";
 export const MOONSHINE_WHY =
   "Moonshine types your words as you say them and has the text ready about 30 ms after you stop (whisper takes about a second). English only; long dictation is still polished by whisper.";
 export const MOONSHINE_DONE = "Installed — live words now use Moonshine";
-export const MOONSHINE_NEXT =
-  "Live words keep using whisper meanwhile. Try again; if it fails again, mindflock doctor --all on the server says why.";
+/** After a failed Moonshine install, past the reason and its next step:
+ * nothing is lost (doctor would only send you back to this button). */
+export const MOONSHINE_NEXT = "Live words keep using whisper meanwhile.";
+/** A failed install's next step, by what its error says. */
+export const INSTALL_NEXT_NET =
+  "This computer couldn't reach the download servers: check that it is online (and any proxy or VPN), then try again.";
+export const installNextDisk = (size: string) => `The disk is full: free ${size}, then try again.`;
+
+/** The next step a failed install's error points at ("" when it names none:
+ * the reason and Try again are all there is). `size` is the download's. */
+export function installNextStep(error: string | null | undefined, size: string): string {
+  const e = String(error || "");
+  if (/no space left|disk (is )?full|ENOSPC|not enough space/i.test(e)) return installNextDisk(size);
+  if (/dns error|lookup address|name resolution|could not resolve|failed to fetch|connection (refused|reset|error)|timed? ?out|network is unreachable|certificate|SSL|proxy/i.test(e))
+    return INSTALL_NEXT_NET;
+  return "";
+}
 
 /** The Live words row's first line: the engine that types the words while
  * recognition streams ("" when it does not, or an older server didn't say). */
@@ -910,7 +939,7 @@ export function moonshineOffer(view: VoiceView | null | undefined, streamSetting
 /** The Moonshine installer's button and line: `installView`'s, with its own
  * done line and a next step after a failure. */
 export function moonshineView(st: InstallStatus, allowed: boolean): ReturnType<typeof installView> {
-  const v = installView(st, allowed);
+  const v = installView(st, allowed, "about 200 MB");
   if (st.state === "done") return { ...v, text: MOONSHINE_DONE + "." };
   if (st.state === "failed" && !st.refused && allowed) return { ...v, text: v.text + " " + MOONSHINE_NEXT };
   return v;
@@ -932,6 +961,9 @@ export function basicRecognizer(view: VoiceView | null | undefined): boolean {
 export function installOffer(backend: string, view: VoiceView | null | undefined): "basic" | "local" | null {
   if (!view) return null;
   const sr = view.server_ready || {};
+  // The voice on local models with them missing: the one installer is here
+  // (the Voice block's line points at it), whatever recognition uses.
+  if (!sr.tts && /local models not installed/i.test(sr.tts_detail || "")) return "local";
   if (sr.stt_backend === "local" && sr.stt) return null;
   if (backend === "local") return "local";
   if (backend === "system" && basicRecognizer(view)) return "basic";
@@ -963,10 +995,12 @@ export function tryInstallFix(view: VoiceView | null | undefined, install: Insta
 export const TRY_INSTALL_LINE = "Local models aren't installed on the server yet. Install them here; they run on this computer.";
 
 /** The installer row's button and line for a status (`allowed` false: the
- * viewer may not change the server). */
+ * viewer may not change the server; `size`: the download's, for a failure's
+ * next step). */
 export function installView(
   st: InstallStatus,
-  allowed: boolean
+  allowed: boolean,
+  size = "about 300 MB"
 ): { button: "install" | "retry" | "busy" | null; disabled: boolean; text: string; last: string } {
   const last = st.state === "running" ? (st.log || []).filter(Boolean).slice(-1)[0] || "" : "";
   if (st.state === "running") {
@@ -976,8 +1010,11 @@ export function installView(
   if (st.state === "done") return { button: null, disabled: true, text: INSTALL_DONE + ".", last };
   if (st.refused) return { button: "install", disabled: true, text: noDot(st.error || INSTALL_REFUSED) + ".", last };
   if (!allowed) return { button: "install", disabled: true, text: INSTALL_REFUSED, last };
-  if (st.state === "failed")
-    return { button: "retry", disabled: false, text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + ".", last };
+  if (st.state === "failed") {
+    const next = installNextStep(st.error, size);
+    const text = "Couldn't install: " + noDot(st.error || "the server gave no reason") + "." + (next ? " " + next : "");
+    return { button: "retry", disabled: false, text, last };
+  }
   return { button: "install", disabled: false, text: "", last };
 }
 
@@ -1101,7 +1138,7 @@ function LiveWordsRow({ model, view, fast }: { model: SettingsModel; view: Voice
         <span className="set-label" id="voice-live-words">
           {line}
         </span>
-        <InstallStatus v={v} state={fast.status.state} idle={MOONSHINE_WHY} idPrefix="voice-moonshine" />
+        <InstallStatus v={v} state={fast.status.state} idle={MOONSHINE_WHY} idPrefix="voice-moonshine" busyLabel="Installing fast recognition" />
       </div>
       <InstallButton v={v} install={fast} id="voice-moonshine-btn" label={MOONSHINE_LABEL} />
     </div>
@@ -1116,11 +1153,14 @@ function InstallStatus({
   state,
   idle,
   idPrefix,
+  busyLabel = "Installing local models",
 }: {
   v: ReturnType<typeof installView>;
   state: InstallStatus["state"];
   idle: string;
   idPrefix: string;
+  /** The progress bar's name for a screen reader. */
+  busyLabel?: string;
 }) {
   return (
     <>
@@ -1131,7 +1171,7 @@ function InstallStatus({
       ) : (
         idle && <span className="set-hint">{idle}</span>
       )}
-      {v.button === "busy" && <progress className="voice-install-progress" aria-label="Installing local models" />}
+      {v.button === "busy" && <progress className="voice-install-progress" aria-label={busyLabel} />}
       {v.last && (
         <span className="set-hint voice-install-log" id={idPrefix + "-log"} title={v.last}>
           {v.last}

@@ -6771,11 +6771,19 @@ labels above the inputs.
     `POST /api/voice/clear-key`) and **Model**; local models add a whisper
     size for recognition and a piper voice name. Under each block a
     readiness line from `GET /api/voice` (*Server recognition ready
-    (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
-    *Server voice not ready: …*): with the built-in engine picked its own
-    sentence is the detail (the Linux one, macOS' permission one); a server
-    too old to report `system` says it has no built-in engine yet. A saved
-    key's **Clear** sits in the key's hint line.
+    (system): Windows (from WSL) speech recognition (en-US): basic accuracy
+    — install local models for better recognition.* / *Server voice ready
+    (system): Windows (from WSL) voices: Microsoft David Desktop, Microsoft
+    Zira Desktop.* / *Server voice not ready: …*): each line carries its own
+    kind's detail (`stt_detail` / `tts_detail`), never the built-in
+    engine's sentence about both; that sentence (`system.detail`) is the
+    detail only when the kind has none, and on Linux (its *no built-in
+    speech engine* why). The server's *local models not installed: Settings
+    → Voice installs them* reads, on this screen, *— install them below*
+    under Recognition and *— install them under Recognition* under Voice
+    and in Try it. A server too old to report `system` says it has no
+    built-in engine yet. A saved key's **Clear** sits in the key's hint
+    line.
   - **The local-models installer** (`#voice-install`, under Recognition: a
     *Local models* action row, its status in the hint).
     Windows' built-in recognizer is the old desktop (SAPI) one —
@@ -6786,7 +6794,7 @@ labels above the inputs.
     (faster-whisper) recognise far better and stay on this computer.* with
     an **Install local models (about 300 MB)** button. The same button
     sits by the readiness line whenever *Local models* is picked but not
-    ready, on every platform. It `POST`s `/api/voice/install-local`
+    ready — for recognition or for the voice — on every platform. It `POST`s `/api/voice/install-local`
     (faster-whisper and piper into the server's own environment, then the
     whisper model — `voice.stt_model`, default `small` — and the piper
     voice), then polls `GET /api/voice/install-local` every 2 s while it is
@@ -6794,8 +6802,12 @@ labels above the inputs.
     a `<progress>` (the server reports no percentage) and the install's
     last log line. *done* → *Installed — recognition now uses local models.* (the
     server switched `voice.stt_backend` to `local` itself; the screen
-    re-reads the settings and `GET /api/voice`); *failed* → the error and
-    **Try again**; a 409 → *Already installing* and that install is
+    re-reads the settings and `GET /api/voice`); *failed* → the error (a
+    failed step's last output line, without uv's *Caused by:* lead-in), the
+    next step it points at — a network error: *This computer couldn't reach
+    the download servers: check that it is online (and any proxy or VPN),
+    then try again.*; a full disk: *The disk is full: free about 300 MB,
+    then try again.*; nothing more for any other — and **Try again**; a 409 → *Already installing* and that install is
     followed. Reopening the screen mid-install resumes following it. The
     button is gone once local models recognise, and on a server without the
     installer (its `GET` fails). A viewer who may not change the server
@@ -6819,9 +6831,11 @@ labels above the inputs.
     a time, and each row shows only its own, by the status's `what`).
     *done* → *Installed — live words now use Moonshine.* and the screen
     re-reads `GET /api/voice`, so the line reads *Live words: Moonshine*;
-    *failed* → the error, then the next step: *Live words keep using
-    whisper meanwhile. Try again; if it fails again, mindflock doctor --all
-    on the server says why.* with **Try again**. An older server (no
+    *failed* → the error and its next step (as the local-models install's,
+    at about 200 MB for a full disk), then *Live words keep using whisper
+    meanwhile.* with **Try again** (no pointer to `mindflock doctor`: its
+    *Fast recognition* row's fix is this button). The progress bar is
+    named *Installing fast recognition*. An older server (no
     `moonshine` in `GET /api/voice`) gets no offer.
   - **On the phone page** (`#voice-phone`): *The desktop app always uses
     this computer.* under the title, then where recognition and the voice
