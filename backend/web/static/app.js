@@ -116271,6 +116271,7 @@ function VoiceSection({ active }) {
 	const [installSupported, setInstallSupported] = (0, import_react.useState)(false);
 	const [installStatus, setInstallStatus] = (0, import_react.useState)({ state: "idle" });
 	const [installTouched, setInstallTouched] = (0, import_react.useState)(false);
+	const [installWhat, setInstallWhat] = (0, import_react.useState)("local");
 	const following = (0, import_react.useRef)(false);
 	const mounted = (0, import_react.useRef)(true);
 	(0, import_react.useEffect)(() => {
@@ -116292,6 +116293,7 @@ function VoiceSection({ active }) {
 		api("/api/voice/install-local").then((s) => {
 			if (!mounted.current) return;
 			setInstallSupported(true);
+			if (s?.what === "moonshine" || s?.what === "local") setInstallWhat(s.what);
 			if (s?.state === "running" && !following.current) {
 				following.current = true;
 				setInstallTouched(true);
@@ -116300,17 +116302,28 @@ function VoiceSection({ active }) {
 			} else if (s?.state === "failed" && !following.current) setInstallStatus(s);
 		}).catch(() => {});
 	}, [active]);
-	const onInstall = () => {
+	const start = (what) => {
 		if (following.current) return;
 		following.current = true;
+		setInstallWhat(what);
 		setInstallTouched(true);
-		installLocalModels(setInstallStatus, { alive }).then(settle);
+		installLocalModels(setInstallStatus, {
+			alive,
+			what
+		}).then(settle);
 	};
+	const idle = { state: "idle" };
 	const install = {
 		supported: installSupported,
-		status: installStatus,
-		touched: installTouched,
-		onInstall
+		status: installWhat === "local" ? installStatus : idle,
+		touched: installTouched && installWhat === "local",
+		onInstall: () => start("local")
+	};
+	const fast = {
+		supported: installSupported,
+		status: installWhat === "moonshine" ? installStatus : idle,
+		touched: installTouched && installWhat === "moonshine",
+		onInstall: () => start("moonshine")
 	};
 	const clearKey = async (kind) => {
 		try {
@@ -116326,13 +116339,14 @@ function VoiceSection({ active }) {
 		view,
 		onClearKey: clearKey,
 		install,
+		fast,
 		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, {
 			view,
 			install
 		})
 	});
 }
-function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
+function VoiceSectionView({ model, view, onClearKey, install, fast, tryRow }) {
 	const approve = model.get("voice", "approve_dialogs") !== false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		id: "voice-screen",
@@ -116355,20 +116369,28 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-section",
 				id: "voice-engines",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
-					kind: "stt",
-					title: "Recognition",
-					model,
-					view,
-					onClearKey,
-					install
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
-					kind: "tts",
-					title: "Voice",
-					model,
-					view,
-					onClearKey
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+						kind: "stt",
+						title: "Recognition",
+						model,
+						view,
+						onClearKey,
+						install
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LiveWordsRow, {
+						model,
+						view,
+						fast
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+						kind: "tts",
+						title: "Voice",
+						model,
+						view,
+						onClearKey
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-section",
@@ -116888,6 +116910,33 @@ var INSTALL_LABEL = "Install local models (about 300 MB)";
 var INSTALL_BASIC_LINE = "Windows' built-in recognizer is basic. Local models (faster-whisper) recognise far better and stay on this computer.";
 var INSTALL_REFUSED = "Only the owner can install models: do it on that computer itself.";
 var INSTALL_POLL_MS = 2e3;
+var MOONSHINE_LABEL = "Install fast recognition (Moonshine, ~200 MB)";
+var MOONSHINE_WHY = "Moonshine types your words as you say them and has the text ready about 30 ms after you stop (whisper takes about a second). English only; long dictation is still polished by whisper.";
+function liveWordsLine(view) {
+	if (!view?.server_ready?.stt_stream) return "";
+	if (view.stream_label) return "Live words: " + view.stream_label;
+	if (view.stream_engine === "moonshine") return "Live words: Moonshine";
+	return view.stream_model ? "Live words: Whisper " + view.stream_model : "";
+}
+function moonshineOffer(view, streamSetting) {
+	const sr = view?.server_ready;
+	if (!sr?.stt_stream || sr.stt_backend !== "local") return false;
+	if (!view?.moonshine || view.moonshine.available) return false;
+	const s = String(streamSetting ?? "").trim().toLowerCase();
+	return s === "" || s === "moonshine";
+}
+function moonshineView(st, allowed) {
+	const v = installView(st, allowed);
+	if (st.state === "done") return {
+		...v,
+		text: "Installed — live words now use Moonshine."
+	};
+	if (st.state === "failed" && !st.refused && allowed) return {
+		...v,
+		text: v.text + " Live words keep using whisper meanwhile. Try again; if it fails again, mindflock doctor --all on the server says why."
+	};
+	return v;
+}
 function basicRecognizer(view) {
 	if (view?.system?.stt_quality) return view.system.stt_quality === "basic";
 	const sr = view?.server_ready;
@@ -116987,7 +117036,10 @@ async function installLocalModels(onStatus, opts = {}) {
 	const call = opts.call || api;
 	let already = false;
 	try {
-		await call("/api/voice/install-local", { method: "POST" });
+		await call("/api/voice/install-local", opts.what === "moonshine" ? {
+			method: "POST",
+			json: { what: "moonshine" }
+		} : { method: "POST" });
 		onStatus({
 			state: "running",
 			step: "Starting"
@@ -117049,6 +117101,39 @@ function InstallRow({ offer, install, allowed }) {
 		})]
 	});
 }
+function LiveWordsRow({ model, view, fast }) {
+	const line = liveWordsLine(view);
+	if (!line) return null;
+	const offer = moonshineOffer(view, model.get("voice", "stt_stream_model"));
+	if (!(!!fast?.supported && (offer || fast.status.state === "running" || fast.touched)) || !fast) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		id: "voice-live-words",
+		children: line
+	});
+	const v = moonshineView(fast.status, view?.configure_allowed !== false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row onboarding-action",
+		id: "voice-moonshine",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "onboarding-action-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				id: "voice-live-words",
+				children: line
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallStatus, {
+				v,
+				state: fast.status.state,
+				idle: MOONSHINE_WHY,
+				idPrefix: "voice-moonshine"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallButton, {
+			v,
+			install: fast,
+			id: "voice-moonshine-btn",
+			label: MOONSHINE_LABEL
+		})]
+	});
+}
 function InstallStatus({ v, state, idle, idPrefix }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		v.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -117075,7 +117160,7 @@ function InstallStatus({ v, state, idle, idPrefix }) {
 		})
 	] });
 }
-function InstallButton({ v, install, id }) {
+function InstallButton({ v, install, id, label = INSTALL_LABEL }) {
 	if (!v.button) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
@@ -117084,7 +117169,7 @@ function InstallButton({ v, install, id }) {
 		disabled: v.disabled,
 		title: v.disabled && v.button === "install" ? v.text : void 0,
 		onClick: install.onInstall,
-		children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
+		children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : label
 	});
 }
 var canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;

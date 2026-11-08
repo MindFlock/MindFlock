@@ -21,6 +21,7 @@ from backend.web.core import speech
 from backend.web.core import speech_moonshine as sm
 from backend.web.core import speech_stream
 from backend.web.routes import speech as routes
+from tests._bundle import in_bundle
 
 client = TestClient(server.app)
 KEY = sm.CACHE_KEY
@@ -262,6 +263,21 @@ class TestDescribe:
         body = client.get("/api/voice?warm=0").json()
         assert body["stream_engine"] == "" and body["stream_label"] == ""
         assert body["moonshine"]["available"] is True
+
+    def test_the_served_bundle_offers_moonshine(self):
+        """The committed build carries Settings → Voice's Moonshine row
+        (rebuilt with ``npm run build``): the live-words hint, the install
+        button, and an install POST that names ``moonshine`` while the
+        local-models one still sends no body."""
+        js = client.get("/app.js").text
+        assert '"voice-live-words"' in js
+        assert '"voice-moonshine-btn"' in js
+        assert '"Install fast recognition (Moonshine, ~200 MB)"' in js
+        assert '"Live words: Moonshine"' in js
+        assert in_bundle(
+            '{ method: "POST", json: { what: "moonshine" } } : { method: "POST" }',
+            js,
+        )
 
 
 # --------------------------------------------------------------------------- #
