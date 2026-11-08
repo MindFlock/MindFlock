@@ -6,6 +6,7 @@ registry. Nothing here loads a model.
 from __future__ import annotations
 
 import io
+import time
 import wave
 from array import array
 
@@ -730,8 +731,10 @@ class TestFinal:
             out = st.finish()
         gate.set()
         assert out == {"committed": "", "partial": ""}
-        assert caplog.text.count("took over 0.1s") == 1
+        assert caplog.text.count("no accurate pass within 0.1s") == 1
+        assert "a fresh one, still running" in caplog.text
         assert acc.calls == [2 * RATE]  # it ran; its late result is dropped
+        assert st.final_outcome == "timeout"
 
     def test_a_short_phrase_skips_the_accurate_pass(self):
         acc = Accurate("hi")
@@ -859,8 +862,8 @@ class TestFlushSkip:
 
 
 def _pause(st, chunks=2):
-    """The quiet chunks a client sends after the speech, 300 ms each (two:
-    0.6 s, past :data:`speech_stream.EARLY_QUIET_SECONDS`)."""
+    """The quiet chunks a client sends after the speech, 300 ms each (the
+    first reaches :data:`speech_stream.EARLY_QUIET_SECONDS`)."""
     for _ in range(chunks):
         st.feed(_secs(0.3, level=0.0))
 
@@ -881,23 +884,58 @@ class TestEarly:
     ``finish`` finds it running or done."""
 
     def test_a_quiet_chunk_starts_the_pass_and_finish_takes_it(self):
-        assert ss.EARLY_QUIET_SECONDS == 0.5
-        acc = Accurate("Run the tests, over.")
-        fake = Script(_words("run the tick over"), _words("run the tick over"))
+        assert ss.EARLY_QUIET_SECONDS == 0.3
+        acc = Accurate("Run the tests.")
+        fake = Script(_words("run the tick"), _words("run the tick"))
         st = ss.Stream(fake, acc)
         st.feed(_secs(2))
         assert acc.calls == []
-        st.feed(_secs(0.3, level=0.0))
-        assert st._early is None  # 0.3 s of quiet: a pause between words
-        st.feed(_secs(0.3, level=0.0))
+        st.feed(_secs(0.2, level=0.0))
+        assert st._early is None  # 0.2 s of quiet: a pause between words
+        st.feed(_secs(0.2, level=0.0))
         _ran(st, acc.calls)
-        assert acc.calls == [int(2.6 * RATE)]  # started, on the phrase so far
+        assert acc.calls == [int(2.4 * RATE)]  # started, on the phrase so far
         out = st.finish()
-        assert out["final"] == "Run the tests, over."
+        assert out["final"] == "Run the tests."
         assert out["final_early"] is True
-        assert acc.calls == [int(2.6 * RATE)]  # not run again
+        assert acc.calls == [int(2.4 * RATE)]  # not run again
         assert out["final_wait_ms"] <= out["final_ms"]
-        assert st.final_early is True
+        assert st.final_early is True and st.final_outcome == "ok"
+
+    def test_a_radio_word_starts_the_pass_after_one_quiet_frame(self):
+        """A fast pass that hears "…, over" with 0.1 s of quiet after the
+        last loud frame starts the accurate pass then — the clients end such
+        a phrase after 100–250 ms, before 0.3 s of quiet ever arrives."""
+        assert ss.RADIO_QUIET_SECONDS == 0.1
+        acc = Accurate("Run the tests, over.")
+        over = _words("run the tick over")
+        st = ss.Stream(Script(over, over, over), acc)
+        st.feed(_secs(2))  # loud to its end: no quiet yet
+        assert st._early is None
+        chunk = _secs(2) + _secs(0.1, level=0.0)  # "over", then one quiet frame
+        st.feed(chunk)
+        _ran(st, acc.calls)
+        assert acc.calls == [int(4.1 * RATE)]
+        out = st.finish()
+        assert out["final"] == "Run the tests, over." and out["final_early"] is True
+        assert len(acc.calls) == 1
+
+    def test_a_radio_word_on_a_quiet_chunk_starts_before_the_fast_pass(self):
+        acc = Accurate("Fix it, over.")
+        over = _words("fix it over")
+        st = ss.Stream(Script(over, over, over), acc)
+        st.feed(_secs(1.5))
+        st.feed(_secs(0.15, level=0.0))  # short of EARLY_QUIET_SECONDS
+        _ran(st, acc.calls)
+        assert acc.calls == [int(1.65 * RATE)]
+
+    def test_no_radio_word_waits_for_the_early_quiet(self):
+        acc = Accurate("fix the overview")
+        words = _words("fix the overview")
+        st = ss.Stream(Script(words, words, words), acc)
+        st.feed(_secs(1.5))
+        st.feed(_secs(0.15, level=0.0))
+        assert st._early is None and acc.calls == []
 
     def test_more_silence_starts_no_second_pass(self):
         acc = Accurate("x")
@@ -909,16 +947,46 @@ class TestEarly:
         assert st.finish()["final_early"] is True
 
     def test_speech_after_it_makes_it_stale(self):
-        acc = Accurate("x y")
-        st = ss.Stream(Script(*([_words("x y")] * 4)), acc)
+        acc = Accurate("x y z")
+        xy, xyz = _words("x y"), _words("x y z")
+        st = ss.Stream(Script(xy, xy, xyz, xyz), acc)
         st.feed(_secs(1))
-        _pause(st)  # early pass on 1.6 s
+        _pause(st)  # early pass on 1.3 s
         _ran(st, acc.calls)
         st.feed(_secs(1))  # the person went on: that pass is stale
         out = st.finish()
-        assert out["final"] == "x y" and out["final_early"] is False
-        assert acc.calls == [int(1.6 * RATE), int(2.6 * RATE)]  # a fresh one
-        assert out["final_wait_ms"] == out["final_ms"]
+        assert out["final"] == "x y z" and out["final_early"] is False
+        assert acc.calls == [int(1.3 * RATE), int(2.6 * RATE)]  # a fresh one
+        assert out["final_wait_ms"] >= out["final_ms"]
+
+    def test_a_word_only_the_flush_hears_needs_a_fresh_pass(self):
+        acc = Accurate("x y z")
+        xy, xyz = _words("x y"), _words("x y z")
+        st = ss.Stream(Script(xy, xy, speech.SpeechError("busy"), xyz), acc)
+        st.feed(_secs(1))
+        _pause(st)
+        _ran(st, acc.calls)
+        with pytest.raises(speech.SpeechError):
+            st.feed(_secs(1))  # stale; its pass failed: the audio is unheard
+        out = st.finish()  # the flush hears "z": the early text is short
+        assert out["committed"] == "z"
+        assert out["final"] == "x y z" and out["final_early"] is False
+        assert acc.calls == [int(1.3 * RATE), int(2.6 * RATE)]
+
+    def test_a_stale_pass_with_no_new_word_still_serves(self):
+        """Loud audio after the early pass that the fast tier hears no word
+        in (a cough, a click) makes it stale, but its text covers the
+        phrase: finish takes it rather than paying for another."""
+        acc = Accurate("x y")
+        st = ss.Stream(Script(*([_words("x y")] * 5)), acc)
+        st.feed(_secs(1))
+        _pause(st)
+        _ran(st, acc.calls)
+        st.feed(_secs(0.2))  # loud, no word in it
+        assert st._early.stale is True
+        out = st.finish()
+        assert out["final"] == "x y" and out["final_early"] is True
+        assert acc.calls == [int(1.3 * RATE)]
 
     def test_a_stale_pass_is_replaced_on_the_next_quiet_chunk(self):
         acc = Accurate("x y")
@@ -929,7 +997,7 @@ class TestEarly:
         st.feed(_secs(1))
         _pause(st)  # the stale one is done: a new one
         _ran(st, acc.calls, 2)
-        assert acc.calls == [int(1.6 * RATE), int(3.2 * RATE)]
+        assert acc.calls == [int(1.3 * RATE), int(2.9 * RATE)]
         assert st.finish()["final_early"] is True
         assert len(acc.calls) == 2
 
@@ -971,7 +1039,10 @@ class TestEarly:
             out = st.finish()
         gate.set()
         assert out == {"committed": "", "partial": ""}
-        assert "took over 0.1s on 1.6s of audio (still running)" in caplog.text
+        assert (
+            "no accurate pass within 0.1s of the end on 1.3s of audio"
+            " (the early one, still running;" in caplog.text
+        )
 
     def test_finish_waits_are_recorded(self):
         assert ss.final_stats() == {
@@ -980,6 +1051,7 @@ class TestEarly:
             "p95_ms": 0,
             "expect_ms": ss.FINAL_EXPECT_MS,
             "timeout_ms": int(ss.FINAL_TIMEOUT_S * 1000),
+            "timeouts": 0,
         }
         assert ss.FINAL_EXPECT_MS <= ss.FINAL_TIMEOUT_S * 1000
         _spoken("hello there", Accurate("hello there")).finish()
@@ -1023,7 +1095,10 @@ class TestEarly:
         assert st.finish() == {"committed": "", "partial": ""}
         assert acc.calls == []
 
-    def test_a_running_stale_pass_does_not_block_the_next(self):
+    def test_a_running_stale_pass_keeps_the_lane(self):
+        """Never two accurate passes at once: a stale one that is running
+        keeps the lane until it returns, and the next queues behind it
+        (released, the two split the cores and both missed the deadline)."""
         import threading
 
         first, second = threading.Event(), threading.Event()
@@ -1035,23 +1110,45 @@ class TestEarly:
                 gates[len(self.calls) - 1].wait(5)
                 return self.text
 
-        acc = Gated("x y")
-        st = ss.Stream(Script(*([_words("x y")] * 6)), acc)
+        acc = Gated("x y z")
+        xy, xyz = _words("x y"), _words("x y z")
+        st = ss.Stream(Script(xy, xy, xyz, xyz, xyz, xyz), acc)
         st.feed(_secs(1))
         _pause(st)  # the early pass starts and blocks
         _ran(st, acc.calls)
-        st.feed(_secs(1))  # the person went on: stale, and abandoned
+        st.feed(_secs(1))  # the person went on: stale, NOT abandoned
         stale = st._early
         assert stale.stale is True and stale.job.state == "running"
-        assert stale.job.abandoned is True
-        _pause(st)  # the next one starts at once: the lane was let go
+        assert stale.job.abandoned is False
+        _pause(st)  # the next one queues behind it
+        nxt = st._early
+        assert nxt is not stale and nxt.job.state == "queued"
+        assert len(acc.calls) == 1
+        first.set()  # the stale one returns: the next runs
         _ran(st, acc.calls, 2)
-        assert st._early is not stale and st._early.job.state == "running"
         second.set()
         out = st.finish()  # the new one covers the whole phrase
-        first.set()
-        assert acc.calls == [int(1.6 * RATE), int(3.2 * RATE)]
-        assert out["final"] == "x y" and out["final_early"] is True
+        assert acc.calls == [int(1.3 * RATE), int(2.9 * RATE)]
+        assert out["final"] == "x y z" and out["final_early"] is True
+
+    def test_a_timed_out_pass_keeps_the_lane_until_it_returns(self, monkeypatch):
+        import threading
+
+        monkeypatch.setattr(ss, "FINAL_TIMEOUT_S", 0.05)
+        gate = threading.Event()
+        acc = Accurate("late", gate=gate)
+        st = _spoken("hello there", acc)
+        assert st.finish() == {"committed": "", "partial": ""}
+        lane = ss.lane("final")
+        job = lane.running
+        assert job is not None and job.abandoned is True  # still the lane's
+        gate.set()
+        end = time.monotonic() + 2
+        while lane.running is not None and time.monotonic() < end:
+            time.sleep(0.002)
+        assert lane.running is None
+        assert ss.final_stats()["timeouts"] == 1
+        assert ss.final_stats()["samples"] == 0  # a timeout is not a wait
 
     def test_the_percentiles_and_the_budget(self):
         timeout = int(ss.FINAL_TIMEOUT_S * 1000)

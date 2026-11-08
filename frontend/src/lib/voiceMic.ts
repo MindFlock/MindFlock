@@ -57,6 +57,26 @@ async function micGranted(): Promise<boolean> {
   }
 }
 
+/** The page's keepers: an AudioContext that starts running starts their
+ * pre-roll ({@link audioCtxRunning}). */
+const keepers = new Set<MicKeeper>();
+
+/** The page's AudioContext runs now (it was resumed, or made, in a
+ * gesture): every open microphone stream starts its pre-roll on it at once —
+ * not only when a recording asks for the capture — so the syllables said
+ * while the recording is still being set up are kept. */
+export function audioCtxRunning(ctx: AudioContext): void {
+  if (ctx.state === "running") keepers.forEach((k) => k.roll(ctx));
+}
+
+/** The capture worklet's module, loaded on `ctx` ahead of the first
+ * recording (as the context is made): the first press then never waits up
+ * to {@link CAPTURE_WAIT_MS} for it, nor falls back to a ScriptProcessor.
+ * A suspended context loads modules too. Never throws. */
+export function preloadCapture(ctx: AudioContext | null): void {
+  if (ctx) void loadCapture(ctx).catch(() => false);
+}
+
 /** The one microphone stream, shared by every recording on the page. A
  * recording {@link hold}s it while it runs and is {@link done} after; with
  * nobody holding it, it is stopped {@link KEEP_STREAM_MS} later. */
@@ -84,6 +104,7 @@ export class MicKeeper {
      * starts on it as soon as the stream opens. */
     private ringCtx: () => AudioContext | null = () => null
   ) {
+    keepers.add(this);
     // A device unplugged (or switched off) under an open stream: its track
     // may end without an event of its own — look on every device change.
     if (typeof navigator !== "undefined")

@@ -795,9 +795,10 @@ async def lifespan(app: FastAPI):
         try:
             from backend.web.core import speech as _speech_warm
 
-            # Recognition is NOT loaded at boot (~1.1 GB for local
-            # whisper): only once a listening mode is on — the standby's
-            # POST /api/voice/listen, a phrase's stream opening.
+            # Recognition is warmed by the speech router's own lifespan
+            # (routes/speech.py → core.speech.warm_stt_at_boot: local
+            # recognition's models — Moonshine or whisper's streaming one,
+            # and the accurate pass's — 8 s in, when ``local`` is set).
             if _voice.say_all():
                 _speech_warm.warm_in_background("tts", delay_s=6.0)
         except Exception:  # noqa: BLE001 — warming is best effort

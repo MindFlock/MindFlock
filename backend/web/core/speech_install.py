@@ -46,6 +46,15 @@ venv lost them (step 1 only, as a ``running`` install the Settings screen
 follows; the models on disk are untouched). A heal whose package no longer
 exists on the index drops the record, so the next boot does not trip again.
 
+**Moonshine** (``start(what="moonshine")``, ``core.speech_moonshine``): the
+fast streaming recognizer, a separate install — ``moonshine-voice`` into the
+same venv (:data:`MOONSHINE_PACKAGES`, with its version floor), then its ``tiny-streaming`` model
+into ``speech.voice_dir()/moonshine`` by the same helper process
+(``moonshine tiny-streaming``). Recorded beside faster-whisper's packages
+(the record is merged, never replaced), so it survives a release and the
+self-heal puts it back too. It changes no setting: whether streams use it is
+the caller's call (``speech_moonshine.available``).
+
 Nothing here runs for real under pytest: :func:`_spawn` (every subprocess)
 refuses there, and tests replace it.
 """
@@ -66,6 +75,8 @@ from typing import Deque, List, Optional, Sequence
 from backend.web.core import speech as _speech
 
 __all__ = [
+    "MOONSHINE",
+    "MOONSHINE_PACKAGES",
     "PACKAGES",
     "install_argv",
     "missing_recorded_packages",
@@ -75,6 +86,19 @@ __all__ = [
 ]
 
 PACKAGES = ("faster-whisper", "piper-tts")
+#: ``start(what=...)``: the local models (default) or Moonshine streaming.
+LOCAL, MOONSHINE = "local", "moonshine"
+#: Moonshine's packages, as recorded (plain names: the record refuses specs).
+MOONSHINE_PACKAGES = ("moonshine-voice",)
+#: What gets installed for a recorded name: the floor is the API
+#: ``core.speech_moonshine`` was written and measured against.
+_INSTALL_SPEC = {"moonshine-voice": "moonshine-voice>=0.1.6"}
+#: The module each recorded package provides (the self-heal's probe).
+_MODULES = {
+    "faster-whisper": "faster_whisper",
+    "piper-tts": "piper",
+    "moonshine-voice": "moonshine_voice",
+}
 #: How many output lines ``status()`` keeps.
 LOG_LINES = 20
 #: One step's limit (a slow network pulling ~500 MB of model).
@@ -152,12 +176,14 @@ def _uv() -> Optional[str]:
     return None
 
 
-def install_argv() -> List[str]:
-    """Step 1's command line."""
+def install_argv(packages: Sequence[str] = PACKAGES) -> List[str]:
+    """Step 1's command line for ``packages`` (recorded names; one with a
+    version floor goes in as its spec, :data:`_INSTALL_SPEC`)."""
+    specs = [_INSTALL_SPEC.get(p, p) for p in packages]
     uv = _uv()
     if uv:
-        return [uv, "pip", "install", "--python", sys.executable, *PACKAGES]
-    return [sys.executable, "-m", "pip", "install", *PACKAGES]
+        return [uv, "pip", "install", "--python", sys.executable, *specs]
+    return [sys.executable, "-m", "pip", "install", *specs]
 
 
 def _download_argv(kind: str, name: str) -> List[str]:
@@ -171,16 +197,24 @@ def _download_argv(kind: str, name: str) -> List[str]:
 
 
 def _download_main(argv: Optional[List[str]] = None) -> None:
-    """The helper process: ``whisper <name>`` or ``piper <name>`` → the
-    download, a last line saying where it went, exit 0; any failure a last
-    line with the reason and exit 1."""
+    """The helper process: ``whisper <name>``, ``piper <name>`` or
+    ``moonshine <arch>`` → the download, a last line saying where it went,
+    exit 0; any failure a last line with the reason and exit 1."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(args) != 2 or args[0] not in ("whisper", "piper"):
-            raise ValueError("usage: whisper <model> | piper <voice>")
+        if len(args) != 2 or args[0] not in ("whisper", "piper", "moonshine"):
+            raise ValueError(
+                "usage: whisper <model> | piper <voice> | moonshine <arch>"
+            )
         kind, name = args
         if kind == "whisper":
             where = _speech.fetch_whisper_model(name)
+        elif kind == "moonshine":
+            from backend.web.core import speech_moonshine as _moonshine
+
+            if name != _moonshine.ARCH:
+                raise ValueError("only the %s model is supported" % _moonshine.ARCH)
+            where = _moonshine.fetch_model()
         else:
             where = str(_speech.fetch_piper_voice(name))
     except Exception as err:  # noqa: BLE001 — the reason is the last line
@@ -195,6 +229,7 @@ def _download_main(argv: Optional[List[str]] = None) -> None:
 _LOCK = threading.Lock()
 _STATE: dict = {
     "state": "idle",
+    "what": "",
     "step": "",
     "started": None,
     "finished": None,
@@ -207,9 +242,10 @@ _HEAL_TRIED = False
 
 
 def status() -> dict:
-    """``{"state": "idle"|"running"|"done"|"failed", "step", "log": [the
-    last LOG_LINES lines], "started", "finished", "error"}`` (epoch seconds
-    or None)."""
+    """``{"state": "idle"|"running"|"done"|"failed", "what": "local"|
+    "moonshine"|"" (the last install's :func:`start` ``what``), "step",
+    "log": [the last LOG_LINES lines], "started", "finished", "error"}``
+    (epoch seconds or None)."""
     with _LOCK:
         return {**_STATE, "log": list(_LOG)}
 
@@ -226,16 +262,21 @@ def _log(line: str) -> None:
             _LOG.append(line[:400])
 
 
-def start(heal: bool = False) -> bool:
+def start(heal: bool = False, what: str = LOCAL) -> bool:
     """Start the install in a background thread → False when one is
     already running (the route's 409). ``heal``: the packages step only
-    (:func:`start_self_heal`)."""
+    (:func:`start_self_heal`). ``what``: :data:`LOCAL` (faster-whisper +
+    piper and their models) or :data:`MOONSHINE` (``moonshine-voice`` and
+    its streaming model); one install at a time either way."""
     global _THREAD
+    if what not in (LOCAL, MOONSHINE):
+        raise ValueError("unknown install: %r" % (what,))
     with _LOCK:
         if _STATE["state"] == "running":
             return False
         _STATE.update(
             state="running",
+            what=what,
             step=STEP_HEAL if heal else STEP_PACKAGES,
             started=time.time(),
             finished=None,
@@ -243,7 +284,7 @@ def start(heal: bool = False) -> bool:
         )
         _LOG.clear()
         _THREAD = threading.Thread(
-            target=_install,
+            target=_install_moonshine if what == MOONSHINE and not heal else _install,
             args=(heal,),
             daemon=True,
             name="voice-install-local",
@@ -254,14 +295,25 @@ def start(heal: bool = False) -> bool:
 
 def missing_recorded_packages() -> List[str]:
     """The packages the record says this venv had, when the venv has lost
-    them (an engine rebuild): ``[]`` with no record, or while both runtimes
-    still import."""
+    any of them (an engine rebuild): ``[]`` with no record, or while every
+    recorded runtime still imports (a name with no known module counts as
+    present)."""
     packages = _self_update().recorded_voice_packages()
     if not packages:
         return []
-    if _speech._installed("faster_whisper") and _speech._installed("piper"):
+    modules = [_MODULES[p] for p in packages if p in _MODULES]
+    if all(_speech._installed(m) for m in modules):
         return []
     return packages
+
+
+def _record(packages: Sequence[str]) -> None:
+    """Add ``packages`` to the record (keeping what it had: the local models'
+    and Moonshine's installs are separate)."""
+    su = _self_update()
+    su.record_voice_packages(
+        list(dict.fromkeys([*su.recorded_voice_packages(), *packages]))
+    )
 
 
 def start_self_heal() -> bool:
@@ -294,7 +346,9 @@ def reset() -> None:
     with _LOCK:
         if _STATE["state"] == "running":
             return
-        _STATE.update(state="idle", step="", started=None, finished=None, error="")
+        _STATE.update(
+            state="idle", what="", step="", started=None, finished=None, error=""
+        )
         _LOG.clear()
         _HEAL_TRIED = False
 
@@ -343,14 +397,23 @@ def _run_step(step: str, argv: Sequence[str]) -> None:
     if timed_out.is_set():
         raise _StepFailed("%s took longer than %d minutes" % (step, STEP_TIMEOUT // 60))
     if code != 0:
-        raise _StepFailed("%s failed: %s" % (step, last or "exit %d" % code))
+        raise _StepFailed("%s failed: %s" % (step, _reason(last) or "exit %d" % code))
+
+
+def _reason(last: str) -> str:
+    """A failed step's last output line as its reason, without uv's
+    ``Caused by:`` lead-in (its error chain ends on the root cause, which is
+    the part a person can act on: "dns error: …", "No space left …")."""
+    return re.sub(r"^\s*Caused by:\s*", "", last or "").strip()
 
 
 def _install(heal: bool = False) -> None:
     try:
         if heal:
             try:
-                _run_step(STEP_HEAL, install_argv())
+                _run_step(
+                    STEP_HEAL, install_argv(missing_recorded_packages() or PACKAGES)
+                )
             except _StepFailed as err:
                 # Gone from the index: stop carrying it, or every boot and
                 # every update would trip over it again.
@@ -367,7 +430,7 @@ def _install(heal: bool = False) -> None:
         piper = _speech.piper_voice(voice.tts_voice)
         _run_step(STEP_PACKAGES, install_argv())
         # Remembered, so an engine rebuild carries them (or puts them back).
-        _self_update().record_voice_packages(PACKAGES)
+        _record(PACKAGES)
         _speech.invalidate()
         _run_step(
             "downloading recognition model (%s)" % model,
@@ -392,4 +455,33 @@ def _install(heal: bool = False) -> None:
         )
         return
     _log("local models are ready: recognition now uses faster-whisper %s" % model)
+    _set(state="done", step="done", finished=time.time())
+
+
+def _install_moonshine(heal: bool = False) -> None:
+    """``start(what="moonshine")``: the package, recorded, then the model
+    (``heal`` is never set: a heal is :func:`_install`'s, for every
+    recorded package)."""
+    from backend.web.core import speech_moonshine as _moonshine
+
+    try:
+        _run_step(STEP_PACKAGES, install_argv(MOONSHINE_PACKAGES))
+        _record(MOONSHINE_PACKAGES)
+        _speech.invalidate()
+        _run_step(
+            "downloading streaming model (moonshine %s)" % _moonshine.ARCH,
+            _download_argv("moonshine", _moonshine.ARCH),
+        )
+        _speech.invalidate()
+    except _StepFailed as err:
+        _set(state="failed", error=str(err), finished=time.time())
+        return
+    except Exception as err:  # noqa: BLE001 — never leave it "running"
+        _set(
+            state="failed",
+            error="%s: %s" % (type(err).__name__, err),
+            finished=time.time(),
+        )
+        return
+    _log("Moonshine streaming recognition is ready (%s)" % _moonshine.ARCH)
     _set(state="done", step="done", finished=time.time())

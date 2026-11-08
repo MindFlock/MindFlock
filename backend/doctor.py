@@ -1751,6 +1751,48 @@ def check_voice_packages() -> Optional[Check]:
     )
 
 
+def check_fast_recognition() -> Optional[Check]:
+    """While local recognition is on (``voice.stt_backend = "local"``):
+    which engine the live words run (``core.speech.stream_engine``) —
+    Moonshine tiny-streaming, final text ~30 ms after the person stops, or
+    whisper, ~0.5–1 s. A ``warn`` with the one-click install as the fix when
+    Moonshine is not installed and the setting would use it; ``None`` — no
+    row — for any other recognition backend."""
+    from backend.web.core import speech, speech_moonshine
+
+    if speech._configured("stt") != "local":
+        return None
+    raw = str(getattr(speech._voice(), "stt_stream_model", "") or "")
+    engine = speech.stream_engine(raw)
+    label = "Fast recognition"
+    if engine == speech.ENGINE_MOONSHINE:
+        return Check(
+            "fast-recognition",
+            label,
+            "ok",
+            "live words: Moonshine %s" % speech_moonshine.ARCH,
+            group=GROUP_OPTIONAL,
+        )
+    whisper = "live words: Whisper " + speech.stream_whisper_model(raw)
+    if raw.strip() and raw.strip().lower() != speech.STREAM_MOONSHINE:
+        return Check(
+            "fast-recognition",
+            label,
+            "info",
+            whisper + " (voice.stt_stream_model picks it)",
+            group=GROUP_OPTIONAL,
+        )
+    return Check(
+        "fast-recognition",
+        label,
+        "warn",
+        "%s — %s" % (whisper, speech_moonshine.unavailable_reason() or "unavailable"),
+        "Settings → Voice → Install fast recognition (Moonshine, ~200 MB): "
+        "phrase ends land in ~30 ms instead of ~1 s",
+        group=GROUP_OPTIONAL,
+    )
+
+
 def check_builtin_speech() -> Check:
     """Informational, never a failure: the operating system's own speech
     engine the voice features use by default (:mod:`backend.web.core.
@@ -1810,6 +1852,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "cache-seeds": check_cache_seeds,
     "db-drivers": check_db_drivers,
     "voice-packages": check_voice_packages,
+    "fast-recognition": check_fast_recognition,
     "builtin-speech": check_builtin_speech,
 }
 
