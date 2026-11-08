@@ -1216,7 +1216,7 @@ class TestAnyAssigneeQueries:
         prov = GithubIssuesProvider(
             TicketProviderConfig(
                 provider="github_issues",
-                api_token="t",
+                api_token="ghp_test",
                 project="octo/repo",
                 assignee_scope="anyone",
             )
@@ -1232,7 +1232,7 @@ class TestAnyAssigneeQueries:
         # wearing an assigned-to-me label.
         prov = GithubIssuesProvider(
             TicketProviderConfig(
-                provider="github_issues", api_token="t", project="octo/repo"
+                provider="github_issues", api_token="ghp_test", project="octo/repo"
             )
         )
         monkeypatch.setattr(prov, "_login", lambda *a, **k: _acoro(""))
