@@ -325,6 +325,9 @@ def test_checklist_untagged_and_unknown(fake_ts, captured):
     st = shared_link.status()
     assert _step(st, "tag")["state"] == "unknown"
     assert _step(st, "approval")["state"] == "unknown"
+    # The checklist shows reasons as plain text: no raw markdown backticks.
+    for step in st["steps"]:
+        assert "`" not in step["reason"], step
 
 
 def test_checklist_operator_refusal(fake_ts):

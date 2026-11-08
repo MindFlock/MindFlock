@@ -697,7 +697,7 @@ def _steps(st: dict) -> list:
             "tag",
             "Tag this device",
             "unknown",
-            "Couldn't read this device's tags from `tailscale status`.",
+            "Couldn't read this device's tags from Tailscale.",
         )
 
     if st["defined"]:
@@ -737,8 +737,8 @@ def _steps(st: dict) -> list:
             "approval",
             "Approved as a host",
             "unknown",
-            "Couldn't read this device's capabilities from `tailscale status` "
-            "(an older Tailscale?).",
+            "Couldn't read this device's capabilities from Tailscale "
+            "(an older version of Tailscale?).",
         )
     elif approved and routed:
         appr = _step(
