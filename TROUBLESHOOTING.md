@@ -121,32 +121,40 @@ when `gh` is absent.
 Want the one-click path anyway? Install: <https://cli.github.com>, then
 `gh auth login`.
 
-### `installed but not authenticated` (gh)
+### `GitHub CLI (gh)` — `installed but not signed in (optional — only Open PR / Merge use it; …)`
 
-Run `gh auth login` and follow the prompts. This affects **Make PR** / **Merge**
-and the PR-review poller only — an unauthenticated `gh` never blocks a push,
-because pushing uses your own git remote and your own git credentials (SSH key
-or credential helper), not `gh`.
+A warning, not a failure. Run `gh auth login` and follow the prompts — or
+skip it: **Connect GitHub** in the app (a token) does the same job, and with a
+token connected the doctor says *installed, not signed in — not needed:
+MindFlock uses your connected GitHub token* instead. This affects **Make PR** /
+**Merge** and the PR-review poller only — an unsigned `gh` never blocks a
+push, because pushing uses your own git remote and your own git credentials
+(SSH key or credential helper), not `gh`.
 
 ### `agent CLI (claude)` — `` `claude` not found on PATH ``
 
-The default coding agent is Claude Code:
-`npm install -g @anthropic-ai/claude-code`
+The default coding agent is Claude Code. `mindflock doctor --fix` (or
+**Install Claude Code** in the app's Get set up checklist) runs Anthropic's
+installer: `curl -fsSL https://claude.ai/install.sh | bash`
 (docs: <https://docs.anthropic.com/en/docs/claude-code/setup>). Using a
-different CLI? Set its binary path in Settings → Agent CLI, or add a
-provider TOML ([docs/providers.md](docs/providers.md)).
+different CLI? Pick it in Settings → Agents (the doctor then checks that one,
+e.g. `agent CLI (codex)`), set its **Binary path** in Settings → Custom
+agents, or add a provider TOML ([docs/providers.md](docs/providers.md)).
 
 ### `configured binary … is missing or not executable`
 
-Settings → Agent CLI has a binary-path override pointing at a file that
-doesn't exist (or isn't executable). Fix the path there, or clear it to fall
-back to PATH lookup.
+The agent's **Binary path** (Settings → Custom agents, on its row) points at
+a file that doesn't exist (or isn't executable). Fix the path there, or clear
+it to fall back to PATH lookup. (The doctor's fix line still says
+"Settings → Agent CLI" — the old name of that screen.)
 
 ### `CLI is installed but no sign of a login was found`
 
-Claude Code is installed but has never logged in. Run `claude` once in any
-terminal and complete the login; MindFlock then finds the credential state in
-`~/.claude.json` / `~/.claude/.credentials.json` (or set `ANTHROPIC_API_KEY`).
+The agent is installed but has never signed in. Use **Sign in** on its card
+(Settings → Agents), or run the CLI once in any terminal and complete the
+login — for Claude Code, `claude`; MindFlock then finds the credential state
+in `~/.claude.json` / `~/.claude/.credentials.json` (or set
+`ANTHROPIC_API_KEY`).
 
 ---
 
