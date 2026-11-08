@@ -6386,17 +6386,18 @@ labels above the inputs.
   back**, **Revive sessions after a restart** and **Put idle agents to sleep
   after** sit in General's Advanced fold (advanced mode) with the plan window
   budget and scroll speed; their keys are unchanged.
-- **Agent CLI → scheduled window refresh** — a keepalive that periodically
+- **Agents → Keep usage windows warm** (under Advanced) — a keepalive that periodically
   pokes each provider's CLI so usage windows stay warm
   (`GET/POST /api/window-refresh`). Its **Default provider** picker reads
   `GET /api/providers/status` and lists **every** provider, the absent ones
   disabled as *<name> — not installed* (*A CLI that isn't installed can't be
-  picked — install or sign in to it under Agent providers.*) — you can't make
+  picked — install or sign in to it under Custom agents.*) — you can't make
   a CLI that isn't there the launch default; if the stored default is missing it
   falls back to the first installed CLI and **persists the correction** (the
   backend rejects the save otherwise — see [web-api.md](web-api.md)). Under
-  the picker is the default agent's card; the Advanced fold's **Set up another
-  agent** picker (product names) shows any other agent's card.
+  the picker, **Not installed — how to install** unfolds a **Set up another
+  agent** picker (product names) that shows any other agent's card; the
+  default agent's card follows.
 - **Custom agents** — one row per CLI, built-in or custom
   (`GET /api/providers/status`), named by its product name: its agent card
   (status + Install / Sign in / Test — the sign-in runs the CLI's own login
@@ -6407,12 +6408,19 @@ labels above the inputs.
   `PUT /api/providers/<name>/binary-path`) for a claude or codex that lives
   off PATH; one pinned by the server's environment says so and wins. A custom
   TOML that fails to load is a red row with the file name, *failed to load*
-  and the parse error. Below the rows is the custom-provider **manager**
-  (**+ Add a custom agent**, Edit, Delete): add/edit/delete user-TOML
-  providers via the `/api/providers` CRUD, including each provider's saved
-  **launch flags** (`[launch] args`). The per-provider **default launch flags**
-  (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
-  also edited here.
+  and the parse error. ABOVE the rows is **+ Add a custom agent** (each row
+  of a custom one has Edit and Delete): add/edit user-TOML providers via the
+  `/api/providers` CRUD. Every field is labelled with a hint — Name, Binary
+  path (*needed when the name is a shell alias or function — sessions start
+  in a plain shell that has none of those*), Launch flags (`[launch] args`),
+  Resume flag, Skip-permissions flag and *Also matches* (`program`; *it
+  doesn't change what runs*) — and a note points at the TOML file for what
+  the form doesn't cover. A save that answers with a launch warning stays
+  open as an **Edit** of that agent, so the fix is *Save changes* (a second
+  Add would 409 "already exists"). Source badges read *built in* / *custom*.
+  The per-provider **default launch flags** (`coding_cli.default_launch_args`)
+  that pre-fill the New-session dialog are set on **Agents** (*Extra flags
+  for new sessions*).
 - **Your devices** (screen key `devices`; was Devices) is the one place for
   your own machines. The **You** card (*You — the same on every device you
   pair.*: name, git author name and email for MindFlock's own commits, the
