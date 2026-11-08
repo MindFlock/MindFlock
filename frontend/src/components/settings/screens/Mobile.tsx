@@ -212,7 +212,7 @@ export function Mobile(p: ScreenProps) {
                   <div id="mobile-qr" dangerouslySetInnerHTML={{ __html: data.qr_svg }} />
                 )}
                 {data.note && <p>{data.note}</p>}
-                <UrlList urls={data.urls || []} />
+                <UrlList urls={phoneUrls(data.urls)} />
                 <p id="mobile-sign-in-hint">
                   Scanning signs the phone in. Opening a link by hand asks for the access token (Settings →
                   Security).
@@ -263,6 +263,20 @@ export function PhoneAppRow({ app }: { app?: MobilePayload["phone_app"] }) {
       )}
     </Row>
   );
+}
+
+/** The URLs a phone can open: never this computer's own loopback ("Local",
+ * http://127.0.0.1/m) — on the phone that is the phone itself, so listing it
+ * under "Scan to open MindFlock" only offered a link that can't work. */
+export function phoneUrls(urls: Array<{ label: string; url: string }> | undefined): Array<{ label: string; url: string }> {
+  return (urls || []).filter((u) => {
+    try {
+      const h = new URL(u.url).hostname;
+      return !(h === "localhost" || h === "[::1]" || h.startsWith("127."));
+    } catch {
+      return true;
+    }
+  });
 }
 
 /** Label/URL pairs in one grid, so every label shares a column and long URLs
