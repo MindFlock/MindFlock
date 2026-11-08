@@ -580,6 +580,55 @@ def test_two_servers_planning_one_release_release_it_once(fake, monkeypatch):
     assert not prompt_queue.get_state("w1").get("held")
 
 
+def test_a_newer_record_than_the_local_copy_is_not_its_namesake(fake):
+    """review-2 deleted and spawned again on the other server: until this
+    engine's next sync it still holds the OLD instance. The new record must
+    not be forgotten as "its namesake", nor its fence landed on the old
+    copy's worktree."""
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    now = time.time()
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}}, created=now)
+    fake.ENGINE.instances["w1"] = _Inst("w1", repo, parent="orch", created=now - 600)
+    drv.tick()
+    w = wo.load()["parents"]["orch"]["workers"]["w1"]
+    assert w["state"] == "held" and not w["fence"].get("applied")
+    assert rz.session_fences(repo) == {}
+    # The opposite (the record is the OLD one): its namesake, as before.
+    fake.ENGINE.instances["w1"] = _Inst("w1", repo, parent="orch", created=now + 600)
+    drv.tick()
+    assert "w1" not in wo.load()["parents"]["orch"]["workers"]
+
+
+def test_a_claim_skips_a_namesake_registered_since_the_plan(fake):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    now = time.time()
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}}, created=now)
+    assert drv._claim_releases("orch", {"w1": now - 600}, now) == set()
+    assert wo.load()["parents"]["orch"]["workers"]["w1"]["state"] == "held"
+    assert drv._claim_releases("orch", {"w1": now}, now) == {"w1"}
+
+
+def test_the_dead_check_runs_outside_the_store_lock(fake, monkeypatch):
+    repo = _repo(str(fake.tmp / "r"))
+    fake.ENGINE.instances["orch"] = _Inst("orch", repo)
+    _spawn(fake, "w1", "orch", repo, {"fence": {"only": ["a/**"]}})
+    drv.tick()
+    fake.ENGINE.instances.clear()
+    fake.disk.update({"w1"})
+    depths = []
+
+    def looks_dead(t):
+        depths.append(wo._FLOCK["depth"])
+        return True
+
+    monkeypatch.setattr(drv, "_looks_dead", looks_dead)
+    drv.tick()
+    assert depths and all(d == 0 for d in depths)
+    assert wo.load()["parents"] == {}
+
+
 def test_a_dead_entry_still_on_disk_frees_its_slot(fake):
     """state.json keeps listing a session whose workspace and tmux are gone
     until some server saves again; no server adopts it, so it must not hold
