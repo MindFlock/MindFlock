@@ -582,7 +582,7 @@ async def test_linear_reports_an_unsuccessful_mutation():
 
 @pytest.mark.asyncio
 async def test_github_append_patches_the_body():
-    p = GithubIssuesProvider(TicketProviderConfig(api_token="t", project="o/r"))
+    p = GithubIssuesProvider(TicketProviderConfig(api_token="ghp_test", project="o/r"))
     s = _FakeSessionRW(
         get_responses=[_FakeResp(json_data={"number": 7, "body": "ORIGINAL"})],
         patch_responses=[_FakeResp(status=200, json_data={})],
@@ -603,7 +603,7 @@ async def test_github_keeps_the_base_class_link_carry():
 
 @pytest.mark.asyncio
 async def test_github_delete_goes_through_graphql_and_names_the_permission():
-    p = GithubIssuesProvider(TicketProviderConfig(api_token="t", project="o/r"))
+    p = GithubIssuesProvider(TicketProviderConfig(api_token="ghp_test", project="o/r"))
     s = _FakeSessionRW(
         get_responses=[_FakeResp(json_data={"number": 7, "node_id": "I_abc"})],
         post_responses=[
