@@ -140,6 +140,47 @@ too; openBehaviors from the grid switches to the Sky.
   chose "you" for all, they are shown as yours AND recorded when answered).
 - A chain parked on a Verify stop counts in the Sky's Needs-you badge.
 
+### Where, ready, who, notes, post to the PR (2026-11-09)
+
+A Verify stop used to know only *who* and *wait until live*; *where* was
+hidden in the repo's card, and "live" meant "the plan's commit is an ancestor
+of the live branch" — which a squash merge into an environment branch never
+satisfies, so the stop waited forever. The stop now carries its own answers:
+
+1. **Where** — `branch` (this branch's own code: a fresh checkout of the
+   plan's newest commit, nothing deployed, the checker starts the product
+   itself) or the **name of one of the repo's environments**. Environments
+   come from the repo's settings (`verify_repo_settings[slug].environments`,
+   see configuration.md); the repo's own target / live branch / deploy delay
+   are always one called `live`. For an environment the **deployment is what
+   is checked** (its `reach`), and `origin/<its branch>` is checked out only
+   so the checker can read the code — the prompt names the environment and
+   says so.
+2. **Ready when** — `now`, `on_branch` (the work has reached the
+   environment's branch — `test_plans.env_reached_at`, first sighting kept on
+   the plan as `env_seen[name]` — then its `deploy_minutes`), or `after_prev`
+   (N minutes after the previous stop finished — the answer for a branch that
+   only takes squash PRs).
+3. **Who checks** — `both` "Agent, then me" (default), `agent` "Agent only",
+   `you` "Only me".
+4. **Notes** — free text for this stop only. They steer the writing (added to
+   the generation's focus) and reach the checker after the repo's standing
+   notes as "Notes for this check: …".
+5. **Post the results to the PR** — when the stop finishes, the route's driver
+   (never the checker, which may only write its results file) comments
+   `test_plans.results_markdown(plan)`: where it was checked, then one line
+   per behavior — ✅ pass · ❌ fail · ⏸ blocked · ⬜ open — with its actor and
+   note.
+
+The checklist is still always written (behaviors, actor agent|human). Backend
+seams: `test_plans.environments(repo_root)`, `environment(repo_root, name)`,
+`env_reached_at(plan_id, env)`, `results_markdown(plan)`;
+`server._ensure_test_plan(title, manual=True, environment=…, notes=…)`;
+`POST /api/test-plans/{id}/run` `{"environment", "notes"}`;
+`GET /api/test-plans/environments`. A run started with a where stamps it on
+its run record (`where`, `target`, `checkout`) so the finish keeps that
+target and the tree check compares against the checkout it asked for.
+
 ## Seams (pre-committed; do not change their signatures without the integrator)
 
 - `frontend/src/lib/behaviorsFocus.ts` — `openBehaviors`, `useBehaviorsFocus`,
