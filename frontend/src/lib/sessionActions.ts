@@ -45,8 +45,12 @@ export function instances(): Instance[] {
  *
  * `null` selects nothing (the sky's empty-sky click and Esc — docs/flights.md
  * "Round 13": selection may be empty): no session is focused, in either view;
- * the MRU, the hidden set and the keyboard are left as they are. */
-export function selectSession(title: string | null, opts?: { noKeyboard?: boolean }) {
+ * the MRU, the hidden set and the keyboard are left as they are.
+ *
+ * `voice`: a voice switch — its rail row also pulses once
+ * (components/sidebar/railFollow), so the eye finds it; every switch scrolls
+ * the rail to the focused row. */
+export function selectSession(title: string | null, opts?: { noKeyboard?: boolean; voice?: boolean }) {
   const ui = useUi.getState();
   if (title === null) {
     ui.setFocused(null);
@@ -83,6 +87,7 @@ export function selectSession(title: string | null, opts?: { noKeyboard?: boolea
   }
   ui.touchMru(title);
   ui.setFocused(title);
+  if (opts?.voice) ui.pulseRail(title);
   if (!opts?.noKeyboard) focusTerm(title);
 }
 // The store's own actions that bring a session forward (threadOpen) go through

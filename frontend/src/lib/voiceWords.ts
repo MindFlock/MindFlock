@@ -5,6 +5,9 @@
  *  - `send` — send the draft, listening goes on ("over");
  *  - `end` — send what is pending and stop listening ("over and out");
  *  - `clear` — take back what this message typed ("disregard");
+ *  - `undo` — take back one phrase ("scratch that"): at the end of a phrase
+ *    the words said before it in that phrase, said alone the last phrase
+ *    typed and not yet sent;
  *  - `stop` — stop listening, the words left unsent ("stop listening"…);
  *  - `hush` — the app stops talking, listening goes on ("stop talking"…);
  *  - `wake` — the word that opens the mic from standby ("mindflock").
@@ -28,8 +31,8 @@
 
 import { api } from "../api/client";
 
-export type PhraseKind = "send" | "end" | "clear" | "stop" | "hush";
-export const PHRASE_KINDS: readonly PhraseKind[] = ["send", "end", "clear", "stop", "hush"];
+export type PhraseKind = "send" | "end" | "clear" | "undo" | "stop" | "hush";
+export const PHRASE_KINDS: readonly PhraseKind[] = ["send", "end", "clear", "undo", "stop", "hush"];
 
 /** What the recogniser writes for the phrases of each kind (and the wake
  * word): the server's `words.heard`, matching only — never shown, never
@@ -40,6 +43,9 @@ export interface VoiceWords {
   send: string[];
   end: string[];
   clear: string[];
+  /** Take back one phrase — absent from an older server's payload, which
+   * then keeps the defaults ({@link wordsFrom}). */
+  undo: string[];
   stop: string[];
   hush: string[];
   wake: string;
@@ -52,6 +58,7 @@ export const BUILTIN_VOICE_WORDS: VoiceWords = {
   send: ["over"],
   end: ["over and out", "over, out"],
   clear: ["disregard"],
+  undo: ["scratch that", "undo that"],
   stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
   hush: ["stop talking", "be quiet", "quiet", "hush", "shut up", "enough"],
   wake: "mindflock",

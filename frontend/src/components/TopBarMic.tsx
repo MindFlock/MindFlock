@@ -68,12 +68,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { instApi } from "../api/client";
+import { api, instApi } from "../api/client";
 import { displayName, useUi } from "../state/store";
 import { queryClient, refreshInstances, type EventEnvelope } from "../state/queries";
 import type { Instance } from "../api/types";
 import { effectiveActivity } from "../lib/sessionState";
-import { selectSession } from "../lib/sessionActions";
+import { instances as liveInstances, selectSession } from "../lib/sessionActions";
+import { VoiceCommands } from "./voice/VoiceCommands";
 import { fetchDialog } from "../lib/flockActions";
 import { KEYMAP, overlayOpen, shortcutLabels } from "../lib/keymap";
 import { askPopupOn } from "../lib/ask";
@@ -109,6 +110,8 @@ import {
   loadVoicePrefs,
   noRecognizerLine,
   recognizerErrorLine,
+  builtinCommands,
+  previousSession,
   routePhrase,
   runVoiceCommand,
   dialogSeen,
@@ -141,6 +144,7 @@ import {
   type TalkPhase,
   type Recognizer,
   type RouteReply,
+  type VoiceCommandItem,
   type SttEngine,
   type VoiceCfg,
   type VoicePrefs,
@@ -460,6 +464,14 @@ export function TopBarMic() {
   /** "Quiet." in the pill, for a second after "stop talking". */
   const [quiet, setQuiet] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** The voice cheat sheet's rows while it is open (components/voice). */
+  const [cheat, setCheat] = useState<VoiceCommandItem[] | null>(null);
+  const cheatOpen = useRef(false);
+  cheatOpen.current = !!cheat;
+  /** The next phrase heard closes the cheat sheet. */
+  const closeCheat = () => {
+    if (cheatOpen.current) setCheat(null);
+  };
   // The title and the wake switch name the current words.
   const words = useVoiceWords();
   /** The Voice tour is on a step in the options (`screen` "mic-pop"): they
@@ -888,7 +900,8 @@ export function TopBarMic() {
           }
           // spokeAt: when the phrase began — a dialog is answered only by
           // words begun after it was there (lib/voiceDesktop ANSWER_AFTER_MS).
-          const reply = await routePhrase(text, session, undefined, spokeAt);
+          // `heard`: Moonshine's text of this phrase (/end), beside whisper's.
+          const reply = await routePhrase(text, session, undefined, spokeAt, undefined, r === serverRec ? serverRec.takeHeard() : "");
           if (reply.kind === "prompt") return false;
           if (reply.kind === "hush") return "hush";
           await routed(reply, text, session, spokeAt);
@@ -976,6 +989,7 @@ export function TopBarMic() {
         // Each phrase is typed as it arrives — also the tail while finishing.
         onFinal: (t, at) => {
           if (live.current !== d) return;
+          closeCheat();
           armIdle();
           voiceMark("commit");
           void d.heard(t, at);
@@ -993,7 +1007,9 @@ export function TopBarMic() {
         // A phrase's end: its last words, and the accurate final when the
         // server heard the phrase otherwise (the whole phrase retyped to it).
         onFlush: (t, final, at) => {
-          if (live.current === d) void d.flush(t, final, at);
+          if (live.current !== d) return;
+          closeCheat();
+          void d.flush(t, final, at);
         },
         // The server's end-of-turn verdict: a lone command ("next session",
         // "repeat") ends its phrase after a short quiet only while nothing
@@ -1157,7 +1173,19 @@ export function TopBarMic() {
     const handled = await runVoiceCommand(r, text, {
       railOrder: () => useUi.getState().railOrder,
       focused: () => session,
-      select: (title) => selectSession(title, { noKeyboard: true }),
+      // A voice switch: the rail scrolls to the row and pulses it.
+      select: (title) => selectSession(title, { noKeyboard: true, voice: true }),
+      previous: () => {
+        const ui = useUi.getState();
+        return previousSession({
+          focused: ui.focused,
+          prev: ui.prevFocused,
+          mru: ui.mru,
+          live: liveInstances().map((i) => i.title),
+          hidden: ui.hidden,
+        });
+      },
+      showCommands: (items) => setCheat(items),
       name: displayName,
       caption: say,
       announce,
@@ -1180,8 +1208,8 @@ export function TopBarMic() {
       case "new":
         if (r.title) {
           const title = r.title;
-          if (r.kind === "new") void refreshInstances().then(() => selectSession(title, { noKeyboard: true }));
-          else selectSession(title, { noKeyboard: true });
+          if (r.kind === "new") void refreshInstances().then(() => selectSession(title, { noKeyboard: true, voice: true }));
+          else selectSession(title, { noKeyboard: true, voice: true });
         }
         {
           const line = r.say || (r.kind === "new" ? "Started " : "") + (r.name || r.title || "") + ".";
@@ -1383,6 +1411,20 @@ export function TopBarMic() {
     const d = start(into);
     if (d) openTourOnFirstUse("voice");
     return d;
+  };
+
+  /** "Voice commands…" in the options: the cheat sheet without voice — the
+   * desktop's own list at once, the server's (the router's `commands`
+   * answer, nothing said) when it has one. */
+  const openCommands = () => {
+    setMenuOpen(false);
+    setCheat(builtinCommands());
+    void api<RouteReply>("/api/voice/route", { json: { text: "what can i say", session: useUi.getState().focused || "" } })
+      .then((r) => {
+        const items = r?.kind === "commands" && Array.isArray(r.items) ? r.items.filter((i) => i && typeof i.say === "string") : [];
+        if (items.length) setCheat((cur) => (cur ? items : cur));
+      })
+      .catch(() => {});
   };
 
   const openMenu = () => {
@@ -1661,6 +1703,9 @@ export function TopBarMic() {
               <span className="mic-pop-label">{wakeSwitchLabel(words)}</span>
               <input type="checkbox" id="mic-wake" checked={!!prefs.wake} onChange={(e) => setWakePref(e.target.checked)} />
             </label>
+            <button type="button" className="mic-commands-btn" id="mic-commands" title="What you can say by voice" onClick={openCommands}>
+              Voice commands…
+            </button>
             {speaking && (
               <button type="button" className="mic-stop-talking" id="mic-stop-talking" title="Stop talking (Esc)" onClick={hush}>
                 Stop talking
@@ -1669,6 +1714,7 @@ export function TopBarMic() {
           </div>,
           document.body
         )}
+      {cheat && <VoiceCommands items={cheat} anchor={btnRef.current} onClose={() => setCheat(null)} />}
     </>
   );
 }

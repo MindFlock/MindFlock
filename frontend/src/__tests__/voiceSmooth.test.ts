@@ -1341,7 +1341,7 @@ describe("a dialog is answered only by words begun after it was there (R8-bis)",
 
   it("wired: TopBarMic routes with the phrase's start and feeds the sightings from the rows", () => {
     const MIC = code("components/TopBarMic.tsx");
-    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt)");
+    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt, undefined, r === serverRec ? serverRec.takeHeard() : \"\")");
     expect(MIC).toContain("await routed(reply, text, session, spokeAt)");
     expect(MIC).toContain("spokeAt: () => (r === serverRec ? serverRec.spokeAt : 0)");
     expect(MIC).toContain("void d.flush(t, final, at)");

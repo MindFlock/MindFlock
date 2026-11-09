@@ -1847,8 +1847,9 @@ describe("wiring", () => {
   it("asks the router with a dictation's first phrase, and selects through the one selection authority", () => {
     // Hands-free listening asks about the session it read out.
     expect(MIC).toContain('const session = opts.title || useUi.getState().focused || "";');
-    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt)");
-    expect(MIC).toContain("selectSession(title, { noKeyboard: true })");
+    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt, undefined, r === serverRec ? serverRec.takeHeard() : \"\")");
+    // A voice switch: the rail scrolls to the row and pulses it.
+    expect(MIC).toContain("selectSession(title, { noKeyboard: true, voice: true })");
     expect(code("lib/voiceDesktop.ts")).toContain('const json: Record<string, unknown> = { text, session };');
     expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json })');
   });

@@ -67,6 +67,7 @@ import { useSetup } from "../setup/useSetup";
 import { useCalm } from "../../lib/useCalm";
 import { CALM_HIDDEN_BARS, calmHidesBar } from "../../lib/calm";
 import { setCalmBarDefaults } from "./barDefs";
+import { useRailFollow, type RailFold } from "./railFollow";
 
 /** No folds (while a search filter is on). */
 const NO_FOLDS: ReadonlySet<string> = new Set();
@@ -488,6 +489,36 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     useUi.getState().setRailOrder(displayedKeys);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [railSig]);
+  // The rail follows the focus (./railFollow): a switch — by voice, keys or
+  // the sky — scrolls the focused row into view, unfolding a run group or a
+  // device section over it; a voice switch also pulses the row.
+  const railFolds: RailFold[] = [
+    ...localSplit.groups.map((g) => ({
+      kind: "run" as const,
+      id: g.id,
+      collapsed: !!g.collapsed,
+      keys: g.entries.map((e) => e.key),
+    })),
+    ...(grouped
+      ? [
+          { kind: "device" as const, id: "__self", collapsed: ui.collapsedDevices.has("__self"), keys: localRail.map((r) => r.key) },
+          ...devRails.concat(peerRails).map(({ dkey, rail }) => ({
+            kind: "device" as const,
+            id: dkey,
+            collapsed: ui.collapsedDevices.has(dkey),
+            keys: rail.map((r) => r.key),
+          })),
+        ]
+      : []),
+  ];
+  const mruHead = ui.mru[0] || "";
+  useRailFollow({
+    focused: ui.focused,
+    head: mruHead.startsWith("\u0000") ? mruHead : null,
+    pulse: ui.railPulse,
+    folds: railFolds,
+    unfold: (f) => (f.kind === "run" ? ui.toggleRunCollapsed(f.id) : ui.toggleDeviceCollapsed(f.id)),
+  });
   // The last NestInfo handed to each row, reused while it is unchanged so
   // the memoized rows don't all re-render on every Sidebar render.
   const nestSeen = useRef(new Map<string, NestInfo>());

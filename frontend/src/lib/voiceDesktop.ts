@@ -13,7 +13,11 @@
  *  - "over and out" — send what is pending (nothing, when nothing is) and
  *    stop listening;
  *  - "disregard" — take back what this message typed (one backspace per
- *    character) and keep listening.
+ *    character) and keep listening;
+ *  - "scratch that" (the `undo` words) — take back one phrase: at the end of
+ *    a phrase, the words said before it in that phrase ("fix the login bug
+ *    scratch that" types nothing); said alone, the last phrase typed and not
+ *    yet sent. Silent: a caption, never a spoken line.
  * "Submit" is an ordinary word (the router still takes it on a select
  * dialog's review screen); stopping with the words left unsent is a stop
  * phrase, Escape, the button / hotkey again, or letting go in "Hold to talk".
@@ -67,18 +71,20 @@ import {
   voiceSent,
   withPreRoll,
 } from "./voiceMic";
-import { applyVoiceView, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
+import { applyVoiceView, normPhrase, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
 import { pronounce, setPronounce, shapeForSpeech } from "./spokenText";
 
 // --- the radio words -------------------------------------------------------- //
 
-export type RadioKind = "over" | "out" | "disregard" | "";
+export type RadioKind = "over" | "out" | "disregard" | "undo" | "";
 
 /** "fix the bug over" → {kind: "over", text: "fix the bug"} (send it, go on
  * listening); "… over and out" (or "over, out") → {kind: "out"} (send it,
- * stop); "… disregard" (or "disregard that") → {kind: "disregard"}; else
- * {kind: "", text} — "… submit" too: it is a word like any other. The words
- * are the CURRENT ones (lib/voiceWords: `send`, `end`, `clear`), the longest
+ * stop); "… disregard" (or "disregard that") → {kind: "disregard"}; "…
+ * scratch that" → {kind: "undo"} (take back this phrase, or alone the last
+ * one); else {kind: "", text} — "… submit" too: it is a word like any other.
+ * The words are the CURRENT ones (lib/voiceWords: `send`, `end`, `clear`,
+ * `undo`), the longest
  * phrase tried first, so "over and out" wins over "over". Case and
  * punctuation do not matter ("Over." from Safari); only the LAST words count
  * — an "over" mid-sentence is a word, and "hangover" is not "over". The shape
@@ -141,6 +147,19 @@ const COMMANDS: string[][][] = [
   "new session *", "a|another new session *",
   "start|open|create|make new session *", "start|open|create|make a|another new session *",
   "spin up new session *", "spin up a|another new session *",
+  // Scroll the focused session's pane (the server scrolls it: kind `scroll`),
+  // and "more" / "keep going" after one.
+  "scroll *", "page up|down *", "go|jump|back to the top|bottom *", "top|bottom", "up|down",
+  "to the top|bottom", "more", "keep going", "some more", "further",
+  // Interrupt the agent (the server presses Escape: kind `interrupt`).
+  "interrupt *", "escape", "press|hit escape *", "stop it", "stop that",
+  // The session focused before (kind `switch_back`).
+  "go|switch|jump|flip|change back *", "back", "last session|one", "the other one", "previous",
+  // Which session is this (kind `where`).
+  "where am i *", "which|what session is this|that", "which|what session am i in|on", "what am i looking at",
+  // The cheat sheet (kind `commands`).
+  "what can i say *", "commands", "voice commands", "show|list|read the|my commands *", "what are the commands *",
+  "what commands *", "help",
 ].map((p) => p.split(" ").map((slot) => slot.split("|")));
 const ROUTER_LEADS = new Set(["ok", "okay", "hey", "please"]);
 
@@ -173,6 +192,10 @@ export function isSwitchCommand(text: string): boolean {
   let w = routerWords(text);
   if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
   if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+  // A whole scroll ("scroll up", "page down", "scroll to the bottom") or
+  // "switch back": acted on as soon as the voice is quiet, like a switch.
+  const all = w.join(" ");
+  if (/^(?:scroll (?:up|down)(?: a bit| more)?|page (?:up|down)|scroll to the (?:top|bottom)|switch back)$/.test(all)) return true;
   if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
     const at = w[1] === "over" ? 2 : 1;
     return w[at] === "to" && w.length > at + 1;
@@ -263,17 +286,32 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
   const ends = [...w.end, ...heardOf(w, "end")];
   const sends = [...w.send, ...heardOf(w, "send")];
   const clears = [...w.clear, ...heardOf(w, "clear")];
-  const entries: Array<{ p: string; kind: RadioKind; rx: string }> = [
+  const others: Array<{ p: string; kind: RadioKind; rx: string }> = [
     ...ends.map((p) => ({ p, kind: "out" as const, rx: phraseRx(p) })),
     ...sends.map((p) => ({ p, kind: "over" as const, rx: phraseRx(p) + tails })),
     ...clears.map((p) => ({ p, kind: "disregard" as const, rx: phraseRx(p) + tails })),
+  ].filter((e) => e.rx);
+  // The undo words (absent from words built before the kind existed: a
+  // test's literal) — less any another kind already says: a person whose
+  // clear word is "scratch" keeps "scratch that" (its tail) as a clear.
+  const taken = others.map((e) => new RegExp("^(?:" + e.rx + ")$", "iu"));
+  const undos = [...(w.undo || []), ...heardOf(w, "undo")].filter((p) => !taken.some((rx) => rx.test(normPhrase(p))));
+  const entries: Array<{ p: string; kind: RadioKind; rx: string }> = [
+    ...others,
+    // "scratch that" carries its own "that": no tails.
+    ...undos.map((p) => ({ p, kind: "undo" as const, rx: phraseRx(p) })),
   ]
     .filter((e) => e.rx)
     .sort((a, b) => longestFirst(a.p, b.p));
   const sounded = (text: string): RegExpExecArray | null => {
     // A clear phrase heard a little off must start with its letter unless
     // said alone: a false clear throws the draft away ("… in this regard").
-    const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true);
+    // An undo the same: a false one takes a phrase back.
+    const hit =
+      soundTail(text, w.end) ||
+      soundTail(text, w.send, RADIO_TAILS) ||
+      soundTail(text, w.clear, RADIO_TAILS, true) ||
+      soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
     return hit ? heardAs(text, hit.before, hit.phrase) : null;
   };
   const radio = entries.length
@@ -311,6 +349,8 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
     ...hushes.map(keysOf),
     ...radioPhrases(sends),
     ...radioPhrases(clears),
+    // "scratch" is held while "that" may follow.
+    ...undos.map(keysOf),
     ...ends.map(keysOf),
     // "Over and out, that's all": the end phrase, then a stop phrase.
     ...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
@@ -682,6 +722,11 @@ export type DictOutcome =
   | { kind: "send"; text: string; erase?: string; end?: boolean; out?: boolean }
   /** "disregard": take back `text`; listening goes on. */
   | { kind: "erase"; text: string }
+  /** "scratch that": take back `text` — the phrase it ended (`alone`
+   * false), or said alone the last phrase typed and not yet sent (`alone`;
+   * "" when there is none). Silent; listening goes on unless `end` (said as
+   * push to talk let go). */
+  | { kind: "undo"; text: string; alone: boolean; end?: boolean }
   /** Escape: take back `text` and stop. */
   | { kind: "dropped"; text: string }
   /** "Stop talking" (a whole phrase): the app's voice stops, nothing is
@@ -711,6 +756,13 @@ export const dictHint = (w: VoiceWords = voiceWords()) => {
 export const answerHint = (name: string, w: VoiceWords = voiceWords()) => "Answer " + name + " — " + radioLine(w);
 /** The caption after push to talk let go (or silence) on a session. */
 export const LEFT_LINE = "In the field — press Enter to send";
+/** The caption after "scratch that": what was taken back. */
+export function undoLine(o: { text: string; alone: boolean }): string {
+  const t = o.text.trim();
+  if (!t) return o.alone ? "Nothing to take back — go on" : "Scratched — go on";
+  const short = Array.from(t).length > 40 ? Array.from(t).slice(0, 39).join("") + "…" : t;
+  return "Took back “" + short + "” — go on";
+}
 /** The caption after a stop phrase with nothing typed. */
 export const STOPPED_LINE = "Stopped listening";
 /** The caption after "stop talking" — shown {@link HUSH_CAPTION_MS}. */
@@ -805,7 +857,7 @@ export function retype(before: string, after: string): { erase: string; type: st
 }
 
 /** What a phrase's guess can end in ({@link Dictation.tail}). */
-export type TailKind = "over" | "out" | "disregard" | "stop" | "hush" | "route";
+export type TailKind = "over" | "out" | "disregard" | "undo" | "stop" | "hush" | "route";
 
 /** A control phrase at the end of the guess acts once the voice has been
  * quiet this long after it — not the recognizer's {@link SILENCE_MS} and its
@@ -968,6 +1020,10 @@ export class Dictation {
   /** {@link typed}'s length when the phrase under way began (-1: between
    * phrases): what came before it is never corrected. */
   private phraseAt = -1;
+  /** Where each phrase this message settled began in {@link typed}, in
+   * order: "scratch that" said alone takes back from the last one. A mark
+   * past the end of {@link typed} (its phrase never went in) is skipped. */
+  private marks: number[] = [];
 
   begin(): void {
     this.listening = true;
@@ -975,6 +1031,7 @@ export class Dictation {
     this.held = "";
     this.partial = "";
     this.phraseAt = -1;
+    this.marks = [];
   }
 
   /** The phrase under way — its committed words and its guess — ends in a
@@ -1001,6 +1058,7 @@ export class Dictation {
     this.held = "";
     this.partial = "";
     this.phraseAt = -1;
+    this.marks = [];
   }
 
   /** The caption's settled words: the phrases typed, then the phrase's
@@ -1103,6 +1161,8 @@ export class Dictation {
     switch (p.kind) {
       case "disregard":
         return { kind: "erase", text: this.erase() };
+      case "undo":
+        return this.undo(p.text);
       case "over":
       case "out": {
         const end = p.kind === "out" || !this.continuous;
@@ -1128,6 +1188,7 @@ export class Dictation {
     this.listening = false;
     if (out.kind === "type") return withErase({ kind: "leave" as const, text: out.text }, out.erase || "");
     if (out.kind === "erase") return { kind: "dropped", text: out.text };
+    if (out.kind === "undo") return { ...out, end: true };
     if (out.kind === "continue") return { kind: "leave", text: "" };
     if (out.kind === "hush") return withErase({ kind: "hush" as const, end: true }, out.erase || "");
     if (out.kind === "send") return { ...out, end: true };
@@ -1148,8 +1209,10 @@ export class Dictation {
     this.listening = false;
     const all = joinWords(this.held, this.partial);
     if (isHushPhrase(all)) return withErase({ kind: "hush" as const, end: true }, this.settle("").erase || "");
-    // The phrase in flight goes in (a radio word among it does nothing).
-    const rest = parseRadio(all).text;
+    // The phrase in flight goes in (a radio word among it does nothing) —
+    // but not one that ended in "scratch that".
+    const r = parseRadio(all);
+    const rest = r.kind === "undo" ? "" : r.text;
     return { kind: "leave", ...this.settle(rest ? rest + " " : "") };
   }
 
@@ -1174,6 +1237,7 @@ export class Dictation {
   private settle(text: string): { text: string; erase?: string } {
     const guessed = this.guessed;
     const whole = this.routes && !this.before && mayBeCommand(text);
+    if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
     this.phraseAt = -1;
     this.held = "";
     this.partial = "";
@@ -1208,7 +1272,29 @@ export class Dictation {
     this.held = "";
     this.partial = "";
     this.phraseAt = -1;
+    this.marks = [];
     return text;
+  }
+
+  /** "scratch that": `said` — the words before it in this phrase. Any
+   * words: the phrase's guess is taken back (nothing of it goes in). None:
+   * the last phrase this message typed is taken back, its characters
+   * exactly; earlier phrases stay. */
+  private undo(said: string): DictOutcome {
+    const guessed = this.guessed;
+    this.phraseAt = -1;
+    this.held = "";
+    this.partial = "";
+    if (said.trim() || guessed) {
+      this.typed = this.typed.slice(0, this.typed.length - guessed.length);
+      return { kind: "undo", text: guessed, alone: false };
+    }
+    while (this.marks.length && this.marks[this.marks.length - 1] >= this.typed.length) this.marks.pop();
+    const at = this.marks.pop();
+    if (at === undefined) return { kind: "undo", text: "", alone: true };
+    const text = this.typed.slice(at);
+    this.typed = this.typed.slice(0, at);
+    return { kind: "undo", text, alone: true };
   }
 }
 
@@ -1950,7 +2036,8 @@ export class LiveDictation {
       this.sendWait = setTimeout(fire, this.fastStands() ? 0 : overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
       return;
     }
-    // "Disregard", a stop, "stop talking", a switch: no accurate text needed.
+    // "Disregard", "scratch that", a stop, "stop talking", a switch: no
+    // accurate text needed.
     this.swallow();
     void this.step(() => this.dict.heard(t.text), spoke);
   }
@@ -2080,6 +2167,21 @@ export class LiveDictation {
         this.hooks.caption("Disregarded — go on", true);
         this.hooks.confirm?.("cleared");
         return;
+      case "undo": {
+        if (out.text && t && this.dialogBlocks(t)) {
+          this.end(dialogStopLine(t.name, ""), true, "stopped");
+          return;
+        }
+        if (out.text) {
+          t?.erase(out.text);
+          if (t?.gate && (await t.gate.settled())) return;
+        }
+        // Silent: your own action, never said back (no confirmation line).
+        const line = undoLine(out);
+        if (out.end) this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : line, false);
+        else this.hooks.caption(line, true);
+        return;
+      }
       case "hush":
         if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
         this.hushed();
@@ -2381,7 +2483,12 @@ export interface RouteReply {
     | "ask"
     | "read"
     | "help"
-    | "early";
+    | "early"
+    | "scroll"
+    | "interrupt"
+    | "switch_back"
+    | "where"
+    | "commands";
   title?: string;
   name?: string;
   say?: string;
@@ -2403,6 +2510,15 @@ export interface RouteReply {
   /** early: how much sooner than allowed the phrase began (ms; null when
    * it said nothing about when it began). */
   early_ms?: number | null;
+  /** scroll: which way, and how far — the server already scrolled
+   * `title`'s pane (`ok` false: it couldn't). */
+  dir?: "up" | "down";
+  amount?: "page" | "half" | "line" | "top" | "bottom";
+  count?: number;
+  /** scroll / interrupt: whether the server did it. */
+  ok?: boolean;
+  /** commands: the cheat sheet's rows ({@link VoiceCommandItem}). */
+  items?: VoiceCommandItem[];
   /** ambiguous: the sessions "Which one: a or b?" reads out. */
   candidates?: { title: string; name: string }[];
   /** ambiguous / ask: what the router asked back — sent with the next
@@ -2415,7 +2531,16 @@ const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
   "switch_index", "switch_rel", "answer", "question", "ask", "read", "help", "early",
+  "scroll", "interrupt", "switch_back", "where", "commands",
 ]);
+
+/** One row of the voice cheat sheet (kind `commands`, components/voice/
+ * VoiceCommands): what to say, what it does, and an optional group. */
+export interface VoiceCommandItem {
+  say: string;
+  does: string;
+  group?: string;
+}
 
 /** How long what the router asked back waits for its answer. */
 export const PENDING_MS = 30_000;
@@ -2583,7 +2708,8 @@ export const earlyLine = (name: string) => name + " asked just now: say your ans
  * so the server reads it on its own clock; `spoke_at` is this page's clock,
  * for the record) and which dialogs this page has had since when
  * (`dialog_seen`): the server presses an answer only when the phrase began
- * after its dialog was there. Anything but a well-formed 200 — the route
+ * after its dialog was there; `heard`, the fast recognizer's text of the
+ * same phrase when the stream gave one. Anything but a well-formed 200 — the route
  * missing (an older server), an error, the network — means "it is a
  * prompt": the words were meant for the session, never lost to the
  * router. */
@@ -2593,9 +2719,14 @@ export async function routePhrase(
   pending: PendingChoice = routePending,
   spokeAt?: number,
   seen: DialogSeen = dialogSeen,
+  heard?: string,
 ): Promise<RouteReply> {
   try {
+    // `session`: the focused session (the one a scroll or an interrupt acts
+    // on); `heard`: Moonshine's text of the phrase (/end's `heard`), which
+    // the router reads beside whisper's for the command words.
     const json: Record<string, unknown> = { text, session };
+    if (heard && heard.trim()) json.heard = heard.trim();
     const held = pending.take();
     if (held) json.pending = held;
     if (spokeAt && spokeAt > 0) {
@@ -2639,6 +2770,63 @@ export function railStep(order: string[], from: string, delta: number): string |
 }
 
 export const APPROVE_OFF_LINE = "Approving by voice is off: Settings → Voice";
+export const NO_PREVIOUS_LINE = "No previous session";
+
+/** "Go back": the session focused before this one — the one the store
+ * remembers (`prev`), else the MRU's next — never a window, the focused one,
+ * a session that is gone (`live`) or hidden. Said again, it bounces back. */
+export function previousSession(o: {
+  focused: string | null | undefined;
+  prev?: string | null;
+  mru: readonly string[];
+  live: readonly string[];
+  hidden?: ReadonlySet<string>;
+}): string | null {
+  const live = new Set(o.live);
+  for (const t of [o.prev || "", ...o.mru])
+    if (t && !isWindowRow(t) && t !== o.focused && live.has(t) && !o.hidden?.has(t)) return t;
+  return null;
+}
+
+/** The caption after the server scrolled a pane (kind `scroll`) — never
+ * said: you see it scroll. */
+export function scrollLine(r: Pick<RouteReply, "dir" | "amount" | "count" | "ok">, name = ""): string {
+  if (r.ok === false) return "Couldn't scroll" + (name ? " " + name : "");
+  if (r.amount === "top") return "At the top";
+  if (r.amount === "bottom") return "At the bottom";
+  const n = Math.trunc(Number(r.count) || 1);
+  return "Scrolled " + (r.dir === "up" ? "up" : "down") + (n > 1 ? " ×" + n : "");
+}
+
+/** The cheat sheet when the server sends no rows of its own (an older
+ * server, the right-click menu before it answers): what the desktop's mic
+ * takes, in the default words. */
+export function builtinCommands(w: VoiceWords = voiceWords()): VoiceCommandItem[] {
+  const q = (k: "send" | "end" | "clear" | "undo" | "stop" | "hush") => (w[k] || [])[0] || "";
+  const dict = "While dictating";
+  const rows: VoiceCommandItem[] = [
+    { say: "… " + q("send"), does: "Send the message; keep listening", group: dict },
+    { say: "… " + q("end"), does: "Send and stop listening", group: dict },
+    { say: q("clear"), does: "Take back the whole message", group: dict },
+    { say: q("undo"), does: "Take back the last phrase", group: dict },
+    { say: q("stop"), does: "Stop listening; words stay unsent", group: dict },
+    { say: q("hush"), does: "Stop reading aloud", group: dict },
+    { say: "switch to <name>", does: "Focus a session by name", group: "Sessions" },
+    { say: "session 3", does: "Focus the rail's row 3", group: "Sessions" },
+    { say: "next session / previous session", does: "Step along the rail", group: "Sessions" },
+    { say: "go back", does: "The session you were on before", group: "Sessions" },
+    { say: "where am I", does: "Says the focused session's name", group: "Sessions" },
+    { say: "new session for <task>", does: "Start a session", group: "Sessions" },
+    { say: "scroll up / scroll down", does: "Scroll the focused pane a page", group: "Reading" },
+    { say: "scroll to the top / bottom", does: "Jump to either end", group: "Reading" },
+    { say: "more", does: "Scroll again the same way", group: "Reading" },
+    { say: "what did it say", does: "Read the last reply", group: "Reading" },
+    { say: "interrupt", does: "Press Escape on the agent", group: "Agent" },
+    { say: "yes / no / option 2", does: "Answer the dialog on screen", group: "Agent" },
+    { say: "what can I say", does: "This list", group: "Agent" },
+  ];
+  return rows.filter((r) => r.say.replace(/[…\s]/g, ""));
+}
 
 /** What a router answer needs from the page (TopBarMic wires the store). */
 export interface CommandDeps {
@@ -2658,6 +2846,10 @@ export interface CommandDeps {
   route(text: string, session: string, spokeAt?: number): Promise<RouteReply>;
   /** GET /api/voice's `approve_dialogs`, read now. */
   approveDialogs(): Promise<boolean>;
+  /** "Go back": the session focused before ({@link previousSession}). */
+  previous?(): string | null;
+  /** Show the voice cheat sheet with `items`. */
+  showCommands?(items: VoiceCommandItem[]): void;
   /** The session's live activity (the rows the app polls). */
   activity(title: string): string;
   replies(): boolean;
@@ -2726,6 +2918,41 @@ export async function runVoiceCommand(
     case "question":
       deps.announce(r.say || "Nothing is being asked.");
       return true;
+    case "switch_back": {
+      const key = deps.previous?.() || null;
+      if (!key) deps.caption(NO_PREVIOUS_LINE);
+      else {
+        deps.select(key);
+        deps.announce(r.say || deps.name(key) + ".");
+      }
+      return true;
+    }
+    case "scroll": {
+      // The server scrolled the pane: a caption only, never said back.
+      const title = r.title || deps.focused();
+      deps.caption(scrollLine(r, title ? deps.name(title) : ""));
+      return true;
+    }
+    case "interrupt": {
+      const title = r.title || deps.focused();
+      const name = title ? deps.name(title) : "";
+      deps.caption(r.ok === false ? "Couldn't interrupt" + (name ? " " + name : "") : "Interrupted" + (name ? " " + name : ""));
+      return true;
+    }
+    case "where": {
+      // A question asked out loud: answered out loud, replies on or off.
+      const title = deps.focused();
+      const line = title ? deps.name(title) + "." : "No session is focused.";
+      (deps.speak || deps.announce)(line);
+      return true;
+    }
+    case "commands": {
+      const items = Array.isArray(r.items) ? r.items.filter((i) => i && typeof i.say === "string" && i.say.trim()) : [];
+      deps.showCommands?.(items.length ? items : builtinCommands());
+      if (r.say) (deps.speak || deps.announce)(r.say);
+      else deps.caption("Voice commands");
+      return true;
+    }
     case "help": {
       deps.caption(HELP_LOOKING_LINE);
       const said = (await askHelp(r.text || text)).say;
@@ -4738,6 +4965,9 @@ interface Phrase {
 }
 
 /** A response's words (the server joins them with spaces). */
+/** A phrase's `heard` (/end) goes with its route call at most this long
+ * after the /end came back. */
+export const HEARD_FRESH_MS = 3000;
 const wordsOf = (v: unknown) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 const langTag = () => String(navigator.language || "en").split(";")[0];
 
@@ -4787,6 +5017,8 @@ export function serverRecognizer(
   finalMs: number | null;
   readonly streaming: boolean;
   readonly spokeAt: number;
+  /** The phrase just ended's Moonshine text (/end `heard`), once. */
+  takeHeard(): string;
   /** Local recognition is loading for this phrase (true: the stream opened
    * with `loading`), then it answered, failed or stopped (false). */
   onLoading?: (on: boolean) => void;
@@ -4811,6 +5043,9 @@ export function serverRecognizer(
   const aborters = new Set<AbortController>();
   /** This dictation streams (until a failure falls back to clips). */
   let streaming = false;
+  /** The last ended phrase's Moonshine text (/end `heard`), for the router
+   * ({@link takeHeard}); cleared when the next phrase's speech starts. */
+  let lastHeard: { text: string; at: number } | null = null;
   /** Phrases ended whose end has not gone to the handlers yet, oldest
    * first: the next phrase's stream opens at once (never behind their /end
    * and its accurate pass), and its words wait only for theirs to be in
@@ -5176,6 +5411,7 @@ export function serverRecognizer(
           voiceMark("final");
         }
         const committed = wordsOf(r.j.committed);
+        lastHeard = typeof r.j.heard === "string" && r.j.heard.trim() ? { text: r.j.heard.trim(), at: Date.now() } : null;
         if (timed) {
           // Measured only when an accurate final came (a timeout, or
           // Moonshine's own text, says nothing of how long one takes), late
@@ -5359,6 +5595,7 @@ export function serverRecognizer(
       c.clock.block(blockAt, now);
       if (isLoud(rms, floor)) {
         if (!c.heard) {
+          lastHeard = null; // a new phrase: the last one's `heard` is not its
           c.speechS = at;
           // When it began: this block's start on the recording's own clock
           // (a late callback doesn't move it) — before the recording when
@@ -5448,6 +5685,14 @@ export function serverRecognizer(
     /** The dictation streams (its words are typed as they come). */
     get streaming(): boolean {
       return streaming;
+    },
+    /** The phrase just ended's Moonshine text (/end `heard`), once, while
+     * fresh (a few seconds; never the phrase before it): POST
+     * /api/voice/route sends it as `heard`. */
+    takeHeard(): string {
+      const h = lastHeard;
+      lastHeard = null;
+      return h && Date.now() - h.at < HEARD_FRESH_MS ? h.text : "";
     },
     /** When the phrase being recorded now began (ms; 0: no speech yet). */
     get spokeAt(): number {

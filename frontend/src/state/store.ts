@@ -186,6 +186,12 @@ export type DialogName =
 interface UiState {
   /** Logically focused session title (keyboard target, MRU head). */
   focused: string | null;
+  /** The session focused before `focused` (voice "go back"). Transient. */
+  prevFocused: string | null;
+  /** The rail row a VOICE switch just focused: the rail scrolls to it and
+   * pulses it once (components/sidebar/railFollow). `n` restarts the pulse
+   * for the same row. Transient. */
+  railPulse: { key: string; n: number } | null;
   /** Grid view cap. */
   viewMode: ViewMode;
   /** The main area's view: the grid, or the sky (lib/viewMode.ts). */
@@ -377,6 +383,8 @@ interface UiState {
   newPrefill: string;
 
   setFocused(title: string | null): void;
+  /** Pulse `key`'s rail row ({@link railPulse}). */
+  pulseRail(key: string): void;
   touchMru(title: string): void;
   /** Replace the MRU wholesale (the capped-view swap-in-place demotion). */
   setOrderlessMru(mru: string[]): void;
@@ -515,6 +523,8 @@ let _focusSeq = 0;
 
 export const useUi = create<UiState>((set, get) => ({
   focused: null,
+  prevFocused: null,
+  railPulse: null,
   viewMode: load<ViewMode>("cs_viewmode", "auto", false),
   view: load<string>("mf_view", "grid", false) === "sky" ? "sky" : "grid",
   skyMode: loadSkyMode(),
@@ -577,7 +587,12 @@ export const useUi = create<UiState>((set, get) => ({
   fastTrackMenu: null,
   newPrefill: "",
 
-  setFocused: (title) => set({ focused: title }),
+  setFocused: (title) => {
+    const was = get().focused;
+    if (was && title && was !== title) set({ focused: title, prevFocused: was });
+    else set({ focused: title });
+  },
+  pulseRail: (key) => set({ railPulse: { key, n: (get().railPulse?.n || 0) + 1 } }),
   touchMru: (title) => {
     const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
     save("cs_mru", mru);
