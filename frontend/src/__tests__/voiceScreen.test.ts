@@ -395,7 +395,7 @@ describe("VoiceSectionView", () => {
     expect(field(html, "stt_url")).toBe(false);
     expect(field(html, "stt_api_key")).toBe(false);
     expect(field(html, "tts_url")).toBe(false);
-    expect(html).toMatch(/data-field="stt_model"[^>]*placeholder="small"/);
+    expect(html).toMatch(/data-field="stt_model"[^>]*placeholder="auto \(small\.en for English\)"/);
     expect(field(html, "tts_model")).toBe(false);
     expect(html).toMatch(/data-field="tts_voice"[^>]*placeholder="en_US-lessac-medium"/);
     expect(html).toMatch(/id="voice-ready-tts"[^>]*>.*✗/);
