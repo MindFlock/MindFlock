@@ -57151,6 +57151,17 @@ function memoryDetail(m) {
 	if (stall >= 5) bits.push("stalled on memory " + Math.round(stall) + "% of the last minute");
 	return bits.join(" · ");
 }
+function windowsIsShort(m) {
+	const host = RANK$1[m.host?.level || "ok"] ?? 0;
+	const guest = RANK$1[m.guest_level || "ok"] ?? 0;
+	return host > 0 && host >= guest;
+}
+function windowsDetail(m) {
+	const h = m.host || {};
+	const bits = ["Windows: " + gb(h.available) + " free of " + gb(h.total) + " (" + Math.round(h.available_pct || 0) + "%)"];
+	if (m.total) bits.push(gb(m.available) + " of WSL's " + gb(m.total) + " is unused inside WSL, but Windows can't take it back while WSL holds it");
+	return bits.join(" · ");
+}
 function jobName(j) {
 	if (j.session) return j.session;
 	return (j.cwd || "").replace(/\/+$/, "").split("/").pop() || (j.pid ? "pid " + j.pid : "a job");
@@ -57177,6 +57188,7 @@ function MemoryNotice() {
 	if (!data || !shown) return null;
 	const heavy = slotsLine(slots);
 	const critical = data.level === "critical";
+	const windows = windowsIsShort(data);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		id: "memory-notice",
 		role: "status",
@@ -57184,11 +57196,21 @@ function MemoryNotice() {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "mn-head",
-				children: ["⚠ Memory is ", critical ? "critically low" : "running low"]
+				children: ["⚠ ", windows ? "Windows is " + (critical ? "critically low" : "running low") + " on memory" : "Memory is " + (critical ? "critically low" : "running low")]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-detail",
-				children: memoryDetail(data)
+				children: windows ? windowsDetail(data) : memoryDetail(data)
+			}),
+			windows && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mn-detail",
+				children: [
+					"Closing Windows apps frees memory now. Restarting WSL (",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "wsl --shutdown" }),
+					", then reopen) makes it hand back what it isn't using and applies any ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: ".wslconfig" }),
+					" change."
+				]
 			}),
 			heavy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "mn-detail mn-slots",

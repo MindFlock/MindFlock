@@ -2334,6 +2334,10 @@ export interface MemoryReading {
   at?: number;
   /** One-line reason ("memory is low: 2.1 GB free of 24.0 GB (9%)"); "" when ok. */
   message?: string;
+  /** WSL only: the Windows host's own reading (memory_pressure._host). The
+   * overall `level` is the worse of the guest's (`guest_level`) and this. */
+  host?: { available?: number; total?: number; available_pct?: number; level?: string } | null;
+  guest_level?: "ok" | "low" | "critical" | "unknown";
   /** The launch gate: what waits for memory (absent on an older server). */
   gate?: LaunchGateStatus;
 }
