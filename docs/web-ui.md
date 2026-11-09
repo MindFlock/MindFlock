@@ -4620,8 +4620,8 @@ menu's per-state count, because that menu is a standing choice about which
 states this panel shows at all (`intake/search.ts` holds the four rules, one per
 list).
 
-**Tab strip with live counts** — **Tickets**, **GitHub PRs**, **GitHub issues**,
-**Auto-start** (keys `tickets` | `prs` | `issues` | `autostart`, unchanged — the
+**Tab strip with live counts** — **Tickets**, **Epics**, **GitHub PRs**, **GitHub issues**,
+**Auto-start** (keys `tickets` | `epics` | `prs` | `issues` | `autostart` — the
 GitHub tabs say "GitHub" so they no longer read as a second home for the GitHub
 Issues ticket provider), a horizontal
 strip rather than Settings' long left nav because they are peers you flip
@@ -4643,6 +4643,27 @@ longer locked behind connecting a tracker. The strip is a real `role="tablist"`
 shared top edge ([dialog placement](#new-session-dialog)) rather than being
 centred, so switching to a taller tab grows it downward instead of moving the
 tab strip under the cursor.
+
+**Epics** (`intake/EpicsTab.tsx`, `#intake/epics`; see `docs/epics.md`) sits
+right after Tickets and replaced the small Epics section that used to sit at the
+top of it. Its **Assigned epics** panel is built from the same kit as Assigned
+tickets: every not-done epic of yours on each epics-capable (Shortcut) source
+(`GET /api/epics`, cached 60 s server side, polled every 60 s while the page is
+visible, **Refresh** = `?refresh=1`), grouped by source — every source gets a
+heading, even with no epics (*No open epics of yours.*) — and then by workflow
+state in the tracker's order (`state_rank`). A source heading's note says
+*auto-starts epics in: …*, *auto-start off* or *no auto-start states — set them on
+the source card in Tickets*, and pressing it opens that source's card on the
+Tickets tab, where the epic states and the switch live; a source that fails to
+list says so in its own group. Each row is the epic's name (a link to the
+tracker), its state and how many of your stories are still to do, its labels,
+then a chip — **auto-starts** (in an auto-start state, label OK, auto-start on),
+**lead running**, or the reasons it won't start by itself — and **Start** (one
+lead session per epic, a worker and a PR per story) or **Open lead ›**. With no
+epics-capable source at all the panel says epics come from a Shortcut source and
+links to Tickets. The tab's badge counts the epics auto-start would take
+(eligible, no lead yet), read from the same query as the list (`intake/epics.ts`
+holds the rules both share).
 
 **One home for auto-start** (round 5). The three switches — **Tickets**,
 **PR review comments**, **New issues** — sit together at the top of the

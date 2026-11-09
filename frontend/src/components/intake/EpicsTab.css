@@ -1,0 +1,14 @@
+/* Intake → Epics (EpicsTab.tsx). The rows reuse the work-list classes
+ * (.pr-open-item & co.); these are only what an epic row has that a ticket
+ * row doesn't: a name rather than a reference, and its labels. */
+.ik-epic-name {
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+.ik-epic-name:hover {
+  text-decoration: underline;
+}
+.ik-epic-labels {
+  color: var(--muted, inherit);
+}

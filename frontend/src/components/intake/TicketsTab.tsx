@@ -71,7 +71,6 @@ import {
   stateName,
 } from "./vocab";
 import { useAutosave } from "./autosave";
-import { EpicsSection } from "./EpicsSection";
 import {
   backStep,
   beginSave,
@@ -1082,8 +1081,6 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
       {/* WORK, with each source's heading as its handle: Edit (or Fix) opens
           the source's settings under its heading. There is no card list
           below any more — "+ Add source" in the dialog head adds one. */}
-      {/* Epics (docs/epics.md): only when a source ingests them. */}
-      {stored.length > 0 && <EpicsSection />}
       {stored.length > 0 ? (
         <AssignedTickets
           sources={stored}
