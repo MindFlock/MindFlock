@@ -332,3 +332,149 @@ class TestStreamOpen:
     def test_no_body_still_opens(self, local):
         r = client.post("/api/voice/stream")
         assert r.status_code == 200 and r.json()["context"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# small.en for English (the bench's pick), small for the rest
+# --------------------------------------------------------------------------- #
+def _on_disk(tmp_path, name):
+    snap = (
+        tmp_path
+        / "voice"
+        / "whisper"
+        / ("models--Systran--faster-whisper-%s/snapshots/abc123" % name)
+    )
+    snap.mkdir(parents=True, exist_ok=True)
+    (snap / "model.bin").write_bytes(b"x")
+
+
+@pytest.fixture
+def fetches(monkeypatch):
+    """``fetch_whisper_model`` recorded (``fail`` raises instead); the
+    background fetch state cleared around the test."""
+    box = SimpleNamespace(names=[], fail=None)
+
+    def fetch(name):
+        box.names.append(name)
+        if box.fail:
+            raise box.fail
+        return "/somewhere/" + name
+
+    monkeypatch.setattr(speech, "fetch_whisper_model", fetch)
+    speech._FETCH.clear()
+    yield box
+    speech._FETCH.clear()
+
+
+def _set_voice(monkeypatch, **fields):
+    base = dict(stt_model="", stt_stream_model="", stt_final="")
+    base.update(fields)
+    monkeypatch.setattr(speech, "_voice", lambda: SimpleNamespace(**base))
+
+
+class TestEnglishTwin:
+    @pytest.mark.parametrize(
+        "raw,lang,name",
+        [
+            ("", "", "small.en"),
+            ("", "en-GB", "small.en"),
+            ("", "de-DE", "small"),
+            ("whisper-1", "en", "small.en"),  # a host's name reads as unset
+            ("whisper-1", "pt", "small"),
+            ("small", "en", "small"),  # a size the person named stays
+            ("medium", "de", "medium"),
+            ("base.en", "fr", "base.en"),
+        ],
+    )
+    def test_whisper_model(self, raw, lang, name):
+        assert speech.whisper_model(raw, lang) == name
+
+    @pytest.mark.parametrize(
+        "final,stt_model,lang,name",
+        [
+            ("", "", "en-US", "small.en"),
+            ("", "", "fr", "small"),
+            ("small", "", "en", "small"),  # explicit: as is
+            ("off", "", "en", ""),
+            ("", "medium", "en", "medium"),
+        ],
+    )
+    def test_final_whisper_model(self, final, stt_model, lang, name):
+        assert speech.final_whisper_model(final, stt_model, lang) == name
+
+    def test_one_model_for_both_tiers_in_english(self, monkeypatch, fetches):
+        _set_voice(monkeypatch)
+        stt = speech.LocalSTT()
+        assert stt._model_name() == stt.final_model_name() == "small.en"
+        assert stt._model_name("de") == stt.final_model_name("de") == "small"
+        assert stt.warm_keys() == ["whisper:base.en", "whisper:small.en"]
+        # Another language's accurate model is kept like its stream model.
+        assert "whisper:small" in stt.resident_keys()
+        assert fetches.names == []
+
+    def test_an_explicit_size_is_kept(self, monkeypatch, tmp_path, fetches):
+        _on_disk(tmp_path, "small")
+        _set_voice(monkeypatch, stt_model="small")
+        stt = speech.LocalSTT()
+        assert stt.final_model_name("en", fetch=True) == "small"
+        _set_voice(monkeypatch, stt_final="medium.en")
+        assert speech.LocalSTT().final_model_name("de", fetch=True) == "medium.en"
+        assert fetches.names == []
+
+    def test_an_old_install_keeps_small_and_fetches_the_twin_once(
+        self, monkeypatch, tmp_path, fetches
+    ):
+        _on_disk(tmp_path, "small")
+        _set_voice(monkeypatch)
+        stt = speech.LocalSTT()
+        # A status read never downloads.
+        assert stt._model_name() == "small" and stt.ready()[0] in (True, False)
+        assert fetches.names == []
+        # Real use falls back to small at once and fetches the twin.
+        assert stt.final_model_name("en-US", fetch=True) == "small"
+        assert fetches.names == ["small.en"]
+        assert stt.final_model_name("en", fetch=True) == "small"
+        assert fetches.names == ["small.en"]  # once, not per phrase
+        # Landed: the next stream takes it.
+        _on_disk(tmp_path, "small.en")
+        assert stt.final_model_name("en", fetch=True) == "small.en"
+        assert stt._model_name() == "small.en"
+        assert fetches.names == ["small.en"]
+
+    def test_a_failed_fetch_is_logged_and_retried_later(
+        self, monkeypatch, tmp_path, fetches, caplog
+    ):
+        _on_disk(tmp_path, "small")
+        _set_voice(monkeypatch)
+        fetches.fail = OSError("offline")
+        stt = speech.LocalSTT()
+        assert stt.final_model_name("en", fetch=True) == "small"
+        assert "could not download faster-whisper small.en: offline" in caplog.text
+        assert stt.final_model_name("en", fetch=True) == "small"
+        assert fetches.names == ["small.en"]  # not within the retry window
+        speech._FETCH["small.en"] -= speech.FETCH_RETRY_SECONDS
+        stt.final_model_name("en", fetch=True)
+        assert fetches.names == ["small.en", "small.en"]
+
+    def test_a_fresh_machine_goes_straight_to_the_twin(self, monkeypatch, fetches):
+        _set_voice(monkeypatch)  # nothing on disk: it downloads on first use
+        assert speech.LocalSTT().final_model_name("en", fetch=True) == "small.en"
+        assert fetches.names == []
+
+    def test_the_accurate_pass_and_the_clip_run_the_picked_model(
+        self, model, monkeypatch, fetches
+    ):
+        _set_voice(monkeypatch)
+        stt = speech.LocalSTT()
+        assert stt.final_transcriber("en-US").lane == "whisper:small.en"
+        assert stt.final_transcriber("es").lane == "whisper:small"
+        stt.final_transcriber("de")(array("f", [0.0]))
+        assert model["names"] == ["small"]
+
+    def test_warm_starts_the_fetch(self, model, monkeypatch, tmp_path, fetches):
+        _on_disk(tmp_path, "small")
+        _set_voice(monkeypatch, stt_stream_model="base.en")
+        monkeypatch.setattr(speech, "_hook_pad", lambda: False, raising=False)
+        speech.LocalSTT().warm(prime=False)
+        assert fetches.names == ["small.en"]
+        assert sorted(model["names"]) == ["base.en", "small"]  # small meanwhile

@@ -35,10 +35,12 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 ``$MINDFLOCK_VOICE_DIR``):
 
 * ``whisper/`` — faster-whisper's ``download_root``: the CTranslate2 models,
-  run as int8 on the CPU. A phrase sent whole uses ``small`` unless
-  ``voice.stt_model`` names another size (``base``, ``medium`` …; a name
-  that is not a faster-whisper size, like the ``whisper-1`` a host wants,
-  reads as ``small``); the live transcript uses the much faster
+  run as int8 on the CPU. A phrase sent whole uses ``small`` — its
+  English-only twin ``small.en`` for English (``lang`` empty or ``en*``:
+  :data:`WHISPER_MODEL_EN`) — unless ``voice.stt_model`` names a size
+  (``base``, ``medium`` …, kept as named in every language; a name that is
+  not a faster-whisper size, like the ``whisper-1`` a host wants, reads as
+  unset); the live transcript uses the much faster
   ``voice.stt_stream_model`` (:func:`stream_whisper_model`: ``base.en`` for
   English, ``base`` otherwise), and at the phrase's end the accurate pass
   re-decodes the whole phrase with ``stt_model`` again unless
@@ -152,6 +154,16 @@ OPENAI_STT_MODEL = "gpt-transcribe"
 OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 OPENAI_TTS_VOICE = "alloy"
 WHISPER_MODEL = "small"
+#: The one-shot and accurate-pass model for ENGLISH while ``voice.stt_model``
+#: (and ``voice.stt_final``) name no size: the English-only twin of
+#: :data:`WHISPER_MODEL`, the same size and cost. ``tests/bench/
+#: stt_context_bench.py`` (2026-11-09, the accurate pass with the dictation
+#: context): WER 5.96 % against 6.97 % on LibriSpeech, 7.54 against 8.32 %
+#: under 12 dB SNR noise, 2.35 against 5.03 % on piper coding dictation, a
+#: paired p50 24 ms faster. Until it is on disk the server keeps
+#: :data:`WHISPER_MODEL` and fetches it in the background
+#: (:func:`english_default_model`).
+WHISPER_MODEL_EN = "small.en"
 #: The live transcript's model (``voice.stt_stream_model`` unset): ``base``
 #: decodes ~5x faster than ``small`` on a CPU at a small accuracy cost, and
 #: the English-only build is the better ``base`` for English. Measured
@@ -1139,11 +1151,87 @@ WHISPER_SIZES = frozenset(
 _PIPER_NAME = re.compile(r"^[a-z]{2,3}_[A-Z]{2}-[A-Za-z0-9_]+-(x_low|low|medium|high)$")
 
 
-def whisper_model(raw: str = "") -> str:
-    """The faster-whisper model for ``raw`` (``voice.stt_model``): a size
-    name or a Hugging Face ``org/repo`` id, else :data:`WHISPER_MODEL`."""
+def _named_size(raw: str) -> bool:
+    """Whether ``raw`` names a faster-whisper model (a size or an
+    ``org/repo`` id) — the person's pick, kept as is in every language."""
     name = (raw or "").strip()
-    return name if name in WHISPER_SIZES or "/" in name else WHISPER_MODEL
+    return name in WHISPER_SIZES or "/" in name
+
+
+def _english(lang: str) -> bool:
+    """``lang`` is English or unsaid (the English models' languages)."""
+    return whisper_language(lang) in (None, "en")
+
+
+def whisper_model(raw: str = "", lang: str = "") -> str:
+    """The faster-whisper model for ``raw`` (``voice.stt_model``) in
+    ``lang``: a size name or a Hugging Face ``org/repo`` id as named, else
+    :data:`WHISPER_MODEL_EN` for English (``lang`` empty or ``en*``) and
+    :data:`WHISPER_MODEL` for any other language. Pure: what the install
+    downloads; ``LocalSTT`` runs :data:`WHISPER_MODEL` until the English
+    twin is on disk (:func:`english_default_model`)."""
+    if _named_size(raw):
+        return raw.strip()
+    return WHISPER_MODEL_EN if _english(lang) else WHISPER_MODEL
+
+
+def whisper_on_disk(name: str) -> bool:
+    """Whether faster-whisper ``name`` is downloaded into
+    ``voice_dir()/whisper`` (the Hugging Face cache layout
+    ``models--<org>--faster-whisper-<name>/snapshots/<rev>/model.bin``). A
+    glob, no import; never raises."""
+    try:
+        root = voice_dir() / "whisper"
+        pattern = "models--*--faster-whisper-%s/snapshots/*/model.bin" % name
+        return any(root.glob(pattern))
+    except Exception:  # noqa: BLE001 — unreadable: not there
+        return False
+
+
+#: How long after a failed background fetch of :data:`WHISPER_MODEL_EN`
+#: (offline, a full disk) the next stream open may try again.
+FETCH_RETRY_SECONDS = 600.0
+_FETCH_LOCK = threading.Lock()
+_FETCH: Dict[str, float] = {}  # name → monotonic time its fetch started
+
+
+def english_default_model(fetch: bool = False) -> str:
+    """The English model while ``voice.stt_model`` names no size:
+    :data:`WHISPER_MODEL_EN` once it is on disk — or when
+    :data:`WHISPER_MODEL` is not either (a fresh machine: it downloads on
+    first use, or the install fetched it) — else :data:`WHISPER_MODEL`,
+    which an install from before the twin has. ``fetch`` (a warm, a stream
+    or a clip — real use, never a status read) also starts the twin's
+    download in the background then (:func:`fetch_whisper_model`, outside
+    the model lock: a load under it would stall every pass for the
+    download); the next stream after it lands takes it. Never blocks."""
+    if whisper_on_disk(WHISPER_MODEL_EN) or not whisper_on_disk(WHISPER_MODEL):
+        return WHISPER_MODEL_EN
+    if fetch:
+        _fetch_in_background(WHISPER_MODEL_EN)
+    return WHISPER_MODEL
+
+
+def _fetch_in_background(name: str) -> None:
+    """Download ``name`` on a thread, once at a time, and not again within
+    :data:`FETCH_RETRY_SECONDS` of the last try (a failure is logged)."""
+    now = time.monotonic()
+    with _FETCH_LOCK:
+        started = _FETCH.get(name)
+        if started is not None and now - started < FETCH_RETRY_SECONDS:
+            return
+        _FETCH[name] = now
+
+    def run() -> None:
+        try:
+            fetch_whisper_model(name)
+            _logger.info("voice: faster-whisper %s downloaded", name)
+        except Exception as err:  # noqa: BLE001 — offline, disk: stay on small
+            _logger.warning(
+                "voice: could not download faster-whisper %s: %s", name, err
+            )
+
+    _spawn(run, "whisper-fetch")
 
 
 def stream_whisper_model(raw: str = "", lang: str = "") -> str:
@@ -1203,17 +1291,17 @@ def is_stt_key(key: str) -> bool:
 FINAL_OFF = "off"
 
 
-def final_whisper_model(raw: str = "", stt_model: str = "") -> str:
+def final_whisper_model(raw: str = "", stt_model: str = "", lang: str = "") -> str:
     """The accurate pass's faster-whisper model for ``raw``
-    (``voice.stt_final``): ``""`` for :data:`FINAL_OFF`, ``raw`` when it is
-    a size or ``org/repo`` id, else the one-shot model
-    (:func:`whisper_model` of ``stt_model``)."""
+    (``voice.stt_final``) in ``lang``: ``""`` for :data:`FINAL_OFF`, ``raw``
+    when it is a size or ``org/repo`` id, else the one-shot model
+    (:func:`whisper_model` of ``stt_model`` in ``lang``). Pure."""
     name = (raw or "").strip()
     if name.lower() == FINAL_OFF:
         return ""
-    if name in WHISPER_SIZES or "/" in name:
+    if _named_size(name):
         return name
-    return whisper_model(stt_model)
+    return whisper_model(stt_model, lang)
 
 
 def piper_voice(raw: str = "") -> str:
@@ -1536,8 +1624,15 @@ class LocalSTT(Backend):
     label = "faster-whisper on this computer"
     streams = True
 
-    def _model_name(self) -> str:
-        return whisper_model(_voice().stt_model)
+    def _model_name(self, lang: str = "", fetch: bool = False) -> str:
+        """The one-shot model in ``lang`` (:func:`whisper_model`; for
+        English with no size set, :func:`english_default_model`: the
+        English twin once it is on disk, its download started when
+        ``fetch``)."""
+        raw = _voice().stt_model
+        if not _named_size(raw) and _english(lang):
+            return english_default_model(fetch)
+        return whisper_model(raw, lang)
 
     def stream_model_name(self, lang: str = "") -> str:
         """The live transcript's WHISPER model for ``lang``
@@ -1563,12 +1658,17 @@ class LocalSTT(Backend):
             return "Moonshine"
         return "Whisper " + self.stream_model_name(lang)
 
-    def final_model_name(self) -> str:
-        """The accurate pass's model (:func:`final_whisper_model`; ``""``:
-        off). ``voice.stt_final`` is read with a default, so this works on a
+    def final_model_name(self, lang: str = "", fetch: bool = False) -> str:
+        """The accurate pass's model in ``lang`` (:func:`final_whisper_model`;
+        ``""``: off) — with no size set, the one-shot model
+        (:meth:`_model_name`), so English runs ONE model for both.
+        ``voice.stt_final`` is read with a default, so this works on a
         settings model without the field."""
         v = _voice()
-        return final_whisper_model(getattr(v, "stt_final", ""), v.stt_model)
+        raw = getattr(v, "stt_final", "")
+        if not final_whisper_model(raw, v.stt_model, lang):
+            return ""
+        return raw.strip() if _named_size(raw) else self._model_name(lang, fetch)
 
     def warm_keys(self) -> List[str]:
         """What :meth:`warm` loads: the one-shot model, the streaming one
@@ -1595,10 +1695,11 @@ class LocalSTT(Backend):
         """Never idle-unloaded while ``local`` recognition is configured and
         a client listens: the :meth:`warm_keys`, the wake check's model
         (:meth:`wake_keys`) and the streaming model of any other language."""
+        other = {self.stream_model_name("xx"), self.final_model_name("xx")}
         return sorted(
             set(self.warm_keys())
             | set(self.wake_keys())
-            | {"whisper:" + self.stream_model_name("xx")}
+            | {"whisper:" + n for n in other if n}
         )
 
     def ready(self) -> Tuple[bool, str]:
@@ -1621,7 +1722,12 @@ class LocalSTT(Backend):
         accurate pass's thread budget (:func:`whisper_threads`)."""
         try:
             fast = {self.stream_model_name(), self.stream_model_name("xx")}
-            slow = {self._model_name(), self.final_model_name()}
+            slow = {
+                self._model_name(),
+                self._model_name("xx"),
+                self.final_model_name(),
+                self.final_model_name("xx"),
+            }
         except Exception:  # noqa: BLE001 — unreadable settings: the big budget
             return "final"
         return "fast" if name in fast and name not in slow else "final"
@@ -1681,7 +1787,7 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 5}
         if prompt:
             kw["initial_prompt"] = prompt
-        name = self._model_name()
+        name = self._model_name(lang, fetch=True)
         return self._clip(self._model(name), audio, mime, kw, name)
 
     def wake_transcribe(
@@ -1819,7 +1925,7 @@ class LocalSTT(Backend):
         :meth:`stream_transcriber`. Every accurate pass of the stream — the
         early one and the one at ``/end`` — runs this one callable, so all
         of them carry the context."""
-        name = self.final_model_name()
+        name = self.final_model_name(lang, fetch=True)
         if not name:
             return None
         language = whisper_language(lang)
@@ -1873,7 +1979,13 @@ class LocalSTT(Backend):
         when ``prime`` is set, run one short silent pass through each one
         this call loaded (CTranslate2 allocates its workspaces on the first
         call, another second or two). ``"loaded"`` when this call loaded
-        any, ``"already"`` when all were resident."""
+        any, ``"already"`` when all were resident. An install from before
+        the English twin starts its download here (in the background:
+        :func:`english_default_model`) and warms ``small`` meanwhile."""
+        try:
+            self._model_name(fetch=True)
+        except Exception:  # noqa: BLE001 — unreadable settings: warm what we can
+            pass
         fresh = False
         for key in self.load_keys():
             name = key.split(":", 1)[1]

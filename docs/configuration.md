@@ -666,7 +666,8 @@ server merges on save so multiple processes can share it.
 - `voice/` — the optional local speech backend's model files
   (`backend/web/core/speech.py`, `voice.stt_backend` / `tts_backend` =
   `"local"`; the built-in `system` engine keeps nothing here): `whisper/` (faster-whisper's download root — the CTranslate2
-  models: `small` unless `voice.stt_model` names another size, and the live
+  models: `small.en` for English and `small` for other languages unless
+  `voice.stt_model` names a size, and the live
   transcript's `base.en` unless `voice.stt_stream_model` names one),
   `moonshine/` (the Moonshine `tiny-streaming` model, ~200 MB, that types
   the live words in English once installed — Settings → Voice → *Install
@@ -1418,8 +1419,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     Voice → *Install local models* (`POST /api/voice/install-local`, owner
     only) installs `faster-whisper` and `piper-tts` into the interpreter the
     server runs (`uv pip install --python <it>`, or its own pip without
-    `uv`), downloads the recognition models (`stt_model`, default `small`,
-    and `stt_stream_model`, default `base.en`) into `<voice dir>/whisper/` and the voice (`tts_voice`, default
+    `uv`), downloads the recognition models (`stt_model`, default
+    `small.en` — the English-only twin of `small`; another language's
+    `small` downloads on its first phrase — and `stt_stream_model`, default
+    `base.en`) into `<voice dir>/whisper/` and the voice (`tts_voice`, default
     `en_US-lessac-medium`) into `<voice dir>/piper/`, then sets
     `stt_backend` to `"local"` (the voice backend is left alone). The
     manual equivalent, from a source checkout, is `uv sync --group voice`
@@ -1435,7 +1438,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
     the model and voice names it wants (blank = `gpt-transcribe`,
     `gpt-4o-mini-tts`, `alloy`; for the local backend the whisper size,
-    default `small`, and the piper voice, default `en_US-lessac-medium` —
+    default `small.en` for English (`lang` empty or `en*`) and `small` for
+    any other language — a size you name is used as is in every language;
+    an install from before `small.en` keeps `small` and downloads
+    `small.en` in the background on its first warm or phrase, switching
+    once it lands — and the piper voice, default `en_US-lessac-medium` —
     the fields are shared, so a name that is not a faster-whisper size or a
     piper voice (`whisper-1`, `Microsoft Zira Desktop`) reads as the default
     there; `stt_stream_model` — the live transcript's engine on `local`:
@@ -1461,7 +1468,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     between speed and accuracy**: the live transcript types the fast
     model's words as the person speaks, then at the end of the phrase the
     accurate pass re-decodes the whole phrase and corrects it (blank = with
-    `stt_model`, i.e. `small`: the pass is ~1.1–1.3 s on an 8-core CPU
+    `stt_model`, i.e. `small.en` for English and `small` otherwise —
+    prompted with the message dictated before the phrase, the stream's
+    `context`: the pass is ~1.1–1.3 s on an 8-core CPU
     whatever the phrase's length, started once 0.5 s of quiet follows the speech so the
     correction usually lands within a second of the person stopping; it is
     skipped only under 0.2 s of speech, so a lone "stop" is still corrected,

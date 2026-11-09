@@ -162,7 +162,7 @@ class TestInstall:
         ]
         assert whisper[0] == sys.executable and whisper[1] == "-c"
         assert "_download_main" in whisper[2]
-        assert whisper[3:] == ["whisper", "small"]
+        assert whisper[3:] == ["whisper", "small.en"]
         assert stream[3:] == ["whisper", "base.en"]  # the live transcript's
         assert piper[3:] == ["piper", "en_US-lessac-medium"]
         S.invalidate()
@@ -203,7 +203,7 @@ class TestInstall:
             voice={"stt_model": "whisper-1", "tts_voice": "Microsoft Zira Desktop"}
         )
         _run()
-        assert spawn.calls[1][3:] == ["whisper", "small"]
+        assert spawn.calls[1][3:] == ["whisper", "small.en"]
         assert spawn.calls[2][3:] == ["whisper", "base.en"]
         assert spawn.calls[3][3:] == ["piper", "en_US-lessac-medium"]
 
@@ -225,9 +225,9 @@ class TestInstall:
         )
         st = _run()
         assert st["state"] == "failed"
-        assert st["step"] == "downloading recognition model (small)"
+        assert st["step"] == "downloading recognition model (small.en)"
         assert st["error"] == (
-            "downloading recognition model (small) failed: error: Connection refused"
+            "downloading recognition model (small.en) failed: error: Connection refused"
         )
         assert len(spawn.calls) == 2  # the voice was never tried
         S.invalidate()
