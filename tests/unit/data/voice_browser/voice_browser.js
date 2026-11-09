@@ -1176,6 +1176,12 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const all1 = await page4.evaluate(() => window.__boxes.slice());
     check("…and the words never blinked out while it read them (the guess stayed until the answer)", all1.indexOf("fix") >= 0 && all1.slice(all1.indexOf("fix")).every(Boolean), JSON.stringify(all1));
     check("…the next phrase opened a new stream", state.streamOpens.length === 2);
+    // Sentence context (POST /api/voice/stream {context, session}): a fresh
+    // message's first phrase opens with none; the next phrase's stream —
+    // opened as phrase 1 ended, before its final — with phrase 1's words.
+    const sess4 = await page4.evaluate(() => window.mfVoice.session);
+    check("context: the first phrase of a fresh message opened with none (the session named)", !!state.streamOpens[0] && !("context" in state.streamOpens[0]) && !!sess4 && state.streamOpens[0].session === sess4, JSON.stringify([state.streamOpens[0], sess4]));
+    check("…the second phrase's open carried the first phrase's words as context", !!state.streamOpens[1] && state.streamOpens[1].context === "fix the parser" && state.streamOpens[1].session === sess4, JSON.stringify(state.streamOpens[1]));
     await sleep(300);
     const vib4 = await page4.evaluate(() => window.__vibes);
     await page4.evaluate(() => window.__tone(0.4));
@@ -1209,6 +1215,10 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(500);
     await page4.click("#voice-cancel");
     const sid5 = "s" + state.streamOpens.length;
+    // The message went ("over and out"): the next one's first phrase (the
+    // stream just cancelled — opened after the send) opens with none.
+    const open5 = state.streamOpens[state.streamOpens.length - 1];
+    check("context: after the send the next message's first open carried none", state.streamOpens.length >= 3 && !!open5 && !("context" in open5) && open5.session === sess4, JSON.stringify(state.streamOpens.slice(2)));
     t4 = Date.now();
     while (state.streamDeletes.indexOf(sid5) < 0 && Date.now() - t4 < 3000) await sleep(30);
     check("Cancel mid-phrase DELETEs the stream", state.streamDeletes.indexOf(sid5) >= 0 && state.streamEnds.indexOf(sid5) < 0, JSON.stringify([sid5, state.streamDeletes, state.streamEnds]));

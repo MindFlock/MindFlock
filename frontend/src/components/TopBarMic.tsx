@@ -382,6 +382,8 @@ function fieldTarget(el: HTMLInputElement | HTMLTextAreaElement): DictTarget {
     kind: "field",
     title: "",
     name: "the text box",
+    // The words ahead of the cursor: the sentence a phrase is heard in.
+    before: () => el.value.slice(0, el.selectionStart != null ? el.selectionStart : el.value.length),
     type: (text) => {
       insertIntoField(el, text);
       return true;
@@ -1015,6 +1017,11 @@ export function TopBarMic() {
         // "repeat") ends its phrase after a short quiet only while nothing
         // is typed yet (lib/voiceDesktop turnHoldMs).
         blank: () => live.current !== d || !d.dict.typed,
+        // Each phrase's stream opens with the message's words already said
+        // ahead of it and the session they go to (lib/voiceDesktop
+        // LiveDictation.streamContext): the accurate model hears it in its
+        // sentence.
+        context: () => (live.current === d ? d.streamContext() : null),
         onPartial: (t) => {
           if (live.current === d) d.unsure(t);
         },

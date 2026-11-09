@@ -4441,15 +4441,49 @@
       if (key && g.proc && g.frames && micLive(g.mic) && mine.h.carry && mine.h.carry(text || "")) {
         clearInterval(clockTimer);
         clockTimer = null;
+        // The next phrase opens now, before this one's final is typed: its
+        // context counts this phrase as heard so far — the stream's words,
+        // a control phrase at their end included (`text` has it cut off when
+        // it fired: "over and out" must start the next one afresh), else
+        // `text`.
+        g.nextContext = contextOf(mine.h, voiceJoin(g.pend, g.partial) || text || "");
         carryFrom(g, key);
         return;
       }
       recStop(g);
     }
+    // Sentence context (POST /api/voice/stream {context, session}): each
+    // phrase's stream opens with the message's words already said ahead of
+    // it — start()'s h.context(prev) ({context, session} or null; `prev`:
+    // the phrase that just ended, its final not typed yet, "" for none) —
+    // the server's accurate model's prompt, so a word is heard in its
+    // sentence. Never throws; null: none.
+    function contextOf(h, prev) {
+      try { return h && h.context ? h.context(prev) || null : null; } catch (e) { return null; }
+    }
+    // At most VOICE_CONTEXT_MAX characters (the server keeps ~300): the last
+    // ones, cut at a word boundary — a word the cut falls in is left out
+    // whole; whitespace runs are one space.
+    var VOICE_CONTEXT_MAX = 400;
+    function contextTail(text) {
+      var t = String(text || "").replace(/\s+/g, " ").trim();
+      if (t.length <= VOICE_CONTEXT_MAX) return t;
+      var cut = t.slice(t.length - VOICE_CONTEXT_MAX);
+      return (t.charAt(t.length - VOICE_CONTEXT_MAX - 1) === " " ? cut : cut.replace(/^\S*/, "")).trim();
+    }
+    // g's open: `context` and `session` only when there are any.
+    function streamBody(g) {
+      var body = { lang: lang(), client: VOICE_CLIENT_ID }, at = g.context;
+      var ctx = contextTail(at && at.context);
+      if (ctx) body.context = ctx;
+      if (at && at.session) body.session = String(at.session);
+      return body;
+    }
     function carryFrom(g, key) {
       carryDrop();
       var c = recNew();
       c.key = key;
+      c.context = g.nextContext || null;
       c.ctx = g.ctx;
       c.rate = g.rate;
       c.floor = g.floor;
@@ -4542,6 +4576,8 @@
         voice.rec.trace = g.trace;
         if (g.debug) { try { console.log("[voice] wake: the word's end → listening " + h.wakeMs + " ms"); } catch (e) {} }
       }
+      // The message's words ahead of this phrase (h.context: the box).
+      g.context = contextOf(h, "");
       if (streams()) streamOpen(g, mine);
       capLoad();   // the capture module loads alongside getUserMedia (capAfter waits for it, bounded)
       getStream().then(capAfter).then(function (s) {
@@ -4717,7 +4753,9 @@
         streamReq(g, "/api/voice/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lang: lang(), client: VOICE_CLIENT_ID }),
+          // With the message's words ahead of the phrase when it has any
+          // (g.context: contextOf), else the plain open.
+          body: JSON.stringify(g.context ? streamBody(g) : { lang: lang(), client: VOICE_CLIENT_ID }),
         }).then(function (x) {
           g.busy = g.opening = false;
           mine = mine || g.mine || null;
@@ -6531,6 +6569,9 @@
       // The box holds no words but this phrase's guess: a lone command's
       // short end-of-turn hold applies (voiceTurnHoldMs).
       boxEmpty: function () { return !voice.box && !voiceGuessBase(vbox()).trim(); },
+      // Each phrase's stream opens with the message's words ahead of it and
+      // the session they go to (voiceStreamContext).
+      context: function (prev) { return voiceStreamContext(mode, prev); },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { if (voiceIsListening() && voicePickup(v) > 0) voice.loudAt = Date.now(); voiceLevel(voiceIsListening() ? v : null); },
       onSpeech: function () { if (voiceIsListening()) voiceSpeechTick(); },
@@ -6862,6 +6903,31 @@
   function voiceGuessBase(box) {
     var G = voice.guess, cur = box.value;
     return G.box === box && G.typed && cur.slice(cur.length - G.typed.length) === G.typed ? cur.slice(0, cur.length - G.typed.length) : cur;
+  }
+  // A phrase's stream context — {context, session}, or null — for a
+  // dictation ("prompt") only: the box's text, which is the message so far
+  // (a guess in it included: the words go in after it). `prev`: the phrase
+  // that just ended, its final not in yet (the next phrase's stream opens
+  // at once, ServerSTT's carry) — it counts as heard, its guess in the box
+  // swapped for its words, never its control words: one that sends ("over",
+  // "over and out") or clears ("disregard") starts the next afresh (""),
+  // "scratch that" takes it back. After a send or a clear the box is what
+  // is left: empty. `session`: where the words go (voice.session).
+  function voiceStreamContext(mode, prev) {
+    if (mode !== "prompt") return null;
+    // A send on its way (voiceSend): the box still holds the message until
+    // /send answers, but those words are gone — the next ones start afresh.
+    if (voice.state === "sending") return { context: "", session: voice.session || "" };
+    var box = vbox(), text = box.value;
+    prev = String(prev || "").trim();
+    if (prev) {
+      var base = voiceGuessBase(box), p = voiceDictParse(prev);
+      if (p.kind) text = "";
+      else if (voiceUndoParse(prev) || voiceTail(prev, false)) text = base;
+      else text = voiceJoin(base, voiceHoldBack(prev, false)[0]);
+    }
+    // (ServerSTT caps it: contextTail.)
+    return { context: String(text || "").trim(), session: voice.session || "" };
   }
   // Take the guess back (the phrase's final is here, or it heard nothing):
   // the box as it was before the phrase. Returns what was taken back.
