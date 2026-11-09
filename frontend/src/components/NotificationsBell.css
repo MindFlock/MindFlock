@@ -205,8 +205,12 @@
 
 /* Pinned live section at the top of the bell popover, above the history. It
    scrolls on its own so a long list never pushes the history off the panel. */
+/* `flex-shrink: 0`: it was `0 1 auto`, so beside a long history the two
+   shrank in proportion to their heights and "Needs you" was squeezed to a
+   sliver (one row of four showing, the rest behind a tiny scroll). It keeps
+   its height now, up to its own cap, and the history takes what is left. */
 .notif-attn {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   max-height: 55vh;
   overflow-y: auto;
   padding: 5px 6px 6px;
