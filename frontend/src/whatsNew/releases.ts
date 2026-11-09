@@ -37,6 +37,24 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.13.1",
+    date: "2026-11-09",
+    big: false,
+    headline: "Dictation that follows the whole sentence.",
+    features: [
+      {
+        title: "Words heard in context",
+        body:
+          "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong.",
+      },
+      {
+        title: "A sharper English model",
+        body:
+          "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast.",
+      },
+    ],
+  },
+  {
     version: "0.13.0",
     date: "2026-11-09",
     big: true,

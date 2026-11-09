@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-09
+
+### Changed
+
+- **Dictation hears each phrase in its sentence.** A message spoken over
+  several phrases (split at pauses) used to have each phrase transcribed on
+  its own. Now the desktop and the phone send the words already in the
+  message with every phrase, and Whisper takes them as its prompt, so a word
+  is settled by the sentence it is in. Command words ("over", "disregard",
+  "scratch that") never count, and after a send or a clear it starts fresh.
+- **English dictation uses Whisper `small.en`.** It's the English-only twin
+  of `small`, at the same cost, for both the one-shot and the accurate pass
+  while no model size is set. Other languages keep `small`. An install that
+  has only `small` keeps using it and downloads `small.en` in the
+  background.
+  - Together with the context, the voice bench's errors drop from 4.7 % to
+    2.35 % on coding dictation and from 7.4 % to 6.0 % on real speech, with
+    no added wait.
+
+### Fixed
+
+- **The desktop dev shell's taskbar pin opened the wrong shell.** The WSL
+  and native-Windows dev shells shared one taskbar identity, so the pin
+  opened whichever had run last. Each dev profile now has its own identity
+  and Start-menu shortcut, and the shortcut records the whole launch
+  (including the new `--mindflock-repo=` flag).
+- **The desktop dev launcher kept its server down after a WSL restart.** It
+  read the always-on `mindflock.service` (port 8765) as the owner of its own
+  port and refused to start. A developer checkout now skips that check. The
+  port-in-use check still prevents a second copy.
+
 ## [0.13.0] - 2026-11-09
 
 ### Added
@@ -5015,7 +5046,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.13.1
 [0.13.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.13.0
 [0.12.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.3
 [0.12.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.2
