@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import time
 
 import pytest
@@ -819,8 +820,11 @@ def test_status_of_one_session_and_of_everything():
         "what's sitecheck doing", ['ACT {"do":"status","session":"sitecheck"}']
     )
     assert events[0]["type"] == "say"
-    assert events[0]["text"].startswith(
-        "sitecheck-bot7-login is working for 7 minutes."
+    # The rows' times are stamped once at import (NOW) and the status says
+    # how long against the real clock, so a long run reads 8 or 9 minutes.
+    assert re.match(
+        r"sitecheck-bot7-login is working for (7|8|9|1[0-9]) minutes\.",
+        events[0]["text"],
     )
     assert "Running the tests now." in events[0]["text"]
     events, _, _ = turn("what needs me", ['ACT {"do":"status"}'])

@@ -1202,7 +1202,7 @@ export const TALK_CHOICES = [
 ] as const;
 export type TalkLevel = (typeof TALK_CHOICES)[number]["value"];
 /** What ▶ says in the picked voice. */
-export const ASSISTANT_SAMPLE = "Hi, I'm MindFlock. Your sitecheck session is waiting on a permission prompt.";
+export const ASSISTANT_SAMPLE = "Hi, I'm MindFlock. Your docs session is waiting on a permission prompt.";
 export const KOKORO_LABEL = "Install the built-in voice (Kokoro, ~120 MB)";
 export const KOKORO_WHY = "A natural voice that runs on this computer, with nothing to sign up for.";
 export const KOKORO_DONE = "Installed — the assistant now speaks with its built-in voice";

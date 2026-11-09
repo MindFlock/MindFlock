@@ -358,10 +358,15 @@ describe("a turn", () => {
     expect(c.spoken).toEqual(["Started session fix-login"]);
   });
 
-  it("a failed did is said whatever the talk level", async () => {
-    const r = rig([[{ type: "did", action: { do: "setting", path: "auth.token", value: "x" }, ok: false, text: "That setting is off limits", detail: {} }, done]], { talk: "quiet" });
+  it("a failed did is said once, by the error event that follows it, whatever the talk level", async () => {
+    const r = rig(
+      [[{ type: "did", action: { do: "setting", path: "auth.token", value: "x" }, ok: false, text: "That setting is off limits", detail: {} }, { type: "error", text: "That setting is off limits" }, done]],
+      { talk: "quiet" },
+    );
     await r.s.turn("set the token");
     expect(r.spoken).toEqual(["That setting is off limits"]);
+    expect(r.view.get().chips).toEqual([]);
+    expect(r.view.get().error).toBe(true);
   });
 
   it("say is spoken at brief, only captioned (and chimed) at quiet", async () => {

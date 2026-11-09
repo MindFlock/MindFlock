@@ -642,11 +642,13 @@ export class AssistantSession {
         } catch (err) {
           r = { ok: false, text: "Couldn't do that: " + ((err as Error)?.message || "error") };
         }
-        this.chip({ text: r.text, ok: r.ok, session: r.session, open: r.open });
         // Your own action: a chime and the chip, never words — a failure is
-        // said (the screen doesn't show why).
-        if (r.ok) chime();
-        else {
+        // said (the screen doesn't show why), once, as the caption (no chip
+        // repeating it).
+        if (r.ok) {
+          this.chip({ text: r.text, ok: r.ok, session: r.session, open: r.open });
+          chime();
+        } else {
           this.view.set({ caption: r.text, error: true, phase: "replying" });
           this.deps.speak(r.text);
         }
@@ -656,11 +658,14 @@ export class AssistantSession {
         const title = typeof e.detail.title === "string" ? e.detail.title : "";
         if (e.action.do === "new_session" && e.ok && title) this.deps.focus(title);
         const session = title || (e.action.do === "send" ? e.action.session : undefined);
-        if (e.text) this.chip({ text: e.text, ok: e.ok, session });
         if (!e.ok) {
+          // The server follows a failed action with an `error` event carrying
+          // the sentence to say: caption it here, speak it there — once.
           this.view.set({ caption: e.text, error: true, phase: "replying" });
-          if (e.text) this.deps.speak(e.text);
-        } else this.say("did", e.text, level, chime);
+        } else {
+          if (e.text) this.chip({ text: e.text, ok: e.ok, session });
+          this.say("did", e.text, level, chime);
+        }
         return;
       }
       case "say":
