@@ -2587,7 +2587,10 @@ export interface RouteReply {
     | "interrupt"
     | "switch_back"
     | "where"
-    | "commands";
+    | "commands"
+    // The voice assistant: "MindFlock, …" — `text` is the rest of the phrase
+    // (lib/voiceAssistant; TopBarMic hands it over).
+    | "assistant";
   title?: string;
   name?: string;
   say?: string;
@@ -2602,7 +2605,8 @@ export interface RouteReply {
   dialog_id?: string;
   keys?: string[];
   /** answer, on Claude's question prompt: free words for its "Type
-   * something" row, typed with the keys; help: the question asked. */
+   * something" row, typed with the keys; help: the question asked;
+   * assistant: the words after "MindFlock," for the assistant. */
   text?: string;
   /** answer: the session has no dialog up (`say` says so). */
   no_dialog?: boolean;
@@ -2630,7 +2634,7 @@ const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
   "switch_index", "switch_rel", "answer", "question", "ask", "read", "help", "early",
-  "scroll", "interrupt", "switch_back", "where", "commands",
+  "scroll", "interrupt", "switch_back", "where", "commands", "assistant",
 ]);
 
 /** One row of the voice cheat sheet (kind `commands`, components/voice/
@@ -3678,6 +3682,8 @@ interface Queued {
   sound?: Speaker;
   /** When it was queued (ms). */
   at: number;
+  /** Said with this engine instead of the queue's (the assistant's voice). */
+  voice?: Speaker;
   /** The session it is about ("" for the app's own words): {@link
    * SpeechQueue.cancel} can drop one session's lines and keep the rest. */
   title: string;
@@ -3736,11 +3742,12 @@ export class SpeechQueue {
 
   /** Queue a line; resolves once it has been said (or cut off, or dropped).
    * `at`: when its news happened (ms), if earlier than now; `title`: the
-   * session it is about. */
-  say(line: SpeechLine, opts: { at?: number; title?: string } = {}): Promise<void> {
+   * session it is about; `voice`: the engine that says it (the assistant's),
+   * else the queue's. */
+  say(line: SpeechLine, opts: { at?: number; title?: string; voice?: Speaker } = {}): Promise<void> {
     if (typeof line === "string" && !line.trim()) return Promise.resolve();
     return new Promise<void>((done) => {
-      this.lines.push({ line, at: opts.at ?? this.now(), title: opts.title || "", done });
+      this.lines.push({ line, at: opts.at ?? this.now(), title: opts.title || "", done, voice: opts.voice });
       this.pump();
     });
   }
@@ -3921,7 +3928,7 @@ export class SpeechQueue {
         next.done();
         continue;
       }
-      const sp = next.sound || this.engine();
+      const sp = next.sound || next.voice || this.engine();
       const turn = ++this.turn;
       if (!next.sound) this.last = text;
       this.speaking = sp;
@@ -4377,6 +4384,8 @@ export function serverSpeaker(
     /** The first {@link serverSpeaker} `onStarting` (it can be set later). */
     onStarting?: (on: boolean) => void;
     now?: () => number;
+    /** More of /api/voice/speak's body (`{as: "assistant"}`: the assistant's voice). */
+    body?: Record<string, unknown>;
   } = {}
 ): Speaker & {
   lastError: string;
@@ -4432,7 +4441,7 @@ export function serverSpeaker(
     const r = await apiRaw("/api/voice/speak", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: part }),
+      body: JSON.stringify({ ...opts.body, text: part }),
       signal: ac.signal,
     });
     if (!r.ok) {

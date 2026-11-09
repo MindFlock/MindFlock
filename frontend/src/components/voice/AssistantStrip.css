@@ -1,0 +1,229 @@
+/* The voice assistant's strip (AssistantStrip.tsx): under the top bar's mic,
+   the same surface as the mic's options (.mic-pop) and the cheat sheet
+   (.voice-cmds). The accent says "talking to MindFlock" — the mic's red is
+   "dictating into a session" — so the two are never confused. Still: a fade
+   in, three dots that step while it thinks, nothing else moves. */
+.assist-strip {
+  position: fixed;
+  z-index: 2990;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  animation: assist-in 120ms ease-out;
+}
+
+@keyframes assist-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.assist-strip.is-asking {
+  border-left-color: var(--gold, var(--accent));
+}
+
+.assist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* A still dot: hollow when the strip only shows a reply, filled while
+   assistant mode listens. */
+.assist-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+}
+
+.assist-dot.on {
+  background: var(--accent);
+}
+
+.assist-where {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assist-thinking {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.assist-thinking i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.3;
+  animation: assist-step 900ms steps(1, end) infinite;
+}
+
+.assist-thinking i:nth-child(2) {
+  animation-delay: 300ms;
+}
+
+.assist-thinking i:nth-child(3) {
+  animation-delay: 600ms;
+}
+
+@keyframes assist-step {
+  0%,
+  33% {
+    opacity: 1;
+  }
+  34%,
+  100% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assist-strip,
+  .assist-thinking i {
+    animation: none;
+  }
+  .assist-thinking i {
+    opacity: 0.7;
+  }
+}
+
+.assist-close {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.assist-close:hover {
+  color: var(--text);
+}
+
+.assist-heard {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.assist-caption {
+  margin: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.assist-caption.is-error {
+  color: var(--red);
+}
+
+.assist-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.assist-chip {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.assist-chip {
+  cursor: pointer;
+}
+
+button.assist-chip:hover {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.assist-chip.is-error {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 40%, var(--border));
+}
+
+.assist-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assist-confirm button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.assist-confirm .assist-yes {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.assist-confirm button:focus-visible,
+.assist-chip:focus-visible,
+.assist-close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.assist-or {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Assistant mode on the mic itself: the ring and the icon in the accent,
+   not the dictation's red — where the words go, at a glance. */
+#topbar #mic-btn.assistant {
+  color: var(--accent);
+}
+
+.mic-ring.assistant::after {
+  border-color: var(--accent);
+}
+
+/* A thing the assistant pressed ({do:"click"}): outlined a moment, so the
+   owner sees what it was (lib/assistantHost FLASH_MS). */
+.assist-flash {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+  transition: outline-color 300ms ease-out;
+}
+
+/* The mic's options: "Talk to MindFlock" while assistant mode is on. */
+.mic-pop .mic-assistant-btn.on {
+  font-weight: 600;
+}
