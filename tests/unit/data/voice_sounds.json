@@ -11,6 +11,9 @@
   "clear": [
    "disregard"
   ],
+  "undo": [
+   "scratch that"
+  ],
   "stop": [
    "stop",
    "stop listening",
@@ -45,14 +48,21 @@
     "ova and out",
     "ovah and out",
     "ova out",
-    "over owt"
+    "over owt",
+    "over felt"
    ],
    "clear": [
     "dis regard",
     "just regard",
     "disregarded",
     "disregards",
-    "this is guard"
+    "this is guard",
+    "it's regard"
+   ],
+   "undo": [
+    "cretch that",
+    "cratch that",
+    "crutch that"
    ],
    "stop": [
     "stock",
@@ -63,6 +73,7 @@
     "stop listen",
     "stopped listening",
     "stop lisning",
+    "stuff listening",
     "mike off",
     "mic of",
     "mike of",
@@ -70,11 +81,14 @@
     "paws listening",
     "paused listening",
     "pause listen",
+    "paul's listening",
+    "how's listening",
     "that's al",
     "that's hall",
     "done talkin",
     "dun talking",
-    "done torking"
+    "done torking",
+    "then talking"
    ],
    "hush": [
     "stop talkin",
@@ -87,6 +101,8 @@
     "quiets",
     "hushed",
     "husch",
+    "hash",
+    "pash",
     "shadap",
     "shut app",
     "enuf",
@@ -112,7 +128,9 @@
     "me flock",
     "meeflock",
     "mindfock",
-    "mind fock"
+    "mind fock",
+    "mindflog",
+    "mind fluff"
    ]
   }
  },
@@ -128,6 +146,9 @@
    "scrap that",
    "never mind that"
   ],
+  "undo": [
+   "take that back"
+  ],
   "stop": [
    "halt",
    "halt listening",
@@ -142,6 +163,7 @@
    "send": [],
    "end": [],
    "clear": [],
+   "undo": [],
    "stop": [],
    "hush": [],
    "wake": []
@@ -835,6 +857,151 @@
   },
   {
    "text": "drop the listening",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "Scratch that.",
+   "kind": "undo",
+   "words": "default"
+  },
+  {
+   "text": "fix the margin on the login page, scratch that",
+   "kind": "undo",
+   "words": "default"
+  },
+  {
+   "text": "Undo that!",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "we should undo that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "fix the margin cretch that",
+   "kind": "undo",
+   "words": "default"
+  },
+  {
+   "text": "scratched that",
+   "kind": "undo",
+   "words": "default"
+  },
+  {
+   "text": "Scratch at.",
+   "kind": "undo",
+   "words": "default"
+  },
+  {
+   "text": "let's stretch that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "look into that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "please patch that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "go ahead and do that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "put the row under that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "scratch that idea and start again",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "undo the last commit",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "undo",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "And do that.",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "into that",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "toss it, take that back",
+   "kind": "undo",
+   "words": "custom"
+  },
+  {
+   "text": "take that bag",
+   "kind": "undo",
+   "words": "custom"
+  },
+  {
+   "text": "toss it take that bag",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "scratch that",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "ship it, over felt",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "fix it it's regard",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "fix it then talking",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "Paul's listening.",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it stuff listening",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "Hash.",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "and then we ended up talking",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "push",
    "kind": null,
    "words": "default"
   }

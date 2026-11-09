@@ -27308,6 +27308,8 @@ var _threadSeq = 0;
 var _focusSeq = 0;
 var useUi = create((set, get) => ({
 	focused: null,
+	prevFocused: null,
+	railPulse: null,
 	viewMode: load$1("cs_viewmode", "auto", false),
 	view: load$1("mf_view", "grid", false) === "sky" ? "sky" : "grid",
 	skyMode: loadSkyMode(),
@@ -27362,7 +27364,18 @@ var useUi = create((set, get) => ({
 	threadLastSeen: load$1("mf_thread_seen", {}),
 	fastTrackMenu: null,
 	newPrefill: "",
-	setFocused: (title) => set({ focused: title }),
+	setFocused: (title) => {
+		const was = get().focused;
+		if (was && title && was !== title) set({
+			focused: title,
+			prevFocused: was
+		});
+		else set({ focused: title });
+	},
+	pulseRail: (key) => set({ railPulse: {
+		key,
+		n: (get().railPulse?.n || 0) + 1
+	} }),
 	touchMru: (title) => {
 		const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
 		save("cs_mru", mru);
@@ -32039,6 +32052,7 @@ function selectSession(title, opts) {
 	}
 	ui.touchMru(title);
 	ui.setFocused(title);
+	if (opts?.voice) ui.pulseRail(title);
 	if (!opts?.noKeyboard) focusTerm(title);
 }
 setSessionSelector(selectSession);
@@ -34028,7 +34042,7 @@ function newSession() {
 }
 var FLIP_MS = 250;
 var MAX_GHOSTS = 12;
-function reducedMotion$1() {
+function reducedMotion$2() {
 	try {
 		return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 	} catch {
@@ -34105,7 +34119,7 @@ function installViewFlip() {
 		const toSky = s.view === "sky";
 		const grid = document.getElementById("grid");
 		if (toSky && grid) gridScroll = grid.scrollTop;
-		const calm = reducedMotion$1();
+		const calm = reducedMotion$2();
 		const from = calm ? /* @__PURE__ */ new Map() : toSky ? paneRects() : _sky?.lineRects() || /* @__PURE__ */ new Map();
 		requestAnimationFrame(() => {
 			if (calm) return;
@@ -41715,6 +41729,108 @@ function placeUnder(btn, w, vw, vh, m = 8) {
 	};
 }
 //#endregion
+//#region src/components/voice/VoiceCommands.tsx
+var SHEET_W = 340;
+function groupCommands(items) {
+	const out = [];
+	for (const it of items) {
+		if (!it || typeof it.say !== "string" || !it.say.trim()) continue;
+		const g = String(it.group || "").trim();
+		let at = out.find((o) => o.group === g);
+		if (!at) out.push(at = {
+			group: g,
+			items: []
+		});
+		at.items.push(it);
+	}
+	return out;
+}
+function VoiceCommands({ items, anchor, onClose }) {
+	const ref = (0, import_react.useRef)(null);
+	const close = (0, import_react.useRef)(onClose);
+	close.current = onClose;
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopImmediatePropagation();
+			e.preventDefault();
+			close.current();
+		};
+		const onDown = (e) => {
+			const t = e.target;
+			if (t && ref.current?.contains(t)) return;
+			close.current();
+		};
+		window.addEventListener("keydown", onKey, true);
+		document.addEventListener("pointerdown", onDown, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			document.removeEventListener("pointerdown", onDown, true);
+		};
+	}, []);
+	const groups = groupCommands(items);
+	const rect = anchor?.getBoundingClientRect();
+	const w = Math.min(SHEET_W, window.innerWidth - 32);
+	const place = rect ? placeUnder(rect, w, window.innerWidth, window.innerHeight) : null;
+	const style = place ? {
+		top: place.top + "px",
+		left: place.left + "px",
+		width: w + "px",
+		maxHeight: place.maxHeight + "px"
+	} : {
+		top: "48px",
+		right: "16px",
+		width: w + "px"
+	};
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "voice-cmds",
+		id: "voice-commands",
+		ref,
+		style,
+		role: "dialog",
+		"aria-label": "Voice commands",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "voice-cmds-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "voice-cmds-title",
+				children: "What you can say"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "voice-cmds-close",
+				"aria-label": "Close",
+				title: "Close (Esc)",
+				onClick: () => close.current(),
+				children: "×"
+			})]
+		}), groups.length ? groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "voice-cmds-group",
+			children: [g.group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "voice-cmds-group-name",
+				children: g.group
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+				className: "voice-cmds-list",
+				children: g.items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "voice-cmds-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dt", {
+						className: "voice-cmds-say",
+						children: [
+							"“",
+							it.say,
+							"”"
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", {
+						className: "voice-cmds-does",
+						children: it.does
+					})]
+				}, i + ":" + it.say))
+			})]
+		}, g.group || "_")) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "voice-cmds-empty",
+			children: "No commands to show."
+		})]
+	}), document.body);
+}
+//#endregion
 //#region src/lib/askVoice.ts
 var ask = null;
 var mic = null;
@@ -42874,6 +42990,7 @@ var PHRASE_KINDS = [
 	"send",
 	"end",
 	"clear",
+	"undo",
 	"stop",
 	"hush"
 ];
@@ -42881,6 +42998,7 @@ var BUILTIN_VOICE_WORDS = {
 	send: ["over"],
 	end: ["over and out", "over, out"],
 	clear: ["disregard"],
+	undo: ["scratch that"],
 	stop: [
 		"stop",
 		"stop listening",
@@ -44314,7 +44432,38 @@ var COMMANDS = [
 	"start|open|create|make new session *",
 	"start|open|create|make a|another new session *",
 	"spin up new session *",
-	"spin up a|another new session *"
+	"spin up a|another new session *",
+	"scroll *",
+	"page up|down *",
+	"go|jump|back to the top|bottom *",
+	"top|bottom",
+	"up|down",
+	"to the top|bottom",
+	"more",
+	"keep going",
+	"some more",
+	"further",
+	"interrupt *",
+	"escape",
+	"press|hit escape *",
+	"stop it",
+	"stop that",
+	"go|switch|jump|flip|change back *",
+	"back",
+	"last session|one",
+	"the other one",
+	"previous",
+	"where am i *",
+	"which|what session is this|that",
+	"which|what session am i in|on",
+	"what am i looking at",
+	"what can i say *",
+	"commands",
+	"voice commands",
+	"show|list|read the|my commands *",
+	"what are the commands *",
+	"what commands *",
+	"help"
 ].map((p) => p.split(" ").map((slot) => slot.split("|")));
 var ROUTER_LEADS = /* @__PURE__ */ new Set([
 	"ok",
@@ -44341,6 +44490,8 @@ function isSwitchCommand(text) {
 	let w = routerWords(text);
 	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
 	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+	const all = w.join(" ");
+	if (/^(?:scroll (?:up|down)(?: a bit| more)?|page (?:up|down)|scroll to the (?:top|bottom)|switch back)$/.test(all)) return true;
 	if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
 		const at = w[1] === "over" ? 2 : 1;
 		return w[at] === "to" && w.length > at + 1;
@@ -44391,7 +44542,7 @@ function buildMatchers(w, v = -1) {
 	const ends = [...w.end, ...heardOf(w, "end")];
 	const sends = [...w.send, ...heardOf(w, "send")];
 	const clears = [...w.clear, ...heardOf(w, "clear")];
-	const entries = [
+	const others = [
 		...ends.map((p) => ({
 			p,
 			kind: "out",
@@ -44407,9 +44558,17 @@ function buildMatchers(w, v = -1) {
 			kind: "disregard",
 			rx: phraseRx(p) + tails
 		}))
-	].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
+	].filter((e) => e.rx);
+	const taken = others.map((e) => new RegExp("^(?:" + e.rx + ")$", "iu"));
+	const undos = [...w.undo || [], ...heardOf(w, "undo")].filter((p) => !taken.some((rx) => rx.test(normPhrase(p))));
+	const entries = [...others, ...undos.map((p) => ({
+		p,
+		kind: "undo",
+		rx: phraseRx(p)
+	}))].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
 	const sounded = (text) => {
-		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true);
+		const undoHit = soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
+		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true) || (undoHit && !/[\p{L}\p{N}]/u.test(undoHit.before) ? undoHit : null);
 		return hit ? heardAs(text, hit.before, hit.phrase) : null;
 	};
 	const radio = entries.length ? new SoundRegExp("^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$", "iu", sounded) : /(?!)/;
@@ -44433,6 +44592,7 @@ function buildMatchers(w, v = -1) {
 		...hushes.map(keysOf),
 		...radioPhrases(sends),
 		...radioPhrases(clears),
+		...undos.map(keysOf),
 		...ends.map(keysOf),
 		...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s]))
 	].filter((p) => p.length);
@@ -44634,6 +44794,11 @@ var dictHint = (w = voiceWords()) => {
 };
 var answerHint = (name, w = voiceWords()) => "Answer " + name + " — " + radioLine(w);
 var LEFT_LINE = "In the field — press Enter to send";
+function undoLine(o) {
+	const t = o.text.trim();
+	if (!t) return o.alone ? "Nothing to take back — go on" : "Scratched — go on";
+	return "Took back “" + (Array.from(t).length > 40 ? Array.from(t).slice(0, 39).join("") + "…" : t) + "” — go on";
+}
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
@@ -44732,6 +44897,7 @@ var FinalClock = class {
 	}
 };
 var finalClock = new FinalClock();
+var timedFinal = (j) => !!j && typeof j.final === "string" && j.final_by !== "moonshine";
 var SWALLOW_MAX_MS = 5e3;
 var SWALLOW_STREAM_MAX_MS = 5e4;
 var withErase = (o, erase) => erase ? {
@@ -44747,12 +44913,14 @@ var Dictation = class {
 	continuous = false;
 	answering = false;
 	phraseAt = -1;
+	marks = [];
 	begin() {
 		this.listening = true;
 		this.typed = "";
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
+		this.marks = [];
 	}
 	tail() {
 		if (!this.listening) return null;
@@ -44783,6 +44951,7 @@ var Dictation = class {
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
+		this.marks = [];
 	}
 	get shown() {
 		return [this.before.trim(), this.held.trim()].filter(Boolean).join(" ");
@@ -44846,6 +45015,7 @@ var Dictation = class {
 				kind: "erase",
 				text: this.erase()
 			};
+			case "undo": return this.undo(p.text);
 			case "over":
 			case "out": {
 				const end = p.kind === "out" || !this.continuous;
@@ -44888,6 +45058,10 @@ var Dictation = class {
 			kind: "dropped",
 			text: out.text
 		};
+		if (out.kind === "undo") return {
+			...out,
+			end: true
+		};
 		if (out.kind === "continue") return {
 			kind: "leave",
 			text: ""
@@ -44918,7 +45092,8 @@ var Dictation = class {
 			kind: "hush",
 			end: true
 		}, this.settle("").erase || "");
-		const rest = parseRadio(all).text;
+		const r = parseRadio(all);
+		const rest = r.kind === "undo" ? "" : r.text;
 		return {
 			kind: "leave",
 			...this.settle(rest ? rest + " " : "")
@@ -44940,6 +45115,7 @@ var Dictation = class {
 	settle(text) {
 		const guessed = this.guessed;
 		const whole = this.routes && !this.before && mayBeCommand(text);
+		if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
 		this.phraseAt = -1;
 		this.held = "";
 		this.partial = "";
@@ -44979,7 +45155,36 @@ var Dictation = class {
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
+		this.marks = [];
 		return text;
+	}
+	undo(said) {
+		const guessed = this.guessed;
+		this.phraseAt = -1;
+		this.held = "";
+		this.partial = "";
+		if (said.trim() || guessed) {
+			this.typed = this.typed.slice(0, this.typed.length - guessed.length);
+			return {
+				kind: "undo",
+				text: guessed,
+				alone: false
+			};
+		}
+		while (this.marks.length && this.marks[this.marks.length - 1] >= this.typed.length) this.marks.pop();
+		const at = this.marks.pop();
+		if (at === void 0) return {
+			kind: "undo",
+			text: "",
+			alone: true
+		};
+		const text = this.typed.slice(at);
+		this.typed = this.typed.slice(0, at);
+		return {
+			kind: "undo",
+			text,
+			alone: true
+		};
 	}
 };
 function dialogUp(activity) {
@@ -45475,6 +45680,20 @@ var LiveDictation = class {
 				this.hooks.caption("Disregarded — go on", true);
 				this.hooks.confirm?.("cleared");
 				return;
+			case "undo": {
+				if (out.text && t && this.dialogBlocks(t)) {
+					this.end(dialogStopLine(t.name, ""), true, "stopped");
+					return;
+				}
+				if (out.text) {
+					t?.erase(out.text);
+					if (t?.gate && await t.gate.settled()) return;
+				}
+				const line = undoLine(out);
+				if (out.end) this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : line, false);
+				else this.hooks.caption(line, true);
+				return;
+			}
 			case "hush":
 				if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
 				this.hushed();
@@ -45696,7 +45915,12 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"ask",
 	"read",
 	"help",
-	"early"
+	"early",
+	"scroll",
+	"interrupt",
+	"switch_back",
+	"where",
+	"commands"
 ]);
 var PENDING_MS = 3e4;
 var PendingChoice = class {
@@ -45804,12 +46028,13 @@ async function recheckDialog(title, fetch, seen = dialogSeen, waitMs = DIALOG_RE
 	}
 }
 var earlyLine = (name) => name + " asked just now: say your answer again";
-async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen) {
+async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen, heard) {
 	try {
 		const json = {
 			text,
 			session
 		};
+		if (heard && heard.trim()) json.heard = heard.trim();
 		const held = pending.take();
 		if (held) json.pending = held;
 		if (spokeAt && spokeAt > 0) {
@@ -45839,6 +46064,120 @@ function railStep(order, from, delta) {
 	return next === from ? null : next;
 }
 var APPROVE_OFF_LINE = "Approving by voice is off: Settings → Voice";
+var NO_PREVIOUS_LINE = "No previous session";
+function previousSession(o) {
+	const live = new Set(o.live);
+	for (const t of [o.prev || "", ...o.mru]) if (t && !isWindowRow(t) && t !== o.focused && live.has(t) && !o.hidden?.has(t)) return t;
+	return null;
+}
+function scrollLine(r, name = "") {
+	if (r.ok === false) return "Couldn't scroll" + (name ? " " + name : "");
+	if (r.amount === "top") return "At the top";
+	if (r.amount === "bottom") return "At the bottom";
+	const n = Math.trunc(Number(r.count) || 1);
+	return "Scrolled " + (r.dir === "up" ? "up" : "down") + (n > 1 ? " ×" + n : "");
+}
+function builtinCommands(w = voiceWords()) {
+	const q = (k) => (w[k] || [])[0] || "";
+	const dict = "While dictating";
+	return [
+		{
+			say: "… " + q("send"),
+			does: "Send the message; keep listening",
+			group: dict
+		},
+		{
+			say: "… " + q("end"),
+			does: "Send and stop listening",
+			group: dict
+		},
+		{
+			say: q("clear"),
+			does: "Take back the whole message",
+			group: dict
+		},
+		{
+			say: q("undo"),
+			does: "Take back the last phrase",
+			group: dict
+		},
+		{
+			say: q("stop"),
+			does: "Stop listening; words stay unsent",
+			group: dict
+		},
+		{
+			say: q("hush"),
+			does: "Stop reading aloud",
+			group: dict
+		},
+		{
+			say: "switch to <name>",
+			does: "Focus a session by name",
+			group: "Sessions"
+		},
+		{
+			say: "session 3",
+			does: "Focus the rail's row 3",
+			group: "Sessions"
+		},
+		{
+			say: "next session / previous session",
+			does: "Step along the rail",
+			group: "Sessions"
+		},
+		{
+			say: "go back",
+			does: "The session you were on before",
+			group: "Sessions"
+		},
+		{
+			say: "where am I",
+			does: "Says the focused session's name",
+			group: "Sessions"
+		},
+		{
+			say: "new session for <task>",
+			does: "Start a session",
+			group: "Sessions"
+		},
+		{
+			say: "scroll up / scroll down",
+			does: "Scroll the focused pane a page",
+			group: "Reading"
+		},
+		{
+			say: "scroll to the top / bottom",
+			does: "Jump to either end",
+			group: "Reading"
+		},
+		{
+			say: "more",
+			does: "Scroll again the same way",
+			group: "Reading"
+		},
+		{
+			say: "what did it say",
+			does: "Read the last reply",
+			group: "Reading"
+		},
+		{
+			say: "interrupt",
+			does: "Press Escape on the agent",
+			group: "Agent"
+		},
+		{
+			say: "yes / no / option 2",
+			does: "Answer the dialog on screen",
+			group: "Agent"
+		},
+		{
+			say: "what can I say",
+			does: "This list",
+			group: "Agent"
+		}
+	].filter((r) => r.say.replace(/[…\s]/g, ""));
+}
 async function questionPending(title, activity) {
 	if (activity === "working") return false;
 	try {
@@ -45885,6 +46224,39 @@ async function runVoiceCommand(r, text, deps, spokeAt, seen = dialogSeen) {
 		case "question":
 			deps.announce(r.say || "Nothing is being asked.");
 			return true;
+		case "switch_back": {
+			const key = deps.previous?.() || null;
+			if (!key) deps.caption(NO_PREVIOUS_LINE);
+			else {
+				deps.select(key);
+				deps.announce(r.say || deps.name(key) + ".");
+			}
+			return true;
+		}
+		case "scroll": {
+			const title = r.title || deps.focused();
+			deps.caption(scrollLine(r, title ? deps.name(title) : ""));
+			return true;
+		}
+		case "interrupt": {
+			const title = r.title || deps.focused();
+			const name = title ? deps.name(title) : "";
+			deps.caption(r.ok === false ? "Couldn't interrupt" + (name ? " " + name : "") : "Interrupted" + (name ? " " + name : ""));
+			return true;
+		}
+		case "where": {
+			const title = deps.focused();
+			const line = title ? deps.name(title) + "." : "No session is focused.";
+			(deps.speak || deps.announce)(line);
+			return true;
+		}
+		case "commands": {
+			const items = Array.isArray(r.items) ? r.items.filter((i) => i && typeof i.say === "string" && i.say.trim()) : [];
+			deps.showCommands?.(items.length ? items : builtinCommands());
+			if (r.say) (deps.speak || deps.announce)(r.say);
+			else deps.caption("Voice commands");
+			return true;
+		}
 		case "help": {
 			deps.caption(HELP_LOOKING_LINE);
 			const said = (await askHelp(r.text || text)).say;
@@ -47129,6 +47501,7 @@ var BargeDetector = class {
 		return true;
 	}
 };
+var HEARD_FRESH_MS = 3e3;
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag$1 = () => String(navigator.language || "en").split(";")[0];
 var VOICE_CLIENT_ID = (() => {
@@ -47155,6 +47528,7 @@ function serverRecognizer(opts = {}) {
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
 	let streaming = false;
+	let lastHeard = null;
 	const ending = [];
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
@@ -47457,13 +47831,18 @@ function serverRecognizer(opts = {}) {
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 				const ran = typeof r.j.final === "string";
+				const timed = timedFinal(r.j);
 				const fms = Number(r.j.final_ms);
-				if (ran && fms > 0) {
+				if (timed && fms > 0) {
 					self.finalMs = fms;
 					voiceMark("final");
 				}
 				const committed = wordsOf(r.j.committed);
-				if (ran) {
+				lastHeard = typeof r.j.heard === "string" && r.j.heard.trim() ? {
+					text: r.j.heard.trim(),
+					at: Date.now()
+				} : null;
+				if (timed) {
 					if (c.byWord && c.endAt) finalClock.note(Date.now() - c.endAt);
 					const fast = joinWords(c.said, committed);
 					finalClock.verdict(r.j.same !== true && plainWords(wordsOf(r.j.final)) !== plainWords(fast));
@@ -47609,6 +47988,7 @@ function serverRecognizer(opts = {}) {
 			c.clock.block(blockAt, now);
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
+					lastHeard = null;
 					c.speechS = at;
 					c.spokeAt = c.clock.at(at);
 					if (at < PRE_ROLL_ONSET_S) {
@@ -47682,6 +48062,11 @@ function serverRecognizer(opts = {}) {
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
 		get streaming() {
 			return streaming;
+		},
+		takeHeard() {
+			const h = lastHeard;
+			lastHeard = null;
+			return h && Date.now() - h.at < HEARD_FRESH_MS ? h.text : "";
 		},
 		get spokeAt() {
 			return cur?.heard ? cur.spokeAt : 0;
@@ -49017,6 +49402,12 @@ function TopBarMic() {
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
+	const [cheat, setCheat] = (0, import_react.useState)(null);
+	const cheatOpen = (0, import_react.useRef)(false);
+	cheatOpen.current = !!cheat;
+	const closeCheat = () => {
+		if (cheatOpen.current) setCheat(null);
+	};
 	const words = useVoiceWords();
 	const tourPop = useUi((s) => s.coachTour?.id === "voice" && TOURS.voice.steps[s.coachTour.step]?.screen === MIC_POP_SCREEN);
 	const tourOpened = (0, import_react.useRef)(false);
@@ -49315,7 +49706,7 @@ function TopBarMic() {
 					}, 150);
 					return "end";
 				}
-				const reply = await routePhrase(text, session, void 0, spokeAt);
+				const reply = await routePhrase(text, session, void 0, spokeAt, void 0, r === serverRec ? serverRec.takeHeard() : "");
 				if (reply.kind === "prompt") return false;
 				if (reply.kind === "hush") return "hush";
 				await routed(reply, text, session, spokeAt);
@@ -49398,6 +49789,7 @@ function TopBarMic() {
 			},
 			onFinal: (t, at) => {
 				if (live.current !== d) return;
+				closeCheat();
 				armIdle();
 				voiceMark("commit");
 				d.heard(t, at);
@@ -49410,7 +49802,9 @@ function TopBarMic() {
 				d.stream(w, p);
 			},
 			onFlush: (t, final, at) => {
-				if (live.current === d) d.flush(t, final, at);
+				if (live.current !== d) return;
+				closeCheat();
+				d.flush(t, final, at);
 			},
 			blank: () => live.current !== d || !d.dict.typed,
 			onPartial: (t) => {
@@ -49533,7 +49927,21 @@ function TopBarMic() {
 		if (await runVoiceCommand(r, text, {
 			railOrder: () => useUi.getState().railOrder,
 			focused: () => session,
-			select: (title) => selectSession(title, { noKeyboard: true }),
+			select: (title) => selectSession(title, {
+				noKeyboard: true,
+				voice: true
+			}),
+			previous: () => {
+				const ui = useUi.getState();
+				return previousSession({
+					focused: ui.focused,
+					prev: ui.prevFocused,
+					mru: ui.mru,
+					live: instances$2().map((i) => i.title),
+					hidden: ui.hidden
+				});
+			},
+			showCommands: (items) => setCheat(items),
 			name: displayName,
 			caption: say,
 			announce,
@@ -49555,8 +49963,14 @@ function TopBarMic() {
 			case "new":
 				if (r.title) {
 					const title = r.title;
-					if (r.kind === "new") refreshInstances().then(() => selectSession(title, { noKeyboard: true }));
-					else selectSession(title, { noKeyboard: true });
+					if (r.kind === "new") refreshInstances().then(() => selectSession(title, {
+						noKeyboard: true,
+						voice: true
+					}));
+					else selectSession(title, {
+						noKeyboard: true,
+						voice: true
+					});
 				}
 				{
 					const line = r.say || (r.kind === "new" ? "Started " : "") + (r.name || r.title || "") + ".";
@@ -49728,6 +50142,17 @@ function TopBarMic() {
 		if (d) openTourOnFirstUse("voice");
 		return d;
 	};
+	const openCommands = () => {
+		setMenuOpen(false);
+		setCheat(builtinCommands());
+		api("/api/voice/route", { json: {
+			text: "what can i say",
+			session: useUi.getState().focused || ""
+		} }).then((r) => {
+			const items = r?.kind === "commands" && Array.isArray(r.items) ? r.items.filter((i) => i && typeof i.say === "string") : [];
+			if (items.length) setCheat((cur) => cur ? items : cur);
+		}).catch(() => {});
+	};
 	const openMenu = () => {
 		setMenuOpen(true);
 		warmMic(true);
@@ -49815,217 +50240,233 @@ function TopBarMic() {
 		width: popW + "px",
 		maxHeight: place.maxHeight + "px"
 	} : void 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "mic-wrap",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			id: "mic-btn",
-			"data-tour": "voice-mic",
-			ref: btnRef,
-			type: "button",
-			className: [
-				"tb-item",
-				"mic-ring",
-				listening && "listening",
-				paused && "muted",
-				wake.on && !listening && "standby",
-				speaking && !listening && "speaking",
-				!supported && "unsupported"
-			].filter(Boolean).join(" "),
-			title,
-			"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
-			"aria-pressed": listening,
-			"aria-haspopup": "menu",
-			"aria-expanded": menuOpen,
-			onPointerDown: (e) => {
-				pressedField.current = textField(document.activeElement);
-				if (!live.current) warmMic(true);
-				if (!hold || e.button !== 0 || e.shiftKey) return;
-				holding.current = true;
-				try {
-					e.currentTarget.setPointerCapture(e.pointerId);
-				} catch {}
-				userStart(pressedField.current);
-			},
-			onPointerUp: () => {
-				if (!holding.current) return;
-				holding.current = false;
-				finish();
-			},
-			onPointerCancel: () => {
-				if (!holding.current) return;
-				holding.current = false;
-				finish();
-			},
-			onMouseDown: (e) => e.preventDefault(),
-			onClick: (e) => {
-				if (e.shiftKey) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "mic-wrap",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "mic-btn",
+				"data-tour": "voice-mic",
+				ref: btnRef,
+				type: "button",
+				className: [
+					"tb-item",
+					"mic-ring",
+					listening && "listening",
+					paused && "muted",
+					wake.on && !listening && "standby",
+					speaking && !listening && "speaking",
+					!supported && "unsupported"
+				].filter(Boolean).join(" "),
+				title,
+				"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
+				"aria-pressed": listening,
+				"aria-haspopup": "menu",
+				"aria-expanded": menuOpen,
+				onPointerDown: (e) => {
+					pressedField.current = textField(document.activeElement);
+					if (!live.current) warmMic(true);
+					if (!hold || e.button !== 0 || e.shiftKey) return;
+					holding.current = true;
+					try {
+						e.currentTarget.setPointerCapture(e.pointerId);
+					} catch {}
+					userStart(pressedField.current);
+				},
+				onPointerUp: () => {
+					if (!holding.current) return;
+					holding.current = false;
+					finish();
+				},
+				onPointerCancel: () => {
+					if (!holding.current) return;
+					holding.current = false;
+					finish();
+				},
+				onMouseDown: (e) => e.preventDefault(),
+				onClick: (e) => {
+					if (e.shiftKey) {
+						menuOpen ? setMenuOpen(false) : openMenu();
+						return;
+					}
+					if (menuOpen) {
+						setMenuOpen(false);
+						return;
+					}
+					if (hold) return;
+					if (live.current) finish();
+					else userStart(pressedField.current);
+					pressedField.current = null;
+				},
+				onContextMenu: (e) => {
+					e.preventDefault();
 					menuOpen ? setMenuOpen(false) : openMenu();
-					return;
-				}
-				if (menuOpen) {
-					setMenuOpen(false);
-					return;
-				}
-				if (hold) return;
-				if (live.current) finish();
-				else userStart(pressedField.current);
-				pressedField.current = null;
-			},
-			onContextMenu: (e) => {
-				e.preventDefault();
-				menuOpen ? setMenuOpen(false) : openMenu();
-			},
-			onKeyDown: (e) => {
-				if (!hold || e.key !== " " && e.key !== "Enter") return;
-				e.preventDefault();
-				if (e.repeat || holding.current) return;
-				holding.current = true;
-				userStart(null);
-			},
-			onKeyUp: (e) => {
-				if (!hold || e.key !== " " && e.key !== "Enter") return;
-				e.preventDefault();
-				if (!holding.current) return;
-				holding.current = false;
-				finish();
-			},
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			id: "mic-pill",
-			className: pill ? "on" : "",
-			role: "status",
-			"aria-live": "polite",
-			children: pill
-		})]
-	}), menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "mic-pop" + (tourPop ? " in-tour" : ""),
-		id: "mic-pop",
-		ref: menuRef,
-		style: popStyle,
-		role: "menu",
-		"aria-label": "Voice options",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mic-pop-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "mic-pop-title",
-					children: ["Voice", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				},
+				onKeyDown: (e) => {
+					if (!hold || e.key !== " " && e.key !== "Enter") return;
+					e.preventDefault();
+					if (e.repeat || holding.current) return;
+					holding.current = true;
+					userStart(null);
+				},
+				onKeyUp: (e) => {
+					if (!hold || e.key !== " " && e.key !== "Enter") return;
+					e.preventDefault();
+					if (!holding.current) return;
+					holding.current = false;
+					finish();
+				},
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				id: "mic-pill",
+				className: pill ? "on" : "",
+				role: "status",
+				"aria-live": "polite",
+				children: pill
+			})]
+		}),
+		menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mic-pop" + (tourPop ? " in-tour" : ""),
+			id: "mic-pop",
+			ref: menuRef,
+			style: popStyle,
+			role: "menu",
+			"aria-label": "Voice options",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-pop-title",
+						children: ["Voice", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tour-btn mic-pop-help",
+							id: "mic-pop-help",
+							"aria-label": "Show me how",
+							title: "Show me how — the Voice tour",
+							"data-tour-id": "voice",
+							onClick: () => {
+								setMenuOpen(false);
+								replayTour("voice");
+							},
+							children: "?"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "tour-btn mic-pop-help",
-						id: "mic-pop-help",
-						"aria-label": "Show me how",
-						title: "Show me how — the Voice tour",
-						"data-tour-id": "voice",
+						className: "mic-pop-close",
+						id: "mic-pop-close",
+						"aria-label": "Close",
+						title: "Close (Esc)",
 						onClick: () => {
 							setMenuOpen(false);
-							replayTour("voice");
+							btnRef.current?.focus();
 						},
-						children: "?"
+						children: "×"
 					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-row",
+					id: "mic-replies-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mic-pop-label",
+						id: "mic-replies-label",
+						children: "Read replies aloud"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "mic-seg",
+						role: "radiogroup",
+						"aria-labelledby": "mic-replies-label",
+						children: REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "mic-seg-opt",
+							title: c.label,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "mic-replies",
+								checked: prefs.replies === c.value,
+								onChange: () => setPrefs({
+									...prefs,
+									replies: c.value
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: REPLIES_SHORT[c.value] })]
+						}, c.value))
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-row",
+					id: "mic-ptt-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-pop-label",
+						id: "mic-ptt-label",
+						children: ["Push to talk", talkHotkey() && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "mic-pop-key",
+							children: [" ", talkHotkey()]
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "mic-seg",
+						role: "radiogroup",
+						"aria-labelledby": "mic-ptt-label",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "mic-seg-opt",
+							title: "Click to start, click again to stop",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "mic-ptt",
+								checked: !hold,
+								onChange: () => setPrefs({
+									...prefs,
+									ptt: "toggle"
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click" })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "mic-seg-opt",
+							title: "Hold the mic (or the hotkey) while you speak",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "mic-ptt",
+								checked: hold,
+								onChange: () => setPrefs({
+									...prefs,
+									ptt: "hold"
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold" })]
+						})]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "mic-pop-row mic-switch-row",
+					id: "mic-wake-row",
+					title: prefs.wake && wake.line || "",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mic-pop-label",
+						children: wakeSwitchLabel(words)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "mic-wake",
+						checked: !!prefs.wake,
+						onChange: (e) => setWakePref(e.target.checked)
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "mic-pop-close",
-					id: "mic-pop-close",
-					"aria-label": "Close",
-					title: "Close (Esc)",
-					onClick: () => {
-						setMenuOpen(false);
-						btnRef.current?.focus();
-					},
-					children: "×"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mic-pop-row",
-				id: "mic-replies-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mic-pop-label",
-					id: "mic-replies-label",
-					children: "Read replies aloud"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-seg",
-					role: "radiogroup",
-					"aria-labelledby": "mic-replies-label",
-					children: REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "mic-seg-opt",
-						title: c.label,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "mic-replies",
-							checked: prefs.replies === c.value,
-							onChange: () => setPrefs({
-								...prefs,
-								replies: c.value
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: REPLIES_SHORT[c.value] })]
-					}, c.value))
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mic-pop-row",
-				id: "mic-ptt-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "mic-pop-label",
-					id: "mic-ptt-label",
-					children: ["Push to talk", talkHotkey() && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "mic-pop-key",
-						children: [" ", talkHotkey()]
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mic-seg",
-					role: "radiogroup",
-					"aria-labelledby": "mic-ptt-label",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "mic-seg-opt",
-						title: "Click to start, click again to stop",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "mic-ptt",
-							checked: !hold,
-							onChange: () => setPrefs({
-								...prefs,
-								ptt: "toggle"
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click" })]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "mic-seg-opt",
-						title: "Hold the mic (or the hotkey) while you speak",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "mic-ptt",
-							checked: hold,
-							onChange: () => setPrefs({
-								...prefs,
-								ptt: "hold"
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold" })]
-					})]
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "mic-pop-row mic-switch-row",
-				id: "mic-wake-row",
-				title: prefs.wake && wake.line || "",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mic-pop-label",
-					children: wakeSwitchLabel(words)
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "mic-wake",
-					checked: !!prefs.wake,
-					onChange: (e) => setWakePref(e.target.checked)
-				})]
-			}),
-			speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "mic-stop-talking",
-				id: "mic-stop-talking",
-				title: "Stop talking (Esc)",
-				onClick: hush,
-				children: "Stop talking"
-			})
-		]
-	}), document.body)] });
+					className: "mic-commands-btn",
+					id: "mic-commands",
+					title: "What you can say by voice",
+					onClick: openCommands,
+					children: "Voice commands…"
+				}),
+				speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "mic-stop-talking",
+					id: "mic-stop-talking",
+					title: "Stop talking (Esc)",
+					onClick: hush,
+					children: "Stop talking"
+				})
+			]
+		}), document.body),
+		cheat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceCommands, {
+			items: cheat,
+			anchor: btnRef.current,
+			onClose: () => setCheat(null)
+		})
+	] });
 }
 //#endregion
 //#region src/lib/desktopNotify.ts
@@ -51532,6 +51973,38 @@ function popupTurn(q) {
 //#endregion
 //#region src/whatsNew/releases.ts
 var RELEASES = [
+	{
+		version: "0.13.0",
+		date: "2026-11-09",
+		big: true,
+		headline: "Voice that hears you right, and does more hands-free.",
+		features: [
+			{
+				title: "Accurate words, instant commands",
+				body: "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them."
+			},
+			{
+				title: "Scroll by voice",
+				body: "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going."
+			},
+			{
+				title: "Interrupt, go back, where am I",
+				body: "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused."
+			},
+			{
+				title: "Scratch that",
+				body: "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all."
+			},
+			{
+				title: "The rail keeps up",
+				body: "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it."
+			},
+			{
+				title: "What can I say?",
+				body: "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu."
+			}
+		]
+	},
 	{
 		version: "0.12.0",
 		date: "2026-11-04",
@@ -62146,6 +62619,112 @@ function SetupChip() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/railFollow.ts
+var PULSE_MS = 1100;
+var CLICK_GRACE_MS = 600;
+var FIND_FRAMES = 4;
+function foldOver(key, folds) {
+	if (!key) return [];
+	const hit = folds.filter((f) => f.collapsed && f.keys.includes(key));
+	return [...hit.filter((f) => f.kind === "device"), ...hit.filter((f) => f.kind === "run")];
+}
+function outOfView(row, view) {
+	return row.top < view.top - .5 || row.bottom > view.bottom + .5;
+}
+function reducedMotion$1() {
+	try {
+		return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+	} catch {
+		return false;
+	}
+}
+function railRowEl(key) {
+	if (typeof document === "undefined") return null;
+	const list = document.getElementById("instance-list");
+	if (!list) return null;
+	for (const el of Array.from(list.querySelectorAll("li[data-title]"))) if (el.getAttribute("data-title") === key) return el;
+	return null;
+}
+function scroller(el) {
+	for (let p = el.parentElement; p; p = p.parentElement) {
+		const oy = getComputedStyle(p).overflowY;
+		if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) return p;
+	}
+	return null;
+}
+function revealRow(el) {
+	const box = scroller(el);
+	const view = box ? box.getBoundingClientRect() : {
+		top: 0,
+		bottom: window.innerHeight
+	};
+	if (!outOfView(el.getBoundingClientRect(), view)) return false;
+	el.scrollIntoView({
+		block: "nearest",
+		inline: "nearest",
+		behavior: reducedMotion$1() ? "auto" : "smooth"
+	});
+	return true;
+}
+var pulseTimers = /* @__PURE__ */ new WeakMap();
+function pulseRow(el) {
+	clearTimeout(pulseTimers.get(el));
+	el.classList.remove("voice-pulse");
+	el.offsetWidth;
+	el.classList.add("voice-pulse");
+	pulseTimers.set(el, setTimeout(() => el.classList.remove("voice-pulse"), PULSE_MS));
+}
+var lastRailPress = 0;
+var pressWired = false;
+function wirePress() {
+	if (pressWired || typeof document === "undefined") return;
+	pressWired = true;
+	document.addEventListener("pointerdown", (e) => {
+		if (e.target?.closest?.("#instance-list")) lastRailPress = Date.now();
+	}, true);
+}
+function withRow(key, fn) {
+	let left = FIND_FRAMES;
+	let raf = 0;
+	const tick = () => {
+		const el = railRowEl(key);
+		if (el) return fn(el);
+		if (--left > 0) raf = requestAnimationFrame(tick);
+	};
+	raf = requestAnimationFrame(tick);
+	return () => cancelAnimationFrame(raf);
+}
+function useRailFollow(o) {
+	const foldsRef = (0, import_react.useRef)(o.folds);
+	foldsRef.current = o.folds;
+	const unfoldRef = (0, import_react.useRef)(o.unfold);
+	unfoldRef.current = o.unfold;
+	(0, import_react.useEffect)(wirePress, []);
+	const follow = (key, pulse, unfold = true) => {
+		if (unfold) for (const f of foldOver(key, foldsRef.current)) unfoldRef.current(f);
+		const clicked = !pulse && Date.now() - lastRailPress < CLICK_GRACE_MS;
+		return withRow(key, (el) => {
+			if (!clicked) revealRow(el);
+			if (pulse) pulseRow(el);
+		});
+	};
+	const seen = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		if (!o.focused) return;
+		const first = !seen.current;
+		seen.current = true;
+		return follow(o.focused, false, !first);
+	}, [o.focused]);
+	(0, import_react.useEffect)(() => {
+		if (!o.head) return;
+		return follow(o.head, false);
+	}, [o.head]);
+	(0, import_react.useEffect)(() => {
+		if (!o.pulse) return;
+		return follow(o.pulse.key, true);
+	}, [o.pulse?.n]);
+}
+//#endregion
 //#region src/components/sidebar/Sidebar.tsx
 var NO_FOLDS = /* @__PURE__ */ new Set();
 var VIEW_MODES = [
@@ -62412,7 +62991,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		});
 		return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k));
 	};
-	const localSplit = splitRail(hideFoldedFamilies(toRail(localRows, winFiltered), ui.filter ? NO_FOLDS : ui.collapsedFamilies, ui.focused), runs, {
+	const localRail = hideFoldedFamilies(toRail(localRows, winFiltered), ui.filter ? NO_FOLDS : ui.collapsedFamilies, ui.focused);
+	const localSplit = splitRail(localRail, runs, {
 		collapsed: ui.collapsedRuns,
 		act: effectiveActivity,
 		filtering: !!ui.filter
@@ -62433,6 +63013,30 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	(0, import_react.useEffect)(() => {
 		useUi.getState().setRailOrder(displayedKeys);
 	}, [railSig]);
+	const railFolds = [...localSplit.groups.map((g) => ({
+		kind: "run",
+		id: g.id,
+		collapsed: !!g.collapsed,
+		keys: g.entries.map((e) => e.key)
+	})), ...grouped ? [{
+		kind: "device",
+		id: "__self",
+		collapsed: ui.collapsedDevices.has("__self"),
+		keys: localRail.map((r) => r.key)
+	}, ...devRails.concat(peerRails).map(({ dkey, rail }) => ({
+		kind: "device",
+		id: dkey,
+		collapsed: ui.collapsedDevices.has(dkey),
+		keys: rail.map((r) => r.key)
+	}))] : []];
+	const mruHead = ui.mru[0] || "";
+	useRailFollow({
+		focused: ui.focused,
+		head: mruHead.startsWith("\0") ? mruHead : null,
+		pulse: ui.railPulse,
+		folds: railFolds,
+		unfold: (f) => f.kind === "run" ? ui.toggleRunCollapsed(f.id) : ui.toggleDeviceCollapsed(f.id)
+	});
 	const nestSeen = (0, import_react.useRef)(/* @__PURE__ */ new Map());
 	const stableNest = (key, n) => {
 		const prev = nestSeen.current.get(key);
@@ -115717,6 +116321,11 @@ var WORD_ROWS = [
 		hint: "Takes back the message you are saying."
 	},
 	{
+		kind: "undo",
+		label: "Undo last phrase",
+		hint: "At the end of a phrase, drops that phrase; said alone, takes back the last phrase typed."
+	},
+	{
 		kind: "stop",
 		label: "Stop listening",
 		hint: "Stops, the words left unsent. A one-word phrase counts only said on its own."
@@ -142769,7 +143378,7 @@ function SkyView() {
 	const mode = useUi((s) => s.skyMode);
 	const setSkyMode = useUi((s) => s.setSkyMode);
 	const gridOne = useUi((s) => effectiveViewMode(s) === "1");
-	const motionOff = useUi((s) => s.reduceMotion) || reducedMotion$1();
+	const motionOff = useUi((s) => s.reduceMotion) || reducedMotion$2();
 	const narrow = useNarrowWindow();
 	const [query, setQuery] = (0, import_react.useState)("");
 	const [layout, setLayout] = (0, import_react.useState)(() => loadSkyLayout());

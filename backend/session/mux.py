@@ -24,6 +24,19 @@ Rules for callers:
 * Never spawn ``tmux attach-session`` in a PTY yourself: :func:`attach`
   returns a :class:`Terminal`.
 * :func:`available` instead of ``shutil.which("tmux")``.
+
+One rule is added on the way through: in a session that MindFlock itself put
+in copy-mode (a voice "scroll up": :func:`guard_typing`), a ``send-keys`` that
+TYPES into it (keys, ``-l`` text, ``-H`` bytes — not ``-X`` / ``-M`` / ``-K``)
+first leaves copy-mode if the pane is still in it (:func:`leave_copy_mode`).
+Keys sent to a pane in copy-mode are copy-mode's commands, not the app's
+input: a prompt dictated after the scroll would be eaten letter by letter
+("q" leaves, Space starts a selection…) and its Enter would copy, not submit.
+Every typer — ``/send``, live dictation, ``/answer``, the queue drain, a
+guest's keys — goes through :func:`run`, so this is the one place that keeps
+them all safe. The guard is tmux's own ``if-shell -F`` in the same
+invocation: no extra process, no race between the check and the keys. Any
+other session's argv goes to tmux exactly as given.
 """
 
 from __future__ import annotations
@@ -31,7 +44,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from typing import Any, Optional, Protocol, Sequence, Tuple
+import threading
+from collections import OrderedDict
+from typing import Any, List, Optional, Protocol, Sequence, Tuple
 
 __all__ = [
     "IS_WINDOWS",
@@ -40,6 +55,8 @@ __all__ = [
     "available",
     "backend",
     "exec_attach",
+    "guard_typing",
+    "leave_copy_mode",
     "popen",
     "run",
 ]
@@ -83,25 +100,147 @@ def _check(argv: Sequence[str]) -> None:
         raise ValueError("mux.run takes a tmux argv (argv[0] == 'tmux'): %r" % (argv,))
 
 
+#: tmux's own options that take a value (``tmux -L name send-keys …``).
+_GLOBAL_VALUE = frozenset(("-c", "-f", "-L", "-S", "-T"))
+#: ``send-keys`` flags that take a value.
+_SEND_VALUE = "cNt"
+#: ``send-keys`` flags under which nothing is typed into the pane: a
+#: copy-mode command (``-X``), a mouse event (``-M``), a client key (``-K``).
+_SEND_NOT_TYPING = frozenset("XMK")
+#: Only copy-mode: ``-X cancel`` errors in a mode without commands (a tree).
+_IN_COPY_MODE = "#{==:#{pane_mode},copy-mode}"
+#: tmux sessions MindFlock put in copy-mode (:func:`guard_typing`), oldest
+#: first; their typing is guarded from then on (a no-op once out of it).
+_GUARDED: "OrderedDict[str, None]" = OrderedDict()
+_GUARDED_MAX = 1024
+_GUARD_LOCK = threading.Lock()
+
+
+def guard_typing(session: str) -> None:
+    """MindFlock is putting tmux session ``session`` in copy-mode (a voice
+    scroll): from now on every typing ``send-keys`` into it leaves
+    copy-mode first (:func:`leave_copy_mode`)."""
+    name = _session_of(session)
+    if not name:
+        return
+    with _GUARD_LOCK:
+        _GUARDED.pop(name, None)
+        while len(_GUARDED) >= _GUARDED_MAX:
+            _GUARDED.popitem(last=False)
+        _GUARDED[name] = None
+
+
+def _session_of(target: str) -> str:
+    """The session a ``-t`` target names: ``=name:`` / ``name:0.1`` → name."""
+    t = str(target or "").lstrip("=")
+    for sep in (":", "."):
+        t = t.split(sep, 1)[0]
+    return t
+
+
+def _typing_target(cmd: List[str]) -> Optional[str]:
+    """For one tmux command: its ``-t`` target (``""`` for none) when it is a
+    ``send-keys`` that types into the pane, else None."""
+    if not cmd or cmd[0] not in ("send-keys", "send"):
+        return None
+    flags, target, j = set(), "", 1
+    while j < len(cmd):
+        a = cmd[j]
+        if a == "--":
+            j += 1
+            break
+        if not a.startswith("-") or len(a) < 2:
+            break
+        for k, ch in enumerate(a[1:], start=1):
+            if ch in _SEND_VALUE:
+                val = a[k + 1 :]
+                if not val and j + 1 < len(cmd):
+                    j += 1
+                    val = cmd[j]
+                if ch == "t":
+                    target = val
+                break
+            flags.add(ch)
+        j += 1
+    if j >= len(cmd) or flags & _SEND_NOT_TYPING:
+        return None
+    return target
+
+
+def leave_copy_mode(argv: Sequence[str], sessions=None) -> List[str]:
+    """``argv`` with every ``send-keys`` that types into a pane preceded by
+    ``if-shell -F -t T '#{==:#{pane_mode},copy-mode}' "send-keys -X -t T
+    cancel" ;`` — the pane leaves copy-mode (if it is in it) right before
+    the keys land, in the same tmux invocation (module docstring).
+    ``sessions``: only those whose target names one of these sessions
+    (:func:`run` passes the guarded ones); None: every one. Any other argv
+    comes back unchanged. A target holding a quote (never a MindFlock name)
+    is left unguarded rather than mis-quoted."""
+    argv = list(argv)
+    i = 1
+    while i < len(argv) and argv[i].startswith("-") and len(argv[i]) > 1:
+        i += 2 if argv[i] in _GLOBAL_VALUE else 1
+    out, seg = argv[:i], []
+
+    def flush() -> None:
+        target = _typing_target(seg)
+        if sessions is not None and (not target or _session_of(target) not in sessions):
+            target = None
+        if target is not None and "'" not in target:
+            out.extend(["if-shell", "-F"])
+            if target:
+                out.extend(["-t", target])
+            out.append(_IN_COPY_MODE)
+            out.append(
+                "send-keys -X -t '%s' cancel" % target
+                if target
+                else "send-keys -X cancel"
+            )
+            out.append(";")
+        out.extend(seg)
+
+    for a in argv[i:]:
+        if a == ";":
+            flush()
+            out.append(a)
+            seg = []
+        else:
+            seg.append(a)
+    flush()
+    return out
+
+
+def _guarded(argv: Sequence[str]) -> List[str]:
+    with _GUARD_LOCK:
+        guarded = frozenset(_GUARDED)
+    if not guarded:
+        return list(argv)
+    return leave_copy_mode(argv, guarded)
+
+
 def run(argv: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess:
-    """``subprocess.run(argv, **kwargs)`` for a tmux argv, on any OS."""
+    """``subprocess.run(argv, **kwargs)`` for a tmux argv, on any OS — a
+    typing ``send-keys`` guarded out of copy-mode first
+    (:func:`leave_copy_mode`) in a session :func:`guard_typing` named."""
     _check(argv)
+    argv = _guarded(argv)
     if not IS_WINDOWS:
-        return subprocess.run(list(argv), **kwargs)
+        return subprocess.run(argv, **kwargs)
     from backend.session.winmux import client  # pragma: no cover - Windows
 
-    return client.run(list(argv), **kwargs)  # pragma: no cover
+    return client.run(argv, **kwargs)  # pragma: no cover
 
 
 def popen(argv: Sequence[str], **kwargs: Any) -> Any:
     """``subprocess.Popen(argv, **kwargs)`` for a tmux argv, on any OS (the
     result has ``communicate``, ``wait``, ``returncode``, ``stdout``)."""
     _check(argv)
+    argv = _guarded(argv)
     if not IS_WINDOWS:
-        return subprocess.Popen(list(argv), **kwargs)
+        return subprocess.Popen(argv, **kwargs)
     from backend.session.winmux import client  # pragma: no cover - Windows
 
-    return client.popen(list(argv), **kwargs)  # pragma: no cover
+    return client.popen(argv, **kwargs)  # pragma: no cover
 
 
 def attach(

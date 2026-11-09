@@ -1,6 +1,7 @@
 /** Settings → Voice → Voice words (`#voice-words`, after "This computer's
  * mic"): the words the mic listens for, one row per kind — Send, End (send
- * and stop), Start over, Stop listening, Stop talking — each a small chips
+ * and stop), Start over, Undo last phrase, Stop listening, Stop talking —
+ * each a small chips
  * editor (type a phrase, Enter adds it, × removes it), and the wake word, one
  * text field. A kind with no phrases of its own uses the defaults, which its
  * field shows as the placeholder; phrases of its own REPLACE them. "Reset to
@@ -36,6 +37,11 @@ export const WORD_ROWS: ReadonlyArray<{ kind: PhraseKind; label: string; hint: s
   { kind: "send", label: "Send", hint: "Sends the message; listening stays on." },
   { kind: "end", label: "End (send and stop)", hint: "Sends what is left and stops listening." },
   { kind: "clear", label: "Start over", hint: "Takes back the message you are saying." },
+  {
+    kind: "undo",
+    label: "Undo last phrase",
+    hint: "At the end of a phrase, drops that phrase; said alone, takes back the last phrase typed.",
+  },
   {
     kind: "stop",
     label: "Stop listening",

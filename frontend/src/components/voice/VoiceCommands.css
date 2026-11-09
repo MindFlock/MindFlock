@@ -1,0 +1,80 @@
+/* The voice cheat sheet (VoiceCommands.tsx): under the top bar's mic, the
+   same surface as the mic's options (.mic-pop in TopBarMic.css). */
+.voice-cmds {
+  position: fixed;
+  z-index: 3000;
+  overflow-y: auto;
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.voice-cmds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.voice-cmds-title {
+  font-weight: 600;
+}
+
+.voice-cmds-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.voice-cmds-close:hover {
+  color: var(--text);
+}
+
+.voice-cmds-group-name {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.voice-cmds-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.voice-cmds-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 8px;
+}
+
+.voice-cmds-say {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.voice-cmds-does {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.voice-cmds-empty {
+  margin: 0;
+  color: var(--muted);
+}

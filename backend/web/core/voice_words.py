@@ -1,5 +1,5 @@
-"""The voice keywords: the words that send, end, clear, stop and hush, and
-the wake word — ours by default, the person's own once they change them —
+"""The voice keywords: the words that send, end, clear, undo, stop and
+hush, and the wake word — ours by default, the person's own once they change them —
 and how a recogniser's near miss of one still counts.
 
 Settings → Voice saves ``voice.words`` (a synced personal policy, like
@@ -8,7 +8,9 @@ Settings → Voice saves ``voice.words`` (a synced personal policy, like
 router (``core.voice_router``: ``stop``, ``hush``) and the wake route
 (``core.wake``) read the same dict. The clients own ``send`` ("over": type
 the pending words and press Enter, keep listening), ``end`` ("over and out":
-send and stop) and ``clear`` ("disregard": drop the pending words).
+send and stop), ``clear`` ("disregard": drop the pending words) and ``undo``
+("scratch that": take back what was last typed) — radio words, read at the
+END of a phrase.
 
 ``DEFAULTS`` lists each kind's canonical phrases. The router keeps a few
 spoken variants of a default phrase ("stop the microphone", "that is all",
@@ -58,12 +60,13 @@ __all__ = [
 ]
 
 #: The phrase kinds, in Settings order (``wake`` is a single word, not a list).
-KINDS = ("send", "end", "clear", "stop", "hush")
+KINDS = ("send", "end", "clear", "undo", "stop", "hush")
 
 DEFAULTS: Dict[str, Any] = {
     "send": ["over"],
     "end": ["over and out", "over, out"],
     "clear": ["disregard"],
+    "undo": ["scratch that"],  # not "undo that": "can you undo that" is dictation
     "stop": [
         "stop",
         "stop listening",
@@ -82,7 +85,10 @@ DEFAULTS: Dict[str, Any] = {
 #: mishearing seen in practice AND not a plausible last word of dictation —
 #: so "hover" and "ever" are not "over", "discard" is not "disregard". A
 #: form is matched like the phrase it belongs to: a radio word's at the end
-#: of any phrase, a hush word's as the whole phrase.
+#: of any phrase, a hush word's as the whole phrase. The forms after the
+#: first few per phrase come from ``tests/bench/voice_command_ears.py``
+#: (Moonshine with keyterms and whisper with hotwords; its docstring has the
+#: tables). A kind serves at most :data:`HEARD_MAX` forms: ``stop`` is full.
 HEARD: Dict[str, Tuple[str, ...]] = {
     "over": ("ova", "ovah", "oh ver", "o ver", "overt"),
     "over and out": (
@@ -94,14 +100,18 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "ova and out",
         "ovah and out",
     ),
-    "over, out": ("ova out", "over owt"),
+    "over, out": ("ova out", "over owt", "over felt"),
     "disregard": (
         "dis regard",
         "just regard",
         "disregarded",
         "disregards",
         "this is guard",
+        "it's regard",
     ),
+    # Not "stretch that", "and do that", "under that", "I'll do that": the
+    # bench hears those for the undo phrases too, but they end dictation.
+    "scratch that": ("cretch that", "cratch that", "crutch that"),
     "stop": ("stock", "stopped", "top"),
     "stop listening": (
         "top listening",
@@ -109,6 +119,7 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "stop listen",
         "stopped listening",
         "stop lisning",
+        "stuff listening",
     ),
     "mic off": ("mike off", "mic of", "mike of"),
     "pause listening": (
@@ -116,13 +127,15 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "paws listening",
         "paused listening",
         "pause listen",
+        "paul's listening",
+        "how's listening",
     ),
     "that's all": ("that's al", "that's hall"),
-    "done talking": ("done talkin", "dun talking", "done torking"),
+    "done talking": ("done talkin", "dun talking", "done torking", "then talking"),
     "stop talking": ("stop talkin", "stop torking", "stopped talking"),
     "be quiet": ("be quite", "b quiet", "be quiets"),
     "quiet": ("quite", "quiets"),
-    "hush": ("hushed", "husch"),
+    "hush": ("hushed", "husch", "hash", "pash"),
     "shut up": ("shadap", "shut app"),
     "enough": ("enuf", "a nuff", "inough"),
     "mindflock": (
@@ -146,6 +159,9 @@ HEARD: Dict[str, Tuple[str, ...]] = {
         "meeflock",
         "mindfock",
         "mind fock",
+        # tests/bench/voice_command_ears.py (Moonshine).
+        "mindflog",
+        "mind fluff",
     ),
 }
 
@@ -538,7 +554,14 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
       "that" / "it" / "all" / "everything" too), else its last words sound
       like one (:func:`sound_tail`) — a clear phrase, whose false hit loses
       the draft, only from its first letter on ("in this regard" is
-      dictation) unless it is the whole utterance.
+      dictation) unless it is the whole utterance;
+    - ``"undo"``: it ends in an undo phrase or a heard form of one, word for
+      word (no tail word: the phrases end in "that" already) — else the
+      WHOLE utterance sounds like one and starts with its first letter
+      ("scratched that": :func:`sound_tail` with nothing before it). Never
+      a sound-alike at the end of dictation ("let's stretch that", "look
+      into that"), nor one that starts elsewhere: Moonshine writes "and do
+      that" for a dictated "and do that" as well as for "undo that".
 
     A control phrase never fires with more words after it: "over the bridge"
     and "this regard is important" are dictation. ``words``: the effective
@@ -564,6 +587,7 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     radio = [(p, "end", ()) for p in _forms(w, "end")]
     radio += [(p, "send", _RADIO_TAILS) for p in _forms(w, "send")]
     radio += [(p, "clear", _RADIO_TAILS) for p in _forms(w, "clear")]
+    radio += [(p, "undo", ()) for p in _forms(w, "undo")]
     radio.sort(key=lambda e: (-len(_words(e[0])), -len(e[0])))
     for p, kind, tails in radio:
         if _ends_with(ws, p, tails):
@@ -579,4 +603,7 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
         hit = sound_tail(text, w[kind], tails, lead)
         if hit is not None:
             return kind
+    hit = sound_tail(text, w["undo"])
+    if hit is not None and not hit[0] and _letters(text)[:1] == _letters(hit[1])[:1]:
+        return "undo"
     return None

@@ -115,6 +115,86 @@
 .sky-weather-word.is-storm {
   color: var(--tone-attention);
 }
+/* The voice cheat sheet (VoiceCommands.tsx): under the top bar's mic, the
+   same surface as the mic's options (.mic-pop in TopBarMic.css). */
+.voice-cmds {
+  position: fixed;
+  z-index: 3000;
+  overflow-y: auto;
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.voice-cmds-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.voice-cmds-title {
+  font-weight: 600;
+}
+
+.voice-cmds-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.voice-cmds-close:hover {
+  color: var(--text);
+}
+
+.voice-cmds-group-name {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.voice-cmds-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.voice-cmds-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 8px;
+}
+
+.voice-cmds-say {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.voice-cmds-does {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.voice-cmds-empty {
+  margin: 0;
+  color: var(--muted);
+}
 /* The Sky guide (SkyGuide.tsx): a wide card, the section list on the left,
    the section on the right scrolling on its own. The sketches draw in
    currentColor and the theme tokens, so both themes work. */
@@ -21248,6 +21328,28 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .inst.peer-gone .title {
   color: var(--muted);
 }
+
+/* A voice switch's row (./railFollow pulseRow): one ~1 s glow so the eye
+   finds where the rail scrolled to. Reduced motion: a still tint instead. */
+.inst.voice-pulse .inst-row {
+  animation: voice-pulse 1s ease-out 1;
+}
+@keyframes voice-pulse {
+  0% {
+    box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), 0.9);
+    background: rgba(var(--accent-rgb), 0.28);
+  }
+  100% {
+    box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), 0);
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .inst.voice-pulse .inst-row {
+    animation: none;
+    background: rgba(var(--accent-rgb), 0.2);
+  }
+}
 }
 
 /* 080 */
@@ -22779,6 +22881,22 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .mic-pop .mic-stop-talking:hover {
   border-color: var(--accent);
+}
+
+/* "Voice commands…": the cheat sheet (components/voice/VoiceCommands) without
+   saying "what can I say". A quiet text button, left-aligned. */
+.mic-pop .mic-commands-btn {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mic-pop .mic-commands-btn:hover {
+  text-decoration: underline;
 }
 }
 

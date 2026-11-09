@@ -363,7 +363,7 @@ class TestWakeJoin:
 
 
 # --------------------------------------------------------------------------- #
-# The final: Moonshine's for a short phrase, whisper's for a long one
+# The final: whisper writes the text, Moonshine hears the control words
 # --------------------------------------------------------------------------- #
 class Accurate:
     def __init__(self, text="whisper text", fail=False, delay=0.0):
@@ -382,18 +382,18 @@ class Accurate:
 
 
 class TestFinalPolicy:
-    def test_a_short_phrase_never_runs_the_accurate_pass(self):
-        acc = Accurate()
-        st, _t = make([[(1, "Over and out.", True)]], accurate=acc)
+    def test_a_short_phrase_gets_the_whisper_final(self):
+        acc = Accurate("Fix the login bug.")
+        st, _t = make([[(1, "Fix the log in bog.", True)]], accurate=acc)
         st.feed(loud(1.0))
-        st.feed(quiet(0.6))  # the quiet tail would start an early whisper pass
-        assert not st.wants_polish
+        st.feed(quiet(0.6))  # the quiet tail starts the early pass
         out = st.finish()
-        assert acc.calls == []
-        assert out["final"] == "Over and out." and out["final_by"] == "moonshine"
-        assert out["same"] is True and out["final_early"] is False
+        assert len(acc.calls) == 1
+        assert out["final"] == "Fix the login bug." and out["final_by"] == "whisper"
+        assert out["heard"] == "Fix the log in bog."
+        assert out["same"] is False and out["final_early"] is True
 
-    def test_a_long_phrase_gets_whisper_polish(self):
+    def test_a_long_phrase_gets_the_whisper_final(self):
         acc = Accurate("Run the tests again and show me the failures.")
         st, _t = make(
             [[(1, "Run the test again and show me the failures.", True)]],
@@ -401,88 +401,250 @@ class TestFinalPolicy:
         )
         for _ in range(3):
             st.feed(loud(1.5))
-        st.feed(quiet(0.6))  # the quiet tail starts the early pass
-        assert st.wants_polish
+        st.feed(quiet(0.6))
         out = st.finish()
         assert len(acc.calls) == 1 and acc.calls[0] >= int(4.5 * RATE)
         assert out["final"] == "Run the tests again and show me the failures."
         assert out["final_by"] == "whisper" and out["same"] is False
 
-    def test_no_polish_is_started_at_the_end(self):
-        # Cut off mid-speech: no early pass ran, and a fresh one would cost
-        # the whole pass again (~1 s+) — Moonshine's final, at once.
-        acc = Accurate("whisper's text")
+    def test_finish_starts_a_fresh_pass_without_an_early_one(self):
+        # Cut off mid-speech: no quiet tail, so no early pass — finish runs
+        # the whole phrase itself.
+        acc = Accurate("Long dictation, cut off.")
         st, _t = make([[(1, "Long dictation cut off.", True)]], accurate=acc)
-        for _ in range(3):
-            st.feed(loud(1.5))
-        assert st.wants_polish
+        st.feed(loud(1.5))
         out = st.finish()
-        assert acc.calls == []
-        assert out["final"] == "Long dictation cut off."
-        assert out["final_by"] == "moonshine"
+        assert len(acc.calls) == 1 and acc.calls[0] == int(1.5 * RATE)
+        assert out["final"] == "Long dictation, cut off."
+        assert out["final_by"] == "whisper" and out["final_early"] is False
 
-    def test_a_stale_early_pass_does_not_polish(self):
-        acc = Accurate("only the first half")
-        st, _t = make([[(1, "First half and the second half.", True)]], accurate=acc)
-        for _ in range(3):
-            st.feed(loud(1.5))
+    def test_a_stale_early_pass_is_replaced_by_a_fresh_one(self):
+        acc = Accurate("First half and the second half.")
+        st, _t = make(
+            [
+                [(1, "First half")],
+                [(1, "First half and")],
+                [(1, "First half and the second half.")],
+            ],
+            accurate=acc,
+        )
+        st.feed(loud(1.0))
         st.feed(quiet(0.6))  # early pass on the first half…
         st.feed(loud(1.0))  # …then more speech: it no longer covers the phrase
+        st.feed(loud(0.5))
         out = st.finish()
         assert out["final"] == "First half and the second half."
-        assert out["final_by"] == "moonshine"
+        assert out["final_by"] == "whisper" and out["final_early"] is False
+        assert acc.calls[-1] == int(3.1 * RATE)  # the whole phrase
 
-    def test_a_slow_polish_is_waited_for_at_most_polish_wait_s(self, monkeypatch):
-        monkeypatch.setattr(sm, "POLISH_WAIT_S", 0.05)
+    def test_a_slow_pass_is_waited_for_at_most_the_timeout(self, monkeypatch):
+        monkeypatch.setattr(ss, "FINAL_TIMEOUT_S", 0.05)
         acc = Accurate("too late", delay=0.5)
-        st, _t = make([[(1, "Long dictation here.", True)]], accurate=acc)
-        for _ in range(3):
-            st.feed(loud(1.5))
+        st, _t = make([[(1, "Some dictation here.", True)]], accurate=acc)
+        st.feed(loud(1.5))
         st.feed(quiet(0.6))
         t0 = time.monotonic()
         out = st.finish()
         assert time.monotonic() - t0 < 0.4
-        assert out["final"] == "Long dictation here." and out["final_by"] == "moonshine"
+        assert out["final"] == "Some dictation here." and out["final_by"] == "moonshine"
+        assert out["heard"] == "Some dictation here."
         assert st.final_outcome == "timeout"
 
-    def test_the_polish_starts_early_on_the_quiet_tail(self):
-        acc = Accurate("Long dictation.")
-        st, _t = make([[(1, "Long dictation.", True)]], accurate=acc)
-        for _ in range(3):
-            st.feed(loud(1.5))
-        st.feed(quiet(0.6))
-        out = st.finish()
-        assert len(acc.calls) == 1
-        assert out["final_early"] is True and out["final_by"] == "whisper"
+    def test_the_timeout_is_speech_streams(self):
+        assert not hasattr(sm, "POLISH_WAIT_S") and not hasattr(
+            sm, "POLISH_MIN_SECONDS"
+        )
+        assert ss.FINAL_TIMEOUT_S >= 1.5
 
-    def test_a_failed_polish_leaves_moonshines_final(self):
+    def test_a_failed_pass_leaves_moonshines_final(self):
         acc = Accurate(fail=True)
-        st, _t = make([[(1, "Long dictation here.", True)]], accurate=acc)
-        for _ in range(3):
-            st.feed(loud(1.5))
+        st, _t = make([[(1, "Some dictation here.", True)]], accurate=acc)
+        st.feed(loud(1.5))
         st.feed(quiet(0.6))
         out = st.finish()
         assert len(acc.calls) == 1
-        assert out["final"] == "Long dictation here." and out["final_by"] == "moonshine"
+        assert out["final"] == "Some dictation here." and out["final_by"] == "moonshine"
+
+    def test_without_whisper_moonshines_text_is_the_final(self):
+        st, _t = make([[(1, "Some dictation here.", True)]])
+        st.feed(loud(1.5))
+        out = st.finish()
+        assert out["final"] == out["heard"] == "Some dictation here."
+        assert out["final_by"] == "moonshine"
+
+    def test_a_click_gets_no_pass(self):
+        acc = Accurate()
+        st, _t = make([[(1, "Uh.", True)]], accurate=acc)
+        st.feed(loud(0.1))  # under FINAL_MIN_SECONDS of speech
+        st.feed(quiet(0.6))
+        out = st.finish()
+        assert acc.calls == [] and out["final_by"] == "moonshine"
 
     def test_whispers_text_gets_the_wake_join_too(self):
         acc = Accurate("Mind flock, summarise the long thread.")
         st, _t = make(
             [[(1, "Mindflock, summarise the long thread.", True)]], accurate=acc
         )
-        for _ in range(3):
-            st.feed(loud(1.5))
+        st.feed(loud(1.5))
         st.feed(quiet(0.6))
         out = st.finish()
         assert out["final_by"] == "whisper"
         assert out["final"] == "Mindflock, summarise the long thread."
 
-    def test_the_wait_is_recorded_for_final_stats(self):
+    def test_a_whisper_final_is_recorded_for_final_stats(self):
         before = ss.final_stats()["samples"]
-        st, _t = make([[(1, "Over.", True)]])
+        st, _t = make([[(1, "Fix the bug.", True)]], accurate=Accurate("Fix the bug."))
         st.feed(loud())
         st.finish()
         assert ss.final_stats()["samples"] == before + 1
+
+    def test_a_moonshine_final_is_not_a_wait(self):
+        # GET /api/voice's expect_ms sizes the clients' /end wait: a ~20 ms
+        # Moonshine final must not pull it under whisper's real wait.
+        before = ss.final_stats()["samples"]
+        for st, _t in (
+            make([[(1, "Fix the bug.", True)]]),  # no whisper
+            make([[(1, "Stop.", True)]], accurate=Accurate("Stop.")),  # control only
+        ):
+            st.feed(loud())
+            st.finish()
+        assert ss.final_stats()["samples"] == before
+
+
+class TestControlWords:
+    """Moonshine hears the control words, whisper writes the text."""
+
+    def test_the_radio_word_starts_the_early_pass(self):
+        acc = Accurate("Send the report, over.")
+        st, _t = make([[(1, "Send the report over.")]], accurate=acc)
+        st.feed(loud(1.0))
+        st.feed(quiet(0.1))  # one quiet frame: under EARLY_QUIET_SECONDS
+        assert st._early is not None
+        plain, _t2 = make([[(1, "Send the report")]], accurate=Accurate())
+        plain.feed(loud(1.0))
+        plain.feed(quiet(0.1))
+        assert plain._early is None
+        out = st.finish()
+        assert out["final_early"] is True and out["final_by"] == "whisper"
+
+    def test_a_plain_pause_starts_it_after_early_quiet_seconds(self):
+        st, _t = make([[(1, "Fix the bug")]], accurate=Accurate())
+        st.feed(loud(1.0))
+        st.feed(quiet(0.3))  # a pause mid-phrase: no pass to go stale
+        assert st._early is None
+        st.feed(quiet(sm.EARLY_QUIET_SECONDS - 0.3))
+        assert st._early is not None
+        st.close()
+
+    @pytest.mark.parametrize(
+        "whisper, want",
+        [
+            ("Send the reports, okay.", "Send the reports over."),  # garbled
+            ("Send the reports.", "Send the reports over."),  # dropped
+            ("Send the reports, over and out.", "Send the reports over."),  # other kind
+            ("Send the reports over.", "Send the reports over."),  # agrees
+        ],
+    )
+    def test_a_garbled_over_still_sends_with_whispers_words(self, whisper, want):
+        from backend.web.core import voice_words
+
+        acc = Accurate(whisper)
+        st, _t = make([[(1, "Send the report over.", True)]], accurate=acc)
+        st.feed(loud(1.0))
+        st.feed(quiet(0.1))
+        out = st.finish()
+        assert out["final_by"] == "whisper" and out["heard"] == "Send the report over."
+        assert out["final"] == want
+        assert voice_words.control_kind(out["final"]) == "send"
+        assert out["final"].startswith("Send the reports")  # whisper's body
+
+    def test_no_control_word_from_moonshine_leaves_whisper_alone(self):
+        acc = Accurate("Note the hand over.")
+        st, _t = make([[(1, "Note the handover.", True)]], accurate=acc)
+        st.feed(loud(1.0))
+        out = st.finish()
+        assert out["final"] == "Note the hand over."
+
+    @pytest.mark.parametrize(
+        "said",
+        [
+            "Stop.",
+            "Over.",
+            "Mindflock, stop.",
+            "Stop talking.",
+            "Switch to sitecheck.",
+            "Next one.",
+        ],
+    )
+    def test_a_control_only_phrase_never_waits_for_whisper(self, said):
+        acc = Accurate("whisper text", delay=1.0)
+        st, _t = make([[(1, said, True)]], accurate=acc)
+        st.feed(loud(0.5))
+        st.feed(quiet(0.6))  # an early pass may have started: it is dropped
+        t0 = time.monotonic()
+        out = st.finish()
+        assert time.monotonic() - t0 < 0.3
+        assert out["final"] == out["heard"] == said and out["final_by"] == "moonshine"
+
+    @pytest.mark.parametrize(
+        "heard, only",
+        [
+            ("stop listening", True),
+            ("Disregard that.", True),
+            ("Send the report over.", False),
+            ("Add a docstring to the new function, disregard.", True),
+            ("Open a pull request for this branch, over.", False),  # no switch
+            ("Switch to sitecheck.", True),
+            ("Run the tests, stop listening.", False),
+            ("Fix the bug.", False),
+            ("new session in app that fixes login", False),
+            ("yes", False),
+            ("", False),
+            # The router's own no-text kinds act at once too.
+            ("Fix the login bug, scratch that.", True),  # undo: nothing to send
+            ("Scratch that.", True),
+            ("Scroll up.", True),
+            ("Page down.", True),
+            ("Interrupt.", True),
+            ("Go back.", True),
+            ("Where am I?", True),
+            ("What can I say?", True),
+            ("Scroll down to the footer and fix the margin.", False),
+            ("Go back and fix the test.", False),
+        ],
+    )
+    def test_control_only(self, heard, only):
+        assert sm.control_only(heard) is only
+
+    def test_control_only_reads_the_persons_words(self):
+        words = {"send": ["roger"]}
+        assert sm.control_only("Roger.", words)
+        assert not sm.control_only("Roger.", {"send": ["over"]})
+
+    @pytest.mark.parametrize(
+        "final, heard, want",
+        [
+            (
+                "Fix it, stop listening.",
+                "Fix it, stop listening.",
+                "Fix it, stop listening.",
+            ),
+            ("Fix it.", "Fix it.", "Fix it."),
+            ("Fix it, okay.", "Fix it, over and out.", "Fix it over and out."),
+            (
+                "Mind flock, run it.",
+                "Mindflock, run it, over.",
+                "Mind flock, run it over.",
+            ),
+            (
+                "Send the report, ober.",
+                "Send the report over.",
+                "Send the report over.",
+            ),
+        ],
+    )
+    def test_with_control(self, final, heard, want):
+        assert sm.with_control(final, heard) == want
 
 
 # --------------------------------------------------------------------------- #

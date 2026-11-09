@@ -113,7 +113,8 @@ def test_the_budget_is_measured_from_finals_that_came_and_seeded():
     # Measured: the round trip of every /end that brought a final (late or
     # not; a timeout brings none) — the median of the last few.
     end = _inner(stt, "streamEnd")
-    assert 'if (typeof x.j.final === "string") {' in end
+    # An accurate final only (voiceTimedFinal: not Moonshine's own text).
+    assert "if (voiceTimedFinal(x.j)) {" in end
     assert (
         "voice.rec.ends = voiceKeepLast(voice.rec.ends, Date.now() - t0, VOICE_END_SAMPLES);"
         in end

@@ -57,9 +57,11 @@ growing window and commits the words two passes agree on, and
 at its end. For English, when ``moonshine-voice`` and its model are
 installed (``core.speech_moonshine``; Settings → Voice installs them), the
 live words come from Moonshine tiny-streaming instead
-(:func:`stream_engine`, :meth:`LocalSTT.stream_engine`): its own text is a
-short phrase's final (~30 ms after the person stops), and the whisper
-accurate pass still polishes a long one. ``voice.stt_stream_model``: ``""``
+(:func:`stream_engine`, :meth:`LocalSTT.stream_engine`): Moonshine hears
+the control words (live, and its own text of the phrase at the end), and
+the whisper accurate pass writes every phrase's final text — Moonshine's
+stands only when that pass fails or times out, or the phrase is nothing
+but a control phrase ("stop", "over", a switch). ``voice.stt_stream_model``: ``""``
 picks Moonshine when it is installed, ``"moonshine"`` the same, a whisper
 name keeps whisper. Its model is cached under ``moonshine:tiny-streaming``
 beside the whisper keys (:func:`is_stt_key`), warmed, kept resident and
@@ -624,6 +626,17 @@ HINT_CHARS = 400
 #: How many live session titles the hints carry at most (the most recently
 #: active first: those are the ones a person switches to by voice).
 HINT_TITLES = 12
+#: The voice commands Moonshine tiny mishears bare and the router reads:
+#: after the voice words, before the titles (``tests/bench/
+#: voice_command_ears.py``: "scroll up" → "grow up", "page down" → "h
+#: down", "summarize that" → "summer eyes that", "status" → "tetris").
+HINT_COMMANDS = (
+    "scroll",
+    "page up",
+    "page down",
+    "summarize",
+    "status",
+)
 #: The fixed MindFlock vocabulary: words whisper's priors spell wrong or
 #: hear as something else, after the voice words and the titles.
 HINT_VOCABULARY = (
@@ -698,7 +711,8 @@ def recognition_hints(
     """The vocabulary a whisper pass is biased towards, one comma-separated
     string of at most ``limit`` characters: the wake word and every voice
     phrase of every kind (``words``: :func:`voice_words.effective`'s dict —
-    these must be heard right, so they come first), then up to
+    these must be heard right, so they come first), then
+    :data:`HINT_COMMANDS` (unless ``vocabulary`` is off), then up to
     :data:`HINT_TITLES` session titles in :func:`speech_form` (``titles``,
     newest first, as :func:`session_titles` orders them), then
     :data:`HINT_VOCABULARY` (unless ``vocabulary`` is off). A phrase that
@@ -712,11 +726,14 @@ def recognition_hints(
     wake = words.get("wake")
     if isinstance(wake, str) and wake.strip():
         wanted.append(wake.strip())
-    for kind in ("send", "end", "clear", "stop", "hush"):
+    # The undo phrases last: the radio words that act at once lead.
+    for kind in ("send", "end", "clear", "stop", "hush", "undo"):
         got = words.get(kind)
         for phrase in got if isinstance(got, (list, tuple)) else ():
             if isinstance(phrase, str) and phrase.strip():
                 wanted.append(phrase.strip())
+    if vocabulary:
+        wanted.extend(HINT_COMMANDS)
     count = 0
     for title in titles or ():
         spoken = speech_form(title)

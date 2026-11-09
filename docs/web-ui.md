@@ -7133,7 +7133,7 @@ its toolbar counts it again. See
 ## Voice input
 
 Every voice word named in this section — "over", "over and out",
-"disregard", "stop recording", "stop talking", "MindFlock" — is the
+"disregard", "scratch that", "stop recording", "stop talking", "MindFlock" — is the
 **default**: each can be changed in [Settings → Voice → Voice
 words](#voice-words), and the mic, its hints and the Voice tour then use the
 new ones. Each is also heard the way the recogniser tends to write it (*ova*,
@@ -7146,7 +7146,9 @@ types as you speak: click (or hold) to talk, and each recognised phrase lands
 in the session's input field at once — word by word while you speak when the
 server's recogniser streams. A phrase ending in "over" stops and sends the
 words (Enter, after the server's dialog checks), one ending in "disregard"
-takes back what was typed and keeps listening, Esc takes it back and stops;
+takes back what was typed and keeps listening, one ending in "scratch that"
+drops just that phrase — said alone it takes back the last
+phrase typed and not yet sent — and Esc takes it all back and stops;
 "stop recording" (or "that's all", "mic off") stops at any point, never typed,
 and leaves the words in the field unsent — as letting go of push to talk does.
 "Submit" is an ordinary word here (only Claude's question prompt's review step
@@ -7267,6 +7269,56 @@ appears on its own while the app listens or speaks. Errors and notices (*Click
 a session first*, *Sent to Login fix.*) are the mic's tooltip; the ask pop-up
 keeps its own words.
 
+**Commands for reading and moving around** (the router's newer answers,
+`lib/voiceDesktop.ts` `runVoiceCommand`; none of them is ever spoken back —
+your own action gets a short caption under the mic and the usual chime, never
+an echo):
+
+- **Scroll** — "scroll up", "scroll down", "page down", "scroll to the
+  top / bottom", then "more" / "keep going" for the same again: the server
+  scrolls the focused session's pane itself (tmux copy-mode) and answers
+  `{"kind": "scroll", "dir", "amount", "count", "title", "ok"}`; the caption
+  says *Scrolled up*, *Scrolled down ×3*, *At the bottom* (`scrollLine`).
+- **Interrupt** — "interrupt", "press escape": the server presses Escape on
+  the agent (`{"kind": "interrupt", "title", "ok"}`); the caption says
+  *Interrupted <name>*.
+- **Go back** — "go back", "switch back": focuses the session you were on
+  before (`{"kind": "switch_back"}`: the store's `prevFocused`, else the MRU's
+  next, never a window, a closed or a hidden session — `previousSession`);
+  said again it bounces back. With none: *No previous session*.
+- **Where am I** — "where am I", "which session is this": says the focused
+  session's name (*hackathon-2.*) — it answers a question, so it is said with
+  replies off too — and captions it.
+- **What can I say** — "what can I say", "voice commands": the router's
+  `{"kind": "commands", "say", "items": [{"say", "does", "group"?}]}` — `say`
+  is read through the speech queue and a **cheat sheet** opens under the mic
+  (`components/voice/VoiceCommands.tsx`: the items grouped when they carry a
+  `group`, else one list; the desktop's own list, `builtinCommands`, when the
+  server sends none). Esc, a click outside it, its × or the next phrase you
+  say closes it (Esc there never cancels the dictation). Without voice:
+  **Voice commands…** in the mic's options (right-click the mic).
+
+These phrases wait whole for the router like its other commands (never typed
+into the terminal while it decides), and a whole "scroll up" / "page down" /
+"switch back" acts as soon as the voice is quiet, like "next session". Every
+route call carries the focused session as `session` and, when the stream's
+`/end` gave one, `heard` — the fast recogniser's (Moonshine's) text of the
+same phrase, beside whisper's `final` — so the router can read the command
+words in either.
+
+**The rail follows the focus.** Whenever the focused session changes — a
+voice switch ("switch to…", "session 3", "next session", "go back"), a
+keyboard switch (Alt+N, Ctrl+Tab), the sky — and its rail row (or a window's
+row brought forward) is outside the rail's visible scroll area, the rail
+scrolls just enough to show it (`scrollIntoView({block: "nearest"})`, smooth
+unless *reduce motion* is set). A row already in view never moves, and a row
+you just clicked never jumps. A run group or device section folded over the
+row is unfolded first (not on a page load: what you folded stays folded). A
+voice switch also pulses the row once (~1 s, `.voice-pulse`; a still tint
+under reduced motion) so the eye finds it. `components/sidebar/railFollow.ts`,
+mounted by `Sidebar.tsx`; `selectSession(…, {voice: true})` asks for the pulse
+(the store's `railPulse`).
+
 **Words as you speak.** Like a phone keyboard, the words go into the field
 the moment the recogniser first hears them, and are corrected as it changes
 its mind: the phrase under way — the stream's committed words plus its
@@ -7280,7 +7332,8 @@ correction per answer, never reaching before the phrase's start — earlier
 phrases and whatever was in the field before you spoke are untouched. A
 phrase being said carries no trailing space; its end (the pause, or letting
 go) settles it with one. Never typed, not even as a guess: a trailing radio
-word ("over", "disregard" and their tails like "disregard that"), a stop
+word ("over", "disregard" and their tails like "disregard that", "scratch
+that" — "scratch" waits while "that" may follow), a stop
 phrase or "stop talking" — or the start of one ("stop" might become "stop
 recording", "that is" might become "that is all"; such a word goes in once
 the next word rules that out) — and a dictation's first phrase while it may
@@ -7368,7 +7421,11 @@ every save), then the server's.
 
 - **The rows**: **Send** ("over" — sends, listening goes on), **End (send and
   stop)** ("over and out", "over, out"), **Start over** ("disregard"),
-  **Stop listening** ("stop", "stop listening", "mic off", "pause
+  **Undo last phrase** ("scratch that" — at the end of a phrase
+  it drops that phrase; said alone it takes back the last phrase typed and
+  not yet sent, exactly its characters, as "disregard" takes back all of
+  them; silent: a caption, no spoken line; an older server whose `words` has
+  no `undo` leaves these defaults in force), **Stop listening** ("stop", "stop listening", "mic off", "pause
   listening", "that's all", "done talking"), **Stop talking** ("stop
   talking", "be quiet", "quiet", "hush", "shut up", "enough") — each a chips editor: type a phrase,
   **Enter** adds it, **×** (or Backspace in the empty field) removes the
@@ -7387,8 +7444,9 @@ every save), then the server's.
   sees the rows disabled with *Only the owner of this computer can change
   them.*
 - **The matchers** (`lib/voiceDesktop.ts` `buildMatchers`, rebuilt the moment
-  the words change): `parseRadio` reads the send / end / clear phrases at the
-  END of a phrase, **longest first** (so "over and out" beats "over"),
+  the words change): `parseRadio` reads the send / end / clear / undo phrases at the
+  END of a phrase (an undo phrase another kind already says — a clear word
+  "scratch" with its tail "that" — stays that kind), **longest first** (so "over and out" beats "over"),
   case- and punctuation-blind, an apostrophe optional ("thats all"), each
   phrase's words escaped, the send and clear phrases taking today's tails
   ("disregard that", "over it"); the hold-back keeps any of them (and their

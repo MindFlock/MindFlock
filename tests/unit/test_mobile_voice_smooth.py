@@ -1680,6 +1680,7 @@ def test_the_route_body_carries_ages_never_the_pages_clock_alone():
             """
 var pending = null;
 function voicePendingTake() { var p = pending; pending = null; return p; }
+function voiceHeardFor(text) { return ""; }   // no /end text (test_mobile_voice_heard.py)
 """
             + _whole(js, "voiceRouteBody")
             + """

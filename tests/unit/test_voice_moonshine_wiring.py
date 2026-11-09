@@ -328,7 +328,7 @@ def local(monkeypatch):
 
 
 class TestStreamOpen:
-    def test_english_opens_moonshine_with_the_whisper_polish(self, local):
+    def test_english_opens_moonshine_with_the_whisper_final(self, local):
         r = client.post("/api/voice/stream", json={"lang": "en-US"})
         assert r.status_code == 200
         body = r.json()
@@ -411,3 +411,26 @@ class TestDoctor:
         assert (
             c.detail == "live words: Whisper small.en (voice.stt_stream_model picks it)"
         )
+
+
+class TestStreamEnd:
+    def test_end_carries_whispers_final_and_moonshines_heard(self):
+        from tests.unit import test_speech_moonshine as tsm
+
+        fake = tsm.FakeTranscriber([[(1, "Send the report over.", True)]])
+        sid = sm.open_stream(
+            "",
+            lambda audio: "Send the reports, okay.",
+            client="t-end",
+            engine_=sm.MoonshineEngine(fake, threads=1),
+        )
+        try:
+            stream = speech_stream.get_stream(sid)
+            stream.feed(tsm.loud(1.0))
+            stream.feed(tsm.quiet(0.1))
+            body = client.post("/api/voice/stream/%s/end" % sid).json()
+        finally:
+            speech_stream.close_stream(sid)
+        assert body["heard"] == "Send the report over."
+        assert body["final"] == "Send the reports over."
+        assert body["final_by"] == "whisper"
