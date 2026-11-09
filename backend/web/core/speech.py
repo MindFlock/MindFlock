@@ -5,7 +5,7 @@ recognition). ``routes/speech.py`` turns it into
 ``POST /api/voice/transcribe`` and ``POST /api/voice/speak``.
 
 Three backend ids, each in a recognition (``stt``) and a voice (``tts``)
-flavour, in preference order (:data:`BACKENDS`):
+flavour, plus a voice-only fourth, in preference order (:data:`BACKENDS`):
 
 * ``system`` — the operating system's own engines
   (:mod:`backend.web.core.speech_system`): Windows ``System.Speech`` through
@@ -19,6 +19,13 @@ flavour, in preference order (:data:`BACKENDS`):
   touches no network: it only checks that a key is set. The URL defaults to
   :data:`OPENAI_URL`; the model fields are free text because every host has
   its own names (Groq wants ``whisper-large-v3-turbo``).
+* ``kokoro`` (voice only) — the built-in natural voice, Kokoro-82M on
+  onnxruntime (:mod:`backend.web.core.speech_kokoro`): the voice assistant's
+  (``voice.assistant_voice``), and the chain's first local fallback ahead
+  of piper (:data:`FALLBACK_TTS`). Ready only once ``kokoro-onnx`` and its
+  model files are installed (the one-click install does both); listed just
+  ahead of piper, so with ``voice.tts_backend`` unset it is picked over
+  piper but not over the OS voice or a configured host.
 * ``local`` — faster-whisper (recognition) and piper (voice) on this machine,
   the optional upgrade installed with ``uv sync --group voice`` (the
   ``voice`` dependency group in pyproject.toml). Both are imported lazily
@@ -2118,6 +2125,11 @@ BACKENDS: Dict[str, List[Backend]] = {
 # and registers into the other (either module may be imported first).
 from backend.web.core import speech_system as _system  # noqa: E402
 
+# The built-in natural voice (``core.speech_kokoro``): ready only once its
+# package and model are installed; it registers itself just ahead of piper,
+# like ``speech_system`` does.
+from backend.web.core import speech_kokoro as _kokoro  # noqa: E402,F401
+
 
 def backends(kind: str) -> List[Backend]:
     return list(BACKENDS.get(kind) or [])
@@ -2208,8 +2220,9 @@ COLD_START_TIMEOUT = 90.0
 #: The probe: :data:`WARM_TEXT` has to come back within this. A model still
 #: loading, or running on the wrong device, stays down.
 PROBE_TIMEOUT = 3.0
-#: The fallback voices, in order, after the configured one (never itself).
-FALLBACK_TTS: Tuple[str, ...] = ("local",)
+#: The fallback voices, in order, after the configured one (never itself):
+#: the built-in Kokoro voice when it is installed, then piper.
+FALLBACK_TTS: Tuple[str, ...] = ("kokoro", "local")
 #: Also tried while the configured host yields to memory
 #: (:meth:`TtsChain.memory_yield`): piper is held back then too, and the OS
 #: voice costs next to nothing.
@@ -3346,6 +3359,30 @@ def _moonshine_status() -> dict:
     return {"available": not reason, "reason": reason}
 
 
+def _kokoro_status() -> dict:
+    """``{"available": bool, "reason": str, "loaded": bool, "voice": id}``:
+    whether the built-in Kokoro voice can speak here
+    (``speech_kokoro.unavailable_reason``), whether its model is in memory,
+    and the assistant's voice (``voice.assistant_voice``)."""
+    try:
+        reason = _kokoro.unavailable_reason()
+        is_loaded = _kokoro.loaded()
+        voice = _kokoro.assistant_voice()
+    except Exception as err:  # noqa: BLE001 — a report, never a failure
+        return {
+            "available": False,
+            "reason": "Kokoro could not be checked: %s" % err,
+            "loaded": False,
+            "voice": _kokoro.DEFAULT_VOICE,
+        }
+    return {
+        "available": not reason,
+        "reason": reason,
+        "loaded": is_loaded,
+        "voice": voice,
+    }
+
+
 def describe(probe: bool = True) -> dict:
     """What ``GET /api/voice`` reports about the server side::
 
@@ -3364,6 +3401,8 @@ def describe(probe: bool = True) -> dict:
          "stream_model": str, "stream_engine": "moonshine"|"whisper"|"",
          "stream_label": str,
          "moonshine": {"available": bool, "reason": str},
+         "kokoro": {"available": bool, "reason": str, "loaded": bool,
+                    "voice": id},
          "warm": {"stt": str, "tts": str}}
 
     ``detail`` is the one-paragraph summary; the per-kind keys are what the
@@ -3376,7 +3415,9 @@ def describe(probe: bool = True) -> dict:
     "Whisper base.en"); ``moonshine`` says whether the Moonshine lane could
     run here at all (``speech_moonshine.available``; ``reason`` why not —
     what Settings' install button and ``mindflock doctor`` show, whichever
-    backend is configured); ``system`` is the built-in
+    backend is configured); ``kokoro`` the same for the built-in Kokoro
+    voice (:func:`_kokoro_status`: the assistant speaks with it whichever
+    voice backend is configured); ``system`` is the built-in
     engine's own report (:func:`speech_system.describe`); ``warm`` is each
     kind's last warm-up — ``"loaded"``, ``"loading"``, ``"skipped: <why>"``,
     or ``""`` before the first. Offline and cheap: the built-in engine is
@@ -3430,5 +3471,6 @@ def describe(probe: bool = True) -> dict:
         "stream_engine": stream_engine_,
         "stream_label": stream_label,
         "moonshine": _moonshine_status(),
+        "kokoro": _kokoro_status(),
         "warm": {k: _WARMED.get(k, ("", "", 0.0))[0] for k in ("stt", "tts")},
     }

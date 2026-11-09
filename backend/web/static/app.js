@@ -22433,7 +22433,7 @@ var gn = class extends D {
 		this._writeBuffer.length > this._bufferOffset ? (this._bufferOffset > bc && (this._writeBuffer = this._writeBuffer.slice(this._bufferOffset), this._callbacks = this._callbacks.slice(this._bufferOffset), this._bufferOffset = 0), setTimeout(() => this._innerWrite())) : (this._writeBuffer.length = 0, this._callbacks.length = 0, this._pendingData = 0, this._bufferOffset = 0), this._onWriteParsed.fire();
 	}
 };
-var ui = class {
+var ui$1 = class {
 	constructor(t) {
 		this._bufferService = t;
 		this._nextId = 1;
@@ -22478,7 +22478,7 @@ var ui = class {
 		i !== -1 && (t.lines.splice(i, 1), t.lines.length === 0 && (t.data.id !== void 0 && this._entriesWithId.delete(t.key), this._dataByLinkId.delete(t.id)));
 	}
 };
-ui = M([S(0, F)], ui);
+ui$1 = M([S(0, F)], ui$1);
 var Tl = !1;
 var Sn = class extends D {
 	constructor(e) {
@@ -22495,7 +22495,7 @@ var Sn = class extends D {
 		this._onWriteParsed = this._register(new v$1());
 		this.onWriteParsed = this._onWriteParsed.event;
 		this._onScroll = this._register(new v$1());
-		this._instantiationService = new ln(), this.optionsService = this._register(new dn(e)), this._instantiationService.setService(H, this.optionsService), this._bufferService = this._register(this._instantiationService.createInstance(ni)), this._instantiationService.setService(F, this._bufferService), this._logService = this._register(this._instantiationService.createInstance(ii)), this._instantiationService.setService(nr, this._logService), this.coreService = this._register(this._instantiationService.createInstance(li)), this._instantiationService.setService(ge, this.coreService), this.coreMouseService = this._register(this._instantiationService.createInstance(ai)), this._instantiationService.setService(rr, this.coreMouseService), this.unicodeService = this._register(this._instantiationService.createInstance(Ae)), this._instantiationService.setService(Js, this.unicodeService), this._charsetService = this._instantiationService.createInstance(pn), this._instantiationService.setService(Zs, this._charsetService), this._oscLinkService = this._instantiationService.createInstance(ui), this._instantiationService.setService(sr, this._oscLinkService), this._inputHandler = this._register(new vn(this._bufferService, this._charsetService, this.coreService, this._logService, this.optionsService, this._oscLinkService, this.coreMouseService, this.unicodeService)), this._register($.forward(this._inputHandler.onLineFeed, this._onLineFeed)), this._register(this._inputHandler), this._register($.forward(this._bufferService.onResize, this._onResize)), this._register($.forward(this.coreService.onData, this._onData)), this._register($.forward(this.coreService.onBinary, this._onBinary)), this._register(this.coreService.onRequestScrollToBottom(() => this.scrollToBottom(!0))), this._register(this.coreService.onUserInput(() => this._writeBuffer.handleUserInput())), this._register(this.optionsService.onMultipleOptionChange(["windowsMode", "windowsPty"], () => this._handleWindowsPtyOptionChange())), this._register(this._bufferService.onScroll(() => {
+		this._instantiationService = new ln(), this.optionsService = this._register(new dn(e)), this._instantiationService.setService(H, this.optionsService), this._bufferService = this._register(this._instantiationService.createInstance(ni)), this._instantiationService.setService(F, this._bufferService), this._logService = this._register(this._instantiationService.createInstance(ii)), this._instantiationService.setService(nr, this._logService), this.coreService = this._register(this._instantiationService.createInstance(li)), this._instantiationService.setService(ge, this.coreService), this.coreMouseService = this._register(this._instantiationService.createInstance(ai)), this._instantiationService.setService(rr, this.coreMouseService), this.unicodeService = this._register(this._instantiationService.createInstance(Ae)), this._instantiationService.setService(Js, this.unicodeService), this._charsetService = this._instantiationService.createInstance(pn), this._instantiationService.setService(Zs, this._charsetService), this._oscLinkService = this._instantiationService.createInstance(ui$1), this._instantiationService.setService(sr, this._oscLinkService), this._inputHandler = this._register(new vn(this._bufferService, this._charsetService, this.coreService, this._logService, this.optionsService, this._oscLinkService, this.coreMouseService, this.unicodeService)), this._register($.forward(this._inputHandler.onLineFeed, this._onLineFeed)), this._register(this._inputHandler), this._register($.forward(this._bufferService.onResize, this._onResize)), this._register($.forward(this.coreService.onData, this._onData)), this._register($.forward(this.coreService.onBinary, this._onBinary)), this._register(this.coreService.onRequestScrollToBottom(() => this.scrollToBottom(!0))), this._register(this.coreService.onUserInput(() => this._writeBuffer.handleUserInput())), this._register(this.optionsService.onMultipleOptionChange(["windowsMode", "windowsPty"], () => this._handleWindowsPtyOptionChange())), this._register(this._bufferService.onScroll(() => {
 			this._onScroll.fire({ position: this._bufferService.buffer.ydisp }), this._inputHandler.markRangeDirty(this._bufferService.buffer.scrollTop, this._bufferService.buffer.scrollBottom);
 		})), this._writeBuffer = this._register(new gn((i, r) => this._inputHandler.parse(i, r))), this._register($.forward(this._writeBuffer.onWriteParsed, this._onWriteParsed));
 	}
@@ -28227,16 +28227,22 @@ function extensionsQuery() {
 		staleTime: EXTENSIONS_STALE_MS
 	};
 }
+function extensionsOf(d) {
+	return (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
+		id: String(a.id),
+		label: a.label || String(a.id),
+		enabled: a.enabled !== false,
+		origin: a.origin === "user" ? "user" : "builtin",
+		extension: a.extension
+	}));
+}
+function extensionsNow() {
+	return extensionsOf(queryClient.getQueryData(["addons"]));
+}
 function useExtensions() {
 	return useQuery({
 		...extensionsQuery(),
-		select: (d) => (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
-			id: String(a.id),
-			label: a.label || String(a.id),
-			enabled: a.enabled !== false,
-			origin: a.origin === "user" ? "user" : "builtin",
-			extension: a.extension
-		}))
+		select: (d) => extensionsOf(d)
 	});
 }
 function refreshExtensions() {
@@ -29818,6 +29824,13 @@ function focusTerm(title, kind = "agent") {
 }
 //#endregion
 //#region src/lib/theme.ts
+function isLightNow() {
+	try {
+		return document.documentElement.classList.contains("light");
+	} catch {
+		return false;
+	}
+}
 function setTheme(light) {
 	try {
 		document.documentElement.classList.toggle("light", light);
@@ -30888,53 +30901,53 @@ var LEAD_ASKS = {
 	lead_gone: "its lead is gone — nothing can merge or ship",
 	stray: "changes no worker owns in the lead's folder — commit or discard them yourself"
 };
-var num$7 = (v) => Number(v) || 0;
-var str$4 = (v) => v == null ? "" : String(v);
+var num$8 = (v) => Number(v) || 0;
+var str$5 = (v) => v == null ? "" : String(v);
 function runNote(event, data, info = {}) {
 	const d = data || {};
-	const run = str$4(d.run);
-	const name = str$4(d.name) || info.name?.(run) || "A team run";
-	const who = str$4(d.ref) || str$4(d.title) || str$4(d.task) || "a line";
+	const run = str$5(d.run);
+	const name = str$5(d.name) || info.name?.(run) || "A team run";
+	const who = str$5(d.ref) || str$5(d.title) || str$5(d.task) || "a line";
 	switch (event) {
 		case "run.needs_you": {
-			const reason = str$4(d.reason);
+			const reason = str$5(d.reason);
 			if (reason === "prompt") return null;
 			if (reason in LEAD_ASKS) {
-				const lead = str$4(d.title) || str$4(d.session);
+				const lead = str$5(d.title) || str$5(d.session);
 				return {
-					text: name + ": " + (str$4(d.text) || LEAD_ASKS[reason]),
+					text: name + ": " + (str$5(d.text) || LEAD_ASKS[reason]),
 					cls: reason === "check_failed" || reason === "lead_gone" || reason === "stray" ? "n-warn" : "n-info",
 					run,
-					dedupe: d.key ? "needs:" + str$4(d.key) : [
+					dedupe: d.key ? "needs:" + str$5(d.key) : [
 						"needs",
 						run,
 						reason,
-						str$4(d.round) || str$4(d.incarnation)
+						str$5(d.round) || str$5(d.incarnation)
 					].join(":"),
 					rule: "run_needs_you",
 					lead: reason === "check_failed" || reason === "lead_gone" ? void 0 : lead || void 0
 				};
 			}
 			return {
-				text: name + ": " + who + " " + (str$4(d.text) || escalationText(reason)),
+				text: name + ": " + who + " " + (str$5(d.text) || escalationText(reason)),
 				cls: "n-warn",
 				run,
-				dedupe: d.key ? "needs:" + str$4(d.key) : [
+				dedupe: d.key ? "needs:" + str$5(d.key) : [
 					"needs",
 					run,
-					str$4(d.task),
+					str$5(d.task),
 					reason,
-					str$4(d.incarnation)
+					str$5(d.incarnation)
 				].join(":"),
 				rule: "run_needs_you"
 			};
 		}
 		case "run.finished": {
-			const shipped = num$7(d.shipped);
-			const failed = num$7(d.failed);
+			const shipped = num$8(d.shipped);
+			const failed = num$8(d.failed);
 			const lane = info.lane?.(run) || "";
 			const word = lane === "pr" || lane === "merge" ? shipped === 1 ? " PR" : " PRs" : " " + laneDoneWord(lane);
-			const what = str$4(d.outcome) || shipped + word;
+			const what = str$5(d.outcome) || shipped + word;
 			return {
 				text: name + " finished — " + what + (failed ? ", " + failed + " failed" : ""),
 				cls: failed ? "n-warn" : "n-done",
@@ -30944,7 +30957,7 @@ function runNote(event, data, info = {}) {
 			};
 		}
 		case "run.task_shipped": {
-			const m = str$4(d.pr_url).match(/\/pull\/(\d+)/);
+			const m = str$5(d.pr_url).match(/\/pull\/(\d+)/);
 			const lane = info.lane?.(run) || "";
 			const did = m ? (lane === "merge" ? "merged" : "opened") + " PR #" + m[1] : laneDoneWord(lane);
 			return {
@@ -30954,7 +30967,7 @@ function runNote(event, data, info = {}) {
 				dedupe: [
 					"shipped",
 					run,
-					str$4(d.task)
+					str$5(d.task)
 				].join(":"),
 				rule: ""
 			};
@@ -34350,11 +34363,19 @@ function installViewFlip() {
 //#endregion
 //#region src/lib/keymap.ts
 var VOICE_TALK_EVENT = "mindflock:voice-talk";
+var VOICE_ASSISTANT_EVENT = "mindflock:voice-assistant";
+function voiceAssistant() {
+	if (typeof window === "undefined") return;
+	window.dispatchEvent(new CustomEvent(VOICE_ASSISTANT_EVENT));
+}
 function voiceTalk(phase) {
 	if (typeof window === "undefined") return;
 	window.dispatchEvent(new CustomEvent(VOICE_TALK_EVENT, { detail: { phase } }));
 }
 var _host = null;
+function keymapHost() {
+	return _host;
+}
 function skyOwnsSheet() {
 	if (typeof document === "undefined") return false;
 	const sky = document.getElementById("sky-view");
@@ -34708,6 +34729,17 @@ var KEYMAP = [
 		aliasOf: "talk",
 		holdable: true,
 		run: (_e, phase) => voiceTalk(phase || "down")
+	},
+	{
+		key: "m",
+		alt: true,
+		id: "assistant",
+		help: [
+			"Navigation",
+			"Alt+M",
+			"Voice assistant — speak to MindFlock itself; every phrase goes to it until “that's all”"
+		],
+		run: () => voiceAssistant()
 	},
 	{
 		key: "Tab",
@@ -38337,17 +38369,17 @@ function GridGlyph({ className = "tb-view-icon" }) {
 }
 //#endregion
 //#region src/lib/flockActions.ts
-var obj$3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
-var str$3 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
+var obj$4 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
+var str$4 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
 function normOption(v) {
-	const o = obj$3(v);
-	const key = str$3(o.key).trim();
+	const o = obj$4(v);
+	const key = str$4(o.key).trim();
 	if (!/^[1-9]$/.test(key)) return null;
-	const keys = Array.isArray(o.keys) ? o.keys.map((k) => str$3(k).trim()).filter(Boolean) : [];
+	const keys = Array.isArray(o.keys) ? o.keys.map((k) => str$4(k).trim()).filter(Boolean) : [];
 	const opt = {
 		key,
-		label: str$3(o.label).trim() || key,
-		kind: str$3(o.kind, "other")
+		label: str$4(o.label).trim() || key,
+		kind: str$4(o.kind, "other")
 	};
 	if (keys.length) opt.keys = keys;
 	const desc = typeof o.desc === "string" ? o.desc.trim() : "";
@@ -38355,46 +38387,46 @@ function normOption(v) {
 	if (typeof o.checked === "boolean") opt.checked = o.checked;
 	return opt;
 }
-var keyList = (v) => Array.isArray(v) ? v.map((k) => str$3(k).trim()).filter(Boolean) : [];
+var keyList = (v) => Array.isArray(v) ? v.map((k) => str$4(k).trim()).filter(Boolean) : [];
 function normSelect(d, o) {
 	d.multi = o.multi === true;
 	d.steps = (Array.isArray(o.steps) ? o.steps : []).map((v) => {
-		const s = obj$3(v);
+		const s = obj$4(v);
 		return s.submit === true ? {
-			label: str$3(s.label).trim(),
+			label: str$4(s.label).trim(),
 			done: s.done === true,
 			submit: true
 		} : {
-			label: str$3(s.label).trim(),
+			label: str$4(s.label).trim(),
 			done: s.done === true
 		};
 	});
 	const step = Math.trunc(Number(o.step));
 	d.step = Number.isFinite(step) && step >= 0 && step < d.steps.length ? step : 0;
 	if (Array.isArray(o.review)) d.review = o.review.map((v) => ({
-		question: str$3(obj$3(v).question).trim(),
-		answer: str$3(obj$3(v).answer).trim()
+		question: str$4(obj$4(v).question).trim(),
+		answer: str$4(obj$4(v).answer).trim()
 	}));
-	const nav = obj$3(o.nav);
+	const nav = obj$4(o.nav);
 	const or = (keys, dflt) => keys.length ? keys : [dflt];
 	d.nav = {
 		next: or(keyList(nav.next), "Right"),
 		prev: or(keyList(nav.prev), "Left"),
 		submit: or(keyList(nav.submit), "Enter")
 	};
-	const cursor = str$3(o.cursor).trim();
+	const cursor = str$4(o.cursor).trim();
 	d.cursor = /^[1-9]$/.test(cursor) ? cursor : null;
-	d.button = str$3(o.button).trim() || null;
+	d.button = str$4(o.button).trim() || null;
 }
 function normDialog(v) {
-	const o = obj$3(v);
+	const o = obj$4(v);
 	const parsed = o.parsed === true;
-	const command = o.command == null ? null : str$3(o.command).trim() || null;
+	const command = o.command == null ? null : str$4(o.command).trim() || null;
 	const options = parsed && Array.isArray(o.options) ? o.options.map(normOption).filter((x) => !!x) : [];
 	const d = {
-		id: str$3(o.id),
+		id: str$4(o.id),
 		parsed: parsed && options.length > 0,
-		question: str$3(o.question).trim(),
+		question: str$4(o.question).trim(),
 		command,
 		options
 	};
@@ -38404,9 +38436,9 @@ function normDialog(v) {
 		d.options = [];
 	}
 	if (d.kind === "select") normSelect(d, o);
-	const heading = str$3(o.heading).trim();
+	const heading = str$4(o.heading).trim();
 	if (heading) d.heading = heading;
-	const source = str$3(o.source).trim();
+	const source = str$4(o.source).trim();
 	if (source) d.source = source;
 	return d;
 }
@@ -38421,11 +38453,11 @@ async function fetchDialog(title, signal) {
 }
 var DIALOG_FRESH_MS = 3e3;
 var LABEL_PREFIX = 24;
-var squash = (s) => (s ?? "").replace(/\s+/g, "");
-var labelKey = (label) => squash(label.split("…")[0]).slice(0, LABEL_PREFIX);
+var squash$1 = (s) => (s ?? "").replace(/\s+/g, "");
+var labelKey = (label) => squash$1(label.split("…")[0]).slice(0, LABEL_PREFIX);
 function sameDialogShape(a, b) {
 	if (!a.parsed || !b.parsed || a.options.length !== b.options.length) return false;
-	if (squash(a.command) !== squash(b.command)) return false;
+	if (squash$1(a.command) !== squash$1(b.command)) return false;
 	return a.options.every((o, i) => {
 		const p = b.options[i];
 		if (o.key !== p.key) return false;
@@ -38484,11 +38516,11 @@ function answerDialog(title, key, dialogId, keys) {
 }
 function isDialogAnswered(err) {
 	const e = err;
-	return e?.status === 409 && obj$3(e.body).dialog_answered === true;
+	return e?.status === 409 && obj$4(e.body).dialog_answered === true;
 }
 function isDialogChanged(err) {
 	const e = err;
-	return e?.status === 409 && obj$3(e.body).dialog_changed === true;
+	return e?.status === 409 && obj$4(e.body).dialog_changed === true;
 }
 var wrapping = /* @__PURE__ */ new Set();
 async function pasteWrapup(title) {
@@ -38510,7 +38542,7 @@ function openThread(title, composeTo) {
 //#region src/lib/ask.ts
 var TYPED_RECENTLY_MS = 1e4;
 var EVENT_ASK_GRACE_MS = 8e3;
-var num$6 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
+var num$7 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
 var strOrNull$1 = (v) => typeof v === "string" && v.trim() ? v.trim() : null;
 function normAsking(v) {
 	if (!v || typeof v !== "object") return null;
@@ -38520,7 +38552,7 @@ function normAsking(v) {
 	return {
 		kind,
 		text: strOrNull$1(o.text),
-		ts: num$6(o.ts),
+		ts: num$7(o.ts),
 		dialog_id: strOrNull$1(o.dialog_id),
 		parsed: o.parsed === true,
 		source: strOrNull$1(o.source)
@@ -38534,7 +38566,7 @@ function askingOf(inst, activity = effectiveActivity(inst)) {
 		return {
 			kind: "dialog",
 			text: null,
-			ts: num$6(inst.activity_since),
+			ts: num$7(inst.activity_since),
 			dialog_id: null,
 			parsed: false,
 			source: null
@@ -38573,7 +38605,7 @@ function askQueue(instances, waiting, events, opts = {}) {
 	};
 	for (const w of waiting || []) {
 		if (w.kind !== "question" || !w.title || out.has(w.title) || movedOn(w.title)) continue;
-		const ts = num$6(w.since);
+		const ts = num$7(w.since);
 		out.set(w.title, {
 			title: w.title,
 			kind: "question",
@@ -40359,7 +40391,7 @@ function FlightHaltedRow({ w, row, shown }) {
 //#endregion
 //#region src/lib/revealGroup.ts
 var FLASH = "rg-flash";
-var FLASH_MS = 1600;
+var FLASH_MS$1 = 1600;
 function revealGroup(runId) {
 	if (!runId || typeof document === "undefined") return false;
 	const head = Array.from(document.querySelectorAll("li.run-group-head[data-run]")).find((el) => el.dataset.run === runId);
@@ -40371,7 +40403,7 @@ function revealGroup(runId) {
 	head.classList.remove(FLASH);
 	head.offsetWidth;
 	head.classList.add(FLASH);
-	window.setTimeout(() => head.classList.remove(FLASH), FLASH_MS);
+	window.setTimeout(() => head.classList.remove(FLASH), FLASH_MS$1);
 	return true;
 }
 //#endregion
@@ -41941,6 +41973,42 @@ function placeUnder(btn, w, vw, vh, m = 8) {
 //#endregion
 //#region src/components/voice/VoiceCommands.tsx
 var SHEET_W = 340;
+var ASSISTANT_GROUP = "MindFlock (the assistant)";
+var ASSISTANT_COMMANDS = [
+	{
+		say: "MindFlock, open intake",
+		does: "Anything you'd do by hand — start with “MindFlock,”",
+		group: ASSISTANT_GROUP
+	},
+	{
+		say: "MindFlock, start a session in the web app to fix the login bug",
+		does: "Starts it and takes you there",
+		group: ASSISTANT_GROUP
+	},
+	{
+		say: "MindFlock, which sessions need me?",
+		does: "Answers out loud",
+		group: ASSISTANT_GROUP
+	},
+	{
+		say: "MindFlock, turn off the birds",
+		does: "Changes a setting",
+		group: ASSISTANT_GROUP
+	},
+	{
+		say: "MindFlock, delete the old docs session",
+		does: "Asks first — say yes or no",
+		group: ASSISTANT_GROUP
+	},
+	{
+		say: "Alt+M … that's all",
+		does: "Talk to MindFlock: every phrase goes to it until “that's all”",
+		group: ASSISTANT_GROUP
+	}
+];
+function withAssistant(items) {
+	return items.some((i) => i && i.group === ASSISTANT_GROUP) ? [...items] : [...items, ...ASSISTANT_COMMANDS];
+}
 function groupCommands(items) {
 	const out = [];
 	for (const it of items) {
@@ -41978,7 +42046,7 @@ function VoiceCommands({ items, anchor, onClose }) {
 			document.removeEventListener("pointerdown", onDown, true);
 		};
 	}, []);
-	const groups = groupCommands(items);
+	const groups = groupCommands(withAssistant(items));
 	const rect = anchor?.getBoundingClientRect();
 	const w = Math.min(SHEET_W, window.innerWidth - 32);
 	const place = rect ? placeUnder(rect, w, window.innerWidth, window.innerHeight) : null;
@@ -42041,51 +42109,4223 @@ function VoiceCommands({ items, anchor, onClose }) {
 	}), document.body);
 }
 //#endregion
-//#region src/lib/askVoice.ts
-var ask = null;
-var mic = null;
-function setAskVoice(a) {
-	ask = a;
+//#region src/lib/voiceAssistant.ts
+var SNAPSHOT_COMMANDS_MAX = 300;
+var SNAPSHOT_CLICKABLES_MAX = 150;
+var UI_DOS = /* @__PURE__ */ new Set([
+	"open",
+	"close",
+	"view",
+	"focus",
+	"command",
+	"session_action",
+	"click",
+	"pref",
+	"type"
+]);
+var SERVER_DOS = /* @__PURE__ */ new Set([
+	"new_session",
+	"send",
+	"setting",
+	"status",
+	"help"
+]);
+var str$3 = (v) => typeof v === "string" ? v : "";
+var obj$3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : null;
+function parseUiAction(v) {
+	const a = obj$3(v);
+	if (!a || !UI_DOS.has(str$3(a.do))) return null;
+	switch (a.do) {
+		case "open": return str$3(a.target) ? {
+			do: "open",
+			target: str$3(a.target)
+		} : null;
+		case "close": return { do: "close" };
+		case "view": return a.mode === "grid" || a.mode === "sky" ? {
+			do: "view",
+			mode: a.mode
+		} : null;
+		case "focus": return str$3(a.session) ? {
+			do: "focus",
+			session: str$3(a.session)
+		} : null;
+		case "command": return str$3(a.label) ? {
+			do: "command",
+			label: str$3(a.label)
+		} : null;
+		case "session_action": return str$3(a.session) && str$3(a.action) ? {
+			do: "session_action",
+			session: str$3(a.session),
+			action: str$3(a.action)
+		} : null;
+		case "click": return str$3(a.label) ? {
+			do: "click",
+			label: str$3(a.label)
+		} : null;
+		case "pref": return str$3(a.key) ? {
+			do: "pref",
+			key: str$3(a.key),
+			value: a.value
+		} : null;
+		case "type": return typeof a.text === "string" ? {
+			do: "type",
+			text: a.text
+		} : null;
+	}
+	return null;
 }
-function clearAskVoice(a) {
-	if (ask === a) ask = null;
+function parseEvent(v) {
+	const e = obj$3(v);
+	if (!e) return null;
+	switch (e.type) {
+		case "act": {
+			const action = parseUiAction(e.action);
+			return action ? {
+				type: "act",
+				action
+			} : null;
+		}
+		case "did": {
+			const a = obj$3(e.action);
+			if (!a || !SERVER_DOS.has(str$3(a.do))) return null;
+			return {
+				type: "did",
+				action: a,
+				ok: e.ok !== false,
+				text: str$3(e.text),
+				detail: obj$3(e.detail) || {}
+			};
+		}
+		case "say":
+		case "ask":
+		case "error": return {
+			type: e.type,
+			text: str$3(e.text)
+		};
+		case "confirm": {
+			const a = obj$3(e.action);
+			if (!str$3(e.id) || !a) return null;
+			const action = UI_DOS.has(str$3(a.do)) ? parseUiAction(a) : SERVER_DOS.has(str$3(a.do)) ? a : null;
+			return action ? {
+				type: "confirm",
+				id: str$3(e.id),
+				text: str$3(e.text),
+				action
+			} : null;
+		}
+		case "done": return {
+			type: "done",
+			ms: Number(e.ms) || 0,
+			model: !!e.model
+		};
+	}
+	return null;
 }
-function askVoice() {
-	return ask;
-}
-function registerAskMic(m) {
-	mic = m;
-	return () => {
-		if (mic === m) mic = null;
-	};
-}
-function askMic() {
-	return mic;
-}
-var micState = {
-	listening: false,
-	title: "",
-	caption: "",
-	unsure: ""
+var NdjsonSplitter = class {
+	buf = "";
+	push(chunk) {
+		this.buf += chunk;
+		const out = [];
+		let nl;
+		while ((nl = this.buf.indexOf("\n")) >= 0) {
+			const line = this.buf.slice(0, nl);
+			this.buf = this.buf.slice(nl + 1);
+			const v = parseLine(line);
+			if (v !== void 0) out.push(v);
+		}
+		return out;
+	}
+	end() {
+		const line = this.buf;
+		this.buf = "";
+		const v = parseLine(line);
+		return v === void 0 ? [] : [v];
+	}
 };
+function parseLine(line) {
+	const t = line.trim();
+	if (!t) return void 0;
+	try {
+		return JSON.parse(t);
+	} catch {
+		return;
+	}
+}
+async function* readEvents(body) {
+	const reader = body.getReader();
+	const dec = new TextDecoder();
+	const split = new NdjsonSplitter();
+	try {
+		for (;;) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			for (const v of split.push(dec.decode(value, { stream: true }))) {
+				const e = parseEvent(v);
+				if (e) yield e;
+			}
+		}
+		for (const v of split.push(dec.decode())) {
+			const e = parseEvent(v);
+			if (e) yield e;
+		}
+		for (const v of split.end()) {
+			const e = parseEvent(v);
+			if (e) yield e;
+		}
+	} finally {
+		try {
+			reader.releaseLock();
+		} catch {}
+	}
+}
+var ASSISTANT_FAILED_LINE = "MindFlock couldn't answer that.";
+async function streamAssistant(body, on, opts = {}) {
+	const post = opts.fetch || apiRaw;
+	const started = Date.now();
+	let sawDone = false;
+	const emit = (e) => {
+		if (sawDone) return;
+		if (e.type === "done") sawDone = true;
+		on(e);
+	};
+	try {
+		const r = await post("/api/voice/assistant", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+			signal: opts.signal
+		});
+		if (!r.ok || !r.body) {
+			const j = await r.json().catch(() => null);
+			emit({
+				type: "error",
+				text: j && typeof j.error === "string" && j.error || ASSISTANT_FAILED_LINE
+			});
+		} else for await (const e of readEvents(r.body)) emit(e);
+	} catch (err) {
+		if (opts.signal?.aborted || err?.name === "AbortError") return;
+		emit({
+			type: "error",
+			text: ASSISTANT_FAILED_LINE
+		});
+	}
+	emit({
+		type: "done",
+		ms: Date.now() - started,
+		model: false
+	});
+}
+var WARM_EVERY_MS = 6e4;
+var warmedAt = 0;
+function warmAssistant(now = Date.now(), post = apiRaw) {
+	if (now - warmedAt < WARM_EVERY_MS) return false;
+	warmedAt = now;
+	Promise.resolve().then(() => post("/api/voice/assistant/warm", { method: "POST" })).catch(() => {});
+	return true;
+}
+var CONVERSATION_IDLE_MS = 12e4;
+var randomId = () => {
+	try {
+		if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+	} catch {}
+	return "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+};
+var Conversation = class {
+	now;
+	makeId;
+	current = "";
+	lastAt = 0;
+	constructor(now = Date.now, makeId = randomId) {
+		this.now = now;
+		this.makeId = makeId;
+	}
+	turn() {
+		const t = this.now();
+		if (!this.current || t - this.lastAt > CONVERSATION_IDLE_MS) this.current = this.makeId();
+		this.lastAt = t;
+		return this.current;
+	}
+	touch() {
+		if (this.current) this.lastAt = this.now();
+	}
+	reset() {
+		this.current = "";
+		this.lastAt = 0;
+	}
+};
+var norm = (t) => String(t || "").toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}' ]+/gu, " ").replace(/\s+/g, " ").trim();
+var YES = [
+	"yes",
+	"yeah",
+	"yep",
+	"yup",
+	"sure",
+	"do it",
+	"go ahead",
+	"ok",
+	"okay",
+	"yes please",
+	"please do",
+	"confirm"
+];
+var NO = [
+	"no",
+	"nope",
+	"cancel",
+	"never mind",
+	"nevermind",
+	"don't",
+	"do not",
+	"no thanks"
+];
+function yesNo(text) {
+	const t = stripAddress(norm(text)).replace(/\s+(please|thanks|thank you)$/, "").trim();
+	if (YES.includes(t)) return true;
+	if (NO.includes(t)) return false;
+	return null;
+}
+function addressed(text) {
+	const m = /^\s*(?:(?:hey|ok|okay)[\s,]+)?(?:mind\s?flock|flock)\b[\s,.:!?-]*/i.exec(String(text || ""));
+	if (!m) return null;
+	return String(text).slice(m[0].length).trim();
+}
+var stripAddress = (t) => {
+	const r = addressed(t);
+	return r === null ? t : norm(r);
+};
+var ENDS$1 = [
+	"that's all",
+	"thats all",
+	"that is all",
+	"that's it",
+	"thats it",
+	"that'll be all",
+	"thanks",
+	"thank you",
+	"thanks mindflock",
+	"thank you mindflock",
+	"thanks that's all",
+	"ok thanks",
+	"okay thanks",
+	"goodbye",
+	"bye",
+	"done",
+	"i'm done",
+	"we're done",
+	"never mind",
+	"nevermind",
+	"stop listening"
+];
+function isAssistantEnd(text) {
+	const t = stripAddress(norm(text)).replace(/\s+(mind\s?flock|flock)$/, "").trim();
+	return ENDS$1.includes(t);
+}
+var ASSISTANT_IDLE_MS = 6e4;
+function talkLevel$1(v) {
+	return v === "quiet" || v === "chatty" ? v : "brief";
+}
+function talkFromSettings(doc) {
+	return talkLevel$1(obj$3(obj$3(doc)?.voice)?.assistant_talk);
+}
+function speaksKind(kind, level) {
+	if (kind === "ask" || kind === "confirm" || kind === "error") return true;
+	if (kind === "say") return level !== "quiet";
+	if (kind === "did") return level === "chatty";
+	return false;
+}
+var EMPTY_VIEW = {
+	mode: false,
+	phase: "off",
+	heard: "",
+	caption: "",
+	error: false,
+	chips: [],
+	question: null,
+	seq: 0
+};
+var STRIP_FADE_MS = 6e3;
+var ViewStore = class {
+	v = EMPTY_VIEW;
+	subs = /* @__PURE__ */ new Set();
+	get = () => this.v;
+	subscribe = (fn) => {
+		this.subs.add(fn);
+		return () => this.subs.delete(fn);
+	};
+	set(patch) {
+		this.v = {
+			...this.v,
+			...patch,
+			seq: this.v.seq + 1
+		};
+		this.subs.forEach((s) => s());
+	}
+	clear() {
+		this.set({
+			phase: this.v.mode ? "listening" : "off",
+			heard: "",
+			caption: "",
+			error: false,
+			chips: [],
+			question: null
+		});
+	}
+};
+var assistantView = new ViewStore();
+function stripVisible(v) {
+	return v.mode || v.phase !== "off" || !!v.caption || !!v.chips.length || !!v.question || !!v.heard;
+}
+var LISTENING_LINE = "Talking to MindFlock";
+var THINKING_LINE = "Thinking…";
+var CONFIRM_TTL_MS = 6e4;
+var AssistantSession = class {
+	deps;
+	conv;
+	view;
+	pending = null;
+	pendingAt = 0;
+	inflight = null;
+	turnNo = 0;
+	constructor(deps) {
+		this.deps = deps;
+		this.conv = deps.conversation || new Conversation(deps.now || Date.now);
+		this.view = deps.view || assistantView;
+	}
+	now() {
+		return this.deps.now ? this.deps.now() : Date.now();
+	}
+	wantsNext() {
+		if (this.pending && this.now() - this.pendingAt > CONFIRM_TTL_MS) this.dropQuestion();
+		return !!this.pending;
+	}
+	confirmId() {
+		return this.wantsNext() && this.pending?.kind === "confirm" ? this.pending.id : null;
+	}
+	dropQuestion() {
+		this.pending = null;
+		if (this.view.get().question) this.view.set({ question: null });
+	}
+	get busy() {
+		return !!this.inflight;
+	}
+	cancel() {
+		this.inflight?.abort();
+		this.inflight = null;
+	}
+	hearing(text) {
+		this.view.set({
+			heard: text,
+			phase: "listening"
+		});
+	}
+	setMode(on) {
+		if (!on) this.cancel();
+		const v = this.view.get();
+		this.view.set({
+			mode: on,
+			phase: on ? "listening" : v.phase === "listening" ? "off" : v.phase
+		});
+	}
+	answer(yes) {
+		return this.turn(yes ? "yes" : "no");
+	}
+	async turn(text) {
+		const words = String(text || "").trim();
+		if (!words) return;
+		this.cancel();
+		const my = ++this.turnNo;
+		const ac = new AbortController();
+		this.inflight = ac;
+		const body = {
+			text: words,
+			conversation: this.conv.turn(),
+			snapshot: this.safeSnapshot()
+		};
+		const cid = this.confirmId();
+		if (cid) {
+			const yn = yesNo(words);
+			if (yn !== null) body.confirm = {
+				id: cid,
+				yes: yn
+			};
+		}
+		this.pending = null;
+		this.view.set({
+			phase: "thinking",
+			heard: words,
+			caption: "",
+			error: false,
+			chips: [],
+			question: null
+		});
+		const level = this.deps.talk();
+		let chimed = false;
+		const chimeOnce = () => {
+			if (chimed) return;
+			chimed = true;
+			this.deps.chime();
+		};
+		const mine = () => this.turnNo === my && !ac.signal.aborted;
+		let chain = Promise.resolve();
+		const on = (e) => {
+			chain = chain.then(() => mine() ? this.event(e, level, chimeOnce) : void 0).catch(() => {});
+		};
+		try {
+			await this.deps.stream(body, on, ac.signal);
+			await chain;
+		} finally {
+			if (this.inflight === ac) this.inflight = null;
+		}
+		if (!mine()) return;
+		this.conv.touch();
+		const v = this.view.get();
+		this.view.set({
+			phase: v.mode ? "listening" : "off",
+			heard: v.question || v.caption || v.chips.length ? v.heard : ""
+		});
+	}
+	safeSnapshot() {
+		try {
+			return this.deps.snapshot();
+		} catch {
+			return {};
+		}
+	}
+	chip(c) {
+		this.view.set({ chips: [...this.view.get().chips, c].slice(-4) });
+	}
+	say(kind, text, level, chime) {
+		if (!text) return;
+		if (speaksKind(kind, level)) this.deps.speak(text);
+		else chime();
+	}
+	async event(e, level, chime) {
+		switch (e.type) {
+			case "act": {
+				let r;
+				try {
+					r = await this.deps.exec(e.action);
+				} catch (err) {
+					r = {
+						ok: false,
+						text: "Couldn't do that: " + (err?.message || "error")
+					};
+				}
+				if (r.ok) {
+					this.chip({
+						text: r.text,
+						ok: r.ok,
+						session: r.session,
+						open: r.open
+					});
+					chime();
+				} else {
+					this.view.set({
+						caption: r.text,
+						error: true,
+						phase: "replying"
+					});
+					this.deps.speak(r.text);
+				}
+				return;
+			}
+			case "did": {
+				const title = typeof e.detail.title === "string" ? e.detail.title : "";
+				if (e.action.do === "new_session" && e.ok && title) this.deps.focus(title);
+				const session = title || (e.action.do === "send" ? e.action.session : void 0);
+				if (!e.ok) this.view.set({
+					caption: e.text,
+					error: true,
+					phase: "replying"
+				});
+				else {
+					if (e.text) this.chip({
+						text: e.text,
+						ok: e.ok,
+						session
+					});
+					this.say("did", e.text, level, chime);
+				}
+				return;
+			}
+			case "say":
+				this.view.set({
+					caption: e.text,
+					error: false,
+					phase: "replying"
+				});
+				this.say("say", e.text, level, chime);
+				return;
+			case "ask":
+				this.pending = { kind: "ask" };
+				this.pendingAt = this.now();
+				this.view.set({
+					question: {
+						kind: "ask",
+						text: e.text
+					},
+					caption: e.text,
+					error: false,
+					phase: "replying"
+				});
+				this.say("ask", e.text, level, chime);
+				this.deps.asked?.("ask");
+				return;
+			case "confirm":
+				this.pending = {
+					kind: "confirm",
+					id: e.id
+				};
+				this.pendingAt = this.now();
+				this.view.set({
+					question: {
+						kind: "confirm",
+						text: e.text
+					},
+					caption: e.text,
+					error: false,
+					phase: "replying"
+				});
+				this.say("confirm", e.text, level, chime);
+				this.deps.asked?.("confirm");
+				return;
+			case "error":
+				this.view.set({
+					caption: e.text,
+					error: true,
+					phase: "replying"
+				});
+				this.say("error", e.text, level, chime);
+				return;
+			case "done": return;
+		}
+	}
+};
+//#endregion
+//#region src/components/voice/AssistantStrip.tsx
+var STRIP_W = 320;
+var PILL_ROOM = 18;
+function stripHead(v) {
+	if (v.phase === "thinking") return THINKING_LINE;
+	if (v.mode) return LISTENING_LINE;
+	return "MindFlock";
+}
+function AssistantStripBody({ v, onChip, onAnswer, onClose }) {
+	const confirm = v.question?.kind === "confirm";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "assist-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "assist-dot" + (v.mode ? " on" : ""),
+					"aria-hidden": "true"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "assist-where",
+					id: "assist-where",
+					children: stripHead(v)
+				}),
+				v.phase === "thinking" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "assist-thinking",
+					"aria-hidden": "true",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", {})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "assist-close",
+					id: "assist-close",
+					"aria-label": v.mode ? "Stop talking to MindFlock" : "Close",
+					title: v.mode ? "Stop talking to MindFlock (Alt+M)" : "Close",
+					onClick: () => onClose?.(),
+					children: "×"
+				})
+			]
+		}),
+		v.heard && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "assist-heard",
+			id: "assist-heard",
+			children: "“" + v.heard + "”"
+		}),
+		v.caption && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "assist-caption" + (v.error ? " is-error" : ""),
+			id: "assist-caption",
+			children: v.caption
+		}),
+		v.chips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "assist-chips",
+			id: "assist-chips",
+			children: v.chips.map((c, i) => {
+				return c.ok && !!(c.session || c.open) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "assist-chip",
+					title: c.session ? "Go to it" : "Open it again",
+					onClick: () => onChip?.(c),
+					children: c.text
+				}, i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "assist-chip" + (c.ok ? "" : " is-error"),
+					children: c.text
+				}, i);
+			})
+		}),
+		confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "assist-confirm",
+			id: "assist-confirm",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "assist-yes",
+					id: "assist-yes",
+					onClick: () => onAnswer?.(true),
+					children: "Yes"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "assist-no",
+					id: "assist-no",
+					onClick: () => onAnswer?.(false),
+					children: "No"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "assist-or",
+					children: "or say it"
+				})
+			]
+		})
+	] });
+}
+function stripHolds(v) {
+	return v.mode || v.phase === "thinking" || !!v.question;
+}
+function AssistantStrip({ anchor, onChip, onAnswer, onClose }) {
+	const v = (0, import_react.useSyncExternalStore)(assistantView.subscribe, assistantView.get, assistantView.get);
+	const [, setTick] = (0, import_react.useState)(0);
+	(0, import_react.useEffect)(() => {
+		if (!stripVisible(v) || stripHolds(v)) return;
+		const t = setTimeout(() => {
+			assistantView.clear();
+			setTick((n) => n + 1);
+		}, STRIP_FADE_MS);
+		return () => clearTimeout(t);
+	}, [v]);
+	if (!stripVisible(v)) return null;
+	const rect = anchor?.getBoundingClientRect();
+	const w = Math.min(STRIP_W, window.innerWidth - 32);
+	const place = rect ? placeUnder({
+		left: rect.left,
+		right: rect.right,
+		bottom: rect.bottom + PILL_ROOM
+	}, w, window.innerWidth, window.innerHeight) : null;
+	const style = place ? {
+		top: place.top + "px",
+		left: place.left + "px",
+		width: w + "px"
+	} : {
+		top: "48px",
+		right: "16px",
+		width: w + "px"
+	};
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "assist-strip" + (v.mode ? " is-mode" : "") + (v.question ? " is-asking" : ""),
+		id: "assist-strip",
+		style,
+		role: "status",
+		"aria-live": "polite",
+		"aria-label": "MindFlock assistant",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantStripBody, {
+			v,
+			onChip,
+			onAnswer,
+			onClose
+		})
+	}), document.body);
+}
+//#endregion
+//#region src/components/palette/paletteRank.ts
+function fuzzyScore(query, text) {
+	query = String(query || "").toLowerCase();
+	text = String(text || "").toLowerCase();
+	if (!query) return 0;
+	const sub = text.indexOf(query);
+	if (sub >= 0) return sub;
+	let ti = 0, score = 1e3;
+	for (const ch of query) {
+		const at = text.indexOf(ch, ti);
+		if (at < 0) return -1;
+		score += at - ti;
+		ti = at + 1;
+	}
+	return score;
+}
+var SYNONYMS = [
+	["New session", "create start add agent task"],
+	["Keyboard shortcuts", "help keys hotkeys keyboard"],
+	["Tour", "help intro welcome guide how getting started"],
+	["Open Setup checklist", "install setup get started onboarding sign in login"],
+	["Open Doctor", "install fix health check dependencies missing tools"],
+	["Open Settings", "preferences options config configure"],
+	["Recently closed", "undo reopen restore closed"],
+	["Open Intake", "tickets inbox jira linear shortcut github issues"],
+	["Verify", "checklist test qa check"],
+	["Toggle sidebar", "hide show panel"],
+	["Customize", "bars sidebar layout"],
+	["Select sessions", "bulk several many"],
+	["Focus:", "go open switch show"]
+];
+function synonymsFor(label) {
+	for (const [prefix, words] of SYNONYMS) if (label.startsWith(prefix)) return words;
+	return "";
+}
+var TOP_LIMIT = 9;
+var NEEDS_LIMIT = 5;
+function rankActions(actions, query, opts = {}) {
+	const q = String(query || "").trim();
+	if (!q) {
+		if (opts.showAll || !opts.allRow) return actions.slice();
+		const ranked = actions.map((a, i) => ({
+			a,
+			i
+		})).filter((x) => x.a.top !== void 0).sort((x, y) => x.a.top - y.a.top || x.i - y.i).map((x) => x.a);
+		const urgent = ranked.filter((a) => a.top < 0).slice(0, NEEDS_LIMIT);
+		const top = ranked.filter((a) => a.top >= 0).slice(0, TOP_LIMIT);
+		return urgent.concat(top, opts.allRow(actions.length));
+	}
+	const scored = [];
+	actions.forEach((a, i) => {
+		let s = fuzzyScore(q, a.label);
+		const words = [a.keywords || "", synonymsFor(a.label)].join(" ").trim();
+		if (words) {
+			const lw = words.toLowerCase();
+			const lq = q.toLowerCase();
+			if ((/\s/.test(lq.trim()) ? lw.includes(lq.trim()) : lw.split(/\s+/).some((w) => w.startsWith(lq))) && (s < 0 || s >= 1e3)) s = 500;
+		}
+		if (s >= 0) scored.push({
+			a,
+			i,
+			s
+		});
+	});
+	scored.sort((x, y) => x.s - y.s || Number(!!x.a.outward) - Number(!!y.a.outward) || x.i - y.i);
+	const out = scored.map((x) => x.a);
+	if (out.length && out[0].outward) {
+		const k = out.findIndex((a) => !a.outward);
+		if (k > 0) out.unshift(out.splice(k, 1)[0]);
+	}
+	return out;
+}
+function paletteCode(query) {
+	const none = {
+		kind: "",
+		code: "",
+		device: ""
+	};
+	const t = String(query || "").trim();
+	if (!t) return none;
+	if (extractPeerCode(t)) return routeCode(t);
+	if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
+	return routeCode(t);
+}
+function isKeyHint(hint) {
+	return !/\b[a-z]{3,}\b/.test(hint);
+}
+//#endregion
+//#region src/lib/templateRun.ts
+async function runTemplateNow(name) {
+	try {
+		const made = await api("/api/templates/" + encodeURIComponent(name) + "/run", { method: "POST" });
+		const title = String(made?.title || "");
+		toast(`Started “${title || name}” from template “${name}”`);
+		await refreshInstances();
+		if (title) selectSession(title);
+		ensureTemplates(true).catch(() => {});
+		return title;
+	} catch (err) {
+		toast(templateRefusal(err, `Couldn't start ${name}`).text);
+		ensureTemplates(true).catch(() => {});
+		return "";
+	}
+}
+//#endregion
+//#region src/components/settings/settingsMode.tsx
+var ADVANCED_LS = lsKeyFor("settings_advanced");
+function readAdvancedMode(kv) {
+	return readLocal("settings_advanced", kv) === true;
+}
+function writeAdvancedMode(on, kv) {
+	writeLocal("settings_advanced", on, kv);
+	notePrefWrite(ADVANCED_LS, kv);
+}
+function navScreens(screens, advanced, active) {
+	if (advanced) return [...screens];
+	const basic = screens.filter((s) => !s.advanced);
+	const peek = screens.find((s) => s.advanced && s.key === active);
+	return peek ? [...basic, peek] : basic;
+}
+function navHeading(shown, i, advanced) {
+	const s = shown[i];
+	if (!advanced) return s.advanced && !shown[i - 1]?.advanced ? "Advanced" : "";
+	return s.group && s.group !== shown[i - 1]?.group ? s.group : "";
+}
+var SettingsModeCtx = (0, import_react.createContext)(false);
+function useAdvancedSettings() {
+	return (0, import_react.useContext)(SettingsModeCtx);
+}
+function AdvancedToggle({ advanced, hidden, onChange }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-mode-foot",
+		"data-tour": "settings-advanced",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			id: "settings-advanced-toggle",
+			className: "set-mode-toggle",
+			"aria-pressed": advanced,
+			onClick: () => onChange(!advanced),
+			children: advanced ? "Hide advanced settings" : "Show advanced settings"
+		}), !advanced && hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-mode-more",
+			children: [hidden, " more screens"]
+		}) : null]
+	});
+}
+function AdvancedFold({ id, summary = "Advanced", basic = false, defaultOpen, children }) {
+	const advanced = useAdvancedSettings();
+	const initial = defaultOpen ?? advanced;
+	const [open, setOpen] = (0, import_react.useState)(initial);
+	(0, import_react.useEffect)(() => setOpen(initial), [initial]);
+	if (!advanced && !basic) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "pr-advanced set-adv-fold",
+		id,
+		"data-advanced-fold": "",
+		open,
+		onToggle: (e) => setOpen(e.currentTarget.open),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "pr-advanced-body set-adv-fold-body",
+			children
+		})]
+	});
+}
+//#endregion
+//#region src/components/palette/settingsSearch.ts
+var SETTINGS_SEARCH = [
+	{
+		key: "general",
+		label: "General",
+		sub: "Tours, hints and terminal scroll speed",
+		terms: [
+			"general",
+			"hints",
+			"tips",
+			"scroll"
+		]
+	},
+	{
+		key: "general",
+		label: "General → Tours",
+		sub: "Replay the welcome tour and the menu tours",
+		terms: [
+			"tour",
+			"tours",
+			"replay",
+			"welcome",
+			"walkthrough",
+			"tutorial",
+			"getting started",
+			"help"
+		],
+		anchor: "#general-tours"
+	},
+	{
+		key: "orchestration",
+		label: "Agent orchestration → Workers",
+		sub: "What Alt+G types, and Workers on every prompt adds",
+		terms: [
+			"workers",
+			"worker",
+			"mindflock agents",
+			"flock",
+			"spawn",
+			"orchestrate",
+			"workers model",
+			"every prompt"
+		],
+		anchor: "#orch-workers"
+	},
+	{
+		key: "general",
+		label: "General → Budgets, resume and sleep",
+		sub: "Cost alerts, carrying on after a usage reset, idle agents",
+		terms: [
+			"budget",
+			"cost",
+			"spend",
+			"usage resets",
+			"resume",
+			"revive",
+			"restart sessions",
+			"sleep",
+			"idle",
+			"memory",
+			"scroll speed"
+		],
+		anchor: "#general-advanced",
+		advanced: true
+	},
+	{
+		key: "connections",
+		label: "Connections",
+		sub: "Everything MindFlock talks to: your agent, GitHub, ticket trackers",
+		terms: [
+			"connections",
+			"connect",
+			"integrations",
+			"github",
+			"token",
+			"tracker",
+			"tickets",
+			"shortcut",
+			"jira",
+			"linear",
+			"asana",
+			"sign in",
+			"login",
+			"signed in"
+		]
+	},
+	{
+		key: "connections",
+		label: "Connections → GitHub",
+		sub: "Connect GitHub so agents can open pull requests",
+		terms: [
+			"github",
+			"gh",
+			"pull request",
+			"pr",
+			"token",
+			"personal access token",
+			"repo access"
+		],
+		anchor: "[data-conn=\"github\"]"
+	},
+	{
+		key: "notifications",
+		label: "Notifications",
+		sub: "Which events alert you, and where: bell, desktop, phone",
+		terms: [
+			"notifications",
+			"notification",
+			"notify",
+			"alerts",
+			"alert",
+			"bell",
+			"desktop",
+			"mute",
+			"ping",
+			"sound"
+		]
+	},
+	{
+		key: "notifications",
+		label: "Notifications → Question pop-up",
+		sub: "Pop up a session's permission and choice prompts in the middle of the screen",
+		terms: [
+			"question",
+			"questions",
+			"pop up",
+			"popup",
+			"pop-up",
+			"ask",
+			"asking",
+			"dialog",
+			"permission",
+			"answer"
+		],
+		anchor: "#notif-ask-row"
+	},
+	{
+		key: "notifications",
+		label: "Notifications → Phone alerts",
+		sub: "Push notifications to your phone (ntfy)",
+		terms: [
+			"phone",
+			"mobile",
+			"push",
+			"ntfy",
+			"alerts on my phone",
+			"notifications on phone"
+		],
+		anchor: "#notif-advanced"
+	},
+	{
+		key: "coding",
+		label: "Agents",
+		sub: "Your default agent, its sign-in and extra launch flags",
+		terms: [
+			"agents",
+			"agent",
+			"default agent",
+			"claude",
+			"codex",
+			"aider",
+			"cli",
+			"launch flags",
+			"flags",
+			"permissions",
+			"skip permissions",
+			"sign in",
+			"model"
+		]
+	},
+	{
+		key: "coding",
+		label: "Agents → Sessions running at once",
+		sub: "How many run together; the ticket-session limit is set in Intake",
+		terms: [
+			"parallel",
+			"concurrency",
+			"concurrent",
+			"at once",
+			"simultaneous",
+			"max sessions",
+			"max ticket sessions",
+			"ticket sessions at once",
+			"how many",
+			"session limit",
+			"limit",
+			"queue"
+		],
+		anchor: "#coding-sessions-at-once"
+	},
+	{
+		key: "providers",
+		label: "Custom agents",
+		sub: "Point an agent at its own build, or add one MindFlock doesn't ship",
+		terms: [
+			"custom agent",
+			"add agent",
+			"provider",
+			"providers",
+			"install agent",
+			"binary",
+			"path",
+			"toml"
+		]
+	},
+	{
+		key: "accounts",
+		label: "Accounts",
+		sub: "Run sessions as different sign-ins or API keys",
+		terms: [
+			"accounts",
+			"account",
+			"api key",
+			"openrouter",
+			"profile",
+			"second account",
+			"switch account"
+		]
+	},
+	{
+		key: "localmodel",
+		label: "Local model",
+		sub: "Use a model running on this computer (Ollama and others)",
+		terms: [
+			"local model",
+			"ollama",
+			"llm",
+			"offline model"
+		]
+	},
+	{
+		key: "orchestration",
+		label: "Agent orchestration",
+		sub: "Let agents start and steer sessions of their own, and how far",
+		terms: [
+			"orchestration",
+			"mcp",
+			"spawn",
+			"workers",
+			"sub-sessions",
+			"fan out",
+			"nesting",
+			"parallel",
+			"concurrency",
+			"limits"
+		]
+	},
+	{
+		key: "workspace",
+		label: "Workspace",
+		sub: "Where sessions' files live, and the branches they start from",
+		terms: [
+			"workspace",
+			"worktree",
+			"worktrees",
+			"folder",
+			"directory",
+			"dir",
+			"checkout",
+			"branch",
+			"base branch",
+			"pr base"
+		]
+	},
+	{
+		key: "workspace",
+		label: "Workspace → Default live branch",
+		sub: "The branch that means shipped, unless a repository sets its own",
+		terms: [
+			"live branch",
+			"default live branch",
+			"shipped",
+			"production branch",
+			"release branch"
+		],
+		anchor: "#workspace-advanced",
+		advanced: true
+	},
+	{
+		key: "workspace",
+		label: "Workspace → Where worktrees live",
+		sub: "The folders new sessions' worktrees are made in",
+		terms: [
+			"where are worktrees",
+			"worktree folder",
+			"workspace folder",
+			"path",
+			"checkout location",
+			"where are my files"
+		],
+		anchor: "#workspace-paths"
+	},
+	{
+		key: "workspace",
+		label: "Workspace → Worktree or clone",
+		sub: "How ticket sessions copy the repo — set in Intake",
+		terms: [
+			"worktree mode",
+			"clone",
+			"full clone",
+			"copy the repo",
+			"how ticket sessions copy the repo",
+			"ticket sessions"
+		],
+		anchor: "#workspace-copy-mode"
+	},
+	{
+		key: "ide",
+		label: "IDE",
+		sub: "Which editor “Open in editor” uses",
+		terms: [
+			"ide",
+			"editor",
+			"cursor",
+			"vscode",
+			"vs code",
+			"open in editor"
+		]
+	},
+	{
+		key: "ide",
+		label: "IDE → Open IDE when a ticket starts",
+		sub: "Open each new ticket session in your editor — set in Intake",
+		terms: [
+			"open ide when a ticket starts",
+			"open ide",
+			"ide on ticket",
+			"open editor on ticket",
+			"ticket ide"
+		],
+		anchor: "#ide-ticket-row"
+	},
+	{
+		key: "security",
+		label: "Security",
+		sub: "Require an access token to open MindFlock from a browser",
+		terms: [
+			"security",
+			"access token",
+			"token",
+			"password",
+			"lock",
+			"auth",
+			"require token"
+		]
+	},
+	{
+		key: "appearance",
+		label: "Appearance",
+		sub: "Light or dark, colours, motion and break reminders",
+		terms: [
+			"appearance",
+			"theme",
+			"color",
+			"colour",
+			"accent",
+			"reduce motion",
+			"motion",
+			"take a break",
+			"break",
+			"idle flock",
+			"birds"
+		]
+	},
+	{
+		key: "appearance",
+		label: "Appearance → Mode",
+		sub: "Light or dark (the moon in the top bar switches too)",
+		terms: [
+			"dark",
+			"light",
+			"dark mode",
+			"light mode",
+			"night mode",
+			"mode"
+		],
+		anchor: "#mode-swatches"
+	},
+	{
+		key: "devices",
+		label: "Your devices",
+		sub: "Pair your other computers and share settings between them",
+		terms: [
+			"devices",
+			"device",
+			"computer",
+			"pair",
+			"pairing",
+			"sync",
+			"settings sync",
+			"tailscale",
+			"reachable",
+			"remote"
+		]
+	},
+	{
+		key: "devices",
+		label: "Your devices → Which computer auto-starts work",
+		sub: "The one device that handles PR review comments and new issues",
+		terms: [
+			"which computer auto-starts work",
+			"pr review and issue handling",
+			"run here",
+			"automation device",
+			"runs on"
+		],
+		anchor: "#devices-run-here"
+	},
+	{
+		key: "mobile",
+		label: "Your phone",
+		sub: "Use MindFlock itself from your phone, over Tailscale",
+		terms: [
+			"phone",
+			"mobile",
+			"qr",
+			"qr code",
+			"use on phone",
+			"tailscale"
+		]
+	},
+	{
+		key: "voice",
+		label: "Voice",
+		sub: "Speech engines for talking to sessions: built in, local models or a host",
+		terms: [
+			"voice",
+			"speech",
+			"microphone",
+			"mic",
+			"dictation",
+			"recognition",
+			"whisper",
+			"piper",
+			"text to speech",
+			"tts",
+			"stt",
+			"talk",
+			"spoken replies",
+			"read replies aloud",
+			"push to talk",
+			"hold to talk",
+			"click to talk",
+			"approve dialogs by voice",
+			"wake word",
+			"hey mindflock",
+			"listen for mindflock",
+			"standby"
+		]
+	},
+	{
+		key: "voice",
+		label: "Voice → Voice words",
+		sub: "The words that send, stop and start over, and the wake word",
+		terms: [
+			"keywords",
+			"voice words",
+			"over",
+			"over and out",
+			"disregard",
+			"wake word",
+			"radio words",
+			"stop words"
+		],
+		anchor: "#voice-words"
+	},
+	{
+		key: "peer",
+		label: "People",
+		sub: "Invite someone and share one folder with their agent",
+		terms: [
+			"people",
+			"peer",
+			"share",
+			"invite",
+			"collaborate",
+			"teammate",
+			"pair",
+			"pairing",
+			"join",
+			"link",
+			"safety number",
+			"joint task"
+		]
+	},
+	{
+		key: "extensions",
+		label: "Extensions",
+		sub: "Add-ons that bring their own sidebar bar and commands",
+		terms: [
+			"extensions",
+			"extension",
+			"addon",
+			"plugin",
+			"database"
+		]
+	},
+	{
+		key: "doctor",
+		label: "Doctor",
+		sub: "Check git, tmux and your agent are installed, and fix what's missing",
+		terms: [
+			"doctor",
+			"install",
+			"dependencies",
+			"missing",
+			"diagnose",
+			"health",
+			"troubleshoot",
+			"fix"
+		]
+	},
+	{
+		key: "logs",
+		label: "System logs",
+		sub: "MindFlock's own logs, to paste into a bug report",
+		terms: [
+			"logs",
+			"log",
+			"errors",
+			"debug"
+		]
+	},
+	{
+		key: "advanced",
+		label: "Engine & updates",
+		sub: "Version and updates, restart, uninstall",
+		terms: [
+			"engine",
+			"update",
+			"updates",
+			"upgrade",
+			"version",
+			"restart server",
+			"uninstall"
+		]
+	},
+	{
+		key: "advanced",
+		label: "Engine & updates → Ticket sessions in MindFlock",
+		sub: "Tickets as MindFlock sessions or a bare tmux session — set in Intake",
+		terms: [
+			"ticket sessions in mindflock",
+			"tmux",
+			"terminal tab",
+			"engine enabled",
+			"bare tmux"
+		],
+		anchor: "#engine-ticket-sessions"
+	}
+];
+function settingsMatchScore(entry, q) {
+	if (q.length < 2) return -1;
+	const label = entry.label.toLowerCase();
+	const terms = entry.terms.map((t) => t.toLowerCase());
+	const wordStart = (text) => (" " + text.replace(/[^a-z0-9]+/g, " ")).includes(" " + q);
+	if (label === q || label.split(" → ").includes(q)) return 0;
+	if (terms.includes(q)) return 1;
+	if (wordStart(label)) return 2;
+	if (terms.some((t) => t.startsWith(q))) return 3;
+	if (label.includes(q)) return 4;
+	if (q.length >= 3 && terms.some((t) => t.includes(q))) return 5;
+	if (q.length >= 3 && wordStart(entry.sub.toLowerCase())) return 6;
+	if (terms.some((t) => t.length >= 3 && q.includes(t))) return 7;
+	return -1;
+}
+function searchSettings(query, limit = 5) {
+	const q = String(query || "").trim().toLowerCase();
+	return SETTINGS_SEARCH.map((e, i) => ({
+		e,
+		i,
+		s: settingsMatchScore(e, q)
+	})).filter((x) => x.s >= 0).sort((a, b) => a.s - b.s || a.i - b.i).slice(0, limit).map((x) => x.e);
+}
+function revealInSettings(selector) {
+	if (typeof document === "undefined") return;
+	let tries = 0;
+	const look = () => {
+		const el = document.querySelector("#settings-screens " + selector);
+		if (!el) {
+			if (++tries < 30) setTimeout(look, 35);
+			return;
+		}
+		for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) d.open = true;
+		if (el instanceof HTMLDetailsElement) el.open = true;
+		el.scrollIntoView?.({ block: "start" });
+	};
+	setTimeout(look, 0);
+}
+function settingsActions(query) {
+	return searchSettings(query).map((e) => ({
+		label: "Settings → " + e.label,
+		sub: e.sub,
+		hint: "settings",
+		run: () => {
+			if (e.advanced && !readAdvancedMode()) writeAdvancedMode(true);
+			openSettings(e.key);
+			if (e.anchor) revealInSettings(e.anchor);
+		}
+	}));
+}
+//#endregion
+//#region src/lib/tours/welcome.ts
+var WELCOME_TOUR = {
+	id: "welcome",
+	title: "Welcome",
+	steps: [
+		{
+			target: "[data-tour=\"setup-step-tools\"], .setup-step[data-step=\"tools\"]",
+			title: "① Install your agent",
+			body: "One click installs the coding agent MindFlock runs for you; each step ticks itself once it is really done."
+		},
+		{
+			target: "[data-tour=\"setup-step-agent_login\"], .setup-step[data-step=\"agent_login\"]",
+			title: "② Sign in to your agent",
+			body: "Sign in once in the window that opens, with that agent's own account."
+		},
+		{
+			target: "[data-tour=\"setup-step-repo\"], .setup-step[data-step=\"repo\"]",
+			title: "③ Start your first agent",
+			body: "Pick a repo and say what to do — that is a session: the agent works on its own branch, and the Sky shows its route."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/new.ts
+var NEW_TOUR = {
+	id: "new",
+	title: "New",
+	steps: [
+		{
+			target: "[data-tour=\"new-task\"], #new-describe-text",
+			title: "Say what to work on",
+			body: "A session is one agent on its own branch — describe its task in plain words, and the agent starts on exactly this."
+		},
+		{
+			target: "[data-tour=\"new-folder\"], #new-describe-folder",
+			title: "Where it works",
+			body: "This is the repo it works in; each session gets its own branch, so your checkout is never touched."
+		},
+		{
+			target: "[data-tour=\"new-start\"], #new-describe-start, #new-create",
+			title: "Start it",
+			body: "Start begins the session now; talk to its agent in the Grid, or follow its route in the Sky."
+		},
+		{
+			target: "[data-tour=\"pane-tabs\"], [data-tour=\"pane-menu\"]",
+			title: "Then, in its pane",
+			body: "Diff shows what changed; when the agent stops, ⋯ → Push or Open PR ships it, and ✕ closes it (reopen it from Recently closed)."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/intake.ts
+var INTAKE_TOUR = {
+	id: "intake",
+	title: "Intake",
+	steps: [
+		{
+			target: "[data-tour=\"intake-tiles\"], #intake-panel:not(:has([data-tour=\"intake-tiles\"])) #intake-add-source",
+			title: "Pick where your work lives",
+			body: "Intake is where work arrives by itself — tickets, pull requests, issues; pick your tracker, or Repository for a GitHub repo."
+		},
+		{
+			target: "[data-tour=\"intake-token\"]",
+			title: "Paste a token",
+			body: "Create a token ↗ opens the tracker's page for one; Test & continue checks it, and nothing is saved until Finish."
+		},
+		{
+			target: "[data-tour=\"intake-repo\"]",
+			title: "Name the repo",
+			body: "Each ticket starts as a session on its own branch of this repo — the one thing Finish needs."
+		},
+		{
+			target: "[data-tour=\"intake-start\"]",
+			title: "Start one by hand first",
+			body: "Start opens a ticket as a session — its route shows in the Sky — and Open session › takes you to it."
+		},
+		{
+			target: "[data-tour=\"intake-autostart\"], #intake-panel:not(:has([data-tour=\"intake-autostart\"])) #intake-tab-autostart",
+			title: "Auto-start, when you trust it",
+			body: "One switch each for tickets, PR review comments and new issues; each source says which route its items take."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/verify.ts
+var VERIFY_TOUR = {
+	id: "verify",
+	title: "Verify",
+	steps: [
+		{
+			target: "[data-tour=\"behaviors-stop\"], .sky-node.sky-behaviors",
+			title: "Behaviors live on the route",
+			body: "What the work should do in real use sits on its route as a Verify stop, and its face says how they stand."
+		},
+		{
+			target: "[data-tour=\"behaviors-card\"], .bh-card",
+			title: "Open it in place",
+			body: "Click it to open the card in place: the agent checks what it can, you answer the rest, and a failure halts the route."
+		},
+		{
+			target: "[data-tour=\"behaviors-board\"], .sky-bh",
+			title: "The Behaviors board",
+			body: "Behaviors with no session in the Sky wait on this board, and Alt+V flies to the next one that needs you."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/schedule.ts
+var SCHEDULE_TOUR = {
+	id: "schedule",
+	title: "Schedule",
+	steps: [
+		{
+			target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+			title: "Sessions you'll want again",
+			body: "Schedule starts sessions and saved routes on a timer — a template is a folder, an agent and a task, ready in one click."
+		},
+		{
+			target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+			title: "Create a template",
+			body: "Start with a job you repeat, like a nightly test run or a dependency bump."
+		},
+		{
+			target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
+			title: "Name it and pick the repo",
+			body: "The folder is what makes a template runnable — every session from it works there."
+		},
+		{
+			target: "[data-tour=\"schedule-task\"]",
+			title: "Say what to do",
+			body: "Every session from this template is told this task first."
+		},
+		{
+			target: "[data-tour=\"schedule-when\"]",
+			title: "Let it start by itself",
+			body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
+		},
+		{
+			target: "[data-tour=\"schedule-run\"]",
+			title: "Try it once now",
+			body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/settings.ts
+var SETTINGS_TOUR = {
+	id: "settings",
+	title: "Settings",
+	steps: [
+		{
+			target: "[data-tour=\"settings-status\"]",
+			screen: "connections",
+			title: "Your status page",
+			body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
+		},
+		{
+			target: "[data-tour=\"settings-github\"]",
+			screen: "connections",
+			title: "Connect GitHub when you need PRs",
+			body: "Agents need GitHub to open pull requests; pushing already works without it."
+		},
+		{
+			target: "#settings-search",
+			screen: "connections",
+			title: "Search finds any setting",
+			body: "Type a word like dark, phone or parallel and jump straight to it."
+		},
+		{
+			target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
+			screen: "coding",
+			title: "Pick your default agent",
+			body: "New sessions start with this agent; you can still pick another one when you start a session."
+		},
+		{
+			target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
+			screen: "workspace",
+			title: "Where your worktrees live",
+			body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
+		},
+		{
+			target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
+			title: "The rest waits here",
+			body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
+		},
+		{
+			target: "[data-tour=\"settings-tours\"], #general-tours",
+			screen: "general",
+			title: "Replay any tour",
+			body: "How MindFlock works and every tour live here under Help, next to the switch for hints."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/people.ts
+var PEOPLE_TOUR = {
+	id: "people",
+	title: "People",
+	steps: [
+		{
+			target: "[data-tour=\"people-invite\"]",
+			title: "Invite someone",
+			body: "Create invite makes a one-time code — send it to the person you want to work with."
+		},
+		{
+			target: "[data-tour=\"people-join\"]",
+			title: "Or join them",
+			body: "Got an invite instead? Paste the whole message here and press Join."
+		},
+		{
+			target: "[data-tour=\"people-safety\"]",
+			title: "Check the safety number",
+			body: "Read it to each other: if it matches press It matches, if it differs unlink."
+		},
+		{
+			target: "[data-tour=\"people-share\"]",
+			title: "Share a folder",
+			body: "An agent works in one shared folder inside a sandbox and talks to their agent."
+		},
+		{
+			target: "[data-tour=\"people-joint\"]",
+			title: "Build one feature together",
+			body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
+		}
+	]
+};
+//#endregion
+//#region src/lib/voiceWords.ts
+var PHRASE_KINDS = [
+	"send",
+	"end",
+	"clear",
+	"undo",
+	"stop",
+	"hush"
+];
+var BUILTIN_VOICE_WORDS = {
+	send: ["over"],
+	end: ["over and out", "over, out"],
+	clear: ["disregard"],
+	undo: ["scratch that"],
+	stop: [
+		"stop",
+		"stop listening",
+		"mic off",
+		"pause listening",
+		"that's all",
+		"done talking"
+	],
+	hush: [
+		"stop talking",
+		"be quiet",
+		"quiet",
+		"hush",
+		"shut up",
+		"enough"
+	],
+	wake: "mindflock"
+};
+var PHRASE_KIN = {
+	stop: {
+		"stop listening": [
+			"stop recording",
+			"stop dictating",
+			"stop the mic",
+			"stop the microphone"
+		],
+		"mic off": [
+			"microphone off",
+			"turn mic off",
+			"turn microphone off",
+			"turn off the mic",
+			"turn off the microphone",
+			"turn the mic off"
+		],
+		"that's all": ["that is all"],
+		"done talking": ["i'm done talking", "i am done talking"]
+	},
+	hush: {
+		"stop talking": [
+			"stop speaking",
+			"stop reading",
+			"stop saying that",
+			"ok stop",
+			"okay stop"
+		],
+		enough: [
+			"that's enough",
+			"that is enough",
+			"enough talking",
+			"enough of that"
+		]
+	}
+};
+function withKin(w, k) {
+	return [...new Set(w[k].flatMap((p) => [p, ...PHRASE_KIN[k]?.[p] || []]))];
+}
+function heardOf(w, k) {
+	const own = k === "wake" ? [w.wake] : w[k];
+	return (w.heard?.[k] || []).filter((f) => !own.includes(f));
+}
+var WORDS_MAX = 6;
+var HEARD_MAX = 24;
+var PHRASE_MAX_CHARS = 40;
+var WAKE_MAX_WORDS = 2;
+var WAKE_MIN_CHARS = 3;
+var WAKE_MAX_CHARS = 20;
+function normPhrase(p) {
+	return String(p || "").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim();
+}
+function phraseWords(p) {
+	return normPhrase(p).replace(/[^\p{L}\p{N}' ]+/gu, " ").split(" ").filter((w) => w.replace(/'/g, ""));
+}
+var wordKey = (w) => w.replace(/'/g, "");
+function wordsFrom(raw, fallback) {
+	const r = raw && typeof raw === "object" ? raw : {};
+	const out = { ...fallback };
+	for (const k of PHRASE_KINDS) {
+		const v = r[k];
+		if (!Array.isArray(v)) continue;
+		const list = [...new Set(v.map((p) => normPhrase(String(p))).filter((p) => phraseWords(p).length))];
+		if (list.length) out[k] = list;
+	}
+	const wake = typeof r.wake === "string" ? normPhrase(r.wake) : "";
+	const n = phraseWords(wake).length;
+	if (n >= 1 && n <= WAKE_MAX_WORDS) out.wake = wake;
+	delete out.heard;
+	const h = r.heard && typeof r.heard === "object" ? r.heard : null;
+	if (h) {
+		const heard = {};
+		for (const k of [...PHRASE_KINDS, "wake"]) {
+			const v = h[k];
+			const list = Array.isArray(v) ? v.filter((p) => typeof p === "string").map(normPhrase).filter((p) => phraseWords(p).length) : [];
+			heard[k] = [...new Set(list)].slice(0, HEARD_MAX);
+		}
+		out.heard = heard;
+	}
+	return out;
+}
+var defaults = BUILTIN_VOICE_WORDS;
+var current$1 = BUILTIN_VOICE_WORDS;
+var version = 0;
 var listeners$4 = /* @__PURE__ */ new Set();
-function publishMicState(patch) {
-	const next = {
-		...micState,
-		...patch
-	};
-	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
-	micState = next;
-	listeners$4.forEach((l) => l());
+function voiceWords() {
+	return current$1;
 }
-function getMicState() {
-	return micState;
+function voiceWordsVersion() {
+	return version;
 }
-function subscribeMicState(cb) {
-	listeners$4.add(cb);
-	return () => {
-		listeners$4.delete(cb);
+function setVoiceWords(words, wordsDefault) {
+	const d = wordsDefault === void 0 ? defaults : wordsFrom(wordsDefault, BUILTIN_VOICE_WORDS);
+	const w = wordsFrom(words, d);
+	if (JSON.stringify(w) === JSON.stringify(current$1) && JSON.stringify(d) === JSON.stringify(defaults)) return;
+	defaults = d;
+	current$1 = w;
+	version++;
+	for (const fn of [...listeners$4]) fn(w);
+}
+function onVoiceWords(fn) {
+	listeners$4.add(fn);
+	return () => void listeners$4.delete(fn);
+}
+function applyVoiceView(j) {
+	const v = j && typeof j === "object" ? j : {};
+	if (v.words && typeof v.words === "object") setVoiceWords(v.words, v.words_default);
+}
+var quoted = (p) => "“" + p + "”";
+function wakeName(w = current$1) {
+	if (w.wake === "mindflock") return "MindFlock";
+	return w.wake.replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+}
+function phraseError(phrase, list) {
+	const p = normPhrase(phrase);
+	if (!phraseWords(p).length) return "Type a word or a phrase.";
+	if (/[^a-z0-9 ',]/.test(p)) return "Letters, digits, spaces, apostrophes and commas only.";
+	if (p.length > PHRASE_MAX_CHARS) return "At most 40 characters.";
+	if (list.includes(p)) return "Already in the list.";
+	if (list.length >= WORDS_MAX) return "At most 6 phrases — remove one first.";
+	return "";
+}
+function wakeError(wake) {
+	const p = normPhrase(wake);
+	if (!p) return "";
+	if (/[^a-z ]/.test(p)) return "Letters only — one or two words.";
+	if (phraseWords(p).length > WAKE_MAX_WORDS) return "One or two words — a sentence never wakes it.";
+	if (p.length < WAKE_MIN_CHARS || p.length > WAKE_MAX_CHARS) return "3–20 characters.";
+	return "";
+}
+var SOUND_RULES = [
+	[/^[kgp]n/g, "n"],
+	[/^wr/g, "r"],
+	[/^x/g, "s"],
+	[/^wh/g, "w"],
+	[/mb$/g, "m"],
+	[/x/g, "ks"],
+	[/ph/g, "f"],
+	[/sch/g, "sk"],
+	[/ch/g, "X"],
+	[/sh/g, "X"],
+	[/th/g, "0"],
+	[/gh$/g, "f"],
+	[/gh/g, ""],
+	[/ck/g, "k"],
+	[/q/g, "k"],
+	[/c(?=[eiy])/g, "s"],
+	[/c/g, "k"],
+	[/dg(?=[eiy])/g, "j"],
+	[/g(?=[eiy])/g, "j"],
+	[/b/g, "p"],
+	[/d/g, "t"],
+	[/v/g, "f"],
+	[/z/g, "s"],
+	[/g/g, "k"]
+];
+var letters = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+function soundKey(text) {
+	let s = letters(text);
+	if (!s) return "";
+	for (const [rx, to] of SOUND_RULES) s = s.replace(rx, to);
+	if (!s) return "";
+	return (s[0] + s.slice(1).replace(/[aeiouhwy]/g, "")).replace(/(.)\1+/g, "$1");
+}
+function edits(a, b) {
+	const d = [];
+	for (let i = 0; i <= a.length; i++) d.push([i, ...new Array(b.length).fill(0)]);
+	for (let j = 0; j <= b.length; j++) d[0][j] = j;
+	for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+		const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+		d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+		if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+	}
+	return d[a.length][b.length];
+}
+var slack = (n) => n >= 8 ? 2 : n >= 5 ? 1 : 0;
+function soundsLike(said, phrase) {
+	const a = letters(said);
+	const b = letters(phrase);
+	if (!a || !b) return false;
+	if (a === b) return true;
+	const d = edits(a, b);
+	const n = slack(b.length);
+	const ka = soundKey(a);
+	const kb = soundKey(b);
+	if (d <= n) return ka === kb || kb.length >= 5 && edits(ka, kb) <= 1;
+	return b.length >= 8 && d === n + 1 && Math.abs(a.length - b.length) <= 1 && ka === kb;
+}
+function soundsLikeAny(text, phrases) {
+	return phrases.some((p) => soundsLike(text, p));
+}
+function soundTail(text, phrases, tails = [], lead = false) {
+	const toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+	const idx = toks.flatMap((t, i) => letters(t) ? [i] : []);
+	if (!idx.length) return null;
+	const ordered = phrases.filter((p) => letters(p)).sort((a, b) => letters(b).length - letters(a).length);
+	if (!ordered.length) return null;
+	const most = Math.max(...ordered.map((p) => phraseWords(p).length)) + 1;
+	const ends = [idx.length];
+	if (idx.length > 1 && tails.includes(letters(toks[idx[idx.length - 1]]))) ends.push(idx.length - 1);
+	for (const end of ends) for (let k = Math.min(most, end); k >= 1; k--) {
+		const said = idx.slice(end - k, end).map((i) => letters(toks[i])).join("");
+		for (const p of ordered) {
+			if (lead && k < end && said[0] !== letters(p)[0]) continue;
+			if (soundsLike(said, p)) return {
+				before: toks.slice(0, idx[end - k]).join(" ").replace(/[\s,.!?]+$/, ""),
+				phrase: p
+			};
+		}
+	}
+	return null;
+}
+//#endregion
+//#region src/lib/tours/voice.ts
+var talkKey = () => "";
+function setTalkKeyLabel(fn) {
+	talkKey = fn;
+}
+var MIC_POP_SCREEN = "mic-pop";
+function voiceTourSteps(w = voiceWords(), key = talkKey()) {
+	return [
+		{
+			target: "[data-tour=\"voice-mic\"], #mic-btn",
+			title: "Press or hold to talk",
+			body: "Click the mic" + (key ? " or press " + key : "") + " and talk to the session in front of you — with Hold to talk, hold it while you speak."
+		},
+		{
+			target: ".pane.focused .agent-term, .pane.focused, #grid",
+			title: "Your words go in as you speak",
+			body: "They are typed into the session as you say them, and corrected when the accurate pass hears one otherwise."
+		},
+		{
+			target: "#mic-pill, [data-tour=\"voice-mic\"], #mic-btn",
+			title: "Say " + quoted(w.send[0]) + " to send",
+			body: "End a sentence with " + quoted(w.send[0]) + " to send it — listening stays on, so the next sentence is the next message."
+		},
+		{
+			target: "[data-tour=\"voice-mic\"], #mic-btn",
+			title: "Stop, or start over",
+			body: "Say " + quoted(w.end[0]) + " to send what is left and stop, or " + quoted(w.clear[0]) + " to take back the message and start it over."
+		},
+		{
+			target: "[data-tour=\"session-row\"], li.inst, #sidebar",
+			title: "Switch sessions by voice",
+			body: "Say “session three”, “next session” or “switch to” and a session's name — the numbers are the sidebar's."
+		},
+		{
+			target: "#ask-mic, #notif-btn",
+			title: "Answer a question",
+			body: "When a session asks you something, answer with its card's mic or say “yes”, “no” or a number — the bell keeps it for later."
+		},
+		{
+			target: "#mic-wake-row",
+			screen: MIC_POP_SCREEN,
+			title: "The wake word",
+			body: "Turn this on, then say " + quoted(wakeName(w)) + " on its own — not inside a sentence — to open the mic without a click."
+		},
+		{
+			target: "#mic-replies-row",
+			screen: MIC_POP_SCREEN,
+			title: "Replies read aloud",
+			body: "Off by default: Mine reads the replies to what you sent by voice, Everything every session's, and " + quoted(w.hush[0]) + " cuts it short."
+		}
+	];
+}
+//#endregion
+//#region src/lib/tours/index.ts
+var TOURS = {
+	welcome: WELCOME_TOUR,
+	new: NEW_TOUR,
+	sky: {
+		id: "sky",
+		title: "Sky",
+		steps: [
+			{
+				target: "",
+				title: "What the Sky is for",
+				body: "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you."
+			},
+			{
+				target: "[data-tour=\"sky-session-box\"], .sky-head",
+				title: "Each session's route",
+				body: "The agent comes first, then the stops its work goes through until it is merged; Ctrl+Y shows the same sessions in the Grid."
+			},
+			{
+				target: ".sky-plus, [data-tour=\"sky-shelf\"]",
+				title: "+ adds a stop",
+				body: "A stop moves the work, checks the work, or asks you — click + after the last stop, or drag one up from the shelf."
+			},
+			{
+				target: "[data-tour=\"flights-bird\"]",
+				title: "The bird shows where the work is",
+				body: "It stands on the stop the work is at; ▶ Run sets the route going and the bird moves along it."
+			},
+			{
+				target: "#notif-btn",
+				title: "Needs you",
+				body: "A stop that waits for your OK, or a route that halts, lands under Needs you on the bell; the sky's ? has the full guide."
+			}
+		]
+	},
+	intake: INTAKE_TOUR,
+	verify: VERIFY_TOUR,
+	schedule: SCHEDULE_TOUR,
+	settings: SETTINGS_TOUR,
+	people: PEOPLE_TOUR,
+	voice: {
+		id: "voice",
+		title: "Voice",
+		get steps() {
+			return voiceTourSteps();
+		}
+	}
+};
+var TOUR_IDS = [
+	"welcome",
+	"new",
+	"sky",
+	"intake",
+	"verify",
+	"schedule",
+	"settings",
+	"people",
+	"voice"
+];
+//#endregion
+//#region src/components/onboarding/replayTour.ts
+var SURFACE = {
+	new: "new-session",
+	intake: "intake",
+	schedule: "schedule"
+};
+function replayTour(id) {
+	const ui = useUi.getState();
+	if (ui.coachTour) ui.closeCoachTour();
+	if (id === "welcome") {
+		ui.closeDialog();
+		ui.openTour();
+		return;
+	}
+	if (id === "settings") openSettings("connections");
+	else if (id === "people") openSettings("peer");
+	else if (id === "sky") ui.showSky();
+	else if (id === "verify") {
+		ui.closeDialog();
+		openBehaviors({ next: true });
+	} else if (id === "voice") ui.closeDialog();
+	else ui.openDialogFor(SURFACE[id]);
+	useUi.getState().openCoachTour(id);
+}
+//#endregion
+//#region src/lib/onboarding.ts
+var VISION_BREATH = [
+	"MindFlock runs your coding agents side by side.",
+	"Each session is one agent working on its own branch.",
+	"Its route is the stops the work goes through until it is merged — the agent, its checks, your OK, the PR.",
+	"The Sky shows every route at once, and what needs you."
+];
+var SKY_LINE = "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you.";
+var GRID_LINE = "Inside the work — your sessions side by side, talk to the agents.";
+var VIEWS_LINE = "Same sessions, two views: Ctrl+Y switches between the Grid and the Sky.";
+var STOP_TEST = "A stop moves the work, checks the work, or asks you.";
+var VISION_PARTS = [
+	{
+		id: "session",
+		title: "Session",
+		line: "one agent on its own branch"
+	},
+	{
+		id: "route",
+		title: "Route",
+		line: "the stops until it is merged"
+	},
+	{
+		id: "needs",
+		title: "Needs you",
+		line: "what waits on your OK"
+	}
+];
+function primaryGithubMethod(st) {
+	const m = st?.methods || [];
+	if (m.includes("device")) return "device";
+	if (m.includes("gh") || st?.gh?.installed) return "gh";
+	return "token";
+}
+function needsIdentity(st) {
+	const id = st?.identity;
+	return !!st && !(id?.name && id?.email);
+}
+function flowFinished(f) {
+	return !!f && f.state !== "pending";
+}
+function pollDelay(f) {
+	return Math.max(2, Number(f?.interval || 5));
+}
+function readinessLine$1(r) {
+	if (!r) return null;
+	if (r.error) return {
+		text: "readiness unknown — " + r.error,
+		warn: false
 	};
+	const bits = [];
+	if (r.missing?.length) bits.push("missing " + r.missing.join(", "));
+	if (r.agent?.signed_in === false) bits.push((r.agent.provider || "agent") + " not signed in");
+	if (r.deferred?.length) bits.push(r.deferred.join(", ") + " not installed");
+	if (r.push?.ok === false) bits.push("can't push");
+	if (r.tailscale?.key_expired) bits.push("Tailscale key expired");
+	else if (r.tailscale?.key_warn && r.tailscale.key_expiry_days != null) bits.push("Tailscale key expires in " + r.tailscale.key_expiry_days + "d");
+	if (!bits.length) return {
+		text: "ready to work",
+		warn: false
+	};
+	return {
+		text: bits.join(" · "),
+		warn: true
+	};
+}
+function hasSyncedAgentStep(steps) {
+	return (steps || []).some((s) => /^synced-.+-cli$/.test(s.id));
+}
+function pushFailedNote(session, data) {
+	const reason = String(data?.reason || "");
+	const setup = reason === "https_auth" || reason === "identity";
+	const what = String(data?.message || "the push was refused");
+	const tail = setup ? reason === "identity" ? " — set your git name and email in Setup" : " — Connect GitHub in Setup" : data?.fix ? " — " + data.fix : "";
+	return {
+		text: "Push failed on " + session + ": " + what + tail,
+		setup
+	};
+}
+//#endregion
+//#region src/components/flights/SkyGuide.tsx
+var SKY_GUIDE_SECTIONS = [
+	{
+		id: "start",
+		title: "Start here"
+	},
+	{
+		id: "what",
+		title: "What the Sky is for"
+	},
+	{
+		id: "lines",
+		title: "Routes, stops and wires"
+	},
+	{
+		id: "stops",
+		title: "Stops and saved routes"
+	},
+	{
+		id: "bird",
+		title: "The bird"
+	},
+	{
+		id: "halt",
+		title: "Halt points and Remove"
+	},
+	{
+		id: "grounded",
+		title: "Routes on their own, and handoffs"
+	},
+	{
+		id: "select",
+		title: "Selection"
+	},
+	{
+		id: "keys",
+		title: "Tools and the keyboard"
+	},
+	{
+		id: "intake",
+		title: "The Intake lane"
+	},
+	{
+		id: "saved",
+		title: "Where things are saved"
+	}
+];
+function sectionOf(id) {
+	return SKY_GUIDE_SECTIONS.find((s) => s.id === id)?.id ?? SKY_GUIDE_SECTIONS[0].id;
+}
+var useSkyGuide = create((set) => ({
+	section: null,
+	open: (section) => set({ section: sectionOf(section) }),
+	close: () => set({ section: null })
+}));
+var openSkyGuide = (section) => useSkyGuide.getState().open(section);
+var closeSkyGuide = () => useSkyGuide.getState().close();
+var SKY_GUIDE_KEYS = [
+	["V", "Drag tool: routes move by their bars, a drag on empty sky selects"],
+	["H", "Click tool: any drag pans the sky, a click selects"],
+	["Space (held)", "Pan with the mouse, in either tool"],
+	["0", "Fit every route, titles still readable"],
+	["1", "Fit the focused route to the window"],
+	["+ / −", "Zoom in / out (Ctrl+wheel too)"],
+	["T", "Tidy: every route back in its place, every window minimised"],
+	["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
+	["Delete", "Remove the selected stop"],
+	["Esc", "Clear the selection, fold an open session, cancel a pick"],
+	["Ctrl+A", "Select every route"],
+	["Enter", "Open the focused route's session; on a stop, its dialog"],
+	["Ctrl+Y", "Switch between the grid and the sky"],
+	["Ctrl/Alt+N", "A new session on the sky (double-click empty sky does too)"]
+];
+function Box({ x, y, w = 44, h = 26, cls = "" }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+		className: "sg-box " + cls,
+		x,
+		y,
+		width: w,
+		height: h,
+		rx: 5
+	});
+}
+function Bar({ x, y, w }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+		className: "sg-bar",
+		x,
+		y,
+		width: w,
+		height: 8,
+		rx: 3
+	});
+}
+function BirdMark({ x, y }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+		className: "sg-bird",
+		d: `M${x - 8} ${y} Q${x - 4} ${y - 6} ${x} ${y} Q${x + 4} ${y - 6} ${x + 8} ${y}`
+	});
+}
+function Line({ x, y, n = 4, cls = [] }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+		x,
+		y,
+		w: n * 54 - 10
+	}), Array.from({ length: n }, (_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [k > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+		className: "sg-link",
+		x1: x + k * 54 - 10,
+		y1: y + 27,
+		x2: x + k * 54,
+		y2: y + 27
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+		x: x + k * 54,
+		y: y + 14,
+		cls: k === 0 ? "sg-session" : cls[k] || ""
+	})] }, k))] });
+}
+function Sketch({ label, children, h = 110 }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+		className: "sg-sketch",
+		viewBox: `0 0 320 ${h}`,
+		role: "img",
+		"aria-label": label,
+		children
+	});
+}
+var SKETCHES = {
+	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A route: the agent first, two stops joined by wires and a + after them; a stop dragged up from the shelf onto it",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 12,
+				n: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box sg-dash",
+				x: 182,
+				y: 26,
+				width: 26,
+				height: 26,
+				rx: 5
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 190,
+				y: 44,
+				children: "+"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
+				x: 74,
+				y: 22
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-chip",
+				x: 196,
+				y: 82,
+				width: 70,
+				height: 20,
+				rx: 10
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 210,
+				y: 96,
+				children: "Verify"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M220 82 L200 58 M200 66 L200 58 L208 60"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 74,
+				children: "agent → stops → merged"
+			})
+		]
+	}),
+	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "Panes on the left, the same sessions as routes on the right",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 8,
+				y: 14,
+				width: 60,
+				height: 38,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 74,
+				y: 14,
+				width: 60,
+				height: 38,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 8,
+				y: 58,
+				width: 126,
+				height: 38,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M144 55 H170 M164 49 L170 55 L164 61"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 180,
+				y: 12,
+				n: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 180,
+				y: 58,
+				n: 2
+			})
+		]
+	}),
+	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A session's outline: its bar on top, the agent first inside, then its stops joined by wires, and a + to add one",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box",
+				x: 4,
+				y: 8,
+				width: 260,
+				height: 96,
+				rx: 10
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 12,
+				y: 30,
+				n: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 12,
+				y: 22,
+				children: "name · branch · state · ⋯"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 12,
+				y: 92,
+				children: "agent"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 70,
+				y: 92,
+				children: "stops →"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box sg-dash",
+				x: 228,
+				y: 44,
+				width: 26,
+				height: 26,
+				rx: 5
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 236,
+				y: 62,
+				children: "+"
+			})
+		]
+	}),
+	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A saved route on the sky: one group holding three stops, and its chip on the shelf with a dot per stop",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 12,
+				y: 24,
+				w: 150,
+				h: 56,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 38,
+				children: "Ticket to merge · 2 of 3"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 20,
+				y: 46,
+				w: 40,
+				h: 24,
+				cls: "sg-done"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 66,
+				y: 46,
+				w: 40,
+				h: 24,
+				cls: "sg-here"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 112,
+				y: 46,
+				w: 40,
+				h: 24
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-chip",
+				x: 196,
+				y: 40,
+				width: 112,
+				height: 26,
+				rx: 13
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 208,
+				y: 57,
+				children: "Ticket to merge"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sg-dot",
+				cx: 290,
+				cy: 53,
+				r: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sg-dot",
+				cx: 296,
+				cy: 53,
+				r: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sg-dot",
+				cx: 302,
+				cy: 53,
+				r: 2
+			})
+		]
+	}),
+	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A route of stops with the bird on the third; a dashed arrow drags it back to the second",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 40,
+				n: 5,
+				cls: [
+					"",
+					"sg-done",
+					"sg-here"
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
+				x: 150,
+				y: 46
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow sg-dash",
+				d: "M146 36 Q120 14 96 36 M98 28 L96 36 L104 36"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 100,
+				children: "click: halt / carry on · drag: jump"
+			})
+		]
+	}),
+	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "The bird on a stop, and a halt point two stops on wearing a pause badge",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 34,
+				n: 5,
+				cls: [
+					"",
+					"sg-done",
+					"sg-here"
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
+				x: 150,
+				y: 40
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-halt",
+				x: 236,
+				y: 44,
+				width: 14,
+				height: 14,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-halt-ink",
+				d: "M241 48 V54 M245 48 V54"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 96,
+				children: "⏹ halt now — here · ⏸ halt here — when it arrives"
+			})
+		]
+	}),
+	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A route with no session: an empty socket on its first stop, its stops, and the Session chip dropped on it",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+				x: 20,
+				y: 30,
+				w: 206
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box sg-dash",
+				x: 20,
+				y: 44,
+				width: 64,
+				height: 26,
+				rx: 5
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 26,
+				y: 61,
+				children: "socket"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 94,
+				y: 44
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 148,
+				y: 44
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-chip",
+				x: 60,
+				y: 84,
+				width: 70,
+				height: 20,
+				rx: 10
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 70,
+				y: 98,
+				children: "Session"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M70 84 L56 74 M56 80 L56 74 L62 74"
+			})
+		]
+	}),
+	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A dashed marquee drawn over the stops of two routes",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 10,
+				n: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 58,
+				n: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-marquee",
+				x: 64,
+				y: 18,
+				width: 118,
+				height: 84,
+				rx: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M182 102 l10 6 M182 102 l3 -10"
+			})
+		]
+	}),
+	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "The tool toggle: Drag (V) and Click (H)",
+		h: 80,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-toggle",
+				x: 60,
+				y: 20,
+				width: 200,
+				height: 34,
+				rx: 17
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-toggle-on",
+				x: 63,
+				y: 23,
+				width: 97,
+				height: 28,
+				rx: 14
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text sg-strong",
+				x: 84,
+				y: 42,
+				children: "✥ Drag · V"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 180,
+				y: 42,
+				children: "☝ Click · H"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 98,
+				y: 74,
+				children: "hold Space: pan in either"
+			})
+		]
+	}),
+	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "The Intake lane folded to a row of sources, and expanded to show each waiting item with Run",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+				x: 12,
+				y: 12,
+				w: 120
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 12,
+				y: 26,
+				w: 56,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 76,
+				y: 26,
+				w: 56,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 12,
+				y: 72,
+				children: "folded"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+				x: 168,
+				y: 12,
+				w: 140
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 168,
+				y: 26,
+				w: 140,
+				h: 70,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-row",
+				x: 176,
+				y: 36,
+				width: 124,
+				height: 14,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-row",
+				x: 176,
+				y: 56,
+				width: 124,
+				height: 14,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-fly",
+				x: 276,
+				y: 38,
+				width: 20,
+				height: 10,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-fly",
+				x: 276,
+				y: 58,
+				width: 20,
+				height: 10,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 168,
+				y: 108,
+				children: "expanded ▾"
+			})
+		]
+	}),
+	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "Three places: this browser for the layout, every device for saved routes, this machine for running routes",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 16,
+				y: 24,
+				width: 70,
+				height: 46,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 22,
+				y: 88,
+				children: "layout: here"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-cloud",
+				d: "M136 64 a14 14 0 0 1 4 -27 a18 18 0 0 1 34 -2 a13 13 0 0 1 6 29 Z"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 118,
+				y: 88,
+				children: "saved routes: synced"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 238,
+				y: 30,
+				width: 60,
+				height: 34,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+				className: "sg-link",
+				x1: 238,
+				y1: 52,
+				x2: 298,
+				y2: 52
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 226,
+				y: 88,
+				children: "running: this machine"
+			})
+		]
+	})
+};
+function Keys() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+		className: "sky-guide-keys",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+			scope: "col",
+			children: "Key"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+			scope: "col",
+			children: "What it does"
+		})] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: SKY_GUIDE_KEYS.map(([k, what]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: k }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: what })] }, k)) })]
+	});
+}
+var WORDS = {
+	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "sky-guide-breath",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: VISION_BREATH[0] }),
+				" ",
+				VISION_BREATH.slice(1).join(" ")
+			]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"The Sky is ",
+			SKY_LINE.charAt(0).toLowerCase() + SKY_LINE.slice(1),
+			" The test for every stop: ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: STOP_TEST.charAt(0).toLowerCase() + STOP_TEST.slice(1) })
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
+			className: "sky-guide-start",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Each session has a route." }), " Its agent comes first; the stops after it run left to right, along the wires, once the agent's turn ends."] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+ adds a stop." }),
+					" Click the ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
+					" after the last stop, or drag ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
+					", ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
+					" or ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
+					" up from the shelf. Double-click empty sky for a new session."
+				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wire it." }), " Drag from a stop's round port onto another stop to move it there. Double-click a stop to edit it."] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The bird shows where the work is." }),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Run" }),
+					" (or your next prompt) sets the route going and the bird moves along it. A ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
+					" stop holds the route and shows under ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+					" on the bell: press ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Done" }),
+					" and it carries on."
+				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Help." }),
+					" The sky's ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
+					" replays the tour or opens this guide; the ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "?" }),
+					" key lists every shortcut."
+				] })
+			]
+		})
+	] }),
+	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The Sky is the main area's second view, for seeing where all the work is. Every session shows as its route — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes. The Grid is for inside the work: talking to the agents." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Switch with ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Grid · Sky" }),
+		" on the top bar, or ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+Y" }),
+		". The chips on the sky's toolbar choose which routes show, and the find field jumps to one by name."
+	] })] }),
+	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Each session draws as a soft outline in its own colour round its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "route" }),
+			". The outline's ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bar" }),
+			" carries the session's name, its branch, its state and a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⋯" }),
+			" menu (open it here, open it in the grid, show only this route, add a stop, close the session); a double-click on the bar renames it."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Inside, the first stop is the session's ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "agent" }),
+			" (\"Claude\", \"Codex\"…): what it is doing now, its state and the bird. A click opens its real terminal in its place (a double-click on its top folds it back); a right-click offers ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Open terminal" }),
+			", ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Send a prompt…" }),
+			" and ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Stop" }),
+			", then the session's own menu. Its out port starts the route: its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stops" }),
+			" follow, free-floating, joined by ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "wires" }),
+			". A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "worker" }),
+			" — a session this session started — is a small outline of its own under its parent's agent: its own agent, its state, and its own route when it runs one; click its agent to open it in place."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Drag a session by its bar (or its agent) to put it anywhere — it stays there. Drag a single stop to move just that stop: order is the wires, never where a stop sits. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
+			" (",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
+			") puts every route back in its place and minimises every open window; the ⋯'s ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
+			" does one."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Every stop has an ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "in port" }),
+			" (the square on its left) and an ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "out port" }),
+			" (the circle on its right). Drag from an out port: onto a later stop of the same route to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another route to give it these stops, or onto empty sky to pick a new stop there. The ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
+			" after the last stop does the same — or just click it. Grab a wire by a stop's in port and pull it onto empty sky to split that stop and the ones after it off into a route of their own."
+		] })
+	] }),
+	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stop" }),
+			" moves the work, checks the work, or asks you: ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
+			" gives the session's agent a prompt and waits for its turn to settle, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
+			" holds the route until you press Done (it shows under ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+			" meanwhile), ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
+			" commits, pushes, opens or merges the PR, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
+			" checks the session's behaviors, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
+			" waits some minutes or until a time, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
+			" sends the route back to an earlier stop, a number of times, every so often. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All stops…" }),
+			" on the shelf lists the rest, each with what it does."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "saved route" }),
+			" is a named route kept on the shelf — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "Ticket to merge" }),
+			", say — that you drag on whole. On the sky it arrives as a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "group" }),
+			": one stop with its stops inside, run one by one, reading ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "2 of 3" }),
+			" while it does. Double-click it to see and change each of its stops."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"To change a saved route, drag it onto the sky, edit its stops there, then ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+			". Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it."
+		] })
+	] }),
+	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"The bird stands on the stop the work is at: bobbing while the session works, gold when the route needs you (the bell lists it under ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
+			")."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to halt the route where it is; click it again on a halted route to carry on."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Drag" }), " the bird onto another stop of the same route to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on."] })
+	] }),
+	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏹ Halt now" }),
+		" (on the current stop, or a click on the bird) halts the route where it is. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏸ Halt here" }),
+		" on a stop ahead makes it a halt point: the route halts when it reaches that stop, before doing it, and the stop wears a pause badge. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Carry on" }),
+		" goes on."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
+		" (🗑, the menu, or ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
+		") takes a stop off at once, with ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
+		" in the toast. Removing the stop the route is on stops its work and halts the route right before the next stop; Carry on goes into it."
+	] })] }),
+	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Drop a stop or a saved route on empty sky and it waits there as a route of its own, with ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "no session" }),
+			": no outline and no agent, just its stops and an empty socket on the first one — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "wire a session's out port here to run it" }),
+			". Nothing runs until it has a session."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Give it one by wiring an agent's out port (or its +) to that socket, by dragging the route into a session's outline, by dropping the shelf's ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
+			" chip on it (a new session is made and the stops run there), or with its ⋯ → ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run on a session…" }),
+			". The same ⋯ offers ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+			" and ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
+			"."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"One route can ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "start another" }),
+			": hold ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Shift" }),
+			" while you drop a wire from a stop onto a route with no session, and a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Start a route" }),
+			" stop goes in there. The other route then shows a trigger stop — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "When <route> reaches <stop>" }),
+			" — and a dashed wire in the first session's colour; when the first route gets there, the other one takes off on a new session (or the one its dialog names), and the wire follows it there."
+		] })
+	] }),
+	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Click tool, Shift+drag). ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+A" }),
+		" selects every route; ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
+		" clears."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"The selection bar then offers: drag any selected route's bar and they all move; ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove…" }),
+		" (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Group into a stop" }),
+		" and ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+		"."
+	] })] }),
+	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"The toolbar's toggle picks how a drag behaves. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✥ Drag" }),
+		" (",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "V" }),
+		"): routes move by their bars and a drag on empty sky selects. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "☝ Click" }),
+		" (",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "H" }),
+		"): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Space" }),
+		" to pan in either; the wheel and the middle button pan too."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Keys, {})] }),
+	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The Intake lane, top left, holds work arriving by itself that hasn't started yet: one card per source — tickets, pull requests, issues — with the items in it. Each source says which route its items take." }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Folded it is a row of sources; expand it (▸ on its head, or double-click the head) to see every item with its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run" }),
+			" button. Run starts a session on that item, and its route appears in the sky."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Drag the lane by its head like a route; Tidy puts it back." })
+	] }),
+	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The layout" }), " — where each route sits, its sizes, the Intake lane's spot, the tool — is kept per device, in this browser."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Saved routes" }), " live on the server and are synced across your devices, like templates."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Running routes" }), " — the stops a session is running and where the bird is — stay on the machine that runs them, never synced."] })
+	] })
+};
+function SkyGuide(p) {
+	const stored = useSkyGuide((s) => s.section);
+	const controlled = p.open !== void 0;
+	const open = controlled ? !!p.open : stored !== null;
+	const start = controlled ? p.section : stored ?? void 0;
+	const onClose = controlled ? p.onClose ?? closeSkyGuide : closeSkyGuide;
+	if (!open) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuideBody, {
+		start: sectionOf(start),
+		onClose,
+		portal: p.portal !== false
+	}, start ?? "");
+}
+function SkyGuideBody({ start, onClose, portal }) {
+	const [at, setAt] = (0, import_react.useState)(start);
+	const title = SKY_GUIDE_SECTIONS.find((s) => s.id === at).title;
+	const replay = () => {
+		onClose();
+		replayTour("sky");
+	};
+	const k = SKY_GUIDE_SECTIONS.findIndex((s) => s.id === at);
+	const onNavKey = (e) => {
+		const d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+		if (!d) return;
+		e.preventDefault();
+		const next = SKY_GUIDE_SECTIONS[(k + d + SKY_GUIDE_SECTIONS.length) % SKY_GUIDE_SECTIONS.length];
+		setAt(next.id);
+		e.currentTarget.querySelector(`[data-section="${next.id}"]`)?.focus();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "sky-guide",
+		className: "sky-guide-modal",
+		onClose,
+		portal,
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "sky-guide-title",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-guide",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "sky-guide-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "sky-guide-title",
+						children: "Learn the Sky"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: replay,
+						children: "Replay the tour"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-icon-btn sky-guide-x",
+						"aria-label": "Close the guide",
+						title: "Close (Esc)",
+						onClick: onClose,
+						children: "×"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-guide-body",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+					className: "sky-guide-nav",
+					"aria-label": "Sections",
+					onKeyDown: onNavKey,
+					children: SKY_GUIDE_SECTIONS.map((s, n) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						"data-section": s.id,
+						className: "fl-stopmenu-item sky-guide-nav-item" + (s.id === at ? " on" : ""),
+						"aria-current": s.id === at ? "true" : void 0,
+						onClick: () => setAt(s.id),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-guide-n",
+							children: n + 1
+						}), s.title]
+					}, s.id))
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "sky-guide-page",
+					"aria-labelledby": "sky-guide-page-title",
+					"data-section": at,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+							id: "sky-guide-page-title",
+							children: title
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sky-guide-sketch",
+							children: SKETCHES[at]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sky-guide-words",
+							children: WORDS[at]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "sky-guide-foot",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									disabled: k === 0,
+									onClick: () => setAt(SKY_GUIDE_SECTIONS[k - 1].id),
+									children: "Back"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "muted",
+									children: [
+										k + 1,
+										" of ",
+										SKY_GUIDE_SECTIONS.length
+									]
+								}),
+								k < SKY_GUIDE_SECTIONS.length - 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "btn-primary",
+									onClick: () => setAt(SKY_GUIDE_SECTIONS[k + 1].id),
+									children: ["Next: ", SKY_GUIDE_SECTIONS[k + 1].title]
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "btn-primary",
+									onClick: onClose,
+									children: "Done"
+								})
+							]
+						})
+					]
+				})]
+			})]
+		})
+	});
+}
+//#endregion
+//#region src/components/settings/screens/peer/replayPeopleTour.ts
+function replayPeopleTour() {
+	const ui = useUi.getState();
+	if (ui.coachTour) ui.closeCoachTour();
+	openSettings(PEER_SCREEN);
+	useUi.getState().openCoachTour("people");
+}
+//#endregion
+//#region src/lib/whatsNew.ts
+function parseVersion(raw) {
+	const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec((raw || "").trim());
+	if (!m) return null;
+	return [
+		Number(m[1]),
+		Number(m[2] || 0),
+		Number(m[3] || 0)
+	];
+}
+function compareVersions(a, b) {
+	const pa = parseVersion(a);
+	const pb = parseVersion(b);
+	if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
+	for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+	return 0;
+}
+function isReleaseVersion(raw) {
+	const v = (raw || "").trim();
+	return !!parseVersion(v) && !v.startsWith("0+");
+}
+function minorOf(raw) {
+	const p = parseVersion(raw);
+	return p ? `${p[0]}.${p[1]}` : raw;
+}
+function sorted(releases) {
+	return [...releases].sort((a, b) => compareVersions(b.version, a.version));
+}
+function planWhatsNew(input) {
+	const none = {
+		pop: false,
+		entries: [],
+		markSeen: null
+	};
+	if (!isReleaseVersion(input.running)) return none;
+	const running = input.running.trim();
+	const seen = isReleaseVersion(input.lastSeen) ? input.lastSeen.trim() : null;
+	if (!seen) {
+		if (!input.onboarded) return {
+			pop: false,
+			entries: [],
+			markSeen: running
+		};
+	}
+	const entries = sorted(input.releases).filter((r) => compareVersions(r.version, running) <= 0 && (!seen || compareVersions(r.version, seen) > 0));
+	if (!entries.some((r) => r.big)) return none;
+	return {
+		pop: true,
+		entries,
+		markSeen: null
+	};
+}
+function sinceNewestBig(newestFirst) {
+	const i = newestFirst.findIndex((r) => r.big);
+	return i < 0 ? newestFirst.slice(0, 1) : newestFirst.slice(0, i + 1);
+}
+function reopenEntries(releases, running) {
+	const cap = isReleaseVersion(running) ? running.trim() : null;
+	return sinceNewestBig(sorted(releases).filter((r) => !cap || compareVersions(r.version, cap) <= 0));
+}
+function laterVersion(a, b) {
+	const x = isReleaseVersion(a) ? a.trim() : null;
+	const y = isReleaseVersion(b) ? b.trim() : null;
+	if (!x || !y) return x || y;
+	return compareVersions(x, y) >= 0 ? x : y;
+}
+function whatsNewTitle(entries) {
+	const lead = entries.find((r) => r.big) || entries[0];
+	return lead ? `What's new in MindFlock ${minorOf(lead.version)}` : "What's new in MindFlock";
+}
+function splitEntries(entries) {
+	return {
+		big: entries.filter((r) => r.big),
+		small: entries.filter((r) => !r.big)
+	};
+}
+function knownAction(f, known) {
+	return f.action && known(f.action.run) ? f.action : void 0;
+}
+var WHATS_NEW_DECIDE_MS = 8e3;
+function popupTurn(q) {
+	if (q.whatsNew === "shown") return "whats-new";
+	if (q.askOpen) return "ask";
+	if (q.otherOpen) return null;
+	if (q.whatsNew === "due") return "whats-new";
+	if (q.whatsNew === "deciding" && q.sinceLoadMs < WHATS_NEW_DECIDE_MS) return null;
+	return q.askWaiting ? "ask" : null;
+}
+//#endregion
+//#region src/whatsNew/releases.ts
+var RELEASES = [
+	{
+		version: "0.13.1",
+		date: "2026-11-09",
+		big: false,
+		headline: "Dictation that follows the whole sentence.",
+		features: [{
+			title: "Words heard in context",
+			body: "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong."
+		}, {
+			title: "A sharper English model",
+			body: "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast."
+		}]
+	},
+	{
+		version: "0.13.0",
+		date: "2026-11-09",
+		big: true,
+		headline: "Voice that hears you right, and does more hands-free.",
+		features: [
+			{
+				title: "Accurate words, instant commands",
+				body: "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them."
+			},
+			{
+				title: "Scroll by voice",
+				body: "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going."
+			},
+			{
+				title: "Interrupt, go back, where am I",
+				body: "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused."
+			},
+			{
+				title: "Scratch that",
+				body: "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all."
+			},
+			{
+				title: "The rail keeps up",
+				body: "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it."
+			},
+			{
+				title: "What can I say?",
+				body: "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu."
+			}
+		]
+	},
+	{
+		version: "0.12.0",
+		date: "2026-11-04",
+		big: true,
+		headline: "Steadier with many agents: they wait for memory instead of freezing the machine.",
+		features: [
+			{
+				title: "Agents wait their turn for memory",
+				body: "When memory is getting low, agents that start by themselves (workers, Intake, schedules, routes) wait in line and show \"Waiting for memory\", and starting one yourself asks first. Each agent also has its own memory limit, so one that runs away is stopped on its own instead of freezing everything."
+			},
+			{
+				title: "After a crash, sessions stay offline",
+				body: "A session whose agent died stays Offline until you press Start, so a restart can't refill memory and crash again. Prompts sent to it wait on its queue."
+			},
+			{
+				title: "One name per session",
+				body: "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (api-fix → api-fix-2)."
+			},
+			{
+				title: "Quieter, quicker voice",
+				body: "Voice Lab starts only when something is spoken and stops when idle; dictation never wakes it, and speech recognition loads only while you listen. \"MindFlock\" wakes the mic faster and more reliably."
+			},
+			{
+				title: "The Sky opens on This session",
+				body: "The Sky starts on the session you're on, fits its route to the window on every switch, and never pops the terminal open. Frames show their state at a glance: amber needs you, red halted.",
+				action: {
+					label: "Show me",
+					run: "sky-tour"
+				}
+			}
+		]
+	},
+	{
+		version: "0.11.0",
+		date: "2026-11-03",
+		big: true,
+		headline: "The Sky: see where every piece of work is, and set the route it takes.",
+		features: [
+			{
+				title: "The Sky",
+				body: "A second view beside the Grid: a session's route drawn as a row of stops, with a bird on the stop where the work is now. It opens on This session; All shows every route at once, and Needs you lists what is waiting on you. Ctrl+Y switches between the Grid and the Sky.",
+				action: {
+					label: "Show me",
+					run: "sky-tour"
+				}
+			},
+			{
+				title: "Saved routes",
+				body: "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf as a saved route. Run it on a session, on its own in a folder, from an Intake source or on a schedule.",
+				action: {
+					label: "Show me",
+					run: "saved-routes"
+				}
+			},
+			{
+				title: "Behaviors on the route",
+				body: "What the work should do in real use is a list of behaviors, each checked by the agent or by you. Verify is now a stop on the session's route, and you answer them on its card there instead of in a separate dialog.",
+				action: {
+					label: "Show me",
+					run: "behaviors"
+				}
+			},
+			{
+				title: "Halt",
+				body: "A stop that fails halts the route, so nothing ships past a failure: Retry it, Skip it, or Let the agent fix it, right on the stop. Halt here on a stop ahead makes the route halt before it until you press Carry on."
+			},
+			{
+				title: "Loops, side-by-side stops and workers",
+				body: "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why (\"fixing 1/2\"). Stops can run side by side, and workers the session starts show up inside its route, as small outlines under its agent.",
+				action: {
+					label: "Show me",
+					run: "sky-guide"
+				}
+			},
+			{
+				title: "Any agent, GitHub Copilot too",
+				body: "GitHub Copilot is now one of the agents a session can run, alongside Claude, Codex and the others. Setup's first step asks which agent you use, then installs and signs in to that one.",
+				action: {
+					label: "Choose agents",
+					run: "agents"
+				}
+			}
+		]
+	},
+	{
+		version: "0.10.6",
+		date: "2026-10-29",
+		big: false,
+		headline: "Ask for workers in one keystroke.",
+		features: [{
+			title: "Ask for workers",
+			body: "Alt+G types a request for workers into the session's prompt; Flock mode keeps asking on every prompt, so a big task gets split without you writing it out."
+		}, {
+			title: "Invite with sessions",
+			body: "An invite to another person can carry the sessions you want to share, and you can chat with them across the link."
+		}]
+	}
+];
+//#endregion
+//#region src/components/whatsNew/actions.ts
+var WHATS_NEW_ACTIONS = {
+	sky: () => setView("sky"),
+	"sky-tour": () => replayTour("sky"),
+	"sky-guide": () => {
+		setView("sky");
+		openSkyGuide();
+	},
+	"saved-routes": () => useUi.getState().showFlyways(),
+	behaviors: () => openBehaviors({ board: true }),
+	intake: () => useUi.getState().openDialogFor("intake"),
+	schedule: () => useUi.getState().openDialogFor("schedule"),
+	settings: () => openSettings(),
+	agents: () => openSettings("coding")
+};
+function isKnownAction(id) {
+	return Object.prototype.hasOwnProperty.call(WHATS_NEW_ACTIONS, id);
+}
+function runWhatsNewAction(id) {
+	if (isKnownAction(id)) WHATS_NEW_ACTIONS[id]();
+}
+//#endregion
+//#region src/components/whatsNew/seen.ts
+var WHATS_NEW_LS = "mf_whats_new_seen";
+var WHATS_NEW_PREF = "whats_new_seen";
+function readLocalSeen() {
+	try {
+		const v = localStorage.getItem(WHATS_NEW_LS);
+		return isReleaseVersion(v) ? v : null;
+	} catch {
+		return null;
+	}
+}
+function writeLocalSeen(v) {
+	try {
+		localStorage.setItem(WHATS_NEW_LS, v);
+	} catch {}
+}
+async function loadSeen() {
+	let server = null;
+	try {
+		const v = (await api("/api/prefs"))?.[WHATS_NEW_PREF];
+		server = typeof v === "string" ? v : null;
+	} catch {}
+	return laterVersion(server, readLocalSeen());
+}
+function saveSeen(v) {
+	if (!isReleaseVersion(v)) return;
+	writeLocalSeen(v);
+	api("/api/prefs", { json: { [WHATS_NEW_PREF]: v } }).catch(() => {});
+}
+var useWhatsNew = create((set) => ({
+	shown: null,
+	running: "",
+	seen: null,
+	auto: "deciding",
+	open: (entries) => set({ shown: entries }),
+	close: () => set({ shown: null })
+}));
+function whatsNewStage(s) {
+	return s.shown && s.shown.length ? "shown" : s.auto;
+}
+//#endregion
+//#region src/components/whatsNew/WhatsNew.tsx
+function openWhatsNew() {
+	const entries = reopenEntries(RELEASES, useWhatsNew.getState().running);
+	if (!entries.length) return;
+	useUi.getState().closeDialog();
+	useWhatsNew.getState().open(entries);
+}
+function closeWhatsNew() {
+	const s = useWhatsNew.getState();
+	const seen = laterVersion(s.running, s.seen);
+	if (seen) {
+		saveSeen(seen);
+		useWhatsNew.setState({ seen });
+	}
+	useWhatsNew.setState({ auto: "done" });
+	s.close();
+}
+function useAutoWhatsNew() {
+	const rawVersion = useDoctor().data?.version;
+	const { data: config } = useConfig();
+	const welcomeSeen = useUi((s) => s.welcomeTourSeen);
+	const touring = useUi((s) => s.tourOpen || !!s.coachTour);
+	const dialog = useUi((s) => s.openDialog);
+	const onboarded = welcomeSeen || config?.onboarded === true;
+	const running = isReleaseVersion(rawVersion) ? rawVersion.trim() : "";
+	const [pulled, setPulled] = (0, import_react.useState)(false);
+	const [pending, setPending] = (0, import_react.useState)(null);
+	const decided = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		firstPrefsPull.then(() => live && setPulled(true));
+		return () => {
+			live = false;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (running) useWhatsNew.setState({ running });
+	}, [running]);
+	(0, import_react.useEffect)(() => {
+		if (rawVersion !== void 0 && !running && !decided.current) useWhatsNew.setState({ auto: "done" });
+	}, [rawVersion, running]);
+	(0, import_react.useEffect)(() => {
+		if (decided.current || !pulled || !running || !config) return;
+		let live = true;
+		loadSeen().then((seen) => {
+			if (!live || decided.current) return;
+			useWhatsNew.setState({ seen });
+			const plan = planWhatsNew({
+				releases: RELEASES,
+				running,
+				lastSeen: seen,
+				onboarded
+			});
+			if (plan.markSeen) {
+				decided.current = true;
+				saveSeen(plan.markSeen);
+				useWhatsNew.setState({
+					seen: plan.markSeen,
+					auto: "done"
+				});
+				return;
+			}
+			if (!plan.pop) {
+				decided.current = true;
+				useWhatsNew.setState({ auto: "done" });
+				return;
+			}
+			if (!onboarded) return;
+			decided.current = true;
+			useWhatsNew.setState({ auto: "due" });
+			setPending(plan.entries);
+		});
+		return () => {
+			live = false;
+		};
+	}, [
+		pulled,
+		running,
+		config,
+		onboarded
+	]);
+	(0, import_react.useEffect)(() => {
+		const st = useWhatsNew.getState();
+		if (!pending || st.shown || st.auto !== "due") {
+			if (pending && st.auto !== "due") setPending(null);
+			return;
+		}
+		if (popupTurn({
+			whatsNew: "due",
+			askOpen: dialog === "ask",
+			askWaiting: false,
+			otherOpen: touring || !!dialog && dialog !== "ask",
+			sinceLoadMs: 0
+		}) !== "whats-new") return;
+		st.open(pending);
+		useWhatsNew.setState({ auto: "done" });
+		setPending(null);
+	}, [
+		pending,
+		touring,
+		dialog
+	]);
+}
+function FeatureRow({ f }) {
+	const action = knownAction(f, isKnownAction);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "wn-feature",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "wn-feature-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "wn-feature-title",
+				children: f.title
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "wn-feature-body",
+				children: f.body
+			})]
+		}), action && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "wn-show",
+			onClick: () => {
+				closeWhatsNew();
+				runWhatsNewAction(action.run);
+			},
+			children: action.label
+		})]
+	});
+}
+function WhatsNew() {
+	useAutoWhatsNew();
+	const shown = useWhatsNew((s) => s.shown);
+	if (!shown || !shown.length) return null;
+	const { big, small } = splitEntries(shown);
+	const many = big.length > 1;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "whats-new",
+		portal: true,
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "wn-title",
+		onClose: closeWhatsNew,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "wn-card",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "wn-x",
+					"aria-label": "Close",
+					title: "Close",
+					onClick: closeWhatsNew,
+					children: "×"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					className: "wn-title",
+					id: "wn-title",
+					children: whatsNewTitle(shown)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "wn-body",
+					children: [(big.length ? big : small.slice(0, 1)).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "wn-release",
+						children: [
+							many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+								className: "wn-version",
+								children: r.version
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+								className: "wn-headline",
+								children: r.headline
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+								className: "wn-features",
+								children: r.features.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeatureRow, { f }, f.title))
+							})
+						]
+					}, r.version)), big.length > 0 && small.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+						className: "wn-also",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Also in this release" }), small.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "wn-release",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+								className: "wn-version",
+								children: r.version
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+								className: "wn-features",
+								children: r.features.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeatureRow, { f }, f.title))
+							})]
+						}, r.version))]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "wn-actions",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "wn-primary",
+						onClick: closeWhatsNew,
+						autoFocus: true,
+						children: "Got it"
+					})
+				})
+			]
+		})
+	});
+}
+//#endregion
+//#region src/components/palette/CommandPalette.tsx
+var PALETTE_ACTIONS = [
+	"rename",
+	"move",
+	"message",
+	"queue",
+	"askWorkers",
+	"flock",
+	"fastTrack",
+	"split",
+	"thread",
+	"commit",
+	"push",
+	"pr",
+	"ide",
+	"duplicate",
+	"branch",
+	"hide",
+	"resume",
+	"pause",
+	"close",
+	"delete",
+	"map",
+	"merge"
+];
+var ACTION_KEYWORDS = {
+	askWorkers: "mindflock agents workers spawn team parallel flock request",
+	flock: "mindflock agents workers spawn team parallel flock every prompt sticky"
+};
+var OUTWARD = /* @__PURE__ */ new Set([
+	"commit",
+	"push",
+	"pr",
+	"merge",
+	"close",
+	"delete",
+	"pause"
+]);
+var NEEDS_TOP = -1;
+var TOP = {
+	new: 0,
+	recent: 1,
+	intake: 2,
+	verify: 3,
+	schedule: 4,
+	setup: 5,
+	settings: 6,
+	tour: 7,
+	shortcuts: 8
+};
+function buildPaletteActions({ config, host, extensions }) {
+	const ui = useUi.getState();
+	const caps = config?.caps ?? {
+		git: true,
+		tailscale: true,
+		ticketing: true,
+		github: true
+	};
+	const ideName = config?.ide_name || "Cursor";
+	const acts = [];
+	acts.push({
+		label: "New session…",
+		hint: "Alt+N",
+		top: TOP.new,
+		run: () => newSession()
+	});
+	acts.push({
+		label: "Intake…",
+		hint: "Alt+I",
+		top: TOP.intake,
+		keywords: "sources tickets pull requests issues waiting to fly",
+		run: () => ui.openDialogFor("intake")
+	});
+	acts.push({
+		label: "Intake: Tickets",
+		run: () => ui.openDialogFor("intake", "tickets")
+	});
+	acts.push({
+		label: "Intake: GitHub PRs",
+		run: () => ui.openDialogFor("intake", "prs")
+	});
+	acts.push({
+		label: "Intake: GitHub issues",
+		run: () => ui.openDialogFor("intake", "issues")
+	});
+	acts.push({
+		label: "Intake: Auto-start",
+		hint: "what starts on its own",
+		run: () => ui.openDialogFor("intake", "autostart")
+	});
+	acts.push({
+		label: "Behaviors — next that needs you",
+		hint: "Alt+V",
+		top: TOP.verify,
+		keywords: "verify behaviors check checklist test plan pushed changes work",
+		run: () => openBehaviors({ next: true })
+	});
+	acts.push({
+		label: "Show the Behaviors board",
+		keywords: "verify behaviors board closed sessions other branches watched repositories",
+		run: () => openBehaviors({ board: true })
+	});
+	acts.push({
+		label: "Schedule…",
+		hint: "Alt+S",
+		top: TOP.schedule,
+		keywords: "templates template cron recurring nightly timer daily weekly scheduled routes chains stops",
+		run: () => ui.openDialogFor("schedule")
+	});
+	acts.push(ui.view === "sky" ? {
+		label: "Switch to the grid",
+		hint: "Ctrl+Y",
+		keywords: "view panes terminals grid",
+		run: () => setView("grid")
+	} : {
+		label: "Switch to the Sky",
+		hint: "Ctrl+Y",
+		keywords: "view sky canvas routes chains lines bird board flock map flights",
+		run: () => setView("sky")
+	});
+	acts.push({
+		label: "Saved routes…",
+		hint: "on the Sky's shelf",
+		keywords: "saved routes route saved chains chain stops shelf canvas new flights saved stops plan",
+		run: () => ui.showFlyways()
+	});
+	acts.push({
+		label: "Learn the Sky",
+		hint: "the guide",
+		keywords: "help how guide tutorial sky routes chains stops saved routes saved chains wait for me needs you bird keys",
+		run: () => {
+			setView("sky");
+			openSkyGuide();
+		}
+	});
+	acts.push({
+		label: "Customize…",
+		hint: "choose sidebar bars",
+		run: () => ui.openDialogFor("customize")
+	});
+	acts.push({
+		label: "Select sessions…",
+		hint: "close, hide or delete several at once · Ctrl+click a row",
+		run: () => ui.setBulkMode(true)
+	});
+	acts.push({
+		label: "Prompts…",
+		hint: "manage saved prompts",
+		run: () => ui.openDialogFor("prompts")
+	});
+	acts.push({
+		label: "New scheduled template…",
+		hint: "daily, weekdays, once or cron",
+		keywords: "schedule a session recurring cron every day nightly weekly",
+		run: () => ui.openDialogFor("schedule", "schedule")
+	});
+	for (const tpl of templatesNow()) {
+		if (runProblem(tpl)) continue;
+		acts.push({
+			label: "Run template: " + tpl.name,
+			hint: "fresh session, task sent",
+			run: () => void runTemplateNow(tpl.name)
+		});
+	}
+	acts.push({
+		label: "Recently closed…",
+		hint: "reopen or delete closed sessions",
+		run: () => ui.openDialogFor("recent")
+	});
+	acts.push({
+		label: "Assistant instructions (agent file)…",
+		run: () => ui.openDialogFor("assistant-agent")
+	});
+	if (caps.git) acts.push({
+		label: "Zones…",
+		hint: "keep-out paths per repo, and derived outputs",
+		run: () => ui.openDialogFor("red-zones")
+	});
+	acts.push({
+		label: "Open Settings",
+		top: TOP.settings,
+		run: () => openSettings()
+	});
+	acts.push({
+		label: "Open Doctor",
+		run: () => host.openDoctor()
+	});
+	acts.push({
+		label: "Your devices",
+		hint: "add a computer you own, or join one; settings sync",
+		run: () => openSettings("devices")
+	});
+	acts.push({
+		label: "Your phone",
+		hint: "the QR code and /m link",
+		run: () => openSettings("mobile")
+	});
+	acts.push({
+		label: "People…",
+		hint: "work with someone: invite them, or join their invite",
+		run: () => openSettings("peer"),
+		keywords: "join pair pairing invite colleague teammate collaborate person someone peer share"
+	});
+	acts.push({
+		label: "Paste a code…",
+		hint: "join with a code from your other computer, or someone's invite",
+		run: () => openDevicesFor({ focusPaste: true })
+	});
+	acts.push({
+		label: "Open Setup checklist",
+		top: TOP.setup,
+		run: () => ui.openDialogFor("setup")
+	});
+	for (const id of TOUR_IDS) {
+		const t = TOURS[id];
+		acts.push({
+			label: `Replay ${id === "welcome" ? "welcome" : t.title} tour`,
+			hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
+			keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
+			top: id === "welcome" ? TOP.tour : void 0,
+			run: () => id === "people" ? replayPeopleTour() : replayTour(id)
+		});
+	}
+	acts.push({
+		label: "What's new",
+		hint: "this release's new features",
+		keywords: "release new features update version help",
+		run: () => openWhatsNew()
+	});
+	acts.push({
+		label: "Toggle sidebar",
+		hint: "Ctrl+B",
+		run: () => ui.toggleSidebar()
+	});
+	acts.push({
+		label: "Keyboard shortcuts",
+		hint: "?",
+		top: TOP.shortcuts,
+		run: () => host.toggleShortcuts()
+	});
+	const { rows } = orderedInstances(instances$2(), ui.order);
+	const t = ui.focused;
+	if (t) {
+		const name = windowName(t);
+		const c = actionCtx(t, {
+			inst: rows.find((r) => r.title === t),
+			caps,
+			ideName
+		});
+		for (const id of PALETTE_ACTIONS) {
+			if (sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "") {
+				acts.push({
+					label: `${actionLabel(id, c)} — ${name}`,
+					hint: actionHint(id, c),
+					outward: true,
+					run: () => runChordAction(id, t)
+				});
+				continue;
+			}
+			if (!sessionAction(id).enabled(c)) continue;
+			acts.push({
+				label: `${actionLabel(id, c)} — ${name}`,
+				hint: actionHint(id, c),
+				keywords: ACTION_KEYWORDS[id],
+				outward: OUTWARD.has(id),
+				run: () => sessionAction(id).run(t)
+			});
+			if (id === "map") acts.push({
+				label: `Find file on map… — ${name}`,
+				hint: "opens its Map's find box",
+				keywords: "search file path locate code map",
+				run: () => useUi.getState().openMap(t, { section: "search" })
+			});
+		}
+	}
+	const needs = needsYouNow();
+	for (const inst of rows) {
+		const recent = ui.mru.indexOf(inst.title);
+		const need = needs.indexOf(inst.title);
+		const ss = deriveSessionState(inst);
+		acts.push({
+			label: "Focus: " + windowName(inst.title),
+			state: {
+				label: ss.label,
+				tone: ss.tone
+			},
+			top: need >= 0 ? NEEDS_TOP + need / 100 : recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : void 0,
+			run: () => selectSession(inst.title)
+		});
+	}
+	for (const ext of extensions || []) {
+		if (!ext.enabled) continue;
+		for (const cmd of ext.extension.commands) acts.push({
+			label: cmd.title || cmd.id,
+			hint: ext.label,
+			run: () => void runCommand(ext.id, cmd.id)
+		});
+	}
+	return acts;
+}
+function CommandPalette({ host }) {
+	const open = useUi((s) => s.openDialog === "palette");
+	const closeDialog = useUi((s) => s.closeDialog);
+	const { data: config } = useConfig();
+	const { data: extensions } = useExtensions();
+	const [query, setQuery] = (0, import_react.useState)("");
+	const [sel, setSel] = (0, import_react.useState)(0);
+	const [showAll, setShowAll] = (0, import_react.useState)(false);
+	const [tplVersion, setTplVersion] = (0, import_react.useState)(0);
+	const inputRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (open) {
+			setQuery("");
+			setSel(0);
+			setShowAll(false);
+			setTimeout(() => inputRef.current?.focus(), 0);
+		}
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const bump = () => setTplVersion((v) => v + 1);
+		document.addEventListener(TEMPLATES_CHANGED, bump);
+		ensureTemplates().catch(() => {});
+		return () => document.removeEventListener(TEMPLATES_CHANGED, bump);
+	}, [open]);
+	const actions = (0, import_react.useMemo)(() => {
+		if (!open) return [];
+		return buildPaletteActions({
+			config,
+			host,
+			extensions
+		});
+	}, [
+		open,
+		config,
+		host,
+		extensions,
+		tplVersion
+	]);
+	const filtered = (0, import_react.useMemo)(() => {
+		const out = rankActions(actions, query, {
+			showAll,
+			allRow: (n) => ({
+				label: "All commands…",
+				hint: n + " — or type to search",
+				keepOpen: true,
+				run: () => setShowAll(true)
+			})
+		});
+		if (query.trim()) {
+			const direct = out.filter((a) => {
+				const s = fuzzyScore(query, a.label);
+				return s >= 0 && s < 1e3;
+			}).length;
+			out.splice(direct, 0, ...settingsActions(query));
+		}
+		const code = paletteCode(query);
+		const named = out.some((a) => fuzzyScore(query, a.label) >= 0 && fuzzyScore(query, a.label) < 1e3);
+		if (code.kind) out[named ? "push" : "unshift"]({
+			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
+			hint: code.kind === "peer" ? "another person · People" : "your devices",
+			run: () => void routePastedCode(query)
+		});
+		return out;
+	}, [
+		actions,
+		query,
+		showAll
+	]);
+	(0, import_react.useEffect)(() => {
+		if (sel >= filtered.length) setSel(Math.max(0, filtered.length - 1));
+	}, [filtered.length, sel]);
+	const listRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		listRef.current?.querySelector("#palette-opt-" + sel)?.scrollIntoView?.({ block: "nearest" });
+	}, [sel]);
+	if (!open) return null;
+	const run = (a) => {
+		if (!a) return;
+		if (a.keepOpen) {
+			a.run();
+			setSel(0);
+			return;
+		}
+		closeDialog();
+		a.run();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "palette",
+		onClose: closeDialog,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "palette-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				id: "palette-input",
+				ref: inputRef,
+				type: "text",
+				role: "combobox",
+				"aria-label": "Command or session",
+				"aria-expanded": "true",
+				"aria-controls": "palette-list",
+				"aria-autocomplete": "list",
+				"aria-activedescendant": filtered.length ? "palette-opt-" + sel : void 0,
+				placeholder: "Type a command or session name…",
+				autoComplete: "off",
+				spellCheck: false,
+				value: query,
+				onChange: (e) => {
+					setQuery(e.target.value);
+					setSel(0);
+				},
+				onKeyDown: (e) => {
+					if (e.key === "ArrowDown") {
+						e.preventDefault();
+						setSel((s) => Math.min(filtered.length - 1, s + 1));
+					} else if (e.key === "ArrowUp") {
+						e.preventDefault();
+						setSel((s) => Math.max(0, s - 1));
+					} else if (e.key === "Enter") {
+						e.preventDefault();
+						run(filtered[sel]);
+					}
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				id: "palette-list",
+				role: "listbox",
+				"aria-label": "Commands",
+				ref: listRef,
+				children: [filtered.map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					id: "palette-opt-" + i,
+					role: "option",
+					"aria-selected": i === sel,
+					className: "palette-item" + (i === sel ? " selected" : ""),
+					onMouseMove: () => setSel(i),
+					onClick: () => run(a),
+					children: [
+						a.sub ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "palette-text",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "palette-label",
+								children: a.label
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "palette-sub",
+								children: a.sub
+							})]
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-label",
+							children: a.label
+						}),
+						a.state && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-state tone-" + a.state.tone,
+							children: a.state.label
+						}),
+						a.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc"),
+							children: a.hint
+						})
+					]
+				}, a.label + i)), !filtered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					className: "palette-empty muted",
+					role: "option",
+					"aria-disabled": "true",
+					"aria-selected": false,
+					children: "No matching commands"
+				})]
+			})]
+		})
+	});
 }
 //#endregion
 //#region src/lib/wavRecorder.ts
@@ -43193,250 +47433,6 @@ function voicePass(ms) {
 	passes = [...passes, Math.round(ms)].slice(-20);
 	if (typeof window !== "undefined") window.__mfVoicePasses = passes;
 	if (debugOn()) console.debug("[voice] pass " + Math.round(ms) + " ms");
-}
-//#endregion
-//#region src/lib/voiceWords.ts
-var PHRASE_KINDS = [
-	"send",
-	"end",
-	"clear",
-	"undo",
-	"stop",
-	"hush"
-];
-var BUILTIN_VOICE_WORDS = {
-	send: ["over"],
-	end: ["over and out", "over, out"],
-	clear: ["disregard"],
-	undo: ["scratch that"],
-	stop: [
-		"stop",
-		"stop listening",
-		"mic off",
-		"pause listening",
-		"that's all",
-		"done talking"
-	],
-	hush: [
-		"stop talking",
-		"be quiet",
-		"quiet",
-		"hush",
-		"shut up",
-		"enough"
-	],
-	wake: "mindflock"
-};
-var PHRASE_KIN = {
-	stop: {
-		"stop listening": [
-			"stop recording",
-			"stop dictating",
-			"stop the mic",
-			"stop the microphone"
-		],
-		"mic off": [
-			"microphone off",
-			"turn mic off",
-			"turn microphone off",
-			"turn off the mic",
-			"turn off the microphone",
-			"turn the mic off"
-		],
-		"that's all": ["that is all"],
-		"done talking": ["i'm done talking", "i am done talking"]
-	},
-	hush: {
-		"stop talking": [
-			"stop speaking",
-			"stop reading",
-			"stop saying that",
-			"ok stop",
-			"okay stop"
-		],
-		enough: [
-			"that's enough",
-			"that is enough",
-			"enough talking",
-			"enough of that"
-		]
-	}
-};
-function withKin(w, k) {
-	return [...new Set(w[k].flatMap((p) => [p, ...PHRASE_KIN[k]?.[p] || []]))];
-}
-function heardOf(w, k) {
-	const own = k === "wake" ? [w.wake] : w[k];
-	return (w.heard?.[k] || []).filter((f) => !own.includes(f));
-}
-var WORDS_MAX = 6;
-var HEARD_MAX = 24;
-var PHRASE_MAX_CHARS = 40;
-var WAKE_MAX_WORDS = 2;
-var WAKE_MIN_CHARS = 3;
-var WAKE_MAX_CHARS = 20;
-function normPhrase(p) {
-	return String(p || "").toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim();
-}
-function phraseWords(p) {
-	return normPhrase(p).replace(/[^\p{L}\p{N}' ]+/gu, " ").split(" ").filter((w) => w.replace(/'/g, ""));
-}
-var wordKey = (w) => w.replace(/'/g, "");
-function wordsFrom(raw, fallback) {
-	const r = raw && typeof raw === "object" ? raw : {};
-	const out = { ...fallback };
-	for (const k of PHRASE_KINDS) {
-		const v = r[k];
-		if (!Array.isArray(v)) continue;
-		const list = [...new Set(v.map((p) => normPhrase(String(p))).filter((p) => phraseWords(p).length))];
-		if (list.length) out[k] = list;
-	}
-	const wake = typeof r.wake === "string" ? normPhrase(r.wake) : "";
-	const n = phraseWords(wake).length;
-	if (n >= 1 && n <= WAKE_MAX_WORDS) out.wake = wake;
-	delete out.heard;
-	const h = r.heard && typeof r.heard === "object" ? r.heard : null;
-	if (h) {
-		const heard = {};
-		for (const k of [...PHRASE_KINDS, "wake"]) {
-			const v = h[k];
-			const list = Array.isArray(v) ? v.filter((p) => typeof p === "string").map(normPhrase).filter((p) => phraseWords(p).length) : [];
-			heard[k] = [...new Set(list)].slice(0, HEARD_MAX);
-		}
-		out.heard = heard;
-	}
-	return out;
-}
-var defaults = BUILTIN_VOICE_WORDS;
-var current$1 = BUILTIN_VOICE_WORDS;
-var version = 0;
-var listeners$3 = /* @__PURE__ */ new Set();
-function voiceWords() {
-	return current$1;
-}
-function voiceWordsVersion() {
-	return version;
-}
-function setVoiceWords(words, wordsDefault) {
-	const d = wordsDefault === void 0 ? defaults : wordsFrom(wordsDefault, BUILTIN_VOICE_WORDS);
-	const w = wordsFrom(words, d);
-	if (JSON.stringify(w) === JSON.stringify(current$1) && JSON.stringify(d) === JSON.stringify(defaults)) return;
-	defaults = d;
-	current$1 = w;
-	version++;
-	for (const fn of [...listeners$3]) fn(w);
-}
-function onVoiceWords(fn) {
-	listeners$3.add(fn);
-	return () => void listeners$3.delete(fn);
-}
-function applyVoiceView(j) {
-	const v = j && typeof j === "object" ? j : {};
-	if (v.words && typeof v.words === "object") setVoiceWords(v.words, v.words_default);
-}
-var quoted = (p) => "“" + p + "”";
-function wakeName(w = current$1) {
-	if (w.wake === "mindflock") return "MindFlock";
-	return w.wake.replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
-}
-function phraseError(phrase, list) {
-	const p = normPhrase(phrase);
-	if (!phraseWords(p).length) return "Type a word or a phrase.";
-	if (/[^a-z0-9 ',]/.test(p)) return "Letters, digits, spaces, apostrophes and commas only.";
-	if (p.length > PHRASE_MAX_CHARS) return "At most 40 characters.";
-	if (list.includes(p)) return "Already in the list.";
-	if (list.length >= WORDS_MAX) return "At most 6 phrases — remove one first.";
-	return "";
-}
-function wakeError(wake) {
-	const p = normPhrase(wake);
-	if (!p) return "";
-	if (/[^a-z ]/.test(p)) return "Letters only — one or two words.";
-	if (phraseWords(p).length > WAKE_MAX_WORDS) return "One or two words — a sentence never wakes it.";
-	if (p.length < WAKE_MIN_CHARS || p.length > WAKE_MAX_CHARS) return "3–20 characters.";
-	return "";
-}
-var SOUND_RULES = [
-	[/^[kgp]n/g, "n"],
-	[/^wr/g, "r"],
-	[/^x/g, "s"],
-	[/^wh/g, "w"],
-	[/mb$/g, "m"],
-	[/x/g, "ks"],
-	[/ph/g, "f"],
-	[/sch/g, "sk"],
-	[/ch/g, "X"],
-	[/sh/g, "X"],
-	[/th/g, "0"],
-	[/gh$/g, "f"],
-	[/gh/g, ""],
-	[/ck/g, "k"],
-	[/q/g, "k"],
-	[/c(?=[eiy])/g, "s"],
-	[/c/g, "k"],
-	[/dg(?=[eiy])/g, "j"],
-	[/g(?=[eiy])/g, "j"],
-	[/b/g, "p"],
-	[/d/g, "t"],
-	[/v/g, "f"],
-	[/z/g, "s"],
-	[/g/g, "k"]
-];
-var letters = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
-function soundKey(text) {
-	let s = letters(text);
-	if (!s) return "";
-	for (const [rx, to] of SOUND_RULES) s = s.replace(rx, to);
-	if (!s) return "";
-	return (s[0] + s.slice(1).replace(/[aeiouhwy]/g, "")).replace(/(.)\1+/g, "$1");
-}
-function edits(a, b) {
-	const d = [];
-	for (let i = 0; i <= a.length; i++) d.push([i, ...new Array(b.length).fill(0)]);
-	for (let j = 0; j <= b.length; j++) d[0][j] = j;
-	for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
-		const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-		d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
-		if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
-	}
-	return d[a.length][b.length];
-}
-var slack = (n) => n >= 8 ? 2 : n >= 5 ? 1 : 0;
-function soundsLike(said, phrase) {
-	const a = letters(said);
-	const b = letters(phrase);
-	if (!a || !b) return false;
-	if (a === b) return true;
-	const d = edits(a, b);
-	const n = slack(b.length);
-	const ka = soundKey(a);
-	const kb = soundKey(b);
-	if (d <= n) return ka === kb || kb.length >= 5 && edits(ka, kb) <= 1;
-	return b.length >= 8 && d === n + 1 && Math.abs(a.length - b.length) <= 1 && ka === kb;
-}
-function soundsLikeAny(text, phrases) {
-	return phrases.some((p) => soundsLike(text, p));
-}
-function soundTail(text, phrases, tails = [], lead = false) {
-	const toks = String(text || "").trim().split(/\s+/).filter(Boolean);
-	const idx = toks.flatMap((t, i) => letters(t) ? [i] : []);
-	if (!idx.length) return null;
-	const ordered = phrases.filter((p) => letters(p)).sort((a, b) => letters(b).length - letters(a).length);
-	if (!ordered.length) return null;
-	const most = Math.max(...ordered.map((p) => phraseWords(p).length)) + 1;
-	const ends = [idx.length];
-	if (idx.length > 1 && tails.includes(letters(toks[idx[idx.length - 1]]))) ends.push(idx.length - 1);
-	for (const end of ends) for (let k = Math.min(most, end); k >= 1; k--) {
-		const said = idx.slice(end - k, end).map((i) => letters(toks[i])).join("");
-		for (const p of ordered) {
-			if (lead && k < end && said[0] !== letters(p)[0]) continue;
-			if (soundsLike(said, p)) return {
-				before: toks.slice(0, idx[end - k]).join(" ").replace(/[\s,.!?]+$/, ""),
-				phrase: p
-			};
-		}
-	}
-	return null;
 }
 //#endregion
 //#region src/lib/spokenText.ts
@@ -46196,7 +50192,8 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"interrupt",
 	"switch_back",
 	"where",
-	"commands"
+	"commands",
+	"assistant"
 ]);
 var PENDING_MS = 3e4;
 var PendingChoice = class {
@@ -46941,7 +50938,8 @@ var SpeechQueue = class {
 				line,
 				at: opts.at ?? this.now(),
 				title: opts.title || "",
-				done
+				done,
+				voice: opts.voice
 			});
 			this.pump();
 		});
@@ -47078,7 +51076,7 @@ var SpeechQueue = class {
 				next.done();
 				continue;
 			}
-			const sp = next.sound || this.engine();
+			const sp = next.sound || next.voice || this.engine();
 			const turn = ++this.turn;
 			if (!next.sound) this.last = text;
 			this.speaking = sp;
@@ -47429,7 +51427,10 @@ function serverSpeaker(fallback, opts = {}) {
 		const r = await apiRaw("/api/voice/speak", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ text: part }),
+			body: JSON.stringify({
+				...opts.body,
+				text: part
+			}),
 			signal: ac.signal
 		});
 		if (!r.ok) {
@@ -48557,6 +52558,615 @@ function recognizerErrorLine(code, detail) {
 	return "Voice error: " + code;
 }
 //#endregion
+//#region src/lib/assistantPrefs.ts
+var bool = (key, label, get, set) => ({
+	key,
+	label,
+	type: "bool",
+	value: get,
+	set
+});
+var select$1 = (key, label, options, get, set) => ({
+	key,
+	label,
+	type: "select",
+	options: [...options],
+	value: get,
+	set
+});
+var num$6 = (key, label, min, max, get, set) => ({
+	key,
+	label,
+	type: "number",
+	min,
+	max,
+	value: get,
+	set
+});
+var ui = () => useUi.getState();
+var voice = (patch) => saveVoicePrefs({
+	...loadVoicePrefs(),
+	...patch
+});
+function assistantPrefs() {
+	return [
+		bool("sky_birds", "Birds in the Sky", () => ui().skyBirds, (on) => ui().setSkyBirds(on)),
+		bool("sidebar", "Sidebar shown", () => !ui().sidebarHidden, (on) => {
+			if (on === ui().sidebarHidden) ui().toggleSidebar();
+		}),
+		select$1("view", "Main view (grid of panes or the Sky)", ["grid", "sky"], () => ui().view, (v) => ui().setView(v)),
+		select$1("sky_mode", "Sky shows (" + SKY_MODES.map((m) => m.id + " = " + m.label).join(", ") + ")", SKY_MODES.map((m) => m.id), () => ui().skyMode, (m) => ui().setSkyMode(m)),
+		select$1("grid_panes", "Panes in the grid", [
+			"auto",
+			"2",
+			"4",
+			"9"
+		], () => ui().viewMode, (v) => ui().setViewMode(v)),
+		select$1("theme", "Light or dark", ["dark", "light"], () => isLightNow() ? "light" : "dark", (v) => setTheme(v === "light")),
+		bool("reduce_motion", "Reduce motion", () => ui().reduceMotion, (on) => ui().setReduceMotion(on)),
+		bool("break_reminder", "Take a break (reminders)", () => ui().breakReminder, (on) => ui().setBreakReminder(on)),
+		num$6("break_every", "Minutes between break reminders", 5, 240, () => ui().breakEveryMin, (n) => ui().setBreakEveryMin(n)),
+		bool("idle_flock", "Idle flock", () => ui().idleFlock, (on) => ui().setIdleFlock(on)),
+		num$6("idle_after", "Minutes idle before the flock appears", 1, 120, () => ui().idleFlockAfterMin, (n) => ui().setIdleFlockAfterMin(n)),
+		bool("hints", "Getting-started hints", () => ui().hintsEnabled, (on) => ui().setHintsEnabled(on)),
+		select$1("read_replies", "Read replies aloud (off, mine, all = everything)", [
+			"off",
+			"mine",
+			"all"
+		], () => loadVoicePrefs().replies, (v) => voice({ replies: v })),
+		bool("spoken_confirmations", "Spoken confirmations", () => loadVoicePrefs().confirm !== false, (on) => voice({ confirm: on })),
+		bool("mic_sounds", "Mic sounds (chimes)", () => loadVoicePrefs().sounds !== false, (on) => voice({ sounds: on })),
+		select$1("push_to_talk", "Push to talk (toggle = click, hold)", ["toggle", "hold"], () => loadVoicePrefs().ptt, (v) => voice({ ptt: v }))
+	];
+}
+function prefSnapshot(list = assistantPrefs()) {
+	return list.map((p) => {
+		let value = null;
+		try {
+			value = p.value();
+		} catch {
+			value = null;
+		}
+		return p.options ? {
+			key: p.key,
+			label: p.label,
+			type: p.type,
+			value,
+			options: p.options
+		} : {
+			key: p.key,
+			label: p.label,
+			type: p.type,
+			value
+		};
+	});
+}
+var ON = /* @__PURE__ */ new Set([
+	"true",
+	"on",
+	"yes",
+	"1",
+	"show",
+	"shown",
+	"enable",
+	"enabled"
+]);
+var OFF = /* @__PURE__ */ new Set([
+	"false",
+	"off",
+	"no",
+	"0",
+	"hide",
+	"hidden",
+	"disable",
+	"disabled"
+]);
+function coercePref(p, value) {
+	if (p.type === "bool") {
+		if (typeof value === "boolean") return value;
+		const s = String(value ?? "").trim().toLowerCase();
+		if (ON.has(s)) return true;
+		if (OFF.has(s)) return false;
+		return;
+	}
+	if (p.type === "number") {
+		const n = typeof value === "number" ? value : Number(String(value ?? "").trim());
+		if (!Number.isFinite(n)) return void 0;
+		return Math.min(p.max ?? n, Math.max(p.min ?? n, Math.round(n)));
+	}
+	const s = String(value ?? "").trim().toLowerCase();
+	const hit = (p.options || []).find((o) => o.toLowerCase() === s);
+	if (hit) return hit;
+	if (p.key === "sky_mode") return SKY_MODES.find((m) => m.label.toLowerCase() === s)?.id;
+	if (p.key === "read_replies" && s === "everything") return "all";
+	if (p.key === "push_to_talk" && (s === "click" || s === "press")) return "toggle";
+}
+var shown = (v) => v === true ? "on" : v === false ? "off" : String(v);
+function setAssistantPref(key, value, list = assistantPrefs()) {
+	const p = list.find((x) => x.key === key);
+	if (!p) return {
+		ok: false,
+		text: "No preference called " + key
+	};
+	const v = coercePref(p, value);
+	if (v === void 0) return {
+		ok: false,
+		text: p.label + " can't be " + shown(value)
+	};
+	try {
+		p.set(v);
+	} catch (err) {
+		return {
+			ok: false,
+			text: "Couldn't set " + p.label + ": " + (err?.message || "error")
+		};
+	}
+	return {
+		ok: true,
+		text: p.label.replace(/\s*\(.*\)$/, "") + ": " + shown(v)
+	};
+}
+//#endregion
+//#region src/components/settings/screenKeys.ts
+var LEGACY_SCREEN_KEYS = {
+	"your-devices": "devices",
+	"your-phone": "mobile",
+	phone: "mobile",
+	"mobile-voice": "voice",
+	speech: "voice",
+	microphone: "voice",
+	people: "peer",
+	"peer-links": "peer",
+	peers: "peer",
+	"remote-control": "devices",
+	"tailnet-trust": "devices",
+	"trusted-accounts": "devices",
+	"pair-by-token": "devices",
+	"settings-sync": "devices",
+	"make-reachable": "devices",
+	"shared-link": "devices",
+	fleet: "devices"
+};
+function resolveScreenKey(name, known) {
+	if (!name) return "";
+	const key = LEGACY_SCREEN_KEYS[name] || name;
+	return known.includes(key) ? key : "";
+}
+//#endregion
+//#region src/lib/settingsLastScreen.ts
+var lastScreen = null;
+function rememberSettingsScreen(key) {
+	lastScreen = key || null;
+}
+function lastSettingsScreen() {
+	return lastScreen;
+}
+function openingScreen(target, keys) {
+	const linked = target ? resolveScreenKey(target, keys) : null;
+	if (linked) return linked;
+	if (lastScreen && keys.includes(lastScreen)) return lastScreen;
+	return DEFAULT_SETTINGS_SCREEN;
+}
+//#endregion
+//#region src/lib/assistantHost.ts
+var ASSISTANT_DIALOGS = {
+	"new-session": "New session",
+	settings: "Settings",
+	intake: "Intake",
+	customize: "Customize",
+	verify: "Verify",
+	recent: "Recently closed",
+	prompts: "Prompts",
+	setup: "the Setup checklist",
+	todo: "To-do",
+	"assistant-agent": "Assistant instructions",
+	palette: "the command palette",
+	shortcuts: "Keyboard shortcuts",
+	"red-zones": "Zones",
+	schedule: "Schedule"
+};
+var ASSISTANT_SETTINGS_SCREENS = {
+	general: "General",
+	connections: "Connections",
+	notifications: "Notifications",
+	coding: "Agents",
+	providers: "Custom agents",
+	accounts: "Accounts",
+	localmodel: "Local model",
+	orchestration: "Agent orchestration",
+	workspace: "Workspace",
+	ide: "IDE",
+	security: "Security",
+	appearance: "Appearance",
+	devices: "Your devices",
+	mobile: "Your phone",
+	voice: "Voice",
+	peer: "People",
+	extensions: "Extensions",
+	doctor: "Doctor",
+	logs: "System logs",
+	advanced: "Engine & updates"
+};
+function normLabel(s) {
+	return String(s || "").toLowerCase().replace(/[’`]/g, "'").replace(/…|\.\.\./g, "").replace(/[^\p{L}\p{N}' ]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+function pickLabel(names, label) {
+	const exact = names.indexOf(label);
+	if (exact >= 0) return exact;
+	const want = normLabel(label);
+	if (!want) return -1;
+	const ns = names.map(normLabel);
+	const same = ns.indexOf(want);
+	if (same >= 0) return same;
+	const starts = ns.findIndex((n) => n.startsWith(want + " ") || want.length >= 4 && n.startsWith(want));
+	if (starts >= 0) return starts;
+	return want.length >= 3 ? ns.findIndex((n) => n.includes(want)) : -1;
+}
+function resolveSession(name, titles, nameOf = displayName) {
+	if (titles.includes(name)) return name;
+	const want = normLabel(name);
+	return titles.find((t) => normLabel(t) === want) || titles.find((t) => normLabel(nameOf(t)) === want) || null;
+}
+var NO_HOST = {
+	togglePalette: () => useUi.getState().openDialogFor("palette"),
+	toggleShortcuts: () => useUi.getState().openDialogFor("shortcuts"),
+	focusFilter: () => {},
+	cycleWindow: () => {},
+	rowAt: () => null,
+	openDoctor: () => openSettings("doctor")
+};
+function paletteCommands() {
+	try {
+		const acts = buildPaletteActions({
+			config: queryClient.getQueryData(["config"]),
+			host: keymapHost() || NO_HOST,
+			extensions: extensionsNow()
+		});
+		const seen = /* @__PURE__ */ new Set();
+		return acts.filter((a) => {
+			if (a.label.startsWith("Focus: ") || seen.has(a.label)) return false;
+			seen.add(a.label);
+			return true;
+		});
+	} catch {
+		return [];
+	}
+}
+var CLICKABLE_SELECTOR = [
+	"button",
+	"a[href]",
+	"summary",
+	"input[type=\"checkbox\"]",
+	"input[type=\"radio\"]",
+	"input[type=\"button\"]",
+	"input[type=\"submit\"]",
+	"[role=\"button\"]",
+	"[role=\"tab\"]",
+	"[role=\"link\"]",
+	"[role=\"menuitem\"]",
+	"[role=\"menuitemradio\"]",
+	"[role=\"menuitemcheckbox\"]",
+	"[role=\"checkbox\"]",
+	"[role=\"switch\"]",
+	"[role=\"radio\"]",
+	"[role=\"option\"]"
+].join(",");
+var squash = (s) => String(s || "").replace(/\s+/g, " ").trim();
+var NAME_MAX$1 = 80;
+function clickableName(el) {
+	let name = squash(el.getAttribute("aria-label"));
+	if (!name) {
+		const by = squash(el.getAttribute("aria-labelledby"));
+		if (by && el.ownerDocument) name = squash(by.split(" ").map((id) => el.ownerDocument?.getElementById(id)?.textContent || "").join(" "));
+	}
+	const tag = String(el.tagName || "").toLowerCase();
+	if (!name && tag === "input") {
+		if (el.type === "button" || el.type === "submit") name = squash(el.value);
+		else name = squash(el.labels && el.labels.length ? el.labels[0].textContent : el.closest?.("label")?.textContent);
+	}
+	if (!name) name = squash(el.textContent);
+	if (!name) name = squash(el.getAttribute("title"));
+	if (!/[\p{L}\p{N}]/u.test(name)) return "";
+	return name.length > NAME_MAX$1 ? name.slice(0, 79).trimEnd() + "…" : name;
+}
+function clickableUsable(el) {
+	if (el.disabled || el.getAttribute("aria-disabled") === "true") return false;
+	if (el.closest?.("[aria-hidden=\"true\"], [inert], #assist-strip")) return false;
+	if (el.getClientRects && el.getClientRects().length === 0) return false;
+	return true;
+}
+function scanRoot(doc = document) {
+	const modals = Array.from(doc.querySelectorAll(".modal"));
+	for (let i = modals.length - 1; i >= 0; i--) if (modals[i].getClientRects().length) return modals[i];
+	return doc.body || doc;
+}
+function scanClickables(root, max = SNAPSHOT_CLICKABLES_MAX) {
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	const all = root.querySelectorAll(CLICKABLE_SELECTOR);
+	for (let i = 0; i < all.length && out.length < max; i++) {
+		const el = all[i];
+		if (!clickableUsable(el)) continue;
+		const name = clickableName(el);
+		if (!name || seen.has(name)) continue;
+		seen.add(name);
+		out.push({
+			name,
+			el
+		});
+	}
+	return out;
+}
+var FLASH_MS = 900;
+function clickLabel(label, doc = document) {
+	const found = scanClickables(scanRoot(doc));
+	const i = pickLabel(found.map((f) => f.name), label);
+	if (i < 0) return {
+		ok: false,
+		text: "Nothing on screen called “" + label + "”"
+	};
+	const el = found[i].el;
+	try {
+		el.scrollIntoView?.({
+			block: "nearest",
+			inline: "nearest"
+		});
+	} catch {}
+	el.classList?.add("assist-flash");
+	setTimeout(() => el.classList?.remove("assist-flash"), FLASH_MS);
+	el.click();
+	return {
+		ok: true,
+		text: "Pressed " + found[i].name
+	};
+}
+function typeInto(el, text, makeEvent = () => new Event("input", { bubbles: true })) {
+	const v = el.value || "";
+	const start = el.selectionStart ?? v.length;
+	const end = el.selectionEnd ?? v.length;
+	const next = v.slice(0, start) + text + v.slice(end);
+	const proto = Object.getPrototypeOf(el);
+	const setter = proto ? Object.getOwnPropertyDescriptor(proto, "value")?.set : void 0;
+	if (setter) setter.call(el, next);
+	else el.value = next;
+	try {
+		el.selectionStart = el.selectionEnd = start + text.length;
+	} catch {}
+	el.dispatchEvent(makeEvent());
+}
+function focusedField() {
+	const el = document.activeElement;
+	if (!el || el.classList.contains("xterm-helper-textarea")) return null;
+	if (el instanceof HTMLTextAreaElement) return el.readOnly || el.disabled ? null : el;
+	if (el instanceof HTMLInputElement) return [
+		"text",
+		"search",
+		"url",
+		"email",
+		""
+	].includes(el.type) && !el.readOnly && !el.disabled ? el : null;
+	return null;
+}
+function assistantSnapshot() {
+	const ui = useUi.getState();
+	const dialog = ui.openDialog || null;
+	let clickables = [];
+	try {
+		clickables = scanClickables(scanRoot()).map((c) => c.name);
+	} catch {
+		clickables = [];
+	}
+	return {
+		view: ui.view,
+		dialog,
+		settings_screen: dialog === "settings" ? lastSettingsScreen() || ui.dialogTarget || null : null,
+		focused: ui.focused || null,
+		commands: paletteCommands().map((a) => a.label).slice(0, SNAPSHOT_COMMANDS_MAX),
+		clickables,
+		prefs: prefSnapshot()
+	};
+}
+var realEnv = {
+	openDialog: (name, target = null) => useUi.getState().openDialogFor(name, target),
+	openSettings: (screen) => openSettings(screen),
+	closeDialog: () => useUi.getState().closeDialog(),
+	openDialogName: () => useUi.getState().openDialog,
+	setView: (mode) => setView(mode),
+	titles: () => instances$2().map((i) => i.title),
+	name: displayName,
+	focus: (title) => selectSession(title, {
+		noKeyboard: true,
+		voice: true
+	}),
+	commands: paletteCommands,
+	sessionAction: (id, title) => {
+		const sid = id;
+		const c = actionCtx(title);
+		const label = actionLabel(sid, c).replace(/…$/, "");
+		if (c.inst && !sessionAction(sid).enabled(c)) {
+			runChordAction(sid, title);
+			return {
+				ok: false,
+				text: label + " isn’t available for " + displayName(title)
+			};
+		}
+		runChordAction(sid, title);
+		return {
+			ok: true,
+			text: label + " — " + displayName(title),
+			session: title
+		};
+	},
+	click: (label) => clickLabel(label),
+	pref: (key, value) => setAssistantPref(key, value),
+	type: (text) => {
+		const el = focusedField();
+		if (!el) return {
+			ok: false,
+			text: "No text box has the cursor"
+		};
+		typeInto(el, text);
+		return {
+			ok: true,
+			text: "Typed “" + (text.length > 40 ? text.slice(0, 39) + "…" : text) + "”"
+		};
+	}
+};
+var SCREEN_PREFIX = "settings:";
+function chipJump(c) {
+	if (c.session) selectSession(c.session, { voice: true });
+	else if (c.open?.startsWith(SCREEN_PREFIX)) openSettings(c.open.slice(9));
+	else if (c.open) useUi.getState().openDialogFor(c.open);
+}
+function execUiAction(a, env = realEnv) {
+	try {
+		switch (a.do) {
+			case "open": {
+				if (a.target.startsWith(SCREEN_PREFIX)) {
+					const key = a.target.slice(9);
+					const label = ASSISTANT_SETTINGS_SCREENS[key];
+					if (!label) return {
+						ok: false,
+						text: "No Settings screen called " + key
+					};
+					env.openSettings(key);
+					return {
+						ok: true,
+						text: "Opened Settings → " + label,
+						open: a.target
+					};
+				}
+				const label = ASSISTANT_DIALOGS[a.target];
+				if (!label) return {
+					ok: false,
+					text: "Can't open " + a.target
+				};
+				env.openDialog(a.target);
+				return {
+					ok: true,
+					text: "Opened " + label,
+					open: a.target
+				};
+			}
+			case "close": {
+				const was = env.openDialogName();
+				if (!was) return {
+					ok: true,
+					text: "Nothing was open"
+				};
+				env.closeDialog();
+				return {
+					ok: true,
+					text: "Closed " + (was === "settings" ? "Settings" : ASSISTANT_DIALOGS[was] || was)
+				};
+			}
+			case "view":
+				env.setView(a.mode);
+				return {
+					ok: true,
+					text: a.mode === "sky" ? "Showing the Sky" : "Showing the grid"
+				};
+			case "focus": {
+				const title = resolveSession(a.session, env.titles(), env.name);
+				if (!title) return {
+					ok: false,
+					text: "No session called " + a.session
+				};
+				env.focus(title);
+				return {
+					ok: true,
+					text: "Focused " + env.name(title),
+					session: title
+				};
+			}
+			case "command": {
+				const acts = env.commands();
+				const i = pickLabel(acts.map((x) => x.label), a.label);
+				if (i < 0) return {
+					ok: false,
+					text: "No command called “" + a.label + "”"
+				};
+				acts[i].run();
+				return {
+					ok: true,
+					text: acts[i].label.replace(/…$/, "")
+				};
+			}
+			case "session_action": {
+				if (!(a.action in SESSION_ACTIONS)) return {
+					ok: false,
+					text: "No session action called " + a.action
+				};
+				const title = resolveSession(a.session, env.titles(), env.name);
+				if (!title) return {
+					ok: false,
+					text: "No session called " + a.session
+				};
+				return env.sessionAction(a.action, title);
+			}
+			case "click": return env.click(a.label);
+			case "pref": return env.pref(a.key, a.value);
+			case "type": return env.type(a.text);
+		}
+	} catch (err) {
+		return {
+			ok: false,
+			text: "Couldn't do that: " + (err?.message || "error")
+		};
+	}
+	return {
+		ok: false,
+		text: "Can't do that"
+	};
+}
+//#endregion
+//#region src/lib/askVoice.ts
+var ask = null;
+var mic = null;
+function setAskVoice(a) {
+	ask = a;
+}
+function clearAskVoice(a) {
+	if (ask === a) ask = null;
+}
+function askVoice() {
+	return ask;
+}
+function registerAskMic(m) {
+	mic = m;
+	return () => {
+		if (mic === m) mic = null;
+	};
+}
+function askMic() {
+	return mic;
+}
+var micState = {
+	listening: false,
+	title: "",
+	caption: "",
+	unsure: ""
+};
+var listeners$3 = /* @__PURE__ */ new Set();
+function publishMicState(patch) {
+	const next = {
+		...micState,
+		...patch
+	};
+	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
+	micState = next;
+	listeners$3.forEach((l) => l());
+}
+function getMicState() {
+	return micState;
+}
+function subscribeMicState(cb) {
+	listeners$3.add(cb);
+	return () => {
+		listeners$3.delete(cb);
+	};
+}
+//#endregion
 //#region src/lib/wakeWord.ts
 var WAKE_QUIET_MS = 350;
 var WAKE_TAIL_MS = 200;
@@ -48948,325 +53558,6 @@ function useVoiceWords() {
 	return (0, import_react.useSyncExternalStore)(onVoiceWords, voiceWords, voiceWords);
 }
 //#endregion
-//#region src/lib/tours/voice.ts
-var talkKey = () => "";
-function setTalkKeyLabel(fn) {
-	talkKey = fn;
-}
-var MIC_POP_SCREEN = "mic-pop";
-function voiceTourSteps(w = voiceWords(), key = talkKey()) {
-	return [
-		{
-			target: "[data-tour=\"voice-mic\"], #mic-btn",
-			title: "Press or hold to talk",
-			body: "Click the mic" + (key ? " or press " + key : "") + " and talk to the session in front of you — with Hold to talk, hold it while you speak."
-		},
-		{
-			target: ".pane.focused .agent-term, .pane.focused, #grid",
-			title: "Your words go in as you speak",
-			body: "They are typed into the session as you say them, and corrected when the accurate pass hears one otherwise."
-		},
-		{
-			target: "#mic-pill, [data-tour=\"voice-mic\"], #mic-btn",
-			title: "Say " + quoted(w.send[0]) + " to send",
-			body: "End a sentence with " + quoted(w.send[0]) + " to send it — listening stays on, so the next sentence is the next message."
-		},
-		{
-			target: "[data-tour=\"voice-mic\"], #mic-btn",
-			title: "Stop, or start over",
-			body: "Say " + quoted(w.end[0]) + " to send what is left and stop, or " + quoted(w.clear[0]) + " to take back the message and start it over."
-		},
-		{
-			target: "[data-tour=\"session-row\"], li.inst, #sidebar",
-			title: "Switch sessions by voice",
-			body: "Say “session three”, “next session” or “switch to” and a session's name — the numbers are the sidebar's."
-		},
-		{
-			target: "#ask-mic, #notif-btn",
-			title: "Answer a question",
-			body: "When a session asks you something, answer with its card's mic or say “yes”, “no” or a number — the bell keeps it for later."
-		},
-		{
-			target: "#mic-wake-row",
-			screen: MIC_POP_SCREEN,
-			title: "The wake word",
-			body: "Turn this on, then say " + quoted(wakeName(w)) + " on its own — not inside a sentence — to open the mic without a click."
-		},
-		{
-			target: "#mic-replies-row",
-			screen: MIC_POP_SCREEN,
-			title: "Replies read aloud",
-			body: "Off by default: Mine reads the replies to what you sent by voice, Everything every session's, and " + quoted(w.hush[0]) + " cuts it short."
-		}
-	];
-}
-//#endregion
-//#region src/lib/tours/index.ts
-var TOURS = {
-	welcome: {
-		id: "welcome",
-		title: "Welcome",
-		steps: [
-			{
-				target: "[data-tour=\"setup-step-tools\"], .setup-step[data-step=\"tools\"]",
-				title: "① Install your agent",
-				body: "One click installs the coding agent MindFlock runs for you; each step ticks itself once it is really done."
-			},
-			{
-				target: "[data-tour=\"setup-step-agent_login\"], .setup-step[data-step=\"agent_login\"]",
-				title: "② Sign in to your agent",
-				body: "Sign in once in the window that opens, with that agent's own account."
-			},
-			{
-				target: "[data-tour=\"setup-step-repo\"], .setup-step[data-step=\"repo\"]",
-				title: "③ Start your first agent",
-				body: "Pick a repo and say what to do — that is a session: the agent works on its own branch, and the Sky shows its route."
-			}
-		]
-	},
-	new: {
-		id: "new",
-		title: "New",
-		steps: [
-			{
-				target: "[data-tour=\"new-task\"], #new-describe-text",
-				title: "Say what to work on",
-				body: "A session is one agent on its own branch — describe its task in plain words, and the agent starts on exactly this."
-			},
-			{
-				target: "[data-tour=\"new-folder\"], #new-describe-folder",
-				title: "Where it works",
-				body: "This is the repo it works in; each session gets its own branch, so your checkout is never touched."
-			},
-			{
-				target: "[data-tour=\"new-start\"], #new-describe-start, #new-create",
-				title: "Start it",
-				body: "Start begins the session now; talk to its agent in the Grid, or follow its route in the Sky."
-			},
-			{
-				target: "[data-tour=\"pane-tabs\"], [data-tour=\"pane-menu\"]",
-				title: "Then, in its pane",
-				body: "Diff shows what changed; when the agent stops, ⋯ → Push or Open PR ships it, and ✕ closes it (reopen it from Recently closed)."
-			}
-		]
-	},
-	sky: {
-		id: "sky",
-		title: "Sky",
-		steps: [
-			{
-				target: "",
-				title: "What the Sky is for",
-				body: "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you."
-			},
-			{
-				target: "[data-tour=\"sky-session-box\"], .sky-head",
-				title: "Each session's route",
-				body: "The agent comes first, then the stops its work goes through until it is merged; Ctrl+Y shows the same sessions in the Grid."
-			},
-			{
-				target: ".sky-plus, [data-tour=\"sky-shelf\"]",
-				title: "+ adds a stop",
-				body: "A stop moves the work, checks the work, or asks you — click + after the last stop, or drag one up from the shelf."
-			},
-			{
-				target: "[data-tour=\"flights-bird\"]",
-				title: "The bird shows where the work is",
-				body: "It stands on the stop the work is at; ▶ Run sets the route going and the bird moves along it."
-			},
-			{
-				target: "#notif-btn",
-				title: "Needs you",
-				body: "A stop that waits for your OK, or a route that halts, lands under Needs you on the bell; the sky's ? has the full guide."
-			}
-		]
-	},
-	intake: {
-		id: "intake",
-		title: "Intake",
-		steps: [
-			{
-				target: "[data-tour=\"intake-tiles\"], #intake-panel:not(:has([data-tour=\"intake-tiles\"])) #intake-add-source",
-				title: "Pick where your work lives",
-				body: "Intake is where work arrives by itself — tickets, pull requests, issues; pick your tracker, or Repository for a GitHub repo."
-			},
-			{
-				target: "[data-tour=\"intake-token\"]",
-				title: "Paste a token",
-				body: "Create a token ↗ opens the tracker's page for one; Test & continue checks it, and nothing is saved until Finish."
-			},
-			{
-				target: "[data-tour=\"intake-repo\"]",
-				title: "Name the repo",
-				body: "Each ticket starts as a session on its own branch of this repo — the one thing Finish needs."
-			},
-			{
-				target: "[data-tour=\"intake-start\"]",
-				title: "Start one by hand first",
-				body: "Start opens a ticket as a session — its route shows in the Sky — and Open session › takes you to it."
-			},
-			{
-				target: "[data-tour=\"intake-autostart\"], #intake-panel:not(:has([data-tour=\"intake-autostart\"])) #intake-tab-autostart",
-				title: "Auto-start, when you trust it",
-				body: "One switch each for tickets, PR review comments and new issues; each source says which route its items take."
-			}
-		]
-	},
-	verify: {
-		id: "verify",
-		title: "Verify",
-		steps: [
-			{
-				target: "[data-tour=\"behaviors-stop\"], .sky-node.sky-behaviors",
-				title: "Behaviors live on the route",
-				body: "What the work should do in real use sits on its route as a Verify stop, and its face says how they stand."
-			},
-			{
-				target: "[data-tour=\"behaviors-card\"], .bh-card",
-				title: "Open it in place",
-				body: "Click it to open the card in place: the agent checks what it can, you answer the rest, and a failure halts the route."
-			},
-			{
-				target: "[data-tour=\"behaviors-board\"], .sky-bh",
-				title: "The Behaviors board",
-				body: "Behaviors with no session in the Sky wait on this board, and Alt+V flies to the next one that needs you."
-			}
-		]
-	},
-	schedule: {
-		id: "schedule",
-		title: "Schedule",
-		steps: [
-			{
-				target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-				title: "Sessions you'll want again",
-				body: "Schedule starts sessions and saved routes on a timer — a template is a folder, an agent and a task, ready in one click."
-			},
-			{
-				target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-				title: "Create a template",
-				body: "Start with a job you repeat, like a nightly test run or a dependency bump."
-			},
-			{
-				target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
-				title: "Name it and pick the repo",
-				body: "The folder is what makes a template runnable — every session from it works there."
-			},
-			{
-				target: "[data-tour=\"schedule-task\"]",
-				title: "Say what to do",
-				body: "Every session from this template is told this task first."
-			},
-			{
-				target: "[data-tour=\"schedule-when\"]",
-				title: "Let it start by itself",
-				body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
-			},
-			{
-				target: "[data-tour=\"schedule-run\"]",
-				title: "Try it once now",
-				body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
-			}
-		]
-	},
-	settings: {
-		id: "settings",
-		title: "Settings",
-		steps: [
-			{
-				target: "[data-tour=\"settings-status\"]",
-				screen: "connections",
-				title: "Your status page",
-				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
-			},
-			{
-				target: "[data-tour=\"settings-github\"]",
-				screen: "connections",
-				title: "Connect GitHub when you need PRs",
-				body: "Agents need GitHub to open pull requests; pushing already works without it."
-			},
-			{
-				target: "#settings-search",
-				screen: "connections",
-				title: "Search finds any setting",
-				body: "Type a word like dark, phone or parallel and jump straight to it."
-			},
-			{
-				target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
-				screen: "coding",
-				title: "Pick your default agent",
-				body: "New sessions start with this agent; you can still pick another one when you start a session."
-			},
-			{
-				target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
-				screen: "workspace",
-				title: "Where your worktrees live",
-				body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
-			},
-			{
-				target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
-				title: "The rest waits here",
-				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
-			},
-			{
-				target: "[data-tour=\"settings-tours\"], #general-tours",
-				screen: "general",
-				title: "Replay any tour",
-				body: "How MindFlock works and every tour live here under Help, next to the switch for hints."
-			}
-		]
-	},
-	people: {
-		id: "people",
-		title: "People",
-		steps: [
-			{
-				target: "[data-tour=\"people-invite\"]",
-				title: "Invite someone",
-				body: "Create invite makes a one-time code — send it to the person you want to work with."
-			},
-			{
-				target: "[data-tour=\"people-join\"]",
-				title: "Or join them",
-				body: "Got an invite instead? Paste the whole message here and press Join."
-			},
-			{
-				target: "[data-tour=\"people-safety\"]",
-				title: "Check the safety number",
-				body: "Read it to each other: if it matches press It matches, if it differs unlink."
-			},
-			{
-				target: "[data-tour=\"people-share\"]",
-				title: "Share a folder",
-				body: "An agent works in one shared folder inside a sandbox and talks to their agent."
-			},
-			{
-				target: "[data-tour=\"people-joint\"]",
-				title: "Build one feature together",
-				body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
-			}
-		]
-	},
-	voice: {
-		id: "voice",
-		title: "Voice",
-		get steps() {
-			return voiceTourSteps();
-		}
-	}
-};
-var TOUR_IDS = [
-	"welcome",
-	"new",
-	"sky",
-	"intake",
-	"verify",
-	"schedule",
-	"settings",
-	"people",
-	"voice"
-];
-//#endregion
 //#region src/components/setup/useSetup.ts
 var SETUP_KEY = ["setup"];
 function useSetup(enabled = true) {
@@ -49442,31 +53733,6 @@ function useTourOnFirstSight(id, shown) {
 	}, [due, id]);
 }
 //#endregion
-//#region src/components/onboarding/replayTour.ts
-var SURFACE = {
-	new: "new-session",
-	intake: "intake",
-	schedule: "schedule"
-};
-function replayTour(id) {
-	const ui = useUi.getState();
-	if (ui.coachTour) ui.closeCoachTour();
-	if (id === "welcome") {
-		ui.closeDialog();
-		ui.openTour();
-		return;
-	}
-	if (id === "settings") openSettings("connections");
-	else if (id === "people") openSettings("peer");
-	else if (id === "sky") ui.showSky();
-	else if (id === "verify") {
-		ui.closeDialog();
-		openBehaviors({ next: true });
-	} else if (id === "voice") ui.closeDialog();
-	else ui.openDialogFor(SURFACE[id]);
-	useUi.getState().openCoachTour(id);
-}
-//#endregion
 //#region src/components/TopBarMic.tsx
 var browserRec = browserRecognizer();
 var cfgNow = DEFAULT_VOICE_CFG;
@@ -49483,6 +53749,38 @@ var clock = new HeardClock();
 var speakingListeners = /* @__PURE__ */ new Set();
 var audibleListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)), { onAudible: (on) => audibleListeners.forEach((l) => l(on)) });
+var ASSISTANT_LINES = "\0mindflock";
+var assistantSp = serverSpeaker(browserSp, {
+	voiceKey: () => "assistant\n" + ttsVoiceKey(cfgNow),
+	body: { as: "assistant" }
+});
+assistantSp.onStarting = (on) => startingListeners.forEach((l) => l(on));
+var assistantTalk = () => talkFromSettings(queryClient.getQueryData(["settings"]));
+function loadAssistantTalk() {
+	if (queryClient.getQueryData(["settings"])) return;
+	queryClient.fetchQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: 6e4
+	}).catch(() => {});
+}
+var assistantHooks = {};
+var assistant = new AssistantSession({
+	stream: (body, on, signal) => streamAssistant(body, on, { signal }),
+	snapshot: assistantSnapshot,
+	exec: (a) => execUiAction(a),
+	speak: (text) => void queue.say(text, {
+		title: ASSISTANT_LINES,
+		voice: ttsEngine(cfgNow) === "server" ? assistantSp : void 0
+	}),
+	chime: () => assistantHooks.chime?.(),
+	focus: (title) => void refreshInstances().then(() => selectSession(title, {
+		noKeyboard: true,
+		voice: true
+	})),
+	talk: assistantTalk,
+	asked: (kind) => assistantHooks.asked?.(kind)
+});
 var standbyMeter = false;
 var wakeFrom = null;
 var lastWakeMs = null;
@@ -49689,6 +53987,8 @@ function TopBarMic() {
 		if (cheatOpen.current) setCheat(null);
 	};
 	const words = useVoiceWords();
+	const [assistantOn, setAssistantOn] = (0, import_react.useState)(false);
+	const assistantMode = (0, import_react.useRef)(false);
 	const tourPop = useUi((s) => s.coachTour?.id === "voice" && TOURS.voice.steps[s.coachTour.step]?.screen === MIC_POP_SCREEN);
 	const tourOpened = (0, import_react.useRef)(false);
 	(0, import_react.useEffect)(() => {
@@ -49902,9 +54202,10 @@ function TopBarMic() {
 	}, []);
 	const supported = recEngine(cfg || cfgNow) !== "none";
 	const idles = (0, import_react.useRef)(true);
+	const idleMs = (0, import_react.useRef)(DICT_IDLE_MS);
 	const armIdle = () => {
 		clearTimeout(idleTimer.current);
-		if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
+		if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), idleMs.current);
 	};
 	const chimed = (0, import_react.useRef)(false);
 	const gated = (0, import_react.useRef)(false);
@@ -49935,6 +54236,8 @@ function TopBarMic() {
 			title: ""
 		});
 		queue.release();
+		idleMs.current = DICT_IDLE_MS;
+		endAssistant();
 	};
 	const target = (into, session = "") => {
 		if (into) return fieldTarget(into);
@@ -49972,12 +54275,19 @@ function TopBarMic() {
 		const chimeSkip = prefsRef.current.sounds !== false ? queue.cueLead + CHIME_MS + 30 : 0;
 		const continuous = opts.continuous !== false;
 		idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
-		const d = new LiveDictation(target(into, opts.title), {
-			caption: say,
+		const d = new LiveDictation(opts.assistant ? null : target(into, opts.title), {
+			caption: (text, sticky, tail) => {
+				say(text, sticky, tail);
+				if (opts.assistant && live.current === d) {
+					const heardNow = [d.dict.shown, d.dict.partial].filter(Boolean).join(" ").trim();
+					if (heardNow) assistant.hearing(heardNow);
+				}
+			},
 			halt: () => {
 				if (live.current === d) halt();
 			},
 			route: async (text, spokeAt) => {
+				if (opts.assistant) return assistantRoute(text, spokeAt, r === serverRec ? serverRec.takeHeard() : "");
 				const session = opts.title || useUi.getState().focused || "";
 				const ask = askVoice();
 				if (ask && ask.title === session && ask.phrase?.(text)) {
@@ -49986,13 +54296,30 @@ function TopBarMic() {
 					}, 150);
 					return "end";
 				}
+				const answering = assistant.wantsNext();
+				if (answering && yesNo(text) !== null) {
+					askAssistant(text);
+					return true;
+				}
 				const reply = await routePhrase(text, session, void 0, spokeAt, void 0, r === serverRec ? serverRec.takeHeard() : "");
-				if (reply.kind === "prompt") return false;
+				if (reply.kind === "assistant") {
+					askAssistant(reply.text || addressed(text) || text);
+					return true;
+				}
+				if (reply.kind === "prompt") {
+					if (!answering && (into || session)) return false;
+					askAssistant(text);
+					return true;
+				}
 				if (reply.kind === "hush") return "hush";
 				await routed(reply, text, session, spokeAt);
 				return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
 			},
 			retarget: () => {
+				if (opts.assistant) return {
+					target: null,
+					hint: LISTENING_LINE
+				};
 				if (into) return null;
 				const ask = askVoice();
 				const title = ask && ask.title === opts.title ? ask.title : "";
@@ -50039,9 +54366,20 @@ function TopBarMic() {
 		live.current = d;
 		rec.current = r;
 		setListening(true);
+		if (opts.assistant) {
+			idleMs.current = ASSISTANT_IDLE_MS;
+			if (opts.mode) {
+				assistantMode.current = true;
+				setAssistantOn(true);
+				assistant.setMode(true);
+				warmAssistant();
+				refreshCfg(true);
+				loadAssistantTalk();
+			}
+		}
 		publishMicState({
 			listening: true,
-			title: into ? "" : opts.title || useUi.getState().focused || ""
+			title: into || opts.assistant ? "" : opts.title || useUi.getState().focused || ""
 		});
 		d.show();
 		armIdle();
@@ -50304,6 +54642,102 @@ function TopBarMic() {
 				if (!r.say) say("“" + text + "” — not typed", true);
 		}
 	};
+	const askAssistant = (text) => {
+		closeCheat();
+		queue.cancel(ASSISTANT_LINES);
+		assistant.turn(text).then(() => {
+			if (assistantMode.current) armIdle();
+		});
+	};
+	const assistantRoute = async (text, spokeAt, heardText = "") => {
+		const words = addressed(text) || text;
+		if (assistant.confirmId() && yesNo(words) !== null) {
+			askAssistant(words);
+			return true;
+		}
+		if (assistantMode.current && isAssistantEnd(words)) {
+			endAssistant();
+			return "end";
+		}
+		const session = useUi.getState().focused || "";
+		const reply = await routePhrase(words, session, void 0, spokeAt, void 0, heardText);
+		switch (reply.kind) {
+			case "assistant":
+				askAssistant(reply.text || words);
+				return true;
+			case "prompt":
+			case "no-session":
+			case "help":
+				askAssistant(words);
+				return true;
+			case "hush": return "hush";
+		}
+		await routed(reply, words, session, spokeAt);
+		return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
+	};
+	const endAssistant = () => {
+		if (!assistantMode.current) return;
+		assistantMode.current = false;
+		setAssistantOn(false);
+		assistant.setMode(false);
+	};
+	const toggleAssistant = () => {
+		if (assistantMode.current) {
+			endAssistant();
+			const d = live.current;
+			if (d) d.expire();
+			return;
+		}
+		const begin = () => start(null, {
+			assistant: true,
+			mode: true,
+			continuous: true,
+			idle: true,
+			hint: LISTENING_LINE
+		});
+		if (live.current) {
+			live.current.expire();
+			setTimeout(() => {
+				if (!live.current) begin();
+			}, TALK_DEBOUNCE_MS);
+		} else begin();
+	};
+	const latestAssist = (0, import_react.useRef)({
+		start,
+		sound
+	});
+	latestAssist.current = {
+		start,
+		sound
+	};
+	(0, import_react.useEffect)(() => {
+		assistantHooks.chime = () => latestAssist.current.sound("start");
+		assistantHooks.asked = () => {
+			queue.drained().then(() => {
+				if (live.current || !assistant.wantsNext()) return;
+				latestAssist.current.start(null, {
+					assistant: true,
+					continuous: false,
+					idle: true,
+					hint: LISTENING_LINE
+				});
+			});
+		};
+		return () => {
+			assistantHooks.chime = void 0;
+			assistantHooks.asked = void 0;
+		};
+	}, []);
+	const toggleRef = (0, import_react.useRef)(toggleAssistant);
+	toggleRef.current = toggleAssistant;
+	(0, import_react.useEffect)(() => {
+		const on = () => {
+			if (!assistantMode.current) warmMic(true);
+			toggleRef.current();
+		};
+		window.addEventListener(VOICE_ASSISTANT_EVENT, on);
+		return () => window.removeEventListener(VOICE_ASSISTANT_EVENT, on);
+	}, []);
 	const latest = (0, import_react.useRef)({
 		listenFor,
 		refreshCfg
@@ -50502,7 +54936,8 @@ function TopBarMic() {
 		};
 	}, [menuOpen]);
 	const who = focusedName || "a session";
-	const base = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
+	const assistKey = shortcutLabels("assistant")[0] || "";
+	const base = !supported ? noRecognizerLine() + " — right-click for options" : assistantOn ? LISTENING_LINE + " — every phrase goes to MindFlock; say “that's all” or click to stop" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
 	const paused = listening && sounding;
 	const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
 	const pill = micPill({
@@ -50533,13 +54968,14 @@ function TopBarMic() {
 					"tb-item",
 					"mic-ring",
 					listening && "listening",
+					assistantOn && "assistant",
 					paused && "muted",
 					wake.on && !listening && "standby",
 					speaking && !listening && "speaking",
 					!supported && "unsupported"
 				].filter(Boolean).join(" "),
 				title,
-				"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
+				"aria-label": paused ? MIC_PAUSED_LINE : assistantOn ? LISTENING_LINE + " — stop" : listening ? "Listening — stop" : "Talk to " + who,
 				"aria-pressed": listening,
 				"aria-haspopup": "menu",
 				"aria-expanded": menuOpen,
@@ -50724,6 +55160,22 @@ function TopBarMic() {
 						onChange: (e) => setWakePref(e.target.checked)
 					})]
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "mic-commands-btn mic-assistant-btn" + (assistantOn ? " on" : ""),
+					id: "mic-assistant",
+					role: "menuitemcheckbox",
+					"aria-checked": assistantOn,
+					title: "Every phrase goes to MindFlock itself — open things, start sessions, change settings, ask anything — until “that's all”",
+					onClick: () => {
+						setMenuOpen(false);
+						toggleAssistant();
+					},
+					children: [assistantOn ? "Stop talking to MindFlock" : "Talk to MindFlock", assistKey && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-pop-key",
+						children: [" ", assistKey]
+					})]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "mic-commands-btn",
@@ -50746,6 +55198,18 @@ function TopBarMic() {
 			items: cheat,
 			anchor: btnRef.current,
 			onClose: () => setCheat(null)
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantStrip, {
+			anchor: btnRef.current,
+			onChip: chipJump,
+			onAnswer: (yes) => askAssistant(yes ? "yes" : "no"),
+			onClose: () => {
+				if (assistantMode.current) toggleAssistant();
+				else {
+					assistant.dropQuestion();
+					assistant.view.clear();
+				}
+			}
 		})
 	] });
 }
@@ -50878,86 +55342,6 @@ function installDesktopNotifyClicks() {
 	if (!b || typeof b.onClick !== "function") return () => {};
 	const off = b.onClick((target) => openNotifyTarget(String(target || "")));
 	return typeof off === "function" ? off : () => {};
-}
-//#endregion
-//#region src/lib/onboarding.ts
-var VISION_BREATH = [
-	"MindFlock runs your coding agents side by side.",
-	"Each session is one agent working on its own branch.",
-	"Its route is the stops the work goes through until it is merged — the agent, its checks, your OK, the PR.",
-	"The Sky shows every route at once, and what needs you."
-];
-var SKY_LINE = "Air traffic control for your agents — every piece of work in flight, the route it's cleared to fly, and the ones that need you.";
-var GRID_LINE = "Inside the work — your sessions side by side, talk to the agents.";
-var VIEWS_LINE = "Same sessions, two views: Ctrl+Y switches between the Grid and the Sky.";
-var STOP_TEST = "A stop moves the work, checks the work, or asks you.";
-var VISION_PARTS = [
-	{
-		id: "session",
-		title: "Session",
-		line: "one agent on its own branch"
-	},
-	{
-		id: "route",
-		title: "Route",
-		line: "the stops until it is merged"
-	},
-	{
-		id: "needs",
-		title: "Needs you",
-		line: "what waits on your OK"
-	}
-];
-function primaryGithubMethod(st) {
-	const m = st?.methods || [];
-	if (m.includes("device")) return "device";
-	if (m.includes("gh") || st?.gh?.installed) return "gh";
-	return "token";
-}
-function needsIdentity(st) {
-	const id = st?.identity;
-	return !!st && !(id?.name && id?.email);
-}
-function flowFinished(f) {
-	return !!f && f.state !== "pending";
-}
-function pollDelay(f) {
-	return Math.max(2, Number(f?.interval || 5));
-}
-function readinessLine$1(r) {
-	if (!r) return null;
-	if (r.error) return {
-		text: "readiness unknown — " + r.error,
-		warn: false
-	};
-	const bits = [];
-	if (r.missing?.length) bits.push("missing " + r.missing.join(", "));
-	if (r.agent?.signed_in === false) bits.push((r.agent.provider || "agent") + " not signed in");
-	if (r.deferred?.length) bits.push(r.deferred.join(", ") + " not installed");
-	if (r.push?.ok === false) bits.push("can't push");
-	if (r.tailscale?.key_expired) bits.push("Tailscale key expired");
-	else if (r.tailscale?.key_warn && r.tailscale.key_expiry_days != null) bits.push("Tailscale key expires in " + r.tailscale.key_expiry_days + "d");
-	if (!bits.length) return {
-		text: "ready to work",
-		warn: false
-	};
-	return {
-		text: bits.join(" · "),
-		warn: true
-	};
-}
-function hasSyncedAgentStep(steps) {
-	return (steps || []).some((s) => /^synced-.+-cli$/.test(s.id));
-}
-function pushFailedNote(session, data) {
-	const reason = String(data?.reason || "");
-	const setup = reason === "https_auth" || reason === "identity";
-	const what = String(data?.message || "the push was refused");
-	const tail = setup ? reason === "identity" ? " — set your git name and email in Setup" : " — Connect GitHub in Setup" : data?.fix ? " — " + data.fix : "";
-	return {
-		text: "Push failed on " + session + ": " + what + tail,
-		setup
-	};
 }
 //#endregion
 //#region src/lib/revive.ts
@@ -52163,1557 +56547,6 @@ function useCalm() {
 	return undecidedCalm(readCalmHint());
 }
 //#endregion
-//#region src/lib/whatsNew.ts
-function parseVersion(raw) {
-	const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec((raw || "").trim());
-	if (!m) return null;
-	return [
-		Number(m[1]),
-		Number(m[2] || 0),
-		Number(m[3] || 0)
-	];
-}
-function compareVersions(a, b) {
-	const pa = parseVersion(a);
-	const pb = parseVersion(b);
-	if (!pa || !pb) return (pa ? 1 : 0) - (pb ? 1 : 0);
-	for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
-	return 0;
-}
-function isReleaseVersion(raw) {
-	const v = (raw || "").trim();
-	return !!parseVersion(v) && !v.startsWith("0+");
-}
-function minorOf(raw) {
-	const p = parseVersion(raw);
-	return p ? `${p[0]}.${p[1]}` : raw;
-}
-function sorted(releases) {
-	return [...releases].sort((a, b) => compareVersions(b.version, a.version));
-}
-function planWhatsNew(input) {
-	const none = {
-		pop: false,
-		entries: [],
-		markSeen: null
-	};
-	if (!isReleaseVersion(input.running)) return none;
-	const running = input.running.trim();
-	const seen = isReleaseVersion(input.lastSeen) ? input.lastSeen.trim() : null;
-	if (!seen) {
-		if (!input.onboarded) return {
-			pop: false,
-			entries: [],
-			markSeen: running
-		};
-	}
-	const entries = sorted(input.releases).filter((r) => compareVersions(r.version, running) <= 0 && (!seen || compareVersions(r.version, seen) > 0));
-	if (!entries.some((r) => r.big)) return none;
-	return {
-		pop: true,
-		entries,
-		markSeen: null
-	};
-}
-function sinceNewestBig(newestFirst) {
-	const i = newestFirst.findIndex((r) => r.big);
-	return i < 0 ? newestFirst.slice(0, 1) : newestFirst.slice(0, i + 1);
-}
-function reopenEntries(releases, running) {
-	const cap = isReleaseVersion(running) ? running.trim() : null;
-	return sinceNewestBig(sorted(releases).filter((r) => !cap || compareVersions(r.version, cap) <= 0));
-}
-function laterVersion(a, b) {
-	const x = isReleaseVersion(a) ? a.trim() : null;
-	const y = isReleaseVersion(b) ? b.trim() : null;
-	if (!x || !y) return x || y;
-	return compareVersions(x, y) >= 0 ? x : y;
-}
-function whatsNewTitle(entries) {
-	const lead = entries.find((r) => r.big) || entries[0];
-	return lead ? `What's new in MindFlock ${minorOf(lead.version)}` : "What's new in MindFlock";
-}
-function splitEntries(entries) {
-	return {
-		big: entries.filter((r) => r.big),
-		small: entries.filter((r) => !r.big)
-	};
-}
-function knownAction(f, known) {
-	return f.action && known(f.action.run) ? f.action : void 0;
-}
-var WHATS_NEW_DECIDE_MS = 8e3;
-function popupTurn(q) {
-	if (q.whatsNew === "shown") return "whats-new";
-	if (q.askOpen) return "ask";
-	if (q.otherOpen) return null;
-	if (q.whatsNew === "due") return "whats-new";
-	if (q.whatsNew === "deciding" && q.sinceLoadMs < WHATS_NEW_DECIDE_MS) return null;
-	return q.askWaiting ? "ask" : null;
-}
-//#endregion
-//#region src/whatsNew/releases.ts
-var RELEASES = [
-	{
-		version: "0.13.1",
-		date: "2026-11-09",
-		big: false,
-		headline: "Dictation that follows the whole sentence.",
-		features: [{
-			title: "Words heard in context",
-			body: "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong."
-		}, {
-			title: "A sharper English model",
-			body: "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast."
-		}]
-	},
-	{
-		version: "0.13.0",
-		date: "2026-11-09",
-		big: true,
-		headline: "Voice that hears you right, and does more hands-free.",
-		features: [
-			{
-				title: "Accurate words, instant commands",
-				body: "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them."
-			},
-			{
-				title: "Scroll by voice",
-				body: "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going."
-			},
-			{
-				title: "Interrupt, go back, where am I",
-				body: "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused."
-			},
-			{
-				title: "Scratch that",
-				body: "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all."
-			},
-			{
-				title: "The rail keeps up",
-				body: "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it."
-			},
-			{
-				title: "What can I say?",
-				body: "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu."
-			}
-		]
-	},
-	{
-		version: "0.12.0",
-		date: "2026-11-04",
-		big: true,
-		headline: "Steadier with many agents: they wait for memory instead of freezing the machine.",
-		features: [
-			{
-				title: "Agents wait their turn for memory",
-				body: "When memory is getting low, agents that start by themselves (workers, Intake, schedules, routes) wait in line and show \"Waiting for memory\", and starting one yourself asks first. Each agent also has its own memory limit, so one that runs away is stopped on its own instead of freezing everything."
-			},
-			{
-				title: "After a crash, sessions stay offline",
-				body: "A session whose agent died stays Offline until you press Start, so a restart can't refill memory and crash again. Prompts sent to it wait on its queue."
-			},
-			{
-				title: "One name per session",
-				body: "Renaming a session renames it everywhere — there's no hidden second name any more — and a copy is named after it with the next free number (api-fix → api-fix-2)."
-			},
-			{
-				title: "Quieter, quicker voice",
-				body: "Voice Lab starts only when something is spoken and stops when idle; dictation never wakes it, and speech recognition loads only while you listen. \"MindFlock\" wakes the mic faster and more reliably."
-			},
-			{
-				title: "The Sky opens on This session",
-				body: "The Sky starts on the session you're on, fits its route to the window on every switch, and never pops the terminal open. Frames show their state at a glance: amber needs you, red halted.",
-				action: {
-					label: "Show me",
-					run: "sky-tour"
-				}
-			}
-		]
-	},
-	{
-		version: "0.11.0",
-		date: "2026-11-03",
-		big: true,
-		headline: "The Sky: see where every piece of work is, and set the route it takes.",
-		features: [
-			{
-				title: "The Sky",
-				body: "A second view beside the Grid: a session's route drawn as a row of stops, with a bird on the stop where the work is now. It opens on This session; All shows every route at once, and Needs you lists what is waiting on you. Ctrl+Y switches between the Grid and the Sky.",
-				action: {
-					label: "Show me",
-					run: "sky-tour"
-				}
-			},
-			{
-				title: "Saved routes",
-				body: "Build a route once — the agent, its checks, your OK, the PR — and keep it on the shelf as a saved route. Run it on a session, on its own in a folder, from an Intake source or on a schedule.",
-				action: {
-					label: "Show me",
-					run: "saved-routes"
-				}
-			},
-			{
-				title: "Behaviors on the route",
-				body: "What the work should do in real use is a list of behaviors, each checked by the agent or by you. Verify is now a stop on the session's route, and you answer them on its card there instead of in a separate dialog.",
-				action: {
-					label: "Show me",
-					run: "behaviors"
-				}
-			},
-			{
-				title: "Halt",
-				body: "A stop that fails halts the route, so nothing ships past a failure: Retry it, Skip it, or Let the agent fix it, right on the stop. Halt here on a stop ahead makes the route halt before it until you press Carry on."
-			},
-			{
-				title: "Loops, side-by-side stops and workers",
-				body: "Drag from a stop's out port back onto an earlier stop to repeat it; when a check sends the work back to the agent, the return wire says why (\"fixing 1/2\"). Stops can run side by side, and workers the session starts show up inside its route, as small outlines under its agent.",
-				action: {
-					label: "Show me",
-					run: "sky-guide"
-				}
-			},
-			{
-				title: "Any agent, GitHub Copilot too",
-				body: "GitHub Copilot is now one of the agents a session can run, alongside Claude, Codex and the others. Setup's first step asks which agent you use, then installs and signs in to that one.",
-				action: {
-					label: "Choose agents",
-					run: "agents"
-				}
-			}
-		]
-	},
-	{
-		version: "0.10.6",
-		date: "2026-10-29",
-		big: false,
-		headline: "Ask for workers in one keystroke.",
-		features: [{
-			title: "Ask for workers",
-			body: "Alt+G types a request for workers into the session's prompt; Flock mode keeps asking on every prompt, so a big task gets split without you writing it out."
-		}, {
-			title: "Invite with sessions",
-			body: "An invite to another person can carry the sessions you want to share, and you can chat with them across the link."
-		}]
-	}
-];
-//#endregion
-//#region src/components/flights/SkyGuide.tsx
-var SKY_GUIDE_SECTIONS = [
-	{
-		id: "start",
-		title: "Start here"
-	},
-	{
-		id: "what",
-		title: "What the Sky is for"
-	},
-	{
-		id: "lines",
-		title: "Routes, stops and wires"
-	},
-	{
-		id: "stops",
-		title: "Stops and saved routes"
-	},
-	{
-		id: "bird",
-		title: "The bird"
-	},
-	{
-		id: "halt",
-		title: "Halt points and Remove"
-	},
-	{
-		id: "grounded",
-		title: "Routes on their own, and handoffs"
-	},
-	{
-		id: "select",
-		title: "Selection"
-	},
-	{
-		id: "keys",
-		title: "Tools and the keyboard"
-	},
-	{
-		id: "intake",
-		title: "The Intake lane"
-	},
-	{
-		id: "saved",
-		title: "Where things are saved"
-	}
-];
-function sectionOf(id) {
-	return SKY_GUIDE_SECTIONS.find((s) => s.id === id)?.id ?? SKY_GUIDE_SECTIONS[0].id;
-}
-var useSkyGuide = create((set) => ({
-	section: null,
-	open: (section) => set({ section: sectionOf(section) }),
-	close: () => set({ section: null })
-}));
-var openSkyGuide = (section) => useSkyGuide.getState().open(section);
-var closeSkyGuide = () => useSkyGuide.getState().close();
-var SKY_GUIDE_KEYS = [
-	["V", "Drag tool: routes move by their bars, a drag on empty sky selects"],
-	["H", "Click tool: any drag pans the sky, a click selects"],
-	["Space (held)", "Pan with the mouse, in either tool"],
-	["0", "Fit every route, titles still readable"],
-	["1", "Fit the focused route to the window"],
-	["+ / −", "Zoom in / out (Ctrl+wheel too)"],
-	["T", "Tidy: every route back in its place, every window minimised"],
-	["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
-	["Delete", "Remove the selected stop"],
-	["Esc", "Clear the selection, fold an open session, cancel a pick"],
-	["Ctrl+A", "Select every route"],
-	["Enter", "Open the focused route's session; on a stop, its dialog"],
-	["Ctrl+Y", "Switch between the grid and the sky"],
-	["Ctrl/Alt+N", "A new session on the sky (double-click empty sky does too)"]
-];
-function Box({ x, y, w = 44, h = 26, cls = "" }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-		className: "sg-box " + cls,
-		x,
-		y,
-		width: w,
-		height: h,
-		rx: 5
-	});
-}
-function Bar({ x, y, w }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-		className: "sg-bar",
-		x,
-		y,
-		width: w,
-		height: 8,
-		rx: 3
-	});
-}
-function BirdMark({ x, y }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-		className: "sg-bird",
-		d: `M${x - 8} ${y} Q${x - 4} ${y - 6} ${x} ${y} Q${x + 4} ${y - 6} ${x + 8} ${y}`
-	});
-}
-function Line({ x, y, n = 4, cls = [] }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
-		x,
-		y,
-		w: n * 54 - 10
-	}), Array.from({ length: n }, (_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [k > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-		className: "sg-link",
-		x1: x + k * 54 - 10,
-		y1: y + 27,
-		x2: x + k * 54,
-		y2: y + 27
-	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-		x: x + k * 54,
-		y: y + 14,
-		cls: k === 0 ? "sg-session" : cls[k] || ""
-	})] }, k))] });
-}
-function Sketch({ label, children, h = 110 }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-		className: "sg-sketch",
-		viewBox: `0 0 320 ${h}`,
-		role: "img",
-		"aria-label": label,
-		children
-	});
-}
-var SKETCHES = {
-	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A route: the agent first, two stops joined by wires and a + after them; a stop dragged up from the shelf onto it",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 20,
-				y: 12,
-				n: 3
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-box sg-dash",
-				x: 182,
-				y: 26,
-				width: 26,
-				height: 26,
-				rx: 5
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 190,
-				y: 44,
-				children: "+"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
-				x: 74,
-				y: 22
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-chip",
-				x: 196,
-				y: 82,
-				width: 70,
-				height: 20,
-				rx: 10
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 210,
-				y: 96,
-				children: "Verify"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-arrow",
-				d: "M220 82 L200 58 M200 66 L200 58 L208 60"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 20,
-				y: 74,
-				children: "agent → stops → merged"
-			})
-		]
-	}),
-	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "Panes on the left, the same sessions as routes on the right",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-pane",
-				x: 8,
-				y: 14,
-				width: 60,
-				height: 38,
-				rx: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-pane",
-				x: 74,
-				y: 14,
-				width: 60,
-				height: 38,
-				rx: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-pane",
-				x: 8,
-				y: 58,
-				width: 126,
-				height: 38,
-				rx: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-arrow",
-				d: "M144 55 H170 M164 49 L170 55 L164 61"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 180,
-				y: 12,
-				n: 2
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 180,
-				y: 58,
-				n: 2
-			})
-		]
-	}),
-	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A session's outline: its bar on top, the agent first inside, then its stops joined by wires, and a + to add one",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-box",
-				x: 4,
-				y: 8,
-				width: 260,
-				height: 96,
-				rx: 10
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 12,
-				y: 30,
-				n: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 12,
-				y: 22,
-				children: "name · branch · state · ⋯"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 12,
-				y: 92,
-				children: "agent"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 70,
-				y: 92,
-				children: "stops →"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-box sg-dash",
-				x: 228,
-				y: 44,
-				width: 26,
-				height: 26,
-				rx: 5
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 236,
-				y: 62,
-				children: "+"
-			})
-		]
-	}),
-	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A saved route on the sky: one group holding three stops, and its chip on the shelf with a dot per stop",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 12,
-				y: 24,
-				w: 150,
-				h: 56,
-				cls: "sg-group"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 20,
-				y: 38,
-				children: "Ticket to merge · 2 of 3"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 20,
-				y: 46,
-				w: 40,
-				h: 24,
-				cls: "sg-done"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 66,
-				y: 46,
-				w: 40,
-				h: 24,
-				cls: "sg-here"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 112,
-				y: 46,
-				w: 40,
-				h: 24
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-chip",
-				x: 196,
-				y: 40,
-				width: 112,
-				height: 26,
-				rx: 13
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 208,
-				y: 57,
-				children: "Ticket to merge"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-				className: "sg-dot",
-				cx: 290,
-				cy: 53,
-				r: 2
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-				className: "sg-dot",
-				cx: 296,
-				cy: 53,
-				r: 2
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-				className: "sg-dot",
-				cx: 302,
-				cy: 53,
-				r: 2
-			})
-		]
-	}),
-	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A route of stops with the bird on the third; a dashed arrow drags it back to the second",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 20,
-				y: 40,
-				n: 5,
-				cls: [
-					"",
-					"sg-done",
-					"sg-here"
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
-				x: 150,
-				y: 46
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-arrow sg-dash",
-				d: "M146 36 Q120 14 96 36 M98 28 L96 36 L104 36"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 20,
-				y: 100,
-				children: "click: halt / carry on · drag: jump"
-			})
-		]
-	}),
-	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "The bird on a stop, and a halt point two stops on wearing a pause badge",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 20,
-				y: 34,
-				n: 5,
-				cls: [
-					"",
-					"sg-done",
-					"sg-here"
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
-				x: 150,
-				y: 40
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-halt",
-				x: 236,
-				y: 44,
-				width: 14,
-				height: 14,
-				rx: 3
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-halt-ink",
-				d: "M241 48 V54 M245 48 V54"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 20,
-				y: 96,
-				children: "⏹ halt now — here · ⏸ halt here — when it arrives"
-			})
-		]
-	}),
-	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A route with no session: an empty socket on its first stop, its stops, and the Session chip dropped on it",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
-				x: 20,
-				y: 30,
-				w: 206
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-box sg-dash",
-				x: 20,
-				y: 44,
-				width: 64,
-				height: 26,
-				rx: 5
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 26,
-				y: 61,
-				children: "socket"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 94,
-				y: 44
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 148,
-				y: 44
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-chip",
-				x: 60,
-				y: 84,
-				width: 70,
-				height: 20,
-				rx: 10
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 70,
-				y: 98,
-				children: "Session"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-arrow",
-				d: "M70 84 L56 74 M56 80 L56 74 L62 74"
-			})
-		]
-	}),
-	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A dashed marquee drawn over the stops of two routes",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 20,
-				y: 10,
-				n: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
-				x: 20,
-				y: 58,
-				n: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-marquee",
-				x: 64,
-				y: 18,
-				width: 118,
-				height: 84,
-				rx: 2
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-arrow",
-				d: "M182 102 l10 6 M182 102 l3 -10"
-			})
-		]
-	}),
-	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "The tool toggle: Drag (V) and Click (H)",
-		h: 80,
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-toggle",
-				x: 60,
-				y: 20,
-				width: 200,
-				height: 34,
-				rx: 17
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-toggle-on",
-				x: 63,
-				y: 23,
-				width: 97,
-				height: 28,
-				rx: 14
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text sg-strong",
-				x: 84,
-				y: 42,
-				children: "✥ Drag · V"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 180,
-				y: 42,
-				children: "☝ Click · H"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 98,
-				y: 74,
-				children: "hold Space: pan in either"
-			})
-		]
-	}),
-	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "The Intake lane folded to a row of sources, and expanded to show each waiting item with Run",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
-				x: 12,
-				y: 12,
-				w: 120
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 12,
-				y: 26,
-				w: 56,
-				cls: "sg-group"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 76,
-				y: 26,
-				w: 56,
-				cls: "sg-group"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 12,
-				y: 72,
-				children: "folded"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
-				x: 168,
-				y: 12,
-				w: 140
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
-				x: 168,
-				y: 26,
-				w: 140,
-				h: 70,
-				cls: "sg-group"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-row",
-				x: 176,
-				y: 36,
-				width: 124,
-				height: 14,
-				rx: 3
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-row",
-				x: 176,
-				y: 56,
-				width: 124,
-				height: 14,
-				rx: 3
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-fly",
-				x: 276,
-				y: 38,
-				width: 20,
-				height: 10,
-				rx: 3
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-fly",
-				x: 276,
-				y: 58,
-				width: 20,
-				height: 10,
-				rx: 3
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 168,
-				y: 108,
-				children: "expanded ▾"
-			})
-		]
-	}),
-	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "Three places: this browser for the layout, every device for saved routes, this machine for running routes",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-pane",
-				x: 16,
-				y: 24,
-				width: 70,
-				height: 46,
-				rx: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 22,
-				y: 88,
-				children: "layout: here"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-				className: "sg-cloud",
-				d: "M136 64 a14 14 0 0 1 4 -27 a18 18 0 0 1 34 -2 a13 13 0 0 1 6 29 Z"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 118,
-				y: 88,
-				children: "saved routes: synced"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				className: "sg-pane",
-				x: 238,
-				y: 30,
-				width: 60,
-				height: 34,
-				rx: 4
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
-				className: "sg-link",
-				x1: 238,
-				y1: 52,
-				x2: 298,
-				y2: 52
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
-				className: "sg-text",
-				x: 226,
-				y: 88,
-				children: "running: this machine"
-			})
-		]
-	})
-};
-function Keys() {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
-		className: "sky-guide-keys",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
-			scope: "col",
-			children: "Key"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
-			scope: "col",
-			children: "What it does"
-		})] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: SKY_GUIDE_KEYS.map(([k, what]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: k }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: what })] }, k)) })]
-	});
-}
-var WORDS = {
-	start: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "sky-guide-breath",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: VISION_BREATH[0] }),
-				" ",
-				VISION_BREATH.slice(1).join(" ")
-			]
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"The Sky is ",
-			SKY_LINE.charAt(0).toLowerCase() + SKY_LINE.slice(1),
-			" The test for every stop: ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: STOP_TEST.charAt(0).toLowerCase() + STOP_TEST.slice(1) })
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ol", {
-			className: "sky-guide-start",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Each session has a route." }), " Its agent comes first; the stops after it run left to right, along the wires, once the agent's turn ends."] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+ adds a stop." }),
-					" Click the ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
-					" after the last stop, or drag ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
-					", ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
-					", ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
-					", ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
-					", ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
-					" or ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
-					" up from the shelf. Double-click empty sky for a new session."
-				] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wire it." }), " Drag from a stop's round port onto another stop to move it there. Double-click a stop to edit it."] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The bird shows where the work is." }),
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Run" }),
-					" (or your next prompt) sets the route going and the bird moves along it. A ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
-					" stop holds the route and shows under ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
-					" on the bell: press ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Done" }),
-					" and it carries on."
-				] }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Help." }),
-					" The sky's ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "?" }),
-					" replays the tour or opens this guide; the ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "?" }),
-					" key lists every shortcut."
-				] })
-			]
-		})
-	] }),
-	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The Sky is the main area's second view, for seeing where all the work is. Every session shows as its route — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes. The Grid is for inside the work: talking to the agents." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"Switch with ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Grid · Sky" }),
-		" on the top bar, or ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+Y" }),
-		". The chips on the sky's toolbar choose which routes show, and the find field jumps to one by name."
-	] })] }),
-	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Each session draws as a soft outline in its own colour round its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "route" }),
-			". The outline's ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bar" }),
-			" carries the session's name, its branch, its state and a ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⋯" }),
-			" menu (open it here, open it in the grid, show only this route, add a stop, close the session); a double-click on the bar renames it."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Inside, the first stop is the session's ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "agent" }),
-			" (\"Claude\", \"Codex\"…): what it is doing now, its state and the bird. A click opens its real terminal in its place (a double-click on its top folds it back); a right-click offers ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Open terminal" }),
-			", ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Send a prompt…" }),
-			" and ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Stop" }),
-			", then the session's own menu. Its out port starts the route: its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stops" }),
-			" follow, free-floating, joined by ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "wires" }),
-			". A ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "worker" }),
-			" — a session this session started — is a small outline of its own under its parent's agent: its own agent, its state, and its own route when it runs one; click its agent to open it in place."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Drag a session by its bar (or its agent) to put it anywhere — it stays there. Drag a single stop to move just that stop: order is the wires, never where a stop sits. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
-			" (",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
-			") puts every route back in its place and minimises every open window; the ⋯'s ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
-			" does one."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Every stop has an ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "in port" }),
-			" (the square on its left) and an ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "out port" }),
-			" (the circle on its right). Drag from an out port: onto a later stop of the same route to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another route to give it these stops, or onto empty sky to pick a new stop there. The ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
-			" after the last stop does the same — or just click it. Grab a wire by a stop's in port and pull it onto empty sky to split that stop and the ones after it off into a route of their own."
-		] })
-	] }),
-	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"A ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stop" }),
-			" moves the work, checks the work, or asks you: ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
-			" gives the session's agent a prompt and waits for its turn to settle, ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait for me" }),
-			" holds the route until you press Done (it shows under ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
-			" meanwhile), ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
-			" commits, pushes, opens or merges the PR, ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
-			" checks the session's behaviors, ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
-			" waits some minutes or until a time, ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
-			" sends the route back to an earlier stop, a number of times, every so often. ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All stops…" }),
-			" on the shelf lists the rest, each with what it does."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"A ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "saved route" }),
-			" is a named route kept on the shelf — ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "Ticket to merge" }),
-			", say — that you drag on whole. On the sky it arrives as a ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "group" }),
-			": one stop with its stops inside, run one by one, reading ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "2 of 3" }),
-			" while it does. Double-click it to see and change each of its stops."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"To change a saved route, drag it onto the sky, edit its stops there, then ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
-			". Right-click its chip on the shelf to rename, reset or delete it, or to pick what starts it."
-		] })
-	] }),
-	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"The bird stands on the stop the work is at: bobbing while the session works, gold when the route needs you (the bell lists it under ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
-			")."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to halt the route where it is; click it again on a halted route to carry on."] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Drag" }), " the bird onto another stop of the same route to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on."] })
-	] }),
-	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏹ Halt now" }),
-		" (on the current stop, or a click on the bird) halts the route where it is. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏸ Halt here" }),
-		" on a stop ahead makes it a halt point: the route halts when it reaches that stop, before doing it, and the stop wears a pause badge. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Carry on" }),
-		" goes on."
-	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
-		" (🗑, the menu, or ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
-		") takes a stop off at once, with ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
-		" in the toast. Removing the stop the route is on stops its work and halts the route right before the next stop; Carry on goes into it."
-	] })] }),
-	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Drop a stop or a saved route on empty sky and it waits there as a route of its own, with ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "no session" }),
-			": no outline and no agent, just its stops and an empty socket on the first one — ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "wire a session's out port here to run it" }),
-			". Nothing runs until it has a session."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Give it one by wiring an agent's out port (or its +) to that socket, by dragging the route into a session's outline, by dropping the shelf's ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
-			" chip on it (a new session is made and the stops run there), or with its ⋯ → ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run on a session…" }),
-			". The same ⋯ offers ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
-			" and ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
-			"."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"One route can ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "start another" }),
-			": hold ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Shift" }),
-			" while you drop a wire from a stop onto a route with no session, and a ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Start a route" }),
-			" stop goes in there. The other route then shows a trigger stop — ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "When <route> reaches <stop>" }),
-			" — and a dashed wire in the first session's colour; when the first route gets there, the other one takes off on a new session (or the one its dialog names), and the wire follows it there."
-		] })
-	] }),
-	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Click tool, Shift+drag). ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+A" }),
-		" selects every route; ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
-		" clears."
-	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"The selection bar then offers: drag any selected route's bar and they all move; ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove…" }),
-		" (it asks first: a session's route closes its session, a route with no session goes); and for stops of one route, ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Group into a stop" }),
-		" and ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
-		"."
-	] })] }),
-	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"The toolbar's toggle picks how a drag behaves. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✥ Drag" }),
-		" (",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "V" }),
-		"): routes move by their bars and a drag on empty sky selects. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "☝ Click" }),
-		" (",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "H" }),
-		"): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Space" }),
-		" to pan in either; the wheel and the middle button pan too."
-	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Keys, {})] }),
-	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The Intake lane, top left, holds work arriving by itself that hasn't started yet: one card per source — tickets, pull requests, issues — with the items in it. Each source says which route its items take." }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Folded it is a row of sources; expand it (▸ on its head, or double-click the head) to see every item with its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Run" }),
-			" button. Run starts a session on that item, and its route appears in the sky."
-		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Drag the lane by its head like a route; Tidy puts it back." })
-	] }),
-	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The layout" }), " — where each route sits, its sizes, the Intake lane's spot, the tool — is kept per device, in this browser."] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Saved routes" }), " live on the server and are synced across your devices, like templates."] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Running routes" }), " — the stops a session is running and where the bird is — stay on the machine that runs them, never synced."] })
-	] })
-};
-function SkyGuide(p) {
-	const stored = useSkyGuide((s) => s.section);
-	const controlled = p.open !== void 0;
-	const open = controlled ? !!p.open : stored !== null;
-	const start = controlled ? p.section : stored ?? void 0;
-	const onClose = controlled ? p.onClose ?? closeSkyGuide : closeSkyGuide;
-	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuideBody, {
-		start: sectionOf(start),
-		onClose,
-		portal: p.portal !== false
-	}, start ?? "");
-}
-function SkyGuideBody({ start, onClose, portal }) {
-	const [at, setAt] = (0, import_react.useState)(start);
-	const title = SKY_GUIDE_SECTIONS.find((s) => s.id === at).title;
-	const replay = () => {
-		onClose();
-		replayTour("sky");
-	};
-	const k = SKY_GUIDE_SECTIONS.findIndex((s) => s.id === at);
-	const onNavKey = (e) => {
-		const d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
-		if (!d) return;
-		e.preventDefault();
-		const next = SKY_GUIDE_SECTIONS[(k + d + SKY_GUIDE_SECTIONS.length) % SKY_GUIDE_SECTIONS.length];
-		setAt(next.id);
-		e.currentTarget.querySelector(`[data-section="${next.id}"]`)?.focus();
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "sky-guide",
-		className: "sky-guide-modal",
-		onClose,
-		portal,
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "sky-guide-title",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-guide",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
-				className: "sky-guide-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						id: "sky-guide-title",
-						children: "Learn the Sky"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						onClick: replay,
-						children: "Replay the tour"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "fl-icon-btn sky-guide-x",
-						"aria-label": "Close the guide",
-						title: "Close (Esc)",
-						onClick: onClose,
-						children: "×"
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-guide-body",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
-					className: "sky-guide-nav",
-					"aria-label": "Sections",
-					onKeyDown: onNavKey,
-					children: SKY_GUIDE_SECTIONS.map((s, n) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						"data-section": s.id,
-						className: "fl-stopmenu-item sky-guide-nav-item" + (s.id === at ? " on" : ""),
-						"aria-current": s.id === at ? "true" : void 0,
-						onClick: () => setAt(s.id),
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-guide-n",
-							children: n + 1
-						}), s.title]
-					}, s.id))
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-					className: "sky-guide-page",
-					"aria-labelledby": "sky-guide-page-title",
-					"data-section": at,
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-							id: "sky-guide-page-title",
-							children: title
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "sky-guide-sketch",
-							children: SKETCHES[at]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "sky-guide-words",
-							children: WORDS[at]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "sky-guide-foot",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn",
-									disabled: k === 0,
-									onClick: () => setAt(SKY_GUIDE_SECTIONS[k - 1].id),
-									children: "Back"
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-									className: "muted",
-									children: [
-										k + 1,
-										" of ",
-										SKY_GUIDE_SECTIONS.length
-									]
-								}),
-								k < SKY_GUIDE_SECTIONS.length - 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-									type: "button",
-									className: "btn-primary",
-									onClick: () => setAt(SKY_GUIDE_SECTIONS[k + 1].id),
-									children: ["Next: ", SKY_GUIDE_SECTIONS[k + 1].title]
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "btn-primary",
-									onClick: onClose,
-									children: "Done"
-								})
-							]
-						})
-					]
-				})]
-			})]
-		})
-	});
-}
-//#endregion
-//#region src/components/whatsNew/actions.ts
-var WHATS_NEW_ACTIONS = {
-	sky: () => setView("sky"),
-	"sky-tour": () => replayTour("sky"),
-	"sky-guide": () => {
-		setView("sky");
-		openSkyGuide();
-	},
-	"saved-routes": () => useUi.getState().showFlyways(),
-	behaviors: () => openBehaviors({ board: true }),
-	intake: () => useUi.getState().openDialogFor("intake"),
-	schedule: () => useUi.getState().openDialogFor("schedule"),
-	settings: () => openSettings(),
-	agents: () => openSettings("coding")
-};
-function isKnownAction(id) {
-	return Object.prototype.hasOwnProperty.call(WHATS_NEW_ACTIONS, id);
-}
-function runWhatsNewAction(id) {
-	if (isKnownAction(id)) WHATS_NEW_ACTIONS[id]();
-}
-//#endregion
-//#region src/components/whatsNew/seen.ts
-var WHATS_NEW_LS = "mf_whats_new_seen";
-var WHATS_NEW_PREF = "whats_new_seen";
-function readLocalSeen() {
-	try {
-		const v = localStorage.getItem(WHATS_NEW_LS);
-		return isReleaseVersion(v) ? v : null;
-	} catch {
-		return null;
-	}
-}
-function writeLocalSeen(v) {
-	try {
-		localStorage.setItem(WHATS_NEW_LS, v);
-	} catch {}
-}
-async function loadSeen() {
-	let server = null;
-	try {
-		const v = (await api("/api/prefs"))?.[WHATS_NEW_PREF];
-		server = typeof v === "string" ? v : null;
-	} catch {}
-	return laterVersion(server, readLocalSeen());
-}
-function saveSeen(v) {
-	if (!isReleaseVersion(v)) return;
-	writeLocalSeen(v);
-	api("/api/prefs", { json: { [WHATS_NEW_PREF]: v } }).catch(() => {});
-}
-var useWhatsNew = create((set) => ({
-	shown: null,
-	running: "",
-	seen: null,
-	auto: "deciding",
-	open: (entries) => set({ shown: entries }),
-	close: () => set({ shown: null })
-}));
-function whatsNewStage(s) {
-	return s.shown && s.shown.length ? "shown" : s.auto;
-}
-//#endregion
-//#region src/components/whatsNew/WhatsNew.tsx
-function openWhatsNew() {
-	const entries = reopenEntries(RELEASES, useWhatsNew.getState().running);
-	if (!entries.length) return;
-	useUi.getState().closeDialog();
-	useWhatsNew.getState().open(entries);
-}
-function closeWhatsNew() {
-	const s = useWhatsNew.getState();
-	const seen = laterVersion(s.running, s.seen);
-	if (seen) {
-		saveSeen(seen);
-		useWhatsNew.setState({ seen });
-	}
-	useWhatsNew.setState({ auto: "done" });
-	s.close();
-}
-function useAutoWhatsNew() {
-	const rawVersion = useDoctor().data?.version;
-	const { data: config } = useConfig();
-	const welcomeSeen = useUi((s) => s.welcomeTourSeen);
-	const touring = useUi((s) => s.tourOpen || !!s.coachTour);
-	const dialog = useUi((s) => s.openDialog);
-	const onboarded = welcomeSeen || config?.onboarded === true;
-	const running = isReleaseVersion(rawVersion) ? rawVersion.trim() : "";
-	const [pulled, setPulled] = (0, import_react.useState)(false);
-	const [pending, setPending] = (0, import_react.useState)(null);
-	const decided = (0, import_react.useRef)(false);
-	(0, import_react.useEffect)(() => {
-		let live = true;
-		firstPrefsPull.then(() => live && setPulled(true));
-		return () => {
-			live = false;
-		};
-	}, []);
-	(0, import_react.useEffect)(() => {
-		if (running) useWhatsNew.setState({ running });
-	}, [running]);
-	(0, import_react.useEffect)(() => {
-		if (rawVersion !== void 0 && !running && !decided.current) useWhatsNew.setState({ auto: "done" });
-	}, [rawVersion, running]);
-	(0, import_react.useEffect)(() => {
-		if (decided.current || !pulled || !running || !config) return;
-		let live = true;
-		loadSeen().then((seen) => {
-			if (!live || decided.current) return;
-			useWhatsNew.setState({ seen });
-			const plan = planWhatsNew({
-				releases: RELEASES,
-				running,
-				lastSeen: seen,
-				onboarded
-			});
-			if (plan.markSeen) {
-				decided.current = true;
-				saveSeen(plan.markSeen);
-				useWhatsNew.setState({
-					seen: plan.markSeen,
-					auto: "done"
-				});
-				return;
-			}
-			if (!plan.pop) {
-				decided.current = true;
-				useWhatsNew.setState({ auto: "done" });
-				return;
-			}
-			if (!onboarded) return;
-			decided.current = true;
-			useWhatsNew.setState({ auto: "due" });
-			setPending(plan.entries);
-		});
-		return () => {
-			live = false;
-		};
-	}, [
-		pulled,
-		running,
-		config,
-		onboarded
-	]);
-	(0, import_react.useEffect)(() => {
-		const st = useWhatsNew.getState();
-		if (!pending || st.shown || st.auto !== "due") {
-			if (pending && st.auto !== "due") setPending(null);
-			return;
-		}
-		if (popupTurn({
-			whatsNew: "due",
-			askOpen: dialog === "ask",
-			askWaiting: false,
-			otherOpen: touring || !!dialog && dialog !== "ask",
-			sinceLoadMs: 0
-		}) !== "whats-new") return;
-		st.open(pending);
-		useWhatsNew.setState({ auto: "done" });
-		setPending(null);
-	}, [
-		pending,
-		touring,
-		dialog
-	]);
-}
-function FeatureRow({ f }) {
-	const action = knownAction(f, isKnownAction);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "wn-feature",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "wn-feature-text",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "wn-feature-title",
-				children: f.title
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "wn-feature-body",
-				children: f.body
-			})]
-		}), action && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "wn-show",
-			onClick: () => {
-				closeWhatsNew();
-				runWhatsNewAction(action.run);
-			},
-			children: action.label
-		})]
-	});
-}
-function WhatsNew() {
-	useAutoWhatsNew();
-	const shown = useWhatsNew((s) => s.shown);
-	if (!shown || !shown.length) return null;
-	const { big, small } = splitEntries(shown);
-	const many = big.length > 1;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "whats-new",
-		portal: true,
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "wn-title",
-		onClose: closeWhatsNew,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "wn-card",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "wn-x",
-					"aria-label": "Close",
-					title: "Close",
-					onClick: closeWhatsNew,
-					children: "×"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-					className: "wn-title",
-					id: "wn-title",
-					children: whatsNewTitle(shown)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "wn-body",
-					children: [(big.length ? big : small.slice(0, 1)).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-						className: "wn-release",
-						children: [
-							many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-								className: "wn-version",
-								children: r.version
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-								className: "wn-headline",
-								children: r.headline
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-								className: "wn-features",
-								children: r.features.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeatureRow, { f }, f.title))
-							})
-						]
-					}, r.version)), big.length > 0 && small.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-						className: "wn-also",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Also in this release" }), small.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-							className: "wn-release",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-								className: "wn-version",
-								children: r.version
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-								className: "wn-features",
-								children: r.features.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FeatureRow, { f }, f.title))
-							})]
-						}, r.version))]
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "wn-actions",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "wn-primary",
-						onClick: closeWhatsNew,
-						autoFocus: true,
-						children: "Got it"
-					})
-				})
-			]
-		})
-	});
-}
-//#endregion
 //#region src/components/TopBar.tsx
 function engineVersion(raw) {
 	const v = (raw || "").trim();
@@ -54865,66 +57698,6 @@ function InstallMissing({ steps, onDone, tourNext = false }) {
 			}),
 			window_
 		]
-	});
-}
-//#endregion
-//#region src/components/settings/settingsMode.tsx
-var ADVANCED_LS = lsKeyFor("settings_advanced");
-function readAdvancedMode(kv) {
-	return readLocal("settings_advanced", kv) === true;
-}
-function writeAdvancedMode(on, kv) {
-	writeLocal("settings_advanced", on, kv);
-	notePrefWrite(ADVANCED_LS, kv);
-}
-function navScreens(screens, advanced, active) {
-	if (advanced) return [...screens];
-	const basic = screens.filter((s) => !s.advanced);
-	const peek = screens.find((s) => s.advanced && s.key === active);
-	return peek ? [...basic, peek] : basic;
-}
-function navHeading(shown, i, advanced) {
-	const s = shown[i];
-	if (!advanced) return s.advanced && !shown[i - 1]?.advanced ? "Advanced" : "";
-	return s.group && s.group !== shown[i - 1]?.group ? s.group : "";
-}
-var SettingsModeCtx = (0, import_react.createContext)(false);
-function useAdvancedSettings() {
-	return (0, import_react.useContext)(SettingsModeCtx);
-}
-function AdvancedToggle({ advanced, hidden, onChange }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "set-mode-foot",
-		"data-tour": "settings-advanced",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			id: "settings-advanced-toggle",
-			className: "set-mode-toggle",
-			"aria-pressed": advanced,
-			onClick: () => onChange(!advanced),
-			children: advanced ? "Hide advanced settings" : "Show advanced settings"
-		}), !advanced && hidden > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "set-mode-more",
-			children: [hidden, " more screens"]
-		}) : null]
-	});
-}
-function AdvancedFold({ id, summary = "Advanced", basic = false, defaultOpen, children }) {
-	const advanced = useAdvancedSettings();
-	const initial = defaultOpen ?? advanced;
-	const [open, setOpen] = (0, import_react.useState)(initial);
-	(0, import_react.useEffect)(() => setOpen(initial), [initial]);
-	if (!advanced && !basic) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "pr-advanced set-adv-fold",
-		id,
-		"data-advanced-fold": "",
-		open,
-		onToggle: (e) => setOpen(e.currentTarget.open),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: summary }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "pr-advanced-body set-adv-fold-body",
-			children
-		})]
 	});
 }
 //#endregion
@@ -99780,1183 +102553,6 @@ function sentinel(kind, ref = "") {
 	return windowKey(kind, ref);
 }
 //#endregion
-//#region src/components/palette/paletteRank.ts
-function fuzzyScore(query, text) {
-	query = String(query || "").toLowerCase();
-	text = String(text || "").toLowerCase();
-	if (!query) return 0;
-	const sub = text.indexOf(query);
-	if (sub >= 0) return sub;
-	let ti = 0, score = 1e3;
-	for (const ch of query) {
-		const at = text.indexOf(ch, ti);
-		if (at < 0) return -1;
-		score += at - ti;
-		ti = at + 1;
-	}
-	return score;
-}
-var SYNONYMS = [
-	["New session", "create start add agent task"],
-	["Keyboard shortcuts", "help keys hotkeys keyboard"],
-	["Tour", "help intro welcome guide how getting started"],
-	["Open Setup checklist", "install setup get started onboarding sign in login"],
-	["Open Doctor", "install fix health check dependencies missing tools"],
-	["Open Settings", "preferences options config configure"],
-	["Recently closed", "undo reopen restore closed"],
-	["Open Intake", "tickets inbox jira linear shortcut github issues"],
-	["Verify", "checklist test qa check"],
-	["Toggle sidebar", "hide show panel"],
-	["Customize", "bars sidebar layout"],
-	["Select sessions", "bulk several many"],
-	["Focus:", "go open switch show"]
-];
-function synonymsFor(label) {
-	for (const [prefix, words] of SYNONYMS) if (label.startsWith(prefix)) return words;
-	return "";
-}
-var TOP_LIMIT = 9;
-var NEEDS_LIMIT = 5;
-function rankActions(actions, query, opts = {}) {
-	const q = String(query || "").trim();
-	if (!q) {
-		if (opts.showAll || !opts.allRow) return actions.slice();
-		const ranked = actions.map((a, i) => ({
-			a,
-			i
-		})).filter((x) => x.a.top !== void 0).sort((x, y) => x.a.top - y.a.top || x.i - y.i).map((x) => x.a);
-		const urgent = ranked.filter((a) => a.top < 0).slice(0, NEEDS_LIMIT);
-		const top = ranked.filter((a) => a.top >= 0).slice(0, TOP_LIMIT);
-		return urgent.concat(top, opts.allRow(actions.length));
-	}
-	const scored = [];
-	actions.forEach((a, i) => {
-		let s = fuzzyScore(q, a.label);
-		const words = [a.keywords || "", synonymsFor(a.label)].join(" ").trim();
-		if (words) {
-			const lw = words.toLowerCase();
-			const lq = q.toLowerCase();
-			if ((/\s/.test(lq.trim()) ? lw.includes(lq.trim()) : lw.split(/\s+/).some((w) => w.startsWith(lq))) && (s < 0 || s >= 1e3)) s = 500;
-		}
-		if (s >= 0) scored.push({
-			a,
-			i,
-			s
-		});
-	});
-	scored.sort((x, y) => x.s - y.s || Number(!!x.a.outward) - Number(!!y.a.outward) || x.i - y.i);
-	const out = scored.map((x) => x.a);
-	if (out.length && out[0].outward) {
-		const k = out.findIndex((a) => !a.outward);
-		if (k > 0) out.unshift(out.splice(k, 1)[0]);
-	}
-	return out;
-}
-function paletteCode(query) {
-	const none = {
-		kind: "",
-		code: "",
-		device: ""
-	};
-	const t = String(query || "").trim();
-	if (!t) return none;
-	if (extractPeerCode(t)) return routeCode(t);
-	if (!/(^|\s)[A-Za-z0-9]{4}-[A-Za-z0-9]{4}(\s|$)/.test(t)) return none;
-	return routeCode(t);
-}
-function isKeyHint(hint) {
-	return !/\b[a-z]{3,}\b/.test(hint);
-}
-//#endregion
-//#region src/lib/templateRun.ts
-async function runTemplateNow(name) {
-	try {
-		const made = await api("/api/templates/" + encodeURIComponent(name) + "/run", { method: "POST" });
-		const title = String(made?.title || "");
-		toast(`Started “${title || name}” from template “${name}”`);
-		await refreshInstances();
-		if (title) selectSession(title);
-		ensureTemplates(true).catch(() => {});
-		return title;
-	} catch (err) {
-		toast(templateRefusal(err, `Couldn't start ${name}`).text);
-		ensureTemplates(true).catch(() => {});
-		return "";
-	}
-}
-//#endregion
-//#region src/components/palette/settingsSearch.ts
-var SETTINGS_SEARCH = [
-	{
-		key: "general",
-		label: "General",
-		sub: "Tours, hints and terminal scroll speed",
-		terms: [
-			"general",
-			"hints",
-			"tips",
-			"scroll"
-		]
-	},
-	{
-		key: "general",
-		label: "General → Tours",
-		sub: "Replay the welcome tour and the menu tours",
-		terms: [
-			"tour",
-			"tours",
-			"replay",
-			"welcome",
-			"walkthrough",
-			"tutorial",
-			"getting started",
-			"help"
-		],
-		anchor: "#general-tours"
-	},
-	{
-		key: "orchestration",
-		label: "Agent orchestration → Workers",
-		sub: "What Alt+G types, and Workers on every prompt adds",
-		terms: [
-			"workers",
-			"worker",
-			"mindflock agents",
-			"flock",
-			"spawn",
-			"orchestrate",
-			"workers model",
-			"every prompt"
-		],
-		anchor: "#orch-workers"
-	},
-	{
-		key: "general",
-		label: "General → Budgets, resume and sleep",
-		sub: "Cost alerts, carrying on after a usage reset, idle agents",
-		terms: [
-			"budget",
-			"cost",
-			"spend",
-			"usage resets",
-			"resume",
-			"revive",
-			"restart sessions",
-			"sleep",
-			"idle",
-			"memory",
-			"scroll speed"
-		],
-		anchor: "#general-advanced",
-		advanced: true
-	},
-	{
-		key: "connections",
-		label: "Connections",
-		sub: "Everything MindFlock talks to: your agent, GitHub, ticket trackers",
-		terms: [
-			"connections",
-			"connect",
-			"integrations",
-			"github",
-			"token",
-			"tracker",
-			"tickets",
-			"shortcut",
-			"jira",
-			"linear",
-			"asana",
-			"sign in",
-			"login",
-			"signed in"
-		]
-	},
-	{
-		key: "connections",
-		label: "Connections → GitHub",
-		sub: "Connect GitHub so agents can open pull requests",
-		terms: [
-			"github",
-			"gh",
-			"pull request",
-			"pr",
-			"token",
-			"personal access token",
-			"repo access"
-		],
-		anchor: "[data-conn=\"github\"]"
-	},
-	{
-		key: "notifications",
-		label: "Notifications",
-		sub: "Which events alert you, and where: bell, desktop, phone",
-		terms: [
-			"notifications",
-			"notification",
-			"notify",
-			"alerts",
-			"alert",
-			"bell",
-			"desktop",
-			"mute",
-			"ping",
-			"sound"
-		]
-	},
-	{
-		key: "notifications",
-		label: "Notifications → Question pop-up",
-		sub: "Pop up a session's permission and choice prompts in the middle of the screen",
-		terms: [
-			"question",
-			"questions",
-			"pop up",
-			"popup",
-			"pop-up",
-			"ask",
-			"asking",
-			"dialog",
-			"permission",
-			"answer"
-		],
-		anchor: "#notif-ask-row"
-	},
-	{
-		key: "notifications",
-		label: "Notifications → Phone alerts",
-		sub: "Push notifications to your phone (ntfy)",
-		terms: [
-			"phone",
-			"mobile",
-			"push",
-			"ntfy",
-			"alerts on my phone",
-			"notifications on phone"
-		],
-		anchor: "#notif-advanced"
-	},
-	{
-		key: "coding",
-		label: "Agents",
-		sub: "Your default agent, its sign-in and extra launch flags",
-		terms: [
-			"agents",
-			"agent",
-			"default agent",
-			"claude",
-			"codex",
-			"aider",
-			"cli",
-			"launch flags",
-			"flags",
-			"permissions",
-			"skip permissions",
-			"sign in",
-			"model"
-		]
-	},
-	{
-		key: "coding",
-		label: "Agents → Sessions running at once",
-		sub: "How many run together; the ticket-session limit is set in Intake",
-		terms: [
-			"parallel",
-			"concurrency",
-			"concurrent",
-			"at once",
-			"simultaneous",
-			"max sessions",
-			"max ticket sessions",
-			"ticket sessions at once",
-			"how many",
-			"session limit",
-			"limit",
-			"queue"
-		],
-		anchor: "#coding-sessions-at-once"
-	},
-	{
-		key: "providers",
-		label: "Custom agents",
-		sub: "Point an agent at its own build, or add one MindFlock doesn't ship",
-		terms: [
-			"custom agent",
-			"add agent",
-			"provider",
-			"providers",
-			"install agent",
-			"binary",
-			"path",
-			"toml"
-		]
-	},
-	{
-		key: "accounts",
-		label: "Accounts",
-		sub: "Run sessions as different sign-ins or API keys",
-		terms: [
-			"accounts",
-			"account",
-			"api key",
-			"openrouter",
-			"profile",
-			"second account",
-			"switch account"
-		]
-	},
-	{
-		key: "localmodel",
-		label: "Local model",
-		sub: "Use a model running on this computer (Ollama and others)",
-		terms: [
-			"local model",
-			"ollama",
-			"llm",
-			"offline model"
-		]
-	},
-	{
-		key: "orchestration",
-		label: "Agent orchestration",
-		sub: "Let agents start and steer sessions of their own, and how far",
-		terms: [
-			"orchestration",
-			"mcp",
-			"spawn",
-			"workers",
-			"sub-sessions",
-			"fan out",
-			"nesting",
-			"parallel",
-			"concurrency",
-			"limits"
-		]
-	},
-	{
-		key: "workspace",
-		label: "Workspace",
-		sub: "Where sessions' files live, and the branches they start from",
-		terms: [
-			"workspace",
-			"worktree",
-			"worktrees",
-			"folder",
-			"directory",
-			"dir",
-			"checkout",
-			"branch",
-			"base branch",
-			"pr base"
-		]
-	},
-	{
-		key: "workspace",
-		label: "Workspace → Default live branch",
-		sub: "The branch that means shipped, unless a repository sets its own",
-		terms: [
-			"live branch",
-			"default live branch",
-			"shipped",
-			"production branch",
-			"release branch"
-		],
-		anchor: "#workspace-advanced",
-		advanced: true
-	},
-	{
-		key: "workspace",
-		label: "Workspace → Where worktrees live",
-		sub: "The folders new sessions' worktrees are made in",
-		terms: [
-			"where are worktrees",
-			"worktree folder",
-			"workspace folder",
-			"path",
-			"checkout location",
-			"where are my files"
-		],
-		anchor: "#workspace-paths"
-	},
-	{
-		key: "workspace",
-		label: "Workspace → Worktree or clone",
-		sub: "How ticket sessions copy the repo — set in Intake",
-		terms: [
-			"worktree mode",
-			"clone",
-			"full clone",
-			"copy the repo",
-			"how ticket sessions copy the repo",
-			"ticket sessions"
-		],
-		anchor: "#workspace-copy-mode"
-	},
-	{
-		key: "ide",
-		label: "IDE",
-		sub: "Which editor “Open in editor” uses",
-		terms: [
-			"ide",
-			"editor",
-			"cursor",
-			"vscode",
-			"vs code",
-			"open in editor"
-		]
-	},
-	{
-		key: "ide",
-		label: "IDE → Open IDE when a ticket starts",
-		sub: "Open each new ticket session in your editor — set in Intake",
-		terms: [
-			"open ide when a ticket starts",
-			"open ide",
-			"ide on ticket",
-			"open editor on ticket",
-			"ticket ide"
-		],
-		anchor: "#ide-ticket-row"
-	},
-	{
-		key: "security",
-		label: "Security",
-		sub: "Require an access token to open MindFlock from a browser",
-		terms: [
-			"security",
-			"access token",
-			"token",
-			"password",
-			"lock",
-			"auth",
-			"require token"
-		]
-	},
-	{
-		key: "appearance",
-		label: "Appearance",
-		sub: "Light or dark, colours, motion and break reminders",
-		terms: [
-			"appearance",
-			"theme",
-			"color",
-			"colour",
-			"accent",
-			"reduce motion",
-			"motion",
-			"take a break",
-			"break",
-			"idle flock",
-			"birds"
-		]
-	},
-	{
-		key: "appearance",
-		label: "Appearance → Mode",
-		sub: "Light or dark (the moon in the top bar switches too)",
-		terms: [
-			"dark",
-			"light",
-			"dark mode",
-			"light mode",
-			"night mode",
-			"mode"
-		],
-		anchor: "#mode-swatches"
-	},
-	{
-		key: "devices",
-		label: "Your devices",
-		sub: "Pair your other computers and share settings between them",
-		terms: [
-			"devices",
-			"device",
-			"computer",
-			"pair",
-			"pairing",
-			"sync",
-			"settings sync",
-			"tailscale",
-			"reachable",
-			"remote"
-		]
-	},
-	{
-		key: "devices",
-		label: "Your devices → Which computer auto-starts work",
-		sub: "The one device that handles PR review comments and new issues",
-		terms: [
-			"which computer auto-starts work",
-			"pr review and issue handling",
-			"run here",
-			"automation device",
-			"runs on"
-		],
-		anchor: "#devices-run-here"
-	},
-	{
-		key: "mobile",
-		label: "Your phone",
-		sub: "Use MindFlock itself from your phone, over Tailscale",
-		terms: [
-			"phone",
-			"mobile",
-			"qr",
-			"qr code",
-			"use on phone",
-			"tailscale"
-		]
-	},
-	{
-		key: "voice",
-		label: "Voice",
-		sub: "Speech engines for talking to sessions: built in, local models or a host",
-		terms: [
-			"voice",
-			"speech",
-			"microphone",
-			"mic",
-			"dictation",
-			"recognition",
-			"whisper",
-			"piper",
-			"text to speech",
-			"tts",
-			"stt",
-			"talk",
-			"spoken replies",
-			"read replies aloud",
-			"push to talk",
-			"hold to talk",
-			"click to talk",
-			"approve dialogs by voice",
-			"wake word",
-			"hey mindflock",
-			"listen for mindflock",
-			"standby"
-		]
-	},
-	{
-		key: "voice",
-		label: "Voice → Voice words",
-		sub: "The words that send, stop and start over, and the wake word",
-		terms: [
-			"keywords",
-			"voice words",
-			"over",
-			"over and out",
-			"disregard",
-			"wake word",
-			"radio words",
-			"stop words"
-		],
-		anchor: "#voice-words"
-	},
-	{
-		key: "peer",
-		label: "People",
-		sub: "Invite someone and share one folder with their agent",
-		terms: [
-			"people",
-			"peer",
-			"share",
-			"invite",
-			"collaborate",
-			"teammate",
-			"pair",
-			"pairing",
-			"join",
-			"link",
-			"safety number",
-			"joint task"
-		]
-	},
-	{
-		key: "extensions",
-		label: "Extensions",
-		sub: "Add-ons that bring their own sidebar bar and commands",
-		terms: [
-			"extensions",
-			"extension",
-			"addon",
-			"plugin",
-			"database"
-		]
-	},
-	{
-		key: "doctor",
-		label: "Doctor",
-		sub: "Check git, tmux and your agent are installed, and fix what's missing",
-		terms: [
-			"doctor",
-			"install",
-			"dependencies",
-			"missing",
-			"diagnose",
-			"health",
-			"troubleshoot",
-			"fix"
-		]
-	},
-	{
-		key: "logs",
-		label: "System logs",
-		sub: "MindFlock's own logs, to paste into a bug report",
-		terms: [
-			"logs",
-			"log",
-			"errors",
-			"debug"
-		]
-	},
-	{
-		key: "advanced",
-		label: "Engine & updates",
-		sub: "Version and updates, restart, uninstall",
-		terms: [
-			"engine",
-			"update",
-			"updates",
-			"upgrade",
-			"version",
-			"restart server",
-			"uninstall"
-		]
-	},
-	{
-		key: "advanced",
-		label: "Engine & updates → Ticket sessions in MindFlock",
-		sub: "Tickets as MindFlock sessions or a bare tmux session — set in Intake",
-		terms: [
-			"ticket sessions in mindflock",
-			"tmux",
-			"terminal tab",
-			"engine enabled",
-			"bare tmux"
-		],
-		anchor: "#engine-ticket-sessions"
-	}
-];
-function settingsMatchScore(entry, q) {
-	if (q.length < 2) return -1;
-	const label = entry.label.toLowerCase();
-	const terms = entry.terms.map((t) => t.toLowerCase());
-	const wordStart = (text) => (" " + text.replace(/[^a-z0-9]+/g, " ")).includes(" " + q);
-	if (label === q || label.split(" → ").includes(q)) return 0;
-	if (terms.includes(q)) return 1;
-	if (wordStart(label)) return 2;
-	if (terms.some((t) => t.startsWith(q))) return 3;
-	if (label.includes(q)) return 4;
-	if (q.length >= 3 && terms.some((t) => t.includes(q))) return 5;
-	if (q.length >= 3 && wordStart(entry.sub.toLowerCase())) return 6;
-	if (terms.some((t) => t.length >= 3 && q.includes(t))) return 7;
-	return -1;
-}
-function searchSettings(query, limit = 5) {
-	const q = String(query || "").trim().toLowerCase();
-	return SETTINGS_SEARCH.map((e, i) => ({
-		e,
-		i,
-		s: settingsMatchScore(e, q)
-	})).filter((x) => x.s >= 0).sort((a, b) => a.s - b.s || a.i - b.i).slice(0, limit).map((x) => x.e);
-}
-function revealInSettings(selector) {
-	if (typeof document === "undefined") return;
-	let tries = 0;
-	const look = () => {
-		const el = document.querySelector("#settings-screens " + selector);
-		if (!el) {
-			if (++tries < 30) setTimeout(look, 35);
-			return;
-		}
-		for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) d.open = true;
-		if (el instanceof HTMLDetailsElement) el.open = true;
-		el.scrollIntoView?.({ block: "start" });
-	};
-	setTimeout(look, 0);
-}
-function settingsActions(query) {
-	return searchSettings(query).map((e) => ({
-		label: "Settings → " + e.label,
-		sub: e.sub,
-		hint: "settings",
-		run: () => {
-			if (e.advanced && !readAdvancedMode()) writeAdvancedMode(true);
-			openSettings(e.key);
-			if (e.anchor) revealInSettings(e.anchor);
-		}
-	}));
-}
-//#endregion
-//#region src/components/settings/screens/peer/replayPeopleTour.ts
-function replayPeopleTour() {
-	const ui = useUi.getState();
-	if (ui.coachTour) ui.closeCoachTour();
-	openSettings(PEER_SCREEN);
-	useUi.getState().openCoachTour("people");
-}
-//#endregion
-//#region src/components/palette/CommandPalette.tsx
-var PALETTE_ACTIONS = [
-	"rename",
-	"move",
-	"message",
-	"queue",
-	"askWorkers",
-	"flock",
-	"fastTrack",
-	"split",
-	"thread",
-	"commit",
-	"push",
-	"pr",
-	"ide",
-	"duplicate",
-	"branch",
-	"hide",
-	"resume",
-	"pause",
-	"close",
-	"delete",
-	"map",
-	"merge"
-];
-var ACTION_KEYWORDS = {
-	askWorkers: "mindflock agents workers spawn team parallel flock request",
-	flock: "mindflock agents workers spawn team parallel flock every prompt sticky"
-};
-var OUTWARD = /* @__PURE__ */ new Set([
-	"commit",
-	"push",
-	"pr",
-	"merge",
-	"close",
-	"delete",
-	"pause"
-]);
-var NEEDS_TOP = -1;
-var TOP = {
-	new: 0,
-	recent: 1,
-	intake: 2,
-	verify: 3,
-	schedule: 4,
-	setup: 5,
-	settings: 6,
-	tour: 7,
-	shortcuts: 8
-};
-function CommandPalette({ host }) {
-	const open = useUi((s) => s.openDialog === "palette");
-	const closeDialog = useUi((s) => s.closeDialog);
-	const { data: config } = useConfig();
-	const { data: extensions } = useExtensions();
-	const [query, setQuery] = (0, import_react.useState)("");
-	const [sel, setSel] = (0, import_react.useState)(0);
-	const [showAll, setShowAll] = (0, import_react.useState)(false);
-	const [tplVersion, setTplVersion] = (0, import_react.useState)(0);
-	const inputRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		if (open) {
-			setQuery("");
-			setSel(0);
-			setShowAll(false);
-			setTimeout(() => inputRef.current?.focus(), 0);
-		}
-	}, [open]);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const bump = () => setTplVersion((v) => v + 1);
-		document.addEventListener(TEMPLATES_CHANGED, bump);
-		ensureTemplates().catch(() => {});
-		return () => document.removeEventListener(TEMPLATES_CHANGED, bump);
-	}, [open]);
-	const actions = (0, import_react.useMemo)(() => {
-		if (!open) return [];
-		const ui = useUi.getState();
-		const caps = config?.caps ?? {
-			git: true,
-			tailscale: true,
-			ticketing: true,
-			github: true
-		};
-		const ideName = config?.ide_name || "Cursor";
-		const acts = [];
-		acts.push({
-			label: "New session…",
-			hint: "Alt+N",
-			top: TOP.new,
-			run: () => newSession()
-		});
-		acts.push({
-			label: "Intake…",
-			hint: "Alt+I",
-			top: TOP.intake,
-			keywords: "sources tickets pull requests issues waiting to fly",
-			run: () => ui.openDialogFor("intake")
-		});
-		acts.push({
-			label: "Intake: Tickets",
-			run: () => ui.openDialogFor("intake", "tickets")
-		});
-		acts.push({
-			label: "Intake: GitHub PRs",
-			run: () => ui.openDialogFor("intake", "prs")
-		});
-		acts.push({
-			label: "Intake: GitHub issues",
-			run: () => ui.openDialogFor("intake", "issues")
-		});
-		acts.push({
-			label: "Intake: Auto-start",
-			hint: "what starts on its own",
-			run: () => ui.openDialogFor("intake", "autostart")
-		});
-		acts.push({
-			label: "Behaviors — next that needs you",
-			hint: "Alt+V",
-			top: TOP.verify,
-			keywords: "verify behaviors check checklist test plan pushed changes work",
-			run: () => openBehaviors({ next: true })
-		});
-		acts.push({
-			label: "Show the Behaviors board",
-			keywords: "verify behaviors board closed sessions other branches watched repositories",
-			run: () => openBehaviors({ board: true })
-		});
-		acts.push({
-			label: "Schedule…",
-			hint: "Alt+S",
-			top: TOP.schedule,
-			keywords: "templates template cron recurring nightly timer daily weekly scheduled routes chains stops",
-			run: () => ui.openDialogFor("schedule")
-		});
-		acts.push(ui.view === "sky" ? {
-			label: "Switch to the grid",
-			hint: "Ctrl+Y",
-			keywords: "view panes terminals grid",
-			run: () => setView("grid")
-		} : {
-			label: "Switch to the Sky",
-			hint: "Ctrl+Y",
-			keywords: "view sky canvas routes chains lines bird board flock map flights",
-			run: () => setView("sky")
-		});
-		acts.push({
-			label: "Saved routes…",
-			hint: "on the Sky's shelf",
-			keywords: "saved routes route saved chains chain stops shelf canvas new flights saved stops plan",
-			run: () => ui.showFlyways()
-		});
-		acts.push({
-			label: "Learn the Sky",
-			hint: "the guide",
-			keywords: "help how guide tutorial sky routes chains stops saved routes saved chains wait for me needs you bird keys",
-			run: () => {
-				setView("sky");
-				openSkyGuide();
-			}
-		});
-		acts.push({
-			label: "Customize…",
-			hint: "choose sidebar bars",
-			run: () => ui.openDialogFor("customize")
-		});
-		acts.push({
-			label: "Select sessions…",
-			hint: "close, hide or delete several at once · Ctrl+click a row",
-			run: () => ui.setBulkMode(true)
-		});
-		acts.push({
-			label: "Prompts…",
-			hint: "manage saved prompts",
-			run: () => ui.openDialogFor("prompts")
-		});
-		acts.push({
-			label: "New scheduled template…",
-			hint: "daily, weekdays, once or cron",
-			keywords: "schedule a session recurring cron every day nightly weekly",
-			run: () => ui.openDialogFor("schedule", "schedule")
-		});
-		for (const tpl of templatesNow()) {
-			if (runProblem(tpl)) continue;
-			acts.push({
-				label: "Run template: " + tpl.name,
-				hint: "fresh session, task sent",
-				run: () => void runTemplateNow(tpl.name)
-			});
-		}
-		acts.push({
-			label: "Recently closed…",
-			hint: "reopen or delete closed sessions",
-			run: () => ui.openDialogFor("recent")
-		});
-		acts.push({
-			label: "Assistant instructions (agent file)…",
-			run: () => ui.openDialogFor("assistant-agent")
-		});
-		if (caps.git) acts.push({
-			label: "Zones…",
-			hint: "keep-out paths per repo, and derived outputs",
-			run: () => ui.openDialogFor("red-zones")
-		});
-		acts.push({
-			label: "Open Settings",
-			top: TOP.settings,
-			run: () => openSettings()
-		});
-		acts.push({
-			label: "Open Doctor",
-			run: () => host.openDoctor()
-		});
-		acts.push({
-			label: "Your devices",
-			hint: "add a computer you own, or join one; settings sync",
-			run: () => openSettings("devices")
-		});
-		acts.push({
-			label: "Your phone",
-			hint: "the QR code and /m link",
-			run: () => openSettings("mobile")
-		});
-		acts.push({
-			label: "People…",
-			hint: "work with someone: invite them, or join their invite",
-			run: () => openSettings("peer"),
-			keywords: "join pair pairing invite colleague teammate collaborate person someone peer share"
-		});
-		acts.push({
-			label: "Paste a code…",
-			hint: "join with a code from your other computer, or someone's invite",
-			run: () => openDevicesFor({ focusPaste: true })
-		});
-		acts.push({
-			label: "Open Setup checklist",
-			top: TOP.setup,
-			run: () => ui.openDialogFor("setup")
-		});
-		for (const id of TOUR_IDS) {
-			const t = TOURS[id];
-			acts.push({
-				label: `Replay ${id === "welcome" ? "welcome" : t.title} tour`,
-				hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
-				keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
-				top: id === "welcome" ? TOP.tour : void 0,
-				run: () => id === "people" ? replayPeopleTour() : replayTour(id)
-			});
-		}
-		acts.push({
-			label: "What's new",
-			hint: "this release's new features",
-			keywords: "release new features update version help",
-			run: () => openWhatsNew()
-		});
-		acts.push({
-			label: "Toggle sidebar",
-			hint: "Ctrl+B",
-			run: () => ui.toggleSidebar()
-		});
-		acts.push({
-			label: "Keyboard shortcuts",
-			hint: "?",
-			top: TOP.shortcuts,
-			run: () => host.toggleShortcuts()
-		});
-		const { rows } = orderedInstances(instances$2(), ui.order);
-		const t = ui.focused;
-		if (t) {
-			const name = windowName(t);
-			const c = actionCtx(t, {
-				inst: rows.find((r) => r.title === t),
-				caps,
-				ideName
-			});
-			for (const id of PALETTE_ACTIONS) {
-				if (sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "") {
-					acts.push({
-						label: `${actionLabel(id, c)} — ${name}`,
-						hint: actionHint(id, c),
-						outward: true,
-						run: () => runChordAction(id, t)
-					});
-					continue;
-				}
-				if (!sessionAction(id).enabled(c)) continue;
-				acts.push({
-					label: `${actionLabel(id, c)} — ${name}`,
-					hint: actionHint(id, c),
-					keywords: ACTION_KEYWORDS[id],
-					outward: OUTWARD.has(id),
-					run: () => sessionAction(id).run(t)
-				});
-				if (id === "map") acts.push({
-					label: `Find file on map… — ${name}`,
-					hint: "opens its Map's find box",
-					keywords: "search file path locate code map",
-					run: () => useUi.getState().openMap(t, { section: "search" })
-				});
-			}
-		}
-		const needs = needsYouNow();
-		for (const inst of rows) {
-			const recent = ui.mru.indexOf(inst.title);
-			const need = needs.indexOf(inst.title);
-			const ss = deriveSessionState(inst);
-			acts.push({
-				label: "Focus: " + windowName(inst.title),
-				state: {
-					label: ss.label,
-					tone: ss.tone
-				},
-				top: need >= 0 ? NEEDS_TOP + need / 100 : recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : void 0,
-				run: () => selectSession(inst.title)
-			});
-		}
-		for (const ext of extensions || []) {
-			if (!ext.enabled) continue;
-			for (const cmd of ext.extension.commands) acts.push({
-				label: cmd.title || cmd.id,
-				hint: ext.label,
-				run: () => void runCommand(ext.id, cmd.id)
-			});
-		}
-		return acts;
-	}, [
-		open,
-		config,
-		host,
-		extensions,
-		tplVersion
-	]);
-	const filtered = (0, import_react.useMemo)(() => {
-		const out = rankActions(actions, query, {
-			showAll,
-			allRow: (n) => ({
-				label: "All commands…",
-				hint: n + " — or type to search",
-				keepOpen: true,
-				run: () => setShowAll(true)
-			})
-		});
-		if (query.trim()) {
-			const direct = out.filter((a) => {
-				const s = fuzzyScore(query, a.label);
-				return s >= 0 && s < 1e3;
-			}).length;
-			out.splice(direct, 0, ...settingsActions(query));
-		}
-		const code = paletteCode(query);
-		const named = out.some((a) => fuzzyScore(query, a.label) >= 0 && fuzzyScore(query, a.label) < 1e3);
-		if (code.kind) out[named ? "push" : "unshift"]({
-			label: "Join with " + (code.kind === "peer" ? "invite " : "code ") + code.code,
-			hint: code.kind === "peer" ? "another person · People" : "your devices",
-			run: () => void routePastedCode(query)
-		});
-		return out;
-	}, [
-		actions,
-		query,
-		showAll
-	]);
-	(0, import_react.useEffect)(() => {
-		if (sel >= filtered.length) setSel(Math.max(0, filtered.length - 1));
-	}, [filtered.length, sel]);
-	const listRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		listRef.current?.querySelector("#palette-opt-" + sel)?.scrollIntoView?.({ block: "nearest" });
-	}, [sel]);
-	if (!open) return null;
-	const run = (a) => {
-		if (!a) return;
-		if (a.keepOpen) {
-			a.run();
-			setSel(0);
-			return;
-		}
-		closeDialog();
-		a.run();
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "palette",
-		onClose: closeDialog,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "palette-panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				id: "palette-input",
-				ref: inputRef,
-				type: "text",
-				role: "combobox",
-				"aria-label": "Command or session",
-				"aria-expanded": "true",
-				"aria-controls": "palette-list",
-				"aria-autocomplete": "list",
-				"aria-activedescendant": filtered.length ? "palette-opt-" + sel : void 0,
-				placeholder: "Type a command or session name…",
-				autoComplete: "off",
-				spellCheck: false,
-				value: query,
-				onChange: (e) => {
-					setQuery(e.target.value);
-					setSel(0);
-				},
-				onKeyDown: (e) => {
-					if (e.key === "ArrowDown") {
-						e.preventDefault();
-						setSel((s) => Math.min(filtered.length - 1, s + 1));
-					} else if (e.key === "ArrowUp") {
-						e.preventDefault();
-						setSel((s) => Math.max(0, s - 1));
-					} else if (e.key === "Enter") {
-						e.preventDefault();
-						run(filtered[sel]);
-					}
-				}
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
-				id: "palette-list",
-				role: "listbox",
-				"aria-label": "Commands",
-				ref: listRef,
-				children: [filtered.map((a, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					id: "palette-opt-" + i,
-					role: "option",
-					"aria-selected": i === sel,
-					className: "palette-item" + (i === sel ? " selected" : ""),
-					onMouseMove: () => setSel(i),
-					onClick: () => run(a),
-					children: [
-						a.sub ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "palette-text",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "palette-label",
-								children: a.label
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "palette-sub",
-								children: a.sub
-							})]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "palette-label",
-							children: a.label
-						}),
-						a.state && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "palette-state tone-" + a.state.tone,
-							children: a.state.label
-						}),
-						a.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "palette-hint" + (isKeyHint(a.hint) ? "" : " is-desc"),
-							children: a.hint
-						})
-					]
-				}, a.label + i)), !filtered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-					className: "palette-empty muted",
-					role: "option",
-					"aria-disabled": "true",
-					"aria-selected": false,
-					children: "No matching commands"
-				})]
-			})]
-		})
-	});
-}
-//#endregion
 //#region src/lib/folderPicker.ts
 var current = null;
 var nextId = 1;
@@ -108766,44 +110362,6 @@ function NewHead({ tab, tabs, onTab, onClose }) {
 			})
 		]
 	});
-}
-//#endregion
-//#region src/components/settings/screenKeys.ts
-var LEGACY_SCREEN_KEYS = {
-	"your-devices": "devices",
-	"your-phone": "mobile",
-	phone: "mobile",
-	"mobile-voice": "voice",
-	speech: "voice",
-	microphone: "voice",
-	people: "peer",
-	"peer-links": "peer",
-	peers: "peer",
-	"remote-control": "devices",
-	"tailnet-trust": "devices",
-	"trusted-accounts": "devices",
-	"pair-by-token": "devices",
-	"settings-sync": "devices",
-	"make-reachable": "devices",
-	"shared-link": "devices",
-	fleet: "devices"
-};
-function resolveScreenKey(name, known) {
-	if (!name) return "";
-	const key = LEGACY_SCREEN_KEYS[name] || name;
-	return known.includes(key) ? key : "";
-}
-//#endregion
-//#region src/lib/settingsLastScreen.ts
-var lastScreen = null;
-function rememberSettingsScreen(key) {
-	lastScreen = key || null;
-}
-function openingScreen(target, keys) {
-	const linked = target ? resolveScreenKey(target, keys) : null;
-	if (linked) return linked;
-	if (lastScreen && keys.includes(lastScreen)) return lastScreen;
-	return DEFAULT_SETTINGS_SCREEN;
 }
 //#endregion
 //#region src/components/intake/buckets.ts
@@ -117559,10 +119117,25 @@ var VOICE_BACKENDS = [
 		label: "Local models (faster-whisper / piper)"
 	}
 ];
+var TTS_BACKENDS = [
+	VOICE_BACKENDS[0],
+	VOICE_BACKENDS[1],
+	{
+		value: "kokoro",
+		label: "Built-in natural voice (Kokoro)"
+	},
+	{
+		value: "local",
+		label: "Local models (piper)"
+	}
+];
+function backendOptions(kind) {
+	return kind === "tts" ? TTS_BACKENDS : VOICE_BACKENDS;
+}
 function effectiveBackend(kind, saved, view) {
 	if (saved) return saved;
 	const id = (kind === "stt" ? view?.server_ready?.stt_backend : view?.server_ready?.tts_backend) || "";
-	return VOICE_BACKENDS.some((o) => o.value === id) ? id : "system";
+	return backendOptions(kind).some((o) => o.value === id) ? id : "system";
 }
 function voiceFields(kind, where, backend) {
 	if (where !== "server") return {
@@ -117573,6 +119146,13 @@ function voiceFields(kind, where, backend) {
 		voice: false
 	};
 	if (backend === "system") return {
+		backend: true,
+		url: false,
+		key: false,
+		model: false,
+		voice: kind === "tts"
+	};
+	if (backend === "kokoro") return {
 		backend: true,
 		url: false,
 		key: false,
@@ -117803,7 +119383,7 @@ function VoiceSection({ active }) {
 		api("/api/voice/install-local").then((s) => {
 			if (!mounted.current) return;
 			setInstallSupported(true);
-			if (s?.what === "moonshine" || s?.what === "local") setInstallWhat(s.what);
+			if (s?.what === "moonshine" || s?.what === "local" || s?.what === "kokoro") setInstallWhat(s.what);
 			if (s?.state === "running" && !following.current) {
 				following.current = true;
 				setInstallTouched(true);
@@ -117835,6 +119415,12 @@ function VoiceSection({ active }) {
 		touched: installTouched && installWhat === "moonshine",
 		onInstall: () => start("moonshine")
 	};
+	const voiceInstall = {
+		supported: installSupported,
+		status: installWhat === "kokoro" ? installStatus : idle,
+		touched: installTouched && installWhat === "kokoro",
+		onInstall: () => start("kokoro")
+	};
 	const clearKey = async (kind) => {
 		try {
 			await api("/api/voice/clear-key", { json: { kind } });
@@ -117850,13 +119436,14 @@ function VoiceSection({ active }) {
 		onClearKey: clearKey,
 		install,
 		fast,
+		assistant: voiceInstall,
 		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, {
 			view,
 			install
 		})
 	});
 }
-function VoiceSectionView({ model, view, onClearKey, install, fast, tryRow }) {
+function VoiceSectionView({ model, view, onClearKey, install, fast, assistant, tryRow }) {
 	const approve = model.get("voice", "approve_dialogs") !== false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		id: "voice-screen",
@@ -117901,6 +119488,11 @@ function VoiceSectionView({ model, view, onClearKey, install, fast, tryRow }) {
 						onClearKey
 					})
 				]
+			}),
+			view?.kokoro && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantBlock, {
+				model,
+				view,
+				install: assistant
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-section",
@@ -118292,7 +119884,7 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 					"data-field": kind + "_backend",
 					value: backend,
 					onChange: (e) => model.saveField("voice", kind + "_backend", e.target.value),
-					children: VOICE_BACKENDS.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					children: backendOptions(kind).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: o.value,
 						children: o.label
 					}, o.value))
@@ -118383,7 +119975,7 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 				group: "voice",
 				field: "tts_voice",
-				placeholder: backend === "system" ? "the system's default" : local ? "en_US-lessac-medium" : "alloy"
+				placeholder: backend === "system" ? "the system's default" : backend === "kokoro" ? "af_heart (blank: the assistant's voice)" : local ? "en_US-lessac-medium" : "alloy"
 			})]
 		}),
 		line.text && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -118558,9 +120150,9 @@ async function installLocalModels(onStatus, opts = {}) {
 	const call = opts.call || api;
 	let already = false;
 	try {
-		await call("/api/voice/install-local", opts.what === "moonshine" ? {
+		await call("/api/voice/install-local", opts.what && opts.what !== "local" ? {
 			method: "POST",
-			json: { what: "moonshine" }
+			json: { what: opts.what }
 		} : { method: "POST" });
 		onStatus({
 			state: "running",
@@ -118655,6 +120247,270 @@ function LiveWordsRow({ model, view, fast }) {
 			id: "voice-moonshine-btn",
 			label: MOONSHINE_LABEL
 		})]
+	});
+}
+var ASSISTANT_MODEL_DEFAULT = "claude-haiku-5-5";
+var ASSISTANT_VOICE_DEFAULT = "af_heart";
+var TALK_CHOICES = [
+	{
+		value: "quiet",
+		label: "Quiet",
+		hint: "Captions only, unless it needs an answer from you."
+	},
+	{
+		value: "brief",
+		label: "Brief",
+		hint: "Speaks answers and questions; never repeats what you just did."
+	},
+	{
+		value: "chatty",
+		label: "Chatty",
+		hint: "Also says what it did."
+	}
+];
+var ASSISTANT_SAMPLE = "Hi, I'm MindFlock. Your docs session is waiting on a permission prompt.";
+var KOKORO_LABEL = "Install the built-in voice (Kokoro, ~120 MB)";
+var KOKORO_WHY = "A natural voice that runs on this computer, with nothing to sign up for.";
+function talkLevel(saved) {
+	const s = String(saved ?? "").trim().toLowerCase();
+	return TALK_CHOICES.find((c) => c.value === s)?.value ?? "brief";
+}
+function assistantVoiceOptions(voices, saved) {
+	const list = voices && voices.length ? voices : [{
+		id: ASSISTANT_VOICE_DEFAULT,
+		label: "Heart (US, female)"
+	}];
+	const out = list.map((v) => ({
+		value: v.id,
+		label: v.label || v.id
+	}));
+	const s = saved == null ? "" : String(saved);
+	if (s && !list.some((v) => v.id === s)) out.push({
+		value: s,
+		label: s + " (not a built-in voice)"
+	});
+	return out;
+}
+function kokoroView(st, allowed) {
+	const v = installView(st, allowed, "about 120 MB");
+	if (st.state === "done") return {
+		...v,
+		text: "Installed — the assistant now speaks with its built-in voice."
+	};
+	return v;
+}
+async function sampleVoice(ctx, voice, now = () => Date.now()) {
+	if (!ctx) return {
+		ok: false,
+		text: "This browser can't play audio from the server."
+	};
+	const t0 = now();
+	try {
+		const r = await apiRaw("/api/voice/speak", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				text: ASSISTANT_SAMPLE,
+				as: "assistant",
+				voice
+			})
+		});
+		if (!r.ok) return {
+			ok: false,
+			text: "Couldn't speak: " + await errorOf(r) + "."
+		};
+		const bytes = await r.arrayBuffer();
+		const ms = now() - t0;
+		const fallback = r.headers?.get?.("X-Voice-Assistant") === "fallback";
+		const audio = await ctx.decodeAudioData(bytes);
+		const src = ctx.createBufferSource();
+		src.buffer = audio;
+		src.connect(ctx.destination);
+		src.start(0);
+		return fallback ? {
+			ok: false,
+			text: `The built-in voice isn't ready, so that was the regular voice (${ms} ms).`
+		} : {
+			ok: true,
+			text: `Spoke in ${ms} ms.`
+		};
+	} catch (err) {
+		return {
+			ok: false,
+			text: "Couldn't speak: " + noDot(String(err?.message || err)) + "."
+		};
+	}
+}
+function AssistantBlock({ model, view, install }) {
+	const [voices, setVoices] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/voice/voices?engine=kokoro").then((v) => {
+			if (live) setVoices(v || {});
+		}).catch(() => {
+			if (live) setVoices({});
+		});
+		return () => {
+			live = false;
+		};
+	}, [view]);
+	const [sample, setSample] = (0, import_react.useState)(null);
+	const [playing, setPlaying] = (0, import_react.useState)(false);
+	const ctx = (0, import_react.useRef)(null);
+	const ready = voices?.ready ?? !!view.kokoro?.available;
+	const talk = talkLevel(model.get("voice", "assistant_talk"));
+	const saved = String(model.get("voice", "assistant_voice") || "");
+	const voice = saved || ASSISTANT_VOICE_DEFAULT;
+	const play = async () => {
+		if (playing) return;
+		setPlaying(true);
+		ctx.current = ctx.current || newAudioCtx();
+		const got = await sampleVoice(ctx.current, voice);
+		setSample(got);
+		setPlaying(false);
+	};
+	const allowed = view.configure_allowed !== false;
+	const showInstall = !!install?.supported && (!ready || install.status.state === "running" || install.touched);
+	const v = install ? kokoroView(install.status, allowed) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-section",
+		id: "voice-assistant",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "set-section-title",
+				children: "Assistant"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "voice-assistant-hint",
+				children: "Talk to MindFlock itself: start a phrase with “MindFlock, …” to switch views, open things, start a session or change a setting. It answers in its own voice, which runs on this computer."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				id: "voice-assistant-talk-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "notif-rule-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						id: "voice-assistant-talk-label",
+						children: "How much it talks"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						id: "voice-assistant-talk-hint",
+						children: TALK_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "voice-talk-line",
+							"data-talk": c.value,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [c.label, ":"] }),
+								" ",
+								c.hint,
+								" "
+							]
+						}, c.value))
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "voice-ptt-choices",
+					id: "voice-assistant-talk",
+					role: "radiogroup",
+					"aria-labelledby": "voice-assistant-talk-label",
+					children: TALK_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "voice-ptt-choice",
+						title: c.hint,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "voice-assistant-talk",
+							value: c.value,
+							checked: talk === c.value,
+							onChange: () => model.saveField("voice", "assistant_talk", c.value)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: c.label })]
+					}, c.value))
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row",
+				id: "voice-assistant-voice-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Its voice"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "test-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+							group: "voice",
+							field: "assistant_voice",
+							options: assistantVoiceOptions(voices?.voices, saved)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "voice-assistant-sample",
+							disabled: playing || !ready,
+							title: ready ? "Hear this voice" : "Install the built-in voice to hear it",
+							"aria-label": "Play a sample of this voice",
+							onClick: () => void play(),
+							children: playing ? "…" : "▶"
+						})]
+					}),
+					sample ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						id: "voice-assistant-sample-line",
+						role: "status",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatusText, {
+							ok: sample.ok,
+							text: sample.text
+						})
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: ready ? "Built in: Kokoro, on this computer." : "The built-in voice isn't installed yet; until it is, the assistant uses the regular voice."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "set-row",
+				id: "voice-assistant-model-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Model"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+						group: "voice",
+						field: "assistant_model",
+						placeholder: ASSISTANT_MODEL_DEFAULT
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [
+							"The model that works out what you asked. Blank: ",
+							ASSISTANT_MODEL_DEFAULT,
+							", the fast one."
+						]
+					})
+				]
+			}),
+			showInstall && install && v && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "set-row onboarding-action",
+				id: "voice-kokoro",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "onboarding-action-text",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						children: "Built-in voice"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallStatus, {
+						v,
+						state: install.status.state,
+						idle: KOKORO_WHY,
+						idPrefix: "voice-kokoro",
+						busyLabel: "Installing the built-in voice"
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallButton, {
+					v,
+					install,
+					id: "voice-kokoro-btn",
+					label: KOKORO_LABEL
+				})]
+			})
+		]
 	});
 }
 function InstallStatus({ v, state, idle, idPrefix, busyLabel = "Installing local models" }) {

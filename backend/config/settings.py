@@ -2033,6 +2033,15 @@ class VoiceSettings:
     tts_api_key: str = ""  # SECRET
     tts_model: str = ""
     tts_voice: str = ""
+    # The MindFlock assistant (docs/voice-assistant.md): the model that maps
+    # free speech to app actions ("" = claude-haiku-5-5), how much it says
+    # back ("" = "brief": speaks answers, questions and results, never echoes
+    # a plain navigation; "quiet" = captions + chimes only; "chatty"), and
+    # its own voice — a built-in Kokoro voice id ("" = "af_heart"), so the
+    # assistant sounds the same whatever engine reads the sessions.
+    assistant_model: str = ""
+    assistant_talk: str = ""
+    assistant_voice: str = ""
     words: dict = field(default_factory=dict)
     pronounce: list = field(default_factory=list)
 
@@ -2048,6 +2057,9 @@ class VoiceSettings:
         "tts_api_key",
         "tts_model",
         "tts_voice",
+        "assistant_model",
+        "assistant_talk",
+        "assistant_voice",
     )
 
     def to_dict(self) -> dict:

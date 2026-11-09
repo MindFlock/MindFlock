@@ -90,6 +90,255 @@ const TOP = {
   shortcuts: 8,
 };
 
+/** What builds the palette's rows: the store, the config and extensions
+ * caches, the keymap host. */
+export interface PaletteSources {
+  config: ReturnType<typeof useConfig>["data"];
+  host: KeymapHost;
+  extensions: ReturnType<typeof useExtensions>["data"];
+}
+
+/** Every command the palette offers right now, in its order. The palette
+ * builds them while open; the voice assistant (lib/assistantHost) reads the
+ * same rows with the palette closed — `snapshot.commands`, and `{do:
+ * "command", label}` runs one. */
+export function buildPaletteActions({ config, host, extensions }: PaletteSources): PaletteAction[] {
+  const ui = useUi.getState();
+  const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
+  const ideName = config?.ide_name || "Cursor";
+  const acts: PaletteAction[] = [];
+  // Order: New, then the places you open, then what acts on the focused
+  // session, then Focus rows, then extensions — commands before sessions, so
+  // an empty query reads as a menu rather than as the session list again.
+  acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => newSession() });
+
+  // --- Dialog openers ----------------------------------------------------
+  // Each Intake tab gets its own entry: the queue you want is the thing you
+  // have in mind, and typing "issues" should land on it directly rather than
+  // on a dialog you then have to navigate.
+  acts.push({
+    label: "Intake…",
+    hint: "Alt+I",
+    top: TOP.intake,
+    keywords: "sources tickets pull requests issues waiting to fly",
+    run: () => ui.openDialogFor("intake"),
+  });
+  acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
+  acts.push({ label: "Intake: GitHub PRs", run: () => ui.openDialogFor("intake", "prs") });
+  acts.push({ label: "Intake: GitHub issues", run: () => ui.openDialogFor("intake", "issues") });
+  acts.push({
+    label: "Intake: Auto-start",
+    hint: "what starts on its own",
+    run: () => ui.openDialogFor("intake", "autostart"),
+  });
+  // The other end of the same arc, so it sits with the Intake entries rather
+  // than down among the settings screens.
+  // Verify lives on the route now (docs/behaviors.md §4): both rows fly the
+  // Sky; the words people learned still find them.
+  acts.push({
+    label: "Behaviors — next that needs you",
+    hint: "Alt+V",
+    top: TOP.verify,
+    keywords: "verify behaviors check checklist test plan pushed changes work",
+    run: () => openBehaviors({ next: true }),
+  });
+  acts.push({
+    label: "Show the Behaviors board",
+    keywords: "verify behaviors board closed sessions other branches watched repositories",
+    run: () => openBehaviors({ board: true }),
+  });
+  acts.push({
+    label: "Schedule…",
+    hint: "Alt+S",
+    top: TOP.schedule,
+    // "Templates…" was a second row for the same dialog; it is one name
+    // now, and the word people learned still finds it (the keywords).
+    keywords: "templates template cron recurring nightly timer daily weekly scheduled routes chains stops",
+    run: () => ui.openDialogFor("schedule"),
+  });
+  // The main area's other view (lib/viewMode): the same sessions as panes
+  // or as lines on the sky — and the sky's flyway shelf, where flyways are
+  // made, edited and flown.
+  acts.push(
+    ui.view === "sky"
+      ? { label: "Switch to the grid", hint: "Ctrl+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
+      : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas routes chains lines bird board flock map flights", run: () => setView("sky") }
+  );
+  acts.push({
+    label: "Saved routes…",
+    hint: "on the Sky's shelf",
+    keywords: "saved routes route saved chains chain stops shelf canvas new flights saved stops plan",
+    run: () => ui.showFlyways(),
+  });
+  // The Sky's long-form guide (flights/SkyGuide): the sky shows it, so show
+  // the sky first.
+  acts.push({
+    label: "Learn the Sky",
+    hint: "the guide",
+    keywords: "help how guide tutorial sky routes chains stops saved routes saved chains wait for me needs you bird keys",
+    run: () => {
+      setView("sky");
+      openSkyGuide();
+    },
+  });
+  // Customize and its tabs: the extras you opt into.
+  acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
+  acts.push({
+    label: "Select sessions…",
+    hint: "close, hide or delete several at once · Ctrl+click a row",
+    run: () => ui.setBulkMode(true),
+  });
+  acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
+  // A NEW template's form with its schedule on — it says template, because
+  // that is what it makes ("Schedule a session…" still finds it).
+  acts.push({
+    label: "New scheduled template…",
+    hint: "daily, weekdays, once or cron",
+    keywords: "schedule a session recurring cron every day nightly weekly",
+    run: () => ui.openDialogFor("schedule", "schedule"),
+  });
+  // Run now: a fresh session from a template, its task already sent —
+  // one row per template that can start one on its own (it has a folder).
+  for (const tpl of templatesNow()) {
+    if (runProblem(tpl)) continue;
+    acts.push({
+      label: "Run template: " + tpl.name,
+      hint: "fresh session, task sent",
+      run: () => void runTemplateNow(tpl.name),
+    });
+  }
+  acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });
+  acts.push({ label: "Assistant instructions (agent file)…", run: () => ui.openDialogFor("assistant-agent") });
+  if (caps.git)
+    acts.push({
+      label: "Zones…",
+      hint: "keep-out paths per repo, and derived outputs",
+      run: () => ui.openDialogFor("red-zones"),
+    });
+  acts.push({ label: "Open Settings", top: TOP.settings, run: () => openSettings() });
+  acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
+  acts.push({
+    label: "Your devices",
+    hint: "add a computer you own, or join one; settings sync",
+    run: () => openSettings("devices"),
+  });
+  acts.push({
+    label: "Your phone",
+    hint: "the QR code and /m link",
+    run: () => openSettings("mobile"),
+  });
+  acts.push({
+    label: "People…",
+    hint: "work with someone: invite them, or join their invite",
+    run: () => openSettings("peer"),
+    // The words a colleague uses ("let's pair", "join me") land here.
+    keywords: "join pair pairing invite colleague teammate collaborate person someone peer share",
+  });
+  // ONE place for every code (lib/deviceActions.ts): Your devices'
+  // paste box, which sends one of your devices' codes to Your devices and
+  // someone's mfp1:/mfp2: invite to People. (A code typed
+  // straight into this box gets its own entry at the top, below.)
+  acts.push({
+    label: "Paste a code…",
+    hint: "join with a code from your other computer, or someone's invite",
+    run: () => openDevicesFor({ focusPaste: true }),
+  });
+  acts.push({ label: "Open Setup checklist", top: TOP.setup, run: () => ui.openDialogFor("setup") });
+  // One "Replay <X> tour" per tour (lib/tours); the Welcome one is on the
+  // short menu. Found by "tour", "help", "how" or the surface's name.
+  for (const id of TOUR_IDS) {
+    const t = TOURS[id];
+    acts.push({
+      label: `Replay ${id === "welcome" ? "welcome" : t.title} tour`,
+      hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
+      keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
+      top: id === "welcome" ? TOP.tour : undefined,
+      // People is a Settings screen, not a top-bar dialog: its own replay.
+      run: () => (id === "people" ? replayPeopleTour() : replayTour(id)),
+    });
+  }
+  acts.push({ label: "What's new", hint: "this release's new features", keywords: "release new features update version help", run: () => openWhatsNew() });
+  acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
+  acts.push({ label: "Keyboard shortcuts", hint: "?", top: TOP.shortcuts, run: () => host.toggleShortcuts() });
+
+  // --- The focused session's verbs ---------------------------------------
+  // Labels, shortcuts and enable rules come from the session action table
+  // (lib/sessionActionTable) — the same rows the sidebar › menu and the
+  // Ctrl+K chords read. Only what applies right now is listed: an entry
+  // that only explains why not is noise in a launcher — except where the
+  // table says the reason IS worth saying (`why`, e.g. Branch outside git):
+  // listed with the reason as its hint, never the Enter default, and
+  // running it raises that reason as an error card.
+  const { rows } = orderedInstances(instances(), ui.order);
+  const t = ui.focused;
+  if (t) {
+    // Every session is named the way its rail row reads (the rename, else
+    // the ticket/PR label) — never its raw title.
+    const name = windowName(t);
+    const c = actionCtx(t, { inst: rows.find((r) => r.title === t), caps, ideName });
+    for (const id of PALETTE_ACTIONS) {
+      const why = sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "";
+      if (why) {
+        acts.push({
+          label: `${actionLabel(id, c)} — ${name}`,
+          hint: actionHint(id, c),
+          outward: true,
+          run: () => runChordAction(id, t),
+        });
+        continue;
+      }
+      if (!sessionAction(id).enabled(c)) continue;
+      acts.push({
+        label: `${actionLabel(id, c)} — ${name}`,
+        hint: actionHint(id, c),
+        keywords: ACTION_KEYWORDS[id],
+        outward: OUTWARD.has(id),
+        run: () => sessionAction(id).run(t),
+      });
+      // The Map's own way in to one file: open it on the focused session.
+      // (Its find box takes "/" once the Map has the keyboard.)
+      if (id === "map")
+        acts.push({
+          label: `Find file on map… — ${name}`,
+          hint: "opens its Map's find box",
+          keywords: "search file path locate code map",
+          run: () => useUi.getState().openMap(t, { section: "search" }),
+        });
+    }
+  }
+
+  // --- Focus rows: every session under the name its rail row shows, with
+  // its state's own word. What needs you leads the empty-query menu, in the
+  // bell's order (lib/needsYou).
+  const needs = needsYouNow();
+  for (const inst of rows) {
+    const recent = ui.mru.indexOf(inst.title);
+    const need = needs.indexOf(inst.title);
+    const ss = deriveSessionState(inst);
+    acts.push({
+      label: "Focus: " + windowName(inst.title),
+      state: { label: ss.label, tone: ss.tone },
+      top: need >= 0 ? NEEDS_TOP + need / 100 : recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : undefined,
+      run: () => selectSession(inst.title),
+    });
+  }
+  // Extensions (Addon API v3): every command of every ENABLED extension,
+  // under the manifest's palette title ("Database: Explorer" style). Listing
+  // needs no extension code — a declarative command opens its surface from
+  // the manifest alone, and the rest activate the module on first run.
+  for (const ext of extensions || []) {
+    if (!ext.enabled) continue;
+    for (const cmd of ext.extension.commands) {
+      acts.push({
+        label: cmd.title || cmd.id,
+        hint: ext.label,
+        run: () => void runCommand(ext.id, cmd.id),
+      });
+    }
+  }
+  return acts;
+}
+
 export function CommandPalette({ host }: { host: KeymapHost }) {
   const open = useUi((s) => s.openDialog === "palette");
   const closeDialog = useUi((s) => s.closeDialog);
@@ -125,240 +374,9 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
 
   const actions = useMemo<PaletteAction[]>(() => {
     if (!open) return [];
-    const ui = useUi.getState();
-    const caps = config?.caps ?? { git: true, tailscale: true, ticketing: true, github: true };
-    const ideName = config?.ide_name || "Cursor";
-    const acts: PaletteAction[] = [];
-    // Order: New, then the places you open, then what acts on the focused
-    // session, then Focus rows, then extensions — commands before sessions, so
-    // an empty query reads as a menu rather than as the session list again.
-    acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => newSession() });
-
-    // --- Dialog openers ----------------------------------------------------
-    // Each Intake tab gets its own entry: the queue you want is the thing you
-    // have in mind, and typing "issues" should land on it directly rather than
-    // on a dialog you then have to navigate.
-    acts.push({
-      label: "Intake…",
-      hint: "Alt+I",
-      top: TOP.intake,
-      keywords: "sources tickets pull requests issues waiting to fly",
-      run: () => ui.openDialogFor("intake"),
-    });
-    acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
-    acts.push({ label: "Intake: GitHub PRs", run: () => ui.openDialogFor("intake", "prs") });
-    acts.push({ label: "Intake: GitHub issues", run: () => ui.openDialogFor("intake", "issues") });
-    acts.push({
-      label: "Intake: Auto-start",
-      hint: "what starts on its own",
-      run: () => ui.openDialogFor("intake", "autostart"),
-    });
-    // The other end of the same arc, so it sits with the Intake entries rather
-    // than down among the settings screens.
-    // Verify lives on the route now (docs/behaviors.md §4): both rows fly the
-    // Sky; the words people learned still find them.
-    acts.push({
-      label: "Behaviors — next that needs you",
-      hint: "Alt+V",
-      top: TOP.verify,
-      keywords: "verify behaviors check checklist test plan pushed changes work",
-      run: () => openBehaviors({ next: true }),
-    });
-    acts.push({
-      label: "Show the Behaviors board",
-      keywords: "verify behaviors board closed sessions other branches watched repositories",
-      run: () => openBehaviors({ board: true }),
-    });
-    acts.push({
-      label: "Schedule…",
-      hint: "Alt+S",
-      top: TOP.schedule,
-      // "Templates…" was a second row for the same dialog; it is one name
-      // now, and the word people learned still finds it (the keywords).
-      keywords: "templates template cron recurring nightly timer daily weekly scheduled routes chains stops",
-      run: () => ui.openDialogFor("schedule"),
-    });
-    // The main area's other view (lib/viewMode): the same sessions as panes
-    // or as lines on the sky — and the sky's flyway shelf, where flyways are
-    // made, edited and flown.
-    acts.push(
-      ui.view === "sky"
-        ? { label: "Switch to the grid", hint: "Ctrl+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
-        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas routes chains lines bird board flock map flights", run: () => setView("sky") }
-    );
-    acts.push({
-      label: "Saved routes…",
-      hint: "on the Sky's shelf",
-      keywords: "saved routes route saved chains chain stops shelf canvas new flights saved stops plan",
-      run: () => ui.showFlyways(),
-    });
-    // The Sky's long-form guide (flights/SkyGuide): the sky shows it, so show
-    // the sky first.
-    acts.push({
-      label: "Learn the Sky",
-      hint: "the guide",
-      keywords: "help how guide tutorial sky routes chains stops saved routes saved chains wait for me needs you bird keys",
-      run: () => {
-        setView("sky");
-        openSkyGuide();
-      },
-    });
-    // Customize and its tabs: the extras you opt into.
-    acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
-    acts.push({
-      label: "Select sessions…",
-      hint: "close, hide or delete several at once · Ctrl+click a row",
-      run: () => ui.setBulkMode(true),
-    });
-    acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
-    // A NEW template's form with its schedule on — it says template, because
-    // that is what it makes ("Schedule a session…" still finds it).
-    acts.push({
-      label: "New scheduled template…",
-      hint: "daily, weekdays, once or cron",
-      keywords: "schedule a session recurring cron every day nightly weekly",
-      run: () => ui.openDialogFor("schedule", "schedule"),
-    });
-    // Run now: a fresh session from a template, its task already sent —
-    // one row per template that can start one on its own (it has a folder).
-    for (const tpl of templatesNow()) {
-      if (runProblem(tpl)) continue;
-      acts.push({
-        label: "Run template: " + tpl.name,
-        hint: "fresh session, task sent",
-        run: () => void runTemplateNow(tpl.name),
-      });
-    }
-    acts.push({ label: "Recently closed…", hint: "reopen or delete closed sessions", run: () => ui.openDialogFor("recent") });
-    acts.push({ label: "Assistant instructions (agent file)…", run: () => ui.openDialogFor("assistant-agent") });
-    if (caps.git)
-      acts.push({
-        label: "Zones…",
-        hint: "keep-out paths per repo, and derived outputs",
-        run: () => ui.openDialogFor("red-zones"),
-      });
-    acts.push({ label: "Open Settings", top: TOP.settings, run: () => openSettings() });
-    acts.push({ label: "Open Doctor", run: () => host.openDoctor() });
-    acts.push({
-      label: "Your devices",
-      hint: "add a computer you own, or join one; settings sync",
-      run: () => openSettings("devices"),
-    });
-    acts.push({
-      label: "Your phone",
-      hint: "the QR code and /m link",
-      run: () => openSettings("mobile"),
-    });
-    acts.push({
-      label: "People…",
-      hint: "work with someone: invite them, or join their invite",
-      run: () => openSettings("peer"),
-      // The words a colleague uses ("let's pair", "join me") land here.
-      keywords: "join pair pairing invite colleague teammate collaborate person someone peer share",
-    });
-    // ONE place for every code (lib/deviceActions.ts): Your devices'
-    // paste box, which sends one of your devices' codes to Your devices and
-    // someone's mfp1:/mfp2: invite to People. (A code typed
-    // straight into this box gets its own entry at the top, below.)
-    acts.push({
-      label: "Paste a code…",
-      hint: "join with a code from your other computer, or someone's invite",
-      run: () => openDevicesFor({ focusPaste: true }),
-    });
-    acts.push({ label: "Open Setup checklist", top: TOP.setup, run: () => ui.openDialogFor("setup") });
-    // One "Replay <X> tour" per tour (lib/tours); the Welcome one is on the
-    // short menu. Found by "tour", "help", "how" or the surface's name.
-    for (const id of TOUR_IDS) {
-      const t = TOURS[id];
-      acts.push({
-        label: `Replay ${id === "welcome" ? "welcome" : t.title} tour`,
-        hint: id === "welcome" ? "the three steps to your first session" : `how ${t.title} works`,
-        keywords: "tour help how guide tutorial walkthrough show me around " + t.title.toLowerCase(),
-        top: id === "welcome" ? TOP.tour : undefined,
-        // People is a Settings screen, not a top-bar dialog: its own replay.
-        run: () => (id === "people" ? replayPeopleTour() : replayTour(id)),
-      });
-    }
-    acts.push({ label: "What's new", hint: "this release's new features", keywords: "release new features update version help", run: () => openWhatsNew() });
-    acts.push({ label: "Toggle sidebar", hint: "Ctrl+B", run: () => ui.toggleSidebar() });
-    acts.push({ label: "Keyboard shortcuts", hint: "?", top: TOP.shortcuts, run: () => host.toggleShortcuts() });
-
-    // --- The focused session's verbs ---------------------------------------
-    // Labels, shortcuts and enable rules come from the session action table
-    // (lib/sessionActionTable) — the same rows the sidebar › menu and the
-    // Ctrl+K chords read. Only what applies right now is listed: an entry
-    // that only explains why not is noise in a launcher — except where the
-    // table says the reason IS worth saying (`why`, e.g. Branch outside git):
-    // listed with the reason as its hint, never the Enter default, and
-    // running it raises that reason as an error card.
-    const { rows } = orderedInstances(instances(), ui.order);
-    const t = ui.focused;
-    if (t) {
-      // Every session is named the way its rail row reads (the rename, else
-      // the ticket/PR label) — never its raw title.
-      const name = windowName(t);
-      const c = actionCtx(t, { inst: rows.find((r) => r.title === t), caps, ideName });
-      for (const id of PALETTE_ACTIONS) {
-        const why = sessionAction(id).enabled(c) ? "" : sessionAction(id).why?.(c) || "";
-        if (why) {
-          acts.push({
-            label: `${actionLabel(id, c)} — ${name}`,
-            hint: actionHint(id, c),
-            outward: true,
-            run: () => runChordAction(id, t),
-          });
-          continue;
-        }
-        if (!sessionAction(id).enabled(c)) continue;
-        acts.push({
-          label: `${actionLabel(id, c)} — ${name}`,
-          hint: actionHint(id, c),
-          keywords: ACTION_KEYWORDS[id],
-          outward: OUTWARD.has(id),
-          run: () => sessionAction(id).run(t),
-        });
-        // The Map's own way in to one file: open it on the focused session.
-        // (Its find box takes "/" once the Map has the keyboard.)
-        if (id === "map")
-          acts.push({
-            label: `Find file on map… — ${name}`,
-            hint: "opens its Map's find box",
-            keywords: "search file path locate code map",
-            run: () => useUi.getState().openMap(t, { section: "search" }),
-          });
-      }
-    }
-
-    // --- Focus rows: every session under the name its rail row shows, with
-    // its state's own word. What needs you leads the empty-query menu, in the
-    // bell's order (lib/needsYou).
-    const needs = needsYouNow();
-    for (const inst of rows) {
-      const recent = ui.mru.indexOf(inst.title);
-      const need = needs.indexOf(inst.title);
-      const ss = deriveSessionState(inst);
-      acts.push({
-        label: "Focus: " + windowName(inst.title),
-        state: { label: ss.label, tone: ss.tone },
-        top: need >= 0 ? NEEDS_TOP + need / 100 : recent >= 0 && recent < 3 ? TOP.recent + recent / 10 : undefined,
-        run: () => selectSession(inst.title),
-      });
-    }
-    // Extensions (Addon API v3): every command of every ENABLED extension,
-    // under the manifest's palette title ("Database: Explorer" style). Listing
-    // needs no extension code — a declarative command opens its surface from
-    // the manifest alone, and the rest activate the module on first run.
-    for (const ext of extensions || []) {
-      if (!ext.enabled) continue;
-      for (const cmd of ext.extension.commands) {
-        acts.push({
-          label: cmd.title || cmd.id,
-          hint: ext.label,
-          run: () => void runCommand(ext.id, cmd.id),
-        });
-      }
-    }
-    return acts;
+    return buildPaletteActions({ config, host, extensions });
+    // tplVersion: the Templates list landed or changed (templatesNow()).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, config, host, extensions, tplVersion]);
 
   const filtered = useMemo(() => {

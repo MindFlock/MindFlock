@@ -204,20 +204,30 @@ function extensionsQuery() {
   } as const;
 }
 
+/** The enabled-or-not extensions in a /api/addons answer — useExtensions'
+ * view, and the voice assistant's (read from the cache, no hook). */
+export function extensionsOf(d: AddonsResponse | undefined): ExtensionInfo[] {
+  return (d?.addons || [])
+    .filter((a) => a && a.id && a.extension)
+    .map((a) => ({
+      id: String(a.id),
+      label: a.label || String(a.id),
+      // Absent on a pre-v3 server: an addon you can't disable is enabled.
+      enabled: a.enabled !== false,
+      origin: a.origin === "user" ? ("user" as const) : ("builtin" as const),
+      extension: a.extension as ExtensionSpec,
+    }));
+}
+
+/** useExtensions' cache, read now (empty before it loaded). */
+export function extensionsNow(): ExtensionInfo[] {
+  return extensionsOf(queryClient.getQueryData<AddonsResponse>(["addons"]));
+}
+
 export function useExtensions() {
   return useQuery({
     ...extensionsQuery(),
-    select: (d: AddonsResponse): ExtensionInfo[] =>
-      (d?.addons || [])
-        .filter((a) => a && a.id && a.extension)
-        .map((a) => ({
-          id: String(a.id),
-          label: a.label || String(a.id),
-          // Absent on a pre-v3 server: an addon you can't disable is enabled.
-          enabled: a.enabled !== false,
-          origin: a.origin === "user" ? ("user" as const) : ("builtin" as const),
-          extension: a.extension as ExtensionSpec,
-        })),
+    select: (d: AddonsResponse): ExtensionInfo[] => extensionsOf(d),
   });
 }
 

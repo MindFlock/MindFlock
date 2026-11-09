@@ -75,8 +75,21 @@ import type { Instance } from "../api/types";
 import { effectiveActivity } from "../lib/sessionState";
 import { instances as liveInstances, selectSession } from "../lib/sessionActions";
 import { VoiceCommands } from "./voice/VoiceCommands";
+import { AssistantStrip } from "./voice/AssistantStrip";
+import { assistantSnapshot, chipJump, execUiAction } from "../lib/assistantHost";
+import {
+  ASSISTANT_IDLE_MS,
+  AssistantSession,
+  LISTENING_LINE,
+  addressed,
+  isAssistantEnd,
+  streamAssistant,
+  talkFromSettings,
+  warmAssistant,
+  yesNo,
+} from "../lib/voiceAssistant";
 import { fetchDialog } from "../lib/flockActions";
-import { KEYMAP, overlayOpen, shortcutLabels } from "../lib/keymap";
+import { KEYMAP, VOICE_ASSISTANT_EVENT, overlayOpen, shortcutLabels } from "../lib/keymap";
 import { askPopupOn } from "../lib/ask";
 import { placeUnder } from "../lib/menuPlace";
 import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
@@ -213,6 +226,42 @@ const queue = new SpeechQueue(
   (on) => speakingListeners.forEach((l) => l(on)),
   { onAudible: (on) => audibleListeners.forEach((l) => l(on)) }
 );
+
+// --- the voice assistant (lib/voiceAssistant): MindFlock itself, not a session --- //
+/** The queue's title for the assistant's lines: a new turn drops what is left
+ * of the last one's (queue.cancel(title)), the sessions' lines play on. */
+const ASSISTANT_LINES = "\u0000mindflock";
+/** The assistant's own voice: /api/voice/speak with `as: "assistant"` (the
+ * built-in Kokoro voice, the server's TTS chain when it isn't ready). */
+const assistantSp = serverSpeaker(browserSp, { voiceKey: () => "assistant\n" + ttsVoiceKey(cfgNow), body: { as: "assistant" } });
+assistantSp.onStarting = (on) => startingListeners.forEach((l) => l(on));
+/** `voice.assistant_talk`, from the settings document the app caches. */
+const assistantTalk = () => talkFromSettings(queryClient.getQueryData(["settings"]));
+/** Read the settings once when nothing has (the talk level). */
+function loadAssistantTalk() {
+  if (queryClient.getQueryData(["settings"])) return;
+  void queryClient
+    .fetchQuery({
+      queryKey: ["settings"],
+      queryFn: async () => (await api<{ settings?: unknown }>("/api/settings"))?.settings || {},
+      staleTime: 60_000,
+    })
+    .catch(() => {});
+}
+/** What the component lends the one session (its chime, the mic opening for
+ * an answer): set while it is mounted. */
+const assistantHooks: { chime?: () => void; asked?: (kind: "ask" | "confirm") => void } = {};
+const assistant = new AssistantSession({
+  stream: (body, on, signal) => streamAssistant(body, on, { signal }),
+  snapshot: assistantSnapshot,
+  exec: (a) => execUiAction(a),
+  speak: (text) => void queue.say(text, { title: ASSISTANT_LINES, voice: ttsEngine(cfgNow) === "server" ? assistantSp : undefined }),
+  chime: () => assistantHooks.chime?.(),
+  // A session the server just started: focused once the rows know it.
+  focus: (title) => void refreshInstances().then(() => selectSession(title, { noKeyboard: true, voice: true })),
+  talk: assistantTalk,
+  asked: (kind) => assistantHooks.asked?.(kind),
+});
 
 /** Standby (the wake word) runs the level meter. */
 let standbyMeter = false;
@@ -476,6 +525,10 @@ export function TopBarMic() {
   };
   // The title and the wake switch name the current words.
   const words = useVoiceWords();
+  /** Assistant mode (Alt+M, "Talk to MindFlock"): every phrase goes to
+   * MindFlock itself, never into a session (lib/voiceAssistant). */
+  const [assistantOn, setAssistantOn] = useState(false);
+  const assistantMode = useRef(false);
   /** The Voice tour is on a step in the options (`screen` "mic-pop"): they
    * open for it, and close again when it moves on if it opened them. */
   const tourPop = useUi((s) => s.coachTour?.id === "voice" && TOURS.voice.steps[s.coachTour.step]?.screen === MIC_POP_SCREEN);
@@ -770,9 +823,12 @@ export function TopBarMic() {
    * hands-free listen or "Hold to talk"; a click (or the wake word) listens
    * until "over and out". */
   const idles = useRef(true);
+  /** How long that silence is: DICT_IDLE_MS, or ASSISTANT_IDLE_MS in
+   * assistant mode (a minute without speech ends it). */
+  const idleMs = useRef(DICT_IDLE_MS);
   const armIdle = () => {
     clearTimeout(idleTimer.current);
-    if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
+    if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), idleMs.current);
   };
 
   /** The recognizer down, nothing reported; the queue may talk again. */
@@ -812,6 +868,10 @@ export function TopBarMic() {
     setListening(false);
     publishMicState({ listening: false, title: "" });
     queue.release();
+    // Listening is over: so is assistant mode (a question still pending
+    // keeps the next phrase the assistant's).
+    idleMs.current = DICT_IDLE_MS;
+    endAssistant();
   };
 
   /** The phrases' target: the text box, else the focused session's agent
@@ -844,6 +904,11 @@ export function TopBarMic() {
       done?: (how: DictEnd) => void;
       continuous?: boolean;
       idle?: boolean;
+      /** Every phrase goes to the assistant, nothing is typed anywhere
+       * (`mode`: assistant mode — the strip says so; else one answer to its
+       * question). */
+      assistant?: boolean;
+      mode?: boolean;
     } = {}
   ): LiveDictation | null => {
     if (live.current) return null;
@@ -883,13 +948,21 @@ export function TopBarMic() {
     const continuous = opts.continuous !== false;
     idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
     const d = new LiveDictation(
-      target(into, opts.title),
+      opts.assistant ? null : target(into, opts.title),
       {
-        caption: say,
+        caption: (text, sticky, tail) => {
+          say(text, sticky, tail);
+          // The strip's live transcript: the words heard so far.
+          if (opts.assistant && live.current === d) {
+            const heardNow = [d.dict.shown, d.dict.partial].filter(Boolean).join(" ").trim();
+            if (heardNow) assistant.hearing(heardNow);
+          }
+        },
         halt: () => {
           if (live.current === d) halt();
         },
         route: async (text, spokeAt) => {
+          if (opts.assistant) return assistantRoute(text, spokeAt, r === serverRec ? serverRec.takeHeard() : "");
           const session = opts.title || useUi.getState().focused || "";
           // The pop-up's own words ("type something" on Claude's question
           // prompt opens that field): listen again, into the field.
@@ -903,8 +976,25 @@ export function TopBarMic() {
           // spokeAt: when the phrase began — a dialog is answered only by
           // words begun after it was there (lib/voiceDesktop ANSWER_AFTER_MS).
           // `heard`: Moonshine's text of this phrase (/end), beside whisper's.
+          // A question the assistant asked: a yes / no is its answer.
+          const answering = assistant.wantsNext();
+          if (answering && yesNo(text) !== null) {
+            askAssistant(text);
+            return true;
+          }
           const reply = await routePhrase(text, session, undefined, spokeAt, undefined, r === serverRec ? serverRec.takeHeard() : "");
-          if (reply.kind === "prompt") return false;
+          // "MindFlock, …": the rest is the assistant's.
+          if (reply.kind === "assistant") {
+            askAssistant(reply.text || addressed(text) || text);
+            return true;
+          }
+          // Words for a session — but the assistant asked, or no session is
+          // there to take them (no text box either): the assistant's.
+          if (reply.kind === "prompt") {
+            if (!answering && (into || session)) return false;
+            askAssistant(text);
+            return true;
+          }
           if (reply.kind === "hush") return "hush";
           await routed(reply, text, session, spokeAt);
           return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
@@ -912,6 +1002,8 @@ export function TopBarMic() {
         // The next message: the text box still, else the ask pop-up's field
         // while it asks the same session, else the focused session.
         retarget: () => {
+          // The assistant's listen stays the assistant's.
+          if (opts.assistant) return { target: null, hint: LISTENING_LINE };
           if (into) return null;
           const ask = askVoice();
           const title = ask && ask.title === opts.title ? ask.title : "";
@@ -959,7 +1051,20 @@ export function TopBarMic() {
     live.current = d;
     rec.current = r;
     setListening(true);
-    publishMicState({ listening: true, title: into ? "" : opts.title || useUi.getState().focused || "" });
+    if (opts.assistant) {
+      idleMs.current = ASSISTANT_IDLE_MS;
+      if (opts.mode) {
+        assistantMode.current = true;
+        setAssistantOn(true);
+        assistant.setMode(true);
+        // The model's process up before the first phrase, the voice it
+        // answers in readied; the talk level read.
+        warmAssistant();
+        void refreshCfg(true);
+        loadAssistantTalk();
+      }
+    }
+    publishMicState({ listening: true, title: into || opts.assistant ? "" : opts.title || useUi.getState().focused || "" });
     d.show();
     armIdle();
     // From the room's quiet as the pre-roll heard it (lib/voiceMic).
@@ -1277,6 +1382,111 @@ export function TopBarMic() {
     }
   };
 
+  // --- the voice assistant ------------------------------------------------- //
+  /** One phrase to the assistant: what is left of its last answer is
+   * dropped (a new question cuts the old reply), the turn runs on its own —
+   * the mic goes on listening meanwhile. */
+  const askAssistant = (text: string) => {
+    closeCheat();
+    queue.cancel(ASSISTANT_LINES);
+    void assistant.turn(text).then(() => {
+      // Its answer is over: the minute without speech counts from here.
+      if (assistantMode.current) armIdle();
+    });
+  };
+
+  /** A phrase in an assistant listen: a yes / no to its confirm, the mode's
+   * end words, the deterministic commands (switch, scroll, stop… — exactly
+   * as ever), and everything else — what would have been typed into a
+   * session — to the assistant. */
+  const assistantRoute = async (text: string, spokeAt?: number, heardText = ""): Promise<boolean | "hush" | "end"> => {
+    const words = addressed(text) || text;
+    if (assistant.confirmId() && yesNo(words) !== null) {
+      askAssistant(words);
+      return true;
+    }
+    if (assistantMode.current && isAssistantEnd(words)) {
+      endAssistant();
+      return "end";
+    }
+    const session = useUi.getState().focused || "";
+    const reply = await routePhrase(words, session, undefined, spokeAt, undefined, heardText);
+    switch (reply.kind) {
+      case "assistant":
+        askAssistant(reply.text || words);
+        return true;
+      case "prompt":
+      case "no-session":
+      case "help":
+        askAssistant(words);
+        return true;
+      case "hush":
+        return "hush";
+    }
+    await routed(reply, words, session, spokeAt);
+    return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
+  };
+
+  /** Assistant mode off (its listen ends with the phrase that said so, or
+   * now: the hotkey, the menu, the strip's ×). */
+  const endAssistant = () => {
+    if (!assistantMode.current) return;
+    assistantMode.current = false;
+    setAssistantOn(false);
+    assistant.setMode(false);
+  };
+
+  /** Alt+M / "Talk to MindFlock": assistant mode on — a dictation under way
+   * ends first (its words stay where they are) — or off. */
+  const toggleAssistant = () => {
+    if (assistantMode.current) {
+      endAssistant();
+      const d = live.current;
+      if (d) void d.expire();
+      return;
+    }
+    const begin = () =>
+      start(null, { assistant: true, mode: true, continuous: true, idle: true, hint: LISTENING_LINE });
+    if (live.current) {
+      void live.current.expire();
+      setTimeout(() => {
+        if (!live.current) begin();
+      }, TALK_DEBOUNCE_MS);
+    } else begin();
+  };
+
+  // The one session's hooks into this mic: its chime (a silent action — your
+  // own navigation is never said back), and the mic opening for the answer
+  // once a question has been said.
+  const latestAssist = useRef({ start, sound });
+  latestAssist.current = { start, sound };
+  useEffect(() => {
+    assistantHooks.chime = () => latestAssist.current.sound("start");
+    assistantHooks.asked = () => {
+      void queue.drained().then(() => {
+        if (live.current || !assistant.wantsNext()) return;
+        latestAssist.current.start(null, { assistant: true, continuous: false, idle: true, hint: LISTENING_LINE });
+      });
+    };
+    return () => {
+      assistantHooks.chime = undefined;
+      assistantHooks.asked = undefined;
+    };
+  }, []);
+
+  // The assistant's hotkey (lib/keymap VOICE_ASSISTANT_EVENT, Alt+M): its
+  // keydown is the gesture that lets start() make the AudioContext.
+  const toggleRef = useRef(toggleAssistant);
+  toggleRef.current = toggleAssistant;
+  useEffect(() => {
+    const on = () => {
+      if (!assistantMode.current) warmMic(true);
+      toggleRef.current();
+    };
+    window.addEventListener(VOICE_ASSISTANT_EVENT, on);
+    return () => window.removeEventListener(VOICE_ASSISTANT_EVENT, on);
+  }, []);
+
   // --- hands-free: a dialog or a question read out, the mic opened -------- //
   // This render's functions, for the one HandsFree the mic keeps.
   const latest = useRef({ listenFor, refreshCfg });
@@ -1511,9 +1721,12 @@ export function TopBarMic() {
   }, [menuOpen]);
 
   const who = focusedName || "a session";
+  const assistKey = shortcutLabels("assistant")[0] || "";
   const base = !supported
     ? noRecognizerLine() + " — right-click for options"
-    : listening
+    : assistantOn
+      ? LISTENING_LINE + " — every phrase goes to MindFlock; say “that's all” or click to stop"
+      : listening
       ? hold
         ? "Listening — release to stop (the words stay), Esc to take them back"
         : "Listening — click to stop (the words stay), Esc to take them back"
@@ -1547,6 +1760,7 @@ export function TopBarMic() {
             "tb-item",
             "mic-ring",
             listening && "listening",
+            assistantOn && "assistant",
             paused && "muted",
             wake.on && !listening && "standby",
             speaking && !listening && "speaking",
@@ -1555,7 +1769,7 @@ export function TopBarMic() {
             .filter(Boolean)
             .join(" ")}
           title={title}
-          aria-label={paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who}
+          aria-label={paused ? MIC_PAUSED_LINE : assistantOn ? LISTENING_LINE + " — stop" : listening ? "Listening — stop" : "Talk to " + who}
           aria-pressed={listening}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
@@ -1710,6 +1924,22 @@ export function TopBarMic() {
               <span className="mic-pop-label">{wakeSwitchLabel(words)}</span>
               <input type="checkbox" id="mic-wake" checked={!!prefs.wake} onChange={(e) => setWakePref(e.target.checked)} />
             </label>
+            {/* The voice assistant: MindFlock itself, not a session. */}
+            <button
+              type="button"
+              className={"mic-commands-btn mic-assistant-btn" + (assistantOn ? " on" : "")}
+              id="mic-assistant"
+              role="menuitemcheckbox"
+              aria-checked={assistantOn}
+              title="Every phrase goes to MindFlock itself — open things, start sessions, change settings, ask anything — until “that's all”"
+              onClick={() => {
+                setMenuOpen(false);
+                toggleAssistant();
+              }}
+            >
+              {assistantOn ? "Stop talking to MindFlock" : "Talk to MindFlock"}
+              {assistKey && <span className="mic-pop-key"> {assistKey}</span>}
+            </button>
             <button type="button" className="mic-commands-btn" id="mic-commands" title="What you can say by voice" onClick={openCommands}>
               Voice commands…
             </button>
@@ -1722,6 +1952,18 @@ export function TopBarMic() {
           document.body
         )}
       {cheat && <VoiceCommands items={cheat} anchor={btnRef.current} onClose={() => setCheat(null)} />}
+      <AssistantStrip
+        anchor={btnRef.current}
+        onChip={chipJump}
+        onAnswer={(yes) => askAssistant(yes ? "yes" : "no")}
+        onClose={() => {
+          if (assistantMode.current) toggleAssistant();
+          else {
+            assistant.dropQuestion();
+            assistant.view.clear();
+          }
+        }}
+      />
     </>
   );
 }
