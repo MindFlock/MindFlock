@@ -28631,6 +28631,28 @@ function prefetchIntakePanels() {
 		retry: false
 	});
 }
+var EPICS_POLL_MS = 6e4;
+function useEpicsQuery() {
+	const q = useQuery({
+		queryKey: ["epics"],
+		queryFn: () => api("/api/epics"),
+		staleTime: 3e4,
+		gcTime: PANEL_GC_MS,
+		placeholderData: (prev) => prev,
+		retry: false,
+		refetchInterval: EPICS_POLL_MS
+	});
+	const refresh = () => queryClient.fetchQuery({
+		queryKey: ["epics"],
+		queryFn: () => api("/api/epics?refresh=1"),
+		staleTime: 0,
+		retry: false
+	}).catch(() => void 0);
+	return {
+		...q,
+		refresh
+	};
+}
 var SETTINGS_STALE_MS = 3e4;
 function useSettingsDoc(enabled) {
 	return useQuery({
@@ -45449,6 +45471,16 @@ function popupTurn(q) {
 //#endregion
 //#region src/whatsNew/releases.ts
 var RELEASES = [
+	{
+		version: "0.14.1",
+		date: "2026-11-09",
+		big: false,
+		headline: "Your assigned epics, in their own tab.",
+		features: [{
+			title: "Intake → Epics",
+			body: "Every Shortcut epic you own is listed in its own Intake tab, grouped by state, with how many of your stories are left. Start any of them; the ones in your auto-start states still start by themselves."
+		}]
+	},
 	{
 		version: "0.14.0",
 		date: "2026-11-09",
@@ -112530,123 +112562,6 @@ function filterSummary(opts) {
 	};
 }
 //#endregion
-//#region src/components/intake/EpicsSection.tsx
-function epicMeta(e) {
-	const bits = [e.state];
-	if (e.mine_open == null) bits.push(e.stories_total + " stories");
-	else bits.push(e.mine_open + " of yours to do" + (e.stories_total ? " (of " + e.stories_total + ")" : ""));
-	if (e.auto) bits.push("starts by itself");
-	return bits.filter(Boolean).join(" · ");
-}
-function EpicsSection() {
-	const [rows, setRows] = (0, import_react.useState)(null);
-	const [errors, setErrors] = (0, import_react.useState)([]);
-	const [busy, setBusy] = (0, import_react.useState)("");
-	const load = (0, import_react.useCallback)(async (refresh = false) => {
-		try {
-			const r = await api("/api/epics" + (refresh ? "?refresh=1" : ""));
-			setRows(Array.isArray(r.epics) ? r.epics : []);
-			setErrors(Array.isArray(r.errors) ? r.errors : []);
-		} catch {
-			setRows([]);
-		}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		load();
-		const t = setInterval(() => {
-			if (!document.hidden) load();
-		}, 6e4);
-		return () => clearInterval(t);
-	}, [load]);
-	if (!rows || !rows.length && !errors.length) return null;
-	const start = async (e) => {
-		setBusy(e.title);
-		try {
-			const r = await api("/api/epics/start", { json: {
-				source: e.source,
-				id: e.id
-			} });
-			toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
-			load(true);
-		} catch (err) {
-			errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
-		} finally {
-			setBusy("");
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "ik-epics",
-		"aria-label": "Epics",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ik-epics-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "Epics" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "one lead agent per epic · a worker and a PR per story"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "ik-epics-refresh",
-						title: "Ask Shortcut again",
-						onClick: () => void load(true),
-						children: "↻"
-					})
-				]
-			}),
-			errors.map((x) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-				className: "ik-epics-error",
-				children: [
-					x.source,
-					": ",
-					x.error
-				]
-			}, x.source)),
-			!rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "muted ik-epics-empty",
-				children: "No epics of yours in those states."
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "ik-epics-list",
-				children: rows.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "ik-epic",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ik-epic-main",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
-								className: "ik-epic-name",
-								href: e.url,
-								target: "_blank",
-								rel: "noreferrer",
-								children: e.name
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "ik-epic-meta muted",
-								children: epicMeta(e)
-							}),
-							!e.eligible && !e.has_session && e.reasons.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "ik-epic-why muted",
-								children: e.reasons.join(" · ")
-							})
-						]
-					}), e.has_session ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						onClick: () => void selectSession(e.title),
-						title: "Go to the epic's lead session",
-						children: "Open lead"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: !(e.startable ?? e.eligible) || busy === e.title,
-						onClick: () => void start(e),
-						children: busy === e.title ? "Starting…" : "Start"
-					})]
-				}, e.source + ":" + e.id))
-			})
-		]
-	});
-}
-//#endregion
 //#region src/components/intake/addDraft.ts
 function backStep(step) {
 	return step === 3 ? 2 : 1;
@@ -115294,7 +115209,6 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 			kind: "tickets",
 			gotoTab
 		}),
-		stored.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpicsSection, {}),
 		stored.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
 			sources: stored,
 			catalog,
@@ -115519,7 +115433,7 @@ function claimedBy(err) {
 	return body && body.claimed_by && body.claimed_by.name ? body.claimed_by : null;
 }
 var BUCKETS_OPEN_LS_KEY = "mf_ticket_buckets_open";
-var SOURCES_CLOSED_LS_KEY = "mf_intake_ticket_sources";
+var SOURCES_CLOSED_LS_KEY$1 = "mf_intake_ticket_sources";
 var WORKFLOWS_CLOSED_LS_KEY = "mf_intake_ticket_workflows";
 function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent, sourceDepths, sourceEfforts, editing, onEdit, onOpenEditor, headOf, editorFor }) {
 	const ticketsQuery = usePanelQuery("tickets");
@@ -115563,7 +115477,7 @@ function AssignedTickets({ sources, catalog, agents, sourceAgents, defaultAgent,
 	});
 	const filter = useListFilter("tk-tickets-filter", "Filter by ticket, title, source, state, or assignee…  ( Ctrl+F )");
 	const openBuckets = useToggleSet(BUCKETS_OPEN_LS_KEY, false, (v) => v.includes("::"));
-	const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
+	const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY$1, true);
 	const openWorkflows = useToggleSet(WORKFLOWS_CLOSED_LS_KEY, true);
 	const visible = visibleBuckets(buckets, doneBuckets, shown);
 	const hidden = buckets.filter((b) => !visible.includes(b));
@@ -116448,6 +116362,250 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 				"data-tk-token-link": source.provider,
 				children: "Create a token ↗"
 			}) : null
+		]
+	});
+}
+//#endregion
+//#region src/components/intake/epics.ts
+function epicMeta(e) {
+	const bits = [e.state];
+	if (e.mine_open == null) bits.push(e.stories_total + " stories");
+	else bits.push(e.mine_open + " of yours to do" + (e.stories_total ? " (of " + e.stories_total + ")" : ""));
+	return bits.filter(Boolean).join(" · ");
+}
+function epicsToStart(epics) {
+	return (epics || []).filter((e) => e.eligible && !e.has_session);
+}
+function autoStarts(e) {
+	return e.eligible && e.auto && !e.has_session;
+}
+var NO_STATE = "No state";
+function groupEpics(data) {
+	const epics = data?.epics || [];
+	const sources = data?.sources || [];
+	const errors = new Map((data?.errors || []).map((x) => [x.source, x.error]));
+	const order = [];
+	const add = (s) => {
+		if (s && !order.includes(s)) order.push(s);
+	};
+	sources.forEach((s) => add(s.source));
+	epics.forEach((e) => add(e.source));
+	errors.forEach((_, s) => add(s));
+	return order.map((src) => {
+		const meta = sources.find((s) => s.source === src) || null;
+		const rows = epics.filter((e) => e.source === src);
+		const byState = /* @__PURE__ */ new Map();
+		for (const e of rows) {
+			const st = e.state || NO_STATE;
+			const rank = typeof e.state_rank === "number" ? e.state_rank : Infinity;
+			const g = byState.get(st);
+			if (g) {
+				g.rows.push(e);
+				g.rank = Math.min(g.rank, rank);
+			} else byState.set(st, {
+				rank,
+				rows: [e]
+			});
+		}
+		const states = [...byState.entries()].sort((a, b) => a[1].rank === b[1].rank ? a[0].localeCompare(b[0]) : a[1].rank < b[1].rank ? -1 : 1).map(([state, g]) => ({
+			state,
+			rows: g.rows
+		}));
+		return {
+			source: src,
+			label: meta?.source_label || rows[0]?.source_label || src,
+			meta,
+			error: errors.get(src) || "",
+			states,
+			total: rows.length
+		};
+	});
+}
+function epicSourceNote(meta) {
+	if (!meta) return null;
+	const states = meta.epic_states || [];
+	if (!states.length) return {
+		text: "no auto-start states — set them on the source card in Tickets",
+		kind: "nostates"
+	};
+	if (!meta.auto) return {
+		text: "auto-start off",
+		kind: "off"
+	};
+	return {
+		text: "auto-starts epics in: " + states.join(", "),
+		kind: "on"
+	};
+}
+//#endregion
+//#region src/components/intake/EpicsTab.tsx
+var SOURCES_CLOSED_LS_KEY = "mf_intake_epic_sources";
+var STATES_CLOSED_LS_KEY = "mf_intake_epic_states";
+function EpicItem({ e, busy, onStart }) {
+	const startable = e.startable ?? e.eligible;
+	const labels = (e.labels || []).filter(Boolean);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ik-epic",
+		"data-epic": e.source + ":" + e.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-open-main",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+					href: e.url || "#",
+					target: "_blank",
+					rel: "noopener noreferrer",
+					className: "pr-open-title ik-epic-name",
+					title: "Open the epic in " + (e.source_label || "the tracker"),
+					children: e.name
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pr-open-meta",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: epicMeta(e) }),
+					labels.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-epic-labels",
+						children: "labels: " + labels.join(", ")
+					}) : null,
+					e.has_session ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip on",
+						children: "lead running"
+					}) : autoStarts(e) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip ok ik-epic-auto",
+						title: "In an auto-start state with auto-start on: its lead starts by itself",
+						children: "auto-starts"
+					}) : !e.eligible ? (e.reasons || []).map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pr-open-chip",
+						title: r,
+						children: r
+					}, r)) : null
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: e.has_session ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary pr-review-btn ik-open-session",
+					title: "Close Intake and go to the epic's lead session",
+					onClick: () => openSessionFromIntake(e.title),
+					children: "Open lead ›"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary pr-review-btn",
+					disabled: !startable || busy,
+					title: startable ? "Start the epic's lead session now" : (e.reasons || []).join(" · ") || "Can't start",
+					onClick: () => onStart(e),
+					children: busy ? "Starting…" : "Start"
+				})
+			})
+		]
+	});
+}
+function EpicsTab({ gotoTab }) {
+	const q = useEpicsQuery();
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const openSources = useToggleSet(SOURCES_CLOSED_LS_KEY, true);
+	const openStates = useToggleSet(STATES_CLOSED_LS_KEY, true);
+	const groups = groupEpics(q.data);
+	const loaded = !!q.data;
+	const error = q.error ? "Could not list epics: " + (q.error.message || "error") : "";
+	const note = panelNote({
+		error,
+		fetching: q.isFetching,
+		loaded
+	});
+	const start = async (e) => {
+		setBusy(e.title);
+		try {
+			const r = await api("/api/epics/start", { json: {
+				source: e.source,
+				id: e.id
+			} });
+			toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
+			q.refresh();
+		} catch (err) {
+			errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
+		} finally {
+			setBusy("");
+		}
+	};
+	const toTickets = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "linklike",
+		id: "ep-goto-tickets",
+		onClick: () => gotoTab("tickets"),
+		children: "Tickets"
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkListPanel, {
+		label: "Assigned epics",
+		onRefresh: () => void q.refresh(),
+		note,
+		rowId: "ep-assigned-row",
+		refreshId: "ep-epics-refresh",
+		noteId: "ep-epics-note",
+		listId: "ep-epics-list",
+		hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			"One lead agent per epic — it runs a worker and opens a PR per story of yours. Rows marked",
+			" ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "auto-starts" }),
+			" start by themselves; ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
+			" starts any other now. Each source's heading says which states auto-start — press it to change them."
+		] }),
+		children: [
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "repo-empty",
+				children: error
+			}) : null,
+			loaded && !groups.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "repo-empty",
+				id: "ep-no-sources",
+				children: [
+					"Epics come from a Shortcut source — add one on the ",
+					toTickets,
+					" tab, then pick its epic states on the source card."
+				]
+			}) : null,
+			groups.map((g) => {
+				const sn = epicSourceNote(g.meta);
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(WorkGroup, {
+					groupKey: g.source,
+					heading: true,
+					name: g.label,
+					count: g.total,
+					detail: g.error ? "can't list epics" : sn?.text,
+					detailTone: g.error ? "bad" : sn?.kind === "nostates" ? "warn" : void 0,
+					onDetail: () => gotoTab("tickets", g.source),
+					detailTitle: "Change which epics " + g.label + " auto-starts",
+					open: openSources.isOpen(g.source),
+					onToggle: () => openSources.toggle(g.source),
+					children: [
+						g.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "repo-empty ik-source-error",
+							children: g.label + ": " + g.error
+						}) : null,
+						!g.total && !g.error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "repo-empty",
+							children: "No open epics of yours."
+						}) : null,
+						g.states.map((s) => {
+							const key = g.source + "::" + s.state;
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkGroup, {
+								indent: true,
+								name: s.state,
+								count: s.rows.length,
+								open: openStates.isOpen(key),
+								onToggle: () => openStates.toggle(key),
+								children: s.rows.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpicItem, {
+									e,
+									busy: busy === e.title,
+									onStart: (x) => void start(x)
+								}, e.source + ":" + e.id))
+							}, key);
+						})
+					]
+				}, g.source);
+			})
 		]
 	});
 }
@@ -117481,6 +117639,7 @@ function parseIntakeTarget(target) {
 }
 var TAB_KEYS = [
 	"tickets",
+	"epics",
 	"prs",
 	"issues",
 	"autostart"
@@ -117495,6 +117654,11 @@ var TABS = [
 		key: "tickets",
 		label: "Tickets",
 		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TicketsTab, { ...p })
+	},
+	{
+		key: "epics",
+		label: "Epics",
+		el: (p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpicsTab, { ...p })
 	},
 	{
 		key: "prs",
@@ -117538,6 +117702,17 @@ function TabCount({ tab }) {
 	const n = tab === "tickets" ? countInBuckets((q.data.tickets || []).filter(isQueued), visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()), loadMineOnly()) : (q.data.prs || q.data.issues || []).filter(isQueued).length;
 	if (!n) return null;
 	const listed = tab === "tickets" ? countInBuckets(q.data.tickets || [], visibleBuckets(q.data.buckets || [], q.data.done_buckets || [], loadShownBuckets()), loadMineOnly()) : (q.data.prs || q.data.issues || []).length;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "ik-tab-count",
+		title: n + " ready to start — the ones auto-start would take" + (listed > n ? " (" + listed + " listed)" : ""),
+		children: n
+	});
+}
+function EpicsCount() {
+	const q = useEpicsQuery();
+	const n = epicsToStart(q.data?.epics).length;
+	if (!n) return null;
+	const listed = (q.data?.epics || []).length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "ik-tab-count",
 		title: n + " ready to start — the ones auto-start would take" + (listed > n ? " (" + listed + " listed)" : ""),
@@ -117707,7 +117882,7 @@ function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 					"data-intake-tab": t.key,
 					onClick: () => switchTab(t.key),
 					onKeyDown: (e) => onTabKey(e, i),
-					children: [t.label, t.key === "autostart" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartOn, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabCount, { tab: t.key })]
+					children: [t.label, t.key === "autostart" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartOn, {}) : t.key === "epics" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpicsCount, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabCount, { tab: t.key })]
 				}, t.key))
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {

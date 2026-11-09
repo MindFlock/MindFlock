@@ -26,7 +26,7 @@ On a Shortcut source's card (Intake → Tickets → Edit):
 
 | Field | What it does |
 |---|---|
-| **Epics in these states** (`epic_states`) | The epic-workflow states whose epics **auto-start** (e.g. *On Deck*), with `epic_auto` on. It doesn't limit the Epics tab: blank = nothing auto-starts, your epics are still listed. A *done*-type state here has no effect — done epics are never listed, so never auto-start. |
+| **Auto-start epics in these states** (`epic_states`) | The epic-workflow states whose epics **auto-start** (e.g. *On Deck*), with `epic_auto` on. It doesn't limit the Epics tab: blank = nothing auto-starts, your epics are still listed. A *done*-type state here has no effect — done epics are never listed, so never auto-start. |
 | **Start epics by themselves** (`epic_auto`) | On: an epic of yours in those states gets its lead automatically (checked every 2 minutes). Off: you start it from the Epics tab. |
 | **Move epic to on start** (`epic_start_state`, advanced) | Optional: the epic state an epic moves to when its lead starts (e.g. *in progress*). |
 

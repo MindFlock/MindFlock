@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Intake → Epics: your assigned epics.** A new Epics tab lists every epic
+  you own that isn't done, on every Shortcut source, grouped by source and
+  epic state, like Assigned tickets: each shows how many of your stories are
+  left, and **Start** starts its lead on any of them. A source's epic states
+  are now only the auto-start filter (renamed "Auto-start epics in these
+  states"), so epics show up with no setup (docs/epics.md).
+
 ## [0.14.0] - 2026-11-09
 
 ### Added
