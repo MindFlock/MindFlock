@@ -227,3 +227,8 @@ button.assist-chip:hover {
 .mic-pop .mic-assistant-btn.on {
   font-weight: 600;
 }
+
+.mic-pop .mic-assistant-btn .mic-pop-key {
+  color: var(--muted);
+  font-weight: 400;
+}
