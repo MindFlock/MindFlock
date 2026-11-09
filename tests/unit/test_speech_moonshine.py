@@ -600,6 +600,15 @@ class TestControlWords:
             ("new session in app that fixes login", False),
             ("yes", False),
             ("", False),
+            # The router's own no-text kinds act at once too.
+            ("Scroll up.", True),
+            ("Page down.", True),
+            ("Interrupt.", True),
+            ("Go back.", True),
+            ("Where am I?", True),
+            ("What can I say?", True),
+            ("Scroll down to the footer and fix the margin.", False),
+            ("Go back and fix the test.", False),
         ],
     )
     def test_control_only(self, heard, only):

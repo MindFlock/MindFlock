@@ -85,13 +85,14 @@ var out = {};
 voiceWordsApply({ undo: ["strike that"] });
 out.custom = [voiceUndoParse("strike that"), voiceUndoParse("scratch that")];
 voiceWordsApply({});
-out.missing = voiceUndoParse("undo that");
+out.missing = voiceUndoParse("scratch that");
 console.log(JSON.stringify(out));
 """)
     assert out["scratch that"] == {"before": ""}
     assert out["Scratch that."] == {"before": ""}
     assert out["fix the login bug, scratch that"] == {"before": "fix the login bug"}
-    assert out["undo that"] == {"before": ""}
+    # "undo that" is dictation ("can you undo that"), not a default
+    assert out["undo that"] is None
     assert out["scratch that idea and start over"] is None
     assert out["fix the bug"] is None
     # the owner's own undo words; an older server without the field: ours

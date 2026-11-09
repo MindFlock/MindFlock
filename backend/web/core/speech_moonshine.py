@@ -126,7 +126,8 @@ MODEL_FILES = (
 )
 #: ``voice_router.command`` kinds that need no text: a phrase Moonshine
 #: hears as one of them is acted on at once, without the whisper pass
-#: (:func:`control_only`). ``new``, ``answer``, ``question`` and ``help``
+#: (:func:`control_only`; the router's own ``voice_router.NO_TEXT_KINDS`` —
+#: scroll, interrupt, go back, where, the command list — count too). ``new``, ``answer``, ``question`` and ``help``
 #: carry the person's words, so they wait for whisper's.
 NO_TEXT_KINDS = frozenset(
     {
@@ -445,7 +446,8 @@ def control_only(heard: str, words: Optional[dict] = None) -> bool:
     except Exception:  # noqa: BLE001 — a hint: whisper's text then
         _logger.debug("voice: control_only failed on %r", text, exc_info=True)
         return False
-    return cmd is not None and cmd.get("kind") in NO_TEXT_KINDS
+    kind = cmd.get("kind") if cmd is not None else None
+    return kind in NO_TEXT_KINDS or kind in _voice_router.NO_TEXT_KINDS
 
 
 def with_control(final: str, heard: str, words: Optional[dict] = None) -> str:
