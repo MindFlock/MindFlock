@@ -25007,9 +25007,9 @@ function isVerifySession(session) {
 //#region src/lib/jobExpectation.ts
 var MIN = 60;
 var HOUR = 3600;
-var DAY = 86400;
+var DAY$1 = 86400;
 var EXPECT_MIN_S = MIN;
-var EXPECT_MAX_S = 14 * DAY;
+var EXPECT_MAX_S = 14 * DAY$1;
 var EXPECT_PRESETS = [
 	{
 		label: "30 min",
@@ -25025,7 +25025,7 @@ var EXPECT_PRESETS = [
 	},
 	{
 		label: "24 h",
-		secs: DAY
+		secs: DAY$1
 	}
 ];
 function formatSpan(secs) {
@@ -25033,20 +25033,20 @@ function formatSpan(secs) {
 	const m = Math.round(s / MIN);
 	if (m < 1) return "<1m";
 	if (m < 60) return m + "m";
-	if (s < 2 * DAY) {
+	if (s < 2 * DAY$1) {
 		const h = Math.floor(m / 60);
 		const mm = m % 60;
 		return mm ? h + "h " + mm + "m" : h + "h";
 	}
-	const d = Math.floor(s / DAY);
-	const h = Math.round((s - d * DAY) / HOUR);
+	const d = Math.floor(s / DAY$1);
+	const h = Math.round((s - d * DAY$1) / HOUR);
 	return h ? d + "d " + h + "h" : d + "d";
 }
 var UNIT$1 = {
 	s: 1,
 	m: MIN,
 	h: HOUR,
-	d: DAY
+	d: DAY$1
 };
 function parseDuration(input) {
 	let secs;
@@ -47277,7 +47277,7 @@ function slowLevel(prev, level, dtMs) {
 }
 var HEARING_HOLD_MS = 700;
 var STALE_MS = 250;
-var POLL_MS$4 = 85;
+var POLL_MS$5 = 85;
 function noiseFloor(floor, rms) {
 	return floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
 }
@@ -47331,7 +47331,7 @@ function paint$2() {
 function frame(t) {
 	raf = 0;
 	const now = Date.now();
-	if (poll && now - lastPoll >= POLL_MS$4) {
+	if (poll && now - lastPoll >= POLL_MS$5) {
 		lastPoll = now;
 		meterFeed(poll(), now);
 	}
@@ -47404,7 +47404,7 @@ function meterRef(el) {
 var passes = [];
 var t0 = 0;
 var marks = {};
-var clock$1 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+var clock$2 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
 function debugOn() {
 	try {
 		return typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1";
@@ -47414,10 +47414,10 @@ function debugOn() {
 }
 function voiceMark(m) {
 	if (m === "start") {
-		t0 = clock$1();
+		t0 = clock$2();
 		marks = {};
 	} else if (!t0 || m in marks) return;
-	marks[m] = Math.round(clock$1() - t0);
+	marks[m] = Math.round(clock$2() - t0);
 	if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
 	if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
 }
@@ -53745,7 +53745,7 @@ var loadingListeners = /* @__PURE__ */ new Set();
 serverRec.onLoading = (on) => loadingListeners.forEach((l) => l(on));
 var tracker = new ReplyTracker();
 var heard = new HeardTurns();
-var clock = new HeardClock();
+var clock$1 = new HeardClock();
 var speakingListeners = /* @__PURE__ */ new Set();
 var audibleListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)), { onAudible: (on) => audibleListeners.forEach((l) => l(on)) });
@@ -54111,7 +54111,7 @@ function TopBarMic() {
 	}, []);
 	const repliesOn = prefs.replies !== "off";
 	(0, import_react.useEffect)(() => {
-		if (repliesOn) clock.restart();
+		if (repliesOn) clock$1.restart();
 	}, [repliesOn]);
 	(0, import_react.useEffect)(() => {
 		let unsubs = [];
@@ -54121,7 +54121,7 @@ function TopBarMic() {
 			const mode = prefsRef.current.replies;
 			const inline = String(data.say || "").trim();
 			const ours = tracker.waiting(title);
-			if (!ours && !isNews(turnEndedAt(ts, data.idle_for), clock.heardAt(title))) return;
+			if (!ours && !isNews(turnEndedAt(ts, data.idle_for), clock$1.heardAt(title))) return;
 			const speak = (words, ask = "", listen = true) => {
 				if (!words) return;
 				say(spokenLine(displayName(title), words));
@@ -54133,11 +54133,11 @@ function TopBarMic() {
 						focused: useUi.getState().focused,
 						name: displayName(title),
 						headline: taskHeadline(title),
-						lastAt: Math.max(clock.last(title), tracker.sentAt(title)),
+						lastAt: Math.max(clock$1.last(title), tracker.sentAt(title)),
 						now: Date.now(),
 						text: words
 					});
-					clock.mark(title);
+					clock$1.mark(title);
 					return line;
 				}, { title });
 				if (!ask) return;
@@ -54187,11 +54187,11 @@ function TopBarMic() {
 		};
 		attach();
 		refreshQuestion(useUi.getState().focused || "");
-		clock.mark(useUi.getState().focused);
+		clock$1.mark(useUi.getState().focused);
 		const unsubFocus = useUi.subscribe((s, prev) => {
 			if (s.focused === prev.focused) return;
-			clock.mark(prev.focused);
-			clock.mark(s.focused);
+			clock$1.mark(prev.focused);
+			clock$1.mark(s.focused);
 			refreshQuestion(s.focused || "");
 		});
 		return () => {
@@ -62412,7 +62412,7 @@ function GuestLinks() {
 }
 //#endregion
 //#region src/components/sidebar/GuestBar.tsx
-var POLL_MS$3 = 1e4;
+var POLL_MS$4 = 1e4;
 function guestBarText(links, tunnel) {
 	const who = links === 1 ? "1 guest link" : links + " guest links";
 	if (tunnel?.state === "up") return who + " · public link up";
@@ -62436,7 +62436,7 @@ function GuestBar() {
 			feedGuestFocus(r.links || []);
 		}).catch(() => {});
 		tick();
-		const t = setInterval(() => void tick(), POLL_MS$3);
+		const t = setInterval(() => void tick(), POLL_MS$4);
 		return () => {
 			live = false;
 			clearInterval(t);
@@ -86477,7 +86477,7 @@ function MapTour({ rootRef, onClose, ctx, steps }) {
 //#region src/components/grid/CodeMapTab.tsx
 var ENTRIES = /* @__PURE__ */ new Map();
 var ENTRY_MAX = 12;
-var POLL_MS$2 = 2e3;
+var POLL_MS$3 = 2e3;
 var NULL_FP_REFRESH_MS = 2e4;
 var PARTIAL_REFRESH_MS = 3e3;
 function entryFor(title) {
@@ -86748,7 +86748,7 @@ function CodeMap({ title, active }) {
 		if (!entryFor(title).snap) loadSnap();
 		const t = setInterval(() => {
 			if (!document.hidden) poll();
-		}, POLL_MS$2);
+		}, POLL_MS$3);
 		const onVis = () => {
 			if (!document.hidden) poll();
 		};
@@ -118081,7 +118081,7 @@ function ScrollSpeedRow() {
 }
 //#endregion
 //#region src/components/settings/screens/TailscaleCard.tsx
-var POLL_MS$1 = 3e3;
+var POLL_MS$2 = 3e3;
 function signedInAs(h) {
 	if (h.tagged) return "a tagged device (" + (h.tags || []).join(", ") + ")";
 	return h.user || "";
@@ -118288,7 +118288,7 @@ function TailscaleCard({ active = true }) {
 		if (!active || !pending) return;
 		const t = setInterval(() => {
 			if (!document.hidden) load(true);
-		}, POLL_MS$1);
+		}, POLL_MS$2);
 		return () => clearInterval(t);
 	}, [
 		active,
@@ -127820,7 +127820,7 @@ function SyncedAgentInstall({ onDone }) {
 }
 //#endregion
 //#region src/components/settings/screens/Devices.tsx
-var POLL_MS = 3e3;
+var POLL_MS$1 = 3e3;
 var JOIN_POLL_MS = 2e3;
 function errText$1(e) {
 	return e instanceof Error ? e.message : String(e);
@@ -127901,7 +127901,7 @@ function Devices(p) {
 			tick++;
 			loadFleet();
 			if (tick % 2 === 0) loadSync();
-		}, POLL_MS);
+		}, POLL_MS$1);
 		return () => clearInterval(t);
 	}, [
 		p.active,
@@ -135772,6 +135772,168 @@ function ConnectGitHubDialog() {
 	});
 }
 //#endregion
+//#region src/lib/todoTime.ts
+var DAYS = [
+	"sunday",
+	"monday",
+	"tuesday",
+	"wednesday",
+	"thursday",
+	"friday",
+	"saturday"
+];
+var DAY_ALIASES = {
+	sun: 0,
+	sunday: 0,
+	mon: 1,
+	monday: 1,
+	tue: 2,
+	tues: 2,
+	tuesday: 2,
+	wed: 3,
+	weds: 3,
+	wednesday: 3,
+	thu: 4,
+	thur: 4,
+	thurs: 4,
+	thursday: 4,
+	fri: 5,
+	friday: 5,
+	sat: 6,
+	saturday: 6
+};
+var DEFAULT_HOUR = 9;
+var pad = (n) => String(n).padStart(2, "0");
+function toDue(d) {
+	return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function fromDue(due) {
+	const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(String(due || ""));
+	if (!m) return null;
+	const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0, 0);
+	return isNaN(d.getTime()) ? null : d;
+}
+function clock(hRaw, mRaw, ampm) {
+	let h = +hRaw;
+	const m = mRaw ? +mRaw : 0;
+	if (m > 59) return null;
+	const ap = (ampm || "").toLowerCase().replace(/\./g, "");
+	if (ap === "pm" && h < 12) h += 12;
+	else if (ap === "am" && h === 12) h = 0;
+	else if (!ap && h >= 1 && h <= 6) h += 12;
+	if (h > 23) return null;
+	return [h, m];
+}
+var TIME = String.raw`(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?`;
+var DAY = String.raw`(today|tonight|tomorrow|tmrw|tmr|` + Object.keys(DAY_ALIASES).join("|") + ")";
+var RE_IN = new RegExp(String.raw`\s+in\s+(\d+)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)\s*$`, "i");
+var RE_DAY_TIME = new RegExp(String.raw`\s+(?:on\s+|next\s+)?` + DAY + String.raw`(?:\s+` + TIME + String.raw`)?\s*$`, "i");
+var RE_TIME_DAY = new RegExp(String.raw`\s+` + TIME + String.raw`\s+(?:on\s+)?` + DAY + String.raw`\s*$`, "i");
+var RE_TIME = new RegExp(String.raw`\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?\s*$`, "i");
+function onDay(day, now) {
+	const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	const key = day.toLowerCase();
+	if (key === "today" || key === "tonight") return d;
+	if (key === "tomorrow" || key === "tmrw" || key === "tmr") {
+		d.setDate(d.getDate() + 1);
+		return d;
+	}
+	let ahead = (DAY_ALIASES[key] - d.getDay() + 7) % 7;
+	if (ahead === 0) ahead = 7;
+	d.setDate(d.getDate() + ahead);
+	return d;
+}
+function parseWhen(input, now = /* @__PURE__ */ new Date()) {
+	const raw = " " + String(input || "").trim();
+	let m = RE_IN.exec(raw);
+	if (m) {
+		const n = +m[1];
+		const unit = m[2].toLowerCase();
+		const ms = unit.startsWith("d") ? 864e5 : unit.startsWith("h") ? 36e5 : 6e4;
+		const text = raw.slice(0, m.index).trim();
+		if (!text || !n) return null;
+		return {
+			text,
+			due: toDue(new Date(now.getTime() + n * ms))
+		};
+	}
+	m = RE_TIME_DAY.exec(raw);
+	let day;
+	let hm = null;
+	if (m) {
+		hm = clock(m[1], m[2], m[3]);
+		day = m[4];
+	} else if (m = RE_DAY_TIME.exec(raw)) {
+		day = m[1];
+		if (m[2]) hm = clock(m[2], m[3], m[4]);
+		else hm = day.toLowerCase() === "tonight" ? [20, 0] : [DEFAULT_HOUR, 0];
+	} else if (m = RE_TIME.exec(raw)) hm = clock(m[1], m[2], m[3]);
+	if (!m || !hm) return null;
+	const text = raw.slice(0, m.index).trim();
+	if (!text) return null;
+	let d;
+	if (day) {
+		d = onDay(day, now);
+		const key = day.toLowerCase();
+		if (key in DAY_ALIASES && DAY_ALIASES[key] === now.getDay()) {
+			if (new Date(now.getFullYear(), now.getMonth(), now.getDate(), hm[0], hm[1]) > now) d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+		}
+	} else d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	d.setHours(hm[0], hm[1], 0, 0);
+	if (!day && d <= now) d.setDate(d.getDate() + 1);
+	return {
+		text,
+		due: toDue(d)
+	};
+}
+function clockText(d) {
+	let h = d.getHours();
+	const ap = h >= 12 ? "PM" : "AM";
+	h = h % 12 || 12;
+	return h + ":" + pad(d.getMinutes()) + " " + ap;
+}
+function formatDue(due, now = /* @__PURE__ */ new Date()) {
+	const d = fromDue(due);
+	if (!d) return "";
+	const day0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+	const dd = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+	const days = Math.round((dd - day0) / 864e5);
+	let lead;
+	if (days === 0) lead = "Today";
+	else if (days === 1) lead = "Tomorrow";
+	else if (days === -1) lead = "Yesterday";
+	else if (days > 1 && days < 7) lead = DAYS[d.getDay()].slice(0, 1).toUpperCase() + DAYS[d.getDay()].slice(1, 3);
+	else {
+		lead = d.toLocaleString("en-US", {
+			month: "short",
+			day: "numeric"
+		});
+		if (d.getFullYear() !== now.getFullYear()) lead += ", " + d.getFullYear();
+	}
+	return lead + " " + clockText(d);
+}
+function isOverdue(due, now = /* @__PURE__ */ new Date()) {
+	const d = fromDue(due);
+	return !!d && d.getTime() <= now.getTime();
+}
+function snoozeChoices(now = /* @__PURE__ */ new Date()) {
+	const t9 = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, DEFAULT_HOUR, 0);
+	return [
+		{
+			label: "10 minutes",
+			until: toDue(new Date(now.getTime() + 6e5))
+		},
+		{
+			label: "1 hour",
+			until: toDue(new Date(now.getTime() + 36e5))
+		},
+		{
+			label: "Tomorrow 9 AM",
+			until: toDue(t9)
+		}
+	];
+}
+//#endregion
 //#region src/components/dialogs/TodoDialog.tsx
 var rid = () => Math.random().toString(36).slice(2, 10);
 function TodoDialog() {
@@ -135786,6 +135948,7 @@ function TodoDialog() {
 	const addRef = (0, import_react.useRef)(null);
 	const [editingId, setEditingId] = (0, import_react.useState)(null);
 	const [editDraft, setEditDraft] = (0, import_react.useState)("");
+	const [dueEditId, setDueEditId] = (0, import_react.useState)(null);
 	const editCancelled = (0, import_react.useRef)(false);
 	const editingRef = (0, import_react.useRef)(null);
 	const setEditing = (0, import_react.useCallback)((id) => {
@@ -135834,11 +135997,28 @@ function TodoDialog() {
 		const text = draft.trim();
 		if (!text) return;
 		setDraft("");
-		save([...todos, {
+		const when = parseWhen(text);
+		save([...todos, when ? {
+			id: rid(),
+			text: when.text,
+			done: false,
+			due: when.due
+		} : {
 			id: rid(),
 			text,
 			done: false
 		}]);
+	};
+	const setDue = (id, due) => {
+		setDueEditId(null);
+		save(todos.map((x) => x.id === id ? due ? {
+			...x,
+			due
+		} : {
+			id: x.id,
+			text: x.text,
+			done: x.done
+		} : x));
 	};
 	const startEdit = (t) => {
 		setEditing(t.id);
@@ -135890,7 +136070,7 @@ function TodoDialog() {
 						id: "todo-add-input",
 						ref: addRef,
 						autoComplete: "off",
-						placeholder: "Add a todo…",
+						placeholder: "Add a todo… (add a time to be reminded: “call the bank tue 9am”)",
 						value: draft,
 						onChange: (e) => setDraft(e.target.value),
 						onKeyDown: (e) => {
@@ -135973,6 +136153,34 @@ function TodoDialog() {
 								onClick: () => startEdit(t),
 								children: t.text
 							}),
+							dueEditId === t.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "todo-due-edit",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "datetime-local",
+									autoFocus: true,
+									defaultValue: t.due || "",
+									onKeyDown: (e) => {
+										if (e.key === "Enter") setDue(t.id, e.currentTarget.value);
+										else if (e.key === "Escape") {
+											e.stopPropagation();
+											setDueEditId(null);
+										}
+									},
+									onBlur: (e) => setDue(t.id, e.currentTarget.value)
+								}), t.due && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "todo-due-clear",
+									onMouseDown: (e) => e.preventDefault(),
+									onClick: () => setDue(t.id, ""),
+									children: "No reminder"
+								})]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "todo-due" + (t.due ? " has-due" : "") + (t.due && !t.done && isOverdue(t.due) ? " overdue" : ""),
+								title: t.due ? "Reminds you then — click to change" : "Remind me at a time",
+								onClick: () => setDueEditId(t.id),
+								children: t.due ? "⏰ " + formatDue(t.due) : "⏰"
+							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								className: "todo-del",
 								title: "Delete",
@@ -135981,6 +136189,164 @@ function TodoDialog() {
 							})
 						]
 					}, t.id))
+				})
+			]
+		})
+	});
+}
+//#endregion
+//#region src/components/dialogs/TodoReminder.tsx
+var POLL_MS = 3e4;
+var CLOSE_HIDE_MS = 6e5;
+function canNotify() {
+	return typeof Notification !== "undefined" && Notification.permission === "granted";
+}
+function TodoReminder() {
+	const [due, setDue] = (0, import_react.useState)([]);
+	const [hiddenUntil, setHiddenUntil] = (0, import_react.useState)(0);
+	const [seen, setSeen] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
+	const [picking, setPicking] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			const r = await api("/api/assistant/todos/due");
+			setDue(Array.isArray(r.due) ? r.due : []);
+		} catch {}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+		const t = setInterval(() => void load(), POLL_MS);
+		const off = (window.mindflock?.events)?.subscribe?.("todo.due", () => void load());
+		const onFocus = () => void load();
+		window.addEventListener("focus", onFocus);
+		return () => {
+			clearInterval(t);
+			window.removeEventListener("focus", onFocus);
+			if (typeof off === "function") off();
+		};
+	}, [load]);
+	(0, import_react.useEffect)(() => {
+		const fresh = due.filter((t) => !seen.has(t.id + "@" + (t.due || "")));
+		if (!fresh.length) return;
+		setSeen((s) => {
+			const n = new Set(s);
+			for (const t of fresh) n.add(t.id + "@" + (t.due || ""));
+			return n;
+		});
+		setHiddenUntil(0);
+		if ((document.hidden || !document.hasFocus()) && canNotify()) for (const t of fresh.slice(0, 3)) try {
+			new Notification("Reminder", {
+				body: t.text,
+				tag: "todo-" + t.id
+			});
+		} catch {}
+	}, [due, seen]);
+	const act = async (id, path, json = {}) => {
+		setBusy(true);
+		try {
+			await api("/api/assistant/todos/" + encodeURIComponent(id) + "/" + path, {
+				method: "POST",
+				json
+			});
+		} catch {} finally {
+			setBusy(false);
+			setPicking(null);
+			load();
+		}
+	};
+	if (!due.length || Date.now() < hiddenUntil) return null;
+	const choices = snoozeChoices();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "todo-reminder",
+		role: "dialog",
+		"aria-label": "Reminder",
+		onClose: () => setHiddenUntil(Date.now() + CLOSE_HIDE_MS),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "todo-reminder",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "tr-head",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: ["⏰ ", due.length === 1 ? "Reminder" : due.length + " reminders"] })
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "tr-list",
+					children: due.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "tr-item",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "tr-text",
+								children: t.text
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "tr-when muted",
+								children: ["Due ", formatDue(t.due)]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "tr-acts",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "btn-primary",
+										disabled: busy,
+										onClick: () => void act(t.id, "done"),
+										children: "Done"
+									}),
+									choices.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										disabled: busy,
+										title: "Remind me again " + (c.label === "Tomorrow 9 AM" ? c.label.toLowerCase() : "in " + c.label),
+										onClick: () => void act(t.id, "snooze", { until: c.until }),
+										children: c.label
+									}, c.label)),
+									picking === t.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "datetime-local",
+										autoFocus: true,
+										className: "tr-pick",
+										onKeyDown: (e) => {
+											if (e.key === "Enter" && e.currentTarget.value) act(t.id, "snooze", { until: e.currentTarget.value });
+											else if (e.key === "Escape") {
+												e.stopPropagation();
+												setPicking(null);
+											}
+										},
+										onBlur: (e) => {
+											if (e.currentTarget.value) act(t.id, "snooze", { until: e.currentTarget.value });
+											else setPicking(null);
+										}
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										disabled: busy,
+										onClick: () => setPicking(t.id),
+										children: "Pick a time…"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "tr-dismiss",
+										disabled: busy,
+										title: "Stop reminding me (the todo stays on the list)",
+										onClick: () => void act(t.id, "dismiss"),
+										children: "Dismiss"
+									})
+								]
+							})
+						]
+					}, t.id))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tr-foot",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tr-open",
+						onClick: () => {
+							setHiddenUntil(Date.now() + CLOSE_HIDE_MS);
+							useUi.getState().openDialogFor("todo", "");
+						},
+						children: "Open the todo list"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => setHiddenUntil(Date.now() + CLOSE_HIDE_MS),
+						children: "Later"
+					})]
 				})
 			]
 		})
@@ -149001,6 +149367,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHubDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TodoReminder, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantAgentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),

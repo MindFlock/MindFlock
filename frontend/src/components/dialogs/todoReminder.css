@@ -1,0 +1,65 @@
+/* The reminder dialog for timed todos (TodoReminder.tsx). */
+#todo-reminder .todo-reminder {
+  width: min(460px, calc(100vw - 32px));
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+#todo-reminder .tr-head h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+#todo-reminder .tr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+#todo-reminder .tr-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+#todo-reminder .tr-item:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+#todo-reminder .tr-text {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+#todo-reminder .tr-when {
+  font-size: 12px;
+  margin: 2px 0 8px;
+}
+#todo-reminder .tr-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+#todo-reminder .tr-acts button {
+  font-size: 12px;
+  padding: 3px 9px;
+}
+#todo-reminder .tr-dismiss {
+  margin-left: auto;
+  color: var(--muted);
+}
+#todo-reminder .tr-pick {
+  font-size: 12px;
+}
+#todo-reminder .tr-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+#todo-reminder .tr-foot button {
+  font-size: 12px;
+}

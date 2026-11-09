@@ -11966,6 +11966,71 @@ details.fl-group-waiting > summary {
 .gh-token-fold > .gh-steps {
   margin-top: 10px;
 }
+/* The reminder dialog for timed todos (TodoReminder.tsx). */
+#todo-reminder .todo-reminder {
+  width: min(460px, calc(100vw - 32px));
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+#todo-reminder .tr-head h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+#todo-reminder .tr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+#todo-reminder .tr-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+#todo-reminder .tr-item:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+#todo-reminder .tr-text {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+#todo-reminder .tr-when {
+  font-size: 12px;
+  margin: 2px 0 8px;
+}
+#todo-reminder .tr-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+#todo-reminder .tr-acts button {
+  font-size: 12px;
+  padding: 3px 9px;
+}
+#todo-reminder .tr-dismiss {
+  margin-left: auto;
+  color: var(--muted);
+}
+#todo-reminder .tr-pick {
+  font-size: 12px;
+}
+#todo-reminder .tr-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+#todo-reminder .tr-foot button {
+  font-size: 12px;
+}
 /* The welcome card (one card, then the coach-mark Welcome tour). Rides the
    shared .modal overlay. */
 
@@ -20574,6 +20639,50 @@ p.set-hint {
   border-radius: 8px;
   position: relative;
 }
+
+
+/* A todo's reminder (lib/todoTime): a quiet clock until it has a time, then
+   the time in words; red once it is due and not done. */
+.todo-row .todo-due {
+  flex: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+.todo-row:hover .todo-due,
+.todo-row .todo-due.has-due {
+  opacity: 1;
+}
+.todo-row .todo-due.has-due {
+  border-color: var(--border);
+  background: var(--panel-2, var(--panel));
+}
+.todo-row .todo-due.overdue {
+  color: var(--red);
+  border-color: var(--red);
+}
+.todo-row.done .todo-due.has-due {
+  opacity: 0.5;
+}
+.todo-row .todo-due-edit {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex: none;
+}
+.todo-row .todo-due-edit input {
+  font-size: 12px;
+}
+.todo-row .todo-due-clear {
+  font-size: 11px;
+  padding: 1px 6px;
+}
 }
 
 /* 070 */
@@ -22769,8 +22878,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 /* Pinned live section at the top of the bell popover, above the history. It
    scrolls on its own so a long list never pushes the history off the panel. */
+/* `flex-shrink: 0`: it was `0 1 auto`, so beside a long history the two
+   shrank in proportion to their heights and "Needs you" was squeezed to a
+   sliver (one row of four showing, the rest behind a tiny scroll). It keeps
+   its height now, up to its own cap, and the history takes what is left. */
 .notif-attn {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   max-height: 55vh;
   overflow-y: auto;
   padding: 5px 6px 6px;

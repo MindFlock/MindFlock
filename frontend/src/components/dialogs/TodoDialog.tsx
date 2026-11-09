@@ -6,11 +6,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
+import { formatDue, isOverdue, parseWhen } from "../../lib/todoTime";
 
 interface Todo {
   id: string;
   text: string;
   done: boolean;
+  /** A reminder: "YYYY-MM-DDTHH:MM" local (lib/todoTime). At that time or
+   * after, the reminder dialog pops it up (TodoReminder). */
+  due?: string;
 }
 
 const rid = () => Math.random().toString(36).slice(2, 10);
@@ -27,6 +31,7 @@ export function TodoDialog() {
   const addRef = useRef<HTMLInputElement | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [dueEditId, setDueEditId] = useState<string | null>(null);
   const editCancelled = useRef(false);
   // Mirrored in a ref so `load` can stay identity-stable: if it changed on every
   // edit, the polling effect below would re-run and re-focus the Add box, which
@@ -88,7 +93,14 @@ export function TodoDialog() {
     const text = draft.trim();
     if (!text) return;
     setDraft("");
-    save([...todos, { id: rid(), text, done: false }]);
+    // "Call the bank tue 9am" → a todo with a reminder (lib/todoTime).
+    const when = parseWhen(text);
+    save([...todos, when ? { id: rid(), text: when.text, done: false, due: when.due } : { id: rid(), text, done: false }]);
+  };
+
+  const setDue = (id: string, due: string) => {
+    setDueEditId(null);
+    save(todos.map((x) => (x.id === id ? (due ? { ...x, due } : { id: x.id, text: x.text, done: x.done }) : x)));
   };
 
   const startEdit = (t: Todo) => {
@@ -127,7 +139,7 @@ export function TodoDialog() {
             id="todo-add-input"
             ref={addRef}
             autoComplete="off"
-            placeholder="Add a todo…"
+            placeholder="Add a todo… (add a time to be reminded: “call the bank tue 9am”)"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -210,6 +222,37 @@ export function TodoDialog() {
                   >
                     {t.text}
                   </span>
+                )}
+                {dueEditId === t.id ? (
+                  <span className="todo-due-edit">
+                    <input
+                      type="datetime-local"
+                      autoFocus
+                      defaultValue={t.due || ""}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") setDue(t.id, e.currentTarget.value);
+                        else if (e.key === "Escape") {
+                          e.stopPropagation();
+                          setDueEditId(null);
+                        }
+                      }}
+                      onBlur={(e) => setDue(t.id, e.currentTarget.value)}
+                    />
+                    {t.due && (
+                      <button type="button" className="todo-due-clear" onMouseDown={(e) => e.preventDefault()} onClick={() => setDue(t.id, "")}>
+                        No reminder
+                      </button>
+                    )}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className={"todo-due" + (t.due ? " has-due" : "") + (t.due && !t.done && isOverdue(t.due) ? " overdue" : "")}
+                    title={t.due ? "Reminds you then — click to change" : "Remind me at a time"}
+                    onClick={() => setDueEditId(t.id)}
+                  >
+                    {t.due ? "⏰ " + formatDue(t.due) : "⏰"}
+                  </button>
                 )}
                 <button
                   className="todo-del"

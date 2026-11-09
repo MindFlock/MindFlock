@@ -537,6 +537,22 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["raising_hand"],
     },
     {
+        # A timed todo came due (or its snooze ran out) — the Assistant's
+        # todo list (addons/assistant.py), once per due time. You asked to be
+        # reminded, so it rings by default.
+        "id": "todo_due",
+        "label": "A todo comes due",
+        "description": 'A todo you gave a time to ("Tuesday at 9 AM") is due.',
+        "event": "todo.due",
+        "old": None,
+        "new": None,
+        "title": "Reminder",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["alarm_clock"],
+    },
+    {
         # A flight landed, halted or was cancelled — once per finish.
         "id": "flight_finished",
         "label": "A route finishes",
