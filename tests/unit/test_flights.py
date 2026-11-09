@@ -203,7 +203,14 @@ def test_builtins_are_seeded_first_and_shaped_as_documented():
     ]
     assert t["steps"][-1]["config"]["comment"] == "Merged by MindFlock"
     v = F.get_plan("builtin:verify")
-    assert v["steps"][0]["config"] == {"who": "both", "wait_live": True}
+    assert v["steps"][0]["config"] == {
+        "where": "live",
+        "ready": "on_branch",
+        "ready_minutes": 0,
+        "who": "both",
+        "notes": "",
+        "post_to_pr": False,
+    }
 
 
 def test_save_edit_delete_and_reset(tmp_path):
@@ -558,7 +565,9 @@ def test_verify_step_writes_runs_parks_and_settles():
     assert F.apply(f, a, NOW)["state"] == "done"
 
 
-def test_verify_agent_only_and_failures_and_wait_live():
+def test_verify_legacy_wait_live_agent_only_and_failures():
+    """A plan written before where/ready (``wait_live=True``) still waits for
+    the live mark, then judges as before (where=live, ready=on_branch)."""
     f = run_step(fly(step("verify", who="agent", wait_live=True)))
     v = _vfacts(open_human=["you look"])
     assert (
@@ -574,6 +583,23 @@ def test_verify_agent_only_and_failures_and_wait_live():
         "model down"
         in F.next_action(f, {"session": sess(), "verify": v}, NOW)["reason"]
     )
+
+
+def test_verify_live_on_branch_agent_only_and_failures():
+    """The same stop in the where/ready vocabulary."""
+    f = run_step(fly(step("verify", who="agent", where="live", ready="on_branch")))
+    assert f["steps"][0]["config"]["where"] == "live"
+    assert "wait_live" not in f["steps"][0]["config"]
+    v = _vfacts(open_human=["you look"])
+    assert (
+        F.next_action(f, {"session": sess(), "verify": v}, NOW)["note"]
+        == "waiting for the work to reach main"
+    )
+    v = _vfacts(open_human=["you look"], live=True)
+    assert F.next_action(f, {"session": sess(), "verify": v}, NOW)["action"] == "done"
+    v = _vfacts(failed=["login works"], live=True, failed_at=NOW + 1)
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 2)
+    assert a["action"] == "fail" and "login works" in a["reason"]
 
 
 def test_verify_kind_reads_as_a_stop_and_halts_by_default():
