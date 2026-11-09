@@ -245,9 +245,9 @@ PROVIDER_META: list[dict] = [
                 "required": False,
                 "placeholder": "any label — or e.g. mindflock, needs-agent",
                 "hint": (
-                    "Optional: only stories with one of these labels auto-start "
-                    "(comma-separated). Handy when adding a label is how you hand "
-                    "a story to MindFlock."
+                    "Optional: only stories — and epics — with one of these labels "
+                    "auto-start (comma-separated). Handy when adding a label is how "
+                    "you hand a story or an epic to MindFlock."
                 ),
             },
             _start_state_field(

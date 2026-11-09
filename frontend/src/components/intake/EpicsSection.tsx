@@ -24,7 +24,13 @@ export interface EpicRow {
   mine_open: number | null;
   has_session: boolean;
   auto: boolean;
+  labels?: string[];
+  /** Would start by itself: in the states, carries one of the source's
+   * Auto-start labels (when any are set), not already taken. */
   eligible: boolean;
+  /** Start works: not taken, stories of yours left (a missing label only
+   * stops the AUTO start). Older servers: falls back to `eligible`. */
+  startable?: boolean;
   reasons: string[];
 }
 
@@ -107,7 +113,7 @@ export function EpicsSection() {
                   Open lead
                 </button>
               ) : (
-                <button type="button" className="btn-primary" disabled={!e.eligible || busy === e.title} onClick={() => void start(e)}>
+                <button type="button" className="btn-primary" disabled={!(e.startable ?? e.eligible) || busy === e.title} onClick={() => void start(e)}>
                   {busy === e.title ? "Starting…" : "Start"}
                 </button>
               )}
