@@ -2820,6 +2820,55 @@ button.assist-chip:hover {
 .bh-add {
   align-self: flex-start;
 }
+
+/* A behavior row collapses to one short line (BehaviorRow): its text is a
+   button that opens the row, clamped to two lines while collapsed. */
+.bh-text-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.bh-text-toggle {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.bh-text-toggle.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.bh-text-toggle:hover {
+  color: var(--accent);
+}
+.bh-caret {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: calc(11px * var(--bh-s));
+  line-height: 1.6;
+}
+.bh-caret:hover {
+  color: var(--text);
+}
+.bh-expand-all {
+  font-size: calc(11px * var(--bh-s));
+  white-space: nowrap;
+  flex: none;
+  padding: 1px 7px;
+}
 /* The flyway canvas (FlywayCanvas.tsx) and Flights' form controls
  * (controls.tsx) — prefix fl-.
  *
