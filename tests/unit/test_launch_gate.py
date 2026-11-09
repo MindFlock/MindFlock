@@ -269,6 +269,63 @@ def test_room_counts_memory_warming_and_the_cap(monkeypatch):
     assert gate.room() is None
 
 
+def _host(available, total=32 * GiB, level="ok"):
+    return {
+        "available": available,
+        "total": total,
+        "available_pct": round(available * 100.0 / total, 1),
+        "level": level,
+        "at": 0.0,
+    }
+
+
+_COST = {"session_mb": 1024, "peak_mb": 1024, "source": "measured", "samples": 3}
+
+
+def test_budget_is_capped_by_windows_headroom_and_says_so():
+    # VM: 10 - 2 reserve = 8 GB; Windows: 6 - 2.56 (8% of 32) = 3.44 GB.
+    snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
+    snap["host"] = _host(6 * GiB)
+    b = gate.budget(snap, _COST, reserve=2 * GiB)
+    assert b["room"] == 3 and b["free_mb"] == 3523  # 6144 - 2621.4
+    assert b["available_mb"] == 10240  # the guest's own number still reported
+    assert b["why"] == (
+        "room for 3 more sessions: Windows has 6.0 GB available over its own "
+        "reserve of 2.6 GB, each ~1.0 GB (measured over 3 sessions)"
+    )
+
+
+def test_budget_keeps_the_guest_sum_when_the_guest_binds():
+    snap = {"level": "ok", "available": 4 * GiB, "total": 20 * GiB}
+    snap["host"] = _host(16 * GiB)
+    b = gate.budget(snap, _COST, reserve=2 * GiB)
+    assert b["room"] == 2 and b["free_mb"] == 2048
+    assert "Windows" not in b["why"]
+    assert "4.0 GB available − 2.0 GB reserve" in b["why"]
+
+
+def test_windows_with_no_headroom_leaves_no_room_while_still_ok():
+    # Windows at 3 GB is ok (it came down from above), the low line 2.56 GB;
+    # an agent warming with 1 GB still to come eats past it.
+    snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
+    snap["host"] = _host(3 * GiB)
+    b = gate.budget(snap, _COST, [None], reserve=2 * GiB)
+    assert b["room"] == 0 and b["to_come_mb"] == 1024
+    host_free = 3 * GiB - 0.08 * 32 * GiB - 1 * GiB
+    assert b["free_mb"] == round(host_free / 1024**2)
+    assert b["short_mb"] == 1024  # all of one session: nothing is free
+    assert b["why"].startswith("one more session needs ~1.0 GB; only 0.0 GB")
+    assert "Windows has 3.0 GB available over its own reserve" in b["why"]
+
+
+@pytest.mark.parametrize("host", [None, {}, {"available": GiB, "total": 0}])
+def test_no_host_reading_leaves_the_budget_as_it_was(host):
+    base = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
+    want = gate.budget(dict(base), _COST, reserve=2 * GiB)
+    got = gate.budget(dict(base, host=host), _COST, reserve=2 * GiB)
+    assert got == want and got["room"] == 8
+
+
 def test_the_cap_and_warmup_are_settings_the_env_beats(monkeypatch):
     _memory(monkeypatch)
     vals = {"max_live_agents": 5, "agent_warmup_mb": 500}

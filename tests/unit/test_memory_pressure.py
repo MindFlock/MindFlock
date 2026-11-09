@@ -77,6 +77,21 @@ def test_hysteresis_steps_down_only_past_the_recovery_line(machine):
     assert machine(3.5) == "low"  # past critical recovery, still under 15%
 
 
+def test_without_a_host_reading_the_level_is_the_guests(machine):
+    """Off WSL (or before the reader has a line) the snapshot still carries
+    the new keys: ``host`` None and ``guest_level`` the level itself."""
+    from backend import host_memory
+
+    host_memory._reset_for_tests()
+    machine(4.5)
+    snap = mp.snapshot()
+    assert snap["host"] is None
+    assert snap["guest_level"] == snap["level"] == "low"
+    machine(16)
+    snap = mp.snapshot()
+    assert snap["host"] is None and snap["guest_level"] == snap["level"] == "ok"
+
+
 def test_no_psi_file_is_just_one_signal_fewer(machine):
     assert machine(16, psi=False) == "ok"
     mp._reset_for_tests()

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The memory guard watches Windows too (WSL).** Inside WSL, MindFlock used
+  to see only its own VM, so Windows could run out and page your apps to disk
+  while the VM still read "plenty free". The server now reads Windows' own
+  available memory (one PowerShell loop, every 10 s) and the memory level is
+  the worse of the two: when Windows runs short, new agents wait, the launch
+  budget shrinks to what Windows can hold, and when it stays critical idle
+  agents go to sleep to give memory back. The Memory popover shows a
+  **Windows** line, and the pressure says when Windows is the cause.
+  `MINDFLOCK_HOST_MEMORY=0` turns it off.
+
 ### Changed
 
 - **The README's numbers are recomputed through October 2026, and corrected.**

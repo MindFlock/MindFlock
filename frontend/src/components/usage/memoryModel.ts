@@ -25,6 +25,12 @@ export interface MemorySystem {
   psi_some_avg10?: number | null;
   psi_full_avg10?: number | null;
   level?: string;
+  /** WSL only: Windows' own memory; `level` is the worse of it and the VM's. */
+  host_total_mb?: number | null;
+  host_available_mb?: number | null;
+  host_level?: string | null;
+  /** WSL only: the VM's own level (before Windows is folded in). */
+  guest_level?: string | null;
 }
 
 export interface MemorySessionRow {
@@ -91,6 +97,11 @@ export interface MachineMemory {
   swapTotalMb: number | null;
   swapUsedMb: number | null;
   level: MemoryLevel;
+  /** WSL only: the Windows host (absent elsewhere / from older servers). */
+  hostTotalMb?: number | null;
+  hostUsedMb?: number | null;
+  hostLevel?: MemoryLevel;
+  guestLevel?: MemoryLevel;
 }
 
 /** From GET /api/memory's `system`. Used = total − available. */
@@ -98,13 +109,22 @@ export function machineFromDetail(sys: MemorySystem | null | undefined): Machine
   const s = sys || {};
   const total = num(s.total_mb);
   const avail = num(s.available_mb);
-  return {
+  const out: MachineMemory = {
     totalMb: total && total > 0 ? total : null,
     usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
     swapTotalMb: num(s.swap_total_mb),
     swapUsedMb: num(s.swap_used_mb),
     level: asLevel(s.level),
   };
+  const hTotal = num(s.host_total_mb);
+  const hAvail = num(s.host_available_mb);
+  if (hTotal && hTotal > 0 && hAvail != null) {
+    out.hostTotalMb = hTotal;
+    out.hostUsedMb = Math.max(0, hTotal - hAvail);
+    out.hostLevel = asLevel(s.host_level);
+    if (s.guest_level != null) out.guestLevel = asLevel(s.guest_level);
+  }
+  return out;
 }
 
 /** From GET /api/system/memory (bytes) — the older server's fallback. */
@@ -162,6 +182,13 @@ export function levelWords(level: string | null | undefined): string {
   }
 }
 
+/** True when Windows alone (not the WSL VM) is what raised the level. */
+export function hostIsCause(m: MachineMemory): boolean {
+  if (m.hostLevel == null || m.hostLevel !== m.level) return false;
+  if (m.level !== "low" && m.level !== "critical") return false;
+  return m.guestLevel == null || m.guestLevel !== m.level;
+}
+
 /** The collapsed row ("Memory 9.8 / 19.5 GB") and its tooltip. */
 export function memoryRowText(m: MachineMemory): { head: string; title: string; share: number | null } {
   const pair = fmtUsedOfTotal(m.usedMb, m.totalMb);
@@ -170,7 +197,9 @@ export function memoryRowText(m: MachineMemory): { head: string; title: string; 
   let title = pair
     ? "This machine's memory: " + pair + " in use (" + Math.round((share || 0) * 100) + "%)"
     : "This machine's memory";
-  if (m.level === "low" || m.level === "critical") title += " — " + levelWords(m.level).toLowerCase();
+  if (m.level === "low" || m.level === "critical") {
+    title += " — " + (hostIsCause(m) ? "Windows is short of memory: " : "") + levelWords(m.level).toLowerCase();
+  }
   return { head, title: title + " — click for what holds it", share };
 }
 
@@ -224,7 +253,12 @@ export function memoryPopModel(
   if ((m.swapUsedMb || 0) > 0) {
     machine.push(["Swap", fmtMb(m.swapUsedMb || 0) + (m.swapTotalMb ? " of " + fmtMb(m.swapTotalMb) : "")]);
   }
-  machine.push(["Pressure", levelWords(m.level)]);
+  const host = fmtUsedOfTotal(m.hostUsedMb ?? null, m.hostTotalMb ?? null);
+  if (host) {
+    const pct = Math.round(((m.hostUsedMb || 0) / (m.hostTotalMb || 1)) * 100);
+    machine.push(["Windows", host + " (" + pct + "%)"]);
+  }
+  machine.push(["Pressure", (hostIsCause(m) ? "Windows: " : "") + levelWords(m.level)]);
 
   const sess = detail && Array.isArray(detail.sessions) ? detail.sessions.filter((r) => r && r.mb > 0) : [];
   const oth = detail && Array.isArray(detail.others) ? detail.others.filter((r) => r && r.mb > 0) : [];

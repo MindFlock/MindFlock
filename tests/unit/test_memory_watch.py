@@ -20,6 +20,9 @@ import pytest
 from backend.web.core import memory_watch as mw
 
 PAGE_KB = mw._PAGE_KB
+_REAL_SYSTEM = mw._system  # the ``fake`` fixture stubs it
+MiB = 1024**2
+GiB = 1024**3
 
 
 # --------------------------------------------------------------------------- #
@@ -456,6 +459,75 @@ def test_get_memory_shape(fake, monkeypatch, client):
     assert set(body["others"][0]) >= {"pid", "name", "cmd", "mb"}
     assert len(body["others"]) <= mw.OTHERS_TOP
     assert not os.path.exists(mw.history_path())  # on demand writes no line
+
+
+def _reading(host=None, level="ok"):
+    return {
+        "level": level,
+        "guest_level": "ok",
+        "available": 10 * GiB,
+        "total": 20 * GiB,
+        "available_pct": 50.0,
+        "swap_total": 0,
+        "swap_free": 0,
+        "psi": None,
+        "host": host,
+        "at": 0.0,
+    }
+
+
+def test_system_carries_windows_memory_in_mib(monkeypatch):
+    from backend import memory_pressure
+
+    host = {
+        "available": int(2.5 * GiB),
+        "total": 32 * GiB + 512 * 1024,  # floors to whole MiB
+        "available_pct": 7.8,
+        "level": "low",
+        "at": 0.0,
+    }
+    monkeypatch.setattr(
+        memory_pressure, "snapshot", lambda **kw: _reading(host, level="low")
+    )
+    sysm = _REAL_SYSTEM()
+    assert sysm["host_total_mb"] == 32768
+    assert sysm["host_available_mb"] == 2560
+    assert sysm["host_level"] == "low" and sysm["level"] == "low"
+    assert sysm["total_mb"] == 20480 and sysm["available_mb"] == 10240
+
+
+@pytest.mark.parametrize("host", [None, {}])
+def test_system_without_windows_reads_null_host_keys(monkeypatch, host):
+    """Null — not absent, not 0 — is what tells the UI there is no Windows
+    row to draw."""
+    from backend import memory_pressure
+
+    monkeypatch.setattr(memory_pressure, "snapshot", lambda **kw: _reading(host))
+    sysm = _REAL_SYSTEM()
+    for k in ("host_total_mb", "host_available_mb", "host_level"):
+        assert k in sysm and sysm[k] is None
+
+
+def test_get_memory_system_has_the_host_keys(fake, monkeypatch, client):
+    from backend import memory_pressure
+
+    monkeypatch.setattr(mw, "_system", _REAL_SYSTEM)
+    monkeypatch.setattr(mw, "_sessions", lambda srv: [])
+    monkeypatch.setattr(mw, "pane_pids", lambda: {})
+    host = {
+        "available": 1 * GiB,
+        "total": 16 * GiB,
+        "available_pct": 6.2,
+        "level": "critical",
+        "at": 0.0,
+    }
+    monkeypatch.setattr(
+        memory_pressure, "snapshot", lambda **kw: _reading(host, level="critical")
+    )
+    system = client.get("/api/memory").json()["system"]
+    assert system["level"] == "critical"
+    assert (system["host_total_mb"], system["host_available_mb"]) == (16384, 1024)
+    assert system["host_level"] == "critical"
 
 
 def test_get_memory_history(fake, client):

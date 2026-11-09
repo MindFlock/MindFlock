@@ -35,6 +35,13 @@ The available-share lines are settings (``general.memory_low_pct``, default
 says is available; ``0`` drops that signal, leaving the floor and PSI). The
 absolute floors and the PSI lines are fixed.
 
+Inside WSL the guest's numbers are only half the story: Windows can run out
+while the VM still reads "plenty available" (it cannot take memory back from
+the VM). When :mod:`backend.host_memory` is running (the web server starts
+it), the host's available physical memory is classified on its own lines
+(:func:`host_thresholds`, fixed) and the level is the WORSE of the two; the
+snapshot carries the host reading under ``"host"``.
+
 Stdlib only at import: the ticket pipeline (a separate process) imports it
 too, and reads the settings through the same lazy, never-raising path.
 ``MINDFLOCK_MEMORY_GUARD=0`` turns the guard off (level reads ``"unknown"``).
@@ -47,7 +54,16 @@ import threading
 import time
 from typing import Dict, Optional, Tuple
 
-__all__ = ["snapshot", "level", "is_low", "describe", "LEVELS", "thresholds"]
+__all__ = [
+    "snapshot",
+    "level",
+    "is_low",
+    "describe",
+    "LEVELS",
+    "thresholds",
+    "host_thresholds",
+    "host_low_line",
+]
 
 LEVELS = ("ok", "low", "critical")
 
@@ -71,6 +87,16 @@ _CRITICAL_FIXED = (1 * _GiB, 40.0, 15.0)
 _RECOVER_FROM_LOW_FIXED = (int(2.5 * _GiB), 10.0, 2.0)
 _RECOVER_FROM_CRITICAL_FIXED = (int(1.5 * _GiB), 30.0, 10.0)
 
+# The Windows host's lines (WSL only): (available share, available bytes).
+# Lower than the guest's: Windows keeps working at a few GB "available"
+# (standby cache counts), and below ~1 GB it pages apps out.
+_HOST_LOW = (0.08, int(2.5 * _GiB))
+_HOST_CRITICAL = (0.04, int(1.25 * _GiB))
+_HOST_RECOVER_FROM_LOW = (0.11, int(3.5 * _GiB))
+_HOST_RECOVER_FROM_CRITICAL = (0.06, 2 * _GiB)
+
+_RANK = {"ok": 0, "low": 1, "critical": 2}
+
 _SHARE_CACHE: Dict[str, object] = {"at": -1e18, "val": None}
 
 #: Readings are cached this long: callers (the create route, the revive
@@ -81,7 +107,7 @@ _MEMINFO = "/proc/meminfo"
 _PSI = "/proc/pressure/memory"
 
 _LOCK = threading.Lock()
-_STATE: Dict[str, object] = {"level": "ok", "at": 0.0, "snap": None}
+_STATE: Dict[str, object] = {"level": "ok", "host_level": "ok", "at": 0.0, "snap": None}
 
 
 def _enabled() -> bool:
@@ -241,6 +267,73 @@ def _classify(prev: str, share: float, avail: int, psi) -> str:
     return "ok"
 
 
+def host_thresholds() -> Dict[str, tuple]:
+    """The host's lines as ``(available share, available bytes)``: ``low`` /
+    ``critical`` (entry) and ``recover_low`` / ``recover_critical``."""
+    return {
+        "low": _HOST_LOW,
+        "critical": _HOST_CRITICAL,
+        "recover_low": _HOST_RECOVER_FROM_LOW,
+        "recover_critical": _HOST_RECOVER_FROM_CRITICAL,
+    }
+
+
+def host_low_line(total: float) -> float:
+    """Bytes the host must keep available to read ``ok``: the low line."""
+    share, floor = _HOST_LOW
+    return max(share * float(total), float(floor))
+
+
+def _classify_host(prev: str, share: float, avail: int) -> str:
+    """The host's level for these readings, given its level before them."""
+    th = host_thresholds()
+
+    def past(line) -> bool:
+        return share <= line[0] or avail <= line[1]
+
+    def clear(line) -> bool:
+        return share >= line[0] and avail >= line[1]
+
+    if past(th["critical"]):
+        return "critical"
+    if prev == "critical" and not clear(th["recover_critical"]):
+        return "critical"
+    if past(th["low"]):
+        return "low"
+    if prev in ("low", "critical") and not clear(th["recover_low"]):
+        return "low"
+    return "ok"
+
+
+def _host() -> Optional[dict]:
+    """The host reading with its level, or None (not WSL / not running /
+    stale). Updates the host's hysteresis state. Call under ``_LOCK``."""
+    try:
+        from backend import host_memory
+
+        r = host_memory.reading()
+    except Exception:  # noqa: BLE001 - advisory: no host reading
+        return None
+    if not r:
+        _STATE["host_level"] = "ok"
+        return None
+    total, avail = float(r["total"]), float(r["available"])
+    share = avail / total
+    lvl = _classify_host(str(_STATE.get("host_level") or "ok"), share, int(avail))
+    _STATE["host_level"] = lvl
+    return {
+        "available": int(avail),
+        "total": int(total),
+        "available_pct": round(share * 100.0, 1),
+        "level": lvl,
+        "at": r.get("at"),
+    }
+
+
+def _worst(a: str, b: str) -> str:
+    return a if _RANK.get(a, -1) >= _RANK.get(b, -1) else b
+
+
 def snapshot(*, fresh: bool = False) -> dict:
     """The current reading::
 
@@ -248,7 +341,11 @@ def snapshot(*, fresh: bool = False) -> dict:
          "available": bytes, "total": bytes, "available_pct": 0-100,
          "swap_total": bytes, "swap_free": bytes,
          "psi": {"some_avg10", "some_avg60", "full_avg10", "full_avg60"} | None,
-         "at": epoch}
+         "host": {"available", "total", "available_pct", "level", "at"} | None,
+         "guest_level": the guest's own level, "at": epoch}
+
+    ``level`` is the worse of the guest's and the host's (WSL only; ``host``
+    is None elsewhere).
 
     Cached for :data:`_CACHE_SECONDS` (``fresh`` skips the cache). Never
     raises; ``"unknown"`` (with no numbers) where nothing can be read."""
@@ -270,10 +367,14 @@ def snapshot(*, fresh: bool = False) -> dict:
             else:
                 psi = _read_psi()
                 share = mem["available"] / float(mem["total"])
-                lvl = _classify(str(_STATE["level"]), share, mem["available"], psi)
-                _STATE["level"] = lvl
+                guest = _classify(str(_STATE["level"]), share, mem["available"], psi)
+                _STATE["level"] = guest
+                host = _host()
+                lvl = _worst(guest, host["level"]) if host else guest
                 snap = {
                     "level": lvl,
+                    "guest_level": guest,
+                    "host": host,
                     "available": mem["available"],
                     "total": mem["total"],
                     "available_pct": round(share * 100.0, 1),
@@ -304,6 +405,14 @@ def describe(snap: Optional[dict] = None) -> str:
     lvl = snap.get("level")
     if lvl not in ("low", "critical"):
         return ""
+    host = snap.get("host") or {}
+    if host.get("level") == lvl and snap.get("guest_level", lvl) != lvl:
+        return "Windows memory is %s: %.1f GB free of %.1f GB (%d%%)" % (
+            "critically low" if lvl == "critical" else "low",
+            float(host.get("available") or 0) / _GiB,
+            float(host.get("total") or 0) / _GiB,
+            int(round(float(host.get("available_pct") or 0))),
+        )
     line = "memory is %s: %.1f GB free of %.1f GB (%d%%)" % (
         "critically low" if lvl == "critical" else "low",
         float(snap.get("available") or 0) / _GiB,
@@ -321,5 +430,5 @@ def describe(snap: Optional[dict] = None) -> str:
 
 def _reset_for_tests() -> None:
     with _LOCK:
-        _STATE.update({"level": "ok", "at": 0.0, "snap": None})
+        _STATE.update({"level": "ok", "host_level": "ok", "at": 0.0, "snap": None})
     _SHARE_CACHE.update({"at": -1e18, "val": None})
