@@ -257,6 +257,48 @@ PROVIDER_META: list[dict] = [
             ),
             _start_comment_field("story"),
             _claim_label_field("story"),
+            # EPICS (docs/epics.md): a whole epic as ONE lead session that
+            # works your stories in it — parallel where independent, stacked
+            # where one blocks another, one PR per story.
+            {
+                "key": "epic_states",
+                "label": "Epics in these states",
+                "type": "epic_state",
+                "secret": False,
+                "required": False,
+                "placeholder": "no epics (add a state to ingest epics)",
+                "hint": (
+                    "Optional: your epics in these epic states each get ONE lead "
+                    "session. It works the stories in the epic that are yours and "
+                    "not done — side by side where they don't depend on each other, "
+                    "one after another where a story blocks another — and opens a "
+                    "PR per story (stacked when they depend), so reviews stay small."
+                ),
+            },
+            {
+                "key": "epic_auto",
+                "label": "Start epics by themselves",
+                "type": "choice",
+                "secret": False,
+                "required": False,
+                "options": [
+                    {"value": "", "label": "Off — list them in Intake to start"},
+                    {
+                        "value": "on",
+                        "label": "On — start each one when it's in those states",
+                    },
+                ],
+                "hint": "Like auto-start states for tickets, for epics.",
+            },
+            {
+                "key": "epic_start_state",
+                "label": "Move epic to on start",
+                "type": "epic_state_one",
+                "secret": False,
+                "required": False,
+                "advanced": True,
+                "hint": "Optional: when an epic's lead starts, move the epic here (e.g. in progress).",
+            },
         ],
     },
     {

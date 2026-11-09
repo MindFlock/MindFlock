@@ -997,6 +997,11 @@ class TicketIngestionAddon(Addon):
                         log.ErrorLog.Printf("automation recheck failed: %v", err)
 
         self._recheck_task = asyncio.get_running_loop().create_task(_recheck())
+        # Epics (docs/epics.md): sources with "Start epics by themselves" on
+        # get a lead session per eligible epic. Idle otherwise.
+        from backend.web.core import epic_start as _epics
+
+        self._epics_task = asyncio.get_running_loop().create_task(_epics.run_loop())
 
     def _boot_reconcile(self) -> None:
         """At server start: a pipeline still running on an older engine build
@@ -1140,9 +1145,10 @@ class TicketIngestionAddon(Addon):
 
     # --- lifecycle -------------------------------------------------------- #
     async def on_shutdown(self, ctx: AppContext) -> None:
-        task = getattr(self, "_recheck_task", None)
-        if task is not None:
-            task.cancel()
+        for name in ("_recheck_task", "_epics_task"):
+            task = getattr(self, name, None)
+            if task is not None:
+                task.cancel()
         # Stop only the child WE own on shutdown — never an operator's
         # independently-started standalone pipeline (matches stop()'s own/external
         # split). The old code leaked the child on server exit.

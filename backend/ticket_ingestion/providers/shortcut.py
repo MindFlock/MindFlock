@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
 import aiohttp
 
@@ -547,6 +547,145 @@ class ShortcutProvider(TicketProvider):
                     }
                 )
         return out
+
+    # ----------------------------------------------------------------- #
+    # Epics (docs/epics.md): a whole epic ingested as ONE lead session that
+    # works the person's own stories in it — in parallel where they don't
+    # depend on each other, stacked where they do.
+    # ----------------------------------------------------------------- #
+    can_epics = True
+
+    async def _get_json(self, path: str, params: Optional[dict] = None):
+        url = f"{_SHORTCUT_API_BASE}{path}"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(url, params=params, headers=self._headers()) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut {path} returned HTTP {resp.status}: {text[:200]}"
+                    )
+                return await resp.json()
+
+    async def list_epic_states(self) -> list[dict]:
+        """The epic workflow's states (``GET /epic-workflow``) →
+        ``[{id, name, type}]`` — epics have their own workflow, apart from
+        stories' ("to do", "On Deck", "in progress", "done")."""
+        data = await self._get_json("/epic-workflow")
+        states = (data or {}).get("epic_states") if isinstance(data, dict) else None
+        out = []
+        for st in states or []:
+            if not isinstance(st, dict) or st.get("id") is None:
+                continue
+            out.append(
+                {
+                    "id": str(st["id"]),
+                    "name": str(st.get("name") or st["id"]),
+                    "type": str(st.get("type") or ""),
+                }
+            )
+        return out
+
+    async def list_epics(self, state_ids: list, mine: bool = True) -> list[dict]:
+        """The epics in any of ``state_ids`` (epic workflow state ids),
+        not archived, and — with ``mine`` — owned by this source's member →
+        ``[{id, name, url, state_id, owner_ids, stories_total}]``."""
+        want = {str(x) for x in state_ids or [] if str(x).strip()}
+        if not want:
+            return []
+        data = await self._get_json("/epics", {"includes_description": "false"})
+        out = []
+        me = str(self.cfg.member_id or "")
+        for e in data if isinstance(data, list) else []:
+            if not isinstance(e, dict) or e.get("archived"):
+                continue
+            if str(e.get("epic_state_id") or "") not in want:
+                continue
+            owners = [str(o) for o in e.get("owner_ids") or []]
+            if mine and (not me or me not in owners):
+                continue
+            out.append(
+                {
+                    "id": str(e.get("id")),
+                    "name": str(e.get("name") or ""),
+                    "url": str(e.get("app_url") or ""),
+                    "state_id": str(e.get("epic_state_id") or ""),
+                    "owner_ids": owners,
+                    "stories_total": int(
+                        ((e.get("stats") or {}).get("num_stories_total")) or 0
+                    ),
+                }
+            )
+        return out
+
+    async def epic_detail(self, epic_id: str) -> dict:
+        """One epic and its stories (``GET /epics/{id}`` + ``/stories``) →
+        ``{id, name, url, description, state_id, stories: [{id, slug, name,
+        url, state_id, state, state_type, owner_ids, mine, blocks: [ids],
+        blocked_by: [ids], relates: [ids]}]}`` — state names and types from
+        the story workflows; ``blocks``/``blocked_by`` from the stories'
+        "blocks" links (the serial order an epic's lead follows)."""
+        epic = await self._get_json(f"/epics/{int(epic_id)}")
+        stories = await self._get_json(f"/epics/{int(epic_id)}/stories")
+        try:
+            states = {s["id"]: s for s in await self.list_states()}
+        except Exception:  # noqa: BLE001 — names are a nicety
+            states = {}
+        me = str(self.cfg.member_id or "")
+        rows = []
+        for st in stories if isinstance(stories, list) else []:
+            if not isinstance(st, dict) or st.get("archived"):
+                continue
+            sid = str(st.get("id"))
+            state = states.get(str(st.get("workflow_state_id") or ""), {})
+            blocks, blocked_by, relates = [], [], []
+            for link in st.get("story_links") or []:
+                verb = str(link.get("verb") or "")
+                subj, obj = str(link.get("subject_id")), str(link.get("object_id"))
+                other = obj if subj == sid else subj
+                if verb == "blocks":
+                    (blocks if subj == sid else blocked_by).append(other)
+                elif verb == "duplicates":
+                    continue
+                else:
+                    relates.append(other)
+            owners = [str(o) for o in st.get("owner_ids") or []]
+            rows.append(
+                {
+                    "id": sid,
+                    "slug": self.make_slug(sid),
+                    "name": str(st.get("name") or ""),
+                    "url": str(st.get("app_url") or ""),
+                    "state_id": str(st.get("workflow_state_id") or ""),
+                    "state": str(state.get("label") or state.get("name") or ""),
+                    "state_type": str(state.get("type") or ""),
+                    "owner_ids": owners,
+                    "mine": bool(me) and me in owners,
+                    "blocks": blocks,
+                    "blocked_by": blocked_by,
+                    "relates": relates,
+                }
+            )
+        return {
+            "id": str(epic.get("id") or epic_id),
+            "name": str(epic.get("name") or ""),
+            "url": str(epic.get("app_url") or ""),
+            "description": str(epic.get("description") or ""),
+            "state_id": str(epic.get("epic_state_id") or ""),
+            "stories": rows,
+        }
+
+    async def set_epic_state(self, epic_id: str, state_id: str) -> None:
+        """Move an epic to an epic-workflow state (``PUT /epics/{id}``)."""
+        url = f"{_SHORTCUT_API_BASE}/epics/{int(epic_id)}"
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.put(
+                url, json={"epic_state_id": int(state_id)}, headers=self._headers()
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ProviderError(
+                        f"Shortcut /epics returned HTTP {resp.status}: {text[:200]}"
+                    )
 
     # ----------------------------------------------------------------- #
     # Writes (Intake → Tickets → Merge into…). See TicketProvider for the

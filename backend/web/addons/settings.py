@@ -1705,6 +1705,33 @@ class SettingsAddon(Addon):
                 )
             return JSONResponse({"ok": True, "states": states})
 
+        @router.post("/settings/ticketing/epic-states")
+        async def ticketing_epic_states(
+            request: Request, body: Optional[dict] = None
+        ) -> JSONResponse:
+            """The EPIC workflow's states (docs/epics.md), for the source
+            card's "Epics in these states" picker — same credentials rules as
+            the story states above. Providers without epics: ``{"states": []}``."""
+            from backend.ticket_ingestion.providers import (
+                ProviderError,
+                get_provider,
+            )
+
+            if await _stored_secret_refused(request, body, "api_token"):
+                return _web_auth.configure_refused()
+            cfg = _source_cfg_from_body(body or {})
+            try:
+                prov = get_provider(cfg)
+                fn = getattr(prov, "list_epic_states", None)
+                states = await fn() if fn is not None else []
+            except ProviderError as err:
+                return JSONResponse({"ok": False, "error": str(err), "states": []})
+            except Exception as err:  # noqa: BLE001
+                return JSONResponse(
+                    {"ok": False, "error": f"{type(err).__name__}: {err}", "states": []}
+                )
+            return JSONResponse({"ok": True, "states": states})
+
         # --- ticketing sources CRUD (multiple providers / same-provider dupes) --
         def _masked_sources() -> list:
             out = []

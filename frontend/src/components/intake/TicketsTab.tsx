@@ -71,6 +71,7 @@ import {
   stateName,
 } from "./vocab";
 import { useAutosave } from "./autosave";
+import { EpicsSection } from "./EpicsSection";
 import {
   backStep,
   beginSave,
@@ -1081,6 +1082,8 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
       {/* WORK, with each source's heading as its handle: Edit (or Fix) opens
           the source's settings under its heading. There is no card list
           below any more — "+ Add source" in the dialog head adds one. */}
+      {/* Epics (docs/epics.md): only when a source ingests them. */}
+      {stored.length > 0 && <EpicsSection />}
       {stored.length > 0 ? (
         <AssignedTickets
           sources={stored}
@@ -2376,8 +2379,47 @@ function TicketSourceEditor({
     () => onDirty("label", true)
   );
 
+  // Epics (docs/epics.md): the EPIC workflow's states, for the "Epics in
+  // these states" / "Move epic to on start" pickers — the same pickers as
+  // the story states, fed from the epic workflow.
+  const [epicStates, setEpicStates] = useState<TicketingWorkflowState[]>([]);
+  const loadEpicStates = async () => {
+    try {
+      const r = await api<{ ok?: boolean; states?: TicketingWorkflowState[] }>(
+        "/api/settings/ticketing/epic-states",
+        { json: testPayload() }
+      );
+      if (r?.ok && Array.isArray(r.states) && r.states.length) setEpicStates(r.states);
+    } catch {
+      /* the picker stays empty until a later try */
+    }
+  };
+  const hasEpicFields = !!meta?.fields?.some((f) => f.type === "epic_state" || f.type === "epic_state_one");
+  useEffect(() => {
+    if (hasEpicFields && stored?.ok && !epicStates.length) void loadEpicStates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source.id, hasEpicFields]);
+
   const renderField = (f: CatalogField) =>
-    f.type === "state" ? (
+    f.type === "epic_state" ? (
+      <StatePicker
+        key={f.key}
+        field={f}
+        source={source}
+        states={epicStates}
+        loadStates={loadEpicStates}
+        onChange={onChange}
+      />
+    ) : f.type === "epic_state_one" ? (
+      <StartStatePicker
+        key={f.key}
+        field={f}
+        source={source}
+        states={epicStates}
+        loadStates={loadEpicStates}
+        onChange={onChange}
+      />
+    ) : f.type === "state" ? (
       <StatePicker
         key={f.key}
         field={f}
