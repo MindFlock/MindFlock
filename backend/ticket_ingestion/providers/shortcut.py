@@ -37,6 +37,14 @@ _logger = logging.getLogger(__name__)
 _HTTP_TIMEOUT = HTTP_TIMEOUT
 _SHORTCUT_API_BASE = "https://api.app.shortcut.com/api/v3"
 
+# An epic's legacy ``state`` → its state type, for an ``epic_state_id`` the
+# epic workflow didn't name (list_epics).
+_LEGACY_EPIC_STATE_TYPE = {
+    "to do": "unstarted",
+    "in progress": "started",
+    "done": "done",
+}
+
 # Per-story hydration retry (429/5xx/network are usually transient; a silent
 # slim fallback loses the description the prompt is built from).
 _HYDRATE_ATTEMPTS = 3
@@ -585,20 +593,40 @@ class ShortcutProvider(TicketProvider):
             )
         return out
 
-    async def list_epics(self, state_ids: list, mine: bool = True) -> list[dict]:
-        """The epics in any of ``state_ids`` (epic workflow state ids),
-        not archived, and — with ``mine`` — owned by this source's member →
-        ``[{id, name, url, state_id, owner_ids, stories_total, labels}]``."""
-        want = {str(x) for x in state_ids or [] if str(x).strip()}
-        if not want:
-            return []
+    async def list_epics(
+        self, state_ids: Optional[list], mine: bool = True
+    ) -> list[dict]:
+        """The epics in any of ``state_ids`` (epic workflow state ids) — or,
+        with ``state_ids=None``, in every state that isn't a done-type one —
+        not archived, and with ``mine`` owned by this source's member →
+        ``[{id, name, url, state_id, state_type, owner_ids, stories_total,
+        labels}]``. ``state_type`` is the epic state's type from
+        ``/epic-workflow`` (unstarted / started / done; "" if unknown)."""
+        want = None
+        if state_ids is not None:
+            want = {str(x).strip() for x in state_ids if str(x).strip()}
+            if not want:
+                return []
+        try:
+            types = {s["id"]: s["type"] for s in await self.list_epic_states()}
+        except Exception:  # noqa: BLE001
+            if want is None:
+                raise  # can't tell which states are done: don't guess
+            types = {}  # a named-states read only loses state_type
         data = await self._get_json("/epics", {"includes_description": "false"})
         out = []
         me = str(self.cfg.member_id or "")
         for e in data if isinstance(data, list) else []:
             if not isinstance(e, dict) or e.get("archived"):
                 continue
-            if str(e.get("epic_state_id") or "") not in want:
+            state_id = str(e.get("epic_state_id") or "")
+            state_type = types.get(state_id) or _LEGACY_EPIC_STATE_TYPE.get(
+                str(e.get("state") or ""), ""
+            )
+            if want is not None:
+                if state_id not in want:
+                    continue
+            elif state_type == "done":
                 continue
             owners = [str(o) for o in e.get("owner_ids") or []]
             if mine and (not me or me not in owners):
@@ -608,7 +636,8 @@ class ShortcutProvider(TicketProvider):
                     "id": str(e.get("id")),
                     "name": str(e.get("name") or ""),
                     "url": str(e.get("app_url") or ""),
-                    "state_id": str(e.get("epic_state_id") or ""),
+                    "state_id": state_id,
+                    "state_type": state_type,
                     "owner_ids": owners,
                     "stories_total": int(
                         ((e.get("stats") or {}).get("num_stories_total")) or 0

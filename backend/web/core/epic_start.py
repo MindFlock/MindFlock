@@ -18,10 +18,11 @@ tickets". So an epic is never one big branch. It is a LEAD session that:
 * keeps the workers in step (the contract between their pieces, questions,
   changes to a shared interface) through the MindFlock mailbox.
 
-Ingested like tickets: a ticket source's ``epic_states`` (epic workflow states)
-picks the epics; ``epic_auto`` "on" starts them by themselves
-(:func:`run_loop`), otherwise Intake lists them (``GET /api/epics``) to start
-by hand (``POST /api/epics/start``). Only epics the source's member owns.
+Listed like assigned tickets: Intake → Epics (``GET /api/epics``) lists every
+not-done epic the source's member owns, on every source whose provider reads
+epics, each with a Start (``POST /api/epics/start``). A source's ``epic_states``
+(epic workflow states) are only the AUTO-start filter: with ``epic_auto`` on,
+an epic in one of them starts by itself (:func:`run_loop`).
 
 Two servers can read one config dir (an installed one beside a dev one), so an
 automatic start is claimed with an exclusive file first — one lead per epic.
@@ -62,15 +63,14 @@ def _server():
 
 
 def _sources() -> list:
-    """The ticket sources that ingest epics (``epic_states`` set, and a
-    provider that can read epics)."""
+    """The ticket sources that list epics: every source whose provider can
+    read them, ``epic_states`` set or not (those are only the auto-start
+    filter — :func:`_auto_states`)."""
     from backend.web.core import ticket_start as _ts
     from backend.ticket_ingestion.providers import get_provider
 
     out = []
     for src in _ts._load_config().ticketing_sources or []:
-        if not str(getattr(src, "epic_states", "") or "").strip():
-            continue
         try:
             provider = get_provider(src)
         except Exception:  # noqa: BLE001
@@ -78,6 +78,15 @@ def _sources() -> list:
         if getattr(provider, "can_epics", False):
             out.append((src, provider))
     return out
+
+
+def _auto_states(src) -> List[str]:
+    """The source's ``epic_states`` ids — the states whose epics auto-start."""
+    return [
+        x.strip()
+        for x in str(getattr(src, "epic_states", "") or "").split(",")
+        if x.strip()
+    ]
 
 
 def _source(source: str):
@@ -220,25 +229,47 @@ def build_lead_prompt(
 # --------------------------------------------------------------------------- #
 # Listing
 # --------------------------------------------------------------------------- #
-async def list_epics(force: bool = False) -> dict:
-    """``{"epics": [row], "errors": [..]}`` for Intake: each source's epics in
-    its ``epic_states`` that the person owns, with their own open stories
-    counted. Row: ``{source, source_label, id, title, name, url, state,
+async def list_epics(force: bool = False, auto_only: bool = False) -> dict:
+    """``{"epics": [row], "sources": [src], "errors": [..]}`` for Intake →
+    Epics: every not-done epic the person owns on each epics-capable source,
+    with their own open stories counted (the first :data:`MAX_DETAIL` per
+    source, auto-start-state epics first). Row: ``{source, source_label, id,
+    title, name, url, state, state_type, state_rank, in_states,
     stories_total, mine_open, has_session, auto, labels, eligible, startable,
-    reasons}`` — ``eligible``: it would start by itself (in the states, has
-    one of the source's Auto-start labels when any are set, not taken);
-    ``startable``: Start works (not taken, stories of yours left)."""
+    reasons}`` — ``in_states``: its state is one of the source's
+    ``epic_states``; ``eligible``: it would start by itself (in those states,
+    has one of the source's Auto-start labels when any are set, not taken,
+    stories of yours left); ``startable``: Start works (not taken, stories of
+    yours left). ``src``: ``{source, source_label, epic_states: [names],
+    auto}`` for every epics-capable source, epics or none.
+
+    ``auto_only`` (the auto-start pass): only the sources that can auto-start
+    an epic (``epic_auto`` on and ``epic_states`` set) — the others' epics are
+    never eligible, so reading them would only spend API calls. That partial
+    listing bypasses the cache both ways."""
     now = time.time()
     hit = _LIST_CACHE.get("all")
-    if hit and not force and now - hit[0] < LIST_TTL_S:
+    if hit and not force and not auto_only and now - hit[0] < LIST_TTL_S:
         return hit[1]
     rows: List[dict] = []
+    sources: List[dict] = []
     errors: List[dict] = []
     from backend.ticket_ingestion.providers.base import ingest_label_list
 
     for src, provider in _sources():
+        if auto_only and not (getattr(src, "epic_auto", False) and _auto_states(src)):
+            continue
         source = src.id or src.provider
-        states = [x for x in str(src.epic_states).split(",") if x.strip()]
+        source_label = str(getattr(src, "label", "") or provider.label)
+        auto = bool(getattr(src, "epic_auto", False))
+        states = _auto_states(src)
+        head = {
+            "source": source,
+            "source_label": source_label,
+            "epic_states": list(states),
+            "auto": auto,
+        }
+        sources.append(head)
         # The source's Auto-start labels gate epics exactly as they gate its
         # stories: with any set, an epic auto-starts only when it carries one
         # (case-insensitive). One without is still listed — with the reason —
@@ -246,13 +277,28 @@ async def list_epics(force: bool = False) -> dict:
         labels = ingest_label_list(src)
         wanted = {x.lower() for x in labels}
         try:
-            names = {s["id"]: s["name"] for s in await provider.list_epic_states()}
-            epics = await provider.list_epics(states, mine=True)
+            workflow = await provider.list_epic_states()
+            epics = await provider.list_epics(None, mine=True)
         except Exception as err:  # noqa: BLE001
             errors.append({"source": source, "error": str(err)[:300]})
             continue
+        names = {s["id"]: s["name"] for s in workflow}
+        kinds = {s["id"]: s.get("type") or "" for s in workflow}
+        rank = {s["id"]: i for i, s in enumerate(workflow)}
+        head["epic_states"] = [names.get(x, x) for x in states]
+        auto_ids = set(states)
+        # Auto-start-state epics first: they get the story reads (and the
+        # list keeps the workflow's order after that).
+        epics = sorted(
+            epics,
+            key=lambda e: (
+                e["state_id"] not in auto_ids,
+                rank.get(e["state_id"], len(rank)),
+            ),
+        )
         for i, e in enumerate(epics):
             title = title_for(provider, e["id"])
+            in_states = e["state_id"] in auto_ids
             mine_open = None
             if i < MAX_DETAIL:
                 try:
@@ -262,6 +308,8 @@ async def list_epics(force: bool = False) -> dict:
                     mine_open = None
             has = _has_session(title)
             reasons = []
+            if not in_states:
+                reasons.append("not in an auto-start state")
             if has:
                 reasons.append("a lead session is already working it")
             if mine_open == 0:
@@ -277,27 +325,33 @@ async def list_epics(force: bool = False) -> dict:
             rows.append(
                 {
                     "source": source,
-                    "source_label": str(getattr(src, "label", "") or provider.label),
+                    "source_label": source_label,
                     "id": e["id"],
                     "title": title,
                     "name": e["name"],
                     "url": e["url"],
                     "state": names.get(e["state_id"], e["state_id"]),
+                    "state_type": str(
+                        kinds.get(e["state_id"]) or e.get("state_type") or ""
+                    ),
+                    "state_rank": rank.get(e["state_id"], len(rank)),
+                    "in_states": in_states,
                     "stories_total": e["stories_total"],
                     "mine_open": mine_open,
                     "has_session": has,
-                    "auto": bool(getattr(src, "epic_auto", False)),
+                    "auto": auto,
                     "labels": epic_labels,
                     # Would start by itself (states + labels + not taken).
                     "eligible": not reasons,
                     # A person's Start: anything not taken with stories left
-                    # (a label miss only stops the AUTO start).
+                    # (a state or label miss only stops the AUTO start).
                     "startable": not has and mine_open != 0,
                     "reasons": reasons,
                 }
             )
-    out = {"epics": rows, "errors": errors}
-    _LIST_CACHE["all"] = (now, out)
+    out = {"epics": rows, "sources": sources, "errors": errors}
+    if not auto_only:
+        _LIST_CACHE["all"] = (now, out)
     return out
 
 
@@ -457,7 +511,7 @@ async def auto_start_once() -> List[str]:
     """Start a lead for every eligible epic on a source with ``epic_auto``
     on → the titles started."""
     started = []
-    data = await list_epics(force=True)
+    data = await list_epics(force=True, auto_only=True)
     for row in data["epics"]:
         if not (row["auto"] and row["eligible"]):
             continue
