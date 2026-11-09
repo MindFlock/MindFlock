@@ -79,6 +79,10 @@ dev = [
 voice = [
     "faster-whisper",
     "piper-tts",
+    # The built-in assistant voice (backend/web/core/speech_kokoro.py, backend
+    # id "kokoro"): Kokoro-82M on onnxruntime; its model files are a separate
+    # download (Settings → Voice installs them).
+    "kokoro-onnx>=0.6.1",
 ]
 # Engine deps — needed to run sessions (the session manager / provisioned mode).
 #   uv sync --group engine

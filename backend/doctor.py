@@ -1736,17 +1736,38 @@ def check_db_drivers() -> Optional[Check]:
 def check_voice_packages() -> Optional[Check]:
     """Informational: the local speech models' packages Settings → Voice
     installed, kept across engine updates (``~/.mindflock/voice/packages.json``).
-    ``None`` — no row — until they were installed."""
+    ``None`` — no row — until they were installed. When ``kokoro-onnx`` (the
+    voice assistant's built-in voice, :mod:`backend.web.core.speech_kokoro`)
+    is among them but cannot speak — its model files missing, or the package
+    gone — a ``warn`` with the one-click install as the fix."""
     from backend.web.core import self_update
 
     packages = self_update.recorded_voice_packages()
     if not packages:
         return None
+    detail = ", ".join(packages) + " — reinstalled automatically after updates"
+    if "kokoro-onnx" in packages:
+        try:
+            from backend.web.core import speech_kokoro
+
+            why = speech_kokoro.unavailable_reason()
+        except Exception as err:  # noqa: BLE001 — a probe, never a failure
+            why = str(err) or type(err).__name__
+        if why:
+            return Check(
+                "voice-packages",
+                "Local speech models",
+                "warn",
+                "%s; the built-in voice cannot speak: %s" % (detail, why),
+                "Settings → Voice → Assistant → Install the built-in voice "
+                "(Kokoro, ~120 MB)",
+                group=GROUP_OPTIONAL,
+            )
     return Check(
         "voice-packages",
         "Local speech models",
         "info",
-        ", ".join(packages) + " — reinstalled automatically after updates",
+        detail,
         group=GROUP_OPTIONAL,
     )
 

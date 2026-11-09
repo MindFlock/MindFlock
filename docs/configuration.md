@@ -671,10 +671,14 @@ server merges on save so multiple processes can share it.
   transcript's `base.en` unless `voice.stt_stream_model` names one),
   `moonshine/` (the Moonshine `tiny-streaming` model, ~200 MB, that types
   the live words in English once installed — Settings → Voice → *Install
-  fast recognition*) and
-  `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
-  Face on first use or by the one-click installs (Settings → Voice, `POST
-  /api/voice/install-local`), never at server start. Override with
+  fast recognition*),
+  `piper/<voice>.onnx` + `.onnx.json` (~60 MB each) and `models/kokoro/`
+  (the built-in Kokoro voice: `kokoro-v1.0.int8.onnx` + `voices-v1.0.bin`,
+  ~120 MB, from the kokoro-onnx GitHub release, each checked against its
+  pinned size and sha256 — `backend/web/core/speech_kokoro.py`). Whisper and
+  piper download from Hugging Face on first use, Kokoro only through the
+  one-click installs (Settings → Voice, `POST /api/voice/install-local`);
+  nothing downloads at server start. Override with
   `$MINDFLOCK_VOICE_DIR`. See
   [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone).
 - `accounts/<id>/` — an `account`-kind auth profile's isolated CLI config dir
@@ -811,7 +815,8 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_PROVIDER_BIN_<NAME>` | — | Per-provider binary override (provider name uppercased, non-alphanumerics → `_`; e.g. `MINDFLOCK_PROVIDER_BIN_CLAUDE=/opt/claude`). Wins over Settings → `coding_cli.binary_paths` and the provider TOML's `binary_path` |
 | `MINDFLOCK_ACTIVITY_MARKER_DIR` | `~/.mindflock-assistant/.activity-markers` | Per-session `{state, ts}` markers the CLI activity hooks write (working/idle/clarify detection — Claude, Codex, and opt-in TOML providers; see [providers.md](providers.md)). Read by the hook **at fire-time from the firing CLI's environment**, not by the server at install time — so a sandboxed CLI (redirected `HOME`) writes into its own sandbox instead of poisoning the shared hooks file's path for cohabiting sessions. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
 | `MINDFLOCK_VOICE_FLAG_DIR` | `~/.mindflock-assistant/.voice` | Per-session voice files: `<session>.on` (a phone is in a voice conversation with that session — written by `POST /api/instances/{title}/voice`, the row's `voice`) and the one-shot `<session>.next` (armed by `POST …/send {say: true}`, consumed **at fire time** by the installed `UserPromptSubmit` hook from the firing CLI's environment, exactly like the marker dir above, which prints the voice instruction for Claude Code to inject when the file is under 120 s old). Through the home guard, so a test can never flip a real session's flag. Does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
-| `MINDFLOCK_VOICE_DIR` | `~/.mindflock/voice` | Where the optional local speech backend keeps its downloaded models (`whisper/`, `piper/`) when `voice.stt_backend` / `tts_backend` is `local` (the built-in `system` engine needs no files) |
+| `MINDFLOCK_VOICE_DIR` | `~/.mindflock/voice` | Where the optional local speech backend keeps its downloaded models (`whisper/`, `piper/`, `models/kokoro/`) when `voice.stt_backend` / `tts_backend` is `local` or `kokoro`, or the voice assistant speaks (the built-in `system` engine needs no files) |
+| `MINDFLOCK_KOKORO_THREADS` | `2` | ONNX Runtime threads for one synthesis of the built-in Kokoro voice (`backend/web/core/speech_kokoro.py`; capped at the CPU count). Two measured fastest on an 8-core laptop under load; all cores was slower |
 | `MINDFLOCK_SPEECH_PROBE` | unset | `1` lets the built-in speech engine (`core/speech_system.py`) probe the OS **under pytest**, where it otherwise spawns nothing (the suite reads `GET /api/voice` and the doctor everywhere); the real smoke test sets it. Ignored outside pytest |
 | `MINDFLOCK_SPEECH_WARM` | unset | `1` lets the built-in Windows/WSL engine keep its **warm** PowerShell under pytest (one long-lived `powershell.exe` per server with `System.Speech` loaded, fed one request per line — a call takes ~0.05–0.2 s instead of the ~1 s start-up; it exits after 10 idle minutes and is restarted after any failure). Outside pytest it is always on, with the one-shot script as the fallback when it cannot start. Ignored outside pytest |
 | `MINDFLOCK_THREAD_MARKER_DIR` | `~/.mindflock-assistant/.thread-markers` | Per-window conversation-id markers so sessions sharing a directory each resume their *own* thread. Note: does **not** follow `MINDFLOCK_ASSISTANT_DIR` |
@@ -1370,7 +1375,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     (`backend/web/core/speech.py`): `""` (default) = the first ready one,
     which is the built-in engine wherever it exists; `"system"` = this
     computer's own speech engine (above); `"openai"` = any OpenAI-compatible
-    host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
+    host (OpenAI, Groq, a self-hosted server); `"kokoro"` (voice only) = the
+    built-in natural voice, Kokoro-82M on this machine (below, under
+    `assistant_voice`); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
     low). With `stt_backend = "local"` the recognition models (`stt_model` for a
@@ -1417,13 +1424,14 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     dictation is the only Windows engine that reads a recorded clip offline,
     so `local` is the accurate one there. **One-click install**: Settings →
     Voice → *Install local models* (`POST /api/voice/install-local`, owner
-    only) installs `faster-whisper` and `piper-tts` into the interpreter the
+    only) installs `faster-whisper`, `piper-tts` and `kokoro-onnx` into the interpreter the
     server runs (`uv pip install --python <it>`, or its own pip without
     `uv`), downloads the recognition models (`stt_model`, default
     `small.en` — the English-only twin of `small`; another language's
     `small` downloads on its first phrase — and `stt_stream_model`, default
     `base.en`) into `<voice dir>/whisper/` and the voice (`tts_voice`, default
-    `en_US-lessac-medium`) into `<voice dir>/piper/`, then sets
+    `en_US-lessac-medium`) into `<voice dir>/piper/` and the built-in Kokoro
+    voice's model into `<voice dir>/models/kokoro/`, then sets
     `stt_backend` to `"local"` (the voice backend is left alone). The
     manual equivalent, from a source checkout, is `uv sync --group voice`
     (the models then download on first use). The install **survives a
@@ -1434,6 +1442,38 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     or `GET /api/voice` (the Settings screen shows that reinstall as a running
     install). Settings → Voice offers the install right where recognition is
     reported not ready, under *Try it*, as well as under *Recognition*.
+  - `assistant_model` / `assistant_talk` / `assistant_voice` — the
+    **voice assistant** (talking to MindFlock itself: "MindFlock, …"):
+    the model that maps a request to the app's actions (blank =
+    `claude-haiku-5-5`); how much it says aloud — `"quiet"` (only questions,
+    confirmations and errors are spoken; the rest is captions), `"brief"`
+    (blank, the default: also its answers; what it just did is a chime and a
+    caption, never words) or `"chatty"` (also says what it did); and its
+    voice, a Kokoro voice id (blank = `af_heart`; the English ones:
+    `af_heart`, `af_bella`, `af_nicole`, `am_michael`, `am_fenrir`,
+    `am_puck`, `bf_emma`, `bm_george` …, listed by `GET
+    /api/voice/voices?engine=kokoro`). The assistant speaks through `POST
+    /api/voice/speak` with `"as": "assistant"`: the **built-in Kokoro
+    voice** (Kokoro-82M, int8 ONNX, ~120 MB on disk and ~270 MB in memory
+    once loaded; about 1 s to load and a real-time factor of ~0.3–0.4 on a
+    laptop CPU with 2 ONNX threads — `$MINDFLOCK_KOKORO_THREADS` changes
+    that), whichever `tts_backend` is configured; until Kokoro is installed
+    (Settings → Voice → *Assistant* → *Install the built-in voice*, `POST
+    /api/voice/install-local {"what": "kokoro"}`, or the local-models
+    install, which includes it) it falls back to the normal voice. Kokoro is
+    also a regular voice backend (`tts_backend = "kokoro"`, voice `tts_voice`
+    when it names a Kokoro voice, else `assistant_voice`) and the first local
+    fallback when the configured voice is down, ahead of piper. Like the
+    other local models it is refused while memory is low and unloaded after
+    30 idle minutes; `GET /api/voice?assistant=1` loads it ahead of the first
+    reply. Its package, `kokoro-onnx`, rides the same release-survival record
+    as the local models. **Licenses**: `kokoro-onnx` is MIT and the Kokoro-82M
+    weights are Apache-2.0; text becomes phonemes through `phonemizer`
+    (GPL-3.0-or-later) and espeak-ng (GPL-3.0, its library and data bundled
+    in the `espeakng-loader` wheels for Linux, macOS and Windows, so no
+    system package is needed) — the same espeak-ng piper uses. None of them
+    ships inside MindFlock: they are installed on request into the
+    server's environment. This machine's, never synced (like the backends).
   - `stt_url` / `tts_url` — base URL of a compatible host (blank =
     `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
     the model and voice names it wants (blank = `gpt-transcribe`,
@@ -1529,9 +1569,11 @@ And the `voice` group, with every field at its default left out the same way
   "stt_api_key": "gsk_…",                // pragma: allowlist secret — an example; masked on read as "•••set"
   "stt_model": "whisper-large-v3-turbo", // the host's model name; a whisper size ("small") for "local"
   "tts": "server",
-  "tts_backend": "local",                // piper on this machine
+  "tts_backend": "local",                // piper on this machine; "kokoro" = the built-in natural voice
   "tts_voice": "en_US-lessac-medium",    // the piper voice; a host's voice name ("alloy") for "openai"
   "approve_dialogs": false,              // dialogs are read out, never answered by voice
+  "assistant_talk": "quiet",             // the voice assistant: "quiet" | "brief" (blank) | "chatty"
+  "assistant_voice": "bm_george",        // its Kokoro voice; blank = af_heart
   "words": {"send": ["send it"], "wake": "jarvis"}   // the rest stay ours
 }
 ```

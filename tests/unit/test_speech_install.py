@@ -65,7 +65,9 @@ class _Spawner:
         key = (
             "packages"
             if "install" in argv
-            else next((k for k in ("whisper", "moonshine") if k in argv), "piper")
+            else next(
+                (k for k in ("whisper", "moonshine", "kokoro") if k in argv), "piper"
+            )
         )
         got = self.script.get(key, (["ok " + key], 0))
         if isinstance(got, BaseException):
@@ -107,6 +109,7 @@ class TestArgv:
             sys.executable,
             "faster-whisper",
             "piper-tts",
+            "kokoro-onnx>=0.6.1",
         ]
 
     def test_uv_beside_the_interpreter(self, monkeypatch):
@@ -125,6 +128,7 @@ class TestArgv:
             "install",
             "faster-whisper",
             "piper-tts",
+            "kokoro-onnx>=0.6.1",
         ]
 
     def test_never_spawns_under_pytest(self):
@@ -152,7 +156,7 @@ class TestInstall:
         st = _run()
         assert st["state"] == "done" and st["step"] == "done" and st["error"] == ""
         assert st["started"] and st["finished"] >= st["started"]
-        install, whisper, stream, piper = spawn.calls
+        install, whisper, stream, piper, kokoro = spawn.calls
         assert install[:5] == [
             "/usr/bin/uv",
             "pip",
@@ -165,6 +169,8 @@ class TestInstall:
         assert whisper[3:] == ["whisper", "small.en"]
         assert stream[3:] == ["whisper", "base.en"]  # the live transcript's
         assert piper[3:] == ["piper", "en_US-lessac-medium"]
+        # The built-in voice's model files ride the same install.
+        assert kokoro[3:] == ["kokoro", "v1.0"]
         S.invalidate()
         voice = S.load_settings().voice
         assert voice.stt_backend == "local"
@@ -196,6 +202,7 @@ class TestInstall:
         assert [c[3:] for c in spawn.calls[1:]] == [
             ["whisper", "base.en"],
             ["piper", "en_US-lessac-medium"],
+            ["kokoro", "v1.0"],
         ]
 
     def test_another_backends_names_fall_back_to_the_defaults(self, spawn):
@@ -383,9 +390,23 @@ class TestSurvivesUpdates:
         assert self_update.recorded_voice_packages() == list(si.PACKAGES)
         # Folded into the engine's install line, like the database drivers.
         argv = self_update.install_command("uv-tool", "a" * 40)
-        assert argv[6:10] == ["--with", "faster-whisper", "--with", "piper-tts"]
+        assert argv[6:12] == [
+            "--with",
+            "faster-whisper",
+            "--with",
+            "piper-tts",
+            "--with",
+            "kokoro-onnx",
+        ]
         assert self_update.driver_carry_commands("pipx") == [
-            ["pipx", "inject", "mindflock", "faster-whisper", "piper-tts"]
+            [
+                "pipx",
+                "inject",
+                "mindflock",
+                "faster-whisper",
+                "piper-tts",
+                "kokoro-onnx",
+            ]
         ]
 
     def test_a_failed_packages_step_records_nothing(self, spawn):
@@ -557,7 +578,12 @@ class TestMoonshine:
         si.wait(5)
         assert si.status()["state"] == "done"
         (argv,) = spawn.calls
-        assert argv[-3:] == ["faster-whisper", "piper-tts", "moonshine-voice>=0.1.6"]
+        assert argv[-4:] == [
+            "faster-whisper",
+            "piper-tts",
+            "kokoro-onnx>=0.6.1",
+            "moonshine-voice>=0.1.6",
+        ]
 
     def test_nothing_to_heal_while_every_recorded_runtime_imports(
         self, spawn, monkeypatch
