@@ -35,10 +35,12 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 ``$MINDFLOCK_VOICE_DIR``):
 
 * ``whisper/`` — faster-whisper's ``download_root``: the CTranslate2 models,
-  run as int8 on the CPU. A phrase sent whole uses ``small`` unless
-  ``voice.stt_model`` names another size (``base``, ``medium`` …; a name
-  that is not a faster-whisper size, like the ``whisper-1`` a host wants,
-  reads as ``small``); the live transcript uses the much faster
+  run as int8 on the CPU. A phrase sent whole uses ``small`` — its
+  English-only twin ``small.en`` for English (``lang`` empty or ``en*``:
+  :data:`WHISPER_MODEL_EN`) — unless ``voice.stt_model`` names a size
+  (``base``, ``medium`` …, kept as named in every language; a name that is
+  not a faster-whisper size, like the ``whisper-1`` a host wants, reads as
+  unset); the live transcript uses the much faster
   ``voice.stt_stream_model`` (:func:`stream_whisper_model`: ``base.en`` for
   English, ``base`` otherwise), and at the phrase's end the accurate pass
   re-decodes the whole phrase with ``stt_model`` again unless
@@ -152,6 +154,16 @@ OPENAI_STT_MODEL = "gpt-transcribe"
 OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 OPENAI_TTS_VOICE = "alloy"
 WHISPER_MODEL = "small"
+#: The one-shot and accurate-pass model for ENGLISH while ``voice.stt_model``
+#: (and ``voice.stt_final``) name no size: the English-only twin of
+#: :data:`WHISPER_MODEL`, the same size and cost. ``tests/bench/
+#: stt_context_bench.py`` (2026-11-09, the accurate pass with the dictation
+#: context): WER 5.96 % against 6.97 % on LibriSpeech, 7.54 against 8.32 %
+#: under 12 dB SNR noise, 2.35 against 5.03 % on piper coding dictation, a
+#: paired p50 24 ms faster. Until it is on disk the server keeps
+#: :data:`WHISPER_MODEL` and fetches it in the background
+#: (:func:`english_default_model`).
+WHISPER_MODEL_EN = "small.en"
 #: The live transcript's model (``voice.stt_stream_model`` unset): ``base``
 #: decodes ~5x faster than ``small`` on a CPU at a small accuracy cost, and
 #: the English-only build is the better ``base`` for English. Measured
@@ -817,6 +829,77 @@ def _bias(model, hints: str, prompt: str, hotwords: bool = True) -> dict:
     return kw
 
 
+#: How much of the dictation context (``POST /api/voice/stream``'s
+#: ``context``: the message dictated before this phrase) the accurate pass
+#: takes as its ``initial_prompt``, in characters, from its end: ~70 tokens,
+#: the sentence or two this phrase continues. With the hints' ~100 tokens of
+#: ``hotwords`` it stays well inside Whisper's 224-token prompt slot
+#: (faster-whisper's ``get_prompt`` keeps the hotwords and the prompt side by
+#: side, each cut at 223); :func:`_prompt_room` keeps the decoder's token
+#: cap beside them. ``tests/bench/stt_context_bench.py`` (2026-11-09, 60
+#: LibriSpeech clips in order, each prompted with the text before it): WER on
+#: ``small`` 7.42 → 6.97 % clean and 9.45 → 8.32 % at 12 dB SNR, 0 copies of
+#: the context into a short reply, and no slower (paired p50 −3 ms).
+CONTEXT_CHARS = 300
+#: Whisper's decoder positions: prompt + generated tokens (faster-whisper
+#: refuses a ``max_new_tokens`` that does not fit beside the prompt).
+WHISPER_MAX_LENGTH = 448
+#: The prompt's fixed tokens besides the text: ``<|startofprev|>``, the
+#: start sequence (``<|startoftranscript|>``, the language, the task) and a
+#: timestamp token — rounded up.
+_PROMPT_OVERHEAD = 6
+_CONTROL_CHARS = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]"
+)
+
+
+def dictation_context(raw, limit: int = CONTEXT_CHARS) -> str:
+    """The dictation context a stream's accurate pass is prompted with, from
+    whatever the client sent: a ``str`` only (anything else → ``""``), its
+    control and invisible characters dropped, its whitespace collapsed, and
+    at most ``limit`` characters from its END (the words this phrase
+    follows), cut at a word boundary so the prompt never opens on half a
+    word (a single word longer than ``limit`` is cut as is). Pure."""
+    if not isinstance(raw, str) or limit <= 0:
+        return ""
+    text = " ".join(_CONTROL_CHARS.sub(" ", raw).split())
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    if text[-limit - 1] != " ":  # the cut fell inside a word: drop that word
+        space = tail.find(" ")
+        if space != -1:
+            tail = tail[space + 1 :]
+    return tail.strip()
+
+
+def _prompt_tokens(model, text: str) -> int:
+    """How many tokens faster-whisper's ``get_prompt`` spends on ``text``
+    (``hotwords`` or ``initial_prompt``; each is cut at half of
+    :data:`WHISPER_MAX_LENGTH`): exact through the model's tokenizer, else a
+    generous two characters a token."""
+    if not text:
+        return 0
+    try:
+        count = len(
+            model.hf_tokenizer.encode(" " + text.strip(), add_special_tokens=False).ids
+        )
+    except Exception:  # noqa: BLE001 — a fake or an old version: estimate
+        count = (len(text) + 1) // 2
+    return min(count, WHISPER_MAX_LENGTH // 2 - 1)
+
+
+def _prompt_room(model, hotwords: str, prompt: str) -> int:
+    """The ``max_new_tokens`` that still fits beside a prompt of
+    ``hotwords`` and ``prompt`` (at least 1)."""
+    used = (
+        _PROMPT_OVERHEAD
+        + _prompt_tokens(model, hotwords)
+        + _prompt_tokens(model, prompt)
+    )
+    return max(1, WHISPER_MAX_LENGTH - used)
+
+
 class Backend:
     """One speech engine of one kind. ``ready()`` is cheap and offline; the
     work methods raise :class:`SpeechError` with a sentence for the UI."""
@@ -898,10 +981,14 @@ class Backend:
         decoder towards, for a backend that can."""
         raise SpeechError("%s does not stream" % self.label)
 
-    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
+    def final_transcriber(
+        self, lang: str = "", hints: str = "", context: str = ""
+    ) -> Optional[Callable]:
         """The ``accurate(audio) -> text`` a stream runs over the whole
         phrase at its end (``core.speech_stream``), or ``None``: no accurate
-        pass, the fast words stand. ``hints`` as above."""
+        pass, the fast words stand. ``hints`` as above; ``context``: the
+        text already dictated before this phrase (:func:`dictation_context`),
+        the decoder's prompt for a backend that can take one."""
         return None
 
 
@@ -1064,11 +1151,87 @@ WHISPER_SIZES = frozenset(
 _PIPER_NAME = re.compile(r"^[a-z]{2,3}_[A-Z]{2}-[A-Za-z0-9_]+-(x_low|low|medium|high)$")
 
 
-def whisper_model(raw: str = "") -> str:
-    """The faster-whisper model for ``raw`` (``voice.stt_model``): a size
-    name or a Hugging Face ``org/repo`` id, else :data:`WHISPER_MODEL`."""
+def _named_size(raw: str) -> bool:
+    """Whether ``raw`` names a faster-whisper model (a size or an
+    ``org/repo`` id) — the person's pick, kept as is in every language."""
     name = (raw or "").strip()
-    return name if name in WHISPER_SIZES or "/" in name else WHISPER_MODEL
+    return name in WHISPER_SIZES or "/" in name
+
+
+def _english(lang: str) -> bool:
+    """``lang`` is English or unsaid (the English models' languages)."""
+    return whisper_language(lang) in (None, "en")
+
+
+def whisper_model(raw: str = "", lang: str = "") -> str:
+    """The faster-whisper model for ``raw`` (``voice.stt_model``) in
+    ``lang``: a size name or a Hugging Face ``org/repo`` id as named, else
+    :data:`WHISPER_MODEL_EN` for English (``lang`` empty or ``en*``) and
+    :data:`WHISPER_MODEL` for any other language. Pure: what the install
+    downloads; ``LocalSTT`` runs :data:`WHISPER_MODEL` until the English
+    twin is on disk (:func:`english_default_model`)."""
+    if _named_size(raw):
+        return raw.strip()
+    return WHISPER_MODEL_EN if _english(lang) else WHISPER_MODEL
+
+
+def whisper_on_disk(name: str) -> bool:
+    """Whether faster-whisper ``name`` is downloaded into
+    ``voice_dir()/whisper`` (the Hugging Face cache layout
+    ``models--<org>--faster-whisper-<name>/snapshots/<rev>/model.bin``). A
+    glob, no import; never raises."""
+    try:
+        root = voice_dir() / "whisper"
+        pattern = "models--*--faster-whisper-%s/snapshots/*/model.bin" % name
+        return any(root.glob(pattern))
+    except Exception:  # noqa: BLE001 — unreadable: not there
+        return False
+
+
+#: How long after a failed background fetch of :data:`WHISPER_MODEL_EN`
+#: (offline, a full disk) the next stream open may try again.
+FETCH_RETRY_SECONDS = 600.0
+_FETCH_LOCK = threading.Lock()
+_FETCH: Dict[str, float] = {}  # name → monotonic time its fetch started
+
+
+def english_default_model(fetch: bool = False) -> str:
+    """The English model while ``voice.stt_model`` names no size:
+    :data:`WHISPER_MODEL_EN` once it is on disk — or when
+    :data:`WHISPER_MODEL` is not either (a fresh machine: it downloads on
+    first use, or the install fetched it) — else :data:`WHISPER_MODEL`,
+    which an install from before the twin has. ``fetch`` (a warm, a stream
+    or a clip — real use, never a status read) also starts the twin's
+    download in the background then (:func:`fetch_whisper_model`, outside
+    the model lock: a load under it would stall every pass for the
+    download); the next stream after it lands takes it. Never blocks."""
+    if whisper_on_disk(WHISPER_MODEL_EN) or not whisper_on_disk(WHISPER_MODEL):
+        return WHISPER_MODEL_EN
+    if fetch:
+        _fetch_in_background(WHISPER_MODEL_EN)
+    return WHISPER_MODEL
+
+
+def _fetch_in_background(name: str) -> None:
+    """Download ``name`` on a thread, once at a time, and not again within
+    :data:`FETCH_RETRY_SECONDS` of the last try (a failure is logged)."""
+    now = time.monotonic()
+    with _FETCH_LOCK:
+        started = _FETCH.get(name)
+        if started is not None and now - started < FETCH_RETRY_SECONDS:
+            return
+        _FETCH[name] = now
+
+    def run() -> None:
+        try:
+            fetch_whisper_model(name)
+            _logger.info("voice: faster-whisper %s downloaded", name)
+        except Exception as err:  # noqa: BLE001 — offline, disk: stay on small
+            _logger.warning(
+                "voice: could not download faster-whisper %s: %s", name, err
+            )
+
+    _spawn(run, "whisper-fetch")
 
 
 def stream_whisper_model(raw: str = "", lang: str = "") -> str:
@@ -1128,17 +1291,17 @@ def is_stt_key(key: str) -> bool:
 FINAL_OFF = "off"
 
 
-def final_whisper_model(raw: str = "", stt_model: str = "") -> str:
+def final_whisper_model(raw: str = "", stt_model: str = "", lang: str = "") -> str:
     """The accurate pass's faster-whisper model for ``raw``
-    (``voice.stt_final``): ``""`` for :data:`FINAL_OFF`, ``raw`` when it is
-    a size or ``org/repo`` id, else the one-shot model
-    (:func:`whisper_model` of ``stt_model``)."""
+    (``voice.stt_final``) in ``lang``: ``""`` for :data:`FINAL_OFF`, ``raw``
+    when it is a size or ``org/repo`` id, else the one-shot model
+    (:func:`whisper_model` of ``stt_model`` in ``lang``). Pure."""
     name = (raw or "").strip()
     if name.lower() == FINAL_OFF:
         return ""
-    if name in WHISPER_SIZES or "/" in name:
+    if _named_size(name):
         return name
-    return whisper_model(stt_model)
+    return whisper_model(stt_model, lang)
 
 
 def piper_voice(raw: str = "") -> str:
@@ -1313,6 +1476,10 @@ FINAL_PAD_SECONDS = 20.0
 FINAL_TOKENS = 20
 FINAL_TOKENS_PER_S = 10
 FINAL_TOKENS_MAX = 220
+#: The accurate pass's beam: 1 is greedy. ``tests/bench/stt_context_bench.py``
+#: (2026-11-09): beam 5 cut ``small``'s WER by about a point but took the
+#: pass from ~1.0 s to ~1.9–2.7 s p50 — past the 1.5 s cap the clients wait.
+FINAL_BEAM = 1
 #: A fast pass decodes greedily, once: faster-whisper's temperature
 #: fallback (5 samples at each of 5 temperatures) takes seconds — never
 #: worth it to a pass the next chunk replaces — and its tokens are capped
@@ -1457,8 +1624,15 @@ class LocalSTT(Backend):
     label = "faster-whisper on this computer"
     streams = True
 
-    def _model_name(self) -> str:
-        return whisper_model(_voice().stt_model)
+    def _model_name(self, lang: str = "", fetch: bool = False) -> str:
+        """The one-shot model in ``lang`` (:func:`whisper_model`; for
+        English with no size set, :func:`english_default_model`: the
+        English twin once it is on disk, its download started when
+        ``fetch``)."""
+        raw = _voice().stt_model
+        if not _named_size(raw) and _english(lang):
+            return english_default_model(fetch)
+        return whisper_model(raw, lang)
 
     def stream_model_name(self, lang: str = "") -> str:
         """The live transcript's WHISPER model for ``lang``
@@ -1484,12 +1658,17 @@ class LocalSTT(Backend):
             return "Moonshine"
         return "Whisper " + self.stream_model_name(lang)
 
-    def final_model_name(self) -> str:
-        """The accurate pass's model (:func:`final_whisper_model`; ``""``:
-        off). ``voice.stt_final`` is read with a default, so this works on a
+    def final_model_name(self, lang: str = "", fetch: bool = False) -> str:
+        """The accurate pass's model in ``lang`` (:func:`final_whisper_model`;
+        ``""``: off) — with no size set, the one-shot model
+        (:meth:`_model_name`), so English runs ONE model for both.
+        ``voice.stt_final`` is read with a default, so this works on a
         settings model without the field."""
         v = _voice()
-        return final_whisper_model(getattr(v, "stt_final", ""), v.stt_model)
+        raw = getattr(v, "stt_final", "")
+        if not final_whisper_model(raw, v.stt_model, lang):
+            return ""
+        return raw.strip() if _named_size(raw) else self._model_name(lang, fetch)
 
     def warm_keys(self) -> List[str]:
         """What :meth:`warm` loads: the one-shot model, the streaming one
@@ -1516,10 +1695,11 @@ class LocalSTT(Backend):
         """Never idle-unloaded while ``local`` recognition is configured and
         a client listens: the :meth:`warm_keys`, the wake check's model
         (:meth:`wake_keys`) and the streaming model of any other language."""
+        other = {self.stream_model_name("xx"), self.final_model_name("xx")}
         return sorted(
             set(self.warm_keys())
             | set(self.wake_keys())
-            | {"whisper:" + self.stream_model_name("xx")}
+            | {"whisper:" + n for n in other if n}
         )
 
     def ready(self) -> Tuple[bool, str]:
@@ -1542,7 +1722,12 @@ class LocalSTT(Backend):
         accurate pass's thread budget (:func:`whisper_threads`)."""
         try:
             fast = {self.stream_model_name(), self.stream_model_name("xx")}
-            slow = {self._model_name(), self.final_model_name()}
+            slow = {
+                self._model_name(),
+                self._model_name("xx"),
+                self.final_model_name(),
+                self.final_model_name("xx"),
+            }
         except Exception:  # noqa: BLE001 — unreadable settings: the big budget
             return "final"
         return "fast" if name in fast and name not in slow else "final"
@@ -1602,7 +1787,7 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 5}
         if prompt:
             kw["initial_prompt"] = prompt
-        name = self._model_name()
+        name = self._model_name(lang, fetch=True)
         return self._clip(self._model(name), audio, mime, kw, name)
 
     def wake_transcribe(
@@ -1722,20 +1907,30 @@ class LocalSTT(Backend):
         run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
-    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
+    def final_transcriber(
+        self, lang: str = "", hints: str = "", context: str = ""
+    ) -> Optional[Callable]:
         """The accurate pass at a stream's end: the whole phrase (float32)
         into :meth:`final_model_name`, greedy, once (temperature 0), its
-        tokens capped (:func:`final_tokens`), no conditioning, the VAD, and
-        ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
-        on a faster-whisper too old for them: :func:`_hotwords_supported`) —
-        the vocabulary, never the fast words (those may be the wrong ones) →
-        its text. ``None`` when ``voice.stt_final`` is ``off``. ``lane`` as
-        in :meth:`stream_transcriber`."""
-        name = self.final_model_name()
+        tokens capped (:func:`final_tokens`, and to what the prompt leaves:
+        :func:`_prompt_room`), no conditioning, the VAD, ``hints``
+        (:func:`recognition_hints`) as the ``hotwords`` (the prompt on a
+        faster-whisper too old for them: :func:`_hotwords_supported`) — the
+        vocabulary, never the fast words (those may be the wrong ones) — and
+        ``context`` (the message dictated before this phrase, sanitized by
+        :func:`dictation_context`) as the ``initial_prompt``: the sentence
+        this phrase continues, which settles the words the audio alone
+        leaves open (:data:`CONTEXT_CHARS`) → its text. ``None`` when
+        ``voice.stt_final`` is ``off``. ``lane`` as in
+        :meth:`stream_transcriber`. Every accurate pass of the stream — the
+        early one and the one at ``/end`` — runs this one callable, so all
+        of them carry the context."""
+        name = self.final_model_name(lang, fetch=True)
         if not name:
             return None
         language = whisper_language(lang)
         hints = " ".join(str(hints or "").split())
+        prompt = dictation_context(context)
 
         def run(audio) -> str:
             from backend.web.core import speech_stream as _stream
@@ -1743,17 +1938,22 @@ class LocalSTT(Backend):
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
-            kw = _bias(model, hints, "")
+            kw = _bias(model, hints, prompt)
             if _takes(model, "temperature"):
                 kw["temperature"] = 0.0
             if _takes(model, "max_new_tokens"):
-                kw["max_new_tokens"] = final_tokens(len(samples) / 16000.0)
+                kw["max_new_tokens"] = min(
+                    final_tokens(len(samples) / 16000.0),
+                    _prompt_room(
+                        model, kw.get("hotwords", ""), kw.get("initial_prompt", "")
+                    ),
+                )
 
             def decode() -> List[str]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
-                    beam_size=1,
+                    beam_size=FINAL_BEAM,
                     condition_on_previous_text=False,
                     vad_filter=True,
                     **kw,
@@ -1779,7 +1979,13 @@ class LocalSTT(Backend):
         when ``prime`` is set, run one short silent pass through each one
         this call loaded (CTranslate2 allocates its workspaces on the first
         call, another second or two). ``"loaded"`` when this call loaded
-        any, ``"already"`` when all were resident."""
+        any, ``"already"`` when all were resident. An install from before
+        the English twin starts its download here (in the background:
+        :func:`english_default_model`) and warms ``small`` meanwhile."""
+        try:
+            self._model_name(fetch=True)
+        except Exception:  # noqa: BLE001 — unreadable settings: warm what we can
+            pass
         fresh = False
         for key in self.load_keys():
             name = key.split(":", 1)[1]

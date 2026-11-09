@@ -53,7 +53,11 @@ beside the window — at most :data:`PHRASE_MAX_SECONDS`, the last of it
 beyond that — and :meth:`Stream.finish` decodes all of it once more with the
 accurate model: ``final`` is the text the client replaces its typed phrase
 with (``same`` when it only differs from the fast words in case, spacing or
-punctuation). The accurate pass is skipped for a phrase with less than
+punctuation). The callable is built per stream with the message's
+dictation context baked in (``POST /api/voice/stream``'s ``context``, the
+``initial_prompt``: ``LocalSTT.final_transcriber``), so every accurate pass
+here — the early one and the fresh one at the end — decodes the phrase as
+the continuation of what was dictated before it. The accurate pass is skipped for a phrase with less than
 :data:`FINAL_MIN_SECONDS` of speech and for one longer than the buffer (the
 final would not cover what was typed); one that fails or takes longer than
 :data:`FINAL_TIMEOUT_S` leaves the fast text standing.

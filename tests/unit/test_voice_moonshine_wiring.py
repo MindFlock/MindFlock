@@ -143,11 +143,18 @@ class TestKeys:
         assert stt.stream_engine() == "moonshine"
         assert stt.stream_key() == KEY
         assert stt.stream_label() == "Moonshine"
-        assert stt.warm_keys() == sorted([KEY, "whisper:small"])
+        assert stt.warm_keys() == sorted([KEY, "whisper:small.en"])
         # The wake check still runs whisper's English streaming model.
         assert stt.wake_keys() == ["whisper:base.en"]
+        # Another language's models too: its stream's base, its small.
         assert stt.resident_keys() == sorted(
-            [KEY, "whisper:small", "whisper:base.en", "whisper:base"]
+            [
+                KEY,
+                "whisper:small.en",
+                "whisper:base.en",
+                "whisper:base",
+                "whisper:small",
+            ]
         )
 
     def test_without_moonshine_the_keys_are_todays(self, moon):
@@ -156,12 +163,13 @@ class TestKeys:
         stt = speech.LocalSTT()
         assert stt.stream_key() == "whisper:base.en"
         assert stt.stream_label() == "Whisper base.en"
-        assert stt.warm_keys() == ["whisper:base.en", "whisper:small"]
+        assert stt.warm_keys() == ["whisper:base.en", "whisper:small.en"]
         assert stt.wake_keys() == []
         assert stt.resident_keys() == [
             "whisper:base",
             "whisper:base.en",
             "whisper:small",
+            "whisper:small.en",
         ]
 
     def test_an_explicit_whisper_stream_keeps_whisper_keys(self, moon):
@@ -178,8 +186,8 @@ class TestKeys:
         _set(stt_backend="local")
         assert speech.warm("stt") == "loaded"
         assert moon.loads == 1
-        assert whisper == ["small"]
-        assert speech.loaded() == sorted([KEY, "whisper:small"])
+        assert whisper == ["small.en"]
+        assert speech.loaded() == sorted([KEY, "whisper:small.en"])
         assert speech.stt_loaded() is True
         assert speech.warm("stt") == "already"
         assert moon.loads == 1
@@ -193,14 +201,14 @@ class TestKeys:
         monkeypatch.setattr(sm, "engine", broken)
         _set(stt_backend="local")
         assert speech.warm("stt") == "loaded"
-        assert speech.loaded() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:small.en"]
 
     def test_a_listening_warm_also_loads_the_wake_model(self, moon, whisper):
         _set(stt_backend="local")
         speech.listen("standby-page")
         assert speech._warm_due("stt") is True
         speech.warm("stt")
-        assert set(speech.loaded()) == {KEY, "whisper:small", "whisper:base.en"}
+        assert set(speech.loaded()) == {KEY, "whisper:small.en", "whisper:base.en"}
         assert speech._warm_due("stt") is False
 
     def test_shedding_moonshine_forgets_the_stt_warm_not_the_tts_one(

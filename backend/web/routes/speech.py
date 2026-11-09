@@ -975,12 +975,23 @@ def voice_wake_recent() -> JSONResponse:
 @router.post("/api/voice/stream")
 def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONResponse:
     """Open a streaming recognition (``core.speech_stream``):
-    ``{"lang": "en-US", "client": optional page id}`` → ``{"id", "ready":
-    true, "hints": n, "loading": bool, "engine": "moonshine"|"whisper"}``
-    (``loading``: local recognition was not in memory and is loading now —
-    the first words wait for it; ``n`` characters of vocabulary hints the
-    accurate pass is biased towards: the voice words, the live session
-    titles, the MindFlock vocabulary — see :func:`_hints`; ``engine``: the
+    ``{"lang": "en-US", "client": optional page id, "context": optional
+    text}`` → ``{"id", "ready": true, "hints": n, "context": m, "loading":
+    bool, "engine": "moonshine"|"whisper"}`` (``context``: the text already
+    dictated in this message before this phrase — the client sends it when
+    a message is spoken as several phrases split at pauses; the accurate
+    pass takes it as whisper's ``initial_prompt``, so each phrase is decoded
+    as the continuation of its sentence rather than alone. Sanitized by
+    ``core.speech.dictation_context``: a string only, control characters
+    dropped, whitespace collapsed, the last
+    ``core.speech.CONTEXT_CHARS`` (300) characters cut at a word boundary;
+    ``m`` is how many characters of it were used, 0 without one. It is a
+    prompt, never text: the final is still only what whisper hears in this
+    phrase's audio; ``loading``: local recognition was not in memory and is
+    loading now — the first words wait for it; ``n`` characters of
+    vocabulary hints the accurate pass is biased towards: the voice words,
+    the live session titles, the MindFlock vocabulary — see :func:`_hints`;
+    ``engine``: the
     live words come from Moonshine tiny-streaming (English, installed,
     ``voice.stt_stream_model`` ``""`` or ``moonshine``:
     ``core.speech_moonshine`` — it hears the control words, the whisper
@@ -1014,7 +1025,13 @@ def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONR
         _speech.warm_in_background("stt")
     hints = _hints()
     client = _client_key(request, body)
-    accurate = backend.final_transcriber(lang, hints)
+    context = _speech.dictation_context(body.get("context"))
+    # Only a phrase with context passes it: a backend (or a test's fake)
+    # without the parameter keeps working, and no context is today's call.
+    if context:
+        accurate = backend.final_transcriber(lang, hints, context=context)
+    else:
+        accurate = backend.final_transcriber(lang, hints)
     engine = _stream_engine(backend, lang)
     sid: Optional[str] = None
     if engine == _speech.ENGINE_MOONSHINE:
@@ -1040,6 +1057,7 @@ def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONR
             "id": sid,
             "ready": True,
             "hints": len(hints),
+            "context": len(context),
             "loading": loading,
             "engine": engine,
         }
