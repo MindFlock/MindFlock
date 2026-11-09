@@ -985,6 +985,16 @@ async def lifespan(app: FastAPI):
     # the ticks' own pool. Off under pytest (ENGINE is the real state there).
     if _memory_watch.enabled():
         _register_task(_memory_watch.run_loop(sys.modules[__name__]))
+    # Windows' own memory (backend.host_memory): inside WSL, one PowerShell
+    # loop feeds memory_pressure so the gate and the shield see a short host,
+    # not just the VM. A no-op elsewhere; off under pytest.
+    if not _restart._under_pytest():
+        try:
+            from backend import host_memory as _host_memory
+
+            _host_memory.start()
+        except Exception:  # noqa: BLE001 - advisory: the guest reading stands
+            pass
     # The all-agents memory ceiling (providers.agent_limits.FLEET_SLICE): put
     # its limits on now, before any agent launches, rather than at the first
     # launch. Linux with a user systemd only; idempotent. Off under pytest.

@@ -748,6 +748,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_AUTO_LAUNCH_SPACING` | `20` | Seconds between two automatic launches the launch gate lets through (its queue drains one at a time). `0` = no spacing |
 | `MINDFLOCK_LAUNCH_QUEUE_MAX` | `32` | Launches that may wait in the launch gate's queue; past it a new automatic start is refused (`memory_queue_full`). `0` = no limit |
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
+| `MINDFLOCK_HOST_MEMORY` | on (WSL only) | `0` stops reading Windows' own memory from inside WSL ([session-engine.md](session-engine.md#memory-guard)); the memory guard then sees only the WSL VM |
 | `MINDFLOCK_SHED_IDLE` | unset | `0` stops the memory shield putting idle agents to sleep when memory stays critical (`general.agent_memory.shed_idle`) |
 | `MINDFLOCK_VOICELAB_UNIT` | `voicelab-backend.service` | The systemd user unit the memory shield stops when memory turns critical (Voice Lab's backend); `0` = never stop one |
 | `MINDFLOCK_AGENT_SCOPE` | unset | `0` launches agents without their memory-limited systemd scope (`general.agent_memory`) |
@@ -1131,7 +1132,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   idle minutes an agent gets while it does before it is put to sleep (unset =
   5; `0` = never sleep for memory). The memory sleep applies even with
   `sleep_idle_minutes` 0, and each pass that sleeps any sends one notice.
-  Per device, never synced; re-read within 30 s.
+  Per device, never synced; re-read within 30 s. Inside WSL these lines are
+  the VM's only: Windows' own lines (low at 8 % / 2.5 GB, critical at 4 % /
+  1.25 GB, `MINDFLOCK_HOST_MEMORY`) are fixed and not affected by them.
 - **Launch gate** (`general.max_live_agents`, `general.agent_warmup_mb`; JSON /
   `PUT /api/settings`): the most live agents that automatic starts bring this
   machine to (unset = one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap), and

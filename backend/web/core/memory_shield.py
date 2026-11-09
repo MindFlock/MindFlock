@@ -181,7 +181,10 @@ def shed_due(state: dict, snap: dict, now: float) -> Tuple[bool, str]:
 
 def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
     """MB to free to bring available memory back over the ``low`` line
-    (``max(low share of RAM, absolute floor)``), 0 when already over."""
+    (``max(low share of RAM, absolute floor)``), 0 when already over. Inside
+    WSL with a host reading, also the host's shortfall under its own low
+    line — memory an agent frees in the guest goes back to Windows (free page
+    reporting), so the bigger of the two is what to free."""
     total = float(snap.get("total") or 0)
     avail = float(snap.get("available") or 0)
     if low_line_bytes is None:
@@ -190,7 +193,12 @@ def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
             low_line_bytes = max(float(th[0]) * total, float(th[1]))
         except Exception:  # noqa: BLE001
             low_line_bytes = 0.0
-    return max(0, int(round((float(low_line_bytes) - avail) / _MiB)))
+    need = float(low_line_bytes) - avail
+    host = snap.get("host") or {}
+    if host.get("total"):
+        host_line = memory_pressure.host_low_line(float(host["total"]))
+        need = max(need, host_line - float(host.get("available") or 0))
+    return max(0, int(round(need / _MiB)))
 
 
 def _never(row: dict) -> str:

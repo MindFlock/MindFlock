@@ -432,6 +432,12 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `system.memory_changed` on each level change and, while low, unloads the
   idle speech models; background ticks shed on `server._memory_low()`. See
   [session-engine.md](session-engine.md#memory-guard).
+- **Windows host memory** (`backend/host_memory.py`, WSL only) — stdlib only:
+  a daemon thread reads ONE long-lived `powershell.exe` that prints Windows'
+  available/total physical memory every 10 s. Only the web server's lifespan
+  starts it (never the ticket pipeline or pytest); `memory_pressure.snapshot()`
+  folds the reading in, so the guard's level is the worse of the WSL VM's and
+  Windows'. `MINDFLOCK_HOST_MEMORY=0` turns it off.
 - **Tick pool + loop watchdog** — the always-on ticks run on
   `server._BG_POOL` (`_in_bg_pool`, 6 threads), never on the default executor
   the request handlers' `asyncio.to_thread` uses; `web/core/loop_watchdog.py`

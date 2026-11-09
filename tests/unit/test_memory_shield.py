@@ -339,6 +339,36 @@ def test_need_is_what_brings_it_back_over_the_low_line():
     assert shield.shed_need_mb(_snap(available=5 * GiB), 3 * GiB) == 0
 
 
+def _host(available, total=32 * GiB, level="ok"):
+    """A WSL host reading as ``memory_pressure.snapshot()["host"]`` carries
+    it (the low line of a 32 GB Windows is 8%: ~2.56 GB)."""
+    return {
+        "available": available,
+        "total": total,
+        "available_pct": round(available * 100.0 / total, 1),
+        "level": level,
+        "at": 0.0,
+    }
+
+
+def test_need_is_the_bigger_of_the_guest_and_the_host_shortfall():
+    # Guest 1.2 GB under a 3 GB line (1843 MB) beats Windows' 0.56 GB.
+    snap = _snap("critical", int(1.2 * GiB), host=_host(2 * GiB, level="low"))
+    assert shield.shed_need_mb(snap, 3 * GiB) == 1843
+    # Both over their lines: nothing to free.
+    snap = _snap(available=5 * GiB, host=_host(8 * GiB))
+    assert shield.shed_need_mb(snap, 3 * GiB) == 0
+    # The guest over its (explicit) line still sizes by Windows' shortfall.
+    snap = _snap(available=5 * GiB, host=_host(1 * GiB, level="critical"))
+    assert shield.shed_need_mb(snap, 3 * GiB) == round((0.08 * 32 - 1) * 1024)
+
+
+def test_no_host_or_a_hostless_reading_is_the_guest_need_alone():
+    for host in (None, {}, {"available": 0, "total": 0}):
+        snap = _snap("critical", int(1.2 * GiB), host=host)
+        assert shield.shed_need_mb(snap, 3 * GiB) == 1843
+
+
 # --------------------------------------------------------------------------- #
 # the shed: which
 # --------------------------------------------------------------------------- #
@@ -453,6 +483,27 @@ def test_a_critical_minute_puts_the_needed_idle_agents_to_sleep(fake_pass):
     # Spaced: the next pass right after does nothing.
     assert shield.tick(srv, snap, t0 + 70, sleeper=fake_pass.sleeper)["shed"] == []
     assert shield.status()["last_shed"] == ["a", "b"]
+
+
+def test_a_critical_windows_alone_sheds_its_shortfall(fake_pass, monkeypatch):
+    # The VM has 10 GB free (guest ok); Windows has 1 GB of 32 (critical).
+    _memory(
+        monkeypatch,
+        level="critical",
+        available=10 * GiB,
+        guest_level="ok",
+        host=_host(1 * GiB, level="critical"),
+    )
+    snap = memory_pressure.snapshot()
+    srv = SimpleNamespace()
+    assert shield.tick(srv, snap, 5000.0, sleeper=fake_pass.sleeper)["shed"] == []
+    out = shield.tick(srv, snap, 5061.0, sleeper=fake_pass.sleeper)
+    # Windows needs ~1.56 GB back over its 2.56 GB line → a (1200) + b (900).
+    assert out["shed"] == ["a", "b"] == fake_pass.slept
+    assert out["why"] == "memory has been critical for 61s"
+    assert shield.status()["last_decision"] == (
+        "memory has been critical for 61s: put 2 to sleep"
+    )
 
 
 def test_shed_idle_off_sheds_nothing(fake_pass, monkeypatch):
@@ -667,6 +718,24 @@ def test_the_capacity_route_and_the_memory_status(monkeypatch):
     mem = c.get("/api/system/memory").json()
     assert mem["capacity"]["room"] == 7
     assert mem["gate"]["room"] == 7
+
+
+def test_the_capacity_route_names_windows_when_it_binds(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from backend.web import server
+
+    _memory(monkeypatch, available=10 * GiB, host=_host(6 * GiB))
+    _sized({"a": 1000, "b": 1000, "c": 1000})
+    body = TestClient(server.app).get("/api/memory/capacity").json()
+    # VM: 10 - 3 = 7 GB; Windows: 6 - 2.56 = 3.44 GB → 3 sessions of 1000 MB.
+    assert body["room"] == 3 and body["free_mb"] == 3523
+    assert body["available_mb"] == 10240 and body["reserve_mb"] == 3072
+    assert body["why"].startswith(
+        "room for 3 more sessions: Windows has 6.0 GB available over its own "
+        "reserve of 2.6 GB"
+    )
+    assert body["hint"].startswith("room for 3 more sessions now")
 
 
 def test_unmeasured_memory_has_no_room_limit():

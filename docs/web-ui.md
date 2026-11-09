@@ -824,6 +824,13 @@ servers / other), and **Outside MindFlock**, the biggest processes in no
 session's tree (name, a short command line, MB; the full command is in the tooltip;
 the MindFlock server names itself). Sessions and outsiders share one bar
 scale, so another app's 4 GB python shows up as the biggest bar.
+Inside WSL (`host_*` set in `GET /api/memory`) the machine block adds a
+**Windows** line — Windows' own used / total (pct %) — under the VM's numbers,
+and when Windows' level equals the overall level and that level is *low* or
+*critical*, **Pressure** reads *Windows: …* and the row's tooltip says
+*Windows is short of memory: …* — only when Windows alone is the cause
+(`guest_level`, the VM's own level, reads better), the same rule as the
+backend's `message`.
 An older server without `/api/memory` still gets the row, from
 `GET /api/system/memory`, and its popover shows only the machine line. Customize
 hides it like any bar; the phone page has no usage line, so it has no memory

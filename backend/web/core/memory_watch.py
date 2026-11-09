@@ -640,6 +640,7 @@ def _system() -> dict:
         return {"level": "unknown"}
     mib = 1024 * 1024
     psi = s.get("psi") or {}
+    host = s.get("host") or None
     total, swap_total = s.get("total"), s.get("swap_total")
     return {
         "total_mb": int(total // mib) if total else None,
@@ -655,6 +656,12 @@ def _system() -> dict:
         "psi_some_avg10": psi.get("some_avg10"),
         "psi_full_avg10": psi.get("full_avg10"),
         "level": s.get("level") or "unknown",
+        # WSL only (None elsewhere): Windows' own memory and level — the
+        # level above is the worse of this and the guest's.
+        "host_total_mb": int(host["total"] // mib) if host else None,
+        "host_available_mb": int(host["available"] // mib) if host else None,
+        "host_level": host.get("level") if host else None,
+        "guest_level": s.get("guest_level") if host else None,
     }
 
 

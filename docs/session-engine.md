@@ -703,6 +703,34 @@ entry one (share + 5 points / 2.5 GB / some 10 / full 2 to leave `low`; share +
 3 points / 1.5 GB / some 30 / full 10 to leave `critical` — 20 % and 10 % at
 the defaults), so a box hovering at the line doesn't flap. A reading is cached for 2 s, and the level is per process: the ticket
 pipeline keeps its own, so it and the server can briefly disagree near a line.
+
+**Windows under WSL.** A WSL2 guest sees only its own VM: Windows can be
+paging its own apps out while `/proc/meminfo` still reads plenty, because the
+VM has grown into everything `.wslconfig`'s `memory=` allows and Windows
+cannot take memory back from it. Inside WSL the web server starts
+`backend/host_memory.py`: ONE long-lived `powershell.exe` printing Windows'
+available physical memory (`Win32_OperatingSystem.FreePhysicalMemory`, free +
+standby) every 10 s, read by a daemon thread. The host has its own lines —
+low at ≤ 8 % or ≤ 2.5 GB, critical at ≤ 4 % or ≤ 1.25 GB, leaving low at 11 %
+and 3.5 GB, critical at 6 % and 2 GB — and the level is the **worse** of the
+guest's and the host's, so everything below (spawns waiting, the launch gate's
+budget, the [memory shield](#memory-shedding-before-it-bricks) shedding idle agents) acts on a
+short Windows too. The shield frees the bigger of the two shortfalls (memory
+an agent gives back in the guest returns to Windows by free page reporting);
+the launch budget is capped by Windows' headroom over its own low line. The
+snapshot carries `host` and `guest_level`; refusals say *Windows memory is
+low* when Windows is the cause. A reading older than 45 s is ignored (never a
+gate); the loop exits when its pipe breaks and restarts with a backoff that
+doubles from 15 s to at most 300 s. If no `powershell.exe` is found the reader
+stops for the life of the process. `MINDFLOCK_HOST_MEMORY=0` turns it off; the
+ticket pipeline and the tests never start it, so the pipeline's level is
+always the guest's alone — while Windows is short it can read `ok` where the
+server reads `low`, for as long as the shortage lasts, not just near a line.
+Each server process runs its own loop: two servers on one state dir (`:8765`
+and `:9000`) mean two resident `powershell.exe`. The loop only notices its
+pipe is gone on its next write, so after a hard kill (`SIGKILL`) of the server
+it lingers up to one more interval (~10 s).
+
 While the level is `low` or `critical`:
 
 - **Agent spawns wait** — `POST /api/instances` with `spawned: true` (the
@@ -815,7 +843,8 @@ Voice Lab's F5 voice (4.1 GB + 1 GB swap) on 19.5 GB of WSL. The **memory
 shield** (`core/memory_shield.py`, called by the server's memory watch every
 10 s) acts:
 
-- **When**: the level has read `critical` for 60 s, or PSI `full avg10` is at
+- **When**: the level has read `critical` for 60 s (inside WSL that includes
+  Windows alone reading critical — see [Windows under WSL](#memory-guard)), or PSI `full avg10` is at
   25 % or past it (every runnable task stalled on memory a quarter of the last
   10 s: a thrash under way, where waiting the minute would cost ~15 s of
   total stall). At most once per 90 s, so the next shed acts on readings
@@ -827,7 +856,9 @@ shield** (`core/memory_shield.py`, called by the server's memory watch every
   Largest-and-longest-idle first (measured MB × idle time, capped at an hour).
 - **How many**: only enough to bring available memory back over the `low`
   line, counting each at its measured size (else the learned cost); at least
-  one, at most six.
+  one, at most six. Inside WSL the need is the larger of the guest's shortfall
+  and Windows' shortfall under its own low line (`host_low_line`), since what
+  an agent frees in the VM returns to Windows by free page reporting.
 - They are put to sleep exactly as *Put idle agents to sleep* does (Wake,
   opening or messaging one brings it back with its conversation). One notice
   (`system.sessions_slept`): *Memory critical — put 3 idle sessions to sleep
