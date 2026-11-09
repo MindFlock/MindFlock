@@ -80,7 +80,7 @@ def test_undo_parse_reads_the_words_at_the_end():
     js = _js()
     out = _run(_harness(js) + _whole(js, "voiceUndoParse") + """
 var out = {};
-["scratch that", "Scratch that.", "fix the login bug, scratch that", "undo that",
+["scratch that", "Scratch that.", "fix the login bug, scratch that", "undo that", "can you undo that",
  "scratch that idea and start over", "fix the bug"].forEach(function (t) { out[t] = voiceUndoParse(t); });
 voiceWordsApply({ undo: ["strike that"] });
 out.custom = [voiceUndoParse("strike that"), voiceUndoParse("scratch that")];
@@ -91,8 +91,9 @@ console.log(JSON.stringify(out));
     assert out["scratch that"] == {"before": ""}
     assert out["Scratch that."] == {"before": ""}
     assert out["fix the login bug, scratch that"] == {"before": "fix the login bug"}
-    # "undo that" is dictation ("can you undo that"), not a default
+    # "undo that" is no default: "can you undo that" is words for the agent
     assert out["undo that"] is None
+    assert out["can you undo that"] is None
     assert out["scratch that idea and start over"] is None
     assert out["fix the bug"] is None
     # the owner's own undo words; an older server without the field: ours
