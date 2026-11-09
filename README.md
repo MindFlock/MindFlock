@@ -47,12 +47,12 @@ irm https://raw.githubusercontent.com/MindFlock/MindFlock/main/install.ps1 | iex
 
 <div align="center">
 
-![MindFlock demo — a Jira issue and a Linear issue assigned to you, then that Jira issue becoming a running AI coding session on its own git worktree with nothing typed, alongside four other ticket-born sessions in different states](docs/demo.gif)
+![MindFlock demo — the Sky: tickets from Jira, Linear and Shortcut in the intake lane, then a newly assigned Jira issue starting its own session and route with nothing typed, beside five other ticket-born routes in different states](docs/demo.gif)
 
-<sub>A Jira issue assigned to you becomes its own git worktree, installed
-environment and seeded agent — with nothing typed — next to four other sessions
-that arrived the same way. A recording of the shipped app; the tickets, repo,
-diffs and terminal output are sample data.</sub>
+<sub>A Jira issue assigned to you becomes its own session — git worktree, seeded
+agent and a route to merge — with nothing typed, next to five others that arrived
+the same way. A recording of the shipped app; the tickets, repo, diffs and terminal
+output are sample data.</sub>
 
 </div>
 
@@ -162,96 +162,104 @@ say so rather than letting a session quietly keep using it.
 
 ## What it looks like in use
 
-Running a flock does not get you more tickets. It changes what fits inside one.
+Running a flock makes each change bigger and better tested. Letting your tracker
+start the sessions is what makes the hours count.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/fig1-what-changed-dark.png">
-  <img alt="Three stacked trends, Aug 2024 to Jul 2026. Tickets closed per month stays flat around 40–60 throughout. Median source lines in a pull request sits under 100 until late 2025, then climbs to 1,152. The share of pull requests that touch tests sits near zero until early 2026, then climbs to 97%." src="docs/img/fig1-what-changed.png">
+  <img alt="Three stacked trends, Aug 2024 to Oct 2026, in four eras: before agents, one at a time, the flock, and auto-start. Tickets closed per month wanders between 21 and 76. Median source lines in a pull request sits under 120 until 2026, then climbs, peaking at 1,111 in August 2026. The share of pull requests that touch tests sits near zero until January 2026, then climbs to 96%." src="docs/img/fig1-what-changed.png">
 </picture>
 
-**6.3× more reviewed source code per half-hour at the keyboard** — at the same
-ticket cadence, with tests on nine changes in ten instead of one in twenty. One
-developer's own repository, 2,210 merged pull requests, recomputed from git and the
-Shortcut API rather than estimated.
+**5.9× more reviewed source code per half-hour at the keyboard**, with tests on 96%
+of changes instead of 4%. One developer's own repository, 2,570 merged pull requests
+from August 2024 through October 2026, recomputed from git and the Shortcut API
+rather than estimated.
 
-|  | before agents<br><sub>2024-07 → 2025-12</sub> | agents, one at a time<br><sub>2026-01 → 03</sub> | **the flock**<br><sub>2026-04 → 07</sub> |
-|---|---|---|---|
-| Tickets closed per month | 43 | 53 | **55** |
-| Median **source lines per ticket** | 114 | 168 | **979** |
-| Median source lines per PR | 68 | 210 | **873** |
-| Median files per PR | 4 | 7 | **13** |
-| Median modules touched per PR | 2 | 2 | **4** |
-| PRs that touch tests | 5% | 58% | **88%** |
-| Most branches in flight in one day | 16 | 13 | **31** |
-| **Reviewed source per engaged half-hour** | 72 | 208 | **453** |
+|  | before agents<br><sub>2024-08 → 2025-12</sub> | agents, one at a time<br><sub>2026-01 → 03</sub> | the flock<br><sub>2026-04 → 07</sub> | **auto-start**<br><sub>2026-08 → 10</sub> |
+|---|---|---|---|---|
+| Tickets closed per month | 46 | 53 | 56 | **68** |
+| Median **source lines per ticket** | 95 | 164 | 380 | **627** |
+| Median source lines per PR | 54 | 206 | 388 | **648** |
+| Median files per PR | 4 | 7 | 7 | **11** |
+| Median modules touched per PR | 2 | 2 | 3 | **4** |
+| PRs that touch tests | 4% | 57% | 80% | **96%** |
+| Branches in flight, average weekday | 6.3 | 6.8 | 7.5 | **9.8** |
+| Most branches in flight in one day | 18 | 14 | 15 | **25** |
+| **Reviewed source per engaged half-hour** | 57 | 190 | 184 | **339** |
 
-A change that used to be 114 lines across 4 files is now 979 lines across 13, in
-twice as many modules. Tests came along for the ride: **5% of pull requests touched
-a test before, 88% do now** — which is the number that makes the extra volume worth
-having rather than worth worrying about.
+A change that used to be 95 lines across 4 files is now 627 lines across 11, in
+twice as many modules — and **4% of pull requests touched a test before, 96% do
+now**, which is the number that makes the extra volume worth having rather than worth
+worrying about.
 
-### Why the flock, and not just an agent
+### Why auto-start, and not just a flock
 
-Adopting one agent roughly tripled the size of a typical change. Going from one
-agent to a flock multiplied it by **four again on top of that** — the second step is
-the bigger one. This is why:
+Running agents side by side (April to July) made a typical change more than twice
+as big and mostly tested — but reviewed code per half-hour stayed where one agent at
+a time had left it, 190 then 184. Every session still needed someone to start it,
+seed it and point it at a branch. What moved the number was not starting them. From
+August, assigned tickets started their own sessions:
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fig3-parallelism-dark.png">
-  <img alt="Column chart of the most branches in flight on the busiest day of each month. Values sit between 7 and 16 every month from Aug 2024 through Mar 2026, then jump to 25 in April 2026 and 31 in May 2026." src="docs/img/fig3-parallelism.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/fig3-tracker-started-dark.png">
+  <img alt="Paired columns per month, June to October 2026: tickets MindFlock started as sessions with nothing typed, and how many reached a merged pull request. June (from the 22nd) 12 and 11; July 26 and 21; August 41 and 34; September 70 and 66; October 96 and 58, with some October tickets still open at month end." src="docs/img/fig3-tracker-started.png">
 </picture>
 
-An average day is 5–8 branches in both eras — that never changed. **The ceiling
-did**, from 16 to 31. Parallelism is not something you use all day; it is what you
-need on the days when six things are half-finished at once, and those are exactly
-the days that used to cap out. MindFlock is the thing that raised that ceiling: one
-grid, one worktree per session, deterministic per-agent state, and the next git step
-always one button away.
+207 tickets in three months, and the same half-hour at the keyboard produced 339
+lines of reviewed source instead of 184. The average weekday now has about ten
+branches in flight, up from six — not because anyone juggles ten, but because the
+queue keeps them filled and the Sky says which one needs you next.
 
-<sub>Honest edges, because they make the rest checkable: this is **not** faster
-wall-clock ticket cycle time — Shortcut's start→done clock is longer, since it
-measures review, QA and deploy queues that no coding tool touches. And it is not
-free: 13.5 B tokens went through agents on this machine over 46 logged days, and
-engaged windows per month rose by half.</sub>
+<sub>Honest edges, because they make the rest checkable. **A correction:** until
+November 2026 this section said 6.3×. Recomputing it with three more months of data
+showed the old script diffed each PR against its target branch's tip rather than its
+merge-base — which also counted, reversed, whatever landed on the target while the
+branch was open, and inflated the parallel months most. Corrected, April–July is
+3.2×, not 6.3×, and the old "31 branches in one day" is 15. Everything above uses the
+corrected method. And it is not free: 46.6 B tokens went through agents on this
+machine across 53 logged days in August–October, and engaged half-hours per month
+rose 2.5×.</sub>
 
 <details>
 <summary>Method — so you can check it</summary>
 
-- **Source-only.** Lockfiles, generated and minified files, images, CSVs,
-  notebooks, `dist/`, `vendor/`, `node_modules/` and DB dumps are excluded. They
-  are under 1% of the lines in the recent period and 2.6% in the older one, so
-  they are not what moved.
-- **Medians, not means.** A handful of bulk-import PRs (one month has 1.6 M lines
-  in a single batch) dominate any average; medians are what a typical change looks
-  like. "Reviewed source per engaged half-hour" is PR count × median PR size ÷
-  engaged windows, so one giant import cannot inflate it.
-- **Diff per PR** = `git diff <base> <branch-tip>` at the merge commit, computed
-  from the local clone for all 2,210 merged PRs authored by one person.
-- **Engaged half-hour** = a distinct 30-minute window containing at least one
-  commit on one of those branches. In the recent period some of those commits are
-  an agent's while the human was elsewhere, which *overstates* engaged time and so
-  makes the 6.3× a floor.
-- **Tickets** = Shortcut stories owned by that person with a `completed_at`.
+- **Diff per PR** = `git diff <merge-base> <branch-tip>` for each merged PR — the
+  PR's own change, which matches GitHub's additions/deletions — computed from a
+  local clone for the 2,570 recoverable merged PRs authored by one person through
+  2026-10-31 (of 2,592; the rest are lost to a shallow clone or a collapsed stack).
+- **Source-only.** Lockfiles, generated and minified files, images (including
+  `.excalidraw`), CSVs, notebooks, `dist/`, `vendor/`, `node_modules/` and DB dumps
+  are excluded.
+- **Medians, not means.** A handful of bulk-import PRs dominate any average; medians
+  are what a typical change looks like. "Reviewed source per engaged half-hour" is PR
+  count × median PR size ÷ engaged windows, so one giant import cannot inflate it.
+- **Engaged half-hour** = a distinct 30-minute window containing at least one commit
+  on one of those branches. Some of those commits are an agent's while the human was
+  elsewhere, which *overstates* engaged time and so makes the 5.9× a floor.
+- **Tickets** = Shortcut stories owned by that person with a `completed_at`, leaving
+  out two bulk-close days (173 finished plan tickets closed within minutes).
+- **Branches in flight** = calendar days from a PR branch's first to last commit,
+  counted per day; one branch split into 34 one-commit PRs on 2026-10-06 is left out.
 - **Eras.** Agent-authored commits first appear 2026-02; the ingestion pipeline's
-  ancestor lands in the work repo 2026-04-22 and has been running ticket → agent →
-  PR in production since 2026-06-22.
+  ancestor lands in the work repo 2026-04-22 and has run ticket → agent → PR in
+  production since 2026-06-22; from August it starts most of the work.
 
 </details>
 
 ## What MindFlock itself has run
 
-38 days, 2026-06-22 → 2026-07-29, from the pipeline's own dedup state:
+2026-06-22 → 2026-10-31, from the pipeline's own dedup state:
 
 | | |
 |---|---|
-| Tickets provisioned into sessions with nothing typed | **38** |
-| Median time from provisioning to a merged pull request | **22 hours** |
-| Own pull requests triaged for review comments | **42** — the ones with nothing actionable were skipped automatically; the rest came back as sessions |
-| Agent CLIs the pipeline drove | **2** (`claude`, `ccc`) — of 5 driven on this machine overall |
+| Tickets provisioned into sessions with nothing typed | **245** (207 of them August–October) |
+| Of those, reached a merged pull request | **190** |
+| Median time from provisioning to a merged pull request | **11.6 hours** (middle half 3.1–24.5 h) |
+| Own pull requests triaged for review comments | **62** — the ones with nothing actionable were skipped automatically; the rest came back as sessions |
 
-<sub>The ticket figure counts distinct tickets: the dedup state holds 47 records,
-of which 7 were throwaway test tickets and 2 were re-runs. Log rotation makes the
-PR-session count a floor.</sub>
+<sub>Distinct tickets: the dedup state holds 275 records in that window, of which 7
+were throwaway test tickets and 19 were re-runs; 4 tickets never provisioned. Some
+October tickets were still open on 2026-10-31.</sub>
 
 ## How is this different?
 
