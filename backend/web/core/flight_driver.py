@@ -417,6 +417,22 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
             reached = 0.0
     run = plan["runs"][-1] if plan.get("runs") else None
     results = (run or {}).get("results") or {}
+    try:
+        progress = _tp.run_progress(plan) if run else {}
+    except Exception:  # noqa: BLE001 — progress is a nicety, never a failure
+        progress = {}
+    checker: dict = {}
+    run_session = str(plan.get("run_session") or "")
+    if plan.get("state") == "running" and run_session:
+        try:
+            facts = _session_obs({"session": run_session}, time.time(), True)
+            checker = {
+                "activity": facts.get("activity") or "",
+                "background_waiting": bool(facts.get("background_waiting")),
+                "present": bool(facts.get("present")),
+            }
+        except Exception:  # noqa: BLE001
+            checker = {}
     open_agent = [
         s["text"]
         for s in plan["steps"]
@@ -449,6 +465,16 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "live_branch": plan.get("live_branch") or "",
         "env": env,
         "env_reached_at": reached,
+        # What keeps the stop from being silently stuck (flights._verify_guard
+        # / _verify_handover): the newest run's progress, when it was opened,
+        # the checker session's own state, and the steps the agent handed to
+        # the person ("needs you: …" vs plain blocked).
+        "progress": progress,
+        "latest_run_at": float(run.get("at") or 0.0) if run else 0.0,
+        "checker": checker,
+        "needs_you": progress.get("needs_you") or [],
+        "blocked_steps": progress.get("blocked") or [],
+        "run_budget_s": float(getattr(_tp, "RUN_BUDGET_MIN", 30)) * 60.0,
     }
 
 
@@ -1227,21 +1253,43 @@ def _ensure_checklist(flight: dict) -> dict:
 
 async def _start_verify_run(
     plan_id: str, where: str = "branch", notes: str = ""
-) -> None:
+) -> dict:
     """``POST /api/test-plans/{id}/run`` in process (its body is the route):
-    checked on ``where`` (this branch or an environment), with ``notes``."""
+    checked on ``where`` (this branch or an environment), with ``notes`` →
+    ``{"started": bool, "reason": str, "detail": str}``.
+
+    THE ANSWER IS READ, never assumed. Every 409 used to count as "already
+    running", so a check the memory guard refused read as started and the stop
+    waited forever on a run that did not exist (sc-25811, 2026-11-09). Now:
+    202 or ``busy`` (a run IS in progress) → started; ``memory`` → not
+    started, the stop waits and retries with the reason on screen; anything
+    else → :class:`_StepFailed` with the server's sentence."""
+    import json as _json
+
     srv = _server()
     resp = await srv.run_test_plan(
         plan_id, None, {"environment": where or "branch", "notes": notes or ""}
     )
-    if resp.status_code >= 400 and resp.status_code != 409:
-        import json as _json
-
-        try:
-            msg = _json.loads(resp.body).get("error") or ""
-        except Exception:  # noqa: BLE001
-            msg = ""
-        raise _StepFailed(msg or "the behaviors check could not start")
+    if resp.status_code < 400:
+        return {"started": True, "reason": "", "detail": ""}
+    try:
+        body = _json.loads(resp.body)
+    except Exception:  # noqa: BLE001
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    reason = str(body.get("reason") or "")
+    if resp.status_code == 409 and (reason == "busy" or body.get("session")):
+        return {"started": True, "reason": "busy", "detail": ""}
+    if reason == "memory":
+        return {
+            "started": False,
+            "reason": "memory",
+            "detail": str(body.get("detail") or body.get("error") or "memory is low"),
+        }
+    raise _StepFailed(
+        str(body.get("error") or "") or "the behaviors check could not start"
+    )
 
 
 def _start_command(flight: dict, step: dict, folder: str) -> None:
@@ -1718,16 +1766,67 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
         phase = action.get("phase")
         sk = step["kind"]
         if phase == "agent_run":
-            pid = str((action.get("detail") or {}).get("plan") or "")
+            got = dict(action.get("detail") or {})
+            pid = str(got.get("plan") or "")
             cfg = step.get("config") or {}
-            await _start_verify_run(
-                pid,
-                str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH),
-                str(cfg.get("notes") or ""),
+            ss = flight["step_states"][step["id"]]["detail"]
+            notes = str(cfg.get("notes") or "")
+            extra = str(got.get("extra_notes") or ss.get("extra_notes") or "")
+            if extra:
+                notes = (notes + "\n" + extra).strip()
+            res = await _start_verify_run(
+                pid, str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH), notes
             )
-            return dict(
-                action, detail=dict(action.get("detail") or {}, run_started=True)
+            if res["started"]:
+                return dict(
+                    action,
+                    detail=dict(
+                        got,
+                        run_started=True,
+                        run_started_at=now,
+                        run_wait=None,
+                        memory_since=None,
+                        nudged_at=None,
+                    ),
+                )
+            # The memory guard refused the checker: NOT started. The stop
+            # waits with the reason and retries (flights._verify_guard).
+            return {
+                "action": "wait",
+                "note": "waiting for memory to start the check (%s)" % res["detail"],
+                "detail": dict(
+                    got,
+                    run_started=False,
+                    run_wait="memory",
+                    memory_since=float(ss.get("memory_since") or now),
+                    memory_detail=res["detail"],
+                    last_try=now,
+                ),
+            }
+        if phase == "nudge":
+            v = action.get("detail") or {}
+            pid = str(v.get("plan") or "")
+            from backend.web.core import test_plans as _tp
+
+            plan = await asyncio.to_thread(_tp.get, pid) if pid else None
+            checker = str((plan or {}).get("run_session") or "")
+            said = "nudged the checker"
+            try:
+                if not checker:
+                    raise _StepFailed("no checker session")
+                await asyncio.to_thread(_deliver, checker, _flights.VERIFY_NUDGE)
+            except Exception as err:  # noqa: BLE001 — the close comes next anyway
+                said = "couldn't nudge the checker (%s)" % (str(err) or "error")
+            return dict(action, detail=dict(v, nudged_at=now, nudge=said))
+        if phase == "close":
+            v = action.get("detail") or {}
+            pid = str(v.get("plan") or "")
+            from backend.web.core import test_plans_driver as _tpd
+
+            await _tpd.close_run(
+                pid, str(v.get("close_reason") or "not checked: the check was closed")
             )
+            return dict(action, detail=dict(v, closed_at=now))
         if phase == "send":
             return await _send_reviews(flight, step, action, now)
         if phase == "push":
@@ -2533,6 +2632,21 @@ def set_start_on(flight_id: str, value) -> dict:
     return _changed(flight_id, lambda f: _flights.op_start_on(f, value))
 
 
+def _needs_you_perch(flight: dict, sid: str) -> bool:
+    """Whether ``sid`` is a Verify stop parked on the person because the check
+    needs them to DO something (``ask`` "needs_you" or "memory"): there Done
+    means "I did it — check again", which is a retry of the stop."""
+    cur = _flights._current(flight)
+    ss = flight["step_states"].get(sid) or {}
+    return (
+        cur is not None
+        and cur["id"] == sid
+        and cur["kind"] == "verify"
+        and ss.get("state") == "waiting_you"
+        and (ss.get("detail") or {}).get("ask") in ("needs_you", "memory")
+    )
+
+
 def _no_blanket_done(flight: dict, sid: str) -> None:
     """There is no blanket Done on a Verify stop waiting on you
     (docs/behaviors.md §5): it moves on when its behaviors are answered, or on
@@ -2601,6 +2715,10 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     before = _flights.get(flight_id)
     if before is None:
         raise _flights.FlightError("unknown_flight", 404, "no such route")
+    if op == "done" and _needs_you_perch(before, step):
+        # "I did it": the stop runs again, and the judge checks the behaviors
+        # that were waiting on the person (flights._verify_handover).
+        op = "retry"
     fn = _OPS[op]
     if op == "done":
         _no_blanket_done(before, step)

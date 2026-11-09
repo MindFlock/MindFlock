@@ -436,6 +436,15 @@ succeeds and is never read from the title: `verify-…` is accepted as a name
 like any other, and without the flag such a session stays listed. Refused for
 a shared-folder session.
 
+`POST /api/test-plans/{id}/run` refusals carry a machine-readable `reason`
+(a route's Verify stop reads it): 409 `busy` (a run is in progress; `session`),
+`memory` (the launch gate refused or queued the verify session for low memory —
+the queued launch is withdrawn; `detail` is the gate's sentence; no run is
+opened), `no_steps`, `human_only`, `repo_gone`, and `launch_failed` (any other
+create/send failure, with its status). The checker rewrites its results file
+after every step (`"finished": false`); those partial answers are folded into
+the open run and stamp its `progress_at`.
+
 **Lineage** (`parent`, `spawned`). These are what the MindFlock MCP's
 `spawn_session` sends; see [mcp.md](mcp.md#lineage-parents-workers-limits).
 

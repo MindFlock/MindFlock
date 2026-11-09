@@ -267,6 +267,15 @@ TIMEOUT_MERGE_BASE = 30.0
 #: the prompt that asks for it and the poller that reads it cannot drift apart.
 RESULT_FILE = ".mindflock_verify.json"
 
+#: How long a verify run may take before whoever drives it closes it (a
+#: route's Verify stop does; the run prompt tells the checker the same number,
+#: so the checker's own deadline and the closer's agree).
+RUN_BUDGET_MIN = 30
+#: A blocked answer whose note starts with this is a step waiting on a PERSON
+#: to do something before it can be checked (the note says what). A route's
+#: Verify stop asks for it and re-checks the step once they have.
+NEEDS_YOU = "needs you:"
+
 #: The complete state ladder. ``generating`` → ``generated`` (steps exist,
 #: waiting for the work to reach the live branch) → ``due`` (it is live, go
 #: check it) → ``running`` (a verify session is working through it) → ``done``.
@@ -948,6 +957,10 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # hours" clock reads this, so a finish must not overwrite it with the
         # finish time — one field, one meaning.
         "at": _f(raw.get("at")),
+        # When the checker last changed an answer while the run was open
+        # (record_progress) — the clock a route's Verify stop measures a
+        # stalled check by. 0 = nothing answered yet.
+        "progress_at": _f(raw.get("progress_at")),
         "by": str(raw.get("by") or "").strip() or "agent",
         "session": str(raw.get("session") or ""),
         # WHAT THIS RUN ACTUALLY TESTED, and what it was supposed to.
@@ -1854,6 +1867,114 @@ def run_tree_mismatch(run: dict) -> bool:
     tested = str((run or {}).get("tested_sha") or "").strip()
     expected = str((run or {}).get("expected_sha") or "").strip()
     return bool(tested and expected and tested != expected)
+
+
+def record_progress(plan_id: str, results: List[dict]) -> Optional[dict]:
+    """Fold a RUNNING verify session's partial answers in (its results file
+    with ``"finished": false``) WITHOUT ending the run → the plan, or None.
+
+    The run prompt asks the checker to rewrite its file after every step it
+    settles, so whoever waits on the run (a route's Verify stop) sees progress
+    and can tell a slow check from a stalled one. Same author rules as
+    :func:`finish_run`: an unrecognised result is ``blocked``, an agent's
+    answer to a human step is ``blocked``, a person's answer is never
+    overwritten. ``progress_at`` on the run is stamped only when an answer
+    actually changed — it is the clock a stall is measured by. The state,
+    ``run_session`` and the run's end are left alone: only ``finish_run`` (or
+    a close) ends a run."""
+    now = time.time()
+
+    def apply(plan: dict) -> None:
+        run = plan["runs"][-1] if plan["runs"] else None
+        if run is None or plan["state"] != "running":
+            return
+        if run.get("session") not in ("", plan["run_session"]):
+            return
+        actors = {st["id"]: st["actor"] for st in plan["steps"]}
+        changed = False
+        for entry in results or []:
+            if not isinstance(entry, dict):
+                continue
+            sid = str(entry.get("id") or "").strip()
+            if sid not in actors:
+                continue
+            mine = run["results"].get(sid) or {}
+            if mine.get("by") == "human" and mine.get("result"):
+                continue
+            value = str(entry.get("result") or "").strip().lower()
+            if not value:
+                continue  # not answered yet: nothing to record
+            if value not in RESULTS:
+                value = "blocked"
+            note = _text(entry.get("note"))
+            if actors[sid] == "human":
+                value = "blocked"
+            if mine.get("result") == value and mine.get("note", "") == note:
+                continue
+            run["results"][sid] = {
+                "result": value,
+                "note": note,
+                "at": now,
+                "by": "agent",
+            }
+            changed = True
+        if changed:
+            run["progress_at"] = now
+
+    return _mutate(plan_id, apply)
+
+
+def run_progress(plan: dict) -> dict:
+    """The newest run's progress, for whoever waits on it (pure):
+    ``{"answered", "total", "started_at", "progress_at", "session",
+    "needs_you": [{"step", "text", "do", "at"}], "blocked": [{"step",
+    "text", "why", "at"}]}``. ``progress_at`` falls back to the start when nothing has been
+    answered yet. ``total`` counts the AGENT's steps (the ones a run answers);
+    ``needs_you`` / ``blocked`` are the agent steps it handed to a person —
+    ``needs you:`` notes (:data:`NEEDS_YOU`) apart from plain blocks."""
+    runs = plan.get("runs") or []
+    run = runs[-1] if runs else {}
+    results = run.get("results") or {}
+    agent = [st for st in plan.get("steps") or [] if st.get("actor") == "agent"]
+    answered = 0
+    needs: List[dict] = []
+    blocked: List[dict] = []
+    for st in agent:
+        entry = results.get(st["id"]) or {}
+        value = entry.get("result") or ""
+        if not value:
+            continue
+        answered += 1
+        if value == "blocked" and entry.get("by") != "human":
+            note = str(entry.get("note") or "")
+            if note.lower().startswith(NEEDS_YOU):
+                needs.append(
+                    {
+                        "step": st["id"],
+                        "text": st["text"],
+                        "do": note[len(NEEDS_YOU) :].strip(),
+                        "at": float(entry.get("at") or 0.0),
+                    }
+                )
+            else:
+                blocked.append(
+                    {
+                        "step": st["id"],
+                        "text": st["text"],
+                        "why": note,
+                        "at": float(entry.get("at") or 0.0),
+                    }
+                )
+    started = float(run.get("at") or 0.0)
+    return {
+        "answered": answered,
+        "total": len(agent),
+        "started_at": started,
+        "progress_at": float(run.get("progress_at") or 0.0) or started,
+        "session": str(run.get("session") or plan.get("run_session") or ""),
+        "needs_you": needs,
+        "blocked": blocked,
+    }
 
 
 def finish_run(
@@ -5605,10 +5726,30 @@ def build_run_prompt(
             parts.append("    Expect: %s" % step["expect"])
     parts += [
         "",
-        "When you are done, write your answers to %s in the root of this "
-        "worktree, and change NOTHING else — no edits, no commits, no push, no "
-        "PR. That file is git-excluded and is the only thing you may write."
-        % RESULT_FILE,
+        "Write your answers to %s in the root of this worktree, and change "
+        "NOTHING else — no edits, no commits, no push, no PR. That file is "
+        "git-excluded and is the only thing you may write." % RESULT_FILE,
+        "",
+        "KEEP IT CURRENT. Rewrite that file after EVERY step you settle, with "
+        '"finished": false and every answer so far — whoever is waiting on '
+        "you sees your progress from it, and a check that writes nothing for "
+        "a long time is treated as stalled and closed. Write it a last time "
+        'with "finished": true once every step has an answer.',
+        "",
+        "NEVER WAIT on a step you cannot settle where you are. If checking it "
+        "needs a PERSON to do something first (approve something, click "
+        "something as a signed-in user, start a paused job, deploy somewhere), "
+        'answer it "blocked" at once with a note that starts with "needs you: " '
+        'followed by exactly what they must do (e.g. "needs you: approve one '
+        'takedown ticket in Freshdesk") — they will be asked, and the step is '
+        "checked again once they have. If it cannot be observed here at all "
+        '(the change only runs in another environment), answer it "blocked" '
+        "at once and say so.",
+        "",
+        "FINISH WITHIN %d MINUTES, and never end your turn with a background "
+        "job (a shell, a watcher, a long scan) still running: stop it first. "
+        'Whatever is not settled by then is "blocked" with a note saying what '
+        "you were waiting for." % RUN_BUDGET_MIN,
         "",
         "Exactly this shape:",
         json.dumps(
