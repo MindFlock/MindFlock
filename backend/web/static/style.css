@@ -5375,6 +5375,18 @@ a.fl-waiting-ref:hover {
   width: max-content;
   padding: 14px 16px 12px;
 }
+
+/* A Verify stop parked on you for a manual step ("needs you: …") or a
+   memory-refused checker: what to do, then "I did it — check again". */
+.fl-you-needs-list {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.fl-you-needs-list li + li {
+  margin-top: 2px;
+}
 /* Round 18 — a chain in the Sky, n8n-style (SkyChain.tsx, lib/skyGraph):
  * free-floating icon tiles with the name and a muted summary UNDER them, a
  * square in-port on the left, a round out-port on the right, bézier wires,

@@ -93644,6 +93644,40 @@ function VerifyStopActions({ flight, compact = false }) {
 		},
 		children: "Skip"
 	});
+	const ss = flight.step_states?.[step.id];
+	const ask = String(ss?.detail?.ask || "");
+	if (ask === "needs_you" || ask === "memory") {
+		const items = Array.isArray(ss?.detail?.items) ? (ss?.detail?.items).map(String) : [];
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-you fl-you-verify fl-you-needs" + (compact ? " fl-you-compact" : ""),
+			onClick: stop,
+			"data-no-drag": true,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-you-text",
+					children: ss?.note || "The check needs you"
+				}),
+				!compact && items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "fl-you-needs-list",
+					children: items.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: t }, i))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-you-acts",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary fl-btn fl-done",
+						disabled: busy,
+						title: ask === "memory" ? "Try to start the check again" : "You've done it — the agent checks these behaviors again",
+						onClick: () => {
+							setBusy(true);
+							stepDone(flight.id, step.id).finally(() => setBusy(false));
+						},
+						children: ask === "memory" ? "Retry" : "I did it — check again"
+					}), skip]
+				})
+			]
+		});
+	}
 	if (compact || !plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you fl-you-verify" + (compact ? " fl-you-compact" : ""),
 		onClick: stop,

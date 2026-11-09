@@ -97,6 +97,42 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
       Skip
     </button>
   );
+  // The check came to you because it needs you to DO something (a manual
+  // step the checker reported as "needs you: …") or because memory refused
+  // its checker (docs/flights.md "When the check can't go on"): say what, and
+  // Done means "I did it" — the server turns it into a retry that checks again.
+  const ss = flight.step_states?.[step.id];
+  const ask = String(ss?.detail?.ask || "");
+  if (ask === "needs_you" || ask === "memory") {
+    const items = Array.isArray(ss?.detail?.items) ? (ss?.detail?.items as unknown[]).map(String) : [];
+    return (
+      <div className={"fl-you fl-you-verify fl-you-needs" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
+        <p className="fl-you-text">{ss?.note || "The check needs you"}</p>
+        {!compact && items.length > 0 && (
+          <ul className="fl-you-needs-list">
+            {items.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+        )}
+        <div className="fl-you-acts">
+          <button
+            type="button"
+            className="btn-primary fl-btn fl-done"
+            disabled={busy}
+            title={ask === "memory" ? "Try to start the check again" : "You've done it — the agent checks these behaviors again"}
+            onClick={() => {
+              setBusy(true);
+              void stepDone(flight.id, step.id).finally(() => setBusy(false));
+            }}
+          >
+            {ask === "memory" ? "Retry" : "I did it — check again"}
+          </button>
+          {skip}
+        </div>
+      </div>
+    );
+  }
   if (compact || !plan)
     return (
       <div className={"fl-you fl-you-verify" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
