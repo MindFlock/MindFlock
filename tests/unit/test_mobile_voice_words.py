@@ -460,7 +460,8 @@ console.log(JSON.stringify(out));
     for c, got in zip(f["cases"], out["cases"]):
         assert got == c["kind"], c
     # The heard forms are the server's, bounded, never a phrase itself.
-    assert out["heard"] == f["words"]["heard"]
+    # (``undo`` is the page's own kind too: empty while the fixture has none.)
+    assert out["heard"] == dict({"undo": []}, **f["words"]["heard"])
     # A streamed guess holds back a heard form while it may still be said.
     assert out["hold"] == [
         ["fix the bug", "this"],

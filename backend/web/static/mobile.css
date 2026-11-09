@@ -1370,3 +1370,15 @@ html, body {
 }
 .sess-row.sess-peer .sess-main { border-style: dashed; }
 .sess-halted { font-weight: 600; }
+
+/* "What can I say": the voice commands sheet (mobile.js voiceCommandsShow). */
+.voice-cmd {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.voice-cmd:last-child { border-bottom: 0; }
+.voice-cmd-say { font-size: 15px; color: var(--text); }
+.voice-cmd-does { font-size: 13px; color: var(--muted, var(--text)); opacity: 0.8; }
