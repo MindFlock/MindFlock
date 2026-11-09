@@ -262,17 +262,18 @@ PROVIDER_META: list[dict] = [
             # where one blocks another, one PR per story.
             {
                 "key": "epic_states",
-                "label": "Epics in these states",
+                "label": "Auto-start epics in these states",
                 "type": "epic_state",
                 "secret": False,
                 "required": False,
-                "placeholder": "no epics (add a state to ingest epics)",
+                "placeholder": "none (epics are listed in Intake → Epics to start)",
                 "hint": (
-                    "Optional: your epics in these epic states each get ONE lead "
-                    "session. It works the stories in the epic that are yours and "
-                    "not done — side by side where they don't depend on each other, "
-                    "one after another where a story blocks another — and opens a "
-                    "PR per story (stacked when they depend), so reviews stay small."
+                    "Optional: every epic of yours is listed in Intake → Epics; "
+                    'those in these epic states start by themselves while "Start '
+                    'epics by themselves" is on. An epic gets ONE lead session '
+                    "that works your stories in it that aren't done — side by side "
+                    "where they don't depend on each other, one after another where "
+                    "a story blocks another — and opens a PR per story."
                 ),
             },
             {
@@ -282,7 +283,7 @@ PROVIDER_META: list[dict] = [
                 "secret": False,
                 "required": False,
                 "options": [
-                    {"value": "", "label": "Off — list them in Intake to start"},
+                    {"value": "", "label": "Off — start them from Intake → Epics"},
                     {
                         "value": "on",
                         "label": "On — start each one when it's in those states",

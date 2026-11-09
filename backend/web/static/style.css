@@ -9611,78 +9611,6 @@ details.fl-group-waiting > summary {
     transition: none;
   }
 }
-/* Intake → Tickets → Epics (EpicsSection.tsx). */
-.ik-epics {
-  margin: 0 0 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
-}
-.ik-epics-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-.ik-epics-head h3 {
-  margin: 0;
-  font-size: 13px;
-}
-.ik-epics-head .muted {
-  font-size: 11.5px;
-  flex: 1;
-}
-.ik-epics-refresh {
-  font-size: 12px;
-  padding: 1px 7px;
-}
-.ik-epics-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.ik-epic {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 0;
-  border-top: 1px solid var(--border);
-}
-.ik-epic:first-child {
-  border-top: 0;
-}
-.ik-epic-main {
-  flex: 1;
-  min-width: 0;
-}
-.ik-epic-name {
-  font-weight: 600;
-  font-size: 13px;
-  color: var(--text);
-  text-decoration: none;
-}
-.ik-epic-name:hover {
-  text-decoration: underline;
-}
-.ik-epic-meta,
-.ik-epic-why {
-  font-size: 11.5px;
-}
-.ik-epics-error {
-  color: var(--red);
-  font-size: 12px;
-  margin: 2px 0;
-}
-.ik-epics-empty {
-  font-size: 12px;
-  margin: 2px 0;
-}
-.ik-epic button {
-  flex: none;
-  font-size: 12px;
-  padding: 3px 10px;
-}
 /* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
    URL, then (with two or more) its optional hint and a Remove. */
 .tk-repo-row {
@@ -9714,6 +9642,20 @@ details.fl-group-waiting > summary {
 
 .tk-repo-row {
   row-gap: 4px;
+}
+/* Intake → Epics (EpicsTab.tsx). The rows reuse the work-list classes
+ * (.pr-open-item & co.); these are only what an epic row has that a ticket
+ * row doesn't: a name rather than a reference, and its labels. */
+.ik-epic-name {
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+}
+.ik-epic-name:hover {
+  text-decoration: underline;
+}
+.ik-epic-labels {
+  color: var(--muted, inherit);
 }
 /* "Search settings…" results: the label, and under it one small line saying
    what is behind it (settingsSearch.ts `sub`). The box and row chrome live

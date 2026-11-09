@@ -37,6 +37,19 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.1",
+    date: "2026-11-09",
+    big: false,
+    headline: "Your assigned epics, in their own tab.",
+    features: [
+      {
+        title: "Intake → Epics",
+        body:
+          "Every Shortcut epic you own is listed in its own Intake tab, grouped by state, with how many of your stories are left. Start any of them; the ones in your auto-start states still start by themselves.",
+      },
+    ],
+  },
+  {
     version: "0.14.0",
     date: "2026-11-09",
     big: true,

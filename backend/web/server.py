@@ -10573,9 +10573,10 @@ async def ticket_fleet_holder(
 
 @app.get("/api/epics")
 async def list_epics(refresh: str = "") -> JSONResponse:
-    """Epics a ticket source ingests (docs/epics.md): the person's own epics
-    in the source's ``epic_states``, each with the count of their own open
-    stories and whether a lead session already works it."""
+    """Intake → Epics (docs/epics.md): every not-done epic the person owns on
+    each epics-capable source, each with the count of their own open stories,
+    whether a lead session already works it, and whether it is in the
+    source's auto-start ``epic_states``; plus ``sources`` (one per source)."""
     from backend.web.core import epic_start as _epics
 
     return JSONResponse(await _epics.list_epics(force=bool(refresh)))
