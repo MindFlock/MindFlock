@@ -12,9 +12,15 @@ the Settings screen, in a background thread, three steps:
    live server runs from a uv tool venv). ``uv`` is found on PATH, else next
    to ``sys.executable``; without it, ``<sys.executable> -m pip install``.
 2. **downloading recognition model (<name>)** — the faster-whisper model of
-   ``voice.stt_model`` (``small`` unless it names another size) into
+   ``voice.stt_model`` for English (``speech.whisper_model``: ``small.en``,
+   the English-only twin of ``small``, unless it names a size) into
    ``speech.voice_dir()/whisper``, the cache ``LocalSTT`` loads from, so the
-   first phrase is not a download; then **downloading streaming model
+   first phrase is not a download — the one-shot clip and the accurate pass
+   both run it. Another language's ``small`` is not fetched here (as its
+   ``base`` stream model is not): its first phrase downloads it. An install
+   from before the twin has ``small``; ``LocalSTT`` keeps using it and
+   fetches ``small.en`` in the background on the first warm or phrase
+   (``speech.english_default_model``); then **downloading streaming model
    (<name>)**, the live transcript's (``speech.stream_whisper_model``:
    ``base.en``, ~75 MB) — skipped when it is the same model.
 3. **downloading voice (<name>)** — the piper voice of ``voice.tts_voice``

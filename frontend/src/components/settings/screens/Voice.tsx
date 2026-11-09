@@ -813,11 +813,11 @@ function VoiceKindBlock({
           <SettingField
             group="voice"
             field={kind + "_model"}
-            placeholder={local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"}
+            placeholder={local ? (kind === "stt" ? "auto (small.en for English)" : "small") : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"}
           />
           <span className="set-hint">
             {local
-              ? "A faster-whisper size: tiny, base, small or medium."
+              ? "A faster-whisper size: tiny, base, small or medium. Empty: small.en for English, small otherwise."
               : "The host's model name (Groq: whisper-large-v3-turbo)."}
           </span>
         </label>

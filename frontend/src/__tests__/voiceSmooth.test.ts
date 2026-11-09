@@ -1359,7 +1359,8 @@ describe("each page opens its streams with its own client id", () => {
   it("random once per page load, sent with every POST /api/voice/stream", () => {
     expect(VOICE_CLIENT_ID).toMatch(/^d-[0-9a-z-]{8,}$/);
     expect(VOICE_CLIENT_ID.length).toBeLessThanOrEqual(64);
-    expect(code("lib/voiceDesktop.ts")).toContain("body: JSON.stringify({ lang: langTag(), client: VOICE_CLIENT_ID })");
+    // With the phrase's sentence context (voiceContext.test.ts): streamOpenBody's lang + client always.
+    expect(code("lib/voiceDesktop.ts")).toContain("body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx))");
   });
 });
 

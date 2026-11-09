@@ -452,6 +452,37 @@ export function isAnswerPhrase(text: string): boolean {
 
 const joinWords = (a: string, b: string) => [a.trim(), b.trim()].filter(Boolean).join(" ");
 
+/** The most context a phrase's stream opens with (chars): the server keeps
+ * about 300 of it for the accurate model's prompt. */
+export const VOICE_CONTEXT_MAX = 400;
+
+/** The message's words ahead of a phrase, as its stream's `context`: one
+ * space for any run of whitespace, and only the last `max` characters, cut
+ * at a word boundary (a word the cut falls in is left out whole). */
+export function voiceContext(text: string, max = VOICE_CONTEXT_MAX): string {
+  const t = String(text || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(t.length - max);
+  return (t[t.length - max - 1] === " " ? cut : cut.replace(/^\S*/, "")).trim();
+}
+
+/** POST /api/voice/stream's body: `context` (the message's words before the
+ * phrase, {@link voiceContext}) and `session` (the title its words go to)
+ * only when there are any. */
+export function streamOpenBody(
+  lang: string,
+  client: string,
+  ctx?: { context?: string; session?: string } | null
+): Record<string, string> {
+  const body: Record<string, string> = { lang, client };
+  const context = voiceContext(ctx?.context || "");
+  if (context) body.context = context;
+  if (ctx?.session) body.session = ctx.session;
+  return body;
+}
+
 // --- prefs (per browser: a hand's habit, not a synced setting) -------------- //
 
 export type PttMode = "toggle" | "hold";
@@ -1080,6 +1111,38 @@ export class Dictation {
     return this.phraseAt < 0 ? "" : this.typed.slice(this.phraseAt);
   }
 
+  /** The message's words ahead of the NEXT phrase — the context its stream
+   * opens with (POST /api/voice/stream `context`, the accurate model's
+   * prompt; {@link voiceContext} caps it). The next phrase opens while this
+   * one may still be under way (its final not back): its words count as
+   * best known — the committed words and the unsure tail, else its typed
+   * guess — with its trailing control phrase never part of it ("over",
+   * "disregard": the next words start afresh, ""; "scratch that": this
+   * phrase, or alone the last one, taken back). A first phrase the router
+   * takes ("next session") is no words of the message. `ahead`: the text
+   * before the cursor in the target, this dictation's words in it (a text
+   * box's value up to the cursor); absent: what this dictation typed. */
+  context(ahead?: string): string {
+    if (!this.listening) return "";
+    const guessed = this.guessed;
+    let base = ahead ?? this.typed;
+    if (guessed && base.endsWith(guessed)) base = base.slice(0, base.length - guessed.length);
+    const said = joinWords(this.held, this.partial) || guessed.trim();
+    if (!said) return base.trim();
+    if (stopTail(said) !== null || isHushPhrase(said)) return base.trim();
+    const r = parseRadio(said);
+    if (r.kind === "over" || r.kind === "out" || r.kind === "disregard") return "";
+    if (r.kind === "undo") {
+      if (r.text.trim() || guessed) return base.trim();
+      const at = [...this.marks].reverse().find((m) => m < this.typed.length);
+      const last = at === undefined ? "" : this.typed.slice(at);
+      return (last && base.endsWith(last) ? base.slice(0, base.length - last.length) : base).trim();
+    }
+    const words = holdBack(r.text).type;
+    if (this.routes && !this.before.trim() && isSwitchCommand(words)) return base.trim();
+    return joinWords(base, words);
+  }
+
   /** Web Speech's interim words: the phrase so far, typed as a guess. */
   hearing(t: string): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
@@ -1544,6 +1607,10 @@ export interface DictTarget {
   /** A correction in one go: `old`, the last characters put in, becomes
    * `text` (a text box sets its value once; without it, erase then type). */
   replace?(old: string, text: string): boolean;
+  /** A text box: its text before the cursor, where the words go — the
+   * context a phrase is heard in ({@link LiveDictation.streamContext}).
+   * Absent (a session's terminal): what the dictation typed. */
+  before?(): string;
   /** A text box that sends itself (the ask pop-up's answer field): "over"
    * calls this instead of leaving the words in the box. `say`: the "Read
    * replies aloud" pref. */
@@ -1753,6 +1820,10 @@ export class LiveDictation {
   private unsent = "";
   /** Stop hearing of the current target's gate refusals. */
   private unwatch: (() => void) | null = null;
+  /** A send is on its way ("over"): the message's words are still counted
+   * as typed until it is through, but they are gone — a phrase opening
+   * meanwhile starts the next message ({@link streamContext}: none). */
+  private sending = false;
 
   constructor(
     private target: DictTarget | null,
@@ -1766,6 +1837,24 @@ export class LiveDictation {
     this.dict.routes = target?.kind !== "field";
     this.dict.continuous = !!opts.continuous;
     this.watch(target);
+  }
+
+  /** For the recognizer's next phrase (its stream's open): the message's
+   * words already said ahead of it ({@link Dictation.context}; a text box:
+   * its text up to the cursor, {@link DictTarget.before}) and the session
+   * they go to (none for a plain text box). After a send or a clear it is
+   * what is left: nothing. */
+  streamContext(): { context: string; session: string } {
+    if (this.done) return { context: "", session: "" };
+    const t = this.target;
+    if (this.sending) return { context: "", session: t?.title || "" };
+    let ahead: string | undefined;
+    try {
+      ahead = t?.before?.();
+    } catch {
+      ahead = undefined;
+    }
+    return { context: voiceContext(this.dict.context(ahead)), session: t?.title || "" };
   }
 
   /** Hear of `t`'s gate refusals (a session's keys go through the server). */
@@ -2227,7 +2316,8 @@ export class LiveDictation {
           this.acted = true;
           this.hooks.caption("Sending to " + t.name + "…", true);
           const say = this.hooks.replies();
-          const r = await t.submit(say);
+          this.sending = true;
+          const r = await t.submit(say).finally(() => (this.sending = false));
           if (r.ok && t.title) this.hooks.submitted(t.title, say);
           this.sent(r, out, from);
           return;
@@ -2245,20 +2335,26 @@ export class LiveDictation {
         }
         this.acted = true;
         this.hooks.caption("Sending to " + t.name + "…", true);
-        // Through the gate: Enter only once every word went in (a refusal
-        // was told to {@link refused}: the check below hands it over). Raw
-        // keys: give them a moment to land first.
-        if (t.gate) await t.gate.settled();
-        else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
-        if (this.done) return;
-        if (this.dialogBlocks(t)) {
-          await this.heldBack(t, "");
-          return;
+        this.sending = true;
+        try {
+          // Through the gate: Enter only once every word went in (a refusal
+          // was told to {@link refused}: the check below hands it over). Raw
+          // keys: give them a moment to land first.
+          if (t.gate) await t.gate.settled();
+          else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+          if (this.done) return;
+          if (this.dialogBlocks(t)) {
+            await this.heldBack(t, "");
+            return;
+          }
+          const say = this.hooks.replies();
+          const r = await submitDraft(t.title, t.name, say);
+          if (r.ok) this.hooks.submitted(t.title, say);
+          this.sending = false;
+          this.sent(r, out, from);
+        } finally {
+          this.sending = false;
         }
-        const say = this.hooks.replies();
-        const r = await submitDraft(t.title, t.name, say);
-        if (r.ok) this.hooks.submitted(t.title, say);
-        this.sent(r, out, from);
         return;
       }
     }
@@ -4514,6 +4610,11 @@ export interface RecognizerHandlers {
    * a lone command's short end-of-turn hold applies only then
    * ({@link turnHoldMs}). Absent: taken as empty. */
   blank?(): boolean;
+  /** Streaming: asked as each phrase's stream opens — the message's words
+   * already said ahead of it ({@link LiveDictation.streamContext}) and the
+   * session they go to, so the accurate model hears the phrase in its
+   * sentence. Absent or null: none. */
+  context?(): { context?: string; session?: string } | null;
   /** Streaming: a phrase ended (a pause, or finish()); its last words.
    * `final`: the whole phrase as the server's accurate model heard it — set
    * only when it differs from the fast words (absent: they stand). */
@@ -5257,10 +5358,18 @@ export function serverRecognizer(
     run(c, async () => {
       if (h !== hh || !c.stream) return;
       try {
+        // The words already in the message, as of now: the phrase before
+        // this one counts as far as it is heard (its final may still come).
+        let ctx: { context?: string; session?: string } | null = null;
+        try {
+          ctx = hh?.context?.() || null;
+        } catch {
+          ctx = null;
+        }
         const r = await call("/api/voice/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lang: langTag(), client: VOICE_CLIENT_ID }),
+          body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx)),
         });
         const id = String(r.j.id || "");
         if (h !== hh || !c.stream) {
