@@ -33,6 +33,8 @@ export interface BehaviorsCardProps {
   onClose?(): void;
   /** Narrow layout (a board row, a small tile slot). */
   compact?: boolean;
+  /** Start with every behavior open (they start collapsed to one line). */
+  expanded?: boolean;
   /** Set when the card is a Verify stop's: the route it parks. Lets the card
    * offer "Skip this stop" next to the behaviors — and, when the stop's
    * behaviors failed and HALTED the route, Retry · Skip · Let the agent fix it. */
@@ -49,7 +51,7 @@ export function ShieldIcon(): JSX.Element {
   );
 }
 
-export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsCardProps): JSX.Element {
+export function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }: BehaviorsCardProps): JSX.Element {
   const s = behaviorSummary(plan);
   const { data: instances } = useInstances();
   const session = (instances || []).find((i) => planForSession([plan], i) === plan) || null;
@@ -68,6 +70,9 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsC
   const [adding, setAdding] = useState(false);
   const [focus, setFocus] = useState<{ id: string; n: number }>({ id: "", n: 0 });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  // Rows start collapsed (one short line each — BehaviorRow); this opens or
+  // closes them all at once.
+  const [allOpen, setAllOpen] = useState<{ open: boolean; n: number }>({ open: !!expanded, n: 0 });
   const moreRef = useRef<HTMLButtonElement>(null);
 
   const withBusy = async (key: string, fn: () => Promise<unknown>) => {
@@ -171,6 +176,16 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsC
             {s.status}
           </span>
           {s.total ? <span className="bh-count">{behaviorsCount(s.total)}</span> : null}
+          {steps.length > 1 ? (
+            <button
+              type="button"
+              className="tb-item bh-quiet bh-expand-all"
+              title={allOpen.open ? "Collapse every behavior to one line" : "Show every behavior in full"}
+              onClick={() => setAllOpen((a) => ({ open: !a.open, n: a.n + 1 }))}
+            >
+              {allOpen.open ? "Collapse all" : "Expand all"}
+            </button>
+          ) : null}
           <span className="bh-head-tools">
             <button
               ref={moreRef}
@@ -286,6 +301,7 @@ export function BehaviorsCard({ plan, onClose, compact, flightStep }: BehaviorsC
               onRemove={remove}
               onFix={fixOne}
               focusNonce={focus.id === st.id ? focus.n : 0}
+              allOpen={allOpen}
             />
           ))}
         </ol>

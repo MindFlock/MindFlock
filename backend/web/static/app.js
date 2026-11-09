@@ -89224,7 +89224,7 @@ var ANSWERS = [
 		key: "3"
 	}
 ];
-function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce }) {
+function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce, allOpen }) {
 	const ref = (0, import_react.useRef)(null);
 	const key = noteKey$1(plan.id, step.id);
 	const draft = NOTES$1.get(key);
@@ -89234,6 +89234,10 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 	const [editing, setEditing] = (0, import_react.useState)(false);
 	const [confirmRemove, setConfirmRemove] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [open, setOpen] = (0, import_react.useState)(!!allOpen?.open);
+	(0, import_react.useEffect)(() => {
+		if (allOpen && allOpen.n) setOpen(allOpen.open);
+	}, [allOpen?.n]);
 	const setNoteOpen = (open, text = note) => {
 		setNoteOpenRaw(open);
 		if (open) NOTES$1.set(key, {
@@ -89251,6 +89255,7 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 	};
 	(0, import_react.useEffect)(() => {
 		if (!focusNonce) return;
+		setOpen(true);
 		const el = ref.current;
 		el?.scrollIntoView?.({
 			block: "nearest",
@@ -89266,6 +89271,7 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 	const shown = pending ?? entry?.result ?? "";
 	const yourEntry = entry?.by === "human";
 	const locked = pending !== null || busy;
+	const isOpen = open || editing || noteOpen || confirmRemove;
 	const record = async (result) => {
 		setPending(result);
 		try {
@@ -89344,14 +89350,27 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 					onSave: async (fields) => {
 						if (await onEdit(step, fields)) setEditing(false);
 					}
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "bh-text",
-					children: step.text
-				}), step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-text-line",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "bh-text bh-text-toggle" + (isOpen ? "" : " is-clamped"),
+						"aria-expanded": isOpen,
+						title: isOpen ? "Show less" : "Show the whole behavior and its answers",
+						onClick: () => setOpen(!isOpen),
+						children: step.text
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "bh-caret",
+						"aria-label": isOpen ? "Collapse" : "Expand",
+						onClick: () => setOpen(!isOpen),
+						children: isOpen ? "▾" : "▸"
+					})]
+				}), isOpen && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "bh-expect",
 					children: ["Expect: ", step.expect]
 				}) : null] }),
-				entry?.note && !yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				!isOpen ? null : entry?.note && !yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "bh-evidence",
 					title: "What the agent recorded",
 					children: [
@@ -89373,7 +89392,7 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 						entry.note
 					]
 				}) : null,
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				isOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "bh-row-actions",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -89479,7 +89498,7 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 							children: "Remove"
 						}) : null
 					]
-				}),
+				}) : null,
 				noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "bh-note-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -89616,7 +89635,7 @@ function ShieldIcon() {
 		})]
 	});
 }
-function BehaviorsCard({ plan, onClose, compact, flightStep }) {
+function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 	const s = behaviorSummary(plan);
 	const { data: instances } = useInstances();
 	const session = (instances || []).find((i) => planForSession([plan], i) === plan) || null;
@@ -89635,6 +89654,10 @@ function BehaviorsCard({ plan, onClose, compact, flightStep }) {
 		n: 0
 	});
 	const [menu, setMenu] = (0, import_react.useState)(null);
+	const [allOpen, setAllOpen] = (0, import_react.useState)({
+		open: !!expanded,
+		n: 0
+	});
 	const moreRef = (0, import_react.useRef)(null);
 	const withBusy = async (key, fn) => {
 		setBusy(key);
@@ -89744,6 +89767,16 @@ function BehaviorsCard({ plan, onClose, compact, flightStep }) {
 								className: "bh-count",
 								children: behaviorsCount(s.total)
 							}) : null,
+							steps.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "tb-item bh-quiet bh-expand-all",
+								title: allOpen.open ? "Collapse every behavior to one line" : "Show every behavior in full",
+								onClick: () => setAllOpen((a) => ({
+									open: !a.open,
+									n: a.n + 1
+								})),
+								children: allOpen.open ? "Collapse all" : "Expand all"
+							}) : null,
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 								className: "bh-head-tools",
 								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -89851,7 +89884,8 @@ function BehaviorsCard({ plan, onClose, compact, flightStep }) {
 					onEdit: edit,
 					onRemove: remove,
 					onFix: fixOne,
-					focusNonce: focus.id === st.id ? focus.n : 0
+					focusNonce: focus.id === st.id ? focus.n : 0,
+					allOpen
 				}, st.id))
 			}) : null,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {

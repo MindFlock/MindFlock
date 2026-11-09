@@ -98,7 +98,7 @@ describe("BehaviorsCard renders", () => {
   });
 
   it("one row per behavior: text, expect, who checks it, the result chip", () => {
-    const html = render(FAILED);
+    const html = render(FAILED, { expanded: true });
     expect(html.match(/<li class="bh-row/g)).toHaveLength(2);
     expect(html).toContain("The badge shows the queue count");
     expect(html).toContain("Expect: a worked");
@@ -109,7 +109,7 @@ describe("BehaviorsCard renders", () => {
   });
 
   it("yours get Pass · Fail · Can't check; the agent's show its note as evidence", () => {
-    const html = render(FAILED);
+    const html = render(FAILED, { expanded: true });
     // Only the human row carries the three answers.
     expect(html.match(/bh-answer-pass/g)).toHaveLength(1);
     expect(html).toContain(">Can&#x27;t check</button>");
@@ -118,6 +118,18 @@ describe("BehaviorsCard renders", () => {
     expect(html).toContain(">Fix</button>");
     expect(html.match(/>Remove<\/button>/g)).toHaveLength(1);
     expect(html.match(/>Edit<\/button>/g)).toHaveLength(2);
+  });
+
+  it("rows start collapsed: the chip and the text (a toggle) only, with Expand all", () => {
+    const html = render(FAILED);
+    expect(html.match(/<li class="bh-row/g)).toHaveLength(2);
+    expect(html).toContain("The badge shows the queue count");
+    expect(html).toMatch(/class="bh-text bh-text-toggle is-clamped"[^>]*aria-expanded="false"/);
+    expect(html).not.toContain("Expect: a worked");
+    expect(html).not.toContain("bh-answer-pass");
+    expect(html).not.toContain("The agent:</span>");
+    expect(html).toContain(">Expand all</button>");
+    expect(html).toMatch(/class="bh-chip" data-check="fail"[^>]*>.*Failed/);
   });
 
   it("+ Add a behavior at the foot; Skip this stop on a Verify stop's card", () => {
