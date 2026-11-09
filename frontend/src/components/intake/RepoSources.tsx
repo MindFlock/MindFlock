@@ -20,7 +20,7 @@
  * `repository.verify_repos` + `repository.verify_repo_settings`, maps keyed by
  * `owner/name` whose block may carry `agent`, `depth`, `base_branch` (PR),
  * `min_age_minutes`, `skip_authors`, and on Verify `live_branch`,
- * `deploy_delay_minutes`, `target`, `prompt`. An absent key or blank value
+ * `deploy_delay_minutes`, `target`, `environments` (a list), `prompt`. An absent key or blank value
  * inherits the tab-wide default, which every placeholder names.
  */
 
@@ -60,6 +60,8 @@ import {
   type RepoUse,
 } from "./repoUses";
 import { sourceRepos } from "./repoList";
+import { RepoEnvironments } from "./RepoEnvironments";
+import { envsOf, type VerifyEnv } from "../../lib/verifyStop";
 
 export const REPO_RE = /^[^\s/]+\/[^\s/]+$/;
 
@@ -105,6 +107,9 @@ export interface RepoOverride {
   /** Verify only: where this repo's running product is. Blank means "there is
    * no deployment to point at" — a real answer for a library or a CLI. */
   target?: string;
+  /** Verify only: more places its behaviors can be checked on (a Verify
+   * stop's "Where" names one); the fields above are the implicit "live". */
+  environments?: VerifyEnv[];
   /** Verify only: standing instructions folded into the prompt that writes a
    * plan for this repo. Truncated server-side; see `VERIFY_PROMPT_MAX`. */
   prompt?: string;
@@ -264,7 +269,7 @@ export function RepoFields({
   const save = (field: string, value: string) => saveFields({ [field]: value });
   // Several fields in ONE save ("Goes as far as": a rung writes the depth and
   // clears the plan together, so the two never land out of order).
-  const saveFields = (fields: Record<string, string>) => {
+  const saveFields = (fields: Record<string, string | Json[]>) => {
     const before = blocksRef.current;
     let patch: Record<string, Json> = {};
     let next = before;
@@ -284,6 +289,8 @@ export function RepoFields({
     const live = o.live_branch || defaults.liveBranch;
     return (
       <div className="ik-fields" data-use="verify" key={repo}>
+        <fieldset className="vf-live-env" data-env="live">
+          <legend className="set-label">Live environment</legend>
         <div className="ik-grid ik-grid-2">
           <BlockInput
             label="Live branch"
@@ -322,6 +329,9 @@ export function RepoFields({
           hint="URL and test login the checks use. Blank checks a fresh checkout."
           onSave={save}
         />
+          <span className="set-hint">A Verify stop names it “live”.</span>
+        </fieldset>
+        <RepoEnvironments value={envsOf(o)} onSave={(list) => saveFields({ environments: list as unknown as Json[] })} />
         <label className="set-row">
           <span className="set-label">Notes for the behaviors writer (optional)</span>
           <textarea
