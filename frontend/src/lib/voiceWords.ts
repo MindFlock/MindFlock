@@ -58,7 +58,7 @@ export const BUILTIN_VOICE_WORDS: VoiceWords = {
   send: ["over"],
   end: ["over and out", "over, out"],
   clear: ["disregard"],
-  undo: ["scratch that", "undo that"],
+  undo: ["scratch that"],
   stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
   hush: ["stop talking", "be quiet", "quiet", "hush", "shut up", "enough"],
   wake: "mindflock",

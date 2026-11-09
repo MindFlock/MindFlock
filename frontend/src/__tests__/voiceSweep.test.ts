@@ -48,9 +48,9 @@ afterEach(() => W.resetVoiceWords());
 describe("the undo word (`undo`: “scratch that”)", () => {
   it("is a voice-words kind with defaults, kept when an older server's payload lacks it", () => {
     expect(W.PHRASE_KINDS).toContain("undo");
-    expect(W.BUILTIN_VOICE_WORDS.undo).toEqual(["scratch that", "undo that"]);
+    expect(W.BUILTIN_VOICE_WORDS.undo).toEqual(["scratch that"]);
     W.applyVoiceView({ words: { send: ["roger"] }, words_default: { send: ["over"] } });
-    expect(W.voiceWords().undo).toEqual(["scratch that", "undo that"]);
+    expect(W.voiceWords().undo).toEqual(["scratch that"]);
     W.applyVoiceView({ words: { send: ["over"], undo: ["take that back"] } });
     expect(W.voiceWords().undo).toEqual(["take that back"]);
     expect(parseRadio("fix it take that back")).toEqual({ kind: "undo", text: "fix it" });
@@ -59,7 +59,8 @@ describe("the undo word (`undo`: “scratch that”)", () => {
   it("ends a phrase: the words before it; alone: nothing before it", () => {
     expect(parseRadio("fix the login bug scratch that")).toEqual({ kind: "undo", text: "fix the login bug" });
     expect(parseRadio("Scratch that.")).toEqual({ kind: "undo", text: "" });
-    expect(parseRadio("undo that")).toEqual({ kind: "undo", text: "" });
+    // "undo that" is ordinary dictation ("can you undo that"), not a default.
+    expect(parseRadio("can you undo that").kind).toBe("");
     // Mid-sentence it is words.
     expect(parseRadio("scratch that itch").kind).toBe("");
     // Its heard forms (the server's `words.heard.undo`) count too.
@@ -70,7 +71,6 @@ describe("the undo word (`undo`: “scratch that”)", () => {
   it("a phrase another kind already says stays that kind (a clear word “scratch” keeps its tail)", () => {
     W.setVoiceWords({ ...W.BUILTIN_VOICE_WORDS, clear: ["scratch"] });
     expect(parseRadio("toss it scratch that")).toEqual({ kind: "disregard", text: "toss it" });
-    expect(parseRadio("toss it undo that")).toEqual({ kind: "undo", text: "toss it" });
   });
 
   it("is held back while “that” may follow, so “scratch” is never typed early", () => {
@@ -108,7 +108,7 @@ describe("the undo word (`undo`: “scratch that”)", () => {
     expect(d.typed).toBe("fix the login bug and add a test ");
     expect(d.heard("scratch that")).toEqual({ kind: "undo", text: "and add a test ", alone: true });
     expect(d.typed).toBe("fix the login bug ");
-    expect(d.heard("undo that")).toEqual({ kind: "undo", text: "fix the login bug ", alone: true });
+    expect(d.heard("scratch that")).toEqual({ kind: "undo", text: "fix the login bug ", alone: true });
     expect(d.typed).toBe("");
     expect(d.heard("scratch that")).toEqual({ kind: "undo", text: "", alone: true });
   });

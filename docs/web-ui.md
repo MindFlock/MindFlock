@@ -7147,7 +7147,7 @@ in the session's input field at once — word by word while you speak when the
 server's recogniser streams. A phrase ending in "over" stops and sends the
 words (Enter, after the server's dialog checks), one ending in "disregard"
 takes back what was typed and keeps listening, one ending in "scratch that"
-(or "undo that") drops just that phrase — said alone it takes back the last
+drops just that phrase — said alone it takes back the last
 phrase typed and not yet sent — and Esc takes it all back and stops;
 "stop recording" (or "that's all", "mic off") stops at any point, never typed,
 and leaves the words in the field unsent — as letting go of push to talk does.
@@ -7421,7 +7421,7 @@ every save), then the server's.
 
 - **The rows**: **Send** ("over" — sends, listening goes on), **End (send and
   stop)** ("over and out", "over, out"), **Start over** ("disregard"),
-  **Undo last phrase** ("scratch that", "undo that" — at the end of a phrase
+  **Undo last phrase** ("scratch that" — at the end of a phrase
   it drops that phrase; said alone it takes back the last phrase typed and
   not yet sent, exactly its characters, as "disregard" takes back all of
   them; silent: a caption, no spoken line; an older server whose `words` has
