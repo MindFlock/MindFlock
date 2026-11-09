@@ -377,6 +377,8 @@ async def _create_planned(plan: dict, request, program: str = "") -> dict:
     payload = {"title": title, "repo_path": plan["repo_path"]}
     if program:
         payload["program"] = program
+    if plan.get("model"):
+        payload["profile_model"] = plan["model"]
     if plan["task"]:
         payload["prompt"] = plan["task"]
     try:

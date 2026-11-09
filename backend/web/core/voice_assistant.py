@@ -939,15 +939,25 @@ async def _default_help(question: str) -> dict:
 
 
 def _write_setting(group: str, field: str, value: Any) -> None:
+    """Save one setting the way ``POST /api/settings`` does: the write, the
+    sync stamp, then the settings hooks (a pipeline reconcile when the save
+    moved what the pipeline reads, and the ``settings.synced`` refetch)."""
     from backend.config import settings as store
+    from backend.web.core import settings_hooks
 
+    path = "%s.%s" % (group, field)
+    try:
+        before = settings_hooks.pipeline_signature()
+    except Exception:  # noqa: BLE001 — no signature = no reconcile, still saved
+        before = None
     store.update_settings(**{group: {field: value}})
     try:
         from backend.web.core import settings_sync
 
-        settings_sync.local_change(["%s.%s" % (group, field)])
+        settings_sync.local_change([path])
     except Exception:  # noqa: BLE001 — a save never fails on the sync stamp
         pass
+    settings_hooks.after_settings_change([path], pipeline_before=before)
 
 
 async def _default_write_setting(group: str, field: str, value: Any) -> None:
@@ -1104,6 +1114,9 @@ async def _execute(
         "repo_name": repo_name,
         "repo_path": path,
         "task": action["prompt"],
+        # The model the person named ("…with opus"): the New dialog's
+        # per-session model pin (session_create's ``profile_model``).
+        "model": str(action.get("model") or ""),
     }
     try:
         out = await ctx.create(plan, action.get("program") or "")

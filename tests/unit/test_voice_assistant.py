@@ -758,6 +758,7 @@ def test_new_session_resolves_the_project_and_creates():
         "repo_name": "sitecheck-bot7",
         "repo_path": "/r/sitecheck-bot7",
         "task": "Add a README",
+        "model": "",
     }
     assert program == "claude"
     assert events[0] == {
