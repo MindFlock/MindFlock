@@ -62,8 +62,8 @@ $ErrorActionPreference = 'Continue'
 # The uv installer run when uv is absent: version-pinned + checksum-verified.
 # Bump both together (sha256 of https://astral.sh/uv/<version>/install.ps1);
 # .github/workflows/bump-uv-pin.yml rewrites them with install.sh's pair.
-$UvPinnedVersion = '0.11.29'
-$UvInstallerSha256 = 'd40be32be5121f25fd433cdc5786549b53aad072947674c2818a9c31a7912b4d'  # pragma: allowlist secret
+$UvPinnedVersion = '0.13.7'
+$UvInstallerSha256 = 'd9e70de578ea2653b631a5933c0296368fca4c91f412b46680661b81bbc399e0'  # pragma: allowlist secret
 # The interpreter uv pins the tool venv to (INSTALL_PYTHON in install.sh).
 $InstallPython = '3.12'
 $GitWinget = 'winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements'
