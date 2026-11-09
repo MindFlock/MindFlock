@@ -8739,6 +8739,72 @@ def recently_closed() -> JSONResponse:
     return JSONResponse(out)
 
 
+@app.post("/api/sessions/by-branch/hand-off")
+async def hand_off_by_branch(payload: dict) -> JSONResponse:
+    """Give work to the session that BUILT a branch (docs/pr-review-rounds.md
+    "The same session"): ``{"branch", "text"}`` → the text goes into that
+    session's prompt queue (typed in once its agent is idle), so a PR's review
+    lands where the ticket was worked, with all of its context.
+
+    The session: a live one on ``branch`` (the ticket's own session before a
+    ``pr-…`` one; never a verify checker) → ``{"title", "how": "queued"}``;
+    else the newest recently-closed one on it, REOPENED on its worktree with
+    its conversation (as the Recently closed dialog does) → ``"reopened"``;
+    else 404 — the caller starts a session of its own."""
+    body = payload or {}
+    branch = str(body.get("branch") or "").strip()
+    text = str(body.get("text") or "")
+    if not branch or not text.strip():
+        return JSONResponse({"error": "branch and text are required"}, status_code=400)
+
+    def _rank(title: str) -> int:
+        return 1 if title.startswith("pr-") else 0
+
+    live = sorted(
+        (
+            t
+            for t, inst in list(ENGINE.instances.items())
+            if str(getattr(inst, "Branch", "") or "") == branch
+            and not t.startswith("verify-")
+        ),
+        key=_rank,
+    )
+    how = "queued"
+    title = live[0] if live else ""
+    if not title:
+        items = _load_recently_closed()
+        closed = [
+            e
+            for e in items
+            if str(e.get("branch") or (e.get("data") or {}).get("branch") or "")
+            == branch
+            and not str(e.get("title") or "").startswith("verify-")
+        ]
+        # The ticket's own sessions before a pr-… one; newest first within.
+        closed.sort(key=lambda e: str(e.get("closed_at") or ""), reverse=True)
+        closed.sort(key=lambda e: _rank(str(e.get("title") or "")))
+        if not closed:
+            return JSONResponse(
+                {"error": "no session on this machine built %s" % branch},
+                status_code=404,
+            )
+        resp = await _reopen_closed_entry(str(closed[0].get("id") or ""))
+        if resp.status_code >= 300:
+            return resp
+        try:
+            title = str(json.loads(bytes(resp.body).decode("utf-8")).get("title") or "")
+        except Exception:  # noqa: BLE001
+            title = ""
+        if not title:
+            return JSONResponse(
+                {"error": "reopened, but no title came back"}, status_code=500
+            )
+        how = "reopened"
+    _prompt_queue.enqueue(title, text)
+    _prompt_queue.set_flags(title, enabled=True, held=False)
+    return JSONResponse({"title": title, "how": how})
+
+
 @app.post("/api/recently-closed/{entry_id}/reopen")
 async def reopen_recently_closed(entry_id: str) -> JSONResponse:
     """Recreate a closed session as a running instance on its preserved worktree."""

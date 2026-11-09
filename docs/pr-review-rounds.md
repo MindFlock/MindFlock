@@ -44,3 +44,21 @@ resolves a reviewer's thread for them.
 "r:<review id>", …], "at": …}}` — what each round carried, so a request goes
 out once. A request older than the PR's first pass (`processed_prs`) counts as
 handled by that pass.
+
+## The same session
+
+PR work goes back to the session that **built the branch** — usually the
+ticket's own session — so the agent addressing the review has the ticket, its
+plan and its earlier reasoning in context, instead of a fresh session reading
+the diff cold. The pipeline asks the server (`POST
+/api/sessions/by-branch/hand-off {branch, text}`):
+
+1. a live session on the PR's head branch (the ticket's before a `pr-…` one;
+   never a verify checker) gets the review in its prompt queue (typed in once
+   its agent is idle) → `queued`;
+2. else the newest recently-closed one is **reopened** on its worktree, with
+   its conversation, then given the review → `reopened`;
+3. else (404, or the server is out of reach) the PR gets a session of its own,
+   as before.
+
+Both the first pass on a PR and every later review round go this way.
