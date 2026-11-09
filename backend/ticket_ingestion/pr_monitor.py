@@ -60,6 +60,19 @@ class PRMonitor:
         eligible.sort(key=lambda p: p.created_at)
         return eligible
 
+    async def my_open_prs(self) -> list[PullRequest]:
+        """Your open, non-draft PRs in the watched repos (into their base
+        branch) — the ones a new review round is looked for on
+        (pr_rounds), whether or not intake has handled them yet."""
+        repos = self.config.repo_list()
+        if not repos:
+            return []
+        my_login = await self._authenticated_user_login()
+        out: list[PullRequest] = []
+        for repo in repos:
+            out.extend(p for p in await self._list_prs(repo) if p.author == my_login)
+        return out
+
     async def _authenticated_user_login(self) -> str:
         if self._my_login:
             return self._my_login

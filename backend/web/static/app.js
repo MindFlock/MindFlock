@@ -113725,21 +113725,56 @@ function RepoFields({ use, repo, liveBranch }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1"),
-				children: [use === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-					label: "Base branch",
-					field: "base_branch",
-					value: text("base_branch"),
-					placeholder: defaults.baseBranch || "the repo's default branch",
-					hint: "Only PRs into this branch auto-start.",
-					onSave: save
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-					label: use === "pr" ? "Ignore comments from" : "Ignore issues from",
-					field: "skip_authors",
-					value: text("skip_authors"),
-					placeholder: defaults.skipAuthors || "e.g. dependabot, renovate",
-					hint: "GitHub logins, comma-separated.",
-					onSave: save
-				})]
+				children: [
+					use === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+						label: "Base branch",
+						field: "base_branch",
+						value: text("base_branch"),
+						placeholder: defaults.baseBranch || "the repo's default branch",
+						hint: "Only PRs into this branch auto-start.",
+						onSave: save
+					}),
+					use === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "When changes are requested"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								"data-repo-field": "changes_requested",
+								value: o.changes_requested || "",
+								onChange: (e) => save("changes_requested", e.target.value),
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "",
+										children: "Triage and handle"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "ask",
+										children: "Triage, then ask me"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+										value: "off",
+										children: "Leave it to me"
+									})
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "A new “changes requested” review or batch of comments on one of your PRs goes to its session, which decides per request: do it, push back with a reply, or ask you."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+						label: use === "pr" ? "Ignore comments from" : "Ignore issues from",
+						field: "skip_authors",
+						value: text("skip_authors"),
+						placeholder: defaults.skipAuthors || "e.g. dependabot, renovate",
+						hint: "GitHub logins, comma-separated.",
+						onSave: save
+					})
+				]
 			})
 		]
 	}, repo);

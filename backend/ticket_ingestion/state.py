@@ -544,6 +544,53 @@ def record_ticket_route(state_dir: Path | str, slug: str, decision: dict) -> Non
     _write_state(state_dir, data)
 
 
+def processed_pr_times(state_dir: Path | str) -> dict:
+    """``{(repo, number): epoch}`` — when intake last recorded each PR as
+    processed (its first handling; a review round counts what came after)."""
+    data = _read_state(state_dir)
+    out: dict = {}
+    for entry in data.get("processed_prs") or []:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            key = (str(entry.get("repo") or ""), int(entry.get("number")))
+            at = datetime.fromisoformat(str(entry.get("processed_at"))).timestamp()
+        except (TypeError, ValueError):
+            continue
+        out[key] = max(out.get(key, 0.0), at)
+    return out
+
+
+def load_pr_rounds(state_dir: Path | str) -> dict:
+    """PR review rounds already handed to a session (docs/pr-review-rounds.md):
+    ``{"<repo>#<number>": {"items": ["c:<comment id>", "r:<review id>", …],
+    "at": <epoch>}}``."""
+    data = _read_state(state_dir)
+    rounds = data.get("pr_rounds")
+    return dict(rounds) if isinstance(rounds, dict) else {}
+
+
+def record_pr_round(
+    state_dir: Path | str, repo: str, number: int, items: list[str]
+) -> None:
+    """Add ``items`` (a round's comment/review keys) to the PR's handled set."""
+    import time as _time
+
+    data = _read_state(state_dir)
+    rounds = data.get("pr_rounds")
+    if not isinstance(rounds, dict):
+        rounds = {}
+    key = "%s#%d" % (repo, int(number))
+    entry = rounds.get(key) if isinstance(rounds.get(key), dict) else {}
+    have = [str(x) for x in entry.get("items") or []]
+    for item in items:
+        if item not in have:
+            have.append(item)
+    rounds[key] = {"items": have[-500:], "at": _time.time()}
+    data["pr_rounds"] = rounds
+    _write_state(state_dir, data)
+
+
 def load_processed_prs(state_dir: Path | str) -> set[tuple[str, int]]:
     """Return the set of ``(repo, number)`` pairs already provisioned.
 

@@ -103,6 +103,12 @@ class GithubConfig:
         val = self._override(repo, "skip_authors")
         return list(val) if val is not None else list(self.skip_authors or [])
 
+    def changes_requested_for(self, repo: str) -> str:
+        """What a new review round on one of your PRs in ``repo`` does
+        (docs/pr-review-rounds.md): "triage" (default), "ask" or "off"."""
+        val = str(self._override(repo, "changes_requested") or "").strip().lower()
+        return val if val in ("ask", "off") else "triage"
+
     def agent_for_repo(self, repo: str) -> str:
         """Coding CLI ``repo``'s review sessions run (``""`` = inherit)."""
         return str(self._override(repo, "agent") or "")

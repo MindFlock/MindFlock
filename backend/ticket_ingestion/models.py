@@ -244,6 +244,9 @@ class PRComment:
     path: str | None = None
     line: int | None = None
     diff_hunk: str | None = None
+    #: ISO 8601 (GitHub's createdAt / submitted_at) — when it was said; a
+    #: review round waits for the reviewer to stop (pr_rounds.SETTLE_S).
+    created_at: str | None = None
 
 
 @dataclass
