@@ -44,6 +44,7 @@ query($owner:String!, $name:String!, $number:Int!) {
               path
               line
               diffHunk
+              createdAt
               url
             }
           }
@@ -164,6 +165,54 @@ async def _fetch_review_comments(
                     path=c.get("path"),
                     line=c.get("line") if isinstance(c.get("line"), int) else None,
                     diff_hunk=c.get("diffHunk"),
+                    created_at=str(c.get("createdAt") or "") or None,
                 )
             )
+    return out
+
+
+async def fetch_changes_requested(
+    pr: PullRequest, config: GithubConfig
+) -> list[PRComment]:
+    """The PR's "changes requested" reviews (REST ``/pulls/{n}/reviews``), as
+    comments (``kind="review"``, ``id`` = the review id, ``path`` None): a
+    review round's top-level asks (docs/pr-review-rounds.md). The PR author's
+    own and ``skip_authors``' are dropped, like inline comments. Raises
+    :class:`PRCommentsFetchError` on a failed fetch (never reads as "none")."""
+    skip = {pr.author, *config.skip_authors_for(pr.repo)}
+    token = await resolve_token(config)
+    url = f"{_GITHUB_API}/repos/{pr.repo}/pulls/{pr.number}/reviews"
+    try:
+        async with aiohttp.ClientSession(timeout=_HTTP_TIMEOUT) as session:
+            async with session.get(
+                url, params={"per_page": "100"}, headers=_headers(token)
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise PRCommentsFetchError(
+                        f"reviews returned {resp.status} for PR #{pr.number}: {text[:200]}"
+                    )
+                data = await resp.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        raise PRCommentsFetchError(
+            f"review fetch failed for PR #{pr.number}: {e}"
+        ) from e
+    out: list[PRComment] = []
+    for r in data if isinstance(data, list) else []:
+        if not isinstance(r, dict) or r.get("state") != "CHANGES_REQUESTED":
+            continue
+        author = (r.get("user") or {}).get("login") or ""
+        if author in skip or not isinstance(r.get("id"), int):
+            continue
+        out.append(
+            PRComment(
+                id=r["id"],
+                kind="review",
+                author=author,
+                body=str(r.get("body") or "").strip()
+                or "(requested changes — see the inline comments)",
+                url=str(r.get("html_url") or ""),
+                created_at=str(r.get("submitted_at") or "") or None,
+            )
+        )
     return out

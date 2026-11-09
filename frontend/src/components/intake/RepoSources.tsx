@@ -97,6 +97,9 @@ export interface RepoOverride {
   base_branch?: string;
   min_age_minutes?: number | string;
   skip_authors?: string[] | string;
+  /** PRs only: what a new review round on one of your PRs does
+   * (docs/pr-review-rounds.md): "" triage and handle, "ask", "off". */
+  changes_requested?: string;
   /** Verify only: which branch counts as SHIPPED for this repo, so a plan
    * written here goes due when its commit lands on it. Per repo because "what
    * counts as live" is a per-repo fact — `main` here, `staging` next door — and
@@ -404,6 +407,19 @@ export function RepoFields({
             hint="Only PRs into this branch auto-start."
             onSave={save}
           />
+        )}
+        {use === "pr" && (
+          <label className="set-row">
+            <span className="set-label">When changes are requested</span>
+            <select data-repo-field="changes_requested" value={o.changes_requested || ""} onChange={(e) => save("changes_requested", e.target.value)}>
+              <option value="">Triage and handle</option>
+              <option value="ask">Triage, then ask me</option>
+              <option value="off">Leave it to me</option>
+            </select>
+            <span className="set-hint">
+              A new “changes requested” review or batch of comments on one of your PRs goes to its session, which decides per request: do it, push back with a reply, or ask you.
+            </span>
+          </label>
         )}
         <BlockInput
           label={use === "pr" ? "Ignore comments from" : "Ignore issues from"}

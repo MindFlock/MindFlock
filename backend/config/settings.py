@@ -2504,6 +2504,13 @@ REPO_OVERRIDE_KEYS = (
     # The flight plan an item from this repo flies (docs/flights.md). Blank =
     # the built-in plan for that kind cut at ``depth`` (none without a depth).
     "plan",
+    # PR review ROUNDS (docs/pr-review-rounds.md): what happens when one of
+    # your PRs gets a new "changes requested" review or a new batch of review
+    # comments after MindFlock first handled it. Blank = "triage" (the PR's
+    # session decides per request: do it / push back with a reply / ask you,
+    # then does what it decided), "ask" (it triages and recommends, then waits
+    # for your go-ahead), "off" (new rounds are left to you).
+    "changes_requested",
 )
 
 

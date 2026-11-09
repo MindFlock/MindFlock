@@ -447,7 +447,37 @@ class SessionRunner:
         )
         return branch
 
-    async def run_pr(self, pr: PullRequest, comments: list[PRComment]) -> str:
+    def _stored_titles(self) -> set:
+        """Session titles in MindFlock's state.json (raw JSON, no restores)."""
+        try:
+            from backend import config as cs_config
+
+            raw = cs_config.LoadState().GetInstances()
+            if isinstance(raw, (bytes, bytearray)):
+                raw = bytes(raw).decode("utf-8")
+            return {str(x.get("title")) for x in (json.loads(raw) if raw else [])}
+        except Exception:  # noqa: BLE001
+            return set()
+
+    async def deliver_pr_round(self, pr: PullRequest, prompt: str) -> str:
+        """Hand a review round (pr_rounds) to the PR's session: QUEUED into
+        ``pr-<slug>`` when it still exists (the server's prompt-queue drain
+        types it in once the agent is idle) → ``"queued"``; otherwise a new PR
+        session with this prompt → ``"started"``."""
+        title = f"pr-{pr_slug(pr)}"
+        if title in self._stored_titles():
+            from backend.web.core import prompt_queue as _pq
+
+            _pq.enqueue(title, prompt)
+            _pq.set_flags(title, enabled=True, held=False)
+            logger.info("PR #%d: review round queued into %s", pr.number, title)
+            return "queued"
+        await self.run_pr(pr, [], prompt_override=prompt)
+        return "started"
+
+    async def run_pr(
+        self, pr: PullRequest, comments: list[PRComment], prompt_override: str = ""
+    ) -> str:
         """Address all PR comments in ONE MindFlock session; return head ref.
 
         Reuses PRProvisioner (correct fork / pull-head fetch) to materialize the
@@ -457,7 +487,9 @@ class SessionRunner:
         """
         await _wait_for_launch_room("PR #%s" % pr.number)
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
-        prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
+        prompt = prompt_override or build_consolidated_pr_prompt(
+            pr, comments, workspace.directory
+        )
         title = f"pr-{pr_slug(pr)}"
         prompt += self._arm(
             title,
