@@ -17,6 +17,8 @@ import io
 import wave
 from types import SimpleNamespace
 
+import importlib.util
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -54,6 +56,14 @@ def _isolate(isolate_settings_store, monkeypatch, tmp_path):
 def _voice(**fields):
     S.update_settings(voice=fields)
     S.invalidate()
+
+
+#: Synthesis converts the model's samples with numpy, which comes with the
+#: voice packages (kokoro-onnx needs it), not with the base install CI runs.
+needs_numpy = pytest.mark.skipif(
+    importlib.util.find_spec("numpy") is None,
+    reason="numpy comes with the voice packages (uv sync --group voice)",
+)
 
 
 class _FakeModel:
@@ -174,6 +184,7 @@ class TestReadiness:
 # --------------------------------------------------------------------------- #
 # Synthesis
 # --------------------------------------------------------------------------- #
+@needs_numpy
 class TestSpeak:
     def test_wav_at_the_models_rate(self, installed):
         audio, mime = speech.get("tts", "kokoro").speak("Hello there.", "bf_emma")
@@ -512,6 +523,7 @@ class TestRoutes:
         client.get("/api/voice?warm=0&assistant=1")
         assert warmed == [1]
 
+    @needs_numpy
     def test_the_assistant_speaks_with_kokoro(self, installed, host):
         _voice(assistant_voice="bm_george")
         r = client.post(
@@ -534,6 +546,7 @@ class TestRoutes:
         assert again.headers["X-Voice-Cache"] == "hit" and again.content == r.content
         assert len(routes.SPEAK_CACHE) == 0
 
+    @needs_numpy
     def test_an_explicit_kokoro_voice_wins(self, installed, host):
         r = client.post(
             "/api/voice/speak",

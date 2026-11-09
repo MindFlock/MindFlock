@@ -282,10 +282,13 @@ class TestDescribe:
         assert '"voice-moonshine-btn"' in js
         assert '"Install fast recognition (Moonshine, ~200 MB)"' in js
         assert '"Live words: Moonshine"' in js
+        # One install POST for every kind (Moonshine, Kokoro): it names
+        # `what`, and the local models' install still sends no body.
         assert in_bundle(
-            '{ method: "POST", json: { what: "moonshine" } } : { method: "POST" }',
+            '{ method: "POST", json: { what: opts.what } } : { method: "POST" }',
             js,
         )
+        assert 'opts.what !== "local"' in js
 
 
 # --------------------------------------------------------------------------- #

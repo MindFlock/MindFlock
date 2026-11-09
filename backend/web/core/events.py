@@ -272,6 +272,10 @@ EVENT_NAMES = (
     # A flight landed, halted or was cancelled, once (data: as
     # flight.changed).
     "flight.finished",
+    # A timed todo came due, or its snooze ran out (addons/assistant.py; the
+    # reminder dialog and the "A todo comes due" push). data: {id, text, due,
+    # detail}.
+    "todo.due",
     # Template runs (core.template_schedule is their one emitter). A template
     # started a fresh session — Run now or its schedule (``session`` is the
     # new one; data: {"template", "trigger": "manual"|"schedule"}). For UI
