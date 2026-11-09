@@ -7164,7 +7164,7 @@
   // (voiceIsHush); the stop tail (voiceTail) takes a stop phrase heard a
   // letter off only after every exact reading (as the server and desktop).
   var VOICE_WORDS_DEFAULT = {
-    send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"], undo: ["scratch that", "undo that"],
+    send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"], undo: ["scratch that"],   // not "undo that": "can you undo that" is words for the agent
     stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
     hush: ["stop talking", "be quiet", "quiet", "hush", "shut up", "enough"],
     wake: "mindflock",
