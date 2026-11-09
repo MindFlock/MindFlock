@@ -249,6 +249,25 @@ stored plans and flights lose the key the next time they are normalised.
 Plan JSON sent through the MCP tools, the CLI or the API should use
 `where` / `ready`.
 
+
+#### When the check can't go on (never silently)
+
+Found live 2026-11-09: a check the memory guard refused read as running
+forever, a checker that ended its turn with a background job and no answers
+read as "checking" for two hours, and a run that answered every behavior
+"blocked" passed as "checked". A Verify stop now always says why it isn't
+moving, and comes to you when only you can move it:
+
+| What happened | What the stop does |
+|---|---|
+| The memory guard refused the checker's session (the run route answers 409 `reason: "memory"`) | waits — "waiting for memory to start the check (<why>)" — and retries every 30 s; after 30 min it parks on you: free memory then Retry, or Skip |
+| It believes a check started, but no run exists 60 s later | fails: "the check never started" |
+| A check is running | says progress: "the agent is checking the behaviors · 3 of 7 answered · quiet 6 min" (the checker rewrites its results file after every step) |
+| No new answer for 8 min and the checker's turn is over | nudges it once: write the file, mark the rest blocked, stop background jobs |
+| Still nothing 15 min after the nudge, or past the 30-minute budget (+5) | closes the check: answered steps keep their answers, the rest become `blocked` ("not checked: …") |
+| The checker answered `blocked` with `needs you: <action>` (a manual step: approve something, click as a reviewer, start a paused job) | parks on you: "the check needs you to do N things, then press Done". **Done = "I did it"**: the stop runs again and the whole check re-runs, told what you did |
+| The checker answered plain `blocked` | parks on you listing them with its why — answer them on the Behaviors card, or Skip. **Never** counted as a pass, whatever `who` says ("Agent only" too) |
+
 ### The CLI
 
 ```

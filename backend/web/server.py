@@ -11443,6 +11443,7 @@ async def run_test_plan(
             {
                 "error": "%s is already verifying this plan" % plan["run_session"],
                 "session": plan["run_session"],
+                "reason": "busy",
             },
             status_code=409,
         )
@@ -11452,7 +11453,10 @@ async def run_test_plan(
         # empty checklist. 409 (not 400) — the request is fine, the plan is not
         # ready, and the regenerate button is the fix.
         return JSONResponse(
-            {"error": "this plan has no steps yet — regenerate it first"},
+            {
+                "error": "this plan has no steps yet — regenerate it first",
+                "reason": "no_steps",
+            },
             status_code=409,
         )
     if not any(s["actor"] != "human" for s in plan["steps"]):
@@ -11467,7 +11471,8 @@ async def run_test_plan(
         return JSONResponse(
             {
                 "error": "every behavior here is for a person to check — "
-                "there is nothing here an agent can settle"
+                "there is nothing here an agent can settle",
+                "reason": "human_only",
             },
             status_code=409,
         )
@@ -11484,7 +11489,8 @@ async def run_test_plan(
             {
                 "error": "the repo these behaviors were written from is gone (%s) — "
                 "a run needs it to check out the live branch"
-                % (repo_root or "no path recorded")
+                % (repo_root or "no path recorded"),
+                "reason": "repo_gone",
             },
             status_code=409,
         )
@@ -11615,7 +11621,7 @@ async def run_test_plan(
         # already sitting on the live branch.
         resp = await instance_send(title, {"text": prompt})
         if resp.status_code >= 400:
-            return resp
+            return _run_launch_refusal(resp)
         # A run that predates the flag (hidden by its name alone until now)
         # is flagged the first time it is reused. Idempotent.
         await asyncio.to_thread(_hidden_sessions.set_hidden_by, title, "verify")
@@ -11636,7 +11642,27 @@ async def run_test_plan(
             request,
         )
         if resp.status_code >= 400:
-            return resp
+            return _run_launch_refusal(resp)
+        if resp.status_code == 202 and _json_body(resp).get("queued"):
+            # QUEUED, not created: the launch gate holds automatic starts while
+            # memory is low and answers 202 + queued. No session exists, so no
+            # run may be opened — the caller (a route's Verify stop) is told
+            # "memory" and retries, instead of believing a check started. The
+            # queued launch is withdrawn: left in the queue it would start a
+            # checker later that no run record is waiting for, while the stop
+            # starts its own on the next retry.
+            body = _json_body(resp)
+            if _launch_gate.cancel(title):
+                if (body.get("waiting_for_memory") or {}).get("creates", True):
+                    _pending.drop(title)
+            return JSONResponse(
+                {
+                    "error": "memory is low — the verify session is waiting to start",
+                    "reason": "memory",
+                    "detail": str(body.get("reason") or body.get("message") or ""),
+                },
+                status_code=409,
+            )
     # Only now: start_run stamps the plan "running" and opens the run record the
     # due loop's give-up clock reads, and a plan claiming a session that was
     # never created would be stuck there for two hours.
@@ -11671,6 +11697,39 @@ async def run_test_plan(
         {"ok": True, "session": title, "plan": _test_plan_row(started)},
         status_code=202,
     )
+
+
+def _json_body(resp) -> dict:
+    """A JSONResponse's body as a dict ({} when it is not one)."""
+    try:
+        body = json.loads(bytes(resp.body).decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _run_launch_refusal(resp) -> JSONResponse:
+    """A run whose verify session could not be created or typed into, with a
+    machine-readable ``reason`` (docs/web-api.md, the run route): ``memory``
+    when the launch gate refused for low memory (``memory_confirm``; its own
+    sentence in ``detail``), ``launch_failed`` otherwise. A route's Verify stop
+    reads it: memory → wait and retry with the reason on screen; anything else
+    → fail with the sentence. Never a bare 409 a caller could mistake for
+    "already verifying"."""
+    body = _json_body(resp)
+    if body.get("memory_confirm"):
+        return JSONResponse(
+            {
+                "error": "memory is low — the verify session can't start yet",
+                "reason": "memory",
+                "detail": str(body.get("message") or body.get("error") or ""),
+            },
+            status_code=409,
+        )
+    out = dict(body)
+    out.setdefault("error", "the verify session could not start")
+    out["reason"] = "launch_failed"
+    return JSONResponse(out, status_code=resp.status_code)
 
 
 def _fix_refusal(status: int, error: str, detail: str, **extra) -> JSONResponse:

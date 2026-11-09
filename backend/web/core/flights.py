@@ -145,6 +145,31 @@ LEASE_STALE_S = 45.0
 AGENT_START_DEADLINE_S = 7200.0
 #: A verify step whose behaviors are never written gives up after this.
 VERIFY_WRITE_DEADLINE_S = 3600.0
+
+# A Verify stop is NEVER silently stuck (docs/flights.md "Verify stops: when
+# the check can't go on"). Found live 2026-11-09: a check whose start the
+# memory guard refused read as running forever, and a checker that ended its
+# turn with a background job and no answers read as "checking" for the two
+# hours until the plan's own give-up.
+#: A check the memory guard refused is retried this often…
+VERIFY_START_RETRY_S = 30.0
+#: …for this long, then the stop parks on you with the reason.
+VERIFY_MEMORY_WAIT_S = 30 * 60.0
+#: A check marked started with no run record this long after → it never started.
+VERIFY_START_CHECK_S = 60.0
+#: No new answer for this long and the checker's turn over → one nudge.
+VERIFY_STALL_NUDGE_S = 8 * 60.0
+#: Still nothing this long after the nudge → the check is closed.
+VERIFY_STALL_CLOSE_S = 15 * 60.0
+#: Past the run's own budget (test_plans.RUN_BUDGET_MIN) plus this → closed.
+VERIFY_BUDGET_GRACE_S = 5 * 60.0
+#: The nudge typed into a stalled checker.
+VERIFY_NUDGE = (
+    "Write your results file now: every step you have checked with its answer, "
+    'every other step "blocked" with a note saying what you were waiting for '
+    '(start it with "needs you: " when a person has to do something first), '
+    '"finished": true — and stop any background job before you end your turn.'
+)
 #: A reviews step with no pull request to watch gives up after this.
 NO_PR_DEADLINE_S = 1800.0
 #: A step's side effect is recorded as ``detail.performing`` BEFORE it is
@@ -2683,6 +2708,11 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
         )
     if cur["kind"] == "verify":
         items = [str(i) for i in d.get("items") or []]
+        if d.get("ask") in ("needs_you", "blocked", "memory"):
+            # Why the check came to you (flights._verify_guard /
+            # _verify_handover): the stop's own sentence, not a count.
+            note = str(flight["step_states"][cur["id"]].get("note") or "")
+            return ("%s: %s" % (cur["title"], note) if note else cur["title"]), items
         return (
             "Check %d behavior%s" % (len(items), "" if len(items) == 1 else "s"),
             items,
@@ -3325,6 +3355,9 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
     gate = _verify_ready_gate(step["config"], ss, v, now)
     if gate:
         return _wait(gate, **up)
+    guard = _verify_guard(ss, v, now, up)
+    if guard is not None:
+        return guard
     failed = list(v.get("failed") or [])
     # Stale: every failure was answered before this attempt began.
     failed_at = v.get("failed_at")
@@ -3358,6 +3391,9 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
             "note": "the agent is checking the behaviors",
             "detail": up,
         }
+    handed = _verify_handover(ss, v, up)
+    if handed is not None:
+        return handed
     if who == "agent":
         if stale:
             # Only a person's Fail is left, and this stop checks the agent's.
@@ -3388,6 +3424,169 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         % (len(open_human), "" if len(open_human) == 1 else "s"),
         "detail": dict(up, items=open_human[:40]),
     }
+
+
+def _verify_guard(ss: dict, v: dict, now: float, up: dict) -> Optional[dict]:
+    """What keeps a Verify stop from being SILENTLY stuck, or None.
+
+    * The memory guard refused the check's session (``d.run_wait`` "memory",
+      set by the driver from the run route's ``reason``): wait with the reason
+      on screen, retry every :data:`VERIFY_START_RETRY_S`, and after
+      :data:`VERIFY_MEMORY_WAIT_S` park on the person.
+    * The stop believes a check started but the checklist has no run from this
+      attempt after :data:`VERIFY_START_CHECK_S`: fail, saying so. (This is
+      also what rescues a route that started before refusals had reasons.)
+    * A run is open: say its progress; nudge a checker whose turn is over and
+      that has answered nothing for :data:`VERIFY_STALL_NUDGE_S` (once);
+      close the check (unanswered → blocked) when the nudge changed nothing
+      for :data:`VERIFY_STALL_CLOSE_S`, or past the run's budget."""
+    d = ss["detail"]
+    if d.get("run_wait") == "memory":
+        since = float(d.get("memory_since") or ss["since"] or now)
+        why = str(d.get("memory_detail") or "memory is low")
+        if now - since > VERIFY_MEMORY_WAIT_S:
+            return {
+                "action": "you",
+                "note": "couldn't start the check: %s" % why,
+                "detail": dict(
+                    up,
+                    ask="memory",
+                    items=[
+                        "Free some memory (close a session or an app), then "
+                        "press Retry — or Skip this check",
+                    ],
+                ),
+            }
+        if now - float(d.get("last_try") or 0.0) >= VERIFY_START_RETRY_S:
+            return {
+                "action": "run",
+                "phase": "agent_run",
+                "note": "trying again to start the check",
+                "detail": dict(up),
+            }
+        return _wait("waiting for memory to start the check (%s)" % why, **up)
+    state = v.get("state") or ""
+    if d.get("run_started") and state != "running" and "latest_run_at" in v:
+        started = float(d.get("run_started_at") or ss["since"] or 0.0)
+        latest = float(v.get("latest_run_at") or 0.0)
+        if latest < started - 1.0 and now - started > VERIFY_START_CHECK_S:
+            why = str(d.get("start_error") or "")
+            return {
+                "action": "fail",
+                "reason": "the check never started" + (": %s" % why if why else ""),
+            }
+    if state != "running":
+        return None
+    p = v.get("progress") if isinstance(v.get("progress"), dict) else {}
+    started = float(p.get("started_at") or 0.0) or float(ss["since"] or now)
+    quiet = now - (float(p.get("progress_at") or 0.0) or started)
+    checker = v.get("checker") if isinstance(v.get("checker"), dict) else {}
+    budget = float(v.get("run_budget_s") or 30 * 60.0)
+    if now - started > budget + VERIFY_BUDGET_GRACE_S:
+        return {
+            "action": "run",
+            "phase": "close",
+            "note": "closing the check: it ran out of time",
+            "detail": dict(
+                up,
+                close_reason="not checked: the check ran out of time (%d min)"
+                % int(budget // 60),
+            ),
+        }
+    nudged = float(d.get("nudged_at") or 0.0)
+    if nudged:
+        if now - nudged > VERIFY_STALL_CLOSE_S and quiet > VERIFY_STALL_CLOSE_S:
+            return {
+                "action": "run",
+                "phase": "close",
+                "note": "closing the check: the checker stopped answering",
+                "detail": dict(
+                    up, close_reason="not checked: the checker stopped answering"
+                ),
+            }
+    elif quiet > VERIFY_STALL_NUDGE_S and str(checker.get("activity") or "") in (
+        "idle",
+        "",
+    ):
+        return {
+            "action": "run",
+            "phase": "nudge",
+            "note": "nudging the checker: nothing new for %d min" % int(quiet // 60),
+            "detail": dict(up),
+        }
+    answered, total = int(p.get("answered") or 0), int(p.get("total") or 0)
+    note = "the agent is checking the behaviors"
+    if total:
+        note += " · %d of %d answered" % (answered, total)
+    if quiet > 120:
+        note += " · quiet %d min" % int(quiet // 60)
+    if nudged:
+        note += " · nudged"
+    if checker.get("background_waiting"):
+        note += " · its background job is still running"
+    return _wait(note, **up)
+
+
+def _verify_handover(ss: dict, v: dict, up: dict) -> Optional[dict]:
+    """The agent's steps it handed to the person, after its run → a perch, or
+    None. Whatever ``who`` says ("Agent only" too): a manual step or a check
+    the agent could not do must never pass silently (it used to — a run that
+    answered every step "blocked" read "the agent's behaviors are checked").
+
+    * ``needs you: …`` answers (test_plans.NEEDS_YOU): a person has to DO
+      something first. Answered before this attempt (the person pressed Done =
+      "I did it", which retries the stop) → check again, telling the checker
+      what was done; otherwise park: "The check needs you to: …".
+    * Plain ``blocked`` answers: park listing them with the checker's why; the
+      person answers them on the Behaviors card (or Skips)."""
+    if (v.get("state") or "") == "running":
+        return None
+    d = ss["detail"]
+    needs = [n for n in v.get("needs_you") or [] if isinstance(n, dict)]
+    blocked = [b for b in v.get("blocked_steps") or [] if isinstance(b, dict)]
+    if needs:
+        done_by_you = [
+            n for n in needs if float(n.get("at") or 0.0) < float(ss["since"] or 0.0)
+        ]
+        if done_by_you and not d.get("rechecked"):
+            did = "; ".join(str(n.get("do") or "") for n in done_by_you)
+            return {
+                "action": "run",
+                "phase": "agent_run",
+                "note": "checking again now that you've done it",
+                "detail": dict(
+                    up,
+                    rechecked=True,
+                    extra_notes="The person says they have now done: " + did,
+                ),
+            }
+        items = [
+            "%s (for: %s)" % (n.get("do") or "do the manual step", n.get("text") or "")
+            for n in needs
+        ][:40]
+        return {
+            "action": "you",
+            "note": "the check needs you to do %d thing%s, then press Done"
+            % (len(items), "" if len(items) == 1 else "s"),
+            "detail": dict(up, ask="needs_you", items=items),
+        }
+    if blocked:
+        items = [
+            "%s — %s"
+            % (b.get("text") or "", b.get("why") or "the agent couldn't check it")
+            for b in blocked
+        ][:40]
+        return {
+            "action": "you",
+            "note": "%d behavior%s the agent couldn't check — answer %s"
+            % (
+                len(items),
+                "" if len(items) == 1 else "s",
+                "it" if len(items) == 1 else "them",
+            ),
+            "detail": dict(up, ask="blocked", items=items),
+        }
+    return None
 
 
 def _verify_ready_gate(cfg: dict, ss: dict, v: dict, now: float) -> str:
@@ -4203,6 +4402,14 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
         ss["state"] in ("failed", "running")
         or ss["detail"].get("failed_reason")
         or flight["state"] == "halted"
+        # A Verify stop parked because the check needs the person to DO
+        # something (or memory refused its checker): their Done is "I did it"
+        # — the stop runs again (flight_driver._needs_you_perch).
+        or (
+            ss["state"] == "waiting_you"
+            and flight["steps"][i]["kind"] == "verify"
+            and ss["detail"].get("ask") in ("needs_you", "memory")
+        )
     )
     lo, hi = current_group(flight)
     if not lo <= i < hi or not retryable:

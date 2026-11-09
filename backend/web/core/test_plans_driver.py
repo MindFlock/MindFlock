@@ -1507,6 +1507,51 @@ def _release_wedged_run(
     )
 
 
+async def close_run(plan_id: str, reason: str) -> Optional[dict]:
+    """End a verify run NOW, keeping what it answered → the plan, or None.
+
+    For whoever drives a run and gives up waiting on it (a route's Verify stop
+    after a stall or past :data:`test_plans.RUN_BUDGET_MIN`): every agent step
+    the checker answered keeps its answer, every one it didn't becomes
+    ``blocked`` with ``reason`` as its note, and the run is finished through
+    :func:`test_plans.finish_run` — the same close a checker's own finished
+    file takes, so the state ladder and the "blocked is never a pass" rules
+    are the ordinary ones. Then the results file is eaten and the checker's
+    session ended. Idempotent: a plan that is not running is returned as is."""
+    plan = _test_plans.get(plan_id)
+    if plan is None or plan["state"] != "running":
+        return plan
+    run_session = str(plan.get("run_session") or "")
+    run = plan["runs"][-1] if plan["runs"] else {}
+    have = run.get("results") or {}
+    results = []
+    for st in plan["steps"]:
+        entry = have.get(st["id"]) or {}
+        if entry.get("result") and entry.get("by") != "human":
+            results.append(
+                {
+                    "id": st["id"],
+                    "result": entry["result"],
+                    "note": entry.get("note", ""),
+                }
+            )
+        elif not entry.get("result") and st.get("actor") == "agent":
+            results.append({"id": st["id"], "result": "blocked", "note": reason})
+    done = await asyncio.to_thread(
+        _test_plans.finish_run,
+        plan_id,
+        results,
+        target=_test_plans.run_target(plan),
+    )
+    if run_session:
+        await asyncio.to_thread(_clear_verify_results, run_session)
+        try:
+            await _end_verify_session(run_session)
+        except Exception:  # noqa: BLE001 — the orphan sweep closes it later
+            pass
+    return done
+
+
 def _poll_running_test_plans(plans: list) -> None:
     """Fold in the results of every verify session that has finished.
 
@@ -1531,6 +1576,14 @@ def _poll_running_test_plans(plans: list) -> None:
         live_titles.add(run_session)
         try:
             data = _read_verify_results(plan)
+            if data and not data.get("finished"):
+                # PROGRESS, not an end: the checker rewrites its file after
+                # every step it settles ("finished": false), so whoever waits
+                # on the run sees the answers so far and can tell a slow
+                # check from a stalled one (`run_progress`'s progress_at).
+                partial = data.get("results")
+                if isinstance(partial, list) and partial:
+                    _test_plans.record_progress(pid, partial)
             if data and data.get("finished"):
                 results = data.get("results")
                 tested, expected = _verify_run_trees(plan)
