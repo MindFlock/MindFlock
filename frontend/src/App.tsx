@@ -46,6 +46,7 @@ import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
 import { ConnectGitHubDialog } from "./components/dialogs/ConnectGitHub";
 import { TodoDialog } from "./components/dialogs/TodoDialog";
+import { TodoReminder } from "./components/dialogs/TodoReminder";
 import { AssistantAgentDialog } from "./components/dialogs/AssistantAgentDialog";
 import { RedZonesDialog } from "./components/dialogs/RedZonesDialog";
 import { WelcomeTour } from "./components/onboarding/WelcomeTour";
@@ -343,6 +344,8 @@ export default function App() {
       <SetupDialog />
       <ConnectGitHubDialog />
       <TodoDialog />
+      {/* A timed todo whose time has come: pops up by itself (lib/todoTime). */}
+      <TodoReminder />
       <AssistantAgentDialog />
       <RedZonesDialog />
       <ExtensionDialog />

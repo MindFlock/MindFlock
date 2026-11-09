@@ -390,3 +390,46 @@
   position: relative;
 }
 
+
+/* A todo's reminder (lib/todoTime): a quiet clock until it has a time, then
+   the time in words; red once it is due and not done. */
+.todo-row .todo-due {
+  flex: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+.todo-row:hover .todo-due,
+.todo-row .todo-due.has-due {
+  opacity: 1;
+}
+.todo-row .todo-due.has-due {
+  border-color: var(--border);
+  background: var(--panel-2, var(--panel));
+}
+.todo-row .todo-due.overdue {
+  color: var(--red);
+  border-color: var(--red);
+}
+.todo-row.done .todo-due.has-due {
+  opacity: 0.5;
+}
+.todo-row .todo-due-edit {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex: none;
+}
+.todo-row .todo-due-edit input {
+  font-size: 12px;
+}
+.todo-row .todo-due-clear {
+  font-size: 11px;
+  padding: 1px 6px;
+}
