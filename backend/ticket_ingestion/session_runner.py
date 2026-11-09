@@ -459,11 +459,62 @@ class SessionRunner:
         except Exception:  # noqa: BLE001
             return set()
 
+    async def hand_to_builder(self, pr: PullRequest, prompt: str) -> str:
+        """Give ``prompt`` to the session that BUILT the PR's branch (the
+        ticket's own session — live, or reopened from Recently closed) through
+        the server (``POST /api/sessions/by-branch/hand-off``) → its title, or
+        "" when no session on this machine built it (or the server is out of
+        reach): the caller then starts a PR session of its own."""
+        port = os.environ.get("MINDFLOCK_SERVER_PORT", "").strip()
+        branch = str(getattr(pr, "head_ref", "") or "")
+        if not port or not branch:
+            return ""
+        headers = {"Content-Type": "application/json"}
+        token = os.environ.get("MINDFLOCK_AUTH_TOKEN", "").strip()
+        if not token:
+            try:
+                from backend.config import settings as _settings
+
+                token = (_settings.load_settings().general.auth_token or "").strip()
+            except Exception:  # noqa: BLE001
+                token = ""
+        if token:
+            headers["Authorization"] = "Bearer " + token
+
+        def _post() -> str:
+            import urllib.error
+            import urllib.request
+
+            req = urllib.request.Request(
+                "http://127.0.0.1:%s/api/sessions/by-branch/hand-off" % port,
+                data=json.dumps({"branch": branch, "text": prompt}).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    body = json.loads(resp.read().decode("utf-8") or "{}")
+            except (urllib.error.URLError, OSError, ValueError):
+                return ""
+            return str(body.get("title") or "")
+
+        title = await asyncio.to_thread(_post)
+        if title:
+            logger.info(
+                "PR #%s: handed to %s (the session that built %s)",
+                pr.number,
+                title,
+                branch,
+            )
+        return title
+
     async def deliver_pr_round(self, pr: PullRequest, prompt: str) -> str:
         """Hand a review round (pr_rounds) to the PR's session: QUEUED into
         ``pr-<slug>`` when it still exists (the server's prompt-queue drain
         types it in once the agent is idle) → ``"queued"``; otherwise a new PR
         session with this prompt → ``"started"``."""
+        if await self.hand_to_builder(pr, prompt):
+            return "handed"
         title = f"pr-{pr_slug(pr)}"
         if title in self._stored_titles():
             from backend.web.core import prompt_queue as _pq
@@ -485,6 +536,18 @@ class SessionRunner:
         session driven by one consolidated prompt — instead of a tmux tab per
         comment. Cursor launch is skipped; the CS web terminal is the surface.
         """
+        if not prompt_override:
+            # The session that built this branch takes the review, with its
+            # context (docs/pr-review-rounds.md "The same session"); only
+            # without one does the PR get a session of its own.
+            handed = await self.hand_to_builder(
+                pr,
+                build_consolidated_pr_prompt(
+                    pr, comments, "this session's own workspace"
+                ),
+            )
+            if handed:
+                return pr.head_ref
         await _wait_for_launch_room("PR #%s" % pr.number)
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = prompt_override or build_consolidated_pr_prompt(
