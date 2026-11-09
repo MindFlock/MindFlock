@@ -16,6 +16,12 @@ On a Shortcut source's card (Intake → Tickets → Edit):
 | **Start epics by themselves** (`epic_auto`) | On: an epic in those states gets its lead automatically (checked every 2 minutes). Off: it is listed under **Intake → Tickets → Epics** with a **Start** button. |
 | **Move epic to on start** (`epic_start_state`, advanced) | Optional: the epic state an epic moves to when its lead starts (e.g. *in progress*). |
 
+The source's **Auto-start labels** gate epics the same way they gate its
+stories: with any set, an epic auto-starts only when it carries one of them
+(case-insensitive). An epic in the states without one is still listed under
+Epics — saying "no auto-start label (…)" — and **Start** still works on it,
+like a ticket outside the filter.
+
 Only **your** epics (you are an owner) are ingested, and inside an epic only
 the stories you own that aren't done are worked. Everyone else's stories are
 given to the lead as context and never started.
@@ -52,8 +58,9 @@ someone else owns.
 ## API
 
 * `GET /api/epics[?refresh=1]` → `{"epics": [{source, source_label, id, title,
-  name, url, state, stories_total, mine_open, has_session, auto, eligible,
-  reasons}], "errors": [{source, error}]}` (cached 60 s).
+  name, url, state, stories_total, mine_open, has_session, auto, labels,
+  eligible, startable, reasons}], "errors": [{source, error}]}` (cached 60 s).
+  `eligible` = would start by itself; `startable` = Start works.
 * `POST /api/epics/start {"source", "id"}` → 202 `{started, title, stories}`;
   404 unknown source/epic, 409 a lead already works it / no stories of yours
   left / another server is starting it, 400 no repo.

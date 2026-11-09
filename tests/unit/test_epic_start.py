@@ -59,6 +59,8 @@ class FakeProvider:
     label = "Shortcut"
     can_epics = True
 
+    labels = ("MindFlock",)
+
     def __init__(self, detail=DETAIL):
         self.detail = detail
         self.moved = []
@@ -78,6 +80,7 @@ class FakeProvider:
                 "state_id": "on-deck",
                 "owner_ids": [ME],
                 "stories_total": 5,
+                "labels": list(self.labels),
             }
         ]
 
@@ -266,4 +269,39 @@ def test_auto_start_only_on_auto_sources_and_once(wired, monkeypatch):
     assert asyncio.run(E.auto_start_once()) == ["sc-epic-500"]
     assert started == [("sc", "500", True)]
     # Claimed once: a finished lead is never restarted by the loop.
+    assert asyncio.run(E.auto_start_once()) == []
+
+
+# --------------------------------------------------------------------------- #
+# The source's Auto-start labels gate epics like they gate stories
+# --------------------------------------------------------------------------- #
+def _row(monkeypatch, wired, ingest_labels):
+    monkeypatch.setattr(
+        E,
+        "_sources",
+        lambda: [(_src(epic_auto=True, ingest_labels=ingest_labels), wired)],
+    )
+    E._LIST_CACHE.clear()
+    (row,) = asyncio.run(E.list_epics(force=True))["epics"]
+    return row
+
+
+def test_no_labels_set_means_no_label_gate(wired, monkeypatch):
+    row = _row(monkeypatch, wired, "")
+    assert row["eligible"] is True and row["startable"] is True
+
+
+def test_a_matching_label_any_case_lets_it_auto_start(wired, monkeypatch):
+    row = _row(monkeypatch, wired, "needs-agent, mindflock")
+    assert row["labels"] == ["MindFlock"]
+    assert row["eligible"] is True
+
+
+def test_a_missing_label_stops_only_the_auto_start(wired, monkeypatch):
+    wired.labels = ("backend",)
+    row = _row(monkeypatch, wired, "mindflock")
+    assert row["eligible"] is False
+    assert row["reasons"] == ["no auto-start label (mindflock)"]
+    assert row["startable"] is True  # a person's Start still works
+    E._LIST_CACHE.clear()
     assert asyncio.run(E.auto_start_once()) == []

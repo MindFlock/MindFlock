@@ -112549,7 +112549,7 @@ function EpicsSection() {
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary",
-						disabled: !e.eligible || busy === e.title,
+						disabled: !(e.startable ?? e.eligible) || busy === e.title,
 						onClick: () => void start(e),
 						children: busy === e.title ? "Starting…" : "Start"
 					})]

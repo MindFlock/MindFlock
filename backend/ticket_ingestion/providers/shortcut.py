@@ -588,7 +588,7 @@ class ShortcutProvider(TicketProvider):
     async def list_epics(self, state_ids: list, mine: bool = True) -> list[dict]:
         """The epics in any of ``state_ids`` (epic workflow state ids),
         not archived, and — with ``mine`` — owned by this source's member →
-        ``[{id, name, url, state_id, owner_ids, stories_total}]``."""
+        ``[{id, name, url, state_id, owner_ids, stories_total, labels}]``."""
         want = {str(x) for x in state_ids or [] if str(x).strip()}
         if not want:
             return []
@@ -613,6 +613,9 @@ class ShortcutProvider(TicketProvider):
                     "stories_total": int(
                         ((e.get("stats") or {}).get("num_stories_total")) or 0
                     ),
+                    # The source's Auto-start labels apply to epics too
+                    # (epic_start.list_epics), as they do to stories.
+                    "labels": _label_names(e),
                 }
             )
         return out

@@ -224,16 +224,27 @@ async def list_epics(force: bool = False) -> dict:
     """``{"epics": [row], "errors": [..]}`` for Intake: each source's epics in
     its ``epic_states`` that the person owns, with their own open stories
     counted. Row: ``{source, source_label, id, title, name, url, state,
-    stories_total, mine_open, has_session, auto, eligible, reasons}``."""
+    stories_total, mine_open, has_session, auto, labels, eligible, startable,
+    reasons}`` — ``eligible``: it would start by itself (in the states, has
+    one of the source's Auto-start labels when any are set, not taken);
+    ``startable``: Start works (not taken, stories of yours left)."""
     now = time.time()
     hit = _LIST_CACHE.get("all")
     if hit and not force and now - hit[0] < LIST_TTL_S:
         return hit[1]
     rows: List[dict] = []
     errors: List[dict] = []
+    from backend.ticket_ingestion.providers.base import ingest_label_list
+
     for src, provider in _sources():
         source = src.id or src.provider
         states = [x for x in str(src.epic_states).split(",") if x.strip()]
+        # The source's Auto-start labels gate epics exactly as they gate its
+        # stories: with any set, an epic auto-starts only when it carries one
+        # (case-insensitive). One without is still listed — with the reason —
+        # and can be started by hand, like a ticket outside the filter.
+        labels = ingest_label_list(src)
+        wanted = {x.lower() for x in labels}
         try:
             names = {s["id"]: s["name"] for s in await provider.list_epic_states()}
             epics = await provider.list_epics(states, mine=True)
@@ -255,6 +266,14 @@ async def list_epics(force: bool = False) -> dict:
                 reasons.append("a lead session is already working it")
             if mine_open == 0:
                 reasons.append("no stories of yours left to do in it")
+            epic_labels = [str(x) for x in e.get("labels") or []]
+            label_ok = not wanted or any(x.lower() in wanted for x in epic_labels)
+            if not label_ok:
+                reasons.append(
+                    "no auto-start label (%s)" % ", ".join(labels)
+                    if len(labels) > 1
+                    else "no auto-start label (%s)" % labels[0]
+                )
             rows.append(
                 {
                     "source": source,
@@ -268,7 +287,12 @@ async def list_epics(force: bool = False) -> dict:
                     "mine_open": mine_open,
                     "has_session": has,
                     "auto": bool(getattr(src, "epic_auto", False)),
+                    "labels": epic_labels,
+                    # Would start by itself (states + labels + not taken).
                     "eligible": not reasons,
+                    # A person's Start: anything not taken with stories left
+                    # (a label miss only stops the AUTO start).
+                    "startable": not has and mine_open != 0,
                     "reasons": reasons,
                 }
             )
