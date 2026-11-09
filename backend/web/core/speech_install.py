@@ -25,9 +25,14 @@ the Settings screen, in a background thread, three steps:
    ``base.en``, ~75 MB) — skipped when it is the same model.
 3. **downloading voice (<name>)** — the piper voice of ``voice.tts_voice``
    (``en_US-lessac-medium`` unless it names a piper voice), fetched the way
-   ``LocalTTS`` fetches one (``speech.fetch_piper_voice``).
+   ``LocalTTS`` fetches one (``speech.fetch_piper_voice``); then
+   **downloading the built-in voice (Kokoro)** — ``kokoro-onnx``'s model
+   files (~120 MB, sha256-pinned: ``speech_kokoro.fetch_model``) into
+   ``speech.voice_dir()/models/kokoro``, the voice assistant's and the
+   chain's first local fallback. ``kokoro-onnx`` is one of step 1's
+   packages.
 
-Steps 2 and 3 run in a helper process (:func:`_download_main`, the same
+The download steps run in a helper process (:func:`_download_main`, the same
 interpreter): the packages were installed after this server imported
 anything, and a model download must never cost the server its memory.
 Every step's output (stdout + stderr) feeds :func:`status`'s ``log`` (the
@@ -61,6 +66,13 @@ into ``speech.voice_dir()/moonshine`` by the same helper process
 self-heal puts it back too. It changes no setting: whether streams use it is
 the caller's call (``speech_moonshine.available``).
 
+**Kokoro** (``start(what="kokoro")``, ``core.speech_kokoro``): the built-in
+voice alone — ``kokoro-onnx`` (:data:`KOKORO_PACKAGES`) and its model files,
+for someone who installed the local models before it was part of them (the
+assistant's "install the voice" prompt). Recorded and healed like
+Moonshine; it changes no setting (the assistant uses it as soon as it is
+ready; ``voice.tts_backend`` is the person's).
+
 Nothing here runs for real under pytest: :func:`_spawn` (every subprocess)
 refuses there, and tests replace it.
 """
@@ -81,6 +93,8 @@ from typing import Deque, List, Optional, Sequence
 from backend.web.core import speech as _speech
 
 __all__ = [
+    "KOKORO",
+    "KOKORO_PACKAGES",
     "MOONSHINE",
     "MOONSHINE_PACKAGES",
     "PACKAGES",
@@ -91,20 +105,31 @@ __all__ = [
     "status",
 ]
 
-PACKAGES = ("faster-whisper", "piper-tts")
-#: ``start(what=...)``: the local models (default) or Moonshine streaming.
-LOCAL, MOONSHINE = "local", "moonshine"
+PACKAGES = ("faster-whisper", "piper-tts", "kokoro-onnx")
+#: ``start(what=...)``: the local models (default), Moonshine streaming, or
+#: the built-in Kokoro voice alone.
+LOCAL, MOONSHINE, KOKORO = "local", "moonshine", "kokoro"
+WHATS = (LOCAL, MOONSHINE, KOKORO)
 #: Moonshine's packages, as recorded (plain names: the record refuses specs).
 MOONSHINE_PACKAGES = ("moonshine-voice",)
+#: The built-in voice's package (``core.speech_kokoro``).
+KOKORO_PACKAGES = ("kokoro-onnx",)
 #: What gets installed for a recorded name: the floor is the API
-#: ``core.speech_moonshine`` was written and measured against.
-_INSTALL_SPEC = {"moonshine-voice": "moonshine-voice>=0.1.6"}
+#: ``core.speech_moonshine`` / ``core.speech_kokoro`` was written and
+#: measured against (Kokoro: ``Kokoro.from_session``, the espeak loader).
+_INSTALL_SPEC = {
+    "moonshine-voice": "moonshine-voice>=0.1.6",
+    "kokoro-onnx": "kokoro-onnx>=0.6.1",
+}
 #: The module each recorded package provides (the self-heal's probe).
 _MODULES = {
     "faster-whisper": "faster_whisper",
     "piper-tts": "piper",
     "moonshine-voice": "moonshine_voice",
+    "kokoro-onnx": "kokoro_onnx",
 }
+#: The Kokoro download step's name.
+STEP_KOKORO = "downloading the built-in voice (Kokoro, ~120 MB)"
 #: How many output lines ``status()`` keeps.
 LOG_LINES = 20
 #: One step's limit (a slow network pulling ~500 MB of model).
@@ -203,17 +228,26 @@ def _download_argv(kind: str, name: str) -> List[str]:
 
 
 def _download_main(argv: Optional[List[str]] = None) -> None:
-    """The helper process: ``whisper <name>``, ``piper <name>`` or
-    ``moonshine <arch>`` → the download, a last line saying where it went,
-    exit 0; any failure a last line with the reason and exit 1."""
+    """The helper process: ``whisper <name>``, ``piper <name>``,
+    ``moonshine <arch>`` or ``kokoro v1.0`` → the download (Kokoro prints
+    its progress), a last line saying where it went, exit 0; any failure a
+    last line with the reason and exit 1."""
     args = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(args) != 2 or args[0] not in ("whisper", "piper", "moonshine"):
+        if len(args) != 2 or args[0] not in ("whisper", "piper", "moonshine", "kokoro"):
             raise ValueError(
-                "usage: whisper <model> | piper <voice> | moonshine <arch>"
+                "usage: whisper <model> | piper <voice> | moonshine <arch> | kokoro v1.0"
             )
         kind, name = args
-        if kind == "whisper":
+        if kind == "kokoro":
+            from backend.web.core import speech_kokoro as _kokoro
+
+            if name != _kokoro.MODEL_VERSION:
+                raise ValueError(
+                    "only the Kokoro %s model is supported" % _kokoro.MODEL_VERSION
+                )
+            where = _kokoro.fetch_model()
+        elif kind == "whisper":
             where = _speech.fetch_whisper_model(name)
         elif kind == "moonshine":
             from backend.web.core import speech_moonshine as _moonshine
@@ -249,7 +283,7 @@ _HEAL_TRIED = False
 
 def status() -> dict:
     """``{"state": "idle"|"running"|"done"|"failed", "what": "local"|
-    "moonshine"|"" (the last install's :func:`start` ``what``), "step",
+    "moonshine"|"kokoro"|"" (the last install's :func:`start` ``what``), "step",
     "log": [the last LOG_LINES lines], "started", "finished", "error"}``
     (epoch seconds or None)."""
     with _LOCK:
@@ -271,11 +305,12 @@ def _log(line: str) -> None:
 def start(heal: bool = False, what: str = LOCAL) -> bool:
     """Start the install in a background thread → False when one is
     already running (the route's 409). ``heal``: the packages step only
-    (:func:`start_self_heal`). ``what``: :data:`LOCAL` (faster-whisper +
-    piper and their models) or :data:`MOONSHINE` (``moonshine-voice`` and
-    its streaming model); one install at a time either way."""
+    (:func:`start_self_heal`). ``what``: :data:`LOCAL` (faster-whisper,
+    piper and Kokoro and their models), :data:`MOONSHINE` (``moonshine-voice``
+    and its streaming model) or :data:`KOKORO` (``kokoro-onnx`` and its
+    model); one install at a time either way."""
     global _THREAD
-    if what not in (LOCAL, MOONSHINE):
+    if what not in WHATS:
         raise ValueError("unknown install: %r" % (what,))
     with _LOCK:
         if _STATE["state"] == "running":
@@ -289,8 +324,13 @@ def start(heal: bool = False, what: str = LOCAL) -> bool:
             error="",
         )
         _LOG.clear()
+        target = _install
+        if not heal and what == MOONSHINE:
+            target = _install_moonshine
+        elif not heal and what == KOKORO:
+            target = _install_kokoro
         _THREAD = threading.Thread(
-            target=_install_moonshine if what == MOONSHINE and not heal else _install,
+            target=target,
             args=(heal,),
             daemon=True,
             name="voice-install-local",
@@ -448,6 +488,7 @@ def _install(heal: bool = False) -> None:
                 _download_argv("whisper", stream),
             )
         _run_step("downloading voice (%s)" % piper, _download_argv("piper", piper))
+        _run_step(STEP_KOKORO, _download_argv("kokoro", _kokoro_version()))
         _settings().update_settings(voice={"stt_backend": "local"})
         _speech.invalidate()
     except _StepFailed as err:
@@ -490,4 +531,33 @@ def _install_moonshine(heal: bool = False) -> None:
         )
         return
     _log("Moonshine streaming recognition is ready (%s)" % _moonshine.ARCH)
+    _set(state="done", step="done", finished=time.time())
+
+
+def _kokoro_version() -> str:
+    from backend.web.core import speech_kokoro as _kokoro
+
+    return _kokoro.MODEL_VERSION
+
+
+def _install_kokoro(heal: bool = False) -> None:  # noqa: ARG001 — as Moonshine's
+    """``start(what="kokoro")``: the package, recorded, then the model
+    files; no setting changes."""
+    try:
+        _run_step(STEP_PACKAGES, install_argv(KOKORO_PACKAGES))
+        _record(KOKORO_PACKAGES)
+        _speech.invalidate()
+        _run_step(STEP_KOKORO, _download_argv("kokoro", _kokoro_version()))
+        _speech.invalidate()
+    except _StepFailed as err:
+        _set(state="failed", error=str(err), finished=time.time())
+        return
+    except Exception as err:  # noqa: BLE001 — never leave it "running"
+        _set(
+            state="failed",
+            error="%s: %s" % (type(err).__name__, err),
+            finished=time.time(),
+        )
+        return
+    _log("the built-in Kokoro voice is ready")
     _set(state="done", step="done", finished=time.time())
