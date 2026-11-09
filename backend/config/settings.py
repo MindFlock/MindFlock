@@ -316,6 +316,17 @@ class TicketingSource:
     # field existed keeps — nobody's working setup changes under them. See
     # backend.ticket_ingestion.providers.base.auto_start_waiting.
     needs_filter: str = ""
+    # EPICS (docs/epics.md): the epic-workflow state ids (comma-separated)
+    # whose epics this source ingests — each one, if it is the person's own,
+    # becomes ONE lead session that works the person's stories in it (in
+    # parallel where independent, stacked where one blocks another). Blank =
+    # no epics. ``epic_auto`` "on" starts them by themselves (like tickets in
+    # ``workflow_state``); blank lists them in Intake to start by hand.
+    # ``epic_start_state``: the epic state an epic moves to when its lead
+    # starts (blank = leave it).
+    epic_states: str = ""
+    epic_auto: str = ""
+    epic_start_state: str = ""
     # The last connection test the Intake card (or its auto-test after a save)
     # ran against THIS configuration: ``{ok, at, message, member_id?, states?,
     # workspaces?}``. Written only by the test route; the sources PUT carries
@@ -347,6 +358,9 @@ class TicketingSource:
             "start_comment",
             "claim_label",
             "needs_filter",
+            "epic_states",
+            "epic_auto",
+            "epic_start_state",
         ):
             v = getattr(self, k)
             if v:
@@ -394,6 +408,13 @@ class TicketingSource:
             start_comment=_on_or_blank(d.get("start_comment")),
             claim_label=str(d.get("claim_label", "") or "").strip(),
             needs_filter=_on_or_blank(d.get("needs_filter")),
+            epic_states=",".join(
+                x.strip()
+                for x in str(d.get("epic_states", "") or "").split(",")
+                if x.strip()
+            ),
+            epic_auto=_on_or_blank(d.get("epic_auto")),
+            epic_start_state=str(d.get("epic_start_state", "") or "").strip(),
             last_test=(
                 dict(d["last_test"]) if isinstance(d.get("last_test"), dict) else {}
             ),
@@ -771,6 +792,13 @@ class RepositorySettings:
     #: every plan is how it stops being said. Capped at
     #: :data:`VERIFY_PROMPT_MAX`, and subordinate to the prompt's output
     #: contract: see ``test_plans.build_generation_prompt``.
+    #:
+    #: ``environments`` is the repo's list of places a Verify stop can check:
+    #: ``[{"name", "reach", "branch", "deploy_minutes"}]`` — a sandbox that only
+    #: takes squash PRs, a staging site, a canary. The block's own
+    #: ``target``/``live_branch``/``deploy_delay_minutes`` are the implicit one
+    #: named ``live`` (``test_plans.environments``), and a listed ``live``
+    #: overrides it. Normalized by :func:`_verify_environments`.
     verify_repo_settings: Dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
@@ -823,8 +851,15 @@ class RepositorySettings:
         if self.deploy_delay_minutes != 5:
             d["deploy_delay_minutes"] = self.deploy_delay_minutes
         if self.verify_repo_settings:
+            # One level deeper than a dict() copy: ``environments`` is a list of
+            # maps, and handing the caller our own list is how an edit to a
+            # serialized copy would reach back into the loaded settings.
             d["verify_repo_settings"] = {
-                k: dict(v) for k, v in self.verify_repo_settings.items()
+                k: {
+                    kk: ([dict(e) for e in vv] if isinstance(vv, list) else vv)
+                    for kk, vv in v.items()
+                }
+                for k, v in self.verify_repo_settings.items()
             }
         return d
 
@@ -2019,6 +2054,15 @@ class VoiceSettings:
     tts_api_key: str = ""  # SECRET
     tts_model: str = ""
     tts_voice: str = ""
+    # The MindFlock assistant (docs/voice-assistant.md): the model that maps
+    # free speech to app actions ("" = claude-haiku-5-5), how much it says
+    # back ("" = "brief": speaks answers, questions and results, never echoes
+    # a plain navigation; "quiet" = captions + chimes only; "chatty"), and
+    # its own voice — a built-in Kokoro voice id ("" = "af_heart"), so the
+    # assistant sounds the same whatever engine reads the sessions.
+    assistant_model: str = ""
+    assistant_talk: str = ""
+    assistant_voice: str = ""
     words: dict = field(default_factory=dict)
     pronounce: list = field(default_factory=list)
 
@@ -2034,6 +2078,9 @@ class VoiceSettings:
         "tts_api_key",
         "tts_model",
         "tts_voice",
+        "assistant_model",
+        "assistant_talk",
+        "assistant_voice",
     )
 
     def to_dict(self) -> dict:
@@ -2457,6 +2504,13 @@ REPO_OVERRIDE_KEYS = (
     # The flight plan an item from this repo flies (docs/flights.md). Blank =
     # the built-in plan for that kind cut at ``depth`` (none without a depth).
     "plan",
+    # PR review ROUNDS (docs/pr-review-rounds.md): what happens when one of
+    # your PRs gets a new "changes requested" review or a new batch of review
+    # comments after MindFlock first handled it. Blank = "triage" (the PR's
+    # session decides per request: do it / push back with a reply / ask you,
+    # then does what it decided), "ask" (it triages and recommends, then waits
+    # for your go-ahead), "off" (new rounds are left to you).
+    "changes_requested",
 )
 
 
@@ -2593,8 +2647,88 @@ def _verify_repo_settings(v: Any) -> Dict[str, dict]:
                 # actually true about the change.
                 s = s[:VERIFY_PROMPT_MAX]
             clean[key] = s
+        # Not one of VERIFY_OVERRIDE_KEYS: those are all strings, and this one
+        # is a list of maps with its own rules (see _verify_environments).
+        envs = _verify_environments(block.get("environments"))
+        if envs:
+            clean["environments"] = envs
         if clean:
             out[slug] = clean
+    return out
+
+
+#: Most environments one repo may name. A repo has a handful — live, staging, a
+#: sandbox or two — and every one is a row in a Verify stop's "where" picker, so
+#: a list long enough to need scrolling is a list nobody chose from.
+VERIFY_ENVIRONMENTS_MAX = 20
+
+#: Longest environment name, and the one shape it may take.
+VERIFY_ENV_NAME_MAX = 40
+_VERIFY_ENV_NAME_RE = re.compile(r"^[a-z0-9_-]{1,%d}$" % VERIFY_ENV_NAME_MAX)
+
+#: Names an environment may NOT take. ``branch`` is the Verify stop's other
+#: "where" answer — "this branch's own code, no deployment" — and the stop stores
+#: both in one field, so an environment called ``branch`` could never be chosen.
+VERIFY_ENV_RESERVED = frozenset({"branch"})
+
+#: Ceiling on one environment's deploy wait: a day. Longer than any real pipeline,
+#: short enough that a typo cannot park a route for a month.
+VERIFY_ENV_DEPLOY_MAX = 1440
+
+#: What a git branch name may look like here. Narrower than git's own rule on
+#: purpose: this string is interpolated into a fetch refspec and into a shell
+#: line the checker is told to run, so anything odd reads as "no branch" rather
+#: than being carried into either.
+_VERIFY_ENV_BRANCH_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]{0,199}$")
+
+
+def _verify_environments(v: Any) -> List[dict]:
+    """Normalize one repo's ``environments`` list (see
+    :attr:`RepositorySettings.verify_repo_settings`).
+
+    ``[{"name", "reach", "branch", "deploy_minutes"}]``, in the order given.
+    Tolerant the way the rest of the block is — this runs on every settings
+    load — so a bad entry is DROPPED, never raised over: a non-map, a name that
+    is not 1..40 of ``[a-z0-9_-]`` (case is folded first, so "Staging" is kept
+    as "staging"), the reserved name ``branch``, and a repeat of a name already
+    seen (first wins, so the dialog's top row is the one that counts).
+
+    ``reach`` and ``branch`` may be blank and are real answers when they are:
+    no reach = "use what you know about this repo", no branch = "it does not
+    deploy from git, check the plan's own commit". A branch that is not a
+    plausible ref name reads as blank rather than as a string git (or the
+    checker's shell) would be handed. ``deploy_minutes`` is clamped to
+    0..:data:`VERIFY_ENV_DEPLOY_MAX`; garbage reads as 0.
+    """
+    if not isinstance(v, list):
+        return []
+    out: List[dict] = []
+    seen: set = set()
+    for raw in v:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip().lower()
+        if not _VERIFY_ENV_NAME_RE.match(name) or name in VERIFY_ENV_RESERVED:
+            continue
+        if name in seen:
+            continue
+        branch = str(raw.get("branch") or "").strip()
+        if branch and (".." in branch or not _VERIFY_ENV_BRANCH_RE.match(branch)):
+            branch = ""
+        seen.add(name)
+        out.append(
+            {
+                "name": name,
+                "reach": str(raw.get("reach") or "").strip()[:VERIFY_TARGET_MAX],
+                "branch": branch,
+                "deploy_minutes": min(
+                    VERIFY_ENV_DEPLOY_MAX,
+                    _non_negative_int(raw.get("deploy_minutes"), 0),
+                ),
+            }
+        )
+        if len(out) >= VERIFY_ENVIRONMENTS_MAX:
+            break
     return out
 
 

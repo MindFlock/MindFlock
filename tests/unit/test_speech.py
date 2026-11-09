@@ -1310,7 +1310,9 @@ class TestRegistry:
         # The built-in engine first: "" (the first ready one) lands on it
         # wherever the OS has one — the fresh-install default.
         assert speech.ids("stt") == ["system", "openai", "local"]
-        assert speech.ids("tts") == ["system", "openai", "local"]
+        # The built-in Kokoro voice just ahead of piper (ready only once
+        # it is installed).
+        assert speech.ids("tts") == ["system", "openai", "kokoro", "local"]
         assert speech.get("stt", "system").label == "This computer's speech engine"
         for kind in ("stt", "tts"):
             for b in speech.backends(kind):

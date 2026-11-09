@@ -8739,6 +8739,72 @@ def recently_closed() -> JSONResponse:
     return JSONResponse(out)
 
 
+@app.post("/api/sessions/by-branch/hand-off")
+async def hand_off_by_branch(payload: dict) -> JSONResponse:
+    """Give work to the session that BUILT a branch (docs/pr-review-rounds.md
+    "The same session"): ``{"branch", "text"}`` → the text goes into that
+    session's prompt queue (typed in once its agent is idle), so a PR's review
+    lands where the ticket was worked, with all of its context.
+
+    The session: a live one on ``branch`` (the ticket's own session before a
+    ``pr-…`` one; never a verify checker) → ``{"title", "how": "queued"}``;
+    else the newest recently-closed one on it, REOPENED on its worktree with
+    its conversation (as the Recently closed dialog does) → ``"reopened"``;
+    else 404 — the caller starts a session of its own."""
+    body = payload or {}
+    branch = str(body.get("branch") or "").strip()
+    text = str(body.get("text") or "")
+    if not branch or not text.strip():
+        return JSONResponse({"error": "branch and text are required"}, status_code=400)
+
+    def _rank(title: str) -> int:
+        return 1 if title.startswith("pr-") else 0
+
+    live = sorted(
+        (
+            t
+            for t, inst in list(ENGINE.instances.items())
+            if str(getattr(inst, "Branch", "") or "") == branch
+            and not t.startswith("verify-")
+        ),
+        key=_rank,
+    )
+    how = "queued"
+    title = live[0] if live else ""
+    if not title:
+        items = _load_recently_closed()
+        closed = [
+            e
+            for e in items
+            if str(e.get("branch") or (e.get("data") or {}).get("branch") or "")
+            == branch
+            and not str(e.get("title") or "").startswith("verify-")
+        ]
+        # The ticket's own sessions before a pr-… one; newest first within.
+        closed.sort(key=lambda e: str(e.get("closed_at") or ""), reverse=True)
+        closed.sort(key=lambda e: _rank(str(e.get("title") or "")))
+        if not closed:
+            return JSONResponse(
+                {"error": "no session on this machine built %s" % branch},
+                status_code=404,
+            )
+        resp = await _reopen_closed_entry(str(closed[0].get("id") or ""))
+        if resp.status_code >= 300:
+            return resp
+        try:
+            title = str(json.loads(bytes(resp.body).decode("utf-8")).get("title") or "")
+        except Exception:  # noqa: BLE001
+            title = ""
+        if not title:
+            return JSONResponse(
+                {"error": "reopened, but no title came back"}, status_code=500
+            )
+        how = "reopened"
+    _prompt_queue.enqueue(title, text)
+    _prompt_queue.set_flags(title, enabled=True, held=False)
+    return JSONResponse({"title": title, "how": how})
+
+
 @app.post("/api/recently-closed/{entry_id}/reopen")
 async def reopen_recently_closed(entry_id: str) -> JSONResponse:
     """Recreate a closed session as a running instance on its preserved worktree."""
@@ -10505,6 +10571,32 @@ async def ticket_fleet_holder(
     )
 
 
+@app.get("/api/epics")
+async def list_epics(refresh: str = "") -> JSONResponse:
+    """Epics a ticket source ingests (docs/epics.md): the person's own epics
+    in the source's ``epic_states``, each with the count of their own open
+    stories and whether a lead session already works it."""
+    from backend.web.core import epic_start as _epics
+
+    return JSONResponse(await _epics.list_epics(force=bool(refresh)))
+
+
+@app.post("/api/epics/start")
+async def start_epic(payload: dict) -> JSONResponse:
+    """``{"source", "id"}`` → start the epic's LEAD session (docs/epics.md):
+    202 ``{started, title, stories}``; 404/409/400 with ``error``."""
+    from backend.web.core import epic_start as _epics
+
+    body = payload or {}
+    try:
+        out = await _epics.launch(
+            str(body.get("source") or ""), str(body.get("id") or "")
+        )
+    except _epics.EpicError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(out, status_code=202)
+
+
 @app.post("/api/tickets/start")
 async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
     """Force-start a coding session for one ticket, bypassing auto filters.
@@ -11056,6 +11148,24 @@ async def list_test_plan_repos() -> JSONResponse:
     return JSONResponse({"repos": await asyncio.to_thread(_known_repo_roots)})
 
 
+# Registered with the other literal GETs, ahead of every
+# ``/api/test-plans/{plan_id:path}`` route: that converter is greedy, and a
+# future GET on it would otherwise read "environments" as a plan id.
+@app.get("/api/test-plans/environments")
+async def list_test_plan_environments() -> JSONResponse:
+    """Where a route's Verify stop can check: ``{"repos": {"owner/name":
+    [env, …]}, "names": [sorted unique names]}`` over ``repository.verify_repos``.
+
+    Each env is ``{name, reach, branch, deploy_minutes, implicit}`` — the
+    implicit ``live`` first (see ``test_plans.environments``). ``names`` is
+    what a stop's picker offers when it does not yet know which repo the route
+    will fly in. Read-only. A thread because resolving the live-branch chain
+    reads settings, which may touch disk."""
+    repos = await asyncio.to_thread(_test_plans.environments_by_slug)
+    names = sorted({e["name"] for envs in repos.values() for e in envs})
+    return JSONResponse({"repos": repos, "names": names})
+
+
 @app.post("/api/test-plans/branch")
 async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
     """Ask the agent for a checklist for a BRANCH no session has been on.
@@ -11384,8 +11494,28 @@ async def run_test_plan(
     refused with a 400 rather than quietly dropped, because the request is a
     category error and silently running nothing would look like it worked: a
     step is ``human`` precisely because no shell can observe what it asks about.
+
+    ``{"environment": …, "notes": …}`` is a route's Verify stop choosing WHERE
+    (both optional; absent = exactly the behaviour above). ``"branch"`` checks
+    out the plan's own commit with no deployment under test; an environment's
+    name (``test_plans.environments``) puts that DEPLOYMENT under test — its
+    ``reach`` is the target — with ``origin/<its branch>`` checked out for
+    reading code (the plan's commit when it names no branch). An unknown name
+    is a 400, never a silent fallback to somewhere else: a check run in the
+    wrong place reports on the wrong system. ``notes`` (≤ 2000 chars, longer is
+    cut) reach the checker after the repo's standing notes.
     """
     payload = payload or {}
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    where = payload.get("environment")
+    if where is not None and not isinstance(where, str):
+        return JSONResponse({"error": "environment must be a string"}, status_code=400)
+    where = str(where or "").strip().lower()
+    notes = payload.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        return JSONResponse({"error": "notes must be a string"}, status_code=400)
+    notes = str(notes or "").strip()[:2000]
     if not git_available():
         return _no_git_response()
     plan = _test_plans.get(plan_id)
@@ -11405,6 +11535,7 @@ async def run_test_plan(
             {
                 "error": "%s is already verifying this plan" % plan["run_session"],
                 "session": plan["run_session"],
+                "reason": "busy",
             },
             status_code=409,
         )
@@ -11414,7 +11545,10 @@ async def run_test_plan(
         # empty checklist. 409 (not 400) — the request is fine, the plan is not
         # ready, and the regenerate button is the fix.
         return JSONResponse(
-            {"error": "this plan has no steps yet — regenerate it first"},
+            {
+                "error": "this plan has no steps yet — regenerate it first",
+                "reason": "no_steps",
+            },
             status_code=409,
         )
     if not any(s["actor"] != "human" for s in plan["steps"]):
@@ -11429,7 +11563,8 @@ async def run_test_plan(
         return JSONResponse(
             {
                 "error": "every behavior here is for a person to check — "
-                "there is nothing here an agent can settle"
+                "there is nothing here an agent can settle",
+                "reason": "human_only",
             },
             status_code=409,
         )
@@ -11446,7 +11581,8 @@ async def run_test_plan(
             {
                 "error": "the repo these behaviors were written from is gone (%s) — "
                 "a run needs it to check out the live branch"
-                % (repo_root or "no path recorded")
+                % (repo_root or "no path recorded"),
+                "reason": "repo_gone",
             },
             status_code=409,
         )
@@ -11500,12 +11636,37 @@ async def run_test_plan(
     # not only the writer. The settings field's own placeholder is "The UI runs
     # on :3000 — check there, not :8080" — a sentence written for the agent that
     # works the checklist, which until now only the model that wrote it ever saw.
+    #
+    # A route's explicit "where" overrides both answers: the environment's own
+    # reach and branch, or the plan's commit with nothing deployed. Resolved
+    # BEFORE any session is touched, so an unknown name costs nothing.
+    run_target: Optional[str] = None
+    checkout = ""
+    checkout_branch = ""
+    if where:
+        sha = str(plan.get("tip_sha") or plan.get("sha") or "")
+        if where == _test_plans.BRANCH_WHERE:
+            run_target, checkout = "", sha
+        else:
+            env = await asyncio.to_thread(_test_plans.environment, repo_root, where)
+            if env is None:
+                return JSONResponse(
+                    {"error": "no such environment: %s" % where}, status_code=400
+                )
+            run_target = env["reach"]
+            checkout_branch = env["branch"]
+            checkout = ("origin/%s" % checkout_branch) if checkout_branch else sha
     prompt = _test_plans.build_run_prompt(
         plan,
         only,
         live=plan["state"] in ("due", "running", "done"),
         repo_notes=_test_plans.repo_notes(repo_root),
-        target=_test_plans.verify_target(repo_root),
+        target=(
+            _test_plans.verify_target(repo_root) if run_target is None else run_target
+        ),
+        where=where,
+        checkout_branch=checkout_branch,
+        notes=notes,
     )
     # Clear the previous run's answers BEFORE starting another one. The result
     # file is the session's only return channel and the poller believes the
@@ -11552,7 +11713,7 @@ async def run_test_plan(
         # already sitting on the live branch.
         resp = await instance_send(title, {"text": prompt})
         if resp.status_code >= 400:
-            return resp
+            return _run_launch_refusal(resp)
         # A run that predates the flag (hidden by its name alone until now)
         # is flagged the first time it is reused. Idempotent.
         await asyncio.to_thread(_hidden_sessions.set_hidden_by, title, "verify")
@@ -11573,11 +11734,38 @@ async def run_test_plan(
             request,
         )
         if resp.status_code >= 400:
-            return resp
+            return _run_launch_refusal(resp)
+        if resp.status_code == 202 and _json_body(resp).get("queued"):
+            # QUEUED, not created: the launch gate holds automatic starts while
+            # memory is low and answers 202 + queued. No session exists, so no
+            # run may be opened — the caller (a route's Verify stop) is told
+            # "memory" and retries, instead of believing a check started. The
+            # queued launch is withdrawn: left in the queue it would start a
+            # checker later that no run record is waiting for, while the stop
+            # starts its own on the next retry.
+            body = _json_body(resp)
+            if _launch_gate.cancel(title):
+                if (body.get("waiting_for_memory") or {}).get("creates", True):
+                    _pending.drop(title)
+            return JSONResponse(
+                {
+                    "error": "memory is low — the verify session is waiting to start",
+                    "reason": "memory",
+                    "detail": str(body.get("reason") or body.get("message") or ""),
+                },
+                status_code=409,
+            )
     # Only now: start_run stamps the plan "running" and opens the run record the
     # due loop's give-up clock reads, and a plan claiming a session that was
     # never created would be stuck there for two hours.
-    started = await asyncio.to_thread(_test_plans.start_run, plan_id, title)
+    started = await asyncio.to_thread(
+        _test_plans.start_run,
+        plan_id,
+        title,
+        where=where,
+        target=run_target,
+        checkout=checkout,
+    )
     if started is None:
         # The plan was deleted while the session was being provisioned. Answering
         # `ok` here left a real, billed agent working a checklist that no longer
@@ -11601,6 +11789,39 @@ async def run_test_plan(
         {"ok": True, "session": title, "plan": _test_plan_row(started)},
         status_code=202,
     )
+
+
+def _json_body(resp) -> dict:
+    """A JSONResponse's body as a dict ({} when it is not one)."""
+    try:
+        body = json.loads(bytes(resp.body).decode("utf-8") or "{}")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _run_launch_refusal(resp) -> JSONResponse:
+    """A run whose verify session could not be created or typed into, with a
+    machine-readable ``reason`` (docs/web-api.md, the run route): ``memory``
+    when the launch gate refused for low memory (``memory_confirm``; its own
+    sentence in ``detail``), ``launch_failed`` otherwise. A route's Verify stop
+    reads it: memory → wait and retry with the reason on screen; anything else
+    → fail with the sentence. Never a bare 409 a caller could mistake for
+    "already verifying"."""
+    body = _json_body(resp)
+    if body.get("memory_confirm"):
+        return JSONResponse(
+            {
+                "error": "memory is low — the verify session can't start yet",
+                "reason": "memory",
+                "detail": str(body.get("message") or body.get("error") or ""),
+            },
+            status_code=409,
+        )
+    out = dict(body)
+    out.setdefault("error", "the verify session could not start")
+    out["reason"] = "launch_failed"
+    return JSONResponse(out, status_code=resp.status_code)
 
 
 def _fix_refusal(status: int, error: str, detail: str, **extra) -> JSONResponse:

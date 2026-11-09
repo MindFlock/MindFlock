@@ -195,6 +195,353 @@
   margin: 0;
   color: var(--muted);
 }
+/* The voice assistant's strip (AssistantStrip.tsx): under the top bar's mic,
+   the same surface as the mic's options (.mic-pop) and the cheat sheet
+   (.voice-cmds). The accent says "talking to MindFlock" — the mic's red is
+   "dictating into a session" — so the two are never confused. Still: a fade
+   in, three dots that step while it thinks, nothing else moves. */
+.assist-strip {
+  position: fixed;
+  z-index: 2990;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 12px;
+  animation: assist-in 120ms ease-out;
+}
+
+@keyframes assist-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.assist-strip.is-asking {
+  border-left-color: var(--gold, var(--accent));
+}
+
+.assist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* A still dot: hollow when the strip only shows a reply, filled while
+   assistant mode listens. */
+.assist-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+}
+
+.assist-dot.on {
+  background: var(--accent);
+}
+
+.assist-where {
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assist-thinking {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.assist-thinking i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.3;
+  animation: assist-step 900ms steps(1, end) infinite;
+}
+
+.assist-thinking i:nth-child(2) {
+  animation-delay: 300ms;
+}
+
+.assist-thinking i:nth-child(3) {
+  animation-delay: 600ms;
+}
+
+@keyframes assist-step {
+  0%,
+  33% {
+    opacity: 1;
+  }
+  34%,
+  100% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assist-strip,
+  .assist-thinking i {
+    animation: none;
+  }
+  .assist-thinking i {
+    opacity: 0.7;
+  }
+}
+
+.assist-close {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.assist-close:hover {
+  color: var(--text);
+}
+
+.assist-heard {
+  margin: 0;
+  color: var(--muted);
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.assist-caption {
+  margin: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.assist-caption.is-error {
+  color: var(--red);
+}
+
+.assist-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.assist-chip {
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.assist-chip {
+  cursor: pointer;
+}
+
+button.assist-chip:hover {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.assist-chip.is-error {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 40%, var(--border));
+}
+
+.assist-confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.assist-confirm button {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.assist-confirm .assist-yes {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.assist-confirm button:focus-visible,
+.assist-chip:focus-visible,
+.assist-close:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.assist-or {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Assistant mode on the mic itself: the ring and the icon in the accent,
+   not the dictation's red — where the words go, at a glance. */
+#topbar #mic-btn.assistant {
+  color: var(--accent);
+}
+
+.mic-ring.assistant::after {
+  border-color: var(--accent);
+}
+
+/* A thing the assistant pressed ({do:"click"}): outlined a moment, so the
+   owner sees what it was (lib/assistantHost FLASH_MS). */
+.assist-flash {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px;
+  transition: outline-color 300ms ease-out;
+}
+
+/* The mic's options: "Talk to MindFlock" while assistant mode is on. */
+.mic-pop .mic-assistant-btn.on {
+  font-weight: 600;
+}
+
+.mic-pop .mic-assistant-btn .mic-pop-key {
+  color: var(--muted);
+  font-weight: 400;
+}
+/* Basic vs advanced Settings (settingsMode.tsx).
+
+   The switch sits at the foot of the nav, pushed to the bottom of the column
+   so it reads as "there is more below the line", not as one more screen. */
+.set-mode-foot {
+  margin-top: auto;
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.set-mode-toggle {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--muted);
+  padding: 10px 10px 4px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.set-mode-toggle:hover,
+.set-mode-toggle:focus-visible {
+  color: var(--text);
+}
+
+.set-mode-toggle[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.set-mode-more {
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* Phone width (the nav is a short stack: search, a screen select, this): the
+   switch and its count on ONE line, left-aligned, so it reads as a switch and
+   not as one more tab. Here and not in screens.css, which sits in a cascade
+   layer — this sheet is imported unlayered and would win over it. */
+@media (max-width: 600px) {
+  #settings-nav .set-mode-foot {
+    margin-top: 0;
+    padding-top: 0;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  #settings-nav .set-mode-toggle {
+    border-top: none;
+    padding: 2px 0;
+  }
+
+  #settings-nav .set-mode-more {
+    padding: 0;
+  }
+}
+
+/* The "Advanced" fold on a basic screen: the screen's own sections, one
+   click away. The body keeps the screen's own rhythm, so a moved row looks
+   the same inside the fold as it did outside it. */
+.set-adv-fold > summary {
+  padding: 2px 0;
+}
+
+.set-adv-fold-body {
+  gap: 16px;
+}
+
+.set-adv-fold-body > .set-section-title:first-child {
+  margin-top: 0;
+}
+
+/* "✓ Saved" after the changed control's label (savedCue.ts) — every save in
+   Settings, toggles included, says so right where you are. Inline, so it
+   never moves the control. */
+[data-saved]::after {
+  content: "✓ Saved";
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green);
+  animation: set-saved-in 0.15s ease-out;
+}
+
+@keyframes set-saved-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-saved]::after {
+    animation: none;
+  }
+}
+
+/* A value a field refused (SettingField): the reason, under the field. */
+.set-field-error {
+  font-size: 12px;
+  color: var(--red);
+}
+
+.set-row input[aria-invalid="true"] {
+  border-color: var(--red);
+}
 /* The Sky guide (SkyGuide.tsx): a wide card, the section list on the left,
    the section on the right scrolling on its own. The sketches draw in
    currentColor and the theme tokens, so both themes work. */
@@ -875,119 +1222,6 @@
 .install-next .setup-primary:hover,
 .gh-connected-row .setup-primary:hover {
   filter: brightness(1.1);
-}
-/* Basic vs advanced Settings (settingsMode.tsx).
-
-   The switch sits at the foot of the nav, pushed to the bottom of the column
-   so it reads as "there is more below the line", not as one more screen. */
-.set-mode-foot {
-  margin-top: auto;
-  padding-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.set-mode-toggle {
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  color: var(--muted);
-  padding: 10px 10px 4px;
-  font-size: 12px;
-  font-family: inherit;
-  line-height: 1.35;
-  cursor: pointer;
-}
-
-.set-mode-toggle:hover,
-.set-mode-toggle:focus-visible {
-  color: var(--text);
-}
-
-.set-mode-toggle[aria-pressed="true"] {
-  color: var(--text);
-}
-
-.set-mode-more {
-  padding: 0 10px;
-  font-size: 11px;
-  color: var(--muted);
-  opacity: 0.8;
-}
-
-/* Phone width (the nav is a short stack: search, a screen select, this): the
-   switch and its count on ONE line, left-aligned, so it reads as a switch and
-   not as one more tab. Here and not in screens.css, which sits in a cascade
-   layer — this sheet is imported unlayered and would win over it. */
-@media (max-width: 600px) {
-  #settings-nav .set-mode-foot {
-    margin-top: 0;
-    padding-top: 0;
-    flex-direction: row;
-    align-items: baseline;
-    gap: 8px;
-  }
-
-  #settings-nav .set-mode-toggle {
-    border-top: none;
-    padding: 2px 0;
-  }
-
-  #settings-nav .set-mode-more {
-    padding: 0;
-  }
-}
-
-/* The "Advanced" fold on a basic screen: the screen's own sections, one
-   click away. The body keeps the screen's own rhythm, so a moved row looks
-   the same inside the fold as it did outside it. */
-.set-adv-fold > summary {
-  padding: 2px 0;
-}
-
-.set-adv-fold-body {
-  gap: 16px;
-}
-
-.set-adv-fold-body > .set-section-title:first-child {
-  margin-top: 0;
-}
-
-/* "✓ Saved" after the changed control's label (savedCue.ts) — every save in
-   Settings, toggles included, says so right where you are. Inline, so it
-   never moves the control. */
-[data-saved]::after {
-  content: "✓ Saved";
-  margin-left: 8px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--green);
-  animation: set-saved-in 0.15s ease-out;
-}
-
-@keyframes set-saved-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  [data-saved]::after {
-    animation: none;
-  }
-}
-
-/* A value a field refused (SettingField): the reason, under the field. */
-.set-field-error {
-  font-size: 12px;
-  color: var(--red);
-}
-
-.set-row input[aria-invalid="true"] {
-  border-color: var(--red);
 }
 /* Settings → Connections dashboard (Connections.tsx). The base row/pill
    styles live in ticketingConnections.css; this adds the groups, the
@@ -2585,6 +2819,55 @@
 }
 .bh-add {
   align-self: flex-start;
+}
+
+/* A behavior row collapses to one short line (BehaviorRow): its text is a
+   button that opens the row, clamped to two lines while collapsed. */
+.bh-text-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.bh-text-toggle {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.bh-text-toggle.is-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.bh-text-toggle:hover {
+  color: var(--accent);
+}
+.bh-caret {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: calc(11px * var(--bh-s));
+  line-height: 1.6;
+}
+.bh-caret:hover {
+  color: var(--text);
+}
+.bh-expand-all {
+  font-size: calc(11px * var(--bh-s));
+  white-space: nowrap;
+  flex: none;
+  padding: 1px 7px;
 }
 /* The flyway canvas (FlywayCanvas.tsx) and Flights' form controls
  * (controls.tsx) — prefix fl-.
@@ -5140,6 +5423,18 @@ a.fl-waiting-ref:hover {
 .fl-chain-frame-body {
   width: max-content;
   padding: 14px 16px 12px;
+}
+
+/* A Verify stop parked on you for a manual step ("needs you: …") or a
+   memory-refused checker: what to do, then "I did it — check again". */
+.fl-you-needs-list {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.fl-you-needs-list li + li {
+  margin-top: 2px;
 }
 /* Round 18 — a chain in the Sky, n8n-style (SkyChain.tsx, lib/skyGraph):
  * free-floating icon tiles with the name and a muted summary UNDER them, a
@@ -8011,6 +8306,130 @@ details.fl-group-waiting > summary {
   width: auto;
   padding-right: 22px;
 }
+
+/* --- The Verify stop's editor (VerifyStopFields.tsx) --------------------------- */
+
+/* ① written → ② checked on <where> → ③ yours park the route: three compact
+   lines over the fields, in the hint's ink. */
+.vf-explain {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  color: var(--fl-ink-muted, var(--muted));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.vf-explain li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.vf-explain-n {
+  flex: none;
+  color: var(--fl-ink-accent, var(--accent));
+}
+
+.vf-where-hint {
+  white-space: pre-line;
+}
+
+/* Who checks: three radio rows, each its label and what it means. */
+.vf-who {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vf-who-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.vf-who-opt .muted {
+  font-size: 12px;
+}
+
+.vf-who-opt:hover {
+  background: var(--panel-2);
+}
+
+.vf-who-opt.on {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.vf-who-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The stop's checklist inside its dialog: who checks each one. */
+.vf-behaviors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.vf-behaviors ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.vf-behavior {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+
+.vf-behavior-mark {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  color: var(--muted);
+}
+
+.vf-behavior-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.vf-behavior-who {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vf-yours .vf-behavior-who {
+  color: var(--fl-ink-accent, var(--accent));
+  font-weight: 600;
+}
 /* A stop's dialog (StopDialog.tsx): the same card as #rename-form
    (smallDialogs.css), wider for a stop's fields. The fields keep the
    inspector's look (.fl-form, StopParts.css). */
@@ -9191,6 +9610,78 @@ details.fl-group-waiting > summary {
   .sky .sky-intake > .sky-lane {
     transition: none;
   }
+}
+/* Intake → Tickets → Epics (EpicsSection.tsx). */
+.ik-epics {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.ik-epics-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ik-epics-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+.ik-epics-head .muted {
+  font-size: 11.5px;
+  flex: 1;
+}
+.ik-epics-refresh {
+  font-size: 12px;
+  padding: 1px 7px;
+}
+.ik-epics-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ik-epic {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.ik-epic:first-child {
+  border-top: 0;
+}
+.ik-epic-main {
+  flex: 1;
+  min-width: 0;
+}
+.ik-epic-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text);
+  text-decoration: none;
+}
+.ik-epic-name:hover {
+  text-decoration: underline;
+}
+.ik-epic-meta,
+.ik-epic-why {
+  font-size: 11.5px;
+}
+.ik-epics-error {
+  color: var(--red);
+  font-size: 12px;
+  margin: 2px 0;
+}
+.ik-epics-empty {
+  font-size: 12px;
+  margin: 2px 0;
+}
+.ik-epic button {
+  flex: none;
+  font-size: 12px;
+  padding: 3px 10px;
 }
 /* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
    URL, then (with two or more) its optional hint and a Remove. */
@@ -11595,6 +12086,71 @@ details.fl-group-waiting > summary {
 
 .gh-token-fold > .gh-steps {
   margin-top: 10px;
+}
+/* The reminder dialog for timed todos (TodoReminder.tsx). */
+#todo-reminder .todo-reminder {
+  width: min(460px, calc(100vw - 32px));
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+#todo-reminder .tr-head h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+#todo-reminder .tr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+#todo-reminder .tr-item {
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+#todo-reminder .tr-item:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+#todo-reminder .tr-text {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+#todo-reminder .tr-when {
+  font-size: 12px;
+  margin: 2px 0 8px;
+}
+#todo-reminder .tr-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+#todo-reminder .tr-acts button {
+  font-size: 12px;
+  padding: 3px 9px;
+}
+#todo-reminder .tr-dismiss {
+  margin-left: auto;
+  color: var(--muted);
+}
+#todo-reminder .tr-pick {
+  font-size: 12px;
+}
+#todo-reminder .tr-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+#todo-reminder .tr-foot button {
+  font-size: 12px;
 }
 /* The welcome card (one card, then the coach-mark Welcome tour). Rides the
    shared .modal overlay. */
@@ -20204,6 +20760,50 @@ p.set-hint {
   border-radius: 8px;
   position: relative;
 }
+
+
+/* A todo's reminder (lib/todoTime): a quiet clock until it has a time, then
+   the time in words; red once it is due and not done. */
+.todo-row .todo-due {
+  flex: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+  opacity: 0.55;
+  white-space: nowrap;
+}
+.todo-row:hover .todo-due,
+.todo-row .todo-due.has-due {
+  opacity: 1;
+}
+.todo-row .todo-due.has-due {
+  border-color: var(--border);
+  background: var(--panel-2, var(--panel));
+}
+.todo-row .todo-due.overdue {
+  color: var(--red);
+  border-color: var(--red);
+}
+.todo-row.done .todo-due.has-due {
+  opacity: 0.5;
+}
+.todo-row .todo-due-edit {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  flex: none;
+}
+.todo-row .todo-due-edit input {
+  font-size: 12px;
+}
+.todo-row .todo-due-clear {
+  font-size: 11px;
+  padding: 1px 6px;
+}
 }
 
 /* 070 */
@@ -22399,8 +22999,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 /* Pinned live section at the top of the bell popover, above the history. It
    scrolls on its own so a long list never pushes the history off the panel. */
+/* `flex-shrink: 0`: it was `0 1 auto`, so beside a long history the two
+   shrank in proportion to their heights and "Needs you" was squeezed to a
+   sliver (one row of four showing, the rest behind a tiny scroll). It keeps
+   its height now, up to its own cap, and the history takes what is left. */
 .notif-attn {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   max-height: 55vh;
   overflow-y: auto;
   padding: 5px 6px 6px;
@@ -39076,6 +39680,49 @@ button.linklike {
 .fl-source-reach .fl-reach-summary {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/* Verify repo card: the live fields are the implicit "live" environment, and
+   the Environments list under them (RepoEnvironments.tsx) — one bordered
+   group per environment, in the card's own field look. */
+.vf-live-env,
+.vf-env {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.vf-live-env > legend {
+  padding: 0 4px;
+}
+.vf-envs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.vf-envs-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vf-env textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.vf-env [aria-invalid="true"] {
+  border-color: var(--red, #e8795a);
+}
+.vf-env-error {
+  color: var(--red, #e8795a);
+}
+.vf-env-acts {
+  display: flex;
+  justify-content: flex-end;
 }
 }
 

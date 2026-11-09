@@ -14,7 +14,12 @@
  * local models are picked but missing; once local recognition streams, the
  * **Live words** row: which engine types the words — Moonshine or whisper —
  * and the one-click "Install fast recognition (Moonshine)" when it is
- * missing); **On the phone page**, where the
+ * missing); **Assistant** (`#voice-assistant`, once the server reports its
+ * built-in Kokoro voice: the talk level — `voice.assistant_talk` —, the
+ * assistant's voice — `voice.assistant_voice`, from
+ * GET /api/voice/voices?engine=kokoro, with ▶ to hear the picked one — and
+ * its model, `voice.assistant_model`, plus the one-click "Install the
+ * built-in voice" while Kokoro is missing); **On the phone page**, where the
  * phone page runs each (`voice.stt` / `voice.tts`, phone | server); **This
  * computer's mic** (per-browser prefs, and "Show me how" — the Voice tour);
  * **Voice words** (`voice.words`, ./VoiceWords.tsx); **Permission dialogs** (the approve-by-voice switch); **Try it** (speak a
@@ -80,6 +85,10 @@ export interface VoiceView {
   /** Whether the Moonshine streaming lane could run on the server, and why
    * not (`speech_moonshine.unavailable_reason`); absent on an older server. */
   moonshine?: { available?: boolean; reason?: string };
+  /** The built-in Kokoro voice (core/speech.py `_kokoro_status`): whether it
+   * can speak, why not, whether it is loaded and the assistant's voice;
+   * absent on a server older than the voice assistant. */
+  kokoro?: { available?: boolean; reason?: string; loaded?: boolean; voice?: string };
   /** The built-in engine; absent on a server older than it. */
   system?: {
     available?: boolean;
@@ -116,12 +125,26 @@ export const VOICE_BACKENDS = [
   { value: "local", label: "Local models (faster-whisper / piper)" },
 ];
 
+/** The voice's picker: the same, plus the built-in Kokoro voice (a voice
+ * only: core/speech_kokoro.py), just ahead of piper as the server lists it. */
+export const TTS_BACKENDS = [
+  VOICE_BACKENDS[0],
+  VOICE_BACKENDS[1],
+  { value: "kokoro", label: "Built-in natural voice (Kokoro)" },
+  { value: "local", label: "Local models (piper)" },
+];
+
+/** The backend picker's options for a kind. */
+export function backendOptions(kind: VoiceKind): Array<{ value: string; label: string }> {
+  return kind === "tts" ? TTS_BACKENDS : VOICE_BACKENDS;
+}
+
 /** The backend a kind's block shows: the saved one, else the one the server
  * says "" resolved to, else the built-in engine. */
 export function effectiveBackend(kind: VoiceKind, saved: string, view: VoiceView | null | undefined): string {
   if (saved) return saved;
   const id = (kind === "stt" ? view?.server_ready?.stt_backend : view?.server_ready?.tts_backend) || "";
-  return VOICE_BACKENDS.some((o) => o.value === id) ? id : "system";
+  return backendOptions(kind).some((o) => o.value === id) ? id : "system";
 }
 
 /** Which fields a kind's block shows. Nothing while that kind runs on the
@@ -137,6 +160,8 @@ export function voiceFields(
 ): { backend: boolean; url: boolean; key: boolean; model: boolean; voice: boolean } {
   if (where !== "server") return { backend: false, url: false, key: false, model: false, voice: false };
   if (backend === "system") return { backend: true, url: false, key: false, model: false, voice: kind === "tts" };
+  // The built-in Kokoro voice: nothing but which of its voices.
+  if (backend === "kokoro") return { backend: true, url: false, key: false, model: false, voice: kind === "tts" };
   const host = backend !== "local";
   return { backend: true, url: host, key: host, model: kind === "stt" || host, voice: kind === "tts" };
 }
@@ -363,7 +388,7 @@ export function VoiceSection({ active }: { active: boolean }) {
       .then((s) => {
         if (!mounted.current) return;
         setInstallSupported(true);
-        if (s?.what === "moonshine" || s?.what === "local") setInstallWhat(s.what);
+        if (s?.what === "moonshine" || s?.what === "local" || s?.what === "kokoro") setInstallWhat(s.what);
         if (s?.state === "running" && !following.current) {
           following.current = true;
           setInstallTouched(true);
@@ -396,6 +421,12 @@ export function VoiceSection({ active }: { active: boolean }) {
     touched: installTouched && installWhat === "moonshine",
     onInstall: () => start("moonshine"),
   };
+  const voiceInstall: InstallProps = {
+    supported: installSupported,
+    status: installWhat === "kokoro" ? installStatus : idle,
+    touched: installTouched && installWhat === "kokoro",
+    onInstall: () => start("kokoro"),
+  };
 
   const clearKey = async (kind: VoiceKind) => {
     // POST /api/settings keeps a secret sent blank (the app-wide convention),
@@ -416,6 +447,7 @@ export function VoiceSection({ active }: { active: boolean }) {
       onClearKey={clearKey}
       install={install}
       fast={fast}
+      assistant={voiceInstall}
       tryRow={<TryRow view={view} install={install} />}
     />
   );
@@ -430,6 +462,7 @@ export function VoiceSectionView({
   onClearKey,
   install,
   fast,
+  assistant,
   tryRow,
 }: {
   model: SettingsModel;
@@ -439,6 +472,8 @@ export function VoiceSectionView({
   install?: InstallProps;
   /** The Moonshine installer (the Live words row's button); none draws no button. */
   fast?: InstallProps;
+  /** The built-in voice's installer (the Assistant section's button); none draws no button. */
+  assistant?: InstallProps;
   tryRow?: ReactNode;
 }) {
   const approve = model.get("voice", "approve_dialogs") !== false;
@@ -465,6 +500,7 @@ export function VoiceSectionView({
         <LiveWordsRow model={model} view={view} fast={fast} />
         <VoiceKindBlock kind="tts" title="Voice" model={model} view={view} onClearKey={onClearKey} />
       </div>
+      {view?.kokoro && <AssistantBlock model={model} view={view} install={assistant} />}
       <div className="set-section" id="voice-phone">
         <h3 className="set-section-title">On the phone page</h3>
         <p className="set-hint" id="voice-phone-hint">
@@ -760,7 +796,7 @@ function VoiceKindBlock({
             value={backend}
             onChange={(e) => model.saveField("voice", kind + "_backend", e.target.value)}
           >
-            {VOICE_BACKENDS.map((o) => (
+            {backendOptions(kind).map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -831,7 +867,15 @@ function VoiceKindBlock({
             <SettingField
               group="voice"
               field="tts_voice"
-              placeholder={backend === "system" ? "the system's default" : local ? "en_US-lessac-medium" : "alloy"}
+              placeholder={
+                backend === "system"
+                  ? "the system's default"
+                  : backend === "kokoro"
+                    ? "af_heart (blank: the assistant's voice)"
+                    : local
+                      ? "en_US-lessac-medium"
+                      : "alloy"
+              }
             />
           )}
         </label>
@@ -892,7 +936,7 @@ export const INSTALL_REFUSED = "Only the owner can install models: do it on that
 export const INSTALL_POLL_MS = 2000;
 
 /** What the one installer puts in: the local models or Moonshine. */
-export type InstallWhat = "local" | "moonshine";
+export type InstallWhat = "local" | "moonshine" | "kokoro";
 export const MOONSHINE_LABEL = "Install fast recognition (Moonshine, ~200 MB)";
 export const MOONSHINE_WHY =
   "Moonshine types your words as you say them and has the text ready about 30 ms after you stop (whisper takes about a second). English only; long dictation is still polished by whisper.";
@@ -1052,7 +1096,8 @@ export async function pollInstall(
 }
 
 /** The button: POST /api/voice/install-local (`what: "moonshine"`: the
- * fast streaming recognizer instead of the local models), then follow it. A
+ * fast streaming recognizer instead of the local models; `"kokoro"`: the
+ * built-in voice alone), then follow it. A
  * 409 means an install is already running — follow that one; a 403 is the
  * owner check. */
 export async function installLocalModels(
@@ -1070,7 +1115,7 @@ export async function installLocalModels(
   try {
     await call(
       "/api/voice/install-local",
-      opts.what === "moonshine" ? { method: "POST", json: { what: "moonshine" } } : { method: "POST" }
+      opts.what && opts.what !== "local" ? { method: "POST", json: { what: opts.what } } : { method: "POST" }
     );
     onStatus({ state: "running", step: "Starting" });
   } catch (err) {
@@ -1141,6 +1186,210 @@ function LiveWordsRow({ model, view, fast }: { model: SettingsModel; view: Voice
         <InstallStatus v={v} state={fast.status.state} idle={MOONSHINE_WHY} idPrefix="voice-moonshine" busyLabel="Installing fast recognition" />
       </div>
       <InstallButton v={v} install={fast} id="voice-moonshine-btn" label={MOONSHINE_LABEL} />
+    </div>
+  );
+}
+
+/** The assistant's defaults while its fields are blank (backend/config
+ * VoiceSettings: `assistant_model`, `assistant_voice`). */
+export const ASSISTANT_MODEL_DEFAULT = "claude-haiku-5-5";
+export const ASSISTANT_VOICE_DEFAULT = "af_heart";
+/** `voice.assistant_talk`: how much the assistant says out loud ("" = brief). */
+export const TALK_CHOICES = [
+  { value: "quiet", label: "Quiet", hint: "Captions only, unless it needs an answer from you." },
+  { value: "brief", label: "Brief", hint: "Speaks answers and questions; never repeats what you just did." },
+  { value: "chatty", label: "Chatty", hint: "Also says what it did." },
+] as const;
+export type TalkLevel = (typeof TALK_CHOICES)[number]["value"];
+/** What ▶ says in the picked voice. */
+export const ASSISTANT_SAMPLE = "Hi, I'm MindFlock. Your docs session is waiting on a permission prompt.";
+export const KOKORO_LABEL = "Install the built-in voice (Kokoro, ~120 MB)";
+export const KOKORO_WHY = "A natural voice that runs on this computer, with nothing to sign up for.";
+export const KOKORO_DONE = "Installed — the assistant now speaks with its built-in voice";
+
+/** One voice of GET /api/voice/voices?engine=kokoro. */
+export interface KokoroVoice {
+  id: string;
+  label: string;
+  lang?: string;
+}
+/** GET /api/voice/voices?engine=kokoro (routes/speech.py voice_voices). */
+export interface VoicesView {
+  voices?: KokoroVoice[];
+  ready?: boolean;
+  reason?: string;
+  voice?: string;
+}
+
+/** The saved talk level, "" (or anything unknown) read as brief. */
+export function talkLevel(saved: unknown): TalkLevel {
+  const s = String(saved ?? "").trim().toLowerCase();
+  return (TALK_CHOICES.find((c) => c.value === s)?.value ?? "brief") as TalkLevel;
+}
+
+/** The voice picker's options: the server's voices (just the default while
+ * they load), and a saved id it doesn't list kept (said so) rather than shown
+ * as another. */
+export function assistantVoiceOptions(voices: KokoroVoice[] | null | undefined, saved: unknown): Array<{ value: string; label: string }> {
+  const list = voices && voices.length ? voices : [{ id: ASSISTANT_VOICE_DEFAULT, label: "Heart (US, female)" }];
+  const out = list.map((v) => ({ value: v.id, label: v.label || v.id }));
+  const s = saved == null ? "" : String(saved);
+  if (s && !list.some((v) => v.id === s)) out.push({ value: s, label: s + " (not a built-in voice)" });
+  return out;
+}
+
+/** The built-in voice's installer button and line (`installView`'s, its own
+ * done line). */
+export function kokoroView(st: InstallStatus, allowed: boolean): ReturnType<typeof installView> {
+  const v = installView(st, allowed, "about 120 MB");
+  if (st.state === "done") return { ...v, text: KOKORO_DONE + "." };
+  return v;
+}
+
+/** ▶: POST /api/voice/speak {text, as: "assistant", voice} — the voice is
+ * sent explicitly, so a voice picked a moment ago plays even before its save
+ * came back — then play the bytes through `ctx` (made inside the click). The
+ * server says which voice spoke (`X-Voice-Assistant`: kokoro | fallback). */
+export async function sampleVoice(ctx: AudioContext | null, voice: string, now = () => Date.now()): Promise<TryResult> {
+  if (!ctx) return { ok: false, text: "This browser can't play audio from the server." };
+  const t0 = now();
+  try {
+    const r = await apiRaw("/api/voice/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: ASSISTANT_SAMPLE, as: "assistant", voice }),
+    });
+    if (!r.ok) return { ok: false, text: "Couldn't speak: " + (await errorOf(r)) + "." };
+    const bytes = await r.arrayBuffer();
+    const ms = now() - t0;
+    const fallback = r.headers?.get?.("X-Voice-Assistant") === "fallback";
+    const audio = await ctx.decodeAudioData(bytes);
+    const src = ctx.createBufferSource();
+    src.buffer = audio;
+    src.connect(ctx.destination);
+    src.start(0);
+    return fallback
+      ? { ok: false, text: `The built-in voice isn't ready, so that was the regular voice (${ms} ms).` }
+      : { ok: true, text: `Spoke in ${ms} ms.` };
+  } catch (err) {
+    return { ok: false, text: "Couldn't speak: " + noDot(String((err as Error)?.message || err)) + "." };
+  }
+}
+
+/** Settings → Voice → Assistant: how much the voice assistant says, its
+ * voice (with ▶ to hear it) and its model, and — while the built-in Kokoro
+ * voice is missing — its one-click install. Shown only once the server
+ * reports `kokoro` (an older server has no assistant). */
+function AssistantBlock({ model, view, install }: { model: SettingsModel; view: VoiceView; install?: InstallProps }) {
+  const [voices, setVoices] = useState<VoicesView | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<VoicesView>("/api/voice/voices?engine=kokoro")
+      .then((v) => {
+        if (live) setVoices(v || {});
+      })
+      .catch(() => {
+        if (live) setVoices({});
+      });
+    return () => {
+      live = false;
+    };
+    // `view` is re-read after every save and every finished install: so is this.
+  }, [view]);
+  const [sample, setSample] = useState<TryResult | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const ctx = useRef<AudioContext | null>(null);
+  const ready = voices?.ready ?? !!view.kokoro?.available;
+  const talk = talkLevel(model.get("voice", "assistant_talk"));
+  const saved = String(model.get("voice", "assistant_voice") || "");
+  const voice = saved || ASSISTANT_VOICE_DEFAULT;
+  const play = async () => {
+    if (playing) return;
+    setPlaying(true);
+    ctx.current = ctx.current || newAudioCtx();
+    const got = await sampleVoice(ctx.current, voice);
+    setSample(got);
+    setPlaying(false);
+  };
+  const allowed = view.configure_allowed !== false;
+  const showInstall = !!install?.supported && (!ready || install.status.state === "running" || install.touched);
+  const v = install ? kokoroView(install.status, allowed) : null;
+  return (
+    <div className="set-section" id="voice-assistant">
+      <h3 className="set-section-title">Assistant</h3>
+      <p className="set-hint" id="voice-assistant-hint">
+        Talk to MindFlock itself: start a phrase with “MindFlock, …” to switch views, open things, start a session or
+        change a setting. It answers in its own voice, which runs on this computer.
+      </p>
+      <div className="set-row" id="voice-assistant-talk-row">
+        <span className="notif-rule-text">
+          <span className="set-label" id="voice-assistant-talk-label">
+            How much it talks
+          </span>
+          <span className="set-hint notif-rule-desc" id="voice-assistant-talk-hint">
+            {TALK_CHOICES.map((c) => (
+              <span key={c.value} className="voice-talk-line" data-talk={c.value}>
+                <strong>{c.label}:</strong> {c.hint}{" "}
+              </span>
+            ))}
+          </span>
+        </span>
+        <div className="voice-ptt-choices" id="voice-assistant-talk" role="radiogroup" aria-labelledby="voice-assistant-talk-label">
+          {TALK_CHOICES.map((c) => (
+            <label className="voice-ptt-choice" key={c.value} title={c.hint}>
+              <input
+                type="radio"
+                name="voice-assistant-talk"
+                value={c.value}
+                checked={talk === c.value}
+                onChange={() => model.saveField("voice", "assistant_talk", c.value)}
+              />
+              <span>{c.label}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      {/* A <div>, not a <label>: ▶ sits beside the select. */}
+      <div className="set-row" id="voice-assistant-voice-row">
+        <span className="set-label">Its voice</span>
+        <span className="test-row">
+          <SettingField group="voice" field="assistant_voice" options={assistantVoiceOptions(voices?.voices, saved)} />
+          <button
+            type="button"
+            className="test-btn"
+            id="voice-assistant-sample"
+            disabled={playing || !ready}
+            title={ready ? "Hear this voice" : "Install the built-in voice to hear it"}
+            aria-label="Play a sample of this voice"
+            onClick={() => void play()}
+          >
+            {playing ? "…" : "▶"}
+          </button>
+        </span>
+        {sample ? (
+          <span className="set-hint" id="voice-assistant-sample-line" role="status">
+            <StatusText ok={sample.ok} text={sample.text} />
+          </span>
+        ) : (
+          <span className="set-hint">
+            {ready ? "Built in: Kokoro, on this computer." : "The built-in voice isn't installed yet; until it is, the assistant uses the regular voice."}
+          </span>
+        )}
+      </div>
+      <label className="set-row" id="voice-assistant-model-row">
+        <span className="set-label">Model</span>
+        <SettingField group="voice" field="assistant_model" placeholder={ASSISTANT_MODEL_DEFAULT} />
+        <span className="set-hint">The model that works out what you asked. Blank: {ASSISTANT_MODEL_DEFAULT}, the fast one.</span>
+      </label>
+      {showInstall && install && v && (
+        <div className="set-row onboarding-action" id="voice-kokoro">
+          <div className="onboarding-action-text">
+            <span className="set-label">Built-in voice</span>
+            <InstallStatus v={v} state={install.status.state} idle={KOKORO_WHY} idPrefix="voice-kokoro" busyLabel="Installing the built-in voice" />
+          </div>
+          <InstallButton v={v} install={install} id="voice-kokoro-btn" label={KOKORO_LABEL} />
+        </div>
+      )}
     </div>
   );
 }

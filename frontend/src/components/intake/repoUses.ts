@@ -152,19 +152,23 @@ export function usesPatch(settings: Json, repo: string, next: RepoUse[]): Record
  * COMPOSE: the map is written wholesale, and a second patch built from a
  * settings echo that hasn't landed yet would silently drop the first.
  * Blank removes the field — blank means "inherit" on every surface — and an
- * emptied block is dropped. `skip_authors` is stored as a list. */
+ * emptied block is dropped. `skip_authors` is stored as a list. A LIST value
+ * (Verify's `environments`) is stored whole; an empty list removes it. */
 export function fieldPatch(
   blocks: Record<string, Json>,
   use: RepoUse,
   repo: string,
   field: string,
-  value: string
+  value: string | Json[]
 ): { patch: Record<string, Json>; blocks: Record<string, Json> } {
   const { group, map } = USE_STORE[use];
   const next = { ...blocks };
   const block: Json = { ...((next[repo] as Json) || {}) };
-  const v = value.trim();
-  if (!v) delete block[field];
+  const v = Array.isArray(value) ? value : value.trim();
+  if (Array.isArray(v)) {
+    if (v.length) block[field] = v;
+    else delete block[field];
+  } else if (!v) delete block[field];
   else if (field === "skip_authors") block[field] = v.split(",").map((x) => x.trim()).filter(Boolean);
   else block[field] = v;
   if (Object.keys(block).length) next[repo] = block;

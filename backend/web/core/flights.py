@@ -47,6 +47,10 @@ from backend.fsutil import atomic_write_json, read_json
 from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flight_when as _when
 
+# A Verify stop in words ("Verify on sandbox · agent, then you · 15 min after
+# the stop before"): one helper, in the stdlib-only cookbook.
+from backend.web.core.flight_cookbook import verify_sentence  # noqa: F401
+
 __all__ = [
     "STEP_KINDS",
     "install_kinds",
@@ -141,6 +145,31 @@ LEASE_STALE_S = 45.0
 AGENT_START_DEADLINE_S = 7200.0
 #: A verify step whose behaviors are never written gives up after this.
 VERIFY_WRITE_DEADLINE_S = 3600.0
+
+# A Verify stop is NEVER silently stuck (docs/flights.md "Verify stops: when
+# the check can't go on"). Found live 2026-11-09: a check whose start the
+# memory guard refused read as running forever, and a checker that ended its
+# turn with a background job and no answers read as "checking" for the two
+# hours until the plan's own give-up.
+#: A check the memory guard refused is retried this often…
+VERIFY_START_RETRY_S = 30.0
+#: …for this long, then the stop parks on you with the reason.
+VERIFY_MEMORY_WAIT_S = 30 * 60.0
+#: A check marked started with no run record this long after → it never started.
+VERIFY_START_CHECK_S = 60.0
+#: No new answer for this long and the checker's turn over → one nudge.
+VERIFY_STALL_NUDGE_S = 8 * 60.0
+#: Still nothing this long after the nudge → the check is closed.
+VERIFY_STALL_CLOSE_S = 15 * 60.0
+#: Past the run's own budget (test_plans.RUN_BUDGET_MIN) plus this → closed.
+VERIFY_BUDGET_GRACE_S = 5 * 60.0
+#: The nudge typed into a stalled checker.
+VERIFY_NUDGE = (
+    "Write your results file now: every step you have checked with its answer, "
+    'every other step "blocked" with a note saying what you were waiting for '
+    '(start it with "needs you: " when a person has to do something first), '
+    '"finished": true — and stop any background job before you end your turn.'
+)
 #: A reviews step with no pull request to watch gives up after this.
 NO_PR_DEADLINE_S = 1800.0
 #: A step's side effect is recorded as ``detail.performing`` BEFORE it is
@@ -207,6 +236,9 @@ HISTORY_EVENTS = (
     "attached",
     "looped",
     "took_off",
+    # A side note on a stop (a Verify stop's results posted to the PR, or why
+    # they were not).
+    "noted",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = (
@@ -231,6 +263,13 @@ SUBJECT_KINDS = ("ticket", "pr", "issue", "schedule", "manual")
 BY_KINDS = ("user", "intake", "schedule", "main_push", "main_red", "hook")
 SHIP_LANES = ("commit", "push", "pr", "merge")
 VERIFY_WHO = ("agent", "you", "both")
+#: When a Verify stop's check may start (docs/flights.md "Verify stops"):
+#: right away, once the work has reached the environment's branch (+ its
+#: deploy minutes), or N minutes after the stop before finished.
+VERIFY_READY = ("now", "on_branch", "after_prev")
+#: ``where`` names: "branch" (this branch's own code) or an environment's name.
+VERIFY_WHERE_BRANCH = "branch"
+_VERIFY_WHERE_RE = re.compile(r"^[a-z0-9_-]{1,40}$")
 #: A join waits for every live child of the session, or only the workers the
 #: nearest split before it spawned.
 JOIN_OF = ("all", "spawned")
@@ -270,14 +309,24 @@ class FlightError(Exception):
 # The step registry (served by GET /api/flights/kinds)
 # --------------------------------------------------------------------------- #
 def _f(
-    name, type_, label, default=None, options=None, placeholder=None, dynamic=None
+    name,
+    type_,
+    label,
+    default=None,
+    options=None,
+    placeholder=None,
+    dynamic=None,
+    option_labels=None,
 ) -> dict:
     """One ``fields`` row. ``dynamic`` (a select whose options the editor
     fills from the line, e.g. ``"stops_before"``: the Loop's ``back_to``)
-    rides through :func:`kinds_dto` unchanged."""
+    rides through :func:`kinds_dto` unchanged; ``option_labels`` (option ->
+    words) lets a select say more than its value."""
     out = {"name": name, "type": type_, "label": label}
     if options is not None:
         out["options"] = list(options)
+    if option_labels is not None:
+        out["option_labels"] = dict(option_labels)
     if default is not None:
         out["default"] = default
     if placeholder is not None:
@@ -387,9 +436,44 @@ STEP_KINDS: Dict[str, dict] = {
         # A failed behavior HALTS the route (the owner: "I kind of like the
         # halt thing") — Retry · Skip · Let the agent fix it on its card.
         "default_on_fail": "halt",
+        # Where / ready when / who / notes / post to the PR (docs/flights.md
+        # "Verify stops"). `where` is text: the repo's environments are not
+        # known statically, so the editor offers them itself.
         "fields": [
-            _f("who", "select", "Who checks", default="both", options=VERIFY_WHO),
-            _f("wait_live", "bool", "Wait until it is live", default=False),
+            _f(
+                "where",
+                "text",
+                "Where",
+                default=VERIFY_WHERE_BRANCH,
+                placeholder="branch or an environment name",
+            ),
+            _f(
+                "ready",
+                "select",
+                "Ready when",
+                default="now",
+                options=VERIFY_READY,
+                option_labels={
+                    "now": "Right away",
+                    "on_branch": "When it reaches the environment's branch",
+                    "after_prev": "Minutes after the stop before",
+                },
+            ),
+            _f("ready_minutes", "int", "Minutes", default=0),
+            _f(
+                "who",
+                "select",
+                "Who checks",
+                default="both",
+                options=("both", "agent", "you"),
+                option_labels={
+                    "both": "Agent, then me",
+                    "agent": "Agent only",
+                    "you": "Only me",
+                },
+            ),
+            _f("notes", "textarea", "Notes for this check", default=""),
+            _f("post_to_pr", "bool", "Post the results to the PR", default=False),
         ],
     },
     "you": {
@@ -744,6 +828,55 @@ def _items(value) -> List[str]:
     return [v for v in out if v][:40]
 
 
+def _verify_config(c: dict, strict: bool, at: str) -> dict:
+    """A Verify stop's config (docs/flights.md "Verify stops"). An old
+    ``wait_live`` reads as where/ready: true → live, on_branch; false →
+    branch, now (it is never written back)."""
+    who = _text(c.get("who"), 8).lower() or "both"
+    if who not in VERIFY_WHO:
+        if strict:
+            raise PlanError("who is agent, you or both", at + ".who")
+        who = "both"
+    legacy = _bool(c.get("wait_live"), False)
+    where = _text(c.get("where"), 64).lower()
+    if not where:
+        where = "live" if legacy else VERIFY_WHERE_BRANCH
+    elif not _VERIFY_WHERE_RE.match(where):
+        if strict:
+            raise PlanError(
+                "where is branch or an environment's name (letters, digits, - and _)",
+                at + ".where",
+            )
+        where = VERIFY_WHERE_BRANCH
+    ready = _text(c.get("ready"), 16).lower()
+    if not ready:
+        ready = "on_branch" if legacy and where != VERIFY_WHERE_BRANCH else "now"
+    elif ready not in VERIFY_READY:
+        if strict:
+            raise PlanError("ready is now, on_branch or after_prev", at + ".ready")
+        ready = "now"
+    if where == VERIFY_WHERE_BRANCH and ready == "on_branch":
+        # This branch's own code is there already.
+        ready = "now"
+    raw_min = c.get("ready_minutes")
+    minutes = _int(raw_min, 0, 0, 1440)
+    if strict and raw_min not in (None, ""):
+        try:
+            ok = 0 <= int(raw_min) <= 1440
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            raise PlanError("ready_minutes is 0 to 1440", at + ".ready_minutes")
+    return {
+        "where": where,
+        "ready": ready,
+        "ready_minutes": minutes,
+        "who": who,
+        "notes": _text(c.get("notes"), 2000),
+        "post_to_pr": _bool(c.get("post_to_pr"), False),
+    }
+
+
 def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
     """``raw`` coerced to ``kind``'s config, raising :class:`PlanError` (in
     strict mode) for the few things that make a step meaningless."""
@@ -798,12 +931,7 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
             "message": _text(c.get("message"), 500),
         }
     if kind == "verify":
-        who = _text(c.get("who"), 8).lower() or "both"
-        if who not in VERIFY_WHO:
-            if strict:
-                raise PlanError("who is agent, you or both", where + ".who")
-            who = "both"
-        return {"who": who, "wait_live": _bool(c.get("wait_live"), False)}
+        return _verify_config(c, strict, where)
     if kind == "you":
         return {
             "text": _text(c.get("text")),
@@ -1277,7 +1405,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s1", "agent", "Agent works the ticket", prompt=""),
                 _s("s2", "ship", "Commit", lane="commit"),
                 _s("s3", "ship", "Push", lane="push"),
-                _s("s4", "verify", "Verify", who="agent"),
+                _s("s4", "verify", "Verify", where="branch", ready="now", who="agent"),
                 _s("s5", "ship", "Open PR", lane="pr"),
                 _s("s6", "reviews", "Reviews settle", quiet_minutes=10),
                 _s("s7", "checks", "CI checks", on_fail="agent"),
@@ -1316,9 +1444,18 @@ def _builtin_defaults() -> Dict[str, dict]:
         },
         "builtin:verify": {
             "name": "Verify on live",
-            "description": "Once the branch is live, the agent and you check its behaviors.",
+            "description": "Once the branch has reached live, the agent and then you check its behaviors.",
             "trigger": {"kind": "manual"},
-            "steps": [_s("s1", "verify", "Verify on live", who="both", wait_live=True)],
+            "steps": [
+                _s(
+                    "s1",
+                    "verify",
+                    "Verify on live",
+                    where="live",
+                    ready="on_branch",
+                    who="both",
+                )
+            ],
         },
         # Round 15: more built-ins, after the four above (whose order the depth
         # cut and the shelf rely on).
@@ -1421,7 +1558,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s("s4", "test", "Test", on_fail="agent"),
                 _s("s5", "ship", "Commit", lane="commit"),
                 _s("s6", "ship", "Push", lane="push"),
-                _s("s7", "verify", "Verify", who="agent"),
+                _s("s7", "verify", "Verify", where="branch", ready="now", who="agent"),
                 _s("s8", "ship", "Open PR", lane="pr"),
                 _s("s9", "reviews", "Reviews settle", quiet_minutes=10),
                 _s("s10", "checks", "CI checks", on_fail="agent"),
@@ -2571,6 +2708,11 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
         )
     if cur["kind"] == "verify":
         items = [str(i) for i in d.get("items") or []]
+        if d.get("ask") in ("needs_you", "blocked", "memory"):
+            # Why the check came to you (flights._verify_guard /
+            # _verify_handover): the stop's own sentence, not a count.
+            note = str(flight["step_states"][cur["id"]].get("note") or "")
+            return ("%s: %s" % (cur["title"], note) if note else cur["title"]), items
         return (
             "Check %d behavior%s" % (len(items), "" if len(items) == 1 else "s"),
             items,
@@ -3186,6 +3328,11 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
     v = obs.get("verify") or {}
     d = ss["detail"]
     who = step["config"]["who"]
+    if v.get("env_missing"):
+        return {
+            "action": "fail",
+            "reason": "no environment named %s in this repo" % v["env_missing"],
+        }
     if not v.get("plan"):
         if now - ss["since"] > VERIFY_WRITE_DEADLINE_S:
             return {
@@ -3203,12 +3350,14 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
             "reason": "the behaviors could not be written: %s"
             % (v.get("error") or "no reason given"),
         }
-    if step["config"]["wait_live"] and not v.get("live"):
-        return _wait(
-            "waiting for the work to reach %s"
-            % (v.get("live_branch") or "the live branch"),
-            **up,
-        )
+    # The ready gate: the behaviors are written meanwhile (above); only the
+    # agent's run and a person's turn wait for the environment to be ready.
+    gate = _verify_ready_gate(step["config"], ss, v, now)
+    if gate:
+        return _wait(gate, **up)
+    guard = _verify_guard(ss, v, now, up)
+    if guard is not None:
+        return guard
     failed = list(v.get("failed") or [])
     # Stale: every failure was answered before this attempt began.
     failed_at = v.get("failed_at")
@@ -3242,6 +3391,9 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
             "note": "the agent is checking the behaviors",
             "detail": up,
         }
+    handed = _verify_handover(ss, v, up)
+    if handed is not None:
+        return handed
     if who == "agent":
         if stale:
             # Only a person's Fail is left, and this stop checks the agent's.
@@ -3272,6 +3424,211 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         % (len(open_human), "" if len(open_human) == 1 else "s"),
         "detail": dict(up, items=open_human[:40]),
     }
+
+
+def _verify_guard(ss: dict, v: dict, now: float, up: dict) -> Optional[dict]:
+    """What keeps a Verify stop from being SILENTLY stuck, or None.
+
+    * The memory guard refused the check's session (``d.run_wait`` "memory",
+      set by the driver from the run route's ``reason``): wait with the reason
+      on screen, retry every :data:`VERIFY_START_RETRY_S`, and after
+      :data:`VERIFY_MEMORY_WAIT_S` park on the person.
+    * The stop believes a check started but the checklist has no run from this
+      attempt after :data:`VERIFY_START_CHECK_S`: fail, saying so. (This is
+      also what rescues a route that started before refusals had reasons.)
+    * A run is open: say its progress; nudge a checker whose turn is over and
+      that has answered nothing for :data:`VERIFY_STALL_NUDGE_S` (once);
+      close the check (unanswered → blocked) when the nudge changed nothing
+      for :data:`VERIFY_STALL_CLOSE_S`, or past the run's budget."""
+    d = ss["detail"]
+    if d.get("run_wait") == "memory":
+        since = float(d.get("memory_since") or ss["since"] or now)
+        why = str(d.get("memory_detail") or "memory is low")
+        if now - since > VERIFY_MEMORY_WAIT_S:
+            return {
+                "action": "you",
+                "note": "couldn't start the check: %s" % why,
+                "detail": dict(
+                    up,
+                    ask="memory",
+                    items=[
+                        "Free some memory (close a session or an app), then "
+                        "press Retry — or Skip this check",
+                    ],
+                ),
+            }
+        if now - float(d.get("last_try") or 0.0) >= VERIFY_START_RETRY_S:
+            return {
+                "action": "run",
+                "phase": "agent_run",
+                "note": "trying again to start the check",
+                "detail": dict(up),
+            }
+        return _wait("waiting for memory to start the check (%s)" % why, **up)
+    state = v.get("state") or ""
+    if d.get("run_started") and state != "running" and "latest_run_at" in v:
+        started = float(d.get("run_started_at") or ss["since"] or 0.0)
+        latest = float(v.get("latest_run_at") or 0.0)
+        if latest < started - 1.0 and now - started > VERIFY_START_CHECK_S:
+            why = str(d.get("start_error") or "")
+            return {
+                "action": "fail",
+                "reason": "the check never started" + (": %s" % why if why else ""),
+            }
+    if state != "running":
+        return None
+    p = v.get("progress") if isinstance(v.get("progress"), dict) else {}
+    started = float(p.get("started_at") or 0.0) or float(ss["since"] or now)
+    quiet = now - (float(p.get("progress_at") or 0.0) or started)
+    checker = v.get("checker") if isinstance(v.get("checker"), dict) else {}
+    budget = float(v.get("run_budget_s") or 30 * 60.0)
+    if now - started > budget + VERIFY_BUDGET_GRACE_S:
+        return {
+            "action": "run",
+            "phase": "close",
+            "note": "closing the check: it ran out of time",
+            "detail": dict(
+                up,
+                close_reason="not checked: the check ran out of time (%d min)"
+                % int(budget // 60),
+            ),
+        }
+    nudged = float(d.get("nudged_at") or 0.0)
+    if nudged:
+        if now - nudged > VERIFY_STALL_CLOSE_S and quiet > VERIFY_STALL_CLOSE_S:
+            return {
+                "action": "run",
+                "phase": "close",
+                "note": "closing the check: the checker stopped answering",
+                "detail": dict(
+                    up, close_reason="not checked: the checker stopped answering"
+                ),
+            }
+    elif quiet > VERIFY_STALL_NUDGE_S and str(checker.get("activity") or "") in (
+        "idle",
+        "",
+    ):
+        return {
+            "action": "run",
+            "phase": "nudge",
+            "note": "nudging the checker: nothing new for %d min" % int(quiet // 60),
+            "detail": dict(up),
+        }
+    answered, total = int(p.get("answered") or 0), int(p.get("total") or 0)
+    note = "the agent is checking the behaviors"
+    if total:
+        note += " · %d of %d answered" % (answered, total)
+    if quiet > 120:
+        note += " · quiet %d min" % int(quiet // 60)
+    if nudged:
+        note += " · nudged"
+    if checker.get("background_waiting"):
+        note += " · its background job is still running"
+    return _wait(note, **up)
+
+
+def _verify_handover(ss: dict, v: dict, up: dict) -> Optional[dict]:
+    """The agent's steps it handed to the person, after its run → a perch, or
+    None. Whatever ``who`` says ("Agent only" too): a manual step or a check
+    the agent could not do must never pass silently (it used to — a run that
+    answered every step "blocked" read "the agent's behaviors are checked").
+
+    * ``needs you: …`` answers (test_plans.NEEDS_YOU): a person has to DO
+      something first. Answered before this attempt (the person pressed Done =
+      "I did it", which retries the stop) → check again, telling the checker
+      what was done; otherwise park: "The check needs you to: …".
+    * Plain ``blocked`` answers: park listing them with the checker's why; the
+      person answers them on the Behaviors card (or Skips)."""
+    if (v.get("state") or "") == "running":
+        return None
+    d = ss["detail"]
+    needs = [n for n in v.get("needs_you") or [] if isinstance(n, dict)]
+    blocked = [b for b in v.get("blocked_steps") or [] if isinstance(b, dict)]
+    if needs:
+        done_by_you = [
+            n for n in needs if float(n.get("at") or 0.0) < float(ss["since"] or 0.0)
+        ]
+        if done_by_you and not d.get("rechecked"):
+            did = "; ".join(str(n.get("do") or "") for n in done_by_you)
+            return {
+                "action": "run",
+                "phase": "agent_run",
+                "note": "checking again now that you've done it",
+                "detail": dict(
+                    up,
+                    rechecked=True,
+                    extra_notes="The person says they have now done: " + did,
+                ),
+            }
+        items = [
+            "%s (for: %s)" % (n.get("do") or "do the manual step", n.get("text") or "")
+            for n in needs
+        ][:40]
+        return {
+            "action": "you",
+            "note": "the check needs you to do %d thing%s, then press Done"
+            % (len(items), "" if len(items) == 1 else "s"),
+            "detail": dict(up, ask="needs_you", items=items),
+        }
+    if blocked:
+        items = [
+            "%s — %s"
+            % (b.get("text") or "", b.get("why") or "the agent couldn't check it")
+            for b in blocked
+        ][:40]
+        return {
+            "action": "you",
+            "note": "%d behavior%s the agent couldn't check — answer %s"
+            % (
+                len(items),
+                "" if len(items) == 1 else "s",
+                "it" if len(items) == 1 else "them",
+            ),
+            "detail": dict(up, ask="blocked", items=items),
+        }
+    return None
+
+
+def _verify_ready_gate(cfg: dict, ss: dict, v: dict, now: float) -> str:
+    """Why the check may not start yet (``""``: it may). ``ready``: "now" —
+    no gate; "on_branch" — the plan's commit has reached the environment's
+    branch (``v["env_reached_at"]``), then ``ready_minutes`` (0 = the
+    environment's deploy minutes) more; "after_prev" — that many minutes
+    after this stop started (= the stop before finished). Without the
+    environment's facts, "on_branch" on live falls back to the checklist's
+    own live mark (``v["live"]``)."""
+    ready = cfg.get("ready") or "now"
+    where = str(cfg.get("where") or VERIFY_WHERE_BRANCH)
+    if ready == "now":
+        return ""
+    env = v.get("env") if isinstance(v.get("env"), dict) else None
+    minutes = _int(cfg.get("ready_minutes"), 0, 0, 1440)
+    if not minutes and env is not None:
+        minutes = _int(env.get("deploy_minutes"), 0, 0, 1440)
+    if ready == "after_prev":
+        start = float(ss.get("since") or 0.0)
+        if minutes and now < start + minutes * 60:
+            return "%d min for %s to be ready" % (
+                max(1, int((start + minutes * 60 - now + 59) // 60)),
+                "this branch" if where == VERIFY_WHERE_BRANCH else where,
+            )
+        return ""
+    # on_branch
+    if env is None:
+        if v.get("live"):
+            return ""
+        return "waiting for the work to reach %s" % (
+            v.get("live_branch") or "the %s branch" % where
+        )
+    reached = _float(v.get("env_reached_at"))
+    if reached <= 0:
+        return "waiting for the work to reach %s" % (
+            env.get("branch") or "the %s branch" % where
+        )
+    if now < reached + minutes * 60:
+        left = max(1, int((reached + minutes * 60 - now + 59) // 60))
+        return "%d min for %s to be ready" % (left, where)
+    return ""
 
 
 def _verify_failed_reason(failed: list) -> str:
@@ -4045,6 +4402,14 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
         ss["state"] in ("failed", "running")
         or ss["detail"].get("failed_reason")
         or flight["state"] == "halted"
+        # A Verify stop parked because the check needs the person to DO
+        # something (or memory refused its checker): their Done is "I did it"
+        # — the stop runs again (flight_driver._needs_you_perch).
+        or (
+            ss["state"] == "waiting_you"
+            and flight["steps"][i]["kind"] == "verify"
+            and ss["detail"].get("ask") in ("needs_you", "memory")
+        )
     )
     lo, hi = current_group(flight)
     if not lo <= i < hi or not retryable:

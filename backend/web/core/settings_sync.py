@@ -282,6 +282,9 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "tts_api_key",
         "tts_model",
         "tts_voice",
+        "assistant_model",
+        "assistant_talk",
+        "assistant_voice",
     ),
     "peer": (
         "enabled",

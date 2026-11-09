@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Talk to MindFlock.** Say "MindFlock, …" or press **Alt+M** and the app
+  itself listens: it opens dialogs and settings screens, switches views,
+  focuses or starts sessions (on a project you name, with a task and a model),
+  types into one, runs palette commands, presses buttons on screen by name,
+  changes settings, and answers "what's X doing" or "how does Y work" from
+  the docs. Obvious commands skip the model (milliseconds); the rest go to one
+  warm Haiku process (~1 s). Delete / close / merge always ask first. A strip
+  under the mic shows what it heard, what it did and its questions (with Yes /
+  No). It never narrates your own actions; Settings → Voice → Assistant picks
+  Quiet / Brief / Chatty and its voice (docs/voice-assistant.md).
+- **A built-in voice: Kokoro.** A natural local voice (Kokoro-82M, ~120 MB,
+  27 English voices) installed by Settings → Voice → Install local models; the
+  assistant speaks with it, and it is the preferred local engine.
+- **Epics.** A Shortcut source can ingest whole epics ("Epics in these
+  states", optional auto-start and start state; its Auto-start labels apply
+  too). Each of your epics gets ONE lead session that works your open stories
+  in it — side by side where independent, stacked where one blocks another —
+  and opens a PR per story so reviews stay small. Intake → Tickets lists them
+  with Start (docs/epics.md).
+- **PR review rounds.** A new "changes requested" review or batch of comments
+  on one of your PRs goes back to work once the reviewer stops: the session
+  triages each request (do it / push back with a reply / ask you) before
+  touching code. Per repo: triage and handle, triage then ask me, or leave it
+  to me. And PR work goes to the session that built the branch — reopened with
+  its conversation if it was closed — instead of a fresh one
+  (docs/pr-review-rounds.md).
+- **Verify stops say where and when.** A Verify stop picks **where** (this
+  branch's code, or a named environment like sandbox — set up per repo in the
+  Verify card), **when it's ready** (right away, once on the environment's
+  branch, or N minutes after the stop before), **who** checks (agent then you,
+  agent only, only you), notes, and can post the results to the PR.
+- **Timed todos.** A todo can carry a time ("call the bank tue 9am", or the ⏰
+  picker, or ask the Assistant): at that time or after, a reminder pops up over
+  whatever is open — Done, snooze (10 min / 1 hour / tomorrow 9 AM / pick) or
+  Dismiss — and your phone gets one push.
+
 - **The memory guard watches Windows too (WSL).** Inside WSL, MindFlock used
   to see only its own VM, so Windows could run out and page your apps to disk
   while the VM still read "plenty free". The server now reads Windows' own
@@ -18,6 +54,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agents go to sleep to give memory back. The Memory popover shows a
   **Windows** line, and the pressure says when Windows is the cause.
   `MINDFLOCK_HOST_MEMORY=0` turns it off.
+
+### Fixed
+
+- **A Verify stop is never silently stuck.** A check the memory guard refused
+  used to read as started forever; a checker that stalled read "checking" for
+  two hours; a run that answered every behavior "blocked" passed. Now it waits
+  for memory with the reason and retries, fails a check that never started,
+  shows progress, nudges then closes a stalled checker, and anything blocked —
+  or a step that needs you to do something first — comes to you (Done = "I
+  did it, check again").
+- **Behaviors cards are compact.** Each behavior is one short line until you
+  open it (Expand all in the head) — a long checklist was a wall of text in
+  the Sky.
+- **The bell's "Needs you" no longer shrinks to one row** beside a long
+  history.
+- **The memory warning names Windows when Windows is the one short**, with its
+  numbers and what WSL is holding, instead of WSL's free memory under
+  "critically low".
 
 ### Changed
 

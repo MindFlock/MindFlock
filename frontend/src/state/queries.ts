@@ -14,6 +14,7 @@ import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verifySession";
 import { windowName } from "../lib/windowName";
+import { rememberEnvironments, type VerifyEnvsResponse } from "../lib/verifyStop";
 import type { EffortCap } from "../lib/effort";
 import type { MemoryDetail, MemoryHistory } from "../components/usage/memoryModel";
 import type { PeerStatus } from "../lib/peer";
@@ -203,20 +204,30 @@ function extensionsQuery() {
   } as const;
 }
 
+/** The enabled-or-not extensions in a /api/addons answer — useExtensions'
+ * view, and the voice assistant's (read from the cache, no hook). */
+export function extensionsOf(d: AddonsResponse | undefined): ExtensionInfo[] {
+  return (d?.addons || [])
+    .filter((a) => a && a.id && a.extension)
+    .map((a) => ({
+      id: String(a.id),
+      label: a.label || String(a.id),
+      // Absent on a pre-v3 server: an addon you can't disable is enabled.
+      enabled: a.enabled !== false,
+      origin: a.origin === "user" ? ("user" as const) : ("builtin" as const),
+      extension: a.extension as ExtensionSpec,
+    }));
+}
+
+/** useExtensions' cache, read now (empty before it loaded). */
+export function extensionsNow(): ExtensionInfo[] {
+  return extensionsOf(queryClient.getQueryData<AddonsResponse>(["addons"]));
+}
+
 export function useExtensions() {
   return useQuery({
     ...extensionsQuery(),
-    select: (d: AddonsResponse): ExtensionInfo[] =>
-      (d?.addons || [])
-        .filter((a) => a && a.id && a.extension)
-        .map((a) => ({
-          id: String(a.id),
-          label: a.label || String(a.id),
-          // Absent on a pre-v3 server: an addon you can't disable is enabled.
-          enabled: a.enabled !== false,
-          origin: a.origin === "user" ? ("user" as const) : ("builtin" as const),
-          extension: a.extension as ExtensionSpec,
-        })),
+    select: (d: AddonsResponse): ExtensionInfo[] => extensionsOf(d),
   });
 }
 
@@ -1220,6 +1231,31 @@ export function useCachedLiveBranch(): string {
     enabled: false,
   });
   return q.data?.live_branch || "";
+}
+
+/** Every watched repo's Verify ENVIRONMENTS (GET /api/test-plans/environments):
+ * the Verify stop's "Where" picker lists their names. Bound to `queryClient`
+ * itself (no provider needed: the stop form also renders in a bare SSR test).
+ * `isError` / null data (an older server: 404) → the picker falls back to a
+ * text field. Each answer is remembered for the stop's face ("once on
+ * release", lib/verifyStop.ts). */
+export function useVerifyEnvironments(enabled = true) {
+  return useQuery(
+    {
+      queryKey: ["test-plan-environments"],
+      queryFn: async () => {
+        const r = await api<VerifyEnvsResponse>("/api/test-plans/environments");
+        const ok = r && typeof r === "object" && Array.isArray(r.names) ? r : null;
+        rememberEnvironments(ok);
+        if (!ok) throw new Error("no environments list");
+        return ok;
+      },
+      enabled,
+      staleTime: 60_000,
+      retry: false,
+    },
+    queryClient
+  );
 }
 
 /** Imperative refresh after anything that changes a plan (start a run, record a

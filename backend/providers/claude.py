@@ -10,6 +10,7 @@ providers.
 from __future__ import annotations
 
 import os
+import shlex
 import threading
 
 from typing import Optional
@@ -141,6 +142,48 @@ class ClaudeProvider(BaseProvider):
             ),
             prompt,
         )
+
+    def stream_chat_argv(
+        self, system_prompt: str, model: str = ""
+    ) -> Optional[list[str]]:
+        """``claude -p --input-format stream-json --output-format stream-json``
+        — one warm process, a user turn per stdin line, partial text deltas
+        on stdout (``--include-partial-messages``, which stream-json output
+        needs ``--verbose`` for) and a ``result`` line per turn.
+
+        ``--tools ""`` gives it no tools at all and ``--setting-sources ""``
+        reads no settings file (no hooks, no CLAUDE.md-driven permissions):
+        it maps words to MindFlock actions and acts through nothing but its
+        text. MCP servers are stripped exactly as :meth:`oneshot_argv` does.
+        Flags confirmed against ``claude --help`` (2.1.3xx)."""
+        from .config import resolve_provider_binary
+
+        exe = (shlex.split(resolve_provider_binary(self.name) or "") or [""])[0]
+        if not exe or not system_prompt:
+            return None
+        argv = [
+            exe,
+            "-p",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+        ]
+        if model:
+            argv += ["--model", model]
+        return argv + [
+            "--system-prompt",
+            system_prompt,
+            "--tools",
+            "",
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+        ]
 
     # --- reasoning effort -------------------------------------------------- #
     def effort_spec(self) -> EffortSpec:

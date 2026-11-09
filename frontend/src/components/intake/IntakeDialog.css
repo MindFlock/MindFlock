@@ -2150,3 +2150,46 @@
   color: var(--muted);
   overflow-wrap: anywhere;
 }
+
+/* Verify repo card: the live fields are the implicit "live" environment, and
+   the Environments list under them (RepoEnvironments.tsx) — one bordered
+   group per environment, in the card's own field look. */
+.vf-live-env,
+.vf-env {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.vf-live-env > legend {
+  padding: 0 4px;
+}
+.vf-envs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.vf-envs-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vf-env textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.vf-env [aria-invalid="true"] {
+  border-color: var(--red, #e8795a);
+}
+.vf-env-error {
+  color: var(--red, #e8795a);
+}
+.vf-env-acts {
+  display: flex;
+  justify-content: flex-end;
+}

@@ -44,7 +44,14 @@ Status codes, in the order they are checked:
   (:func:`_client_key`) has its own reply there. The 502 comes only when
   no engine could say it. The text is
   shaped for the voice first (``core.spoken_text``) unless ``shape`` is
-  false; the caller's text — the caption — is never changed.
+  false; the caller's text — the caption — is never changed. With ``"as":
+  "assistant"`` the voice assistant's line is said by the built-in Kokoro
+  voice (``core.speech_kokoro``) in ``voice.assistant_voice`` — or the
+  body's ``voice`` when that names a Kokoro voice (Settings' ▶ samples) —
+  from a cache of its own (:data:`ASSISTANT_CACHE`), ``X-Voice-Assistant:
+  kokoro``; while Kokoro is not ready (not installed, memory low, a failed
+  load) the line goes through the normal chain above instead,
+  ``X-Voice-Assistant: fallback``. Any other ``as`` is a 400.
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
   does not stream (only ``local`` does: the client sends one clip per phrase
   instead), or :data:`speech_stream.MAX_STREAMS` are open; 200
@@ -101,6 +108,7 @@ from starlette.requests import ClientDisconnect
 from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
+from backend.web.core import speech_kokoro as _kokoro
 from backend.web.core import speech_moonshine as _moonshine
 from backend.web.core import speech_stream as _stream
 from backend.web.core import spoken_text as _spoken_text
@@ -690,7 +698,9 @@ def _failed(err: BaseException) -> JSONResponse:
 
 @router.get("/api/voice")
 def voice_get(
-    warm: str = "", allowed: bool = Depends(_auth.configure_allowed)
+    warm: str = "",
+    assistant: str = "",
+    allowed: bool = Depends(_auth.configure_allowed),
 ) -> JSONResponse:
     """Where speech runs and what the server offers::
 
@@ -736,7 +746,12 @@ def voice_get(
     be said soon. It never loads RECOGNITION (local whisper, ~1.1 GB): that
     follows a listening mode — :func:`voice_listen` (the wake-word standby)
     and a phrase's stream opening (:func:`voice_stream_open`);
-    ``server_ready.stt_loaded`` says whether it is in memory now."""
+    ``server_ready.stt_loaded`` says whether it is in memory now.
+    ``?assistant=1`` also loads the assistant's built-in Kokoro voice when it
+    is installed and not loaded yet (``core.speech_kokoro``, ~1 s and
+    ~270 MB): a client entering the assistant asks for it, so the first
+    reply does not wait for the load. ``kokoro`` reports its state
+    (:func:`core.speech.describe`)."""
     # An engine rebuild that dropped the local models' packages: put them
     # back (once per boot; nothing when they are there or never were).
     _install.start_self_heal()
@@ -770,6 +785,8 @@ def voice_get(
         # says — pre-synthesised while the voice is idle (Prewarm; a thread
         # of its own).
         PREWARM.kick()
+    if str(assistant).strip().lower() in ("1", "true", "yes", "on"):
+        _kokoro.warm_in_background()
     return JSONResponse(body)
 
 
@@ -1217,6 +1234,23 @@ async def voice_speak(request: Request, payload: Optional[dict] = None) -> Respo
     voice = voice.strip()[:64] if isinstance(voice, str) else ""
     started = time.monotonic()
     listener = _client_key(request, body)
+    as_ = body.get("as")
+    assistant = ""
+    if as_ is not None and as_ != "" and as_ != ASSISTANT:
+        return JSONResponse(
+            {"error": 'as must be "%s" (or absent)' % ASSISTANT}, status_code=400
+        )
+    if as_ == ASSISTANT:
+        said = await _speak_assistant(
+            text, body.get("shape") is not False, voice, listener, started
+        )
+        if said is not None:
+            return said
+        # Kokoro is not ready: the normal chain says it, in its own voice (a
+        # Kokoro voice id means nothing to a host or piper).
+        assistant = "fallback"
+        if voice in _kokoro.ids():
+            voice = ""
     # Settings, readiness and shaping read files and PATH: off the loop.
     plan = await asyncio.to_thread(
         _speak_plan, text, body.get("shape") is not False, listener
@@ -1276,6 +1310,8 @@ async def voice_speak(request: Request, payload: Optional[dict] = None) -> Respo
     }
     if shared:
         headers["X-Voice-Shared"] = "1"
+    if assistant:
+        headers["X-Voice-Assistant"] = assistant
     PREWARM.kick()  # a new session's name, a changed voice: re-pinned when idle
     return Response(
         content=audio,
@@ -1310,16 +1346,23 @@ def _speak_plan(text: str, shape: bool, listener: str = ""):
 _INFLIGHT: "Dict[tuple, asyncio.Future]" = {}
 
 
-async def _speak_once(key: tuple, primary, spoken: str, voice: str, listener: str = ""):
+async def _speak_once(
+    key: tuple, primary, spoken: str, voice: str, listener: str = "", run=None
+):
     """``(TTS_CHAIN.speak's result, shared)``: the synthesis for ``key``,
     started here or joined (``shared``). Shielded: a caller that hangs up
-    does not cancel the synthesis the others wait for."""
+    does not cancel the synthesis the others wait for. ``run``: the blocking
+    synthesis to start instead of the chain's (the assistant's Kokoro)."""
     task = _INFLIGHT.get(key)
     shared = task is not None and not task.done()
     if not shared:
-        task = asyncio.ensure_future(
-            asyncio.to_thread(_speech.TTS_CHAIN.speak, primary, spoken, voice, listener)
-        )
+        if run is None:
+            work = asyncio.to_thread(
+                _speech.TTS_CHAIN.speak, primary, spoken, voice, listener
+            )
+        else:
+            work = asyncio.to_thread(run)
+        task = asyncio.ensure_future(work)
         _INFLIGHT[key] = task
 
         def _done(t: "asyncio.Future", k: tuple = key) -> None:
@@ -1331,6 +1374,112 @@ async def _speak_once(key: tuple, primary, spoken: str, voice: str, listener: st
         task.add_done_callback(_done)
     assert task is not None
     return await asyncio.shield(task), shared
+
+
+#: ``POST /api/voice/speak``'s ``as`` for the voice assistant's lines.
+ASSISTANT = "assistant"
+#: The assistant's lines (Kokoro), apart from :data:`SPEAK_CACHE`: one
+#: signature each, so the assistant and the configured voice taking turns
+#: never drop each other's clips.
+ASSISTANT_CACHE = SpeakCache()
+
+
+def _assistant_plan(text: str, shape: bool, voice: str):
+    """The assistant line's blocking half → ``(engine, shaped text, voice
+    id)``, a 400 :class:`Response` (nothing left once shaped), or None:
+    Kokoro is not ready, the normal chain says it."""
+    engine = _speech.get("tts", _kokoro.KokoroTTS.id)
+    if engine is None:
+        return None
+    try:
+        ok, _detail = engine.ready()
+    except Exception:  # noqa: BLE001 — a probe never fails the line
+        ok = False
+    if not ok:
+        return None
+    if shape:
+        spoken = _spoken_text.shape(text, _pronounce(_settings()))
+    else:
+        spoken = text.strip()
+    if not spoken:
+        return JSONResponse({"error": "nothing to say once shaped"}, status_code=400)
+    vid = voice if voice in _kokoro.ids() else _kokoro.assistant_voice()
+    return engine, spoken, vid
+
+
+async def _speak_assistant(
+    text: str, shape: bool, voice: str, listener: str, started: float
+) -> Optional[Response]:
+    """Say an assistant line with Kokoro → the response, or None when Kokoro
+    is not ready or fails (the caller then uses the normal chain)."""
+    plan = await asyncio.to_thread(_assistant_plan, text, shape, voice)
+    if plan is None or isinstance(plan, Response):
+        return plan
+    engine, spoken, vid = plan
+    sig = (engine.id, id(engine))
+    key = (vid, spoken)
+    hit = ASSISTANT_CACHE.get(sig, key)
+    shared = False
+    if hit is not None:
+        audio, mime = hit
+    else:
+        try:
+            (audio, mime), shared = await _speak_once(
+                ("assistant", vid, spoken),
+                None,
+                spoken,
+                vid,
+                listener,
+                run=lambda: engine.speak(spoken, vid),
+            )
+        except Exception as err:  # noqa: BLE001 — the chain says it instead
+            _logger.info("voice: the assistant's Kokoro voice failed: %s", err)
+            return None
+        if not shared:
+            ASSISTANT_CACHE.put(sig, key, audio, mime)
+    # The listener's reply is busy while it plays (the prewarm stays quiet).
+    _speech.TTS_CHAIN.note_line(spoken, listener)
+    headers = {
+        "X-Voice-Backend": engine.id,
+        "X-Voice-Engine": engine.engine_name(),
+        "X-Voice-Fallback": "0",
+        "X-Voice-Cache": "hit" if hit is not None else "miss",
+        "X-Voice-Ms": str(int((time.monotonic() - started) * 1000)),
+        "X-Voice-Assistant": "kokoro",
+        "Cache-Control": "no-store",
+    }
+    if shared:
+        headers["X-Voice-Shared"] = "1"
+    return Response(content=audio, media_type=mime or "audio/wav", headers=headers)
+
+
+@router.get("/api/voice/voices")
+def voice_voices(engine: str = "kokoro") -> JSONResponse:
+    """The voices an engine offers: ``?engine=kokoro`` (the only one, and
+    the default) → ``{"engine": "kokoro", "voices": [{"id", "label",
+    "lang"}], "ready": bool, "reason": str, "voice": the assistant's}``.
+    ``ready`` is whether Kokoro can speak now (installed, model on disk, not
+    held back by memory), ``reason`` why not; the list is the same either
+    way (Settings shows the picker with its install prompt). 400 another
+    engine. Readable by any signed-in client."""
+    if str(engine or "").strip().lower() != _kokoro.KokoroTTS.id:
+        return JSONResponse(
+            {"error": 'engine must be "%s"' % _kokoro.KokoroTTS.id}, status_code=400
+        )
+    backend = _speech.get("tts", _kokoro.KokoroTTS.id)
+    try:
+        ok, detail = backend.ready() if backend is not None else (False, "")
+    except Exception as err:  # noqa: BLE001 — a probe never fails the list
+        ok, detail = False, str(err)
+    return JSONResponse(
+        {
+            "engine": _kokoro.KokoroTTS.id,
+            "voices": _kokoro.voices(),
+            "ready": bool(ok),
+            "reason": "" if ok else detail,
+            "voice": _kokoro.assistant_voice(),
+        }
+    )
 
 
 @router.post("/api/voice/say-all")
@@ -1416,7 +1565,10 @@ def voice_install_local(
     ``{"what": "moonshine"}``: the fast streaming recognizer instead —
     ``moonshine-voice`` and its ``tiny-streaming`` model (~200 MB), no
     setting changed (``GET /api/voice``'s ``stream_engine`` turns
-    ``moonshine`` once it is in). Runs in the background — poll ``GET`` for
+    ``moonshine`` once it is in). With ``{"what": "kokoro"}``: the built-in
+    voice alone — ``kokoro-onnx`` and its model files (~120 MB), no setting
+    changed (``GET /api/voice/voices``' ``ready`` turns true). The local
+    models' install includes Kokoro too. Runs in the background — poll ``GET`` for
     the progress (its ``what`` says which). Owner only (403); 400 an unknown
     ``what``; 409 while one is already running; 200 the status (``state:
     "running"``)."""
@@ -1424,9 +1576,9 @@ def voice_install_local(
         return _auth.configure_refused()
     body = payload if isinstance(payload, dict) else {}
     what = body.get("what") or _install.LOCAL
-    if what not in (_install.LOCAL, _install.MOONSHINE):
+    if what not in _install.WHATS:
         return JSONResponse(
-            {"error": "what must be %r or %r" % (_install.LOCAL, _install.MOONSHINE)},
+            {"error": "what must be one of %s" % ", ".join(map(repr, _install.WHATS))},
             status_code=400,
         )
     if not _install.start(what=what):

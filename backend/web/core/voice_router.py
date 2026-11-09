@@ -86,6 +86,7 @@ __all__ = [
     "finish",
     "fresh_reply",
     "is_select",
+    "list_say",
     "match_repo",
     "match_session",
     "norm",
@@ -100,6 +101,7 @@ __all__ = [
     "select_speech",
     "session_state",
     "started",
+    "status_say",
     "switch_line",
     "title_base",
 ]
@@ -595,6 +597,11 @@ GUIDE = (
     ("stop", "stop listening", "Turn the microphone off"),
     ("off", "voice off", "Turn voice off for this session"),
     ("commands", "what can I say", "Hear and see this list"),
+    (
+        "assistant",
+        "MindFlock, open intake",
+        "Ask MindFlock itself: open a screen, change a setting, start a session",
+    ),
 )
 #: What "what can I say" says (the list itself is on the screen).
 COMMANDS_SAY = (
@@ -1036,6 +1043,44 @@ _HELP_NOT = re.compile(
 )
 
 
+# --- the assistant: a phrase addressed to MindFlock itself -------------------
+# "MindFlock, open intake", "Hey MindFlock what needs me", "Flock, turn on
+# the bell": the name FIRST (the lead "hey"/"ok"/"please" is already gone —
+# :class:`_Words`), then the request. The wake word's common mishearings
+# ("mind flock", "mine flock", "mindlock") count; "my flock" / "mind block"
+# do not (ordinary words). "flock" alone, a name mid-sentence, "flock mode
+# …" (the feature, said to the agent) or "MindFlock's …" (about it, not to
+# it) never address it.
+_ASSIST_RE = re.compile(
+    r"^(?:ask )?(?:mind ?flock|mine ?flock|min ?flock|mind ?lock|mind ?flog"
+    r"|minh flock|flock(?! mode\b)) (?P<rest>.+)$"
+)
+#: An addressed phrase whose rest is one of these commands is that command
+#: (the client's own words and the pane actions the assistant can't do):
+#: "MindFlock, stop listening" stops the mic.
+_ASSIST_DIRECT = frozenset(LOCAL_KINDS) | frozenset(
+    ("scroll", "scroll_more", "interrupt", "commands")
+)
+
+
+def _assistant_command(w: "_Words", words: Optional[dict]) -> Optional[dict]:
+    """``{"kind": "assistant", "text"}`` — the request as said, the name
+    dropped — for a phrase addressed to MindFlock (:data:`_ASSIST_RE`), or
+    the deterministic command its rest is when that is one of
+    :data:`_ASSIST_DIRECT`; None when not addressed."""
+    m = _ASSIST_RE.match(w.text)
+    if m is None:
+        return None
+    start = w.at(m.start("rest"))
+    rest = w.original(start)
+    if not norm(rest):
+        return None
+    got = command(rest, words)
+    if got is not None and got["kind"] in _ASSIST_DIRECT:
+        return got
+    return {"kind": "assistant", "text": rest}
+
+
 def _help_command(text: str) -> Optional[dict]:
     """A question about MindFlock itself → ``{"kind": "help", "text"}`` (the
     question, a "mindflock," / "help:" lead dropped), or None. Help when the
@@ -1078,6 +1123,9 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
     for kind, rx in _CMDS[:1]:
         if rx.match(w.text):
             return {"kind": kind, "arg": ""}
+    got = _assistant_command(w, words)
+    if got is not None:
+        return got
     p = _parse_new(w)
     if p is not None:
         return {
@@ -1740,6 +1788,21 @@ def _status(session: str, rows, now: float) -> dict:
     return {"kind": "status", "say": say}
 
 
+def status_say(session: str, rows, now: Optional[float] = None) -> str:
+    """What "what's <session> doing" says (the ``status`` answer's ``say``);
+    ``session`` empty → what "what needs me" says. For the assistant
+    (``core.voice_assistant``'s ``status`` action)."""
+    now = time.time() if now is None else now
+    if not session:
+        return _needs(rows, now)["say"]
+    return _status(session, rows, now)["say"]
+
+
+def list_say(rows, now: Optional[float] = None) -> str:
+    """What "list sessions" says."""
+    return _list(rows, time.time() if now is None else now)["say"]
+
+
 def _read(cmd: dict, session: str, rows, now: float, title: str) -> dict:
     """ "What did it say?": the session's last reply (its Say line), read
     whatever its age."""
@@ -1854,6 +1917,8 @@ def answer(
         return _answer_or_question(cmd, session, rows, title)
     if kind == "help":
         return {"kind": "help", "text": cmd["text"]}
+    if kind == "assistant":
+        return {"kind": "assistant", "text": cmd["text"]}
     if kind == "list":
         return _list(rows, now)
     if kind == "needs":

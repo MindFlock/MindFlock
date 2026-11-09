@@ -20,6 +20,7 @@ import { catalogMatch } from "../../lib/stopCatalog";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
 import { StopIcon } from "./Bird";
+import { VerifyStopFields, isVerifyEditor } from "./VerifyStopFields";
 import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle, DurationField } from "./controls";
 import "./Flights.css";
 import "./StopParts.css";
@@ -574,12 +575,26 @@ export function StopForm({
 }) {
   const fallback = defaultOnFail(def);
   const setField = (name: string, v: unknown) => onChange({ config: { ...step.config, [name]: v } });
+  const field = (f: StepKindField) => (
+    <StopField
+      key={f.name}
+      f={f}
+      value={step.config?.[f.name]}
+      readOnly={readOnly}
+      choices={f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : undefined}
+      onChange={(v) => setField(f.name, v)}
+    />
+  );
   return (
     <div className="fl-form">
       <FlField label="Title" wide={false}>
         <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
       </FlField>
-      {(def?.fields || []).map((f) =>
+      {isVerifyEditor(step.kind, def) ? (
+        // The Verify stop's own editor: where / ready when / who / notes /
+        // post to PR, and its explainer (VerifyStopFields.tsx).
+        <VerifyStopFields config={step.config} def={def} readOnly={readOnly} onChange={(config) => onChange({ config })} renderField={(f) => field(f)} />
+      ) : (def?.fields || []).map((f) =>
         step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? (
           // A Loop's "until" is a `when` expression (round 15's grammar):
           // the same editor, checked by the server as it is typed.
@@ -593,14 +608,7 @@ export function StopForm({
             onChange={(w) => setField(f.name, w)}
           />
         ) : (
-          <StopField
-            key={f.name}
-            f={f}
-            value={step.config?.[f.name]}
-            readOnly={readOnly}
-            choices={f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : undefined}
-            onChange={(v) => setField(f.name, v)}
-          />
+          field(f)
         )
       )}
       {step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && (

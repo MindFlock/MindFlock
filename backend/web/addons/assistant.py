@@ -83,6 +83,13 @@ Rules for editing it:
   in the UI, so don't reshuffle unless they ask you to.
 - `done: true` marks an item checked off; leave it in the list unless asked to
   remove it.
+- **Reminders:** an item may carry `"due": "YYYY-MM-DDTHH:MM"` — a LOCAL date
+  and time (e.g. `"2026-11-10T09:00"` for Tuesday at 9 AM). At that time, or
+  any time after while it isn't done, MindFlock pops it up in a dialog the user
+  can snooze or dismiss, and pushes it to their phone. When the user says
+  "remind me …" / "on Tuesday at 9" / "tomorrow morning", set `due` (ask if
+  the time is unclear; "morning" = 09:00). Leave `snoozed_until`,
+  `dismissed_at` and `notified_at` alone — MindFlock manages those.
 - After you change the list, briefly tell the user what you changed.
 
 The UI shows this same list in a "Todo" tab and writes to the same file, so
@@ -395,9 +402,105 @@ def _assistant_activity() -> str:
         return "offline"
 
 
+#: A reminder's local time, as the UI and the assistant write it.
+_DUE_FMT = "%Y-%m-%dT%H:%M"
+#: How often the reminder loop looks for todos that came due.
+REMIND_EVERY_S = 20.0
+
+
+def _norm_due(value) -> str:
+    """A todo's ``due`` → ``"YYYY-MM-DDTHH:MM"`` in LOCAL time, or ``""``.
+
+    Accepts that exact form, a full ISO 8601 stamp (seconds, ``Z`` or an
+    offset — converted to local time), or epoch seconds; anything else is no
+    reminder at all rather than a guess."""
+    if value in (None, ""):
+        return ""
+    import datetime as _dt
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return _dt.datetime.fromtimestamp(float(value)).strftime(_DUE_FMT)
+        except (OverflowError, OSError, ValueError):
+            return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        stamp = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone().replace(tzinfo=None)
+    return stamp.strftime(_DUE_FMT)
+
+
+def due_epoch(item: dict) -> float:
+    """The epoch seconds of ``item["due"]`` (local time), or 0."""
+    due = str(item.get("due") or "")
+    if not due:
+        return 0.0
+    import datetime as _dt
+
+    try:
+        return _dt.datetime.strptime(due, _DUE_FMT).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _num(value) -> float:
+    try:
+        out = float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return out if out > 0 else 0.0
+
+
+def _norm_todo(item: dict, index: int) -> dict:
+    """One row → ``{id, text, done, due?, snoozed_until?, dismissed_at?,
+    notified_at?}`` (the reminder fields only when set, so a list without
+    reminders reads exactly as it always did)."""
+    out = {
+        "id": str(item.get("id") or "t%d" % index),
+        "text": str(item.get("text", "")),
+        "done": bool(item.get("done", False)),
+    }
+    due = _norm_due(item.get("due"))
+    if due:
+        out["due"] = due
+        for key in ("snoozed_until", "dismissed_at", "notified_at"):
+            val = _num(item.get(key))
+            if val:
+                out[key] = val
+    return out
+
+
+def remind_at(item: dict) -> float:
+    """When ``item`` should next pop up: its due time, or a later snooze; 0
+    when it has no reminder, is done, or was dismissed for this due time."""
+    if item.get("done"):
+        return 0.0
+    due = due_epoch(item)
+    if not due:
+        return 0.0
+    if _num(item.get("dismissed_at")) >= due:
+        return 0.0
+    return max(due, _num(item.get("snoozed_until")))
+
+
+def due_now(items: list, now: Optional[float] = None) -> list:
+    """The todos whose reminder time has come (at it or any time after),
+    oldest first — what the reminder dialog shows."""
+    import time as _time
+
+    t = _time.time() if now is None else now
+    hits = [(remind_at(i), i) for i in items]
+    return [i for at, i in sorted(hits, key=lambda x: x[0]) if at and at <= t]
+
+
 def _read_todos() -> list[dict]:
-    """Load todos.json as a list of {id, text, done} dicts, tolerating a missing
-    or malformed file (returns [])."""
+    """Load todos.json as a list of todo dicts (see :func:`_norm_todo`),
+    tolerating a missing or malformed file (returns [])."""
     try:
         raw = ASSIST_TODOS.read_text(encoding="utf-8")
     except OSError:
@@ -408,18 +511,66 @@ def _read_todos() -> list[dict]:
         return []
     if not isinstance(data, list):
         return []
-    out = []
-    for i, item in enumerate(data):
-        if not isinstance(item, dict):
-            continue
-        out.append(
-            {
-                "id": str(item.get("id") or "t%d" % i),
-                "text": str(item.get("text", "")),
-                "done": bool(item.get("done", False)),
-            }
-        )
-    return out
+    return [
+        _norm_todo(item, i) for i, item in enumerate(data) if isinstance(item, dict)
+    ]
+
+
+def _write_todos(items: list) -> None:
+    _seed_assistant_dir()
+    _atomic_write(ASSIST_TODOS, json.dumps(items, indent=2) + "\n")
+
+
+def _update_todo(todo_id: str, fn) -> Optional[dict]:
+    """Read-modify-write one todo by id → the updated row, or None."""
+    items = _read_todos()
+    for item in items:
+        if item["id"] == todo_id:
+            fn(item)
+            clean = _norm_todo(item, 0)
+            item.clear()
+            item.update(clean)
+            _write_todos(items)
+            return item
+    return None
+
+
+def _announce_due(now: Optional[float] = None) -> list:
+    """Mark and announce the todos that came due since they were last
+    announced → the announced rows. ``notified_at`` lives ON the todo, in the
+    shared file, so two servers reading one todo list (the installed one and a
+    dev one) push a reminder once, not twice."""
+    import time as _time
+
+    t = _time.time() if now is None else now
+    items = _read_todos()
+    fresh = []
+    for item in items:
+        at = remind_at(item)
+        if at and at <= t and _num(item.get("notified_at")) < at:
+            item["notified_at"] = t
+            fresh.append(item)
+    if not fresh:
+        return []
+    _write_todos(items)
+    try:
+        from backend.web.core import events as _events
+
+        for item in fresh:
+            _events.BUS.emit(
+                "todo.due",
+                session="",
+                data={
+                    "id": item["id"],
+                    "text": item["text"],
+                    "due": item.get("due", ""),
+                    "detail": item["text"],
+                },
+            )
+    except Exception as err:  # noqa: BLE001 — the dialog still finds it by polling
+        if log.ErrorLog is not None:
+            log.ErrorLog.Printf("todo reminders: announce failed: %v", err)
+    return fresh
 
 
 class AssistantAddon(Addon):
@@ -503,6 +654,7 @@ class AssistantAddon(Addon):
             items = (payload or {}).get("todos")
             if not isinstance(items, list):
                 return JSONResponse({"error": "todos must be a list"}, status_code=400)
+            before = {t["id"]: t for t in await asyncio.to_thread(_read_todos)}
             clean = []
             seen = set()
             for i, item in enumerate(items):
@@ -512,23 +664,97 @@ class AssistantAddon(Addon):
                 while tid in seen:  # keep ids unique even if the client sent dupes
                     tid += "_"
                 seen.add(tid)
-                clean.append(
-                    {
-                        "id": tid,
-                        "text": str(item.get("text", "")),
-                        "done": bool(item.get("done", False)),
-                    }
-                )
+                row = _norm_todo(dict(item, id=tid), i)
+                old = before.get(tid) or {}
+                if row.get("due") and row.get("due") == old.get("due"):
+                    # The server owns these: a client that never heard of
+                    # reminders must not wipe a snooze by saving the list.
+                    for key in ("snoozed_until", "dismissed_at", "notified_at"):
+                        if key in old and key not in item:
+                            row[key] = old[key]
+                elif row.get("due") != old.get("due"):
+                    # A new time is a new reminder: no snooze, not dismissed,
+                    # not yet announced.
+                    for key in ("snoozed_until", "dismissed_at", "notified_at"):
+                        row.pop(key, None)
+                clean.append(row)
 
             def _write() -> None:
-                _seed_assistant_dir()
-                _atomic_write(ASSIST_TODOS, json.dumps(clean, indent=2) + "\n")
+                _write_todos(clean)
 
             try:
                 await asyncio.to_thread(_write)
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=500)
             return JSONResponse({"todos": clean})
+
+        @router.get("/todos/due")
+        async def get_due_todos() -> JSONResponse:
+            """The todos whose reminder time has come (due, or a snooze that
+            ran out; not done, not dismissed) — what the reminder dialog
+            shows. ``{"due": [todo, …]}``, oldest first."""
+            items = await asyncio.to_thread(_read_todos)
+            return JSONResponse({"due": due_now(items)})
+
+        @router.post("/todos/{todo_id}/snooze")
+        async def snooze_todo(
+            todo_id: str, payload: Optional[dict] = None
+        ) -> JSONResponse:
+            """``{"minutes": n}`` or ``{"until": epoch | "YYYY-MM-DDTHH:MM"}``
+            → the todo pops up again then. 400 without either; 404 unknown."""
+            import time as _time
+
+            body = payload or {}
+            until = 0.0
+            if body.get("minutes") not in (None, ""):
+                try:
+                    until = _time.time() + max(1.0, float(body["minutes"])) * 60.0
+                except (TypeError, ValueError):
+                    until = 0.0
+            elif body.get("until") not in (None, ""):
+                when = body["until"]
+                until = (
+                    _num(when)
+                    if isinstance(when, (int, float))
+                    else due_epoch({"due": _norm_due(when)})
+                )
+            if not until:
+                return JSONResponse(
+                    {"error": "give minutes, or until (a time)"}, status_code=400
+                )
+
+            def fn(item: dict) -> None:
+                item["snoozed_until"] = until
+
+            row = await asyncio.to_thread(_update_todo, todo_id, fn)
+            if row is None:
+                return JSONResponse({"error": "no such todo"}, status_code=404)
+            return JSONResponse({"todo": row})
+
+        @router.post("/todos/{todo_id}/dismiss")
+        async def dismiss_todo(todo_id: str) -> JSONResponse:
+            """Stop reminding about this due time (the todo stays, not done)."""
+            import time as _time
+
+            def fn(item: dict) -> None:
+                item["dismissed_at"] = max(_time.time(), due_epoch(item))
+
+            row = await asyncio.to_thread(_update_todo, todo_id, fn)
+            if row is None:
+                return JSONResponse({"error": "no such todo"}, status_code=404)
+            return JSONResponse({"todo": row})
+
+        @router.post("/todos/{todo_id}/done")
+        async def done_todo(todo_id: str) -> JSONResponse:
+            """Check it off (from the reminder dialog)."""
+
+            def fn(item: dict) -> None:
+                item["done"] = True
+
+            row = await asyncio.to_thread(_update_todo, todo_id, fn)
+            if row is None:
+                return JSONResponse({"error": "no such todo"}, status_code=404)
+            return JSONResponse({"todo": row})
 
         return router
 
@@ -540,6 +766,26 @@ class AssistantAddon(Addon):
     async def on_startup(self, ctx: AppContext) -> None:
         # Seed-if-missing; moved from import time to startup. Idempotent.
         await asyncio.to_thread(_seed_assistant_dir)
+
+        async def _remind() -> None:
+            # Timed todos: announce each one once when it comes due (or its
+            # snooze runs out) — the bus event pops the reminder dialog in
+            # open windows and, through the notify addon's `todo_due` rule,
+            # pushes it to the phone. Never raises; never stops.
+            while True:
+                try:
+                    await asyncio.to_thread(_announce_due)
+                except Exception as err:  # noqa: BLE001
+                    if log.ErrorLog is not None:
+                        log.ErrorLog.Printf("todo reminders: %v", err)
+                await asyncio.sleep(REMIND_EVERY_S)
+
+        self._remind_task = asyncio.get_running_loop().create_task(_remind())
+
+    async def on_shutdown(self, ctx: AppContext) -> None:
+        task = getattr(self, "_remind_task", None)
+        if task is not None:
+            task.cancel()
 
     # --- frontend --------------------------------------------------------- #
     def frontend(self):

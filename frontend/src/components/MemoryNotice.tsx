@@ -39,6 +39,26 @@ export function memoryDetail(m: MemoryReading): string {
   return bits.join(" · ");
 }
 
+/** Whether WINDOWS (the WSL host), not the Linux side, is what reads low:
+ * the host's level is set and at least as bad as the guest's. Then the
+ * notice must show Windows' numbers — "13.4 GB free of 19.5 GB" under
+ * "critically low" read as a bug when the 13.4 GB was inside WSL. */
+export function windowsIsShort(m: MemoryReading): boolean {
+  const host = RANK[m.host?.level || "ok"] ?? 0;
+  const guest = RANK[m.guest_level || "ok"] ?? 0;
+  return host > 0 && host >= guest;
+}
+
+/** "Windows: 0.5 GB free of 31.4 GB (2%) · 5.1 GB of WSL's 19.5 GB is unused
+ * inside WSL, but Windows can't take it back while WSL holds it" — exported
+ * for tests. */
+export function windowsDetail(m: MemoryReading): string {
+  const h = m.host || {};
+  const bits = ["Windows: " + gb(h.available) + " free of " + gb(h.total) + " (" + Math.round(h.available_pct || 0) + "%)"];
+  if (m.total) bits.push(gb(m.available) + " of WSL's " + gb(m.total) + " is unused inside WSL, but Windows can't take it back while WSL holds it");
+  return bits.join(" · ");
+}
+
 /** Who a slot job is: its session, else its folder, else its pid. */
 function jobName(j: SlotJob): string {
   if (j.session) return j.session;
@@ -76,10 +96,19 @@ export function MemoryNotice() {
   const heavy = slotsLine(slots);
 
   const critical = data.level === "critical";
+  const windows = windowsIsShort(data);
   return (
     <div id="memory-notice" role="status" className={critical ? "critical" : ""}>
-      <div className="mn-head">⚠ Memory is {critical ? "critically low" : "running low"}</div>
-      <div className="mn-detail">{memoryDetail(data)}</div>
+      <div className="mn-head">
+        ⚠ {windows ? "Windows is " + (critical ? "critically low" : "running low") + " on memory" : "Memory is " + (critical ? "critically low" : "running low")}
+      </div>
+      <div className="mn-detail">{windows ? windowsDetail(data) : memoryDetail(data)}</div>
+      {windows && (
+        <div className="mn-detail">
+          Closing Windows apps frees memory now. Restarting WSL (<code>wsl --shutdown</code>, then reopen) makes it hand back what it
+          isn&apos;t using and applies any <code>.wslconfig</code> change.
+        </div>
+      )}
       {heavy && <div className="mn-detail mn-slots">{heavy}</div>}
       <div className="mn-detail mn-what">
         Agents that start by themselves (a worker an agent spawns, a queued prompt, a restart) wait

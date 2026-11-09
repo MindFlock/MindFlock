@@ -72,6 +72,16 @@ export type HoldPhase = "down" | "up";
  * each down flips, up is ignored. */
 export const VOICE_TALK_EVENT = "mindflock:voice-talk";
 
+/** Assistant mode's hotkey → the top-bar mic (TopBarMic): talk to MindFlock
+ * itself, every phrase to the voice assistant until "that's all". A second
+ * press ends it. */
+export const VOICE_ASSISTANT_EVENT = "mindflock:voice-assistant";
+
+function voiceAssistant() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(VOICE_ASSISTANT_EVENT));
+}
+
 function voiceTalk(phase: HoldPhase) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(VOICE_TALK_EVENT, { detail: { phase } }));
@@ -100,6 +110,12 @@ export interface KeymapHost {
 }
 
 let _host: KeymapHost | null = null;
+
+/** The host installKeymap was given (null before the app mounts): the voice
+ * assistant builds the palette's commands with it while the palette is closed. */
+export function keymapHost(): KeymapHost | null {
+  return _host;
+}
 
 // --- Guards ----------------------------------------------------------------
 
@@ -619,6 +635,19 @@ export const KEYMAP: KeymapEntry[] = [
     aliasOf: "talk",
     holdable: true,
     run: (_e, phase) => voiceTalk(phase || "down"),
+  },
+  {
+    // Talk to MindFlock itself (the voice assistant), not to a session: the
+    // mic opens in assistant mode — every phrase goes to MindFlock until
+    // "that's all", "thanks", a stop word or a minute of quiet; a second press
+    // ends it. Alt like Alt+I / V / S / G (M for MindFlock; free in Chrome,
+    // Electron, the pane find bar and the shell's usual bindings), and like
+    // Talk it fires from a terminal too — that is where you are.
+    key: "m",
+    alt: true,
+    id: "assistant",
+    help: ["Navigation", "Alt+M", "Voice assistant — speak to MindFlock itself; every phrase goes to it until “that's all”"],
+    run: () => voiceAssistant(),
   },
   {
     key: "Tab",

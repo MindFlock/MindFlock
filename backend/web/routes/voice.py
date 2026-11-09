@@ -364,9 +364,10 @@ async def _start_new(text: str, session: str, rows: list, request) -> dict:
     return await _create_planned(plan, request)
 
 
-async def _create_planned(plan: dict, request) -> dict:
+async def _create_planned(plan: dict, request, program: str = "") -> dict:
     """Create the session a finished plan names (``core.voice_router``'s
-    ``kind: "new"``) → ``started``, or ``new-failed``."""
+    ``kind: "new"``) → ``started``, or ``new-failed``. ``program``: the CLI
+    to run ("" = the default), as the New dialog's agent picker sends it."""
     # A person's start, but a spoken one has no dialog to ask in: while
     # memory reads low (core.launch_gate) it says so instead of starting.
     refusal = await asyncio.to_thread(_memory_refusal_line)
@@ -374,6 +375,10 @@ async def _create_planned(plan: dict, request) -> dict:
         return {"kind": "new-failed", "say": refusal}
     title = await asyncio.to_thread(_session_create.free_title, plan["title_base"])
     payload = {"title": title, "repo_path": plan["repo_path"]}
+    if program:
+        payload["program"] = program
+    if plan.get("model"):
+        payload["profile_model"] = plan["model"]
     if plan["task"]:
         payload["prompt"] = plan["task"]
     try:
@@ -631,6 +636,10 @@ async def voice_route(request: Request) -> JSONResponse:
         return JSONResponse({"kind": "interrupt", "title": target, "ok": ok})
     if cmd["kind"] == "commands":
         return JSONResponse(_voice_router.commands_answer(words))
+    if cmd["kind"] == "assistant":
+        # Addressed to MindFlock itself: the client posts the rest to
+        # /api/voice/assistant (core.voice_assistant).
+        return JSONResponse({"kind": "assistant", "text": cmd["text"]})
     if rows is None:
         rows = await asyncio.to_thread(_session_rows, request)
     if cmd["kind"] == "new":
@@ -677,3 +686,143 @@ async def voice_help(request: Request) -> JSONResponse:
     if not text:
         return JSONResponse({"error": "text must be a question"}, status_code=400)
     return JSONResponse(await asyncio.to_thread(_help_answer, text))
+
+
+# ---- the voice assistant: talking to MindFlock itself ---------------------------
+#: Seconds the known projects (a shallow folder sweep) are reused between
+#: assistant turns.
+ASSISTANT_REPOS_TTL_S = 30.0
+_assistant_repos_cache: dict = {"at": 0.0, "repos": []}
+
+
+async def _assistant_repos(rows: list) -> list:
+    """:func:`_known_repos`, reused for :data:`ASSISTANT_REPOS_TTL_S`."""
+    import time as _time
+
+    now = _time.monotonic()
+    if now - _assistant_repos_cache["at"] > ASSISTANT_REPOS_TTL_S:
+        _assistant_repos_cache["repos"] = await asyncio.to_thread(_known_repos, rows)
+        _assistant_repos_cache["at"] = now
+    return list(_assistant_repos_cache["repos"])
+
+
+async def _assistant_send(request, title: str, text: str):
+    """``(status, body)`` of a voice ``/send`` to ``title`` (every gate of
+    the route: dialog-safe, paused, over budget, driven elsewhere), asking
+    for its ``Say:`` line. Module-level so tests replace it."""
+    resp = await _server().instance_send(
+        title, {"text": text, "voice": True, "say": True}, request
+    )
+    try:
+        body = json.loads(resp.body)
+    except Exception:  # noqa: BLE001
+        body = {}
+    return getattr(resp, "status_code", 500), body if isinstance(body, dict) else {}
+
+
+def _assistant_context(request):
+    """The I/O one assistant turn reaches (``core.voice_assistant.Context``)."""
+    from backend.web.core import voice_assistant as _va
+
+    async def rows():
+        return await asyncio.to_thread(_session_rows, request)
+
+    async def create(plan, program):
+        return await _create_planned(plan, request, program)
+
+    async def send(title, text):
+        return await _assistant_send(request, title, text)
+
+    async def may_configure():
+        return await _auth.may_configure(request.scope)
+
+    return _va.Context(
+        rows=rows,
+        repos=_assistant_repos,
+        create=create,
+        send=send,
+        may_configure=may_configure,
+    )
+
+
+def _assistant_body(payload) -> str:
+    """Why ``payload`` is not an assistant turn, or ""."""
+    if not isinstance(payload, dict):
+        return "body must be an object"
+    if not isinstance(payload.get("text", ""), str):
+        return "text must be a string"
+    if not isinstance(payload.get("conversation", ""), str):
+        return "conversation must be a string"
+    snap = payload.get("snapshot")
+    if snap is not None and not isinstance(snap, dict):
+        return "snapshot must be an object"
+    confirm = payload.get("confirm")
+    if confirm is not None and not (
+        isinstance(confirm, dict)
+        and isinstance(confirm.get("id"), str)
+        and isinstance(confirm.get("yes"), bool)
+    ):
+        return "confirm must be {id: string, yes: boolean}"
+    if not str(payload.get("text") or "").strip() and confirm is None:
+        return "text must be what was said"
+    return ""
+
+
+@router.post("/api/voice/assistant")
+async def voice_assistant(request: Request):
+    """One phrase to the MindFlock assistant → NDJSON events, one per line,
+    flushed as they are produced (``act`` / ``did`` / ``say`` / ``ask`` /
+    ``confirm`` / ``error``, then ``done {ms, model}``; see
+    docs/voice-assistant.md). 400 when the body is not ``{text, conversation,
+    snapshot?, confirm?}``."""
+    from fastapi.responses import StreamingResponse
+
+    from backend.web.core import voice_assistant as _va
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 — not JSON: a bad body, not a 422
+        payload = None
+    why = _assistant_body(payload)
+    if why:
+        return JSONResponse({"error": why}, status_code=400)
+    ctx = _assistant_context(request)
+
+    async def events():
+        try:
+            async for ev in _va.turn(payload, ctx):
+                yield (json.dumps(ev) + "\n").encode("utf-8")
+        except Exception as err:  # noqa: BLE001 — the stream always ends with done
+            yield (
+                json.dumps({"type": "error", "text": "The assistant failed: %s" % err})
+                + "\n"
+            ).encode("utf-8")
+            yield (json.dumps({"type": "done", "ms": 0, "model": False}) + "\n").encode(
+                "utf-8"
+            )
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/api/voice/assistant/warm")
+async def voice_assistant_warm() -> JSONResponse:
+    """Start the assistant's model process now (the mic opening, assistant
+    mode turning on) → ``{ok, mode, model, program}``; ``mode``: stream |
+    oneshot | none. Idempotent."""
+    from backend.web.core import voice_assistant as _va
+
+    return JSONResponse(await asyncio.to_thread(_va.BRAIN.warm))
+
+
+@router.get("/api/voice/assistant/catalog")
+async def voice_assistant_catalog() -> JSONResponse:
+    """What the assistant can do → ``{settings: [{path, label, type, value,
+    options?}], dialogs, settings_screens, session_actions}``
+    (``core.voice_assistant_catalog``; secrets and guarded fields left out)."""
+    from backend.web.core import voice_assistant_catalog as _cat
+
+    return JSONResponse(await asyncio.to_thread(_cat.catalog))

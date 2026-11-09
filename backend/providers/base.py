@@ -881,6 +881,25 @@ class BaseProvider:
         """
         return None
 
+    def stream_chat_argv(
+        self, system_prompt: str, model: str = ""
+    ) -> Optional[list[str]]:
+        """argv for a LONG-LIVED text-only chat process, or None.
+
+        The voice assistant (:mod:`backend.web.core.voice_assistant`) keeps
+        one such process warm and writes each user turn to its stdin as one
+        ``{"type": "user", "message": …}`` JSON line; the process answers on
+        stdout as JSON lines (Claude Code's ``stream-json``: ``stream_event``
+        text deltas, then a ``result`` line per turn) and stays up for the
+        next turn. No tools, no MCP servers, no settings files: it only
+        talks. ``system_prompt`` replaces the CLI's own; ``model`` "" = the
+        CLI's default.
+
+        None (the default): this CLI has no such mode we trust — the
+        assistant then asks :meth:`oneshot_argv` once per turn instead.
+        """
+        return None
+
     # --- usage-window knowledge (roadmap E) ------------------------------- #
     def usage_window(self) -> dict:
         """How this CLI's usage limits reset in time — the knowledge the

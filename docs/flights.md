@@ -176,7 +176,97 @@ path and makes the route **Need you** while behaviors that are yours to check
 are open. Checking them moves the route on at once
 (`session.test_plan_settled` wakes the driver); **Done** on the stop records
 them as verified. The behaviors the push watcher writes for the same branch
-are the same behaviors — Verify keys them by (repo, branch).
+are the same behaviors — Verify keys them by (repo, branch). The checklist is
+always written, whatever the stop's settings.
+
+The stop carries four plain choices and a checkbox; its face reads them as one
+sentence, **"Verify on *where* · *who* · *ready*"** — e.g. "Verify on sandbox ·
+agent, then you · 15 min after the stop before", "Verify on this branch · agent
+only · right away", "Verify on live · agent, then you · once on release".
+
+- **Where** (`where`) — `branch`: this branch's own code, a fresh checkout of
+  the plan's commit, no deployment; or the **name of one of the repo's
+  environments** (`repository.verify_repo_settings["owner/name"].environments`:
+  `{name, reach, branch, deploy_minutes}` each). The repo's older fields
+  (live branch, deploy delay, target) are an implicit environment named
+  `live`. A name is lowercased and must match `[a-z0-9_-]{1,40}`. A name
+  the repo does not have fails the stop: "no environment named *x* in this
+  repo". When the environments **cannot be read** (the lookup raises), the
+  stop does **not** fail: it goes on as if nothing were known about the
+  environment — `ready_minutes` gets no `deploy_minutes` fallback, and
+  `on_branch` waits on the checklist's own `live` mark (the repo's live
+  branch), whatever `where` names.
+- **Ready when** (`ready`) — when the check may start:
+  - `now` — right away.
+  - `on_branch` — once the work has **reached the environment's branch**
+    (`test_plans.env_reached_at`: the first time the plan's commit is seen on
+    `origin/<branch>`), then `ready_minutes` more (0 = the environment's
+    `deploy_minutes`). On `where: branch` it reads as `now`.
+  - `after_prev` — `ready_minutes` (0 = the environment's `deploy_minutes`)
+    after this stop started (`step_states[sid].since`), which is normally
+    when the stop before finished. A halt point or a pause in between adds to
+    the wait; it does not count towards it. With 0 minutes and no
+    `deploy_minutes` (always so on `where: branch`) there is no wait at all,
+    although the face still reads "after the stop before, once this branch
+    has deployed".
+
+  `ready_minutes` (0..1440) is ignored when `ready` is `now`.
+
+  The gate never holds up the writing: the behaviors are written meanwhile,
+  and only the agent's run and a person's turn wait. The face says why it
+  waits: "waiting for the work to reach sandbox", "12 min for sandbox to be
+  ready".
+
+  *Why `after_prev` exists:* a protected `sandbox` branch that only takes
+  squash-merged PRs never carries the plan's own commit — the squash makes a
+  new one — so "reached the branch" never comes true. A route like *Push →
+  Open PR → Merge into sandbox → Verify on sandbox, ready `after_prev`, 15
+  min* checks the sandbox a quarter of an hour after the merge stop finished,
+  which is when its deploy has landed. Use `on_branch` when the branch takes
+  the commits themselves (a fast-forward or merge-commit release branch).
+- **Who checks** (`who`) — `both` "Agent, then me" (default: the agent checks
+  its behaviors, then yours park the route on you), `agent` "Agent only"
+  (your behaviors stay open on the checklist but do not hold the route),
+  `you` "Only me".
+- **Notes** (`notes`) — text for this check only, on top of the repo's
+  standing notes; handed to the checklist and to the agent's run.
+- **Post the results to the PR** (`post_to_pr`) — when the stop finishes
+  (done **or** failed) the driver comments `test_plans.results_markdown(plan)`
+  on the session's PR, once per attempt (`detail.pr_comment` says what
+  happened: `posted`, `skipped: …`, `failed: …`, and a `noted` history entry
+  says it too: "posted the results to the PR" or "results not posted to the
+  PR (<reason>)"). No checklist, no PR or no GitHub token is a `skipped`; a
+  posting error never fails the stop. The checker itself never posts — it
+  only writes its results file.
+
+A bad `who`, `where`, `ready` or `ready_minutes` is a 400 `bad_step` when a
+plan is saved; a stored config that is already bad falls back to the
+defaults.
+
+**Migration from `wait_live`.** An old `wait_live` reads as where/ready (true
+→ `live` + `on_branch`; false → `branch` + `now`) and is never written back:
+stored plans and flights lose the key the next time they are normalised.
+Plan JSON sent through the MCP tools, the CLI or the API should use
+`where` / `ready`.
+
+
+#### When the check can't go on (never silently)
+
+Found live 2026-11-09: a check the memory guard refused read as running
+forever, a checker that ended its turn with a background job and no answers
+read as "checking" for two hours, and a run that answered every behavior
+"blocked" passed as "checked". A Verify stop now always says why it isn't
+moving, and comes to you when only you can move it:
+
+| What happened | What the stop does |
+|---|---|
+| The memory guard refused the checker's session (the run route answers 409 `reason: "memory"`) | waits — "waiting for memory to start the check (<why>)" — and retries every 30 s; after 30 min it parks on you: free memory then Retry, or Skip |
+| It believes a check started, but no run exists 60 s later | fails: "the check never started" |
+| A check is running | says progress: "the agent is checking the behaviors · 3 of 7 answered · quiet 6 min" (the checker rewrites its results file after every step) |
+| No new answer for 8 min and the checker's turn is over | nudges it once: write the file, mark the rest blocked, stop background jobs |
+| Still nothing 15 min after the nudge, or past the 30-minute budget (+5) | closes the check: answered steps keep their answers, the rest become `blocked` ("not checked: …") |
+| The checker answered `blocked` with `needs you: <action>` (a manual step: approve something, click as a reviewer, start a paused job) | parks on you: "the check needs you to do N things, then press Done". **Done = "I did it"**: the stop runs again and the whole check re-runs, told what you did |
+| The checker answered plain `blocked` | parks on you listing them with its why — answer them on the Behaviors card, or Skip. **Never** counted as a pass, whatever `who` says ("Agent only" too) |
 
 ### The CLI
 
@@ -229,6 +319,14 @@ accessor (the pattern of `core/autopilot.py`).
 {"id": "s1", "kind": "agent", "title": "Work the ticket", "config": {...}, "on_fail": "halt" | "agent" | "skip" | "you", "halt": true}
 ```
 
+A Verify stop's config, for example (see [Verify stops](#verify-stops)):
+
+```json
+{"id": "s5", "kind": "verify", "title": "Verify on sandbox", "on_fail": "halt",
+ "config": {"where": "sandbox", "ready": "after_prev", "ready_minutes": 15,
+            "who": "both", "notes": "log in as the qa user", "post_to_pr": true}}
+```
+
 `halt` (optional, omitted when false) makes the step a **halt point**: the
 flight stops before it ([Halt points](#halt-points)). A plan keeps it (the
 per-plan editor saves it with the plan) and a flight's snapshot carries it.
@@ -251,7 +349,7 @@ editor's palette and forms are driven by the server):
 | `split` | robot | `prompts` (textarea: one worker per non-empty line; `{index}` / `{n}` and the flight's placeholders filled), `count` (int, default 1: a single line is spawned this many times), `model` (text, optional: the workers' `profile_model`), `fence_only` (text, optional: comma-separated paths each worker may change → its fence's `only`), `report_back` (bool, default true: the `spawn_session` report footer) | every worker was created as a child of the session (`parent`, `spawned`, forked from the session's HEAD); their titles are in `step_states[sid].detail.children`. Follow it with a `join` |
 | `join` | robot | `of`: `all` (every live child, default) \| `spawned` (only the workers the nearest `split` before it made); `on_failed`: `halt` (default: a worker whose report is `failed` fails the step with its summary) \| `continue` | every worker in the set has finished ([Fan-out and join](#fan-out-and-join)) |
 | `ship` | robot | `lane`: `commit` \| `push` \| `pr` \| `merge`; `ask_first` (bool); `message` (optional commit message hint) | the autopilot record armed with `source="flight"` reaches `done`; a `halted` record fails the step with its reason (the autopilot's own fix hand-off runs first) |
-| `verify` | robot (+you) | `who`: `agent` \| `you` \| `both` (default both); `wait_live` (bool: wait until the branch is on the live branch + deploy delay, default false) | the checklist exists for (repo, branch) and every step is settled; open *you* items park the flight as waiting on you with a deep link to the checklist |
+| `verify` | robot (+you) | `where` (`branch` or an environment's name, default branch); `ready`: `now` \| `on_branch` \| `after_prev` (default now); `ready_minutes` (0..1440, 0 = the environment's deploy minutes); `who`: `both` \| `agent` \| `you` (default both); `notes` (≤2000 chars); `post_to_pr` (bool, default false) — see [Verify stops](#verify-stops); a legacy `wait_live` true reads as `live` + `on_branch` | the checklist exists for (repo, branch) and every step is settled; open *you* items park the flight as waiting on you with a deep link to the checklist |
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
 | `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true) | the PR has had no new unresolved review comments for `quiet_minutes`; each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail |
@@ -280,7 +378,7 @@ issue flights the server-built intake prompt is used and the step's own
   "cursor": 0,                    // index into steps of the current step
   "step_states": {"s1": {"state": "pending"|"running"|"waiting_you"|"done"|"skipped"|"failed", "since": 0.0, "note": "", "detail": {}, "rounds": 0}},
   "reason": "",                   // why halted / cancelled (human-readable)
-  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed"|"moved"|"halted_at", "note": ""}],  // ≤200
+  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed"|"moved"|"halted_at"|"noted", "note": ""}],  // ≤200; noted = a remark that changes nothing (a Verify stop's PR comment)
   "started": 0.0, "updated": 0.0, "finished": 0.0,
   "by": "user" | "intake" | "schedule" | "agent:<title>",
   "boot": "", "owner": "", "owner_at": 0.0   // lease, as autopilot.json
@@ -336,7 +434,7 @@ No model installed → 409 `no_model`.
 
 | Method and path | Body / query | Returns |
 |---|---|---|
-| `GET /api/flights/kinds` | | `{"kinds": [{kind, label, actor: "robot"|"you", summary, fields: [{name, type: "text"|"textarea"|"int"|"bool"|"select", label, options?, default?, placeholder?}], default_title}]}` |
+| `GET /api/flights/kinds` | | `{"kinds": [{kind, label, actor: "robot"|"you", summary, fields: [{name, type: "text"|"textarea"|"int"|"bool"|"select", label, options?, option_labels?, default?, placeholder?}], default_title}]}` (`option_labels`: `{option: words}`, e.g. a Verify stop's `who` → "Agent, then me") |
 | `GET /api/flights/plans` | | `{"plans": [Plan]}` (built-ins first) |
 | `POST /api/flights/plans` | Plan (no `id` = create; `id` = replace) | `{"plan": Plan}`; 400 with `{"error", "field"}` on a bad step |
 | `DELETE /api/flights/plans/{id}` | | 204; a built-in is reset to its default instead of removed |
@@ -701,7 +799,9 @@ workers), is each card under the Sky drawer's *Landed*.
   default flyway's cut).
 - **Registry fields** in `GET /api/flights/kinds` become designed controls: a
   `select` is a segmented control (its `options` read as plain strings or
-  `{value, label}`; lane and who in the app's words), a `bool` a switch chip,
+  `{value, label}`; lane and who in the app's words; a field's
+  `option_labels`, when it has them, are the words to show — not read by the
+  editor yet, see [Verify stops](#verify-stops)), a `bool` a switch chip,
   an `int` a field with its unit (`*minutes` → "min", `max_rounds` →
   "rounds"), a `textarea` the prompt box (a perch's `items` one per line,
   stored as a list), a `text` the field look.
@@ -716,10 +816,10 @@ workers), is each card under the Sky drawer's *Landed*.
 
 ## Built-in flyways (seeded on first read, editable, resettable)
 
-- **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (agent) → Open PR → Reviews settle (10 min) → Checks → Perch: Approve the merge (step title "Approve the merge") → Merge → Ticket: comment (step title "Ticket: comment"; it posts "Merged by MindFlock" and moves the ticket nowhere — set the step's `state` to move it).
+- **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (this branch · agent only · right away) → Open PR → Reviews settle (10 min) → Checks → Perch: Approve the merge (step title "Approve the merge") → Merge → Ticket: comment (step title "Ticket: comment"; it posts "Merged by MindFlock" and moves the ticket nowhere — set the step's `state` to move it).
 - **Pull request** (`builtin:pr`, trigger pr): Agent addresses the review comments → Commit → Push → Reviews settle → Checks.
 - **Scheduled task** (`builtin:schedule`, trigger schedule): Agent → Commit → Push → Open PR.
-- **Verify on live** (`builtin:verify`, trigger manual): Verify (both, wait_live).
+- **Verify on live** (`builtin:verify`, trigger manual): "Verify on live · agent, then you · once on the live branch" (`where: live`, `ready: on_branch`, `who: both`).
 
 Every built-in's agent step keeps `join` on (the default), so a ticket agent
 that spawns workers is waited for automatically: its next stop starts only
@@ -822,8 +922,13 @@ had to choose. Field and route names are unchanged.
 - **`checks` step**: `none` (nothing reports) counts as passed only after 2
   minutes; the failing names come from the check-runs API.
 - **`verify` step** asks for the checklist through Verify's own manual path
-  (`_ensure_test_plan(title, manual=True)`) and starts the agent's run through
-  the `POST /api/test-plans/{id}/run` route body. `who: agent` is done once
+  (`_ensure_test_plan(title, manual=True, environment=where, notes=notes)`)
+  and starts the agent's run through the `POST /api/test-plans/{id}/run`
+  route body (`{"environment": where, "notes": notes}`). `_verify_obs` adds
+  `env` (`test_plans.environment(repo_root, where)`, None for `branch`) and,
+  for `ready: on_branch`, `env_reached_at`; an unknown environment fails the
+  stop. With `post_to_pr` the driver comments the results on the PR when the
+  stop is done or failed (`_post_verify_results`). `who: agent` is done once
   the agent's items are answered (human items stay on the checklist); open
   agent items left after a run become yours under `both`.
 
@@ -5229,7 +5334,7 @@ go to the agent, the stop retries).
 - **Bug report** (`builtin:bugreport`, trigger ticket): Agent "Write a failing
   test that reproduces the report" → Test `expect: fail` titled "Write the
   failing test first" → Agent "Make it pass" → Test → Commit → Push → Verify
-  (agent) → Open PR → Reviews settle → Checks → Perch "Approve the merge" →
+  (this branch · agent only · right away) → Open PR → Reviews settle → Checks → Perch "Approve the merge" →
   Merge → Ticket: comment ("Fixed by MindFlock"; set `state` to move it). The
   contract listed the expect-fail Test first; an agent step to write the test
   comes before it, since a Test stop runs tests, it does not write them.

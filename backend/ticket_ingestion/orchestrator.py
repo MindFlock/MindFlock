@@ -704,9 +704,86 @@ class PipelineOrchestrator:
                                 )
                     finally:
                         self._mark_busy("pr", -1)
+                await self._check_rounds()
             except Exception as e:
                 _logger.exception("PR scan failed: %s; will retry next interval", e)
             await asyncio.sleep(interval)
+
+    async def _check_rounds(self) -> None:
+        """New review ROUNDS on your PRs intake already handled
+        (docs/pr-review-rounds.md): a "changes requested" review or review
+        comments said after the last pass, once the reviewer has stopped for
+        ``pr_rounds.SETTLE_S``, go to the PR's session with a triage prompt
+        (do it / push back / ask you) — per the repo's ``changes_requested``
+        ("triage", "ask", "off"). Never raises."""
+        import time as _time
+
+        from backend.ticket_ingestion import pr_rounds as _rounds
+        from backend.ticket_ingestion.pr_comments import fetch_changes_requested
+        from backend.ticket_ingestion.state import (
+            load_pr_rounds,
+            processed_pr_times,
+            record_pr_round,
+        )
+
+        cfg = self.config.github
+        if cfg is None or self._pr_monitor is None or self._cs_runner is None:
+            return
+        processed = load_processed_prs(_STATE_DIR)
+        if not processed:
+            return
+        try:
+            prs = await self._pr_monitor.my_open_prs()
+        except Exception as e:  # noqa: BLE001
+            _logger.warning("PR rounds: listing your PRs failed: %s", e)
+            return
+        rounds = load_pr_rounds(_STATE_DIR)
+        times = processed_pr_times(_STATE_DIR)
+        now = _time.time()
+        for pr in prs:
+            repo = getattr(pr, "repo", "")
+            if (repo, pr.number) not in processed:
+                continue  # never handled yet: the ordinary first pass takes it
+            policy = cfg.changes_requested_for(repo)
+            if policy == "off":
+                continue
+            try:
+                comments = await fetch_actionable_comments(pr, cfg)
+                reviews = await fetch_changes_requested(pr, cfg)
+            except PRCommentsFetchError as e:
+                _logger.warning("PR #%d rounds: fetch failed (%s)", pr.number, e)
+                continue
+            key = "%s#%d" % (repo, pr.number)
+            handled = set((rounds.get(key) or {}).get("items") or [])
+            state, items = _rounds.pending_round(
+                comments, reviews, handled, times.get((repo, pr.number), 0.0), now
+            )
+            if state != "ready":
+                if state == "settling":
+                    _logger.info(
+                        "PR #%d: %d new review request(s), waiting for the reviewer to finish",
+                        pr.number,
+                        len(items),
+                    )
+                continue
+            prompt = _rounds.build_round_prompt(pr, items, policy)
+            try:
+                how = await self._cs_runner.deliver_pr_round(pr, prompt)
+            except Exception as e:  # noqa: BLE001
+                _logger.exception(
+                    "PR #%d: review round failed to start: %s", pr.number, e
+                )
+                continue
+            record_pr_round(
+                _STATE_DIR, repo, pr.number, [_rounds.comment_key(c) for c in items]
+            )
+            _logger.info(
+                "PR #%d: review round of %d request(s) %s (%s)",
+                pr.number,
+                len(items),
+                how,
+                policy,
+            )
 
     async def _issue_loop(self) -> None:
         assert self._issue_monitor is not None and self.config.github is not None

@@ -34,11 +34,14 @@ export interface BehaviorRowProps {
   onRemove?(step: TestStep): Promise<void>;
   /** Open a session to fix this failed behavior. */
   onFix?(step: TestStep): void;
+  /** The card's Expand all / Collapse all: every change of `n` sets this
+   * row open or closed (rows start collapsed — one short line each). */
+  allOpen?: { open: boolean; n: number };
   /** The primary action asked for this row: focus (and scroll) to it. */
   focusNonce?: number;
 }
 
-export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce }: BehaviorRowProps): JSX.Element {
+export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce, allOpen }: BehaviorRowProps): JSX.Element {
   const ref = useRef<HTMLLIElement>(null);
   const key = noteKey(plan.id, step.id);
   const draft = NOTES.get(key);
@@ -48,6 +51,14 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
   const [editing, setEditing] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Collapsed by default: a behavior is one short line (its chip and the
+  // start of its text) until you open it — a checklist of long, precise
+  // behaviors was a wall of text in the Sky. Open shows the whole text, what
+  // to expect, the agent's evidence and the answers.
+  const [open, setOpen] = useState(!!allOpen?.open);
+  useEffect(() => {
+    if (allOpen && allOpen.n) setOpen(allOpen.open);
+  }, [allOpen?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setNoteOpen = (open: boolean, text = note) => {
     setNoteOpenRaw(open);
@@ -61,6 +72,7 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
 
   useEffect(() => {
     if (!focusNonce) return;
+    setOpen(true);
     const el = ref.current;
     el?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
     el?.focus({ preventScroll: true });
@@ -74,6 +86,8 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
   const shown = pending ?? entry?.result ?? "";
   const yourEntry = entry?.by === "human";
   const locked = pending !== null || busy;
+  // Something in progress keeps the row open whatever the toggle says.
+  const isOpen = open || editing || noteOpen || confirmRemove;
 
   const record = async (result: TestStepResult) => {
     setPending(result);
@@ -147,11 +161,24 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
           />
         ) : (
           <>
-            <div className="bh-text">{step.text}</div>
-            {step.expect ? <div className="bh-expect">Expect: {step.expect}</div> : null}
+            <div className="bh-text-line">
+              <button
+                type="button"
+                className={"bh-text bh-text-toggle" + (isOpen ? "" : " is-clamped")}
+                aria-expanded={isOpen}
+                title={isOpen ? "Show less" : "Show the whole behavior and its answers"}
+                onClick={() => setOpen(!isOpen)}
+              >
+                {step.text}
+              </button>
+              <button type="button" className="bh-caret" aria-label={isOpen ? "Collapse" : "Expand"} onClick={() => setOpen(!isOpen)}>
+                {isOpen ? "▾" : "▸"}
+              </button>
+            </div>
+            {isOpen && step.expect ? <div className="bh-expect">Expect: {step.expect}</div> : null}
           </>
         )}
-        {entry?.note && !yourEntry ? (
+        {!isOpen ? null : entry?.note && !yourEntry ? (
           <div className="bh-evidence" title="What the agent recorded">
             <span className="bh-evidence-by">The agent:</span> {entry.note}
           </div>
@@ -160,6 +187,7 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
             <span className="bh-evidence-by">Your note:</span> {entry.note}
           </div>
         ) : null}
+        {isOpen ? (
         <div className="bh-row-actions">
           <button
             type="button"
@@ -258,6 +286,7 @@ export function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onF
             )
           ) : null}
         </div>
+        ) : null}
         {noteOpen ? (
           <div className="bh-note-row">
             <input

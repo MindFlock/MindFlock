@@ -2311,11 +2311,7 @@ def test_route_ignores_a_pending_that_is_not_an_object(env):
         ("what is a worktree in MindFlock", "what is a worktree in mindflock"),
         ("how do I open a PR in MindFlock", "how do i open a pr in mindflock"),
         ("ok, what's a session", "what's a session"),
-        # Addressed to MindFlock: the lead is dropped, and the agent's-work
-        # words no longer make it a prompt.
-        ("MindFlock, how do I fix the login bug?", "how do i fix the login bug"),
-        ("Hey MindFlock, what does the bell do?", "what does the bell do"),
-        ("mindflock what is a lane", "what is a lane"),
+        # "help:" first: still help ("MindFlock, …" is the assistant's now).
         ("help: what is a team run", "what is a team run"),
     ],
 )
@@ -2373,7 +2369,7 @@ def test_help_is_never_the_agents_work(text):
         ("what does docs want", "question"),
         ("what needs me", "needs"),
         ("what sessions are open", "list"),
-        ("mindflock yes", "prompt"),
+        ("mindflock yes", "assistant"),
         ("go to templates", "no-session"),
     ],
 )
@@ -2388,9 +2384,84 @@ def test_route_help_carries_the_question(env):
     }
     # Said while Claude's question tool is up, help is still help.
     env.dialogs["docs"] = _ask("multi")
-    assert route("mindflock, what is a team run", "docs") == {
+    assert route("help: what is a team run", "docs") == {
         "kind": "help",
         "text": "what is a team run",
+    }
+
+
+# --- the assistant: a phrase addressed to MindFlock itself -------------------------
+@pytest.mark.parametrize(
+    "text, rest",
+    [
+        ("MindFlock, open intake", "open intake"),
+        ("Hey MindFlock, what does the bell do?", "what does the bell do?"),
+        ("MindFlock, how do I fix the login bug?", "how do I fix the login bug?"),
+        ("mindflock what is a lane", "what is a lane"),
+        ("ok mind flock, turn on the question pop-up", "turn on the question pop-up"),
+        (
+            "Flock, start a session on sitecheck to add a README",
+            "start a session on sitecheck to add a README",
+        ),
+        ("flock switch to the sky", "switch to the sky"),
+        ("Mine flock, open settings", "open settings"),
+        ("ask MindFlock what needs me", "what needs me"),
+        ("MindFlock yes", "yes"),
+        ("MindFlock, switch to invoice parser", "switch to invoice parser"),
+    ],
+)
+def test_addressed_to_mindflock_is_the_assistant(text, rest):
+    want = {"kind": "assistant", "text": rest}
+    assert vr.command(text) == want
+    assert ans(text, session="docs") == want
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "mindflock",  # the wake word alone
+        "flock",
+        "Flock.",
+        "the flock is flying south",
+        "add flock mode to the sidebar",
+        "flock mode on",
+        "MindFlock's settings page is slow",
+        "my flock open settings",
+        "fix the mindflock login bug",
+        "tell mindflock to open intake",
+    ],
+)
+def test_not_addressed_to_mindflock(text):
+    got = vr.command(text)
+    assert got is None or got["kind"] != "assistant", got
+
+
+@pytest.mark.parametrize(
+    "text, kind",
+    [
+        # The client's own words and the pane actions stay those commands.
+        ("MindFlock, stop listening", "stop"),
+        ("hey mindflock stop talking", "hush"),
+        ("mindflock cancel", "cancel"),
+        ("MindFlock, scroll up", "scroll"),
+        ("mindflock interrupt", "interrupt"),
+        ("mindflock, what can I say", "commands"),
+    ],
+)
+def test_addressed_control_words_stay_commands(text, kind):
+    assert vr.command(text)["kind"] == kind
+
+
+def test_route_assistant_carries_the_rest(env):
+    assert route("MindFlock, open intake", "docs") == {
+        "kind": "assistant",
+        "text": "open intake",
+    }
+    # Said while Claude's question tool is up: still the assistant's.
+    env.dialogs["docs"] = _ask("multi")
+    assert route("Hey MindFlock, what needs me", "docs") == {
+        "kind": "assistant",
+        "text": "what needs me",
     }
 
 
@@ -2751,6 +2822,7 @@ def test_guide_covers_every_new_kind():
         "hush",
         "stop",
         "commands",
+        "assistant",
     ):
         assert kind in kinds, kind
 
