@@ -27,6 +27,8 @@ const fl = require('./firstlaunch')
 const upd = require('./update')
 // Which engine Windows drives (native or WSL) and how a native one runs.
 const eng = require('./engine')
+// Launch flags, the per-profile dev identity and the server guard (pure).
+const lnch = require('./launch')
 
 // Windows attributes toast notifications by AppUserModelID. Without setting it,
 // toasts are labeled "electron.app.MindFlock" with no icon. The packaged app
@@ -40,20 +42,14 @@ if (process.platform === 'win32') {
 // Launch flags for what the dev launchers used to set as environment
 // variables: a Windows shortcut can pass arguments but not environment, and
 // a .bat launcher (the only way to set it) opens a console window every
-// time. `--mindflock-url=…`, `--mindflock-engine=native|wsl` and
-// `--mindflock-profile=…` set MINDFLOCK_URL, MINDFLOCK_DESKTOP_ENGINE and
-// MINDFLOCK_DEV_PROFILE before anything below reads them. The flag wins over
-// an inherited variable: it is what this shortcut asked for, while the
+// time. `--mindflock-url=…`, `--mindflock-engine=native|wsl`,
+// `--mindflock-profile=…` and `--mindflock-repo=…` set MINDFLOCK_URL,
+// MINDFLOCK_DESKTOP_ENGINE, MINDFLOCK_DEV_PROFILE and MINDFLOCK_REPO before
+// anything below reads them (electron/launch.js LAUNCH_FLAGS). The flag wins
+// over an inherited variable: it is what this shortcut asked for, while the
 // environment may be another launcher's (Windows programs started from WSL
 // inherit the WSL dev launcher's MINDFLOCK_URL=…:9000).
-for (const [flag, name] of [
-  ['--mindflock-url=', 'MINDFLOCK_URL'],
-  ['--mindflock-engine=', 'MINDFLOCK_DESKTOP_ENGINE'],
-  ['--mindflock-profile=', 'MINDFLOCK_DEV_PROFILE'],
-]) {
-  const arg = process.argv.find((a) => a.startsWith(flag))
-  if (arg) process.env[name] = arg.slice(flag.length)
-}
+lnch.applyLaunchFlags(process.argv, process.env)
 
 // Dev sandbox — the dev launcher (run-dev.bat) sets MINDFLOCK_DEV=1 so this
 // shell runs FULLY ISOLATED from the installed prod app: its own userData
@@ -66,13 +62,22 @@ const DEV_ICON = DEV
   ? (process.env.MINDFLOCK_DEV_ICON ||
      path.join(__dirname, process.platform === 'win32' ? 'dev-icon.ico' : 'dev-icon.png'))
   : null
-// The dev shell's own taskbar/toast identity. Kept STABLE: it is what a pinned
-// taskbar button and any already-registered shortcut are keyed on, so renaming
-// it silently orphans both.
-const DEV_AUMID = 'ai.mindflock.desktop.dev'
-// What Windows should PRINT above a dev notification: prod's product name with
-// the suffix this build already wears everywhere else. See ensureDevToastName().
-const DEV_TOAST_NAME = 'MindFlock-dev'
+// MINDFLOCK_DEV_PROFILE names the dev profile, so two dev shells (the WSL one
+// and the native-Windows one) can run side by side: one profile is one
+// single-instance lock, one userData dir — and one taskbar identity.
+const DEV_PROFILE = lnch.devProfile(process.env)
+// The dev shell's own taskbar/toast identity, ONE PER PROFILE. Kept STABLE: it
+// is what a pinned taskbar button and any already-registered shortcut are
+// keyed on, so renaming it silently orphans both. The default profile keeps
+// the pre-profile id (ai.mindflock.desktop.dev); another gets a suffix from
+// its name ("MindFlock (native)" -> ai.mindflock.desktop.dev.native). Sharing
+// one id made the pin open whichever dev shell had run LAST.
+const DEV_AUMID = 'ai.mindflock.desktop.dev' + lnch.devAumidSuffix(DEV_PROFILE)
+// What Windows should PRINT above a dev notification, and the Start-menu
+// shortcut's name: prod's product name with the suffix this build already
+// wears everywhere else ("MindFlock-dev"; "MindFlock-dev (native)" for another
+// profile). See ensureDevToastName().
+const DEV_TOAST_NAME = 'MindFlock-dev' + lnch.devNameSuffix(DEV_PROFILE)
 // A run from SOURCE: the dev shell, or any unpackaged `electron .` run (what
 // the dev launcher starts on Windows: electron.exe "\\wsl.localhost\…\electron"
 // --mindflock-dev). Such a shell is a git checkout, not a release build: it
@@ -84,13 +89,9 @@ const DEV_TOAST_NAME = 'MindFlock-dev'
 // are logged as skipped, not silently absent.
 const SOURCE_RUN = DEV || !app.isPackaged
 if (DEV) {
-  app.setAppUserModelId(DEV_AUMID) // own taskbar group + icon
+  app.setAppUserModelId(DEV_AUMID) // own taskbar group + icon, per profile
   try {
-    // MINDFLOCK_DEV_PROFILE names another dev profile, so two dev shells (the
-    // WSL one and the native-Windows one) can run side by side: one profile
-    // is one single-instance lock.
-    const profile = (process.env.MINDFLOCK_DEV_PROFILE || '').trim() || 'MindFlock (dev)'
-    app.setPath('userData', path.join(app.getPath('appData'), profile))
+    app.setPath('userData', path.join(app.getPath('appData'), DEV_PROFILE))
   } catch (e) { /* fall back to the shared dir if this platform disallows it */ }
 }
 
@@ -107,7 +108,11 @@ if (DEV) {
 // targets electron.exe DIRECTLY with the app dir + the dev flag (the same shape
 // the README's pin-to-taskbar recipe uses — a .bat would make Windows attribute
 // the icon to cmd.exe), which also makes it a working launcher rather than a
-// decoy that exists only to be read.
+// decoy that exists only to be read. A working launcher of THIS run: its
+// arguments carry every launch flag this run has (--mindflock-url/-engine/
+// -profile/-repo, from flags or inherited env — run-dev.bat's variables), and
+// each profile has its own shortcut and AUMID, so the pin of one dev shell
+// never opens the other.
 //
 // Windows-only, and only in dev: prod already has the installer's shortcut, and
 // no other platform resolves notification identity this way.
@@ -166,12 +171,12 @@ function ensureDevToastName () {
     const icon = (ico && stageShortcutIcon(ico)) || process.execPath
     const want = {
       target: process.execPath,
-      args: '"' + app.getAppPath() + '" --mindflock-dev',
+      args: lnch.devShortcutArgs(app.getAppPath(), '--mindflock-dev', process.env),
       cwd: path.dirname(process.execPath),
       icon,
       iconIndex: 0,
       appUserModelId: DEV_AUMID,
-      description: 'MindFlock dev shell (isolated profile, shared server)'
+      description: 'MindFlock dev shell (' + DEV_PROFILE + ': isolated profile, shared server)'
     }
     // Rewrite only when it is missing or has drifted — an electron.exe that
     // moved, an icon override that changed. Touching the .lnk on every launch
@@ -381,9 +386,10 @@ function startServerIfNeeded() {
     // Single-owner rule: NEVER kill whatever holds the port. The old `fuser -k`
     // here and the systemd unit's ExecStartPre=fuser -k SIGKILLed each other at
     // every distro boot (2026-07-14 reboot-loop incident). If a systemd unit is
-    // enabled (dev machines -- checked via its enable symlink, which works even
-    // before the user manager is up) or something already answers on the port
-    // inside WSL, launch nothing and just hold the distro open.
+    // enabled (checked via its enable symlink, which works even before the user
+    // manager is up; installed mode only — a developer checkout binds its own
+    // port) or something already answers on the port inside WSL, launch
+    // nothing and just hold the distro open. See launch.js serverGuard.
     // The log path is spliced in ONCE, quoted (shLogExpr), into a shell var;
     // every later use goes through "$MF_LOG" so spaces/quotes in the path
     // can't split words or terminate the script mid-expression.
@@ -392,17 +398,16 @@ function startServerIfNeeded() {
     // server and all. Parking a flock'ed sleep in the foreground keeps wsl.exe
     // connected so the distro -- and the server -- stay up; `-n` guarantees at
     // most one keepalive per distro (later bootstraps exit immediately).
-    const alive = '(exec 3<>/dev/tcp/127.0.0.1/' + PORT + ') 2>/dev/null'
     const script = 'MF_LOG=' + shLogExpr(log) + ';'
       + ' mkdir -p "$(dirname "$MF_LOG")";'
       + ' [ -f "$MF_LOG" ] && [ "$(wc -c < "$MF_LOG")" -gt 2000000 ] && : > "$MF_LOG";'
       + ' { echo "===== desktop bootstrap $(date) (port ' + PORT + ') =====";'
-      + ' if [ -e "$HOME/.config/systemd/user/default.target.wants/mindflock.service" ];'
-      + ' then echo "systemd mindflock.service owns port ' + PORT + '; not launching a second server.";'
-      + ' elif ' + alive + '; then echo "a server is already listening on port ' + PORT + '; not launching another.";'
-      // Native host: foreground (the exec above replaces this shell with the
-      // server, which inherits the log redirect). WSL: background + keepalive.
-      + (NATIVE_HOST ? ' else ' + launch + '; fi;' : ' else (' + launch + ') & fi;')
+      // The systemd check is skipped for a developer checkout (WSL_REPO): it
+      // serves its OWN port from the checkout, which the unit never binds, so
+      // the check wedged the dev server off after every WSL restart. Native
+      // host: foreground (the exec above replaces this shell with the server,
+      // which inherits the log redirect). WSL: background + keepalive.
+      + lnch.serverGuard({ port: PORT, devRepo: WSL_REPO, launch, nativeHost: NATIVE_HOST })
       + ' } >> "$MF_LOG" 2>&1;'
       // WSL detection via kernel string, not $WSL_DISTRO_NAME -- the env var is
       // only set in wsl.exe-launched sessions. macOS/native Linux exit here.
