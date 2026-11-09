@@ -258,3 +258,44 @@ def test_build_prompt_keeps_to_the_budget(docs, monkeypatch):
     body = prompt.split("Excerpts:", 1)[1]
     assert body.count("[") >= 1
     assert len(body) < 50 + 200 * len(passages)
+
+
+# --- the retrieval half on its own (the voice assistant's) ---------------------
+def test_passages_are_the_excerpts_answer_would_read(docs, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(vh, "_ask_model", lambda p: seen.setdefault("prompt", p))
+    got = vh.passages("how do fences work")
+    assert got and got[0]["doc"] == "web-ui.md"
+    assert got[0]["heading"] == "Fences"
+    assert got[0]["path"] == "Schedules › Fences"
+    assert "keeps a worker inside" in got[0]["text"]
+    assert set(got[0]) == {"doc", "heading", "path", "text"}
+    # The same selection, worded the same way, as answer()'s model call.
+    vh.answer("how do fences work")
+    assert vh.format_excerpts(got) in seen["prompt"]
+
+
+def test_passages_keep_to_the_budget(docs, monkeypatch):
+    monkeypatch.setattr(vh, "CONTEXT_MAX", 50)
+    got = vh.passages("fence schedule template")
+    assert got and sum(len(it["text"]) for it in got) <= 50
+
+
+def test_passages_none_found_or_no_docs(docs, monkeypatch, tmp_path):
+    assert vh.passages("zzzz qqqq") == []
+    monkeypatch.setenv("MINDFLOCK_DOCS_DIR", str(tmp_path / "missing"))
+    monkeypatch.setattr(vh, "docs_dir", lambda: None)
+    assert vh.passages("how do fences work") == []
+
+
+def test_fallback_say_names_the_section():
+    item = {
+        "doc": "web-ui.md",
+        "heading": "Fences",
+        "path": "Fences",
+        "text": "A **fence** keeps a worker in. Everything else is read-only. More.",
+    }
+    assert vh.fallback_say(item) == (
+        "From Fences: A fence keeps a worker in. Everything else is read-only."
+    )
+    assert vh.fallback_say(dict(item, heading="")).startswith("A fence")

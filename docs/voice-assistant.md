@@ -88,8 +88,15 @@ installed it uses your normal voice engine.
   assistant (Claude Code's `claude -p --input-format stream-json`, model
   `voice.assistant_model`, default `claude-haiku-5-5`): measured here at about
   0.7 s per turn within a conversation, 1–2 s for the first turn of a new
-  one, and each action runs as soon as its line arrives. A docs question also
-  waits for the docs lookup's own model call (a few seconds).
+  one, and each action runs as soon as its line arrives.
+- **Docs questions** ("how do red zones work?", "what is a flyway?") are
+  answered by the same warm process from the best excerpts of MindFlock's
+  docs (the same search the phone's help uses). A plain question about
+  MindFlock carries those excerpts in its own turn, so one model turn
+  answers it: measured here at 0.9–1.3 s. Anything else the model decides is
+  a docs question gets the excerpts as a second turn in the same process:
+  about 1.7–1.9 s. (Before, a separate cold model call took 6–7 s.) Only a
+  CLI without a streaming chat mode still makes that separate call.
 - The process starts when the mic opens or assistant mode turns on
   (`POST /api/voice/assistant/warm`), starts afresh for a new conversation
   (after two minutes without a turn), restarts if it dies, and stops after ten
@@ -137,5 +144,9 @@ dataclasses, dialogs / Settings screens / session actions mirrored from the
 web UI — a test fails when they drift) and the client's snapshot (a command,
 a click or a preference must be one the client listed). An action it can't
 validate is dropped with an `error`, never guessed at; prose around the lines
-is ignored, and a reply that is only prose is said as is. The CLI's flags
+is ignored, and a reply that is only prose is said as is. An `ACT help` is
+held until the model's turn ends; then the docs excerpts for its question go
+back to the same process as a follow-up turn (`build_help_message`), whose
+SAY (or prose) is the answer: never asked twice, and the best excerpt's first
+sentences are said if it answers nothing. The CLI's flags
 belong to its provider (`CodingProvider.stream_chat_argv`).
