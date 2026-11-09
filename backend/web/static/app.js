@@ -45450,6 +45450,38 @@ function popupTurn(q) {
 //#region src/whatsNew/releases.ts
 var RELEASES = [
 	{
+		version: "0.14.0",
+		date: "2026-11-09",
+		big: true,
+		headline: "Talk to MindFlock, hand it whole epics, and let reviews come back to the right session.",
+		features: [
+			{
+				title: "Talk to MindFlock",
+				body: "Say \"MindFlock, …\" or press Alt+M to drive the app by voice: open a dialog, start a session on a project, change a setting, or ask what a session is doing. It asks before anything destructive and never repeats back what you just did."
+			},
+			{
+				title: "A built-in voice",
+				body: "Kokoro is a natural voice that runs on your machine. Install it from Settings → Voice; the assistant speaks with it."
+			},
+			{
+				title: "Whole epics, one lead",
+				body: "A Shortcut source can take your epics too. Each one gets a single lead session that works your stories in it side by side, or one after another where one blocks another, with a pull request per story."
+			},
+			{
+				title: "Review rounds go back to work",
+				body: "When a reviewer asks for changes on one of your PRs, the session that built it decides per request whether to do it, push back with a reply, or ask you."
+			},
+			{
+				title: "Verify says where, and never stalls silently",
+				body: "A Verify stop now picks where to check (this branch or an environment like sandbox) and when it's ready. A check that can't go on tells you why, and a step only you can do comes to you."
+			},
+			{
+				title: "Timed todos",
+				body: "Give a todo a time (\"call the bank tue 9am\") and it pops up then, with snooze."
+			}
+		]
+	},
+	{
 		version: "0.13.1",
 		date: "2026-11-09",
 		big: false,
