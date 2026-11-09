@@ -168,6 +168,8 @@ function FeatureRow({ f }: { f: WhatsNewFeature }) {
   );
 }
 
+const STAR_URL = "https://github.com/MindFlock/MindFlock";
+
 export function WhatsNew() {
   useAutoWhatsNew();
   const shown = useWhatsNew((s) => s.shown);
@@ -212,6 +214,12 @@ export function WhatsNew() {
           )}
         </div>
         <div className="wn-actions">
+          {/* The one place the app asks for anything: stars are how a solo
+              open-source project learns whether to keep going, and this
+              window only reaches people who already chose to update. */}
+          <a className="wn-star" href={STAR_URL} target="_blank" rel="noreferrer">
+            Finding MindFlock useful? A star on GitHub helps.
+          </a>
           <button type="button" className="wn-primary" onClick={closeWhatsNew} autoFocus>
             Got it
           </button>
