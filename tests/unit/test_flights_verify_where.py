@@ -251,10 +251,10 @@ def test_on_branch_live_without_env_facts_uses_the_live_mark():
 def test_after_prev_waits_minutes_after_the_stop_started():
     f = started(fly(vstep(where="sandbox", ready="after_prev")), now=NOW)
     a = judge(f, facts(env=SANDBOX), NOW + 60)
-    assert a["action"] == "wait" and a["note"] == "15 min for sandbox to be ready"
+    assert a["action"] == "wait" and a["note"] == "14 min for sandbox to be ready"
     assert judge(f, facts(env=SANDBOX), NOW + 15 * 60)["action"] == "run"
     g = started(fly(vstep(ready="after_prev", ready_minutes=5), session="t"))
-    assert judge(g, facts(), NOW + 60)["note"] == "5 min for this branch to be ready"
+    assert judge(g, facts(), NOW + 60)["note"] == "4 min for this branch to be ready"
     assert judge(g, facts(), NOW + 300)["action"] == "run"
 
 

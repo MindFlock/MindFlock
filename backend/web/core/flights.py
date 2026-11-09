@@ -3410,7 +3410,7 @@ def _verify_ready_gate(cfg: dict, ss: dict, v: dict, now: float) -> str:
         start = float(ss.get("since") or 0.0)
         if minutes and now < start + minutes * 60:
             return "%d min for %s to be ready" % (
-                minutes,
+                max(1, int((start + minutes * 60 - now + 59) // 60)),
                 "this branch" if where == VERIFY_WHERE_BRANCH else where,
             )
         return ""
