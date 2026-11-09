@@ -817,6 +817,77 @@ def _bias(model, hints: str, prompt: str, hotwords: bool = True) -> dict:
     return kw
 
 
+#: How much of the dictation context (``POST /api/voice/stream``'s
+#: ``context``: the message dictated before this phrase) the accurate pass
+#: takes as its ``initial_prompt``, in characters, from its end: ~70 tokens,
+#: the sentence or two this phrase continues. With the hints' ~100 tokens of
+#: ``hotwords`` it stays well inside Whisper's 224-token prompt slot
+#: (faster-whisper's ``get_prompt`` keeps the hotwords and the prompt side by
+#: side, each cut at 223); :func:`_prompt_room` keeps the decoder's token
+#: cap beside them. ``tests/bench/stt_context_bench.py`` (2026-11-09, 60
+#: LibriSpeech clips in order, each prompted with the text before it): WER on
+#: ``small`` 7.42 → 6.97 % clean and 9.45 → 8.32 % at 12 dB SNR, 0 copies of
+#: the context into a short reply, and no slower (paired p50 −3 ms).
+CONTEXT_CHARS = 300
+#: Whisper's decoder positions: prompt + generated tokens (faster-whisper
+#: refuses a ``max_new_tokens`` that does not fit beside the prompt).
+WHISPER_MAX_LENGTH = 448
+#: The prompt's fixed tokens besides the text: ``<|startofprev|>``, the
+#: start sequence (``<|startoftranscript|>``, the language, the task) and a
+#: timestamp token — rounded up.
+_PROMPT_OVERHEAD = 6
+_CONTROL_CHARS = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]"
+)
+
+
+def dictation_context(raw, limit: int = CONTEXT_CHARS) -> str:
+    """The dictation context a stream's accurate pass is prompted with, from
+    whatever the client sent: a ``str`` only (anything else → ``""``), its
+    control and invisible characters dropped, its whitespace collapsed, and
+    at most ``limit`` characters from its END (the words this phrase
+    follows), cut at a word boundary so the prompt never opens on half a
+    word (a single word longer than ``limit`` is cut as is). Pure."""
+    if not isinstance(raw, str) or limit <= 0:
+        return ""
+    text = " ".join(_CONTROL_CHARS.sub(" ", raw).split())
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    if text[-limit - 1] != " ":  # the cut fell inside a word: drop that word
+        space = tail.find(" ")
+        if space != -1:
+            tail = tail[space + 1 :]
+    return tail.strip()
+
+
+def _prompt_tokens(model, text: str) -> int:
+    """How many tokens faster-whisper's ``get_prompt`` spends on ``text``
+    (``hotwords`` or ``initial_prompt``; each is cut at half of
+    :data:`WHISPER_MAX_LENGTH`): exact through the model's tokenizer, else a
+    generous two characters a token."""
+    if not text:
+        return 0
+    try:
+        count = len(
+            model.hf_tokenizer.encode(" " + text.strip(), add_special_tokens=False).ids
+        )
+    except Exception:  # noqa: BLE001 — a fake or an old version: estimate
+        count = (len(text) + 1) // 2
+    return min(count, WHISPER_MAX_LENGTH // 2 - 1)
+
+
+def _prompt_room(model, hotwords: str, prompt: str) -> int:
+    """The ``max_new_tokens`` that still fits beside a prompt of
+    ``hotwords`` and ``prompt`` (at least 1)."""
+    used = (
+        _PROMPT_OVERHEAD
+        + _prompt_tokens(model, hotwords)
+        + _prompt_tokens(model, prompt)
+    )
+    return max(1, WHISPER_MAX_LENGTH - used)
+
+
 class Backend:
     """One speech engine of one kind. ``ready()`` is cheap and offline; the
     work methods raise :class:`SpeechError` with a sentence for the UI."""
@@ -898,10 +969,14 @@ class Backend:
         decoder towards, for a backend that can."""
         raise SpeechError("%s does not stream" % self.label)
 
-    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
+    def final_transcriber(
+        self, lang: str = "", hints: str = "", context: str = ""
+    ) -> Optional[Callable]:
         """The ``accurate(audio) -> text`` a stream runs over the whole
         phrase at its end (``core.speech_stream``), or ``None``: no accurate
-        pass, the fast words stand. ``hints`` as above."""
+        pass, the fast words stand. ``hints`` as above; ``context``: the
+        text already dictated before this phrase (:func:`dictation_context`),
+        the decoder's prompt for a backend that can take one."""
         return None
 
 
@@ -1313,6 +1388,10 @@ FINAL_PAD_SECONDS = 20.0
 FINAL_TOKENS = 20
 FINAL_TOKENS_PER_S = 10
 FINAL_TOKENS_MAX = 220
+#: The accurate pass's beam: 1 is greedy. ``tests/bench/stt_context_bench.py``
+#: (2026-11-09): beam 5 cut ``small``'s WER by about a point but took the
+#: pass from ~1.0 s to ~1.9–2.7 s p50 — past the 1.5 s cap the clients wait.
+FINAL_BEAM = 1
 #: A fast pass decodes greedily, once: faster-whisper's temperature
 #: fallback (5 samples at each of 5 temperatures) takes seconds — never
 #: worth it to a pass the next chunk replaces — and its tokens are capped
@@ -1722,20 +1801,30 @@ class LocalSTT(Backend):
         run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
-    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
+    def final_transcriber(
+        self, lang: str = "", hints: str = "", context: str = ""
+    ) -> Optional[Callable]:
         """The accurate pass at a stream's end: the whole phrase (float32)
         into :meth:`final_model_name`, greedy, once (temperature 0), its
-        tokens capped (:func:`final_tokens`), no conditioning, the VAD, and
-        ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
-        on a faster-whisper too old for them: :func:`_hotwords_supported`) —
-        the vocabulary, never the fast words (those may be the wrong ones) →
-        its text. ``None`` when ``voice.stt_final`` is ``off``. ``lane`` as
-        in :meth:`stream_transcriber`."""
+        tokens capped (:func:`final_tokens`, and to what the prompt leaves:
+        :func:`_prompt_room`), no conditioning, the VAD, ``hints``
+        (:func:`recognition_hints`) as the ``hotwords`` (the prompt on a
+        faster-whisper too old for them: :func:`_hotwords_supported`) — the
+        vocabulary, never the fast words (those may be the wrong ones) — and
+        ``context`` (the message dictated before this phrase, sanitized by
+        :func:`dictation_context`) as the ``initial_prompt``: the sentence
+        this phrase continues, which settles the words the audio alone
+        leaves open (:data:`CONTEXT_CHARS`) → its text. ``None`` when
+        ``voice.stt_final`` is ``off``. ``lane`` as in
+        :meth:`stream_transcriber`. Every accurate pass of the stream — the
+        early one and the one at ``/end`` — runs this one callable, so all
+        of them carry the context."""
         name = self.final_model_name()
         if not name:
             return None
         language = whisper_language(lang)
         hints = " ".join(str(hints or "").split())
+        prompt = dictation_context(context)
 
         def run(audio) -> str:
             from backend.web.core import speech_stream as _stream
@@ -1743,17 +1832,22 @@ class LocalSTT(Backend):
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
-            kw = _bias(model, hints, "")
+            kw = _bias(model, hints, prompt)
             if _takes(model, "temperature"):
                 kw["temperature"] = 0.0
             if _takes(model, "max_new_tokens"):
-                kw["max_new_tokens"] = final_tokens(len(samples) / 16000.0)
+                kw["max_new_tokens"] = min(
+                    final_tokens(len(samples) / 16000.0),
+                    _prompt_room(
+                        model, kw.get("hotwords", ""), kw.get("initial_prompt", "")
+                    ),
+                )
 
             def decode() -> List[str]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
-                    beam_size=1,
+                    beam_size=FINAL_BEAM,
                     condition_on_previous_text=False,
                     vad_filter=True,
                     **kw,
