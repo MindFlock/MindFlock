@@ -60,6 +60,14 @@ def test_login_page_no_longer_points_at_the_startup_banner():
     assert "mindflock token" in html
 
 
+def test_login_page_tells_a_phone_to_scan_the_qr():
+    # On a phone, typing a 40-character token is the hard way: scanning the
+    # QR in Settings → Your phone signs it in.
+    html = auth.login_page_html()
+    assert "Settings → Your phone" in html and "scan its QR code" in html
+    assert html.index("scan its QR code") < html.index("mindflock token")
+
+
 # --------------------------------------------------------------------------- #
 # mindflock token
 # --------------------------------------------------------------------------- #

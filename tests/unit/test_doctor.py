@@ -231,9 +231,43 @@ class TestGh:
             "_run",
             lambda argv: (1, "You are not logged into any GitHub hosts."),
         )
+        monkeypatch.setattr(doctor, "_github_token_connected", lambda: False)
         c = doctor.check_gh()
         assert c.status == "warn"
         assert "gh auth login" in c.fix
+        # Not gh's own sentence (which repeats the fix and reads as a must):
+        # what gh is for, and that it is optional.
+        assert "not logged into" not in c.detail
+        assert "optional" in c.detail and "Connect GitHub" in c.detail
+
+    def test_troubleshooting_heading_matches_the_unsigned_line(self, monkeypatch):
+        # TROUBLESHOOTING.md is indexed by what the doctor prints; its gh
+        # heading said "installed but not authenticated" long after the line
+        # became "installed but not signed in (optional — …)".
+        from pathlib import Path
+
+        monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))
+        monkeypatch.setattr(doctor, "_run", lambda argv: (1, "not logged in"))
+        monkeypatch.setattr(doctor, "_github_token_connected", lambda: False)
+        detail = doctor.check_gh().detail
+        doc = (Path(__file__).resolve().parents[2] / "TROUBLESHOOTING.md").read_text(
+            encoding="utf-8"
+        )
+        heads = [
+            ln for ln in doc.splitlines() if ln.startswith("### `GitHub CLI (gh)`")
+        ]
+        quoted = [h.split("— `", 1)[1].rstrip("`").split("…")[0] for h in heads]
+        assert any(q and detail.startswith(q) for q in quoted), (quoted, detail)
+        assert "not authenticated" not in doc
+
+    def test_unauthenticated_with_a_mindflock_token_is_info(self, monkeypatch):
+        # Connect GitHub (or $GH_TOKEN) already does gh's job: nothing to fix.
+        monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))
+        monkeypatch.setattr(doctor, "_run", lambda argv: (1, "not logged in"))
+        monkeypatch.setenv("GH_TOKEN", "ghp_test")
+        c = doctor.check_gh()
+        assert c.status == "info"
+        assert "not needed" in c.detail and not c.cmd
 
     def test_authenticated_is_ok(self, monkeypatch):
         monkeypatch.setattr(doctor.shutil, "which", _which({"gh": "/usr/bin/gh"}))
@@ -1505,3 +1539,27 @@ class TestBuiltinSpeech:
     def test_registered_and_optional(self):
         assert doctor.CHECKS_BY_ID["builtin-speech"] is doctor.check_builtin_speech
         assert doctor.group_of("builtin-speech") == "optional"
+
+
+class TestGitIdentity:
+    def test_unset_fix_is_a_bare_pasteable_command(self, monkeypatch):
+        # The fix line is shown as code (terminal and browser): prose in it
+        # ("(or Connect GitHub in the browser …)") broke copy-paste.
+        monkeypatch.setattr(doctor.shutil, "which", _which({"git": "/usr/bin/git"}))
+        monkeypatch.setattr(doctor, "_run", lambda argv: (1, ""))
+        c = doctor.check_git_identity()
+        assert c.status == "warn" and "user.name and user.email" in c.detail
+        assert c.fix == (
+            'git config --global user.name "Your Name" && '
+            "git config --global user.email you@example.com"
+        )
+        assert "(" not in c.fix
+        # No auto-run command: the values are the person's to give.
+        assert not c.cmd
+
+    def test_set_is_ok(self, monkeypatch):
+        monkeypatch.setattr(doctor.shutil, "which", _which({"git": "/usr/bin/git"}))
+        vals = {"user.name": "Ada", "user.email": "ada@example.com"}
+        monkeypatch.setattr(doctor, "_run", lambda argv: (0, vals[argv[-1]]))
+        c = doctor.check_git_identity()
+        assert c.status == "ok" and c.detail == "Ada <ada@example.com>"

@@ -269,3 +269,19 @@
 .mic-pop .mic-stop-talking:hover {
   border-color: var(--accent);
 }
+
+/* "Voice commands…": the cheat sheet (components/voice/VoiceCommands) without
+   saying "what can I say". A quiet text button, left-aligned. */
+.mic-pop .mic-commands-btn {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mic-pop .mic-commands-btn:hover {
+  text-decoration: underline;
+}

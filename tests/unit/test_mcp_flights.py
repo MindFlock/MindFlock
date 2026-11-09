@@ -787,6 +787,26 @@ class TestCookbookAndDryRun:
         assert "read the sentence back" in out["next"]
         assert not [c for c in api.calls if c[0] == "POST"]
 
+    def test_dry_run_says_a_leading_agent_stop_is_not_sent(self):
+        """On an existing session the read-back listed "Agent: next pass" as
+        if it would be sent; the route then skipped it and reviewed an empty
+        branch. The dry run now says what happens and how to send it."""
+        box, api, clock = _real_box()
+        steps = [
+            {"kind": "agent", "config": {"prompt": "next pass"}},
+            {"kind": "review"},
+        ]
+        out = box.start_flight({"steps": steps, "dry_run": True}, _ctx(clock))
+        assert out["first_stop"].startswith("not sent: on orch the work so far")
+        assert "at='s1'" in out["first_stop"]
+        for extra in ({"at": "s1"}, {"start_on": "run"}):
+            out = box.start_flight(
+                dict({"steps": steps, "dry_run": True}, **extra), _ctx(clock)
+            )
+            assert "first_stop" not in out
+        out = box.start_flight({"steps": steps[1:], "dry_run": True}, _ctx(clock))
+        assert "first_stop" not in out
+
     def test_dry_run_shows_the_problems(self):
         box, api, clock = _real_box()
         out = box.start_flight(

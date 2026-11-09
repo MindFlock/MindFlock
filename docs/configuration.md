@@ -666,10 +666,14 @@ server merges on save so multiple processes can share it.
 - `voice/` — the optional local speech backend's model files
   (`backend/web/core/speech.py`, `voice.stt_backend` / `tts_backend` =
   `"local"`; the built-in `system` engine keeps nothing here): `whisper/` (faster-whisper's download root — the CTranslate2
-  models: `small` unless `voice.stt_model` names another size, and the live
-  transcript's `base.en` unless `voice.stt_stream_model` names one) and
+  models: `small.en` for English and `small` for other languages unless
+  `voice.stt_model` names a size, and the live
+  transcript's `base.en` unless `voice.stt_stream_model` names one),
+  `moonshine/` (the Moonshine `tiny-streaming` model, ~200 MB, that types
+  the live words in English once installed — Settings → Voice → *Install
+  fast recognition*) and
   `piper/<voice>.onnx` + `.onnx.json` (~60 MB each). Downloaded from Hugging
-  Face on first use or by the one-click install (Settings → Voice, `POST
+  Face on first use or by the one-click installs (Settings → Voice, `POST
   /api/voice/install-local`), never at server start. Override with
   `$MINDFLOCK_VOICE_DIR`. See
   [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone).
@@ -731,7 +735,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `CS_WEB_MODE` | `local` | `run.py` — `local` binds 127.0.0.1 (and refuses non-loopback `Host` headers), `tailscale` binds 127.0.0.1 + this node's Tailscale IPs (0.0.0.0 while Tailscale is down or its IPs can't be bound here) and auto-enables the auth-token gate |
 | `PORT` / `UVICORN_PORT` | `8765` | Web server port |
 | `MINDFLOCK_BIND_ALL` | unset | `1` makes tailscale mode bind every interface (`0.0.0.0`, your LAN included) instead of 127.0.0.1 + this node's Tailscale IPs — for a phone reaching the server over the LAN without Tailscale. `run.py`'s positional mode word `all` (`python -m backend.web.run all`) sets it too |
-| `MINDFLOCK_BIND_FALLBACK` | — | **Internal**: set by `run.py` when tailscale mode fell back to `0.0.0.0` because Tailscale wasn't running at boot; the server then re-execs (mode kept, at most twice per boot chain) once Tailscale is up and one of its addresses can be bound |
+| `MINDFLOCK_BIND_FALLBACK` | — | **Internal**: set by `run.py` when tailscale mode fell back to `0.0.0.0` because Tailscale wasn't running at boot; the server then re-execs (mode kept, at most twice per boot chain) once Tailscale is up and one of its addresses can be bound. The ticket pipeline it started survives the re-exec and is adopted back by the new image (not duplicated or orphaned) |
 | `MINDFLOCK_TAILNET_MSS` | auto | The TCP segment size cap on tailnet connections (`web/core/tailnet_mtu.py`). Left unset, MindFlock (Linux only) clamps its tailnet listening sockets and its own outgoing tailnet connections to underlay MTU − 120 when the network adapter's MTU leaves no room for Tailscale's 80 bytes of headers (e.g. `tailscale0` 1280 over a 1280 `eth0` on WSL2 → 1160), and leaves them alone otherwise. `0` (or `off`) turns the clamp off; an integer (88–65535) forces that MSS whatever the MTUs say. `mindflock doctor`'s `tailnet-mtu` row shows the MTUs it found |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which peers' `X-Forwarded-*` headers rewrite the request's client address/scheme. `run.py` starts uvicorn with `proxy_headers=False` and the app applies the rewrite itself (`PeerCaptureMiddleware`, after recording the raw peer for Tailscale trust) |
 | `CS_CURSOR_AUTOADOPT` | on | `0` starts the Cursor auto-adopt loop disabled |
@@ -963,6 +967,13 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   next to the pipeline's `state.json`), so nothing the other device reviewed is
   reviewed again. Intake says *runs on <device>* where this device doesn't
   (`GET /api/mindflock/status` → `automation_here`, `automation_device`).
+  While this device can't yet tell which member it is (Tailscale isn't up,
+  so its key is the OS hostname rather than its roster key), it runs neither,
+  records nothing in `automation_here.json` and Intake names no device; once
+  the roster resolves the pipeline restarts with the real answer within 30 s.
+  A recorded hand-over whose runner is this machine's own hostname is ignored
+  (logged "Ignoring an automation hand-over from <name>: that is this
+  machine"), so it never seeds the processed-PR ledger.
 - **Setup's devices answer** (`general.setup_devices`: `first` · `join` ·
   unset; per device, never synced): the answer to Setup's "First computer, or
   join one you already have?". It orders the first-run plan (`GET
@@ -1362,11 +1373,12 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
-    low). With `stt_backend = "local"` the whisper models (`stt_model` for a
-    phrase sent whole and the accurate pass, `stt_stream_model` for the live
-    transcript and the wake word, `stt_final` when it names a third) are
-    **loaded only while a listening mode is on** (~1.1 GB): never at boot
-    nor by a status read, but when the wake-word standby turns on (it holds
+    low). With `stt_backend = "local"` the recognition models (`stt_model` for a
+    phrase sent whole and the accurate pass, the live transcript's — Moonshine
+    or `stt_stream_model`, below — `stt_stream_model`'s whisper model for the
+    wake word, `stt_final` when it names a third) are loaded 8 s after boot
+    and otherwise **only while a listening mode is on** (~1.1 GB): never by
+    a status read, but when the wake-word standby turns on (it holds
     a listening lease, `POST /api/voice/listen`, renewed every minute —
     while any page holds one the models stay resident, so a wake is answered
     at once) or when a phrase's stream opens. With nobody listening they are
@@ -1407,8 +1419,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     Voice → *Install local models* (`POST /api/voice/install-local`, owner
     only) installs `faster-whisper` and `piper-tts` into the interpreter the
     server runs (`uv pip install --python <it>`, or its own pip without
-    `uv`), downloads the recognition models (`stt_model`, default `small`,
-    and `stt_stream_model`, default `base.en`) into `<voice dir>/whisper/` and the voice (`tts_voice`, default
+    `uv`), downloads the recognition models (`stt_model`, default
+    `small.en` — the English-only twin of `small`; another language's
+    `small` downloads on its first phrase — and `stt_stream_model`, default
+    `base.en`) into `<voice dir>/whisper/` and the voice (`tts_voice`, default
     `en_US-lessac-medium`) into `<voice dir>/piper/`, then sets
     `stt_backend` to `"local"` (the voice backend is left alone). The
     manual equivalent, from a source checkout, is `uv sync --group voice`
@@ -1424,17 +1438,39 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     `https://api.openai.com/v1`); `stt_model` / `tts_model` / `tts_voice` —
     the model and voice names it wants (blank = `gpt-transcribe`,
     `gpt-4o-mini-tts`, `alloy`; for the local backend the whisper size,
-    default `small`, and the piper voice, default `en_US-lessac-medium` —
+    default `small.en` for English (`lang` empty or `en*`) and `small` for
+    any other language — a size you name is used as is in every language;
+    an install from before `small.en` keeps `small` and downloads
+    `small.en` in the background on its first warm or phrase, switching
+    once it lands — and the piper voice, default `en_US-lessac-medium` —
     the fields are shared, so a name that is not a faster-whisper size or a
     piper voice (`whisper-1`, `Microsoft Zira Desktop`) reads as the default
-    there; `stt_stream_model` — the live transcript's faster-whisper model
-    on `local` (blank = `base.en` for English, `base` for any other
-    language: ~5× faster than `small` on a CPU at a small accuracy cost; a
-    non-size name reads as the default too); `stt_final` — **the balance
+    there; `stt_stream_model` — the live transcript's engine on `local`:
+    blank = **Moonshine** `tiny-streaming` for English when it is installed
+    (`moonshine-voice` and its model, ~200 MB: Settings → Voice → *Install
+    fast recognition (Moonshine, ~200 MB)*, `POST /api/voice/install-local
+    {"what": "moonshine"}`; it changes no setting) — a true streaming model
+    that hears the live words and the control words ("over", the stop
+    phrases, a session's name) ~30 ms after they are said, while the
+    accurate pass (`stt_final`) still writes every phrase's final text; a
+    phrase that is only a control phrase is acted on at once, on
+    Moonshine's words — else
+    `base.en`, and `base` for any other language (Moonshine is English
+    only); `"moonshine"` asks for Moonshine explicitly (still whisper while
+    it is not installed, and for other languages); any faster-whisper size
+    or `org/repo` id keeps that whisper model (~5× faster than `small` on a
+    CPU at a small accuracy cost; any other name reads as the default).
+    `GET /api/voice`'s `stream_engine` / `stream_label` say which is live,
+    Settings → Voice shows it as *Live words: Moonshine* or *Live words:
+    Whisper base.en*, and `mindflock doctor --all` warns (*Fast
+    recognition*) while local recognition is on without Moonshine;
+    `stt_final` — **the balance
     between speed and accuracy**: the live transcript types the fast
     model's words as the person speaks, then at the end of the phrase the
     accurate pass re-decodes the whole phrase and corrects it (blank = with
-    `stt_model`, i.e. `small`: the pass is ~1.1–1.3 s on an 8-core CPU
+    `stt_model`, i.e. `small.en` for English and `small` otherwise —
+    prompted with the message dictated before the phrase, the stream's
+    `context`: the pass is ~1.1–1.3 s on an 8-core CPU
     whatever the phrase's length, started once 0.5 s of quiet follows the speech so the
     correction usually lands within a second of the person stopping; it is
     skipped only under 0.2 s of speech, so a lone "stop" is still corrected,

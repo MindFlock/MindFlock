@@ -65,6 +65,16 @@ def test_unknown_mode_counts_as_reachable(monkeypatch):
     assert "warning" not in fleet.create_invite()
 
 
+def test_status_says_why_it_binds_where_it_does(monkeypatch):
+    # run.py exports the bind plan's reason; a fallback to 0.0.0.0 must reach
+    # Your devices, which otherwise says "listens on your tailnet".
+    monkeypatch.setenv("CS_WEB_MODE", "tailscale")
+    monkeypatch.setenv("MINDFLOCK_BIND_WHY", "unbindable")
+    assert fleet.status(True)["bind"] == "unbindable"
+    monkeypatch.setenv("MINDFLOCK_BIND_WHY", "")
+    assert fleet.status(True)["bind"] == ""
+
+
 def test_status_says_whether_the_gate_is_on(monkeypatch):
     monkeypatch.setenv("MINDFLOCK_AUTH", "1")
     assert fleet.status(True)["gate_on"] is True

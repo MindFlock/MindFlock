@@ -65,7 +65,7 @@ class _Spawner:
         key = (
             "packages"
             if "install" in argv
-            else ("whisper" if "whisper" in argv else "piper")
+            else next((k for k in ("whisper", "moonshine") if k in argv), "piper")
         )
         got = self.script.get(key, (["ok " + key], 0))
         if isinstance(got, BaseException):
@@ -139,6 +139,7 @@ class TestInstall:
     def test_idle_shape(self):
         assert si.status() == {
             "state": "idle",
+            "what": "",
             "step": "",
             "log": [],
             "started": None,
@@ -161,7 +162,7 @@ class TestInstall:
         ]
         assert whisper[0] == sys.executable and whisper[1] == "-c"
         assert "_download_main" in whisper[2]
-        assert whisper[3:] == ["whisper", "small"]
+        assert whisper[3:] == ["whisper", "small.en"]
         assert stream[3:] == ["whisper", "base.en"]  # the live transcript's
         assert piper[3:] == ["piper", "en_US-lessac-medium"]
         S.invalidate()
@@ -202,7 +203,7 @@ class TestInstall:
             voice={"stt_model": "whisper-1", "tts_voice": "Microsoft Zira Desktop"}
         )
         _run()
-        assert spawn.calls[1][3:] == ["whisper", "small"]
+        assert spawn.calls[1][3:] == ["whisper", "small.en"]
         assert spawn.calls[2][3:] == ["whisper", "base.en"]
         assert spawn.calls[3][3:] == ["piper", "en_US-lessac-medium"]
 
@@ -224,13 +225,28 @@ class TestInstall:
         )
         st = _run()
         assert st["state"] == "failed"
-        assert st["step"] == "downloading recognition model (small)"
+        assert st["step"] == "downloading recognition model (small.en)"
         assert st["error"] == (
-            "downloading recognition model (small) failed: error: Connection refused"
+            "downloading recognition model (small.en) failed: error: Connection refused"
         )
         assert len(spawn.calls) == 2  # the voice was never tried
         S.invalidate()
         assert S.load_settings().voice.stt_backend == ""  # not switched
+
+    def test_uv_caused_by_lead_in_is_dropped_from_the_reason(self, spawn):
+        # uv ends its error chain on "  Caused by: <root cause>": the reason
+        # a person reads (and Settings picks the next step from) is the cause.
+        spawn.script["packages"] = (
+            [
+                "error: Failed to fetch: https://pypi.org/simple/faster-whisper/",
+                "  Caused by: dns error: failed to lookup address information",
+            ],
+            2,
+        )
+        st = _run()
+        assert st["error"] == (
+            "installing packages failed: dns error: failed to lookup address information"
+        )
 
     def test_install_failure_without_output(self, spawn):
         spawn.script["packages"] = ([], 2)
@@ -447,3 +463,136 @@ class TestSurvivesUpdates:
         assert si.start_self_heal() is False
         spawn.gate.set()
         si.wait(5)
+
+
+# --------------------------------------------------------------------------- #
+# Moonshine streaming recognition: its own install, recorded beside the others
+# --------------------------------------------------------------------------- #
+class TestMoonshine:
+    @pytest.fixture(autouse=True)
+    def _home(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path / "home"))
+
+    def _run(self):
+        assert si.start(what=si.MOONSHINE) is True
+        si.wait(5)
+        return si.status()
+
+    def test_the_package_with_its_floor(self, monkeypatch):
+        monkeypatch.setattr(si, "_which", lambda name: "/usr/bin/uv")
+        argv = si.install_argv(si.MOONSHINE_PACKAGES)
+        assert argv[-1] == "moonshine-voice>=0.1.6"
+        assert argv[:5] == ["/usr/bin/uv", "pip", "install", "--python", sys.executable]
+
+    def test_installs_the_package_then_the_model(self, spawn):
+        from backend.web.core import speech_moonshine as sm
+
+        S.update_settings(voice={"stt_backend": "openai"})
+        st = self._run()
+        assert st["state"] == "done" and st["error"] == "", st
+        install, model = spawn.calls
+        assert install[-1] == "moonshine-voice>=0.1.6"
+        assert model[0] == sys.executable and "_download_main" in model[2]
+        assert model[3:] == ["moonshine", sm.ARCH]
+        assert st["log"][-1].startswith("Moonshine streaming recognition is ready")
+        assert spawn.invalidated >= 1
+        S.invalidate()
+        assert S.load_settings().voice.stt_backend == "openai"  # no switch
+
+    def test_recorded_beside_the_local_models(self, spawn):
+        from backend.web.core import self_update
+
+        assert si.start() is True
+        si.wait(5)
+        si.reset()
+        assert self._run()["state"] == "done"
+        assert self_update.recorded_voice_packages() == [
+            *si.PACKAGES,
+            "moonshine-voice",
+        ]
+        # Moonshine alone, then the local models: still all three.
+        self_update.forget_voice_packages()
+        si.reset()
+        self._run()
+        si.reset()
+        assert si.start() is True
+        si.wait(5)
+        assert self_update.recorded_voice_packages() == [
+            "moonshine-voice",
+            *si.PACKAGES,
+        ]
+
+    def test_a_failed_package_step_records_nothing(self, spawn):
+        from backend.web.core import self_update
+
+        spawn.script["packages"] = (["boom"], 1)
+        st = self._run()
+        assert st["state"] == "failed" and "boom" in st["error"]
+        assert self_update.recorded_voice_packages() == []
+        assert len(spawn.calls) == 1
+
+    def test_a_failed_download_fails_the_install(self, spawn):
+        spawn.script["moonshine"] = (["error: offline"], 1)
+        st = self._run()
+        assert st["state"] == "failed" and "offline" in st["error"]
+
+    def test_one_install_at_a_time(self, spawn):
+        spawn.gate = threading.Event()
+        assert si.start() is True
+        assert si.start(what=si.MOONSHINE) is False
+        spawn.gate.set()
+        si.wait(5)
+
+    def test_an_unknown_install(self):
+        with pytest.raises(ValueError):
+            si.start(what="nope")
+
+    def test_the_heal_puts_moonshine_back(self, spawn, monkeypatch):
+        from backend.web.core import self_update
+
+        self_update.record_voice_packages([*si.PACKAGES, "moonshine-voice"])
+        monkeypatch.setattr(speech, "_installed", lambda m: m != "moonshine_voice")
+        assert si.missing_recorded_packages() == [*si.PACKAGES, "moonshine-voice"]
+        assert si.start_self_heal() is True
+        si.wait(5)
+        assert si.status()["state"] == "done"
+        (argv,) = spawn.calls
+        assert argv[-3:] == ["faster-whisper", "piper-tts", "moonshine-voice>=0.1.6"]
+
+    def test_nothing_to_heal_while_every_recorded_runtime_imports(
+        self, spawn, monkeypatch
+    ):
+        from backend.web.core import self_update
+
+        self_update.record_voice_packages(["moonshine-voice"])
+        monkeypatch.setattr(speech, "_installed", lambda m: m == "moonshine_voice")
+        assert si.missing_recorded_packages() == []
+
+    def test_download_main_fetches_the_model(self, monkeypatch, capsys):
+        from backend.web.core import speech_moonshine as sm
+
+        monkeypatch.setattr(sm, "fetch_model", lambda: "/voice/moonshine/tiny")
+        si._download_main(["moonshine", sm.ARCH])
+        assert capsys.readouterr().out.strip() == "saved to /voice/moonshine/tiny"
+        with pytest.raises(SystemExit):
+            si._download_main(["moonshine", "medium-streaming"])
+        assert "only the" in capsys.readouterr().out
+
+    def test_fetch_model_downloads_into_the_voice_dir(self, monkeypatch, tmp_path):
+        from backend.web.core import speech_moonshine as sm
+
+        seen = {}
+
+        def get_model_for_language(lang, arch, cache_root=None):
+            seen.update(lang=lang, arch=arch, root=cache_root)
+            return str(cache_root / "tiny"), arch
+
+        mv = SimpleNamespace(
+            ModelArch=SimpleNamespace(TINY_STREAMING=2),
+            get_model_for_language=get_model_for_language,
+        )
+        monkeypatch.setattr(speech, "_import", lambda name: mv)
+        where = sm.fetch_model()
+        root = tmp_path / "voice" / "moonshine"
+        assert seen == {"lang": "en", "arch": 2, "root": root}
+        assert where == str(root / "tiny") and root.is_dir()

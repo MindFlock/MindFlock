@@ -436,7 +436,7 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.useTransition = function() {
 		return ReactSharedInternals.H.useTransition();
 	};
-	exports.version = "19.3.0";
+	exports.version = "19.3.1";
 }));
 //#endregion
 //#region node_modules/react/index.js
@@ -854,7 +854,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.useFormStatus = function() {
 		return ReactSharedInternals.H.useHostTransitionStatus();
 	};
-	exports.version = "19.3.0";
+	exports.version = "19.3.1";
 }));
 //#endregion
 //#region node_modules/react-dom/index.js
@@ -11409,7 +11409,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		}
 	};
 	var isomorphicReactPackageVersion$jscomp$inline_2043 = React.version;
-	if ("19.3.0" !== isomorphicReactPackageVersion$jscomp$inline_2043) throw Error(formatProdErrorMessage(527, isomorphicReactPackageVersion$jscomp$inline_2043, "19.3.0"));
+	if ("19.3.1" !== isomorphicReactPackageVersion$jscomp$inline_2043) throw Error(formatProdErrorMessage(527, isomorphicReactPackageVersion$jscomp$inline_2043, "19.3.1"));
 	ReactDOMSharedInternals.findDOMNode = function(componentOrElement) {
 		var fiber = componentOrElement._reactInternals;
 		if (void 0 === fiber) {
@@ -11424,10 +11424,10 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 	var internals$jscomp$inline_2586 = {
 		bundleType: 0,
-		version: "19.3.0",
+		version: "19.3.1",
 		rendererPackageName: "react-dom",
 		currentDispatcherRef: ReactSharedInternals,
-		reconcilerVersion: "19.3.0"
+		reconcilerVersion: "19.3.1"
 	};
 	if ("undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__) {
 		var hook$jscomp$inline_2587 = __REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -11612,6 +11612,7 @@ function partialMatchKey(a, b) {
 	if (typeof a !== typeof b) return false;
 	if (a && b && typeof a === "object" && typeof b === "object") {
 		if (Array.isArray(a) && Array.isArray(b)) {
+			if (b.length > a.length) return false;
 			for (let i = 0; i < b.length; i++) if (!partialMatchKey(a[i], b[i])) return false;
 			return true;
 		}
@@ -11653,7 +11654,7 @@ function replaceEqualDeep(a, b, depth = 0) {
 }
 function shallowEqualObjects(a, b) {
 	if (!b || Object.keys(a).length !== Object.keys(b).length) return false;
-	for (const key in a) if (a[key] !== b[key]) return false;
+	for (const key of Object.keys(a)) if (!hasOwn.call(b, key) || a[key] !== b[key]) return false;
 	return true;
 }
 function isPlainArray(value) {
@@ -11661,12 +11662,14 @@ function isPlainArray(value) {
 }
 function isPlainObject(o) {
 	if (!hasObjectPrototype(o)) return false;
-	const ctor = o.constructor;
+	const objectPrototype = Object.getPrototypeOf(o);
+	const ctor = objectPrototype?.constructor;
 	if (ctor === void 0) return true;
+	if (typeof ctor !== "function") return false;
 	const prot = ctor.prototype;
 	if (!hasObjectPrototype(prot)) return false;
 	if (!prot.hasOwnProperty("isPrototypeOf")) return false;
-	if (Object.getPrototypeOf(o) !== Object.prototype) return false;
+	if (objectPrototype !== Object.prototype) return false;
 	return true;
 }
 function hasObjectPrototype(o) {
@@ -11684,11 +11687,11 @@ function replaceData(prevData, data, options) {
 }
 function addToEnd(items, item, max = 0) {
 	const newItems = [...items, item];
-	return max && newItems.length > max ? newItems.slice(1) : newItems;
+	return max && newItems.length > max ? newItems.slice(-max) : newItems;
 }
 function addToStart(items, item, max = 0) {
 	const newItems = [item, ...items];
-	return max && newItems.length > max ? newItems.slice(0, -1) : newItems;
+	return max && newItems.length > max ? newItems.slice(0, max) : newItems;
 }
 var skipToken = Symbol();
 function ensureQueryFn(options, fetchOptions) {
@@ -11700,18 +11703,22 @@ function shouldThrowError(throwOnError, params) {
 	if (typeof throwOnError === "function") return throwOnError(...params);
 	return !!throwOnError;
 }
-function addConsumeAwareSignal(object, getSignal, onCancelled) {
+var fetchSignal = Symbol();
+function addConsumeAwareSignal(object, getSignal, onCancelled, internalSignal) {
 	let consumed = false;
 	let signal;
-	Object.defineProperty(object, "signal", {
-		enumerable: true,
-		get: () => {
-			signal ??= getSignal();
-			if (consumed) return signal;
-			consumed = true;
-			if (signal.aborted) onCancelled();
-			else signal.addEventListener("abort", onCancelled, { once: true });
-			return signal;
+	Object.defineProperties(object, {
+		[fetchSignal]: { value: internalSignal },
+		signal: {
+			enumerable: true,
+			get: () => {
+				signal ??= getSignal();
+				if (consumed) return signal;
+				consumed = true;
+				if (signal.aborted) onCancelled();
+				else signal.addEventListener("abort", onCancelled, { once: true });
+				return signal;
+			}
 		}
 	});
 	return object;
@@ -11961,10 +11968,10 @@ function createRetryer(config) {
 			promiseReject(value);
 		}
 	};
-	const pause = () => {
+	const pause = (canResume) => {
 		return new Promise((continueResolve) => {
 			continueFn = (value) => {
-				if (isResolved() || canContinue()) continueResolve(value);
+				if (isResolved() || canResume()) continueResolve(value);
 			};
 			config.onPause?.();
 		}).then(() => {
@@ -11994,7 +12001,7 @@ function createRetryer(config) {
 			failureCount++;
 			config.onFail?.(failureCount, error);
 			sleep$1(delay).then(() => {
-				return canContinue() ? void 0 : pause();
+				return isResolved() || canContinue() ? void 0 : pause(canContinue);
 			}).then(() => {
 				if (isRetryCancelled) reject(error);
 				else run();
@@ -12014,7 +12021,7 @@ function createRetryer(config) {
 		canStart,
 		start: () => {
 			if (canStart()) run();
-			else pause().then(run);
+			else pause(canStart).then(run);
 			return promise;
 		}
 	};
@@ -12057,8 +12064,9 @@ function infiniteQueryBehavior(pages) {
 		let currentPage = 0;
 		const fetchFn = async () => {
 			let cancelled = false;
+			const signalContext = context;
 			const addSignalProperty = (object) => {
-				addConsumeAwareSignal(object, () => context.signal, () => cancelled = true);
+				addConsumeAwareSignal(object, () => context.signal, () => cancelled = true, signalContext[fetchSignal]);
 			};
 			const queryFn = ensureQueryFn(context.options, context.fetchOptions);
 			const fetchPage = async (data, param, previous) => {
@@ -12095,7 +12103,7 @@ function infiniteQueryBehavior(pages) {
 			} else {
 				const remainingPages = pages ?? oldPages.length;
 				do {
-					const param = currentPage === 0 ? oldPageParams[0] ?? options.initialPageParam : getNextPageParam(options, result);
+					const param = currentPage === 0 ? oldPageParams[0] === void 0 ? options.initialPageParam : oldPageParams[0] : getNextPageParam(options, result);
 					if (currentPage > 0 && param == null) break;
 					result = await fetchPage(result, param);
 					currentPage++;
@@ -12130,6 +12138,7 @@ var Query = class extends Removable {
 	#cache;
 	#client;
 	#retryer;
+	#fetchPromise;
 	#defaultOptions;
 	#abortSignalConsumed;
 	constructor(config) {
@@ -12216,6 +12225,7 @@ var Query = class extends Removable {
 		return this.state.dataUpdateCount + this.state.errorUpdateCount > 0;
 	}
 	isStatic() {
+		if (this.state.data === void 0) return false;
 		if (this.getObserversCount() > 0) return this.observers.some((observer) => resolveQueryValue(observer.options.staleTime, this) === "static");
 		return false;
 	}
@@ -12275,9 +12285,9 @@ var Query = class extends Removable {
 	async fetch(options, fetchOptions) {
 		if (this.state.fetchStatus !== "idle" && this.#retryer?.status() !== "rejected") {
 			if (this.state.data !== void 0 && fetchOptions?.cancelRefetch) this.cancel({ silent: true });
-			else if (this.#retryer) {
+			else if (this.#retryer && this.#fetchPromise) {
 				this.#retryer.continueRetry();
-				return this.#retryer.promise;
+				return this.#fetchPromise;
 			}
 		}
 		if (options) this.setOptions(options);
@@ -12287,11 +12297,17 @@ var Query = class extends Removable {
 		}
 		const abortController = new AbortController();
 		const addSignalProperty = (object) => {
-			Object.defineProperty(object, "signal", {
-				enumerable: true,
-				get: () => {
-					this.#abortSignalConsumed = true;
-					return abortController.signal;
+			Object.defineProperties(object, {
+				[fetchSignal]: {
+					value: abortController.signal,
+					enumerable: true
+				},
+				signal: {
+					enumerable: true,
+					get: () => {
+						this.#abortSignalConsumed = true;
+						return abortController.signal;
+					}
 				}
 			});
 		};
@@ -12358,32 +12374,42 @@ var Query = class extends Removable {
 			networkMode: context.options.networkMode,
 			canRun: () => true
 		});
-		try {
-			const data = await retryer.start();
-			if (data === void 0) throw new Error(`${this.queryHash} data is undefined`);
-			this.setData(data);
-			this.#cache.config.onSuccess?.(data, this);
-			this.#cache.config.onSettled?.(data, this.state.error, this);
-			return data;
-		} catch (error) {
-			if (error instanceof CancelledError) {
-				if (error.silent) return this.#retryer.promise;
-				else if (error.revert) {
-					if (this.state.data === void 0) throw error;
-					return this.state.data;
+		const fetchPromise = (async () => {
+			try {
+				const data = await retryer.promise;
+				if (data === void 0) throw new Error(`${this.queryHash} data is undefined`);
+				this.setData(data);
+				this.#cache.config.onSuccess?.(data, this);
+				this.#cache.config.onSettled?.(data, this.state.error, this);
+				return data;
+			} catch (error) {
+				if (error instanceof CancelledError) {
+					if (error.silent) {
+						if (this.#retryer !== retryer && this.#fetchPromise) return this.#fetchPromise;
+						throw error;
+					} else if (error.revert) {
+						if (this.state.data === void 0) throw error;
+						return this.state.data;
+					}
 				}
+				this.#dispatch({
+					type: "error",
+					error
+				});
+				this.#cache.config.onError?.(error, this);
+				this.#cache.config.onSettled?.(this.state.data, error, this);
+				throw error;
+			} finally {
+				if (this.#retryer === retryer) {
+					this.#retryer = void 0;
+					this.#fetchPromise = void 0;
+				}
+				this.scheduleGc();
 			}
-			this.#dispatch({
-				type: "error",
-				error
-			});
-			this.#cache.config.onError?.(error, this);
-			this.#cache.config.onSettled?.(this.state.data, error, this);
-			throw error;
-		} finally {
-			if (this.#retryer === retryer) this.#retryer = void 0;
-			this.scheduleGc();
-		}
+		})();
+		this.#fetchPromise = fetchPromise;
+		retryer.start();
+		return fetchPromise;
 	}
 	#dispatch(action) {
 		const reducer = (state) => {
@@ -12607,7 +12633,7 @@ var QueryObserver = class extends Subscribable {
 				}
 			});
 		});
-		return Promise.race([query.fetch().then(() => {
+		return Promise.race([query.fetch(defaultedOptions).then(() => {
 			const result = this.createResult(query, defaultedOptions);
 			resolveEarly?.(result);
 			return result;
@@ -12643,7 +12669,7 @@ var QueryObserver = class extends Subscribable {
 		}, timeout);
 	}
 	#computeRefetchInterval() {
-		return (typeof this.options.refetchInterval === "function" ? this.options.refetchInterval(this.#currentQuery) : this.options.refetchInterval) ?? false;
+		return resolveQueryValue(this.options.refetchInterval, this.#currentQuery) ?? false;
 	}
 	#updateRefetchInterval(nextInterval) {
 		this.#clearRefetchInterval();
@@ -12770,12 +12796,9 @@ var QueryObserver = class extends Subscribable {
 			const { notifyOnChangeProps } = this.options;
 			const notifyOnChangePropsValue = typeof notifyOnChangeProps === "function" ? notifyOnChangeProps() : notifyOnChangeProps;
 			if (notifyOnChangePropsValue === "all" || !notifyOnChangePropsValue && !this.#trackedProps.size) return true;
-			const includedProps = new Set(notifyOnChangePropsValue ?? this.#trackedProps);
-			if (this.options.throwOnError) includedProps.add("error");
-			return Object.keys(this.#currentResult).some((key) => {
-				const typedKey = key;
-				return this.#currentResult[typedKey] !== prevResult[typedKey] && includedProps.has(typedKey);
-			});
+			if (this.options.throwOnError && this.#currentResult.error !== prevResult.error) return true;
+			for (const key of notifyOnChangePropsValue ?? this.#trackedProps) if (this.#currentResult[key] !== prevResult[key]) return true;
+			return false;
 		};
 		const notifyListeners = shouldNotifyListeners();
 		notifyManager.batch(() => {
@@ -12812,7 +12835,7 @@ function shouldFetchOnMount(query, options) {
 }
 function shouldFetchOn(query, options, field) {
 	if (resolveQueryValue(options.enabled, query) !== false && resolveQueryValue(options.staleTime, query) !== "static") {
-		const value = typeof field === "function" ? field(query) : field;
+		const value = resolveQueryValue(field, query);
 		return value === "always" || value !== false && isStale(query, options);
 	}
 	return false;
@@ -12925,6 +12948,7 @@ var Mutation = class extends Removable {
 					isPaused
 				});
 			}
+			if (this.state.isPaused && retryer.canStart()) onContinue();
 			const data = await retryer.start();
 			await this.#mutationCache.config.onSuccess?.(data, variables, this.state.context, this, mutationFnContext);
 			await this.options.onSuccess?.(data, variables, this.state.context, mutationFnContext);
@@ -13109,14 +13133,15 @@ var MutationCache = class extends Subscribable {
 	}
 	clear() {
 		notifyManager.batch(() => {
-			this.#mutations.forEach((mutation) => {
+			const mutations = this.getAll();
+			this.#mutations.clear();
+			this.#scopes.clear();
+			mutations.forEach((mutation) => {
 				this.notify({
 					type: "removed",
 					mutation
 				});
 			});
-			this.#mutations.clear();
-			this.#scopes.clear();
 		});
 	}
 	getAll() {
@@ -13183,10 +13208,9 @@ var QueryCache = class extends Subscribable {
 		}
 	}
 	remove(query) {
-		const queryInMap = this.#queries.get(query.queryHash);
-		if (queryInMap) {
+		if (this.#queries.get(query.queryHash) === query) {
 			query.destroy();
-			if (queryInMap === query) this.#queries.delete(query.queryHash);
+			this.#queries.delete(query.queryHash);
 			this.notify({
 				type: "removed",
 				query
@@ -13377,8 +13401,9 @@ var QueryClient = class {
 		};
 		const promises = notifyManager.batch(() => this.#queryCache.findAll(filters).filter((query) => !query.isDisabled() && !query.isStatic()).map((query) => {
 			let promise = query.fetch(void 0, fetchOptions);
-			if (!fetchOptions.throwOnError) promise = promise.catch(noop$1);
-			return query.state.fetchStatus === "paused" ? Promise.resolve() : promise;
+			const isPaused = query.state.fetchStatus === "paused";
+			if (!fetchOptions.throwOnError || isPaused) promise = promise.catch(noop$1);
+			return isPaused ? Promise.resolve() : promise;
 		}));
 		return Promise.all(promises).then(noop$1);
 	}
@@ -13514,7 +13539,7 @@ var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBo
 //#endregion
 //#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
-	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
+	const throwOnError = query?.state.status === "error" && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
 		if (!errorResetBoundary.isReset()) options.retryOnMount = false;
 	}
@@ -13557,15 +13582,15 @@ function useBaseQuery(options, Observer, queryClient) {
 	useClearResetErrorBoundary(errorResetBoundary);
 	const [observer] = import_react.useState(() => new Observer(client, defaultedOptions));
 	const result = observer.getOptimisticResult(defaultedOptions);
+	import_react.useEffect(() => {
+		observer.setOptions(defaultedOptions);
+	}, [defaultedOptions, observer]);
 	const shouldSubscribe = !isRestoring && subscribed;
 	import_react.useSyncExternalStore(import_react.useCallback((onStoreChange) => {
 		const unsubscribe = shouldSubscribe ? observer.subscribe(notifyManager.batchCalls(onStoreChange)) : noop$1;
 		observer.updateResult();
 		return unsubscribe;
 	}, [observer, shouldSubscribe]), () => observer.getCurrentResult(), () => observer.getCurrentResult());
-	import_react.useEffect(() => {
-		observer.setOptions(defaultedOptions);
-	}, [defaultedOptions, observer]);
 	if (shouldSuspend(defaultedOptions, result)) throw fetchOptimistic(defaultedOptions, observer, errorResetBoundary);
 	if (getHasError({
 		result,
@@ -25202,8 +25227,8 @@ function heldWasQueued(err) {
 function heldQueuedText(name, queued = true) {
 	return queued ? "Queued — " + name + " is offline; press Start to send it." : name + " is offline since a crash — press Start, then send it again.";
 }
-function heldRows(instances) {
-	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i));
+function heldRows(instances, missing) {
+	return instances.filter((i) => !i.pending && !i.sleeping && isHeldOffline(i) && !(missing && missing(i)));
 }
 function heldNoticeText(n) {
 	const who = n === 1 ? "1 session stayed" : n + " sessions stayed";
@@ -26296,7 +26321,7 @@ var createStore = ((createState) => createState ? createStoreImpl(createState) :
 //#region node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
-	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
+	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), () => selector(api.getInitialState()));
 	import_react.useDebugValue(slice);
 	return slice;
 }
@@ -27283,6 +27308,8 @@ var _threadSeq = 0;
 var _focusSeq = 0;
 var useUi = create((set, get) => ({
 	focused: null,
+	prevFocused: null,
+	railPulse: null,
 	viewMode: load$1("cs_viewmode", "auto", false),
 	view: load$1("mf_view", "grid", false) === "sky" ? "sky" : "grid",
 	skyMode: loadSkyMode(),
@@ -27337,7 +27364,18 @@ var useUi = create((set, get) => ({
 	threadLastSeen: load$1("mf_thread_seen", {}),
 	fastTrackMenu: null,
 	newPrefill: "",
-	setFocused: (title) => set({ focused: title }),
+	setFocused: (title) => {
+		const was = get().focused;
+		if (was && title && was !== title) set({
+			focused: title,
+			prevFocused: was
+		});
+		else set({ focused: title });
+	},
+	pulseRail: (key) => set({ railPulse: {
+		key,
+		n: (get().railPulse?.n || 0) + 1
+	} }),
 	touchMru: (title) => {
 		const mru = [title, ...get().mru.filter((t) => t !== title)].slice(0, 50);
 		save("cs_mru", mru);
@@ -32014,6 +32052,7 @@ function selectSession(title, opts) {
 	}
 	ui.touchMru(title);
 	ui.setFocused(title);
+	if (opts?.voice) ui.pulseRail(title);
 	if (!opts?.noKeyboard) focusTerm(title);
 }
 setSessionSelector(selectSession);
@@ -34003,7 +34042,7 @@ function newSession() {
 }
 var FLIP_MS = 250;
 var MAX_GHOSTS = 12;
-function reducedMotion$1() {
+function reducedMotion$2() {
 	try {
 		return typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 	} catch {
@@ -34080,7 +34119,7 @@ function installViewFlip() {
 		const toSky = s.view === "sky";
 		const grid = document.getElementById("grid");
 		if (toSky && grid) gridScroll = grid.scrollTop;
-		const calm = reducedMotion$1();
+		const calm = reducedMotion$2();
 		const from = calm ? /* @__PURE__ */ new Map() : toSky ? paneRects() : _sky?.lineRects() || /* @__PURE__ */ new Map();
 		requestAnimationFrame(() => {
 			if (calm) return;
@@ -36617,6 +36656,11 @@ var SKY_MODES = [
 		title: "Only the routes that need you"
 	}
 ];
+function groundedLanding(mode, noSessions) {
+	if (mode === "all" || mode === "mine") return "shown";
+	return mode === "one" && noSessions ? "switch" : "say";
+}
+var GROUNDED_HIDDEN_LINE = "Your routes with no session yet show under All.";
 var inSky = (r) => !r.hidden_by;
 function linePerched(r) {
 	const fl = r.flight;
@@ -40582,12 +40626,21 @@ function routeCode(text) {
 		device: ""
 	};
 }
+var BIND_ALL_WHY = {
+	all: "you asked for every interface",
+	unbindable: "Tailscale's addresses can't be bound here",
+	"no-tailnet": "Tailscale wasn't running when it started"
+};
 function thisDeviceLine(st) {
 	if (st.listening === void 0 || st.listening === "") return "";
 	const name = st.self.host || st.self.key;
-	const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+	const port = st.self.port || 8765;
+	const where = st.self.ip ? st.self.ip + ":" + port : "port " + port;
 	if (st.self_reachable === false) return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
-	return name + " listens on your tailnet (" + where + ") · access gate " + (st.gate_on ? "on" : "off");
+	const gate = " · access gate " + (st.gate_on ? "on" : "off");
+	const why = BIND_ALL_WHY[st.bind || ""];
+	if (why) return name + " listens on every interface (port " + port + ", " + why + ") — your LAN can reach it too, not only your tailnet" + gate;
+	return name + " listens on your tailnet (" + where + ")" + gate;
 }
 var MAKE_REACHABLE_TEXT = "MindFlock restarts listening on your tailnet (Tailscale mode) with the access gate on — your other devices and your phone can reach it, nothing else can without the access token. This browser stays signed in.";
 function matchText(match) {
@@ -41676,6 +41729,108 @@ function placeUnder(btn, w, vw, vh, m = 8) {
 	};
 }
 //#endregion
+//#region src/components/voice/VoiceCommands.tsx
+var SHEET_W = 340;
+function groupCommands(items) {
+	const out = [];
+	for (const it of items) {
+		if (!it || typeof it.say !== "string" || !it.say.trim()) continue;
+		const g = String(it.group || "").trim();
+		let at = out.find((o) => o.group === g);
+		if (!at) out.push(at = {
+			group: g,
+			items: []
+		});
+		at.items.push(it);
+	}
+	return out;
+}
+function VoiceCommands({ items, anchor, onClose }) {
+	const ref = (0, import_react.useRef)(null);
+	const close = (0, import_react.useRef)(onClose);
+	close.current = onClose;
+	(0, import_react.useEffect)(() => {
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopImmediatePropagation();
+			e.preventDefault();
+			close.current();
+		};
+		const onDown = (e) => {
+			const t = e.target;
+			if (t && ref.current?.contains(t)) return;
+			close.current();
+		};
+		window.addEventListener("keydown", onKey, true);
+		document.addEventListener("pointerdown", onDown, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			document.removeEventListener("pointerdown", onDown, true);
+		};
+	}, []);
+	const groups = groupCommands(items);
+	const rect = anchor?.getBoundingClientRect();
+	const w = Math.min(SHEET_W, window.innerWidth - 32);
+	const place = rect ? placeUnder(rect, w, window.innerWidth, window.innerHeight) : null;
+	const style = place ? {
+		top: place.top + "px",
+		left: place.left + "px",
+		width: w + "px",
+		maxHeight: place.maxHeight + "px"
+	} : {
+		top: "48px",
+		right: "16px",
+		width: w + "px"
+	};
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "voice-cmds",
+		id: "voice-commands",
+		ref,
+		style,
+		role: "dialog",
+		"aria-label": "Voice commands",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "voice-cmds-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "voice-cmds-title",
+				children: "What you can say"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "voice-cmds-close",
+				"aria-label": "Close",
+				title: "Close (Esc)",
+				onClick: () => close.current(),
+				children: "×"
+			})]
+		}), groups.length ? groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+			className: "voice-cmds-group",
+			children: [g.group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "voice-cmds-group-name",
+				children: g.group
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+				className: "voice-cmds-list",
+				children: g.items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "voice-cmds-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dt", {
+						className: "voice-cmds-say",
+						children: [
+							"“",
+							it.say,
+							"”"
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", {
+						className: "voice-cmds-does",
+						children: it.does
+					})]
+				}, i + ":" + it.say))
+			})]
+		}, g.group || "_")) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "voice-cmds-empty",
+			children: "No commands to show."
+		})]
+	}), document.body);
+}
+//#endregion
 //#region src/lib/askVoice.ts
 var ask = null;
 var mic = null;
@@ -42116,6 +42271,13 @@ async function micGranted() {
 		return false;
 	}
 }
+var keepers = /* @__PURE__ */ new Set();
+function audioCtxRunning(ctx) {
+	if (ctx.state === "running") keepers.forEach((k) => k.roll(ctx));
+}
+function preloadCapture(ctx) {
+	if (ctx) loadCapture(ctx).catch(() => false);
+}
 var MicKeeper = class {
 	keepMs;
 	open;
@@ -42133,6 +42295,7 @@ var MicKeeper = class {
 		this.keepMs = keepMs;
 		this.open = open;
 		this.ringCtx = ringCtx;
+		keepers.add(this);
 		if (typeof navigator !== "undefined") navigator.mediaDevices?.addEventListener?.("devicechange", () => {
 			const st = this.stream;
 			if (st && (st.active === false || st.getTracks().some((t) => t.readyState === "ended"))) this.lost(st);
@@ -42827,6 +42990,7 @@ var PHRASE_KINDS = [
 	"send",
 	"end",
 	"clear",
+	"undo",
 	"stop",
 	"hush"
 ];
@@ -42834,6 +42998,7 @@ var BUILTIN_VOICE_WORDS = {
 	send: ["over"],
 	end: ["over and out", "over, out"],
 	clear: ["disregard"],
+	undo: ["scratch that"],
 	stop: [
 		"stop",
 		"stop listening",
@@ -44267,7 +44432,38 @@ var COMMANDS = [
 	"start|open|create|make new session *",
 	"start|open|create|make a|another new session *",
 	"spin up new session *",
-	"spin up a|another new session *"
+	"spin up a|another new session *",
+	"scroll *",
+	"page up|down *",
+	"go|jump|back to the top|bottom *",
+	"top|bottom",
+	"up|down",
+	"to the top|bottom",
+	"more",
+	"keep going",
+	"some more",
+	"further",
+	"interrupt *",
+	"escape",
+	"press|hit escape *",
+	"stop it",
+	"stop that",
+	"go|switch|jump|flip|change back *",
+	"back",
+	"last session|one",
+	"the other one",
+	"previous",
+	"where am i *",
+	"which|what session is this|that",
+	"which|what session am i in|on",
+	"what am i looking at",
+	"what can i say *",
+	"commands",
+	"voice commands",
+	"show|list|read the|my commands *",
+	"what are the commands *",
+	"what commands *",
+	"help"
 ].map((p) => p.split(" ").map((slot) => slot.split("|")));
 var ROUTER_LEADS = /* @__PURE__ */ new Set([
 	"ok",
@@ -44294,6 +44490,8 @@ function isSwitchCommand(text) {
 	let w = routerWords(text);
 	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
 	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+	const all = w.join(" ");
+	if (/^(?:scroll (?:up|down)(?: a bit| more)?|page (?:up|down)|scroll to the (?:top|bottom)|switch back)$/.test(all)) return true;
 	if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
 		const at = w[1] === "over" ? 2 : 1;
 		return w[at] === "to" && w.length > at + 1;
@@ -44344,7 +44542,7 @@ function buildMatchers(w, v = -1) {
 	const ends = [...w.end, ...heardOf(w, "end")];
 	const sends = [...w.send, ...heardOf(w, "send")];
 	const clears = [...w.clear, ...heardOf(w, "clear")];
-	const entries = [
+	const others = [
 		...ends.map((p) => ({
 			p,
 			kind: "out",
@@ -44360,9 +44558,17 @@ function buildMatchers(w, v = -1) {
 			kind: "disregard",
 			rx: phraseRx(p) + tails
 		}))
-	].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
+	].filter((e) => e.rx);
+	const taken = others.map((e) => new RegExp("^(?:" + e.rx + ")$", "iu"));
+	const undos = [...w.undo || [], ...heardOf(w, "undo")].filter((p) => !taken.some((rx) => rx.test(normPhrase(p))));
+	const entries = [...others, ...undos.map((p) => ({
+		p,
+		kind: "undo",
+		rx: phraseRx(p)
+	}))].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
 	const sounded = (text) => {
-		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true);
+		const undoHit = soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
+		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true) || (undoHit && !/[\p{L}\p{N}]/u.test(undoHit.before) ? undoHit : null);
 		return hit ? heardAs(text, hit.before, hit.phrase) : null;
 	};
 	const radio = entries.length ? new SoundRegExp("^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$", "iu", sounded) : /(?!)/;
@@ -44386,6 +44592,7 @@ function buildMatchers(w, v = -1) {
 		...hushes.map(keysOf),
 		...radioPhrases(sends),
 		...radioPhrases(clears),
+		...undos.map(keysOf),
 		...ends.map(keysOf),
 		...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s]))
 	].filter((p) => p.length);
@@ -44458,6 +44665,23 @@ function isAnswerPhrase(text) {
 	return ANSWER_RE.test(routerWords(text).join(" "));
 }
 var joinWords = (a, b) => [a.trim(), b.trim()].filter(Boolean).join(" ");
+var VOICE_CONTEXT_MAX = 400;
+function voiceContext(text, max = VOICE_CONTEXT_MAX) {
+	const t = String(text || "").replace(/\s+/g, " ").trim();
+	if (t.length <= max) return t;
+	const cut = t.slice(t.length - max);
+	return (t[t.length - max - 1] === " " ? cut : cut.replace(/^\S*/, "")).trim();
+}
+function streamOpenBody(lang, client, ctx) {
+	const body = {
+		lang,
+		client
+	};
+	const context = voiceContext(ctx?.context || "");
+	if (context) body.context = context;
+	if (ctx?.session) body.session = ctx.session;
+	return body;
+}
 var VOICE_PREFS_KEY = "cs_voice_desktop";
 function voiceInUse(p) {
 	return p.replies !== "off" || !!p.wake;
@@ -44587,6 +44811,11 @@ var dictHint = (w = voiceWords()) => {
 };
 var answerHint = (name, w = voiceWords()) => "Answer " + name + " — " + radioLine(w);
 var LEFT_LINE = "In the field — press Enter to send";
+function undoLine(o) {
+	const t = o.text.trim();
+	if (!t) return o.alone ? "Nothing to take back — go on" : "Scratched — go on";
+	return "Took back “" + (Array.from(t).length > 40 ? Array.from(t).slice(0, 39).join("") + "…" : t) + "” — go on";
+}
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
@@ -44649,21 +44878,43 @@ function overWaitMs(typical) {
 	if (typical == null || !(typical > 0)) return OVER_FINAL_WAIT_MS;
 	return Math.min(OVER_FINAL_WAIT_MS, Math.max(OVER_FINAL_MIN_MS, Math.round(typical * 1.5 + 100)));
 }
+var FINAL_SAMPLES = 7;
+var FAST_TRUST_MIN = 3;
+var FAST_TRUST_WINDOW = 12;
+var FAST_TRUST_MAX_CHANGED = 1 / 3;
+var plainWords = (t) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}' ]+/gu, " ").replace(/\s+/g, " ").trim();
 var FinalClock = class {
-	ema = null;
+	times = [];
+	changes = [];
 	note(ms) {
 		if (!(ms >= 0) || ms > 6e4) return;
-		this.ema = this.ema == null ? ms : this.ema * .6 + ms * .4;
+		this.times.push(ms);
+		if (this.times.length > FINAL_SAMPLES) this.times.shift();
+	}
+	verdict(changed) {
+		this.changes.push(changed);
+		if (this.changes.length > FAST_TRUST_WINDOW) this.changes.shift();
+	}
+	fastStands() {
+		const n = this.changes.length;
+		if (n < FAST_TRUST_MIN) return false;
+		return this.changes.filter(Boolean).length / n <= FAST_TRUST_MAX_CHANGED;
 	}
 	typical(seed) {
-		if (this.ema != null) return Math.round(this.ema);
+		const n = this.times.length;
+		if (n) {
+			const s = [...this.times].sort((a, b) => a - b);
+			return Math.round(n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2);
+		}
 		return seed != null && seed > 0 ? seed + FINAL_ROUND_TRIP_MS : null;
 	}
 	reset() {
-		this.ema = null;
+		this.times = [];
+		this.changes = [];
 	}
 };
 var finalClock = new FinalClock();
+var timedFinal = (j) => !!j && typeof j.final === "string" && j.final_by !== "moonshine";
 var SWALLOW_MAX_MS = 5e3;
 var SWALLOW_STREAM_MAX_MS = 5e4;
 var withErase = (o, erase) => erase ? {
@@ -44679,12 +44930,14 @@ var Dictation = class {
 	continuous = false;
 	answering = false;
 	phraseAt = -1;
+	marks = [];
 	begin() {
 		this.listening = true;
 		this.typed = "";
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
+		this.marks = [];
 	}
 	tail() {
 		if (!this.listening) return null;
@@ -44715,6 +44968,7 @@ var Dictation = class {
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
+		this.marks = [];
 	}
 	get shown() {
 		return [this.before.trim(), this.held.trim()].filter(Boolean).join(" ");
@@ -44724,6 +44978,26 @@ var Dictation = class {
 	}
 	get guessed() {
 		return this.phraseAt < 0 ? "" : this.typed.slice(this.phraseAt);
+	}
+	context(ahead) {
+		if (!this.listening) return "";
+		const guessed = this.guessed;
+		let base = ahead ?? this.typed;
+		if (guessed && base.endsWith(guessed)) base = base.slice(0, base.length - guessed.length);
+		const said = joinWords(this.held, this.partial) || guessed.trim();
+		if (!said) return base.trim();
+		if (stopTail(said) !== null || isHushPhrase(said)) return base.trim();
+		const r = parseRadio(said);
+		if (r.kind === "over" || r.kind === "out" || r.kind === "disregard") return "";
+		if (r.kind === "undo") {
+			if (r.text.trim() || guessed) return base.trim();
+			const at = [...this.marks].reverse().find((m) => m < this.typed.length);
+			const last = at === void 0 ? "" : this.typed.slice(at);
+			return (last && base.endsWith(last) ? base.slice(0, base.length - last.length) : base).trim();
+		}
+		const words = holdBack(r.text).type;
+		if (this.routes && !this.before.trim() && isSwitchCommand(words)) return base.trim();
+		return joinWords(base, words);
 	}
 	hearing(t) {
 		if (!this.listening) return { kind: "stopped" };
@@ -44778,6 +45052,7 @@ var Dictation = class {
 				kind: "erase",
 				text: this.erase()
 			};
+			case "undo": return this.undo(p.text);
 			case "over":
 			case "out": {
 				const end = p.kind === "out" || !this.continuous;
@@ -44820,6 +45095,10 @@ var Dictation = class {
 			kind: "dropped",
 			text: out.text
 		};
+		if (out.kind === "undo") return {
+			...out,
+			end: true
+		};
 		if (out.kind === "continue") return {
 			kind: "leave",
 			text: ""
@@ -44850,7 +45129,8 @@ var Dictation = class {
 			kind: "hush",
 			end: true
 		}, this.settle("").erase || "");
-		const rest = parseRadio(all).text;
+		const r = parseRadio(all);
+		const rest = r.kind === "undo" ? "" : r.text;
 		return {
 			kind: "leave",
 			...this.settle(rest ? rest + " " : "")
@@ -44872,6 +45152,7 @@ var Dictation = class {
 	settle(text) {
 		const guessed = this.guessed;
 		const whole = this.routes && !this.before && mayBeCommand(text);
+		if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
 		this.phraseAt = -1;
 		this.held = "";
 		this.partial = "";
@@ -44911,7 +45192,36 @@ var Dictation = class {
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
+		this.marks = [];
 		return text;
+	}
+	undo(said) {
+		const guessed = this.guessed;
+		this.phraseAt = -1;
+		this.held = "";
+		this.partial = "";
+		if (said.trim() || guessed) {
+			this.typed = this.typed.slice(0, this.typed.length - guessed.length);
+			return {
+				kind: "undo",
+				text: guessed,
+				alone: false
+			};
+		}
+		while (this.marks.length && this.marks[this.marks.length - 1] >= this.typed.length) this.marks.pop();
+		const at = this.marks.pop();
+		if (at === void 0) return {
+			kind: "undo",
+			text: "",
+			alone: true
+		};
+		const text = this.typed.slice(at);
+		this.typed = this.typed.slice(0, at);
+		return {
+			kind: "undo",
+			text,
+			alone: true
+		};
 	}
 };
 function dialogUp(activity) {
@@ -45111,7 +45421,7 @@ var LiveDictation = class {
 	swallowing;
 	wordEnd = 0;
 	wordsAt = Date.now();
-	endedAt = 0;
+	sendNow = null;
 	early = null;
 	bargeAt = 0;
 	startedAt = Date.now();
@@ -45122,6 +45432,7 @@ var LiveDictation = class {
 	checkedAt = 0;
 	unsent = "";
 	unwatch = null;
+	sending = false;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -45130,6 +45441,27 @@ var LiveDictation = class {
 		this.dict.routes = target?.kind !== "field";
 		this.dict.continuous = !!opts.continuous;
 		this.watch(target);
+	}
+	streamContext() {
+		if (this.done) return {
+			context: "",
+			session: ""
+		};
+		const t = this.target;
+		if (this.sending) return {
+			context: "",
+			session: t?.title || ""
+		};
+		let ahead;
+		try {
+			ahead = t?.before?.();
+		} catch {
+			ahead = void 0;
+		}
+		return {
+			context: voiceContext(this.dict.context(ahead)),
+			session: t?.title || ""
+		};
 	}
 	watch(t) {
 		this.unwatch?.();
@@ -45192,7 +45524,12 @@ var LiveDictation = class {
 		if (w.trim() || p.trim()) this.wordsAt = Date.now();
 		if (w.trim() || p.trim()) this.notePhrase();
 		if (this.swallowing) return this.chain;
-		return this.step(() => this.dict.stream(w, p));
+		return this.step(() => this.dict.stream(w, p)).then(() => {
+			if (this.sendNow && this.fastStands()) this.sendNow();
+		});
+	}
+	fastStands() {
+		return !!this.hooks.endsSurely?.() && !this.dict.partial && !!this.dict.held && finalClock.fastStands();
 	}
 	words(w) {
 		return this.stream(w, "");
@@ -45221,11 +45558,8 @@ var LiveDictation = class {
 	phraseEnded() {
 		clearTimeout(this.sendWait);
 		this.sendWait = void 0;
+		this.sendNow = null;
 		this.early = null;
-		if (this.endedAt) {
-			finalClock.note(Date.now() - this.endedAt);
-			this.endedAt = 0;
-		}
 		if (!this.swallowing) return false;
 		clearTimeout(this.swallowing);
 		this.swallowing = void 0;
@@ -45288,18 +45622,23 @@ var LiveDictation = class {
 		clearInterval(this.tailTimer);
 		this.tailTimer = void 0;
 		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
-		this.endedAt = Date.now();
 		const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
 		this.hooks.endPhrase?.();
 		if (radio) {
 			const e = early ? this.watchQuiet() : null;
-			this.sendWait = setTimeout(() => {
+			const fire = () => {
+				clearTimeout(this.sendWait);
 				this.sendWait = void 0;
+				this.sendNow = null;
 				this.early = null;
 				this.swallow();
-				if (e) this.afterQuiet(e, (r) => this.dict.heard(t.text, r), spoke);
-				else this.step(() => this.dict.heard(t.text), spoke);
-			}, overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
+				const now = this.dict.tail();
+				const text = now && (now.kind === "over" || now.kind === "out") ? now.text : t.text;
+				if (e) this.afterQuiet(e, (r) => this.dict.heard(text, r), spoke);
+				else this.step(() => this.dict.heard(text), spoke);
+			};
+			this.sendNow = fire;
+			this.sendWait = setTimeout(fire, this.fastStands() ? 0 : overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
 			return;
 		}
 		this.swallow();
@@ -45369,6 +45708,7 @@ var LiveDictation = class {
 		this.unsent = "";
 		clearInterval(this.tailTimer);
 		clearTimeout(this.sendWait);
+		this.sendNow = null;
 		clearTimeout(this.swallowing);
 		clearInterval(this.early?.timer);
 		this.early = null;
@@ -45399,6 +45739,20 @@ var LiveDictation = class {
 				this.hooks.caption("Disregarded — go on", true);
 				this.hooks.confirm?.("cleared");
 				return;
+			case "undo": {
+				if (out.text && t && this.dialogBlocks(t)) {
+					this.end(dialogStopLine(t.name, ""), true, "stopped");
+					return;
+				}
+				if (out.text) {
+					t?.erase(out.text);
+					if (t?.gate && await t.gate.settled()) return;
+				}
+				const line = undoLine(out);
+				if (out.end) this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : line, false);
+				else this.hooks.caption(line, true);
+				return;
+			}
 			case "hush":
 				if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
 				this.hushed();
@@ -45432,7 +45786,8 @@ var LiveDictation = class {
 					this.acted = true;
 					this.hooks.caption("Sending to " + t.name + "…", true);
 					const say = this.hooks.replies();
-					const r = await t.submit(say);
+					this.sending = true;
+					const r = await t.submit(say).finally(() => this.sending = false);
 					if (r.ok && t.title) this.hooks.submitted(t.title, say);
 					this.sent(r, out, from);
 					return;
@@ -45448,17 +45803,23 @@ var LiveDictation = class {
 				}
 				this.acted = true;
 				this.hooks.caption("Sending to " + t.name + "…", true);
-				if (t.gate) await t.gate.settled();
-				else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
-				if (this.done) return;
-				if (this.dialogBlocks(t)) {
-					await this.heldBack(t, "");
-					return;
+				this.sending = true;
+				try {
+					if (t.gate) await t.gate.settled();
+					else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+					if (this.done) return;
+					if (this.dialogBlocks(t)) {
+						await this.heldBack(t, "");
+						return;
+					}
+					const say = this.hooks.replies();
+					const r = await submitDraft(t.title, t.name, say);
+					if (r.ok) this.hooks.submitted(t.title, say);
+					this.sending = false;
+					this.sent(r, out, from);
+				} finally {
+					this.sending = false;
 				}
-				const say = this.hooks.replies();
-				const r = await submitDraft(t.title, t.name, say);
-				if (r.ok) this.hooks.submitted(t.title, say);
-				this.sent(r, out, from);
 				return;
 			}
 		}
@@ -45620,7 +45981,12 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"ask",
 	"read",
 	"help",
-	"early"
+	"early",
+	"scroll",
+	"interrupt",
+	"switch_back",
+	"where",
+	"commands"
 ]);
 var PENDING_MS = 3e4;
 var PendingChoice = class {
@@ -45728,12 +46094,13 @@ async function recheckDialog(title, fetch, seen = dialogSeen, waitMs = DIALOG_RE
 	}
 }
 var earlyLine = (name) => name + " asked just now: say your answer again";
-async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen) {
+async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen, heard) {
 	try {
 		const json = {
 			text,
 			session
 		};
+		if (heard && heard.trim()) json.heard = heard.trim();
 		const held = pending.take();
 		if (held) json.pending = held;
 		if (spokeAt && spokeAt > 0) {
@@ -45763,6 +46130,120 @@ function railStep(order, from, delta) {
 	return next === from ? null : next;
 }
 var APPROVE_OFF_LINE = "Approving by voice is off: Settings → Voice";
+var NO_PREVIOUS_LINE = "No previous session";
+function previousSession(o) {
+	const live = new Set(o.live);
+	for (const t of [o.prev || "", ...o.mru]) if (t && !isWindowRow(t) && t !== o.focused && live.has(t) && !o.hidden?.has(t)) return t;
+	return null;
+}
+function scrollLine(r, name = "") {
+	if (r.ok === false) return "Couldn't scroll" + (name ? " " + name : "");
+	if (r.amount === "top") return "At the top";
+	if (r.amount === "bottom") return "At the bottom";
+	const n = Math.trunc(Number(r.count) || 1);
+	return "Scrolled " + (r.dir === "up" ? "up" : "down") + (n > 1 ? " ×" + n : "");
+}
+function builtinCommands(w = voiceWords()) {
+	const q = (k) => (w[k] || [])[0] || "";
+	const dict = "While dictating";
+	return [
+		{
+			say: "… " + q("send"),
+			does: "Send the message; keep listening",
+			group: dict
+		},
+		{
+			say: "… " + q("end"),
+			does: "Send and stop listening",
+			group: dict
+		},
+		{
+			say: q("clear"),
+			does: "Take back the whole message",
+			group: dict
+		},
+		{
+			say: q("undo"),
+			does: "Take back the last phrase",
+			group: dict
+		},
+		{
+			say: q("stop"),
+			does: "Stop listening; words stay unsent",
+			group: dict
+		},
+		{
+			say: q("hush"),
+			does: "Stop reading aloud",
+			group: dict
+		},
+		{
+			say: "switch to <name>",
+			does: "Focus a session by name",
+			group: "Sessions"
+		},
+		{
+			say: "session 3",
+			does: "Focus the rail's row 3",
+			group: "Sessions"
+		},
+		{
+			say: "next session / previous session",
+			does: "Step along the rail",
+			group: "Sessions"
+		},
+		{
+			say: "go back",
+			does: "The session you were on before",
+			group: "Sessions"
+		},
+		{
+			say: "where am I",
+			does: "Says the focused session's name",
+			group: "Sessions"
+		},
+		{
+			say: "new session for <task>",
+			does: "Start a session",
+			group: "Sessions"
+		},
+		{
+			say: "scroll up / scroll down",
+			does: "Scroll the focused pane a page",
+			group: "Reading"
+		},
+		{
+			say: "scroll to the top / bottom",
+			does: "Jump to either end",
+			group: "Reading"
+		},
+		{
+			say: "more",
+			does: "Scroll again the same way",
+			group: "Reading"
+		},
+		{
+			say: "what did it say",
+			does: "Read the last reply",
+			group: "Reading"
+		},
+		{
+			say: "interrupt",
+			does: "Press Escape on the agent",
+			group: "Agent"
+		},
+		{
+			say: "yes / no / option 2",
+			does: "Answer the dialog on screen",
+			group: "Agent"
+		},
+		{
+			say: "what can I say",
+			does: "This list",
+			group: "Agent"
+		}
+	].filter((r) => r.say.replace(/[…\s]/g, ""));
+}
 async function questionPending(title, activity) {
 	if (activity === "working") return false;
 	try {
@@ -45809,6 +46290,39 @@ async function runVoiceCommand(r, text, deps, spokeAt, seen = dialogSeen) {
 		case "question":
 			deps.announce(r.say || "Nothing is being asked.");
 			return true;
+		case "switch_back": {
+			const key = deps.previous?.() || null;
+			if (!key) deps.caption(NO_PREVIOUS_LINE);
+			else {
+				deps.select(key);
+				deps.announce(r.say || deps.name(key) + ".");
+			}
+			return true;
+		}
+		case "scroll": {
+			const title = r.title || deps.focused();
+			deps.caption(scrollLine(r, title ? deps.name(title) : ""));
+			return true;
+		}
+		case "interrupt": {
+			const title = r.title || deps.focused();
+			const name = title ? deps.name(title) : "";
+			deps.caption(r.ok === false ? "Couldn't interrupt" + (name ? " " + name : "") : "Interrupted" + (name ? " " + name : ""));
+			return true;
+		}
+		case "where": {
+			const title = deps.focused();
+			const line = title ? deps.name(title) + "." : "No session is focused.";
+			(deps.speak || deps.announce)(line);
+			return true;
+		}
+		case "commands": {
+			const items = Array.isArray(r.items) ? r.items.filter((i) => i && typeof i.say === "string" && i.say.trim()) : [];
+			deps.showCommands?.(items.length ? items : builtinCommands());
+			if (r.say) (deps.speak || deps.announce)(r.say);
+			else deps.caption("Voice commands");
+			return true;
+		}
 		case "help": {
 			deps.caption(HELP_LOOKING_LINE);
 			const said = (await askHelp(r.text || text)).say;
@@ -46652,10 +47166,15 @@ var audioCtx = null;
 function voiceAudioCtx() {
 	const AC = audioCtxCtor();
 	if (!AC) return null;
-	if (!audioCtx) try {
-		audioCtx = new AC();
-	} catch {
-		return null;
+	if (!audioCtx) {
+		try {
+			audioCtx = new AC();
+		} catch {
+			return null;
+		}
+		const ctx = audioCtx;
+		preloadCapture(ctx);
+		ctx.addEventListener?.("statechange", () => audioCtxRunning(ctx));
 	}
 	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 	return audioCtx;
@@ -46968,6 +47487,8 @@ var SILENCE_MS = 1100;
 var TURN_MIN_MS = 300;
 var TURN_MAX_MS = 3e3;
 var FIRST_PHRASE_HOLD_MS = 1100;
+var FIRST_PHRASE_PLAIN_HOLD_MS = 900;
+var SETTLED_HOLD_MS = 600;
 function parseTurn(v, at) {
 	if (!v || typeof v !== "object") return null;
 	const o = v;
@@ -46979,10 +47500,14 @@ function parseTurn(v, at) {
 		at
 	};
 }
-function turnHoldMs(turn, loudAt, blank) {
+function turnHoldMs(turn, loudAt, blank, heard) {
 	if (!turn) return SILENCE_MS;
 	let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
-	if (blank && (turn.reason === "sentence" || turn.reason === "question")) hold = Math.max(hold, FIRST_PHRASE_HOLD_MS);
+	const sentence = turn.reason === "sentence" || turn.reason === "question";
+	if (blank && sentence) {
+		const plain = !!heard?.text && !mayBeCommand(heard.text) && !mayBeCommand(holdBack(heard.text).type);
+		hold = Math.max(hold, plain ? FIRST_PHRASE_PLAIN_HOLD_MS : FIRST_PHRASE_HOLD_MS);
+	} else if (sentence && heard?.settled && heard.text) hold = Math.min(hold, SETTLED_HOLD_MS);
 	if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
 	return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
 }
@@ -47042,6 +47567,7 @@ var BargeDetector = class {
 		return true;
 	}
 };
+var HEARD_FRESH_MS = 3e3;
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag$1 = () => String(navigator.language || "en").split(";")[0];
 var VOICE_CLIENT_ID = (() => {
@@ -47068,7 +47594,8 @@ function serverRecognizer(opts = {}) {
 	let capTimer;
 	const aborters = /* @__PURE__ */ new Set();
 	let streaming = false;
-	let lastEnd = Promise.resolve();
+	let lastHeard = null;
+	const ending = [];
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
 	let firstSkipMs = 0;
@@ -47239,18 +47766,19 @@ function serverRecognizer(opts = {}) {
 	};
 	const openStream = (c) => {
 		const hh = h;
-		const before = lastEnd;
 		run(c, async () => {
-			await before;
 			if (h !== hh || !c.stream) return;
 			try {
+				let ctx = null;
+				try {
+					ctx = hh?.context?.() || null;
+				} catch {
+					ctx = null;
+				}
 				const r = await call("/api/voice/stream", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						lang: langTag$1(),
-						client: VOICE_CLIENT_ID
-					})
+					body: JSON.stringify(streamOpenBody(langTag$1(), VOICE_CLIENT_ID, ctx))
 				});
 				const id = String(r.j.id || "");
 				if (h !== hh || !c.stream) {
@@ -47293,6 +47821,11 @@ function serverRecognizer(opts = {}) {
 			c.turn = parseTurn(r.j.turn, takenAt);
 			const w = wordsOf(r.j.committed);
 			const p = wordsOf(r.j.partial);
+			c.said = joinWords(c.said, w);
+			c.partial = p;
+			c.passAt = takenAt;
+			await settleBefore(c, hh);
+			if (h !== hh || !c.stream) return;
 			if (hh.onStream) hh.onStream(w, p);
 			else {
 				if (w) hh.onWords?.(w);
@@ -47313,13 +47846,32 @@ function serverRecognizer(opts = {}) {
 		const hh = h;
 		run(c, () => sendChunk(c, blob, hh, takenAt));
 	};
+	const settleBefore = async (c, hh) => {
+		for (const p of [...ending]) {
+			if (p === c) return;
+			await p.heardAll;
+			if (h !== hh) return;
+			if (p.flushed) continue;
+			p.flushed = true;
+			const i = ending.indexOf(p);
+			if (i >= 0) ending.splice(i, 1);
+			if (!p.stream) continue;
+			hh.onPartial?.("");
+			hh.onFlush?.(p.partial, void 0, p.spokeAt || void 0);
+		}
+	};
 	const endStream = async (c) => {
 		const hh = h;
 		const mine = token;
 		c.ending = true;
 		uploads++;
-		let release = () => {};
-		lastEnd = new Promise((r) => release = r);
+		let heard = () => {};
+		c.heardAll = new Promise((r) => heard = r);
+		ending.push(c);
+		const unlist = () => {
+			const i = ending.indexOf(c);
+			if (i >= 0) ending.splice(i, 1);
+		};
 		try {
 			const tail = await c.rec.stop().catch(() => null);
 			if (token !== mine) return;
@@ -47337,6 +47889,7 @@ function serverRecognizer(opts = {}) {
 				return;
 			}
 			if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+			heard();
 			if (h !== hh || !c.stream || !c.sid) return;
 			const sid = c.sid;
 			c.sid = null;
@@ -47346,22 +47899,42 @@ function serverRecognizer(opts = {}) {
 				setLoading(false);
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
-				c.stream = false;
+				const ran = typeof r.j.final === "string";
+				const timed = timedFinal(r.j);
 				const fms = Number(r.j.final_ms);
-				if (fms > 0) {
+				if (timed && fms > 0) {
 					self.finalMs = fms;
 					voiceMark("final");
 				}
-				const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
+				const committed = wordsOf(r.j.committed);
+				lastHeard = typeof r.j.heard === "string" && r.j.heard.trim() ? {
+					text: r.j.heard.trim(),
+					at: Date.now()
+				} : null;
+				if (timed) {
+					if (c.byWord && c.endAt) finalClock.note(Date.now() - c.endAt);
+					const fast = joinWords(c.said, committed);
+					finalClock.verdict(r.j.same !== true && plainWords(wordsOf(r.j.final)) !== plainWords(fast));
+				}
+				if (c.flushed) return;
+				await settleBefore(c, hh);
+				if (h !== hh || c.flushed) return;
+				c.flushed = true;
+				unlist();
+				c.stream = false;
+				const final = ran && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(wordsOf(r.j.committed), final || void 0, c.spokeAt || void 0);
+				hh.onFlush?.(committed, final || void 0, c.spokeAt || void 0);
 			} catch (err) {
-				if (h !== hh) return;
+				if (h !== hh || c.flushed) return;
 				c.sid = sid;
+				c.flushed = true;
+				unlist();
 				streamFailed(c, err);
 			}
 		} finally {
-			release();
+			heard();
+			unlist();
 			uploads--;
 			if (h === hh) maybeEnd();
 		}
@@ -47382,6 +47955,7 @@ function serverRecognizer(opts = {}) {
 		cur = null;
 		clearTimeout(capTimer);
 		if (!c?.rec) return;
+		c.endAt = Date.now();
 		mic.cut();
 		if (c.stream) {
 			endStream(c);
@@ -47419,7 +47993,14 @@ function serverRecognizer(opts = {}) {
 			clock: new RecordingClock(),
 			loudAt: 0,
 			turn: null,
-			pre: null
+			pre: null,
+			said: "",
+			partial: "",
+			passAt: 0,
+			byWord: false,
+			endAt: 0,
+			flushed: false,
+			heardAll: null
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -47476,6 +48057,7 @@ function serverRecognizer(opts = {}) {
 			c.clock.block(blockAt, now);
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
+					lastHeard = null;
 					c.speechS = at;
 					c.spokeAt = c.clock.at(at);
 					if (at < PRE_ROLL_ONSET_S) {
@@ -47495,7 +48077,11 @@ function serverRecognizer(opts = {}) {
 			} else if (!c.heard && c.stream) {
 				if (c.rec?.take()) c.trimS = blockAt;
 			}
-			if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true)) endClip();
+			const heardSoFar = c.stream ? {
+				text: joinWords(c.said, c.partial),
+				settled: !c.partial && c.passAt > c.loudAt
+			} : null;
+			if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true, heardSoFar)) endClip();
 			else pump(c);
 		};
 		try {
@@ -47546,6 +48132,11 @@ function serverRecognizer(opts = {}) {
 		get streaming() {
 			return streaming;
 		},
+		takeHeard() {
+			const h = lastHeard;
+			lastHeard = null;
+			return h && Date.now() - h.at < HEARD_FRESH_MS ? h.text : "";
+		},
 		get spokeAt() {
 			return cur?.heard ? cur.spokeAt : 0;
 		},
@@ -47558,7 +48149,10 @@ function serverRecognizer(opts = {}) {
 			cur?.clock.reset();
 		},
 		endPhrase() {
-			if (cur?.heard && want) endClip();
+			if (cur?.heard && want) {
+				cur.byWord = true;
+				endClip();
+			}
 		},
 		start(handlers, o = {}) {
 			self.stop();
@@ -47579,7 +48173,8 @@ function serverRecognizer(opts = {}) {
 			holding = true;
 			mic.hold();
 			streaming = !!opts.stream?.();
-			lastEnd = Promise.resolve();
+			ending.length = 0;
+			noteVoiceUsed();
 			clip();
 			return true;
 		},
@@ -47609,6 +48204,7 @@ function serverRecognizer(opts = {}) {
 			aborters.forEach((a) => a.abort());
 			aborters.clear();
 			open.forEach(abandon);
+			ending.length = 0;
 			unhold();
 		},
 		release() {
@@ -47624,19 +48220,63 @@ var DEFAULT_VOICE_CFG = {
 	server_ready: {},
 	system: {}
 };
+var VOICE_USED_KEY = "cs_voice_used_at";
+var STT_WARM_RECENT_MS = 2592e5;
+var STT_WARM_EVERY_MS = 6e4;
+function noteVoiceUsed(now = Date.now()) {
+	try {
+		localStorage.setItem(VOICE_USED_KEY, String(now));
+	} catch {}
+}
+function voiceUsedAt() {
+	try {
+		return Number(localStorage.getItem(VOICE_USED_KEY)) || 0;
+	} catch {
+		return 0;
+	}
+}
+function sttWarmWanted(cfg, usedAt, lastWarm, now = Date.now()) {
+	const r = cfg.server_ready || {};
+	return cfg.stt === "server" && r.stt_stream === true && r.stt_loaded === false && usedAt > 0 && now - usedAt < STT_WARM_RECENT_MS && now - lastWarm >= STT_WARM_EVERY_MS;
+}
+var sttWarmedAt = 0;
+function warmStt(cfg, now = Date.now()) {
+	if (!sttWarmWanted(cfg, voiceUsedAt(), sttWarmedAt, now)) return false;
+	sttWarmedAt = now;
+	(async () => {
+		try {
+			const r = await apiRaw("/api/voice/stream", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					lang: String(navigator.language || "en").split(";")[0],
+					client: VOICE_CLIENT_ID
+				})
+			});
+			const j = await r.json().catch(() => ({}));
+			const id = String(j.id || "");
+			if (r.ok && id) await apiRaw("/api/voice/stream/" + encodeURIComponent(id), { method: "DELETE" });
+		} catch {}
+	})();
+	return true;
+}
 async function loadVoiceCfg(prev, warm = true) {
 	try {
 		const j = await api(warm ? "/api/voice" : "/api/voice?warm=0");
 		applyVoiceView(j);
 		setPronounce(j?.pronounce);
-		if (j && typeof j === "object") return {
-			stt: j.stt === "server" ? "server" : "phone",
-			tts: j.tts === "server" ? "server" : "phone",
-			approve_dialogs: j.approve_dialogs === true,
-			...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
-			server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
-			system: j.system && typeof j.system === "object" ? j.system : {}
-		};
+		if (j && typeof j === "object") {
+			const cfg = {
+				stt: j.stt === "server" ? "server" : "phone",
+				tts: j.tts === "server" ? "server" : "phone",
+				approve_dialogs: j.approve_dialogs === true,
+				...typeof j.say_all === "boolean" ? { say_all: j.say_all } : {},
+				server_ready: j.server_ready && typeof j.server_ready === "object" ? j.server_ready : {},
+				system: j.system && typeof j.system === "object" ? j.system : {}
+			};
+			warmStt(cfg);
+			return cfg;
+		}
 	} catch {}
 	return prev || DEFAULT_VOICE_CFG;
 }
@@ -48750,6 +49390,7 @@ function fieldTarget(el) {
 		kind: "field",
 		title: "",
 		name: "the text box",
+		before: () => el.value.slice(0, el.selectionStart != null ? el.selectionStart : el.value.length),
 		type: (text) => {
 			insertIntoField(el, text);
 			return true;
@@ -48831,6 +49472,12 @@ function TopBarMic() {
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
+	const [cheat, setCheat] = (0, import_react.useState)(null);
+	const cheatOpen = (0, import_react.useRef)(false);
+	cheatOpen.current = !!cheat;
+	const closeCheat = () => {
+		if (cheatOpen.current) setCheat(null);
+	};
 	const words = useVoiceWords();
 	const tourPop = useUi((s) => s.coachTour?.id === "voice" && TOURS.voice.steps[s.coachTour.step]?.screen === MIC_POP_SCREEN);
 	const tourOpened = (0, import_react.useRef)(false);
@@ -49129,7 +49776,7 @@ function TopBarMic() {
 					}, 150);
 					return "end";
 				}
-				const reply = await routePhrase(text, session, void 0, spokeAt);
+				const reply = await routePhrase(text, session, void 0, spokeAt, void 0, r === serverRec ? serverRec.takeHeard() : "");
 				if (reply.kind === "prompt") return false;
 				if (reply.kind === "hush") return "hush";
 				await routed(reply, text, session, spokeAt);
@@ -49212,6 +49859,7 @@ function TopBarMic() {
 			},
 			onFinal: (t, at) => {
 				if (live.current !== d) return;
+				closeCheat();
 				armIdle();
 				voiceMark("commit");
 				d.heard(t, at);
@@ -49224,9 +49872,12 @@ function TopBarMic() {
 				d.stream(w, p);
 			},
 			onFlush: (t, final, at) => {
-				if (live.current === d) d.flush(t, final, at);
+				if (live.current !== d) return;
+				closeCheat();
+				d.flush(t, final, at);
 			},
 			blank: () => live.current !== d || !d.dict.typed,
+			context: () => live.current === d ? d.streamContext() : null,
 			onPartial: (t) => {
 				if (live.current === d) d.unsure(t);
 			},
@@ -49347,7 +49998,21 @@ function TopBarMic() {
 		if (await runVoiceCommand(r, text, {
 			railOrder: () => useUi.getState().railOrder,
 			focused: () => session,
-			select: (title) => selectSession(title, { noKeyboard: true }),
+			select: (title) => selectSession(title, {
+				noKeyboard: true,
+				voice: true
+			}),
+			previous: () => {
+				const ui = useUi.getState();
+				return previousSession({
+					focused: ui.focused,
+					prev: ui.prevFocused,
+					mru: ui.mru,
+					live: instances$2().map((i) => i.title),
+					hidden: ui.hidden
+				});
+			},
+			showCommands: (items) => setCheat(items),
 			name: displayName,
 			caption: say,
 			announce,
@@ -49369,8 +50034,14 @@ function TopBarMic() {
 			case "new":
 				if (r.title) {
 					const title = r.title;
-					if (r.kind === "new") refreshInstances().then(() => selectSession(title, { noKeyboard: true }));
-					else selectSession(title, { noKeyboard: true });
+					if (r.kind === "new") refreshInstances().then(() => selectSession(title, {
+						noKeyboard: true,
+						voice: true
+					}));
+					else selectSession(title, {
+						noKeyboard: true,
+						voice: true
+					});
 				}
 				{
 					const line = r.say || (r.kind === "new" ? "Started " : "") + (r.name || r.title || "") + ".";
@@ -49542,6 +50213,17 @@ function TopBarMic() {
 		if (d) openTourOnFirstUse("voice");
 		return d;
 	};
+	const openCommands = () => {
+		setMenuOpen(false);
+		setCheat(builtinCommands());
+		api("/api/voice/route", { json: {
+			text: "what can i say",
+			session: useUi.getState().focused || ""
+		} }).then((r) => {
+			const items = r?.kind === "commands" && Array.isArray(r.items) ? r.items.filter((i) => i && typeof i.say === "string") : [];
+			if (items.length) setCheat((cur) => cur ? items : cur);
+		}).catch(() => {});
+	};
 	const openMenu = () => {
 		setMenuOpen(true);
 		warmMic(true);
@@ -49629,217 +50311,233 @@ function TopBarMic() {
 		width: popW + "px",
 		maxHeight: place.maxHeight + "px"
 	} : void 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "mic-wrap",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			id: "mic-btn",
-			"data-tour": "voice-mic",
-			ref: btnRef,
-			type: "button",
-			className: [
-				"tb-item",
-				"mic-ring",
-				listening && "listening",
-				paused && "muted",
-				wake.on && !listening && "standby",
-				speaking && !listening && "speaking",
-				!supported && "unsupported"
-			].filter(Boolean).join(" "),
-			title,
-			"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
-			"aria-pressed": listening,
-			"aria-haspopup": "menu",
-			"aria-expanded": menuOpen,
-			onPointerDown: (e) => {
-				pressedField.current = textField(document.activeElement);
-				if (!live.current) warmMic(true);
-				if (!hold || e.button !== 0 || e.shiftKey) return;
-				holding.current = true;
-				try {
-					e.currentTarget.setPointerCapture(e.pointerId);
-				} catch {}
-				userStart(pressedField.current);
-			},
-			onPointerUp: () => {
-				if (!holding.current) return;
-				holding.current = false;
-				finish();
-			},
-			onPointerCancel: () => {
-				if (!holding.current) return;
-				holding.current = false;
-				finish();
-			},
-			onMouseDown: (e) => e.preventDefault(),
-			onClick: (e) => {
-				if (e.shiftKey) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "mic-wrap",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				id: "mic-btn",
+				"data-tour": "voice-mic",
+				ref: btnRef,
+				type: "button",
+				className: [
+					"tb-item",
+					"mic-ring",
+					listening && "listening",
+					paused && "muted",
+					wake.on && !listening && "standby",
+					speaking && !listening && "speaking",
+					!supported && "unsupported"
+				].filter(Boolean).join(" "),
+				title,
+				"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
+				"aria-pressed": listening,
+				"aria-haspopup": "menu",
+				"aria-expanded": menuOpen,
+				onPointerDown: (e) => {
+					pressedField.current = textField(document.activeElement);
+					if (!live.current) warmMic(true);
+					if (!hold || e.button !== 0 || e.shiftKey) return;
+					holding.current = true;
+					try {
+						e.currentTarget.setPointerCapture(e.pointerId);
+					} catch {}
+					userStart(pressedField.current);
+				},
+				onPointerUp: () => {
+					if (!holding.current) return;
+					holding.current = false;
+					finish();
+				},
+				onPointerCancel: () => {
+					if (!holding.current) return;
+					holding.current = false;
+					finish();
+				},
+				onMouseDown: (e) => e.preventDefault(),
+				onClick: (e) => {
+					if (e.shiftKey) {
+						menuOpen ? setMenuOpen(false) : openMenu();
+						return;
+					}
+					if (menuOpen) {
+						setMenuOpen(false);
+						return;
+					}
+					if (hold) return;
+					if (live.current) finish();
+					else userStart(pressedField.current);
+					pressedField.current = null;
+				},
+				onContextMenu: (e) => {
+					e.preventDefault();
 					menuOpen ? setMenuOpen(false) : openMenu();
-					return;
-				}
-				if (menuOpen) {
-					setMenuOpen(false);
-					return;
-				}
-				if (hold) return;
-				if (live.current) finish();
-				else userStart(pressedField.current);
-				pressedField.current = null;
-			},
-			onContextMenu: (e) => {
-				e.preventDefault();
-				menuOpen ? setMenuOpen(false) : openMenu();
-			},
-			onKeyDown: (e) => {
-				if (!hold || e.key !== " " && e.key !== "Enter") return;
-				e.preventDefault();
-				if (e.repeat || holding.current) return;
-				holding.current = true;
-				userStart(null);
-			},
-			onKeyUp: (e) => {
-				if (!hold || e.key !== " " && e.key !== "Enter") return;
-				e.preventDefault();
-				if (!holding.current) return;
-				holding.current = false;
-				finish();
-			},
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			id: "mic-pill",
-			className: pill ? "on" : "",
-			role: "status",
-			"aria-live": "polite",
-			children: pill
-		})]
-	}), menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "mic-pop" + (tourPop ? " in-tour" : ""),
-		id: "mic-pop",
-		ref: menuRef,
-		style: popStyle,
-		role: "menu",
-		"aria-label": "Voice options",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mic-pop-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "mic-pop-title",
-					children: ["Voice", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				},
+				onKeyDown: (e) => {
+					if (!hold || e.key !== " " && e.key !== "Enter") return;
+					e.preventDefault();
+					if (e.repeat || holding.current) return;
+					holding.current = true;
+					userStart(null);
+				},
+				onKeyUp: (e) => {
+					if (!hold || e.key !== " " && e.key !== "Enter") return;
+					e.preventDefault();
+					if (!holding.current) return;
+					holding.current = false;
+					finish();
+				},
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				id: "mic-pill",
+				className: pill ? "on" : "",
+				role: "status",
+				"aria-live": "polite",
+				children: pill
+			})]
+		}),
+		menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "mic-pop" + (tourPop ? " in-tour" : ""),
+			id: "mic-pop",
+			ref: menuRef,
+			style: popStyle,
+			role: "menu",
+			"aria-label": "Voice options",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-pop-title",
+						children: ["Voice", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tour-btn mic-pop-help",
+							id: "mic-pop-help",
+							"aria-label": "Show me how",
+							title: "Show me how — the Voice tour",
+							"data-tour-id": "voice",
+							onClick: () => {
+								setMenuOpen(false);
+								replayTour("voice");
+							},
+							children: "?"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "tour-btn mic-pop-help",
-						id: "mic-pop-help",
-						"aria-label": "Show me how",
-						title: "Show me how — the Voice tour",
-						"data-tour-id": "voice",
+						className: "mic-pop-close",
+						id: "mic-pop-close",
+						"aria-label": "Close",
+						title: "Close (Esc)",
 						onClick: () => {
 							setMenuOpen(false);
-							replayTour("voice");
+							btnRef.current?.focus();
 						},
-						children: "?"
+						children: "×"
 					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-row",
+					id: "mic-replies-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mic-pop-label",
+						id: "mic-replies-label",
+						children: "Read replies aloud"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "mic-seg",
+						role: "radiogroup",
+						"aria-labelledby": "mic-replies-label",
+						children: REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "mic-seg-opt",
+							title: c.label,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "mic-replies",
+								checked: prefs.replies === c.value,
+								onChange: () => setPrefs({
+									...prefs,
+									replies: c.value
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: REPLIES_SHORT[c.value] })]
+						}, c.value))
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-pop-row",
+					id: "mic-ptt-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-pop-label",
+						id: "mic-ptt-label",
+						children: ["Push to talk", talkHotkey() && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "mic-pop-key",
+							children: [" ", talkHotkey()]
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "mic-seg",
+						role: "radiogroup",
+						"aria-labelledby": "mic-ptt-label",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "mic-seg-opt",
+							title: "Click to start, click again to stop",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "mic-ptt",
+								checked: !hold,
+								onChange: () => setPrefs({
+									...prefs,
+									ptt: "toggle"
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click" })]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "mic-seg-opt",
+							title: "Hold the mic (or the hotkey) while you speak",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "radio",
+								name: "mic-ptt",
+								checked: hold,
+								onChange: () => setPrefs({
+									...prefs,
+									ptt: "hold"
+								})
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold" })]
+						})]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "mic-pop-row mic-switch-row",
+					id: "mic-wake-row",
+					title: prefs.wake && wake.line || "",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "mic-pop-label",
+						children: wakeSwitchLabel(words)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "mic-wake",
+						checked: !!prefs.wake,
+						onChange: (e) => setWakePref(e.target.checked)
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "mic-pop-close",
-					id: "mic-pop-close",
-					"aria-label": "Close",
-					title: "Close (Esc)",
-					onClick: () => {
-						setMenuOpen(false);
-						btnRef.current?.focus();
-					},
-					children: "×"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mic-pop-row",
-				id: "mic-replies-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mic-pop-label",
-					id: "mic-replies-label",
-					children: "Read replies aloud"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-seg",
-					role: "radiogroup",
-					"aria-labelledby": "mic-replies-label",
-					children: REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "mic-seg-opt",
-						title: c.label,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "mic-replies",
-							checked: prefs.replies === c.value,
-							onChange: () => setPrefs({
-								...prefs,
-								replies: c.value
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: REPLIES_SHORT[c.value] })]
-					}, c.value))
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "mic-pop-row",
-				id: "mic-ptt-row",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "mic-pop-label",
-					id: "mic-ptt-label",
-					children: ["Push to talk", talkHotkey() && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "mic-pop-key",
-						children: [" ", talkHotkey()]
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mic-seg",
-					role: "radiogroup",
-					"aria-labelledby": "mic-ptt-label",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "mic-seg-opt",
-						title: "Click to start, click again to stop",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "mic-ptt",
-							checked: !hold,
-							onChange: () => setPrefs({
-								...prefs,
-								ptt: "toggle"
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click" })]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "mic-seg-opt",
-						title: "Hold the mic (or the hotkey) while you speak",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							type: "radio",
-							name: "mic-ptt",
-							checked: hold,
-							onChange: () => setPrefs({
-								...prefs,
-								ptt: "hold"
-							})
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold" })]
-					})]
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "mic-pop-row mic-switch-row",
-				id: "mic-wake-row",
-				title: prefs.wake && wake.line || "",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "mic-pop-label",
-					children: wakeSwitchLabel(words)
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "mic-wake",
-					checked: !!prefs.wake,
-					onChange: (e) => setWakePref(e.target.checked)
-				})]
-			}),
-			speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "mic-stop-talking",
-				id: "mic-stop-talking",
-				title: "Stop talking (Esc)",
-				onClick: hush,
-				children: "Stop talking"
-			})
-		]
-	}), document.body)] });
+					className: "mic-commands-btn",
+					id: "mic-commands",
+					title: "What you can say by voice",
+					onClick: openCommands,
+					children: "Voice commands…"
+				}),
+				speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "mic-stop-talking",
+					id: "mic-stop-talking",
+					title: "Stop talking (Esc)",
+					onClick: hush,
+					children: "Stop talking"
+				})
+			]
+		}), document.body),
+		cheat && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceCommands, {
+			items: cheat,
+			anchor: btnRef.current,
+			onClose: () => setCheat(null)
+		})
+	] });
 }
 //#endregion
 //#region src/lib/desktopNotify.ts
@@ -51346,6 +52044,51 @@ function popupTurn(q) {
 //#endregion
 //#region src/whatsNew/releases.ts
 var RELEASES = [
+	{
+		version: "0.13.1",
+		date: "2026-11-09",
+		big: false,
+		headline: "Dictation that follows the whole sentence.",
+		features: [{
+			title: "Words heard in context",
+			body: "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong."
+		}, {
+			title: "A sharper English model",
+			body: "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast."
+		}]
+	},
+	{
+		version: "0.13.0",
+		date: "2026-11-09",
+		big: true,
+		headline: "Voice that hears you right, and does more hands-free.",
+		features: [
+			{
+				title: "Accurate words, instant commands",
+				body: "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them."
+			},
+			{
+				title: "Scroll by voice",
+				body: "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going."
+			},
+			{
+				title: "Interrupt, go back, where am I",
+				body: "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused."
+			},
+			{
+				title: "Scratch that",
+				body: "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all."
+			},
+			{
+				title: "The rail keeps up",
+				body: "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it."
+			},
+			{
+				title: "What can I say?",
+				body: "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu."
+			}
+		]
+	},
 	{
 		version: "0.12.0",
 		date: "2026-11-04",
@@ -54089,7 +54832,7 @@ function plainDetail$1(c) {
 		if (/^no sign-in needed/i.test(d)) return "No sign-in needed";
 		if (/can't be checked/i.test(d)) return "Installed. MindFlock can't check its sign-in from here.";
 		if (/not signed in/i.test(d)) return "Installed, not signed in";
-		if (/^not installed/i.test(d)) return "Not installed";
+		if (/^not installed/i.test(d)) return "Not on this computer yet. Install it, then press Check again.";
 		return d;
 	}
 	if (c.kind === "github") {
@@ -54236,7 +54979,8 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 	const copyIsFix = a?.kind === "copy" && (!fixCmd || a.target === fixCmd);
 	const handler = a && !copyIsFix && a.target !== "agent-sign-in" && a.target !== "agent-install" ? actionHandler(a, deps) : null;
 	const legacy = a === void 0 ? configureAction(c, deps.gotoScreen) : null;
-	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test");
+	const showTest = !!c.test && !!onTest && !(c.kind === "github" && status === "off") && (stage === null || stage === "test" || stage === "install");
+	const testLabel = stage === "install" ? testing ? "Checking…" : "Check again" : testing ? "Testing…" : "Test";
 	const githubOnButton = c.kind === "github" && !!handler && !tourNext;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "conn-row",
@@ -54296,7 +55040,7 @@ function ConnectionRowView({ c, deps, result, testing, onTest, onChanged, tourNe
 						className: "test-btn conn-test",
 						disabled: testing,
 						onClick: onTest,
-						children: testing ? "Testing…" : "Test"
+						children: testLabel
 					}),
 					a?.kind === "dialog" && a.target === "agent-sign-in" && a.provider ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AgentSignIn, {
 						provider: a.provider,
@@ -55401,7 +56145,7 @@ function WindowRefresh() {
 			return "soon";
 		}
 	};
-	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => o.name + ": next ~" + fmtWhen(o.next_fire));
+	const statusLines = opts.filter((o) => selected.has(o.name) && o.next_fire).map((o) => agentName(o.name) + ": next ~" + fmtWhen(o.next_fire));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
 			className: "set-section-title",
@@ -55509,7 +56253,7 @@ function WindowRefresh() {
 									}
 								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									title: o.window?.note || "",
-									children: o.name + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
+									children: agentName(o.name) + (o.window?.hours ? " · " + o.window.hours + "h window" : o.window?.kind ? " · " + o.window.kind : "")
 								})]
 							}, o.name))
 						}),
@@ -58443,6 +59187,7 @@ function GuestLinks() {
 		copyText(l.url).then((ok) => toast(ok ? "Guest link copied — send it to them" : "Copy failed"));
 	};
 	const copyLocal = (l) => void copyText(l.local_url).then((ok) => toast(ok ? "On-your-network link copied" : "Copy failed"));
+	const localLive = (l) => l.local_live !== false;
 	const off = gateOn === false || gateOn === null && config?.auth_enabled === false;
 	const live = (links?.length || 0) > 0 || tunnel?.state === "up" || tunnel?.state === "starting";
 	const madeRow = made ? links?.find((l) => l.id === made) || null : null;
@@ -58618,11 +59363,18 @@ function GuestLinks() {
 								onClick: () => copy(madeRow),
 								children: "Copy link"
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							localLive(madeRow) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "test-btn",
 								onClick: () => copyLocal(madeRow),
 								children: "Copy on-your-network link"
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-guests-local-reach",
+								title: "MindFlock only listens on this computer, so an on-your-network link wouldn't open for anyone else. Make it reachable in Your devices first.",
+								onClick: () => openSettings("devices"),
+								children: "On-your-network link: Make reachable first"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
@@ -59050,12 +59802,15 @@ function sweepToast(r, offline) {
 	}
 	return line;
 }
-function offlineRows(instances) {
+function offlineRows(instances, logins) {
 	return instances.filter((i) => {
-		if (i.device || i.pending || i.sleeping) return false;
+		if (i.device || i.pending || i.sleeping || missingAgent$1(i, logins)) return false;
 		const ss = deriveSessionState(i);
 		return ss.state === "offline" && ss.restartable && i.status !== "paused";
 	});
+}
+function missingAgent$1(i, logins) {
+	return !!agentMissing(i, logins, "offline");
 }
 var LOW_MEMORY_LINE = "Memory is low — starting them all may fill it again.";
 var DISMISS_KEY = "mf.heldNotice.dismissed";
@@ -59074,10 +59829,11 @@ function writeDismissed(v) {
 function OfflineBar() {
 	const { data: instances = [] } = useInstances();
 	const memory = useMemory().data;
+	const logins = useSetup().data?.logins;
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [dismissed, setDismissed] = (0, import_react.useState)(readDismissed);
-	const offline = offlineRows(instances);
-	const held = heldRows(instances);
+	const offline = offlineRows(instances, logins);
+	const held = heldRows(instances, (i) => missingAgent$1(i, logins));
 	const heldKey = heldNoticeKey(held);
 	const notice = held.length > 0 && !heldNoticeHidden(dismissed, heldKey);
 	if (!notice && offline.length < 2 && !busy) return null;
@@ -61153,6 +61909,15 @@ function isRequiredCheck(c) {
 	if (typeof c.required === "boolean") return c.required;
 	return !EXTRA_CHECKS.has(String(c.id || ""));
 }
+function checkLabel(c) {
+	const id = String(c.id || "");
+	if (id === "agent-cli" && c.provider) return `agent (${c.provider})`;
+	if (id === "agent-auth" && c.provider) return `agent sign-in (${c.provider})`;
+	return c.label || id;
+}
+function asksGitIdentity(c) {
+	return c.id === "git-identity" && (c.status === "warn" || c.status === "fail");
+}
 function requiredChecks(checks) {
 	return (checks || []).filter(isRequiredCheck);
 }
@@ -61205,7 +61970,78 @@ function useDoctorAutoShow() {
 function plainDetail(text) {
 	return (text || "").replace(/`([^`]*)`/g, "$1");
 }
+function GitIdentityForm({ fix, onSaved }) {
+	const [name, setName] = (0, import_react.useState)("");
+	const [email, setEmail] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const ready = !!name.trim() && !!email.trim();
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "doctor-identity",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "doctor-identity-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "doctor-ident-name",
+						placeholder: "Your Name",
+						"aria-label": "Your name for commits",
+						value: name,
+						onChange: (e) => setName(e.target.value),
+						onClick: (e) => e.stopPropagation()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "doctor-ident-email",
+						placeholder: "you@example.com",
+						"aria-label": "Your email for commits",
+						type: "email",
+						value: email,
+						onChange: (e) => setEmail(e.target.value),
+						onClick: (e) => e.stopPropagation()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "doctor-ident-save",
+						disabled: busy || !ready,
+						title: ready ? void 0 : "Fill in both your name and email",
+						onClick: (e) => {
+							e.stopPropagation();
+							setBusy(true);
+							setError("");
+							api("/api/github/identity", { json: {
+								name: name.trim(),
+								email: email.trim()
+							} }).then(() => {
+								setBusy(false);
+								toast("git now knows who you are");
+								onSaved();
+							}, (err) => {
+								setBusy(false);
+								setError(err.message || "couldn't save");
+							});
+						},
+						children: busy ? "Saving…" : "Save"
+					})
+				]
+			}),
+			error ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "error doctor-ident-error",
+				children: error
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The name and email your commits carry — saved in your global git config (~/.gitconfig)."
+			}),
+			fix ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "doctor-ident-cli",
+				onClick: (e) => e.stopPropagation(),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Or in a terminal" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: plainDetail(fix) })]
+			}) : null
+		]
+	});
+}
 function CheckRow({ c, onSignedIn }) {
+	const identity = asksGitIdentity(c);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 		className: "doctor-check st-" + (c.status || "info"),
 		children: [
@@ -61215,13 +62051,16 @@ function CheckRow({ c, onSignedIn }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "doctor-label",
-				children: c.label || c.id || ""
+				children: checkLabel(c)
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "doctor-detail",
 				children: [
 					plainDetail(c.detail),
-					c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					identity ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GitIdentityForm, {
+						fix: c.fix,
+						onSaved: onSignedIn
+					}) : c.fix && c.status !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "doctor-fix",
 						children: [
 							" ",
@@ -61864,6 +62703,112 @@ function SetupChip() {
 	});
 }
 //#endregion
+//#region src/components/sidebar/railFollow.ts
+var PULSE_MS = 1100;
+var CLICK_GRACE_MS = 600;
+var FIND_FRAMES = 4;
+function foldOver(key, folds) {
+	if (!key) return [];
+	const hit = folds.filter((f) => f.collapsed && f.keys.includes(key));
+	return [...hit.filter((f) => f.kind === "device"), ...hit.filter((f) => f.kind === "run")];
+}
+function outOfView(row, view) {
+	return row.top < view.top - .5 || row.bottom > view.bottom + .5;
+}
+function reducedMotion$1() {
+	try {
+		return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+	} catch {
+		return false;
+	}
+}
+function railRowEl(key) {
+	if (typeof document === "undefined") return null;
+	const list = document.getElementById("instance-list");
+	if (!list) return null;
+	for (const el of Array.from(list.querySelectorAll("li[data-title]"))) if (el.getAttribute("data-title") === key) return el;
+	return null;
+}
+function scroller(el) {
+	for (let p = el.parentElement; p; p = p.parentElement) {
+		const oy = getComputedStyle(p).overflowY;
+		if ((oy === "auto" || oy === "scroll") && p.scrollHeight > p.clientHeight) return p;
+	}
+	return null;
+}
+function revealRow(el) {
+	const box = scroller(el);
+	const view = box ? box.getBoundingClientRect() : {
+		top: 0,
+		bottom: window.innerHeight
+	};
+	if (!outOfView(el.getBoundingClientRect(), view)) return false;
+	el.scrollIntoView({
+		block: "nearest",
+		inline: "nearest",
+		behavior: reducedMotion$1() ? "auto" : "smooth"
+	});
+	return true;
+}
+var pulseTimers = /* @__PURE__ */ new WeakMap();
+function pulseRow(el) {
+	clearTimeout(pulseTimers.get(el));
+	el.classList.remove("voice-pulse");
+	el.offsetWidth;
+	el.classList.add("voice-pulse");
+	pulseTimers.set(el, setTimeout(() => el.classList.remove("voice-pulse"), PULSE_MS));
+}
+var lastRailPress = 0;
+var pressWired = false;
+function wirePress() {
+	if (pressWired || typeof document === "undefined") return;
+	pressWired = true;
+	document.addEventListener("pointerdown", (e) => {
+		if (e.target?.closest?.("#instance-list")) lastRailPress = Date.now();
+	}, true);
+}
+function withRow(key, fn) {
+	let left = FIND_FRAMES;
+	let raf = 0;
+	const tick = () => {
+		const el = railRowEl(key);
+		if (el) return fn(el);
+		if (--left > 0) raf = requestAnimationFrame(tick);
+	};
+	raf = requestAnimationFrame(tick);
+	return () => cancelAnimationFrame(raf);
+}
+function useRailFollow(o) {
+	const foldsRef = (0, import_react.useRef)(o.folds);
+	foldsRef.current = o.folds;
+	const unfoldRef = (0, import_react.useRef)(o.unfold);
+	unfoldRef.current = o.unfold;
+	(0, import_react.useEffect)(wirePress, []);
+	const follow = (key, pulse, unfold = true) => {
+		if (unfold) for (const f of foldOver(key, foldsRef.current)) unfoldRef.current(f);
+		const clicked = !pulse && Date.now() - lastRailPress < CLICK_GRACE_MS;
+		return withRow(key, (el) => {
+			if (!clicked) revealRow(el);
+			if (pulse) pulseRow(el);
+		});
+	};
+	const seen = (0, import_react.useRef)(false);
+	(0, import_react.useEffect)(() => {
+		if (!o.focused) return;
+		const first = !seen.current;
+		seen.current = true;
+		return follow(o.focused, false, !first);
+	}, [o.focused]);
+	(0, import_react.useEffect)(() => {
+		if (!o.head) return;
+		return follow(o.head, false);
+	}, [o.head]);
+	(0, import_react.useEffect)(() => {
+		if (!o.pulse) return;
+		return follow(o.pulse.key, true);
+	}, [o.pulse?.n]);
+}
+//#endregion
 //#region src/components/sidebar/Sidebar.tsx
 var NO_FOLDS = /* @__PURE__ */ new Set();
 var VIEW_MODES = [
@@ -62130,7 +63075,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		});
 		return railKeys.filter((k) => byKey.has(k)).map((k) => byKey.get(k));
 	};
-	const localSplit = splitRail(hideFoldedFamilies(toRail(localRows, winFiltered), ui.filter ? NO_FOLDS : ui.collapsedFamilies, ui.focused), runs, {
+	const localRail = hideFoldedFamilies(toRail(localRows, winFiltered), ui.filter ? NO_FOLDS : ui.collapsedFamilies, ui.focused);
+	const localSplit = splitRail(localRail, runs, {
 		collapsed: ui.collapsedRuns,
 		act: effectiveActivity,
 		filtering: !!ui.filter
@@ -62151,6 +63097,30 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 	(0, import_react.useEffect)(() => {
 		useUi.getState().setRailOrder(displayedKeys);
 	}, [railSig]);
+	const railFolds = [...localSplit.groups.map((g) => ({
+		kind: "run",
+		id: g.id,
+		collapsed: !!g.collapsed,
+		keys: g.entries.map((e) => e.key)
+	})), ...grouped ? [{
+		kind: "device",
+		id: "__self",
+		collapsed: ui.collapsedDevices.has("__self"),
+		keys: localRail.map((r) => r.key)
+	}, ...devRails.concat(peerRails).map(({ dkey, rail }) => ({
+		kind: "device",
+		id: dkey,
+		collapsed: ui.collapsedDevices.has(dkey),
+		keys: rail.map((r) => r.key)
+	}))] : []];
+	const mruHead = ui.mru[0] || "";
+	useRailFollow({
+		focused: ui.focused,
+		head: mruHead.startsWith("\0") ? mruHead : null,
+		pulse: ui.railPulse,
+		folds: railFolds,
+		unfold: (f) => f.kind === "run" ? ui.toggleRunCollapsed(f.id) : ui.toggleDeviceCollapsed(f.id)
+	});
 	const nestSeen = (0, import_react.useRef)(/* @__PURE__ */ new Map());
 	const stableNest = (key, n) => {
 		const prev = nestSeen.current.get(key);
@@ -64249,38 +65219,70 @@ function PausedBody({ title, hidden }) {
 }
 //#endregion
 //#region src/components/grid/HeldBody.tsx
+function heldMissingLine(name) {
+	return agentName(name) + " isn't installed on this computer, so this session's agent couldn't start. Install it, then Start it here.";
+}
+function useMissingAgent(title) {
+	const { data: setup } = useQuery({
+		queryKey: SETUP_KEY,
+		queryFn: () => api("/api/setup"),
+		staleTime: 3e4
+	}, queryClient);
+	const inst = (queryClient.getQueryData(["instances"]) || []).find((r) => r.title === title);
+	if (!inst) return null;
+	const name = agentMissing(inst, setup?.logins, "offline");
+	if (!name) return null;
+	return {
+		name,
+		isDefault: installTarget(name, setup?.default_provider || "") === "setup"
+	};
+}
 function HeldBody({ title, reason, hidden, onStarted }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const missing = useMissingAgent(title);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "pane-term agent-term pane-paused pane-held" + (hidden ? " hidden" : ""),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "paused-body held-body",
 			role: "status",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "paused-head",
-					children: "Offline"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "paused-text",
-					children: heldLine(reason)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					className: "paused-resume held-start",
-					type: "button",
-					disabled: busy,
-					title: "Start the agent again in the same worktree, resuming its conversation",
-					onClick: (e) => {
-						e.stopPropagation();
-						setBusy(true);
-						startSession(title).then((r) => {
-							setBusy(false);
-							if (r) onStarted?.();
-						});
-					},
-					children: busy ? "Starting…" : "▶ Start"
-				})
-			]
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-head",
+				children: "Offline"
+			}), missing ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-text",
+				children: heldMissingLine(missing.name)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				className: "paused-resume held-install",
+				type: "button",
+				title: "Open " + (missing.isDefault ? "Setup" : "Settings → Agents") + " to install " + agentName(missing.name),
+				onClick: (e) => {
+					e.stopPropagation();
+					if (missing.isDefault) useUi.getState().openDialogFor("setup");
+					else openAgentSettings(missing.name);
+				},
+				children: [
+					"Install ",
+					agentName(missing.name),
+					"…"
+				]
+			})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "paused-text",
+				children: heldLine(reason)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				className: "paused-resume held-start",
+				type: "button",
+				disabled: busy,
+				title: "Start the agent again in the same worktree, resuming its conversation",
+				onClick: (e) => {
+					e.stopPropagation();
+					setBusy(true);
+					startSession(title).then((r) => {
+						setBusy(false);
+						if (r) onStarted?.();
+					});
+				},
+				children: busy ? "Starting…" : "▶ Start"
+			})] })]
 		})
 	});
 }
@@ -86162,6 +87164,11 @@ var VERIFY_WHO = {
 	agent: "by the agent",
 	you: "by you"
 };
+var YOU_WAITS = "waits for your Done";
+function youFlownSub(step, state) {
+	if (step.kind !== "you" || state !== "done" && state !== "skipped") return "";
+	return stopSummary(step) === YOU_WAITS ? state : "";
+}
 function stopSummary(step) {
 	const c = step.config || {};
 	switch (step.kind) {
@@ -86179,7 +87186,7 @@ function stopSummary(step) {
 			const items = youItems(step);
 			if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
 			const t = String(c.text ?? "").trim();
-			return t ? clip(t) : "waits for your Done";
+			return t ? clip(t) : YOU_WAITS;
 		}
 		case "wait": {
 			const until = String(c.until ?? "").trim();
@@ -86609,7 +87616,7 @@ function flightStops(f, kinds) {
 			kind: "stop",
 			row: "main",
 			title: stopTitle(s, kinds),
-			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), stopSummary(s)),
+			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s)),
 			state,
 			icon: s.kind,
 			perch: stepActor(s, kinds) === "you",
@@ -100402,7 +101409,7 @@ function otherSessionsLine(titles, worktree) {
 function agentMissingReason(agent, installed) {
 	if (!installed || !agent) return "";
 	if (installed[agent] !== false) return "";
-	return agent + " isn't installed on this device. Install it in Settings → Agents, or pick another agent.";
+	return agentName(agent) + " isn't installed on this device. Install it in one click from Get set up (step ①; a custom agent: Settings → Custom agents), or pick another agent.";
 }
 function preferInstalled(agent, names, installed) {
 	if (!installed || installed[agent] !== false) return agent;
@@ -109459,6 +110466,7 @@ function settleSave(seqs, seq, ids, ok) {
 //#endregion
 //#region src/components/intake/sourceForm.ts
 var TEST_FRESH_MS = 864e5;
+var REQUIRED = "Required";
 function lastTestOf(source) {
 	const raw = source?.last_test;
 	if (!raw || typeof raw !== "object") return null;
@@ -109524,13 +110532,17 @@ function splitForSave(sources, catalog, storedIds) {
 	for (const s of sources) {
 		const meta = catalog.find((p) => p.id === s.provider) || null;
 		const missing = storedIds.has(s.id) ? [] : missingRequiredFields(meta, s);
-		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, "Required"]));
+		if (missing.length) held[s.id] = Object.fromEntries(missing.map((f) => [f.key, REQUIRED]));
 		else send.push(s);
 	}
 	return {
 		send,
 		held
 	};
+}
+function shownFieldError(error, typed) {
+	if (error === REQUIRED && typed !== null && typed.trim() !== "") return void 0;
+	return error;
 }
 function fieldErrorsFrom(body) {
 	if (!body || typeof body !== "object") return {};
@@ -109885,11 +110897,12 @@ function rowsFor(source) {
 		hint: ""
 	}];
 }
-function RepoListField({ source, onChange, onPending, onSettled }) {
+function RepoListField({ source, onChange, onPending, onSettled, error }) {
 	const stored = sourceRepos(source);
 	const storedRef = (0, import_react.useRef)(stored);
 	storedRef.current = stored;
 	const [rows, setRows] = (0, import_react.useState)(() => rowsFor(source));
+	const [touched, setTouched] = (0, import_react.useState)(false);
 	const save = useAutosave((next) => {
 		if (!sameRepos(cleanRepos(next), storedRef.current)) onChange(reposPatch(next));
 		else onSettled?.();
@@ -109919,7 +110932,7 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 		}
 	};
 	const many = rows.length > 1;
-	const missing = cleanRepos(rows).length === 0;
+	const red = cleanRepos(rows).length === 0 && (touched || !!error);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "set-row tk-repos",
 		role: "group",
@@ -109942,11 +110955,15 @@ function RepoListField({ source, onChange, onPending, onSettled }) {
 						required: i === 0,
 						"data-tk-field": i === 0 ? "repo_url" : void 0,
 						"aria-label": many ? `Repo ${i + 1} URL` : "Repo URL",
-						className: "tk-repo-url" + (i === 0 && missing ? " field-missing" : ""),
+						className: "tk-repo-url" + (i === 0 && red ? " field-missing" : ""),
+						"aria-invalid": i === 0 && red ? true : void 0,
 						placeholder: "git@github.com:org/repo.git",
 						value: r.url,
 						onChange: (e) => edit(i, { url: e.target.value }),
-						onBlur: save.flush,
+						onBlur: () => {
+							setTouched(true);
+							save.flush();
+						},
 						onKeyDown: onKey
 					}),
 					many && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -111043,6 +112060,7 @@ function AutoStartLink({ kind }) {
 	if (kind === "tickets" && (!m.status || !m.status.available)) return null;
 	if (!(kind === "tickets" ? m.ticketSources > 0 : kind === "prs" ? m.repos > 0 : m.issueRepos > 0)) return null;
 	const on = kind === "tickets" ? m.ticketsOn : kind === "prs" ? m.prsOn : m.issuesOn;
+	if (!m.ticketsOn && !m.prsOn && !m.issuesOn) return null;
 	const state = kind === "tickets" && on && broken.length ? "on, but " + listNames(broken.map((b) => b.name)) + " can't connect" : kind !== "tickets" && m.runsOn && on ? "runs on " + m.runsOn : on ? "on — " + everyText(m.every[kind]) : "off";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "ik-autostart-link",
@@ -111805,7 +112823,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
-				"Connect a tracker. Tickets in the states you pick start as sessions — on their own while auto-start is on, or when you press ",
+				stored.length ? null : "Connect a tracker. ",
+				"Tickets in the states you pick start as sessions — on their own while auto-start is on, or when you press ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Start" }),
 				"."
 			]
@@ -111949,7 +112968,7 @@ function StatePicker({ field, source, states, loadStates, onChange }) {
 						value: String(st.id),
 						children: st.name || String(st.id)
 					}, String(st.id))),
-					safe && !selected.length && !hasLabels ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					safe && !selected.length && !hasLabels && source.assignee_scope !== "anyone" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 						value: ANY_STATE,
 						children: "Any " + noun + " — start every ticket assigned to me"
 					}) : null
@@ -112479,6 +113498,11 @@ function AssignedTicketRow({ t, all, agents, configuredAgent, configuredDepth, c
 		}
 	});
 }
+function fieldPart(key, credFields, filterFields) {
+	if (key && credFields.some((f) => f.key === key)) return "connect";
+	if (key && filterFields.some((f) => f.key === key)) return "takes";
+	return key ? "goes" : "connect";
+}
 var EDIT_PARTS = [
 	["connect", "Connect"],
 	["takes", "What it takes"],
@@ -112583,7 +113607,9 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 	const paired = filterFields.length >= 2 && filterFields[0].key === "assignee_scope" && filterFields[1].type === "state";
 	const saveLine = !saved ? unsaved ? "Not saved — fill in the marked fields" : dirty ? "Saving…" : "Not saved yet" : dirty || save?.state === "saving" || save?.state === "pending" ? "Saving…" : save?.state === "failed" ? "Not saved" : save?.state === "saved" ? "Saved ✓" : "";
 	const name = sourceDisplayName(source, catalog);
-	const [part, setPart] = (0, import_react.useState)(() => pillState === "connected" && !unsaved ? "takes" : "connect");
+	const errPart = unsaved ? fieldPart(Object.keys(errs)[0], credFields, filterFields) : null;
+	const pillPart = errPart || "connect";
+	const [part, setPart] = (0, import_react.useState)(() => errPart || (pillState === "connected" ? "takes" : "connect"));
 	const heads = section === "edit";
 	const showConnect = section === "connect" || heads && part === "connect";
 	const showTakes = section === "setup" || heads && part === "takes";
@@ -112612,7 +113638,7 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 							children: i + 1
 						}),
 						label,
-						key === "connect" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
+						key === pillPart ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SourcePill, {
 							state: pillState,
 							label: pillLabel,
 							message: pillMessage
@@ -112694,7 +113720,8 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 							onChange(patch);
 						},
 						onPending: () => onDirty("repos", true),
-						onSettled: () => onDirty("repos", false)
+						onSettled: () => onDirty("repos", false),
+						error: errs.repo_url || errs.repos
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -112849,6 +113876,8 @@ function FieldNote({ field, error }) {
 	}) : null;
 }
 function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty }) {
+	const [typed, setTyped] = (0, import_react.useState)(null);
+	const shownError = shownFieldError(error, typed);
 	const save = useAutosave((v) => {
 		onDirty?.(false);
 		if (f.secret && v === "") return;
@@ -112886,11 +113915,14 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 		type: f.secret ? "password" : "text",
 		autoComplete: "off",
 		"data-tk-field": f.key,
-		className: error ? "field-missing" : "",
-		"aria-invalid": error ? true : void 0,
+		className: shownError ? "field-missing" : "",
+		"aria-invalid": shownError ? true : void 0,
 		placeholder: f.secret && stored ? "•••set (saved) — type to replace" : f.placeholder || "",
 		defaultValue: f.secret && saved ? "" : source[f.key] || "",
-		onChange: (e) => save.schedule(e.target.value),
+		onChange: (e) => {
+			setTyped(e.target.value);
+			save.schedule(e.target.value);
+		},
 		onBlur: save.flush,
 		onKeyDown: (e) => {
 			if (e.key === "Enter") {
@@ -112921,7 +113953,7 @@ function CatalogInput({ field: f, source, saved = true, error, onChange, onDirty
 			}) : input,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldNote, {
 				field: f,
-				error
+				error: shownError
 			}),
 			tokenUrl ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
 				className: "ik-token-link",
@@ -114056,7 +115088,7 @@ function AutoStartLine({ ticketSources, gotoTab }) {
 			className: "linklike",
 			title: "The switches for tickets, PR comments and new issues",
 			onClick: () => gotoTab("autostart"),
-			children: p.onKinds.length ? "Auto-start switches ›" : "Turn on ›"
+			children: "Auto-start switches ›"
 		}) : null]
 	});
 }
@@ -115262,7 +116294,7 @@ function Mobile(p) {
 								dangerouslySetInnerHTML: { __html: data.qr_svg }
 							}),
 							data.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: data.note }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: data.urls || [] }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(UrlList, { urls: phoneUrls(data.urls) }),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								id: "mobile-sign-in-hint",
 								children: "Scanning signs the phone in. Opening a link by hand asks for the access token (Settings → Security)."
@@ -115320,6 +116352,16 @@ function PhoneAppRow({ app }) {
 		})]
 	});
 }
+function phoneUrls(urls) {
+	return (urls || []).filter((u) => {
+		try {
+			const h = new URL(u.url).hostname;
+			return !(h === "localhost" || h === "[::1]" || h.startsWith("127."));
+		} catch {
+			return true;
+		}
+	});
+}
 function UrlList({ urls }) {
 	if (!urls.length) return null;
 	const plain = urls.some((u) => /^http:\/\//i.test(u.url));
@@ -115361,6 +116403,11 @@ var WORD_ROWS = [
 		kind: "clear",
 		label: "Start over",
 		hint: "Takes back the message you are saying."
+	},
+	{
+		kind: "undo",
+		label: "Undo last phrase",
+		hint: "At the end of a phrase, drops that phrase; said alone, takes back the last phrase typed."
 	},
 	{
 		kind: "stop",
@@ -115913,6 +116960,11 @@ function voiceFields(kind, where, backend) {
 	};
 }
 var noDot = (s) => s.replace(/\.\s*$/, "");
+var HERE_POINTER = /:\s*Settings → Voice installs them\b/;
+function hereDetail(kind, detail) {
+	if (!HERE_POINTER.test(detail)) return detail;
+	return detail.replace(HERE_POINTER, kind === "stt" ? " — install them below" : " — install them under Recognition");
+}
 var VOICE_HOST_ON_USE = "starts when you use voice, stops when idle";
 function readinessLine(kind, view, where, backend = "") {
 	if (where !== "server") return {
@@ -115929,10 +116981,11 @@ function readinessLine(kind, view, where, backend = "") {
 	const id = (kind === "stt" ? sr.stt_backend : sr.tts_backend) || "";
 	let detail = (kind === "stt" ? sr.stt_detail : sr.tts_detail) || "";
 	if (backend === "system" || !backend && id === "system") {
-		if (view.system?.detail) detail = view.system.detail;
-		else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
+		if (view.system?.detail) {
+			if (!detail || view.system.platform === "none") detail = view.system.detail;
+		} else if (!view.system && !ok) detail = detail || "this server has no built-in engine yet — update MindFlock";
 	}
-	detail = noDot(detail);
+	detail = hereDetail(kind, noDot(detail));
 	if (ok && kind === "tts" && id === "openai" && localVoice({
 		...DEFAULT_VOICE_CFG,
 		server_ready: sr
@@ -115967,11 +117020,11 @@ function tryState(view, canRecord) {
 			why: ""
 		} : {
 			ok: false,
-			why: "No voice is ready on the server" + (sr.tts_detail ? ": " + noDot(sr.tts_detail) : "") + "."
+			why: "No voice is ready on the server" + (sr.tts_detail ? ": " + hereDetail("try", noDot(sr.tts_detail)) : "") + "."
 		},
 		hear: !sr.stt ? {
 			ok: false,
-			why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + noDot(sr.stt_detail) : "") + "."
+			why: "No recognition is ready on the server" + (sr.stt_detail ? ": " + hereDetail("try", noDot(sr.stt_detail)) : "") + "."
 		} : !canRecord ? {
 			ok: false,
 			why: "This browser can't record from a microphone."
@@ -116099,6 +117152,7 @@ function VoiceSection({ active }) {
 	const [installSupported, setInstallSupported] = (0, import_react.useState)(false);
 	const [installStatus, setInstallStatus] = (0, import_react.useState)({ state: "idle" });
 	const [installTouched, setInstallTouched] = (0, import_react.useState)(false);
+	const [installWhat, setInstallWhat] = (0, import_react.useState)("local");
 	const following = (0, import_react.useRef)(false);
 	const mounted = (0, import_react.useRef)(true);
 	(0, import_react.useEffect)(() => {
@@ -116120,6 +117174,7 @@ function VoiceSection({ active }) {
 		api("/api/voice/install-local").then((s) => {
 			if (!mounted.current) return;
 			setInstallSupported(true);
+			if (s?.what === "moonshine" || s?.what === "local") setInstallWhat(s.what);
 			if (s?.state === "running" && !following.current) {
 				following.current = true;
 				setInstallTouched(true);
@@ -116128,17 +117183,28 @@ function VoiceSection({ active }) {
 			} else if (s?.state === "failed" && !following.current) setInstallStatus(s);
 		}).catch(() => {});
 	}, [active]);
-	const onInstall = () => {
+	const start = (what) => {
 		if (following.current) return;
 		following.current = true;
+		setInstallWhat(what);
 		setInstallTouched(true);
-		installLocalModels(setInstallStatus, { alive }).then(settle);
+		installLocalModels(setInstallStatus, {
+			alive,
+			what
+		}).then(settle);
 	};
+	const idle = { state: "idle" };
 	const install = {
 		supported: installSupported,
-		status: installStatus,
-		touched: installTouched,
-		onInstall
+		status: installWhat === "local" ? installStatus : idle,
+		touched: installTouched && installWhat === "local",
+		onInstall: () => start("local")
+	};
+	const fast = {
+		supported: installSupported,
+		status: installWhat === "moonshine" ? installStatus : idle,
+		touched: installTouched && installWhat === "moonshine",
+		onInstall: () => start("moonshine")
 	};
 	const clearKey = async (kind) => {
 		try {
@@ -116154,13 +117220,14 @@ function VoiceSection({ active }) {
 		view,
 		onClearKey: clearKey,
 		install,
+		fast,
 		tryRow: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TryRow, {
 			view,
 			install
 		})
 	});
 }
-function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
+function VoiceSectionView({ model, view, onClearKey, install, fast, tryRow }) {
 	const approve = model.get("voice", "approve_dialogs") !== false;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		id: "voice-screen",
@@ -116183,20 +117250,28 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-section",
 				id: "voice-engines",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
-					kind: "stt",
-					title: "Recognition",
-					model,
-					view,
-					onClearKey,
-					install
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
-					kind: "tts",
-					title: "Voice",
-					model,
-					view,
-					onClearKey
-				})]
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+						kind: "stt",
+						title: "Recognition",
+						model,
+						view,
+						onClearKey,
+						install
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LiveWordsRow, {
+						model,
+						view,
+						fast
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceKindBlock, {
+						kind: "tts",
+						title: "Voice",
+						model,
+						view,
+						onClearKey
+					})
+				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "set-section",
@@ -116659,11 +117734,11 @@ function VoiceKindBlock({ kind, title, model, view, onClearKey, install }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
 					group: "voice",
 					field: kind + "_model",
-					placeholder: local ? "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"
+					placeholder: local ? kind === "stt" ? "auto (small.en for English)" : "small" : kind === "stt" ? "gpt-transcribe" : "gpt-4o-mini-tts"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint",
-					children: local ? "A faster-whisper size: tiny, base, small or medium." : "The host's model name (Groq: whisper-large-v3-turbo)."
+					children: local ? "A faster-whisper size: tiny, base, small or medium. Empty: small.en for English, small otherwise." : "The host's model name (Groq: whisper-large-v3-turbo)."
 				})
 			]
 		}),
@@ -116716,6 +117791,41 @@ var INSTALL_LABEL = "Install local models (about 300 MB)";
 var INSTALL_BASIC_LINE = "Windows' built-in recognizer is basic. Local models (faster-whisper) recognise far better and stay on this computer.";
 var INSTALL_REFUSED = "Only the owner can install models: do it on that computer itself.";
 var INSTALL_POLL_MS = 2e3;
+var MOONSHINE_LABEL = "Install fast recognition (Moonshine, ~200 MB)";
+var MOONSHINE_WHY = "Moonshine types your words as you say them and has the text ready about 30 ms after you stop (whisper takes about a second). English only; long dictation is still polished by whisper.";
+var INSTALL_NEXT_NET = "This computer couldn't reach the download servers: check that it is online (and any proxy or VPN), then try again.";
+var installNextDisk = (size) => `The disk is full: free ${size}, then try again.`;
+function installNextStep(error, size) {
+	const e = String(error || "");
+	if (/no space left|disk (is )?full|ENOSPC|not enough space/i.test(e)) return installNextDisk(size);
+	if (/dns error|lookup address|name resolution|could not resolve|failed to fetch|connection (refused|reset|error)|timed? ?out|network is unreachable|certificate|SSL|proxy/i.test(e)) return INSTALL_NEXT_NET;
+	return "";
+}
+function liveWordsLine(view) {
+	if (!view?.server_ready?.stt_stream) return "";
+	if (view.stream_label) return "Live words: " + view.stream_label;
+	if (view.stream_engine === "moonshine") return "Live words: Moonshine";
+	return view.stream_model ? "Live words: Whisper " + view.stream_model : "";
+}
+function moonshineOffer(view, streamSetting) {
+	const sr = view?.server_ready;
+	if (!sr?.stt_stream || sr.stt_backend !== "local") return false;
+	if (!view?.moonshine || view.moonshine.available) return false;
+	const s = String(streamSetting ?? "").trim().toLowerCase();
+	return s === "" || s === "moonshine";
+}
+function moonshineView(st, allowed) {
+	const v = installView(st, allowed, "about 200 MB");
+	if (st.state === "done") return {
+		...v,
+		text: "Installed — live words now use Moonshine."
+	};
+	if (st.state === "failed" && !st.refused && allowed) return {
+		...v,
+		text: v.text + " Live words keep using whisper meanwhile."
+	};
+	return v;
+}
 function basicRecognizer(view) {
 	if (view?.system?.stt_quality) return view.system.stt_quality === "basic";
 	const sr = view?.server_ready;
@@ -116724,6 +117834,7 @@ function basicRecognizer(view) {
 function installOffer(backend, view) {
 	if (!view) return null;
 	const sr = view.server_ready || {};
+	if (!sr.tts && /local models not installed/i.test(sr.tts_detail || "")) return "local";
 	if (sr.stt_backend === "local" && sr.stt) return null;
 	if (backend === "local") return "local";
 	if (backend === "system" && basicRecognizer(view)) return "basic";
@@ -116741,7 +117852,7 @@ function tryInstallFix(view, install) {
 	return localModelsMissing(view) || st === "failed" && install.touched;
 }
 var TRY_INSTALL_LINE = "Local models aren't installed on the server yet. Install them here; they run on this computer.";
-function installView(st, allowed) {
+function installView(st, allowed, size = "about 300 MB") {
 	const last = st.state === "running" ? (st.log || []).filter(Boolean).slice(-1)[0] || "" : "";
 	if (st.state === "running") {
 		const head = st.already ? "Already installing" : "Installing";
@@ -116770,12 +117881,15 @@ function installView(st, allowed) {
 		text: INSTALL_REFUSED,
 		last
 	};
-	if (st.state === "failed") return {
-		button: "retry",
-		disabled: false,
-		text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + ".",
-		last
-	};
+	if (st.state === "failed") {
+		const next = installNextStep(st.error, size);
+		return {
+			button: "retry",
+			disabled: false,
+			text: "Couldn't install: " + noDot(st.error || "the server gave no reason") + "." + (next ? " " + next : ""),
+			last
+		};
+	}
 	return {
 		button: "install",
 		disabled: false,
@@ -116815,7 +117929,10 @@ async function installLocalModels(onStatus, opts = {}) {
 	const call = opts.call || api;
 	let already = false;
 	try {
-		await call("/api/voice/install-local", { method: "POST" });
+		await call("/api/voice/install-local", opts.what === "moonshine" ? {
+			method: "POST",
+			json: { what: "moonshine" }
+		} : { method: "POST" });
 		onStatus({
 			state: "running",
 			step: "Starting"
@@ -116877,7 +117994,41 @@ function InstallRow({ offer, install, allowed }) {
 		})]
 	});
 }
-function InstallStatus({ v, state, idle, idPrefix }) {
+function LiveWordsRow({ model, view, fast }) {
+	const line = liveWordsLine(view);
+	if (!line) return null;
+	const offer = moonshineOffer(view, model.get("voice", "stt_stream_model"));
+	if (!(!!fast?.supported && (offer || fast.status.state === "running" || fast.touched)) || !fast) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		id: "voice-live-words",
+		children: line
+	});
+	const v = moonshineView(fast.status, view?.configure_allowed !== false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row onboarding-action",
+		id: "voice-moonshine",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "onboarding-action-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				id: "voice-live-words",
+				children: line
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallStatus, {
+				v,
+				state: fast.status.state,
+				idle: MOONSHINE_WHY,
+				idPrefix: "voice-moonshine",
+				busyLabel: "Installing fast recognition"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallButton, {
+			v,
+			install: fast,
+			id: "voice-moonshine-btn",
+			label: MOONSHINE_LABEL
+		})]
+	});
+}
+function InstallStatus({ v, state, idle, idPrefix, busyLabel = "Installing local models" }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		v.text ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "set-hint",
@@ -116893,7 +118044,7 @@ function InstallStatus({ v, state, idle, idPrefix }) {
 		}),
 		v.button === "busy" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {
 			className: "voice-install-progress",
-			"aria-label": "Installing local models"
+			"aria-label": busyLabel
 		}),
 		v.last && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "set-hint voice-install-log",
@@ -116903,7 +118054,7 @@ function InstallStatus({ v, state, idle, idPrefix }) {
 		})
 	] });
 }
-function InstallButton({ v, install, id }) {
+function InstallButton({ v, install, id, label = INSTALL_LABEL }) {
 	if (!v.button) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
@@ -116912,7 +118063,7 @@ function InstallButton({ v, install, id }) {
 		disabled: v.disabled,
 		title: v.disabled && v.button === "install" ? v.text : void 0,
 		onClick: install.onInstall,
-		children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : INSTALL_LABEL
+		children: v.button === "retry" ? "Try again" : v.button === "busy" ? "Installing…" : label
 	});
 }
 var canRecord = () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
@@ -119617,6 +120768,7 @@ function PeerLinkCard(props) {
 			})
 		]
 	}, "talk");
+	const mayDelete = confirm === "unshare" || confirm === "unlink" && !!link.shared;
 	const confirmView = confirm === "mismatch" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		title: `It doesn't match — remove the connection to ${link.peer_name}?`,
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Someone may be between you. Remove it, then make a new invite and send it a different way (a call, another chat), and compare again." }),
@@ -119630,22 +120782,22 @@ function PeerLinkCard(props) {
 	}) : confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 		title: confirm === "unlink" ? `Remove the connection to ${link.peer_name}?` : "Stop sharing this folder?",
 		body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? `${link.peer_name} can no longer reach you. Their shared session is closed, not deleted; yours too unless you tick delete.` : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: confirm === "unlink" ? unlinkText(link) : "Your shared session is closed, not deleted, unless you tick delete. Your own folder is untouched." }),
 			" ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			mayDelete && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "check",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "checkbox",
 					checked: deleteFiles,
 					onChange: (e) => setDeleteFiles(e.target.checked)
-				}), "also delete the sandbox copy of the shared folder"]
+				}), "Also delete the sandbox copy of the shared folder"]
 			})
 		] }),
 		confirmLabel: confirm === "unlink" ? "Remove connection" : "Stop sharing",
 		busy: !!busy,
 		onCancel: () => setConfirm(""),
 		onConfirm: () => {
-			const q = deleteFiles ? "?delete_files=1" : "";
+			const q = deleteFiles && mayDelete ? "?delete_files=1" : "";
 			const path = confirm === "unlink" ? base + q : base + "/share" + q;
 			const unlinking = confirm === "unlink";
 			setConfirm("");
@@ -119723,6 +120875,16 @@ function PeerLinkCard(props) {
 			confirmView
 		]
 	});
+}
+function unlinkText(link) {
+	const name = link.peer_name;
+	const theirs = !!link.their_share?.shared;
+	const mine = !!link.shared;
+	let text = `${name} can no longer reach you.`;
+	if (theirs && mine) text += " Their shared session is closed, not deleted; yours too unless you tick delete.";
+	else if (theirs) text += " Their shared session is closed, not deleted.";
+	else if (mine) text += " Your shared session is closed, not deleted, unless you tick delete.";
+	return text;
 }
 //#endregion
 //#region src/components/settings/screens/PeerLinks.tsx
@@ -120866,6 +122028,11 @@ var AGENTS_BY_KIND = {
 	]
 };
 var ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+function accountId(id, label) {
+	const typed = (id || "").trim().toLowerCase();
+	if (typed) return typed;
+	return (label || "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^[-_]+|-+$/g, "").slice(0, 64);
+}
 function Accounts(_) {
 	const { data } = useAuthProfiles();
 	const [profiles, setProfiles] = (0, import_react.useState)([]);
@@ -120924,9 +122091,9 @@ function Accounts(_) {
 		...p
 	} : x));
 	const addDraft = () => {
-		const id = (draft.id || "").trim().toLowerCase();
+		const id = accountId(draft.id, draft.label || "");
 		if (!ID_RE.test(id)) {
-			setError("id must be lowercase letters/digits/-/_ (max 64)");
+			setError(id ? "The short name can only use lowercase letters, digits, - and _ (64 at most)." : "Give the account a label or a short name.");
 			return;
 		}
 		if (profiles.some((p) => p.id === id)) {
@@ -121033,7 +122200,7 @@ function Accounts(_) {
 								}),
 								p.kind !== "openrouter" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge prov-badge-src",
-									children: p.provider || "claude"
+									children: agentName(p.provider || "claude")
 								}),
 								p.id === defaultId && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge",
@@ -121195,22 +122362,6 @@ function Accounts(_) {
 					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
-						children: "Id"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						autoComplete: "off",
-						placeholder: "work",
-						value: draft.id,
-						onChange: (e) => setDraft((d) => ({
-							...d,
-							id: e.target.value
-						}))
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-label",
 						children: "Label"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 						type: "text",
@@ -121225,6 +122376,29 @@ function Accounts(_) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "set-row",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "Short name"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "text",
+							autoComplete: "off",
+							value: draft.id,
+							placeholder: accountId("", draft.label || "") || "work",
+							onChange: (e) => setDraft((d) => ({
+								...d,
+								id: e.target.value
+							}))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Optional: names the account's folder. Made from the label when empty."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "set-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-label",
 						children: "Agent"
@@ -121236,7 +122410,7 @@ function Accounts(_) {
 						})),
 						children: (AGENTS_BY_KIND[draft.kind] || ["claude"]).map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
 							value: a,
-							children: a || "any (route by session's CLI)"
+							children: a ? agentName(a) : "any (route by session's CLI)"
 						}, a || "any"))
 					})]
 				}),
@@ -121369,11 +122543,12 @@ function LocalModel(_) {
 			className: "set-hint set-block-hint",
 			children: [
 				"Point your agent CLI at a model running on this machine. No subscription and no API key — and nothing you type, no diff and no file ever leaves the box. Works with ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "codex" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("codex") }),
 				", ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "aider" }),
-				" and ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "goose" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("aider") }),
+				" and",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: agentName("goose") }),
 				", each of which has native local-model support; Claude Code talks only to the Anthropic API, so a session on it keeps using that."
 			]
 		}),
@@ -121490,7 +122665,7 @@ function LocalModel(_) {
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "set-hint",
-				children: supported.length ? `Installed CLIs that can use it: ${supported.join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it."
+				children: supported.length ? `Installed agents that can use it: ${supported.map(agentName).join(", ")}. Set a session's agent (or a ticketing source's) to one of those.` : "Test also reports which of your installed CLIs can be pointed at it."
 			})]
 		})
 	] });
@@ -122488,6 +123663,14 @@ var EMPTY_FORM = {
 	resume: "",
 	skip: ""
 };
+function editingAfterSave(name, warning) {
+	return warning ? name : null;
+}
+function sourceBadge(source) {
+	if (source === "builtin") return "built in";
+	if (source === "user") return "custom";
+	return source;
+}
 function toForm(p) {
 	return {
 		name: p.name,
@@ -122511,7 +123694,7 @@ function BinaryPathField({ row, onSaved }) {
 				json: { path }
 			});
 			setWarning(r?.warning || "");
-			toast(path ? "Binary path saved for " + row.name : "Binary path cleared for " + row.name);
+			toast((path ? "Binary path saved for " : "Binary path cleared for ") + agentName(row.name));
 			if (r?.status) onSaved(r.status);
 			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
@@ -122554,6 +123737,7 @@ function BinaryPathField({ row, onSaved }) {
 function Providers({ gotoScreen }) {
 	const [statuses, setStatuses] = (0, import_react.useState)([]);
 	const [loadErrors, setLoadErrors] = (0, import_react.useState)([]);
+	const [tomlDir, setTomlDir] = (0, import_react.useState)("");
 	const [managed, setManaged] = (0, import_react.useState)({});
 	const [form, setForm] = (0, import_react.useState)(EMPTY_FORM);
 	const [editing, setEditing] = (0, import_react.useState)(null);
@@ -122564,6 +123748,7 @@ function Providers({ gotoScreen }) {
 		const statusList = s.status === "fulfilled" ? s.value?.providers || [] : [];
 		setStatuses(statusList);
 		setLoadErrors(s.status === "fulfilled" ? s.value?.errors || [] : []);
+		setTomlDir(s.status === "fulfilled" ? s.value?.providers_dir || "" : "");
 		const byName = {};
 		if (m.status === "fulfilled") for (const p of m.value?.providers || []) byName[p.name] = p;
 		setManaged(byName);
@@ -122580,8 +123765,10 @@ function Providers({ gotoScreen }) {
 	const del = async (name) => {
 		try {
 			await api("/api/providers/" + encodeURIComponent(name), { method: "DELETE" });
-			toast("Removed agent " + name);
+			toast("Removed " + agentName(name));
+			if (editing === name) cancelEdit();
 			load();
+			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
@@ -122622,13 +123809,13 @@ function Providers({ gotoScreen }) {
 				method: "PUT",
 				json: body
 			}) : api("/api/providers", { json: body }));
-			toast((editing ? "Saved agent " : "Added agent ") + body.name);
+			toast((editing ? "Saved " : "Added ") + agentName(body.name));
 			setWarning(res?.warning || "");
-			if (!res?.warning) {
-				setEditing(null);
-				setForm(EMPTY_FORM);
-			}
+			const next = editingAfterSave(body.name, res?.warning || "");
+			setEditing(next);
+			if (!next) setForm(EMPTY_FORM);
 			load();
+			notifyConnectionsChanged();
 			window.reloadProviderPicker?.();
 			refreshProviders();
 		} catch (err) {
@@ -122649,6 +123836,180 @@ function Providers({ gotoScreen }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "set-hint",
 			children: "Every agent MindFlock knows and where it runs from. Point one at a build MindFlock can't find, or add an agent MindFlock doesn't ship."
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+			id: "prov-add",
+			open: !!editing,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: editing ? "Edit " + editing : "+ Add a custom agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prov-form",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Name"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-name",
+								placeholder: "mycli",
+								autoComplete: "off",
+								value: form.name,
+								onChange: set("name"),
+								disabled: !!editing
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: editing ? "Fixed once saved — delete and add it again to rename." : "What you pick in the New dialog. Also the command MindFlock runs, unless you set a binary path."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Binary path"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-binary",
+								placeholder: "/home/me/bin/mycli",
+								autoComplete: "off",
+								value: form.binary,
+								onChange: set("binary")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "set-hint",
+								children: [
+									"Optional: the executable to run. Needed when the name is a shell alias or function (",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "type mycli" }),
+									" says “aliased to”) — sessions start in a plain shell that has none of those."
+								]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Launch flags"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-args",
+								placeholder: "--model fast",
+								autoComplete: "off",
+								value: form.args,
+								onChange: set("args")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: added every time it starts, right after the command."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Resume flag"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-resume",
+								placeholder: "--continue",
+								autoComplete: "off",
+								value: form.resume,
+								onChange: set("resume")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: continues the last conversation when a session restarts. Leave empty if it can't."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Skip-permissions flag"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-skip",
+								placeholder: "--yolo",
+								autoComplete: "off",
+								value: form.skip,
+								onChange: set("skip")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: added only to sessions started with permission prompts skipped."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Also matches"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								id: "prov-new-program",
+								placeholder: "my-cli mycli-beta",
+								autoComplete: "off",
+								value: form.program,
+								onChange: set("program")
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Optional: other command names that mean this agent, space-separated. It doesn't change what runs — that's the binary path."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "prov-form-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "prov-add-btn",
+							onClick: save,
+							children: editing ? "Save changes" : "Add agent"
+						}), editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "prov-cancel-btn",
+							onClick: cancelEdit,
+							children: "Cancel"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						id: "prov-error",
+						className: "error",
+						children: error
+					}),
+					warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						id: "prov-warning",
+						className: "prov-launch-hint",
+						children: warning
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "set-hint",
+						id: "prov-toml-hint",
+						children: [
+							"Each custom agent is a TOML file in ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: tomlDir || "~/.mindflock-assistant/providers/" }),
+							tomlDir ? "" : " (or $MINDFLOCK_PROVIDERS_DIR)",
+							". Edit it for what this form doesn't cover — busy/idle screen patterns, trust prompts, effort levels, sign-in — as docs/providers.md describes; saving here keeps those keys."
+						]
+					})
+				]
+			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "prov-conn-list",
@@ -122696,7 +124057,7 @@ function Providers({ gotoScreen }) {
 								}),
 								mgr?.source && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 									className: "prov-badge prov-badge-src",
-									children: mgr.source
+									children: sourceBadge(mgr.source)
 								})
 							]
 						}),
@@ -122709,10 +124070,6 @@ function Providers({ gotoScreen }) {
 						row.installed && row.installTitle && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 							className: "set-hint prov-path",
 							children: ["Runs ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: row.installTitle })]
-						}),
-						row.launchHint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "prov-launch-hint",
-							children: row.launchHint
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BinaryPathField, {
 							row,
@@ -122733,88 +124090,6 @@ function Providers({ gotoScreen }) {
 					]
 				}, row.name);
 			})
-		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-			id: "prov-add",
-			open: !!editing,
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: editing ? "Edit " + editing : "+ Add a custom agent" }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "prov-form",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-name",
-						placeholder: "name (e.g. mycli)",
-						autoComplete: "off",
-						value: form.name,
-						onChange: set("name"),
-						disabled: !!editing
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-program",
-						placeholder: "program (default: name)",
-						autoComplete: "off",
-						value: form.program,
-						onChange: set("program")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-binary",
-						placeholder: "binary path (optional, e.g. /home/me/bin/mycli)",
-						autoComplete: "off",
-						value: form.binary,
-						onChange: set("binary")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-args",
-						placeholder: "saved args (e.g. --dangerously-skip-permissions)",
-						autoComplete: "off",
-						value: form.args,
-						onChange: set("args")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-resume",
-						placeholder: "resume flag (e.g. --continue)",
-						autoComplete: "off",
-						value: form.resume,
-						onChange: set("resume")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prov-new-skip",
-						placeholder: "skip-perms flag (e.g. --yolo)",
-						autoComplete: "off",
-						value: form.skip,
-						onChange: set("skip")
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "prov-form-actions",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prov-add-btn",
-							onClick: save,
-							children: editing ? "Save changes" : "Add agent"
-						}), editing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "prov-cancel-btn",
-							onClick: cancelEdit,
-							children: "Cancel"
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "prov-error",
-						className: "error",
-						children: error
-					}),
-					warning && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						id: "prov-warning",
-						className: "prov-launch-hint",
-						children: warning
-					})
-				]
-			})]
 		})
 	] });
 }
@@ -123196,7 +124471,7 @@ function PersonCardView({ person, draft, busy, error, onChange, onSave, onCopyId
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "What MindFlock's own commits (Goes as far as, team-run merges, peer exports) are authored as. Blank: the repo's git config decides. Your agents' commits are never changed."
+						children: "Who the commits MindFlock makes for you are authored as — when a session is set to commit or open a PR by itself, team-run merges, peer exports. Blank: the repo's git config decides. Your agents' commits are never changed."
 					})
 				]
 			}),
@@ -124290,7 +125565,7 @@ function Devices(p) {
 					className: "set-row set-switch-row",
 					id: "devices-reachable-row",
 					"data-control": "tailscale-mode",
-					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't",
+					title: "Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it. Where Tailscale's addresses can't be bound (userspace networking, WSL) it listens on every interface instead, and the line above says so",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "set-label",
@@ -125029,11 +126304,6 @@ function Devices(p) {
 			revision: linkRev
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DevicesAdvanced, { focusDevice }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "set-hint",
-			id: "devices-you-intro",
-			children: "You — the same on every device you pair."
-		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PersonCard, {})
 	] });
 }
@@ -132936,6 +134206,15 @@ function Logo() {
 		"aria-label": "MindFlock"
 	});
 }
+function newcomerSeen(running, seen) {
+	return isReleaseVersion(running) ? laterVersion(running, seen) : null;
+}
+function settleWhatsNewForNewcomer(running) {
+	const seen = newcomerSeen(running, laterVersion(useWhatsNew.getState().seen, readLocalSeen()));
+	if (!seen) return;
+	saveSeen(seen);
+	useWhatsNew.setState({ seen });
+}
 function useFirstLaunchTour() {
 	const seen = useUi((s) => s.welcomeTourSeen);
 	const { data: instances } = useInstances();
@@ -132955,19 +134234,32 @@ function useFirstLaunchTour() {
 		status,
 		onboarded: config?.onboarded
 	});
+	const firstLaunch = (0, import_react.useRef)(false);
 	(0, import_react.useEffect)(() => {
 		if (!due) return;
+		firstLaunch.current = true;
 		if (!useUi.getState().tourOpen) useUi.setState({ tourOpen: true });
 	}, [due]);
 	const open = useUi((s) => s.tourOpen);
 	const [wasOpen, setWasOpen] = (0, import_react.useState)(false);
+	const [settle, setSettle] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
 		if (open) setWasOpen(true);
 		else if (wasOpen) {
 			setWasOpen(false);
 			useUi.getState().markWelcomeTourSeen();
+			if (firstLaunch.current) {
+				firstLaunch.current = false;
+				setSettle(true);
+			}
 		}
 	}, [open, wasOpen]);
+	const version = useDoctor().data?.version;
+	(0, import_react.useEffect)(() => {
+		if (!settle || version === void 0) return;
+		setSettle(false);
+		settleWhatsNewForNewcomer(version);
+	}, [settle, version]);
 }
 function WelcomeTour() {
 	useFirstLaunchTour();
@@ -142170,7 +143462,7 @@ function SkyView() {
 	const mode = useUi((s) => s.skyMode);
 	const setSkyMode = useUi((s) => s.setSkyMode);
 	const gridOne = useUi((s) => effectiveViewMode(s) === "1");
-	const motionOff = useUi((s) => s.reduceMotion) || reducedMotion$1();
+	const motionOff = useUi((s) => s.reduceMotion) || reducedMotion$2();
 	const narrow = useNarrowWindow();
 	const [query, setQuery] = (0, import_react.useState)("");
 	const [layout, setLayout] = (0, import_react.useState)(() => loadSkyLayout());
@@ -143315,6 +144607,15 @@ function SkyView() {
 			y: at.y,
 			pinned: true
 		}));
+		groundedLanded(f);
+	};
+	const groundedLanded = (f) => {
+		const how = groundedLanding(useUi.getState().skyMode, instQ.data?.length === 0);
+		if (how === "switch") setSkyMode("all");
+		else if (how === "say") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it", { action: {
+			label: "Show all",
+			onClick: () => setSkyMode("all")
+		} });
 	};
 	const spotRef = (0, import_react.useRef)(() => ({
 		x: 0,
@@ -143372,14 +144673,13 @@ function SkyView() {
 			pinned: true
 		}));
 		placing.current.set(groundedKey(f.id), near);
-		const m = useUi.getState().skyMode;
-		if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+		groundedLanded(f);
 	};
 	const editDefault = (ref) => void openDefaultEditor(ref, flights, {
 		existing: (f) => {
 			const key = groundedKey(f.id);
 			if (rectOf(key)) jumpTo(key);
-			else toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+			else groundedLanded(f);
 		},
 		made: (f) => {
 			if (!alive.current) return;
@@ -143392,8 +144692,7 @@ function SkyView() {
 			}));
 			placing.current.set(key, "lane");
 			setGroundFocus(key);
-			const m = useUi.getState().skyMode;
-			if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the Sky — All or Mine shows it");
+			groundedLanded(f);
 		}
 	});
 	const pinAt = (key, at) => {
@@ -144314,8 +145613,9 @@ function SkyView() {
 		};
 	}, [narrow]);
 	const noSessions = instQ.data !== void 0 && instQ.data.length === 0;
-	const empty = lines.length > 0 ? "" : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
-	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused);
+	const groundedHidden = mode === "one" && groundedIds.size > 0;
+	const empty = lines.length > 0 ? "" : groundedHidden && noSessions && !focused && !query ? GROUNDED_HIDDEN_LINE : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -145002,7 +146302,7 @@ function SkyView() {
 								onClose: () => setShortcutsOpen(false),
 								groups: SKY_SHORTCUT_GROUPS
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
+							!(paletteOn && blank) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyEmpty, {
 								blank,
 								newSession: noSessions && !lines.length,
 								className: "sky-empty muted",

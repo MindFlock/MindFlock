@@ -337,10 +337,17 @@ a session first*).
   300 ms..1.5 s (`overWaitMs`; `OVER_FINAL_WAIT_MS` is the most, for the
   first "over" of a page before anything is known — `/end`'s `final_ms`,
   the server's own measure of its accurate pass, plus 150 ms stands in
-  until a round trip was measured, from the phrase's end at the recogniser
-  to its `/end` back, `FinalClock`), then sends the fast words and ignores a
-  later final — never the other way round: a slow final never holds the
-  words. A final that matches the fast words types nothing, so Enter goes
+  until a round trip was measured: the median of the last 7, from the
+  phrase's end at the recogniser to an `/end` back **with a final in it**,
+  late or not — a timeout brings no final and is never a sample,
+  `FinalClock`), then sends the fast words and ignores a later final —
+  never the other way round: a slow final never holds the words. **No wait
+  at all when the final would buy little**: the phrase's fast words all
+  settled (no unstable tail: two passes agreed on every word) and, of at
+  least the last 3 finals (`FAST_TRUST_MIN`, out of 12), at most a third
+  changed a word (`FinalClock.fastStands`, compared case, punctuation and
+  spacing aside) — then "over" sends at once, or the moment the phrase's
+  last chunk settles its words; its final is still measured, never typed. A final that matches the fast words types nothing, so Enter goes
   at once (no trailing space is typed before Enter, and nothing settles);
   only a correction waits 250 ms for its keys to land. The time from the
   word's end to Enter is the Diagnostics line's *over → sent 0.9 s* (and
@@ -399,10 +406,21 @@ a session first*).
   repeating words. The silence detector's and the
   meter's noise floor start from the ring's quietest block rather than the
   first block (a press that lands mid-word would make the word the floor).
+  The ring starts the moment the page's AudioContext runs
+  (`audioCtxRunning`, on its `statechange`), not when the first recording
+  asks for the capture, and the capture worklet's module loads as that
+  context is made (`preloadCapture`) — so a cold press neither waits for the
+  module nor loses the syllables said while the recording is set up.
   The microphone is opened with `{echoCancellation: true,
   noiseSuppression: true}` asked for explicitly (`MIC_CONSTRAINTS` in
   `lib/voiceMic.ts`; the Settings mic test still asks `{audio: true}`), so
   the reply playing from the speakers is not what the recorder hears.
+- **Recognition is warm before the press.** Reading the voice config (a
+  load, a focus) on a device that listened with the server's recognizer in
+  the last 3 days (`cs_voice_used_at`) opens and drops a stream when the
+  server says `server_ready.stt_loaded` is false (`warmStt`, at most once a
+  minute): local whisper loads in the background instead of costing the
+  next press 1–7 s. An older server (no `stt_loaded`) is never asked.
 - **A microphone that goes away** (unplugged, taken by the OS: the track's
   `ended`, or a `devicechange` that leaves no live track — a merely
   `muted` track is not counted) is noticed
@@ -665,7 +683,10 @@ chunk's `turn` verdict sets the quiet that ends the phrase (`turnHoldMs`):
 about 350 ms after a radio word, stop phrase or lone command, 900 ms after a
 sentence or question — but at least 1100 ms (`FIRST_PHRASE_HOLD_MS`) for a
 first phrase into an empty box, so "…so far. [0.9 s] over and out" is not
-routed in halves — 1500 ms after a comma or trailing connector, clamped to
+routed in halves (900 ms, `FIRST_PHRASE_PLAIN_HOLD_MS`, when its words
+can't begin a command), and only 600 ms (`SETTLED_HOLD_MS`) once words are
+typed and the phrase has **settled** — no unstable tail, the last pass
+taken after the last loud block — 1500 ms after a comma or trailing connector, clamped to
 300–3000 ms (`TURN_MIN_MS` / `TURN_MAX_MS`). It falls back to clip mode's
 1.1 s (`SILENCE_MS`) when there is no verdict (an older server, a malformed
 `turn`), when the voice was heard after the audio the verdict judged, and for
@@ -674,7 +695,12 @@ box: “next session” mid-message is words; `RecognizerHandlers.blank()`). The
 `…/end` flushes its last words (the
 phrase's radio word, if any, is read off the whole phrase then — "over" and
 "disregard" act exactly as in clip mode), and the next phrase opens a
-new stream; there is no 12 s cap. Letting go (or the second click) sends what
+new stream **at once**, alongside that `/end` (the server keeps two per page,
+`CLIENT_STREAMS`) — never behind its accurate pass. Its words are handed
+over the moment they are back; when the phrase before is still waiting for
+its `/end`, that phrase ends first with its fast words (its final, when it
+comes, is only measured), so phrases still reach the dictation in order
+and speaking again after a pause shows words at once. There is no 12 s cap. Letting go (or the second click) sends what
 was said since the last chunk, flushes, and stops — waiting for the final
 only the finals' usual round trip (`finishWaitMs`, as for "over"; a clip
 waits for its transcript, up to 45 s; Web Speech 1.5 s), then stops with the
@@ -3141,9 +3167,10 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
   behind a last row, *More agents… (6 not installed)*, which lists them as
   *codex (not installed)* (`GET /api/providers/status`, this device only — an
   unknown answer never blocks; the chosen agent always shows). The default never starts on a missing agent
-  when another is installed. Picking a missing one shows *<agent> isn't
-  installed on this device. Install it in Settings → Agents, or pick another
-  agent.* under the field, and **Start** (on either page)
+  when another is installed. Picking a missing one shows *<Agent> isn't
+  installed on this device. Install it in one click from Get set up (step ①;
+  a custom agent: Settings → Custom agents), or pick another agent.* under
+  the field, and **Start** (on either page)
   refuses — a session would otherwise sit "Idle" on *command not found*. An
   installed agent `GET /api/setup` knows is NOT signed in gets *<agent> isn't
   signed in yet — a session would stop at its sign-in screen.* **Sign in…**
@@ -3308,10 +3335,10 @@ and *To send text to a session that's already running, use Prompts.*, with
   last, as cards with a template's anatomy: the bird and the name, *2 stops ·
   app · claude*, the strip's schedule line (`runs.schedule_label`) and how far
   off the next run is (*Paused*, *Starts on mac-mini*), then the last run or
-  *Last run failed: …* and **Recent runs**. Two actions: **Fly now** (`POST
+  *Last run failed: …* and **Recent runs**. Two actions: **Run now** (`POST
   /api/flights/start {plan_id}` — the new session is selected once its row
-  exists, and Schedule closes) and **Edit in the Sky** (closes Schedule and
-  opens that flyway's card on the Sky's shelf, its **Takes off** section
+  exists, and Schedule closes) and **Edit** (closes Schedule and
+  opens that saved route's card on the Sky's shelf, its **Starts:** section
   open on the schedule). With no scheduled flyway the section is not drawn
   at all (`scheduledFlyways` / `flywayNextLine` in `TemplatesDialog.tsx`).
 
@@ -4009,7 +4036,9 @@ saved routes shelf, the Behaviors board, Settings → Agents); **Got it**, ×,
 `prefs.whats_new_seen`, so the tab, the desktop app and the phone share it, with
 this browser's localStorage (`mf_whats_new_seen`) as the fallback. It never
 opens on a fresh install (the version is marked seen; the welcome tour is
-theirs), never before onboarding is done or over the welcome card, a tour or a
+theirs — and closing a first launch's welcome marks it seen too, so a
+newcomer who closes it before the slow first doctor probe tells What's new
+the version is not read as an upgrader), never before onboarding is done or over the welcome card, a tour or a
 dialog, and never lists an entry above the running version. Reopen it from the
 palette (**What's new**), **Settings → General → Help**, or a click on the
 version beside the wordmark. Details: `docs/vision/whats-new.md`.
@@ -4280,8 +4309,8 @@ and the waiting items from that source (the sky's intake lane and its drawer)
 start on it unless their own chips say otherwise
 (`components/flights/PlanSelect.tsx`; hidden on a server without flights).
 
-**Scheduled flyways** are listed on [Schedule](#schedule) under their own
-heading, with **Fly now** and **Edit in the Sky**.
+**Scheduled saved routes** are listed on [Schedule](#schedule) under their own
+heading, with **Run now** and **Edit** (opens it in the Sky).
 
 **The pane's Flight tab** (`SessionFlight.tsx`; header item `flight` in
 Customize → Pane header, after Map). It shows once the session has a diagram
@@ -4627,13 +4656,15 @@ starts**, and **Ticket sessions in MindFlock** (`engine.enabled`); Settings
 keeps a **Set in Intake ›** row under each old name.
 The Tickets / GitHub PRs / GitHub issues tabs show one status line where their
 switch used to be — *Auto-start: on — checks every 20 s* — and the dialog
-header's **Auto-start switches ›** goes to the switches.
+header's **Auto-start switches ›** goes to the switches. While all three are
+off that line is left out: the header already says *Auto-start is off
+everywhere.*
 
 **What auto-starts, in one line.** A line above the tabs says what starts on its
 own right now across the three switches (*Auto-start is on for tickets and PR
 comments.*, *Auto-start is off everywhere.*) and the next scheduled template
 (*Next to start on its own: nightly tests, Fri 07:30 — tomorrow's run
-skipped.*); its link (**Turn on ›** / **Auto-start switches ›**) goes to the
+skipped.*); its link, **Auto-start switches ›**, goes to the
 switches (`intake/switches.ts` reads the three together, for this line, the
 row chips and New → Ticket alike). It is hidden until something is set up, so a
 first open shows only the add flow. **New → Ticket** reads the same ticket switch, so it never says
@@ -4828,7 +4859,12 @@ source** / **+ Add a repository**). The tracker and repository halves:
   starts a draft (`needs_filter: "on"`: it
   auto-starts nothing until a state or label is picked). **Connect** is the
   credentials, each tracker's **API token** with a **Create a token ↗** link to
-  the tracker's own token page; **Test & continue** tests the typed values
+  the tracker's own token page and a one-line hint naming the button there and
+  what the token must be allowed to do (the catalog field's `hint`); a red
+  **Required** under a box goes as soon as text is typed in it, not when the
+  value is next sent — sent on blur, it went on the mousedown of the button
+  reached for, the page moved under the pointer and that first press did
+  nothing; **Test & continue** tests the typed values
   WITHOUT saving anything (`POST /api/settings/test/ticketing` with no
   `record`) — the draft stays local, and the verdict, member id and state list
   land on it so step 3's pickers fill in. A failed Test stays on the step with a
@@ -4896,7 +4932,8 @@ buckets inside a source, and only the two GitHub tabs share one credential.
   the picker says *None picked — nothing auto-starts from this source yet*, rows say *no
   auto-start state picked yet*, and the pipeline's scan skips the source —
   `providers.base.auto_start_waiting`). **Any state — start every ticket assigned
-  to me** stays in the state menu as an explicit choice; sources saved before
+  to me** stays in the state menu as an explicit choice (not on an Anyone's
+  source, where the server refuses it — it needs a state or label); sources saved before
   this keep their old "empty = every state" rule. Until a Test has passed a
   state can be **typed** (*Type a state name*); it is swapped for the tracker's
   real state once a Test lists one by that name, a typed name the tracker lacks
@@ -6135,7 +6172,10 @@ A few screens got quieter:
   GitHub's row is a plain status ("Not connected. Agents can't open pull
   requests yet." / "Connected as @you"), with no `gh` output or Copy chip and
   no Test until something is connected. A failing Test outranks an agent
-  row's stored Connected.
+  row's stored Connected. A not-installed agent says **Not installed** once
+  (the pill; its line says *Install it, then press Check again.*) and its
+  Test reads **Check again**, so a CLI installed in a terminal shows up
+  without a reload.
 - **Connect GitHub** never shows "device flow is not configured": without a
   device flow the token path leads (the `repo` and `read:org` scopes named,
   the link opening GitHub's token page with both ticked), with the gh CLI
@@ -6386,17 +6426,18 @@ labels above the inputs.
   back**, **Revive sessions after a restart** and **Put idle agents to sleep
   after** sit in General's Advanced fold (advanced mode) with the plan window
   budget and scroll speed; their keys are unchanged.
-- **Agent CLI → scheduled window refresh** — a keepalive that periodically
+- **Agents → Keep usage windows warm** (under Advanced) — a keepalive that periodically
   pokes each provider's CLI so usage windows stay warm
   (`GET/POST /api/window-refresh`). Its **Default provider** picker reads
   `GET /api/providers/status` and lists **every** provider, the absent ones
   disabled as *<name> — not installed* (*A CLI that isn't installed can't be
-  picked — install or sign in to it under Agent providers.*) — you can't make
+  picked — install or sign in to it under Custom agents.*) — you can't make
   a CLI that isn't there the launch default; if the stored default is missing it
   falls back to the first installed CLI and **persists the correction** (the
   backend rejects the save otherwise — see [web-api.md](web-api.md)). Under
-  the picker is the default agent's card; the Advanced fold's **Set up another
-  agent** picker (product names) shows any other agent's card.
+  the picker, **Not installed — how to install** unfolds a **Set up another
+  agent** picker (product names) that shows any other agent's card; the
+  default agent's card follows.
 - **Custom agents** — one row per CLI, built-in or custom
   (`GET /api/providers/status`), named by its product name: its agent card
   (status + Install / Sign in / Test — the sign-in runs the CLI's own login
@@ -6407,12 +6448,19 @@ labels above the inputs.
   `PUT /api/providers/<name>/binary-path`) for a claude or codex that lives
   off PATH; one pinned by the server's environment says so and wins. A custom
   TOML that fails to load is a red row with the file name, *failed to load*
-  and the parse error. Below the rows is the custom-provider **manager**
-  (**+ Add a custom agent**, Edit, Delete): add/edit/delete user-TOML
-  providers via the `/api/providers` CRUD, including each provider's saved
-  **launch flags** (`[launch] args`). The per-provider **default launch flags**
-  (`coding_cli.default_launch_args`) that pre-fill the New-session dialog are
-  also edited here.
+  and the parse error. ABOVE the rows is **+ Add a custom agent** (each row
+  of a custom one has Edit and Delete): add/edit user-TOML providers via the
+  `/api/providers` CRUD. Every field is labelled with a hint — Name, Binary
+  path (*needed when the name is a shell alias or function — sessions start
+  in a plain shell that has none of those*), Launch flags (`[launch] args`),
+  Resume flag, Skip-permissions flag and *Also matches* (`program`; *it
+  doesn't change what runs*) — and a note points at the TOML file for what
+  the form doesn't cover. A save that answers with a launch warning stays
+  open as an **Edit** of that agent, so the fix is *Save changes* (a second
+  Add would 409 "already exists"). Source badges read *built in* / *custom*.
+  The per-provider **default launch flags** (`coding_cli.default_launch_args`)
+  that pre-fill the New-session dialog are set on **Agents** (*Extra flags
+  for new sessions*).
 - **Your devices** (screen key `devices`; was Devices) is the one place for
   your own machines. The **You** card (*You — the same on every device you
   pair.*: name, git author name and email for MindFlock's own commits, the
@@ -6745,11 +6793,19 @@ labels above the inputs.
     `POST /api/voice/clear-key`) and **Model**; local models add a whisper
     size for recognition and a piper voice name. Under each block a
     readiness line from `GET /api/voice` (*Server recognition ready
-    (system): Windows via WSL — recognizer en-US, voices David, Zira.* /
-    *Server voice not ready: …*): with the built-in engine picked its own
-    sentence is the detail (the Linux one, macOS' permission one); a server
-    too old to report `system` says it has no built-in engine yet. A saved
-    key's **Clear** sits in the key's hint line.
+    (system): Windows (from WSL) speech recognition (en-US): basic accuracy
+    — install local models for better recognition.* / *Server voice ready
+    (system): Windows (from WSL) voices: Microsoft David Desktop, Microsoft
+    Zira Desktop.* / *Server voice not ready: …*): each line carries its own
+    kind's detail (`stt_detail` / `tts_detail`), never the built-in
+    engine's sentence about both; that sentence (`system.detail`) is the
+    detail only when the kind has none, and on Linux (its *no built-in
+    speech engine* why). The server's *local models not installed: Settings
+    → Voice installs them* reads, on this screen, *— install them below*
+    under Recognition and *— install them under Recognition* under Voice
+    and in Try it. A server too old to report `system` says it has no
+    built-in engine yet. A saved key's **Clear** sits in the key's hint
+    line.
   - **The local-models installer** (`#voice-install`, under Recognition: a
     *Local models* action row, its status in the hint).
     Windows' built-in recognizer is the old desktop (SAPI) one —
@@ -6760,7 +6816,7 @@ labels above the inputs.
     (faster-whisper) recognise far better and stay on this computer.* with
     an **Install local models (about 300 MB)** button. The same button
     sits by the readiness line whenever *Local models* is picked but not
-    ready, on every platform. It `POST`s `/api/voice/install-local`
+    ready — for recognition or for the voice — on every platform. It `POST`s `/api/voice/install-local`
     (faster-whisper and piper into the server's own environment, then the
     whisper model — `voice.stt_model`, default `small` — and the piper
     voice), then polls `GET /api/voice/install-local` every 2 s while it is
@@ -6768,13 +6824,41 @@ labels above the inputs.
     a `<progress>` (the server reports no percentage) and the install's
     last log line. *done* → *Installed — recognition now uses local models.* (the
     server switched `voice.stt_backend` to `local` itself; the screen
-    re-reads the settings and `GET /api/voice`); *failed* → the error and
-    **Try again**; a 409 → *Already installing* and that install is
+    re-reads the settings and `GET /api/voice`); *failed* → the error (a
+    failed step's last output line, without uv's *Caused by:* lead-in), the
+    next step it points at — a network error: *This computer couldn't reach
+    the download servers: check that it is online (and any proxy or VPN),
+    then try again.*; a full disk: *The disk is full: free about 300 MB,
+    then try again.*; nothing more for any other — and **Try again**; a 409 → *Already installing* and that install is
     followed. Reopening the screen mid-install resumes following it. The
     button is gone once local models recognise, and on a server without the
     installer (its `GET` fails). A viewer who may not change the server
     (`configure_allowed: false` in `GET /api/voice`, or the POST's 403)
     gets it disabled with the reason.
+  - **Live words** (`#voice-live-words`, under Recognition, only while the
+    ready recognition streams — `server_ready.stt_stream`, i.e. local
+    models): which engine types the words as you speak, from
+    `GET /api/voice`'s `stream_label` — *Live words: Moonshine* or *Live
+    words: Whisper base.en*. While Moonshine can't run on the server
+    (`moonshine.available: false`) and `voice.stt_stream_model` would use
+    it (blank or `moonshine`; a whisper size there is a choice, so no
+    offer), the line becomes an action row (`#voice-moonshine`): *Moonshine
+    types your words as you say them and has the text ready about 30 ms
+    after you stop (whisper takes about a second). English only; long
+    dictation is still polished by whisper.* with an **Install fast
+    recognition (Moonshine, ~200 MB)** button (`#voice-moonshine-btn`). It
+    `POST`s `/api/voice/install-local {"what": "moonshine"}` and is
+    followed like the local-models install (the same poll, progress, last
+    log line, 409 and 403 handling — the one installer runs one install at
+    a time, and each row shows only its own, by the status's `what`).
+    *done* → *Installed — live words now use Moonshine.* and the screen
+    re-reads `GET /api/voice`, so the line reads *Live words: Moonshine*;
+    *failed* → the error and its next step (as the local-models install's,
+    at about 200 MB for a full disk), then *Live words keep using whisper
+    meanwhile.* with **Try again** (no pointer to `mindflock doctor`: its
+    *Fast recognition* row's fix is this button). The progress bar is
+    named *Installing fast recognition*. An older server (no
+    `moonshine` in `GET /api/voice`) gets no offer.
   - **On the phone page** (`#voice-phone`): *The desktop app always uses
     this computer.* under the title, then where recognition and the voice
     run for the phone (`voice.stt` / `voice.tts`: *The phone* · *This
@@ -7049,7 +7133,7 @@ its toolbar counts it again. See
 ## Voice input
 
 Every voice word named in this section — "over", "over and out",
-"disregard", "stop recording", "stop talking", "MindFlock" — is the
+"disregard", "scratch that", "stop recording", "stop talking", "MindFlock" — is the
 **default**: each can be changed in [Settings → Voice → Voice
 words](#voice-words), and the mic, its hints and the Voice tour then use the
 new ones. Each is also heard the way the recogniser tends to write it (*ova*,
@@ -7062,7 +7146,9 @@ types as you speak: click (or hold) to talk, and each recognised phrase lands
 in the session's input field at once — word by word while you speak when the
 server's recogniser streams. A phrase ending in "over" stops and sends the
 words (Enter, after the server's dialog checks), one ending in "disregard"
-takes back what was typed and keeps listening, Esc takes it back and stops;
+takes back what was typed and keeps listening, one ending in "scratch that"
+drops just that phrase — said alone it takes back the last
+phrase typed and not yet sent — and Esc takes it all back and stops;
 "stop recording" (or "that's all", "mic off") stops at any point, never typed,
 and leaves the words in the field unsent — as letting go of push to talk does.
 "Submit" is an ordinary word here (only Claude's question prompt's review step
@@ -7183,6 +7269,56 @@ appears on its own while the app listens or speaks. Errors and notices (*Click
 a session first*, *Sent to Login fix.*) are the mic's tooltip; the ask pop-up
 keeps its own words.
 
+**Commands for reading and moving around** (the router's newer answers,
+`lib/voiceDesktop.ts` `runVoiceCommand`; none of them is ever spoken back —
+your own action gets a short caption under the mic and the usual chime, never
+an echo):
+
+- **Scroll** — "scroll up", "scroll down", "page down", "scroll to the
+  top / bottom", then "more" / "keep going" for the same again: the server
+  scrolls the focused session's pane itself (tmux copy-mode) and answers
+  `{"kind": "scroll", "dir", "amount", "count", "title", "ok"}`; the caption
+  says *Scrolled up*, *Scrolled down ×3*, *At the bottom* (`scrollLine`).
+- **Interrupt** — "interrupt", "press escape": the server presses Escape on
+  the agent (`{"kind": "interrupt", "title", "ok"}`); the caption says
+  *Interrupted <name>*.
+- **Go back** — "go back", "switch back": focuses the session you were on
+  before (`{"kind": "switch_back"}`: the store's `prevFocused`, else the MRU's
+  next, never a window, a closed or a hidden session — `previousSession`);
+  said again it bounces back. With none: *No previous session*.
+- **Where am I** — "where am I", "which session is this": says the focused
+  session's name (*hackathon-2.*) — it answers a question, so it is said with
+  replies off too — and captions it.
+- **What can I say** — "what can I say", "voice commands": the router's
+  `{"kind": "commands", "say", "items": [{"say", "does", "group"?}]}` — `say`
+  is read through the speech queue and a **cheat sheet** opens under the mic
+  (`components/voice/VoiceCommands.tsx`: the items grouped when they carry a
+  `group`, else one list; the desktop's own list, `builtinCommands`, when the
+  server sends none). Esc, a click outside it, its × or the next phrase you
+  say closes it (Esc there never cancels the dictation). Without voice:
+  **Voice commands…** in the mic's options (right-click the mic).
+
+These phrases wait whole for the router like its other commands (never typed
+into the terminal while it decides), and a whole "scroll up" / "page down" /
+"switch back" acts as soon as the voice is quiet, like "next session". Every
+route call carries the focused session as `session` and, when the stream's
+`/end` gave one, `heard` — the fast recogniser's (Moonshine's) text of the
+same phrase, beside whisper's `final` — so the router can read the command
+words in either.
+
+**The rail follows the focus.** Whenever the focused session changes — a
+voice switch ("switch to…", "session 3", "next session", "go back"), a
+keyboard switch (Alt+N, Ctrl+Tab), the sky — and its rail row (or a window's
+row brought forward) is outside the rail's visible scroll area, the rail
+scrolls just enough to show it (`scrollIntoView({block: "nearest"})`, smooth
+unless *reduce motion* is set). A row already in view never moves, and a row
+you just clicked never jumps. A run group or device section folded over the
+row is unfolded first (not on a page load: what you folded stays folded). A
+voice switch also pulses the row once (~1 s, `.voice-pulse`; a still tint
+under reduced motion) so the eye finds it. `components/sidebar/railFollow.ts`,
+mounted by `Sidebar.tsx`; `selectSession(…, {voice: true})` asks for the pulse
+(the store's `railPulse`).
+
 **Words as you speak.** Like a phone keyboard, the words go into the field
 the moment the recogniser first hears them, and are corrected as it changes
 its mind: the phrase under way — the stream's committed words plus its
@@ -7196,7 +7332,8 @@ correction per answer, never reaching before the phrase's start — earlier
 phrases and whatever was in the field before you spoke are untouched. A
 phrase being said carries no trailing space; its end (the pause, or letting
 go) settles it with one. Never typed, not even as a guess: a trailing radio
-word ("over", "disregard" and their tails like "disregard that"), a stop
+word ("over", "disregard" and their tails like "disregard that", "scratch
+that" — "scratch" waits while "that" may follow), a stop
 phrase or "stop talking" — or the start of one ("stop" might become "stop
 recording", "that is" might become "that is all"; such a word goes in once
 the next word rules that out) — and a dictation's first phrase while it may
@@ -7284,7 +7421,11 @@ every save), then the server's.
 
 - **The rows**: **Send** ("over" — sends, listening goes on), **End (send and
   stop)** ("over and out", "over, out"), **Start over** ("disregard"),
-  **Stop listening** ("stop", "stop listening", "mic off", "pause
+  **Undo last phrase** ("scratch that" — at the end of a phrase
+  it drops that phrase; said alone it takes back the last phrase typed and
+  not yet sent, exactly its characters, as "disregard" takes back all of
+  them; silent: a caption, no spoken line; an older server whose `words` has
+  no `undo` leaves these defaults in force), **Stop listening** ("stop", "stop listening", "mic off", "pause
   listening", "that's all", "done talking"), **Stop talking** ("stop
   talking", "be quiet", "quiet", "hush", "shut up", "enough") — each a chips editor: type a phrase,
   **Enter** adds it, **×** (or Backspace in the empty field) removes the
@@ -7303,8 +7444,9 @@ every save), then the server's.
   sees the rows disabled with *Only the owner of this computer can change
   them.*
 - **The matchers** (`lib/voiceDesktop.ts` `buildMatchers`, rebuilt the moment
-  the words change): `parseRadio` reads the send / end / clear phrases at the
-  END of a phrase, **longest first** (so "over and out" beats "over"),
+  the words change): `parseRadio` reads the send / end / clear / undo phrases at the
+  END of a phrase (an undo phrase another kind already says — a clear word
+  "scratch" with its tail "that" — stays that kind), **longest first** (so "over and out" beats "over"),
   case- and punctuation-blind, an apostrophe optional ("thats all"), each
   phrase's words escaped, the send and clear phrases taking today's tails
   ("disregard that", "over it"); the hold-back keeps any of them (and their
@@ -7811,9 +7953,15 @@ standby 680 (as `VOICE_WAKE_BLOCK` 2048) — through a ScriptProcessor-shaped
 event, so nothing downstream changed and no graph is made or torn down
 between a standby and a listen. With no tap for 1 s (`VOICE_CAP_IDLE_MS`)
 the worklet stops posting until the next tap. The module is added once per
-AudioContext (`capLoad`, alongside `getUserMedia`); the first start waits for
-it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and records with the fallback past
-that (the next start gets the worklet). A busy main thread now delays the
+AudioContext (`capLoad`) — already in the gesture that primes voice
+(`voicePrime`, when the page may record), so the first press finds it
+loaded; a start still waits for it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and
+records with the fallback past that (the next start gets the worklet).
+Recognition is warmed on a config read too: with voice on, a streaming
+server recognizer and `server_ready.stt_loaded` false, a stream is opened
+and DELETEd at once (`voiceSttWarm`, at most once a minute), which loads
+the model in the background — an older server, without `stt_loaded`, is
+left alone. A busy main thread now delays the
 blocks but never drops them. **The ScriptProcessor fallback** — the old
 code path unchanged, one `ScriptProcessorNode(4096, 1, 1)` graph per
 consumer — runs with no `AudioWorkletNode` / `ctx.audioWorklet` (iOS Safari
@@ -7881,11 +8029,18 @@ stream DELETEd, never ended. *Over* / *over and out* end the phrase there
 when `/end` takes longer than its **budget** the fast words go and a later
 final is ignored. The budget follows how long `/end` takes on this server
 (`voiceEndBudgetMs`): **1.5 s** (`VOICE_CONTROL_END_MS`) only while nothing
-is known; once `/end` has been timed here (a running mean of its round
-trips, seeded by the advisory `final_ms` when `GET /api/voice` carries one)
-**1.5× that plus 100 ms**, held to **0.3–1.5 s** (the desktop app's rule)
-— so a whisper that answers in 300 ms is waited for 550 ms at most, and a
-late `/end` grows the next budget (it took at least that). The Enter itself waits for no round
+is known; once `/end` has been timed here (`voiceEndTypicalMs`: the median
+of the last 7 `/end`s that brought a `final`, late ones included — a
+timeout brings none and is never a sample; seeded by the advisory
+`final_ms` when `GET /api/voice` carries one) **1.5× that plus 100 ms**,
+held to **0.3–1.5 s** (the desktop app's rule) — so a whisper that answers
+in 300 ms is waited for 550 ms at most. **No budget at all** when the fast
+words settled (no unstable tail) and at most a third of the last finals
+(at least 3) changed a word (`voiceFastStands`, `voice.rec.finals`): the
+send goes at once, or the moment the phrase's last chunk settles them; its
+`/end` still comes back to be measured (`g.late`), never typed. A settled
+sentence with words in the box already ends after 600 ms
+(`VOICE_SETTLED_HOLD_MS`) instead of the verdict's 900. The Enter itself waits for no round
 trip: the ack's baseline read goes out alongside `POST /send`, not before
 it. The trace and Diagnostics time it: *Last control: over → sent 0.9 s
 (waited for /end up to 1.2 s; /end takes ~0.7 s here)* (the word's last

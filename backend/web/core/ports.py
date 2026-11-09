@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import os
 import threading
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from backend.fsutil import atomic_write_json
 from backend.config.config import GetConfigDir
@@ -126,6 +126,12 @@ def get(title: str) -> Optional[int]:
     """The allocated block base for ``title``, or None."""
     with _lock:
         return _load().get(title)
+
+
+def titles() -> List[str]:
+    """Titles that hold an allocation."""
+    with _lock:
+        return list(_load())
 
 
 def prune(live_titles) -> None:

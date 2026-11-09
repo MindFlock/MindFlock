@@ -155,7 +155,9 @@ def invite_message(code: str, expires_in: int, direct: bool = False) -> str:
     """The text "Copy invite" puts on the clipboard: the code plus the one
     thing the other person has to do with it, so the code can go over any chat
     with no explaining. :meth:`PeerService.join` accepts this whole message
-    back, so pasting all of it works. A ``direct`` invite names this machine,
+    back, so pasting all of it works. It names the palette, not Settings →
+    People: People is an advanced screen a fresh install's nav doesn't show
+    (as on the /join page). A ``direct`` invite names this machine,
     so it says it only reaches someone on the same network or Tailscale."""
     minutes = max(1, round(int(expires_in or 0) / 60))
     reach = (
@@ -165,8 +167,8 @@ def invite_message(code: str, expires_in: int, direct: bool = False) -> str:
         else ""
     )
     return (
-        "Join me on MindFlock: open Settings → People (or press Ctrl+P and "
-        'type "people"), press Join someone and paste this whole message.%s'
+        'Join me on MindFlock: press Ctrl+P, type "people", press Join '
+        "someone and paste this whole message.%s"
         "\n\n%s\n\n(Works once, expires in %d min. From a terminal: "
         "mindflock peer join <the code above>)" % (reach, code, minutes)
     )

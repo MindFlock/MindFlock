@@ -87,6 +87,24 @@ Flights button as tabs of a Flights dialog; round 8 retired it — see
 
 ## Using Flights
 
+### On the Sky: build, run, and a stop that fails
+
+- **Build a route from nothing.** Right-click empty sky and type in **Add a
+  stop…** (Enter places it where you clicked), drag a chip from the
+  **Stops** shelf at the bottom, or open **All stops…** for every kind and the
+  **saved routes** (Ticket to merge, Nightly chores, …) at its foot. A route
+  with no session yet shows under **All** and **Mine**. **This session** (the
+  default) shows one session's route only: with no session at all, placing a
+  stop moves the view to All; otherwise a toast says where it went, with
+  **Show all**.
+- **Run it.** A route on a session runs its stops in order; the bird shows
+  where the work is, and a stop with a ✓ is done.
+- **Wait for me** stops the route until you press **Done** (or **Skip**) on
+  the stop or in the bell; the route then **Needs you**.
+- **A stop that fails halts the route** (its *If it fails* option, Halt by
+  default): the stop turns red with the reason, and offers **Retry**, **Skip**
+  and **Let the agent fix it**.
+
 ### How a ticket gets its route
 
 Every way work arrives ends in the same start path, and every one of them can
@@ -148,8 +166,8 @@ failed run with the reason. The saved-route list (`GET /api/flights/plans`)
 shows a scheduled one's next run, last run and history under `runs`; the
 record is `~/.mindflock/flights/schedule_runs.json`, on this device only (the
 saved routes themselves sync). The Schedule dialog lists templates and these
-saved routes — with that record (next run, last result, history), **Run now**
-and **Edit in the Sky**.
+saved routes — with that record (next run, last result, history), **Run now**,
+**Schedule…** (an unscheduled one) and **Edit** (opens it in the Sky).
 
 ### Verify stops
 
@@ -326,7 +344,7 @@ No model installed → 409 `no_model`.
 | `POST /api/flights/describe` | `{text, want}` | `{"steps": [Step]}` |
 | `GET /api/flights` | `?all=1` to include finished (default: unfinished + last 20 finished) | `{"flights": [Flight]}` |
 | `GET /api/flights/{id}` | | `{"flight": Flight}` |
-| `POST /api/flights/start` | `{"plan_id"?, "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>", "steps"?: [Step], "absorb_fasttrack"?: bool}` | 202 `{"flight": Flight, "absorbed": [lane]}`. **`steps`** (1..40, validated like a plan's; 400 `bad_step` with `field`) draws the flight here: alone, the flight is `plan_id: "adhoc"`, `plan_name` = the subject's headline or "Flight on <title>", its steps numbered `s1..sN`; with `plan_id`, the plan's steps then the given ones (next free `sN`). An ad-hoc flight needs `title` or `repo_path` (400 `needs_title`). **`absorb_fasttrack`** (default true with `title`): the session's own fast-track run (autopilot record `running` or `halted`, `source != "flight"`) becomes the flight's leading `ship` steps — the rungs after the one the session's stage (`committed`/`pushed`/`pr`) proves, up to the run's lane, in `autopilot.DEPTH_ORDER` order — placed where the flight starts, and the record is disarmed so the ladder carries on under the flight; `absorbed` lists their lanes. A `done` run is left alone; a `halted` one is absorbed (its first step starts `pending`, the halt reason goes into the flight's history). Attaching to an existing session (`title`) starts at `start_at` or the first non-`agent` step. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. |
+| `POST /api/flights/start` | `{"plan_id"?, "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>", "steps"?: [Step], "absorb_fasttrack"?: bool}` | 202 `{"flight": Flight, "absorbed": [lane]}`. **`steps`** (1..40, validated like a plan's; 400 `bad_step` with `field`) draws the flight here: alone, the flight is `plan_id: "adhoc"`, `plan_name` = the subject's headline or "Flight on <title>", its steps numbered `s1..sN`; with `plan_id`, the plan's steps then the given ones (next free `sN`). An ad-hoc flight needs `title` or `repo_path` (400 `needs_title`). **`absorb_fasttrack`** (default true with `title`): the session's own fast-track run (autopilot record `running` or `halted`, `source != "flight"`) becomes the flight's leading `ship` steps — the rungs after the one the session's stage (`committed`/`pushed`/`pr`) proves, up to the run's lane, in `autopilot.DEPTH_ORDER` order — placed where the flight starts, and the record is disarmed so the ladder carries on under the flight; `absorbed` lists their lanes. A `done` run is left alone; a `halted` one is absorbed (its first step starts `pending`, the halt reason goes into the flight's history). Attaching to an existing session (`title`) starts at `start_at` or the first non-`agent` step — unless the session is still on its turn (working, loading, or its task waiting in its prompt queue) and the route opens with an `agent` step: that step then starts `running` on the work in progress (nothing is sent; history `started` "the session's work in progress") and ends when the turn settles. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. |
 | `POST /api/flights/{id}/steps` | `{"step": Step, "at"?: int}` | `{"flight"}` — appended, or inserted at index `at`, which must be after the current step (409 `in_progress`); the flight must be `running`/`waiting_you`/`paused` (409 `finished`). The new step takes the next free `sN`. History `added`. |
 | `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?, halt?}` | `{"flight"}` — only a pending step after the current one (409 `in_progress`); validated like a plan step. `{halt}` alone may also mark / clear the **current** step ([Halt points](#halt-points)). History `edited`. |
 | `DELETE /api/flights/{id}/steps/{sid}` | | `{"flight"}` — only a pending step after the current one (409 `in_progress`). History `removed`. |

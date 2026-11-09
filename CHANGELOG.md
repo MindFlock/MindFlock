@@ -32,6 +32,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starting its own session and route with nothing typed, beside five other
   ticket-born routes. It replaces the grid-first `pipeline` scene described under
   0.1.5.
+## [0.13.1] - 2026-11-09
+
+### Changed
+
+- **Dictation hears each phrase in its sentence.** A message spoken over
+  several phrases (split at pauses) used to have each phrase transcribed on
+  its own. Now the desktop and the phone send the words already in the
+  message with every phrase, and Whisper takes them as its prompt, so a word
+  is settled by the sentence it is in. Command words ("over", "disregard",
+  "scratch that") never count, and after a send or a clear it starts fresh.
+- **English dictation uses Whisper `small.en`.** It's the English-only twin
+  of `small`, at the same cost, for both the one-shot and the accurate pass
+  while no model size is set. Other languages keep `small`. An install that
+  has only `small` keeps using it and downloads `small.en` in the
+  background.
+  - Together with the context, the voice bench's errors drop from 4.7 % to
+    2.35 % on coding dictation and from 7.4 % to 6.0 % on real speech, with
+    no added wait.
+
+### Fixed
+
+- **The desktop dev shell's taskbar pin opened the wrong shell.** The WSL
+  and native-Windows dev shells shared one taskbar identity, so the pin
+  opened whichever had run last. Each dev profile now has its own identity
+  and Start-menu shortcut, and the shortcut records the whole launch
+  (including the new `--mindflock-repo=` flag).
+- **The desktop dev launcher kept its server down after a WSL restart.** It
+  read the always-on `mindflock.service` (port 8765) as the owner of its own
+  port and refused to start. A developer checkout now skips that check. The
+  port-in-use check still prevents a second copy.
+
+## [0.13.0] - 2026-11-09
+
+### Added
+
+- **Scroll a session by voice.** "Scroll up", "page down", "scroll up a
+  bit", "scroll up three pages", "scroll to the top", "back to the bottom"
+  move the focused session's output (tmux copy mode, done on the server so
+  the desktop and the phone both get it). Right after a scroll, "more" or
+  "keep going" repeats it; otherwise those words stay dictation. The next
+  thing you type or send leaves the scrolled view first.
+- **More voice commands.** "Interrupt" (or "press escape", "interrupt
+  <session>") presses Escape in the session. "Go back" / "switch back"
+  returns to the session you were on before. "Where am I" says the focused
+  session's name. "What can I say" reads the main groups and opens a
+  cheat sheet of every command, which is also under the mic's right-click
+  menu as **Voice commands…**.
+- **"Scratch that" takes back one phrase.** At the end of a phrase it drops
+  that phrase; said alone it removes the last phrase typed and not yet
+  sent. "Disregard" still clears everything. It has its own row in
+  Settings → Voice → Voice words.
+- **The rail follows the focus.** Switching to a session by voice, keys or
+  the Sky scrolls the left rail so its row is visible, opening a folded
+  group if needed. A voice switch also pulses the row once. A click never
+  makes the rail jump.
+- **Near-instant command words with Moonshine** (#320). Moonshine
+  tiny-streaming, a one-click install in Settings → Voice, hears the live
+  words and the control words ("over", stop, session names) within tens of
+  milliseconds. The Whisper path is faster too: finishing after "over" went
+  from ~1.1 s to ~0.5 s.
+
+### Changed
+
+- **Whisper writes every phrase's text; Moonshine only listens for
+  commands.** With Moonshine installed, short phrases had kept Moonshine's
+  own transcript (about 13% of words wrong on real speech). Now Whisper
+  transcribes every phrase (about 8% on real speech, 7% on commands; long
+  dictation went from 12.5% to 7.6% wrong), while Moonshine still decides
+  "over", stop and switches, which act at once without waiting for Whisper.
+  A phrase ending in "over" costs about half a second more than before.
+- Voice commands are routed on Moonshine's hearing when it heard a command
+  (`heard` on `/api/voice/route`), and the grammar takes more natural
+  phrasings ("switch over to…", "bring … up", "show me …").
+
+### Fixed
+
+- Polish loop passes 1–5 (#321, #322, #324, #325): workers spawned through
+  MCP no longer sit "held" forever when two servers share `~/.mindflock`;
+  route Review stops run on the real branch; a Shortcut token is no longer
+  sent to GitHub when testing a GitHub Issues source; peer invites without a
+  public tunnel work again; the Sky's empty card no longer hides the stop
+  catalog; failed voice model installs say what to do next; plus onboarding,
+  agent setup, Intake and device fixes.
+
+## [0.12.3] - 2026-11-05
+
+### Fixed
+
+- **The flight minimap hides under dialogs and menus**, as the off-screen
+  pointers already did: it drew through Settings, New and ⋯ menus.
+
+### Documentation
+
+- The ticket pipeline across a server re-exec (adopted back, restarted on a
+  settings change, never duplicated) and the automation hand-over while
+  Tailscale is still booting are written up in the configuration,
+  development, ingestion-pipeline and web-api docs.
 
 ## [0.12.2] - 2026-11-05
 
@@ -4977,7 +5074,10 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.12.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.13.1
+[0.13.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.13.0
+[0.12.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.3
 [0.12.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.2
 [0.12.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.1
 [0.12.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.12.0

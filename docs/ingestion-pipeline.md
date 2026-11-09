@@ -83,13 +83,18 @@ re-check matches a configured state against `state_id` or the state name,
 case-folded, and fails open when the ticket reports neither.
 
 **`github_issues` is the zero-config on-ramp** and therefore leads both the
-registry and the UI catalog (the Intake → Tickets tab seeds a newly added source
-with the catalog's first entry). It is the only source that needs **no fields
-at all**:
+registry and the UI catalog (it is the first tile of Intake → Tickets → **Add
+source**; nothing is picked for you — the flow starts on "Pick your tracker").
+It is the only source that needs **no fields at all**:
 
-- its **token** comes from the shared GitHub auth chain — `ticketing.api_token`,
-  else `github.token` in settings, else `$GH_TOKEN`/`$GITHUB_TOKEN`, else
-  `gh auth token` — so anyone who has run `gh auth login` is already done;
+- its **token** comes from the shared GitHub auth chain — `github.token` in
+  settings (Connect GitHub), else `$GH_TOKEN`/`$GITHUB_TOKEN`, else
+  `gh auth token` — so anyone who has run `gh auth login` is already done. A
+  per-source `api_token` an older release stored is read only after all of
+  those, and only when it is shaped like a GitHub token (`ghp_…`,
+  `github_pat_…`, 40 hex): a Test or listing with no token of its own is
+  filled from the *primary* source, so anything else would be another
+  tracker's secret on its way to api.github.com;
 - its **repository** resolves through `GithubIssuesProvider.resolve_repo()`:
   explicit `project` → the source's `repo_url` → the global `[repository].url` →
   this checkout's `origin` remote.
@@ -303,7 +308,9 @@ ticketing source first and by workflow-state bucket *within* the source, so
 same-named states from two sources are no longer merged; `GET /api/tickets`
 carries a `source_labels` entry for EVERY configured source — including ones
 that returned nothing or errored — because a source with no tickets still needs
-a heading to say so under.
+a heading to say so under. With NO source configured the listing asks no tracker at all
+(`PipelineConfig.ticketing_sources` stays empty — it used to hold a blank
+Shortcut stand-in, which the panel searched with an empty token on every open).
 
 Shortcut's `search_assigned_all()` applies the **same archived story + archived
 epic filter** as its poll (on both the owner-scoped and the any-assignee
@@ -340,17 +347,26 @@ already-done tickets get re-ingested; set `MINDFLOCK_REPO_ROOT` explicitly if
 the auto-detection can't see your `config.toml`.
 
 **Singleton per directory**: the process takes an exclusive `flock` on
-`.mindflock-pipeline.lock` (writing its PID into it). A second copy exits **0**
+`.mindflock-pipeline.lock` (writing its PID on the first line and
+`{version, commit, owner}` on the second). A second copy exits **0**
 with a message — deliberately not an error, so the web controller doesn't flag
 it. Two pipelines against one repo would collide on `workspaces/pr-<n>` dirs and
-tmux session names.
+tmux session names. When the web server re-execs itself in place (the
+Tailscale bind-fallback re-exec, a self-update), the pipeline it started keeps
+running and the new image adopts it back — only when the lock says
+`owner: server` and the holder is the server's own child (`waitpid`) — so
+settings changes restart it as before. A standalone run or another server's
+pipeline stays external and is never stopped by this server.
 
 **It follows your settings.** Sources, the GitHub token / repos / switches and
 which device runs the GitHub halves are read once at boot, so the web server
 restarts the pipeline it owns whenever one of them changes — saved locally in
 Intake / Settings or synced in from another device — 2 s after the last change
 of a burst (one restart per form, not per field), logging the changed keys
-(`github`, `ticketing.<id>`, `automation`; never values). The signature is in
+(`github`, `ticketing.<id>`, `automation`; never values). This holds across a
+server re-exec too: the re-adopted pipeline is restarted like a fresh one
+(before, it counted as external and switches flipped after a re-exec were
+silently not applied). The signature is in
 `backend/web/core/settings_hooks.py` (`pipeline_signature`: every field of
 every source with secrets hashed, the GitHub token hash, repos and switches).
 Per-poll knobs (grace period, skip authors) and per-launch ones (agent, effort,
@@ -746,8 +762,9 @@ plus one repo check, and a repository's **Test access** checks that the
 resolved credential reaches that particular repo
 (`POST /api/settings/test/github-repo`). The GitHub Issues source resolves
 through the same chain; a per-source `api_token` an older release stored is
-read as the last fallback this release only, with a one-time log notice and
-an *Action needed* row in Settings → Connections.
+read as the last fallback this release only (GitHub-shaped tokens only — see
+the on-ramp above), with a one-time log notice and an *Action needed* row in
+Settings → Connections.
 
 ## Issue-handling flow
 
@@ -850,8 +867,8 @@ connected in the UI a minute ago is exactly what the next clone needs.
 | File | Contents |
 |---|---|
 | `./state.json` | `{last_run_timestamp, processed_stories: [{story_id, branch, status, processed_at}], pending_stories: [{story_id, ticket_id, source_key}], processed_prs: [{number, head_sha, processed_at}], ticket_routes: {<slug>: {repos, reason, method, at}}}` — dedup/resume state; `pending_stories` is the crash-recovery queue (see Story flow step 2): an entry is removed on dequeue, on a filter miss at restart, or when the ticket is gone (`TicketNotFound`), and kept on a transient fetch failure. `ticket_routes` keeps the last 500 multi-repo routing decisions (see "A source spanning several repos"). Corrupt/missing → starts fresh. |
-| `./automation_here.json` | `{here, runner}` — whether PR review and issue handling last ran on this device or on another of "Your devices" (`runner`, its name). The web server records "elsewhere"; when they move here the pipeline, before its first PR / issue scan, adds every PR and issue open right now to `processed_prs` / the processed-issues ledger with status `handed_over` (logging "PR review moved here — n open PRs already handled on X are skipped"), then records "here". The same seeding runs, once per loop, when this device is in a group with another live device (`MINDFLOCK_PIPELINE_FLEET=1` from the server) and that loop has never run here — no ledger entry or attempt and no `ledger_started.<prs\|issues>` in `state.json` — so a device that was chosen before the group's repos reached it never re-reviews what another device handled (the log names "another device"). After the check each enabled loop is marked in `state.json`'s `ledger_started`, so a device that has been running alone is never seeded later. If GitHub can't be listed it seeds, marks and scans nothing and retries next poll |
-| `./.mindflock-pipeline.lock` | Singleton flock; contains the winner's PID |
+| `./automation_here.json` | `{here, runner}` — whether PR review and issue handling last ran on this device or on another of "Your devices" (`runner`, its name). The web server records "elsewhere" (only once it can tell which member it is — nothing is written while Tailscale is still booting — and a mark whose `runner` is this machine's own hostname is ignored with a warning); when they move here the pipeline, before its first PR / issue scan, adds every PR and issue open right now to `processed_prs` / the processed-issues ledger with status `handed_over` (logging "PR review moved here — n open PRs already handled on X are skipped"), then records "here". The same seeding runs, once per loop, when this device is in a group with another live device (`MINDFLOCK_PIPELINE_FLEET=1` from the server) and that loop has never run here — no ledger entry or attempt and no `ledger_started.<prs\|issues>` in `state.json` — so a device that was chosen before the group's repos reached it never re-reviews what another device handled (the log names "another device"). After the check each enabled loop is marked in `state.json`'s `ledger_started`, so a device that has been running alone is never seeded later. If GitHub can't be listed it seeds, marks and scans nothing and retries next poll |
+| `./.mindflock-pipeline.lock` | Singleton flock; the winner's PID, then `{version, commit, owner}` (`owner: server` when the web server started it — what lets a re-exec'd server adopt it back) |
 | `./.mindflock-pipeline-activity.json` | Activity beacon `{pid, ticket_busy, pr_busy, issue_busy, held_for_slot, config_errors: [{source, field, message}], updated}` the web status reads (counts only while `pid` is the running pipeline's) |
 | `./.mindflock-pipeline-exit.json` | `{pid, at, kind: config\|crash, message, fields}` written on the way out of a configuration error or an unhandled crash; the web status reads it (when `pid` is its child's) to say why, and deletes it on the next start |
 | `./logs/pipeline.log` | The pipeline's own log (`[logging]` config) |

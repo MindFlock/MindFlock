@@ -731,21 +731,40 @@ export function routeCode(text: string): { kind: "peer" | "device" | ""; code: s
   return { kind: "", code: "", device: "" };
 }
 
+/** Why the server bound every interface (0.0.0.0) instead of only its
+ * Tailscale addresses, keyed by `/api/fleet`'s `bind`. */
+const BIND_ALL_WHY: Record<string, string> = {
+  all: "you asked for every interface",
+  unbindable: "Tailscale's addresses can't be bound here",
+  "no-tailnet": "Tailscale wasn't running when it started",
+};
+
 /** "This device" — where it listens and whether the others can reach it,
- * as one line ("" while the server doesn't say). */
-export function thisDeviceLine(st: Pick<FleetStatus, "self" | "self_reachable" | "listening" | "gate_on">): string {
+ * as one line ("" while the server doesn't say). `bind` (the server's bind
+ * reason) turns "listens on your tailnet" into "every interface" when the
+ * server fell back to 0.0.0.0 — then the LAN can reach it too. */
+export function thisDeviceLine(
+  st: Pick<FleetStatus, "self" | "self_reachable" | "listening" | "gate_on"> & { bind?: string }
+): string {
   if (st.listening === undefined || st.listening === "") return "";
   const name = st.self.host || st.self.key;
-  const where = st.self.ip ? st.self.ip + ":" + (st.self.port || 8765) : "port " + (st.self.port || 8765);
+  const port = st.self.port || 8765;
+  const where = st.self.ip ? st.self.ip + ":" + port : "port " + port;
   if (st.self_reachable === false)
     return name + " only listens on this computer (127.0.0.1) — your other devices and your phone can't reach it.";
-  return (
-    name +
-    " listens on your tailnet (" +
-    where +
-    ") · access gate " +
-    (st.gate_on ? "on" : "off")
-  );
+  const gate = " · access gate " + (st.gate_on ? "on" : "off");
+  const why = BIND_ALL_WHY[st.bind || ""];
+  if (why)
+    return (
+      name +
+      " listens on every interface (port " +
+      port +
+      ", " +
+      why +
+      ") — your LAN can reach it too, not only your tailnet" +
+      gate
+    );
+  return name + " listens on your tailnet (" + where + ")" + gate;
 }
 
 /** The one confirm "Make reachable" asks: what it changes, said once. */

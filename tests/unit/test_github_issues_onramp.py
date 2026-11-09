@@ -117,7 +117,7 @@ def test_unresolvable_repo_raises_an_actionable_error(monkeypatch):
         _prov()._repo()
     msg = str(err.value)
     # It must say what to do, not just that it failed.
-    assert "Repo URL" in msg and "origin" in msg
+    assert "Repository field" in msg and "owner/repo" in msg and "Repo URL" in msg
 
 
 def test_origin_probe_survives_a_non_git_directory(monkeypatch, tmp_path):

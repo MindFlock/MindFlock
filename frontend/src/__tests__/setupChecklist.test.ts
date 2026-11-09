@@ -323,6 +323,48 @@ describe("SetupChecklist", () => {
     expect(tools).not.toContain("`claude`");
   });
 
+  it("step ①'s git identity row asks for the name and email in place, the shell command folded", () => {
+    const fix = 'git config --global user.name "Your Name" && git config --global user.email you@example.com';
+    setupData.current = status(
+      {},
+      {
+        doctor: {
+          ok: true,
+          checks: [
+            { id: "git", label: "git", status: "ok", detail: "git 2.43", required: true },
+            {
+              id: "git-identity",
+              label: "git identity",
+              status: "warn",
+              detail: "user.name and user.email not set — commits will fail on this computer",
+              fix,
+              required: true,
+            },
+            { id: "agent-cli", label: "agent CLI (claude)", provider: "claude", status: "ok", detail: "/usr/bin/claude", required: true },
+            { id: "agent-auth", label: "agent auth (claude)", provider: "claude", status: "ok", detail: "signed in", required: true },
+          ],
+          install: { steps: [] },
+        } as never,
+      }
+    );
+    const html = render();
+    const tools = html.slice(html.indexOf('data-step="tools"'), html.indexOf('data-step="agent_login"'));
+    // Shown outside All checks (a problem the install button doesn't fix)…
+    const problems = tools.slice(tools.indexOf("doctor-list-essential"), tools.indexOf("setup-allchecks"));
+    expect(problems).toContain("git identity");
+    // …as a form, not a terminal command to paste in a browser.
+    expect(problems).toContain('aria-label="Your name for commits"');
+    expect(problems).toContain('aria-label="Your email for commits"');
+    expect(problems).toContain(">Save<");
+    expect(problems).not.toContain("fix: <code>");
+    expect(problems).toContain("Or in a terminal");
+    // The agent rows read as the terminal doctor says them.
+    expect(tools).toContain("agent (claude)");
+    expect(tools).toContain("agent sign-in (claude)");
+    expect(tools).not.toContain("agent CLI (claude)");
+    expect(tools).not.toContain("agent auth (claude)");
+  });
+
   it("step ① never sits empty while checking: a skeleton until a payload arrives", () => {
     const html = render();
     const tools = html.slice(html.indexOf('data-step="tools"'), html.indexOf('data-step="agent_login"'));
@@ -374,3 +416,24 @@ describe("SetupChecklist", () => {
   });
 });
 
+
+describe("doctor row helpers", () => {
+  it("checkLabel says agent / agent sign-in, and falls back to the wire label", async () => {
+    const { checkLabel } = await import("../components/setup/setupModel");
+    expect(checkLabel({ id: "agent-cli", label: "agent CLI (codex)", provider: "codex" })).toBe("agent (codex)");
+    expect(checkLabel({ id: "agent-auth", label: "agent auth (codex)", provider: "codex" })).toBe("agent sign-in (codex)");
+    // A per-role row (agent-auth-<name>) keeps its own label.
+    expect(checkLabel({ id: "agent-auth-aider", label: "agent auth (aider — PR review)", provider: "aider" })).toBe(
+      "agent auth (aider — PR review)"
+    );
+    expect(checkLabel({ id: "tmux", label: "tmux" })).toBe("tmux");
+    expect(checkLabel({ id: "x" })).toBe("x");
+  });
+
+  it("asksGitIdentity: only the git identity row, only while unset", async () => {
+    const { asksGitIdentity } = await import("../components/setup/setupModel");
+    expect(asksGitIdentity({ id: "git-identity", status: "warn" })).toBe(true);
+    expect(asksGitIdentity({ id: "git-identity", status: "ok" })).toBe(false);
+    expect(asksGitIdentity({ id: "gh", status: "warn" })).toBe(false);
+  });
+});

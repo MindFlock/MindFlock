@@ -35,7 +35,7 @@ function kindOf(text: string): string | null {
   if (V.isHushPhrase(text)) return "hush";
   if (V.stopTail(text) !== null) return "stop";
   const r = V.parseRadio(text).kind;
-  return r === "over" ? "send" : r === "out" ? "end" : r === "disregard" ? "clear" : null;
+  return r === "over" ? "send" : r === "out" ? "end" : r === "disregard" ? "clear" : r === "undo" ? "undo" : null;
 }
 
 afterEach(() => W.resetVoiceWords());
@@ -50,7 +50,7 @@ describe("the shared fixture", () => {
     expect(w.heard?.wake).toContain("mind lock");
     const c = W.wordsFrom(F.custom, W.BUILTIN_VOICE_WORDS);
     expect(c.send).toEqual(["roger"]);
-    expect(c.heard).toEqual({ send: [], end: [], clear: [], stop: [], hush: [], wake: [] });
+    expect(c.heard).toEqual({ send: [], end: [], clear: [], undo: [], stop: [], hush: [], wake: [] });
     expect(F.cases.length).toBeGreaterThanOrEqual(80);
   });
 
@@ -119,7 +119,7 @@ describe("the heard forms (words.heard)", () => {
     expect(V.isHushPhrase("quite")).toBe(true);
     // The server's shape is read whole; a kind it leaves out is just empty.
     W.setVoiceWords({ send: ["roger"], heard: { send: ["rodjah"] } });
-    expect(W.voiceWords().heard).toEqual({ send: ["rodjah"], end: [], clear: [], stop: [], hush: [], wake: [] });
+    expect(W.voiceWords().heard).toEqual({ send: ["rodjah"], end: [], clear: [], undo: [], stop: [], hush: [], wake: [] });
     expect(V.parseRadio("fix it rodjah").kind).toBe("over");
   });
 });

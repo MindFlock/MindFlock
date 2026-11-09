@@ -55,6 +55,7 @@ def _matchers(js: str) -> str:
             )
         ]
         + js[js.index("  var VOICE_CMD = [") : js.index("  function voiceRunCommand(")]
+        + js[js.index("  function voiceUndoParse(") : js.index("  function voiceUndo(")]
     )
 
 
@@ -440,7 +441,7 @@ function kindOf(t) {
   var p = voiceDictParse(t);
   if (voiceIsHush(p.text || t)) return "hush";
   if (voiceTail(t, false)) return "stop";
-  return { over: "send", out: "end", disregard: "clear" }[p.kind] || null;
+  return { over: "send", out: "end", disregard: "clear" }[p.kind] || (voiceUndoParse(t) ? "undo" : null);
 }
 var out = { keys: {}, alike: [], cases: [] };
 Object.keys(F.keys).forEach(function (t) { out.keys[t] = voiceSoundKey(t); });
@@ -460,7 +461,8 @@ console.log(JSON.stringify(out));
     for c, got in zip(f["cases"], out["cases"]):
         assert got == c["kind"], c
     # The heard forms are the server's, bounded, never a phrase itself.
-    assert out["heard"] == f["words"]["heard"]
+    # (``undo`` is the page's own kind too: empty while the fixture has none.)
+    assert out["heard"] == dict({"undo": []}, **f["words"]["heard"])
     # A streamed guess holds back a heard form while it may still be said.
     assert out["hold"] == [
         ["fix the bug", "this"],

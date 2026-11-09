@@ -32,6 +32,9 @@ export const SECRET_MASK = "•••set";
 /** Per-field messages for one source, as the PUT returns them. */
 export type FieldErrors = Record<string, string>;
 
+/** The error a blank must-fill field shows (splitForSave). */
+export const REQUIRED = "Required";
+
 /** The stored test verdict, which rides on the source JSON as an object even
  * though every other source field is a string. Read it through this so the
  * shape is checked once. */
@@ -174,12 +177,24 @@ export function splitForSave(
     const meta = catalog.find((p) => p.id === s.provider) || null;
     const missing = storedIds.has(s.id) ? [] : missingRequiredFields(meta, s);
     if (missing.length) {
-      held[s.id] = Object.fromEntries(missing.map((f) => [f.key, "Required"]));
+      held[s.id] = Object.fromEntries(missing.map((f) => [f.key, REQUIRED]));
     } else {
       send.push(s);
     }
   }
   return { send, held };
+}
+
+/** The error a field shows while the user is typing in it. A "Required"
+ * under a box that now holds text is gone the moment they type — not when
+ * the value is next sent (blur, a pause). Sent on blur, it vanished on the
+ * mousedown of the button they reached for, so everything below moved up a
+ * line under the pointer and the click (Test & continue, Finish) landed on
+ * nothing: the first press after filling the box did nothing. Any other
+ * error is about the value's shape and stays until the value is judged. */
+export function shownFieldError(error: string | undefined, typed: string | null): string | undefined {
+  if (error === REQUIRED && typed !== null && typed.trim() !== "") return undefined;
+  return error;
 }
 
 /** The per-source field errors in a rejected PUT (`ApiError.body`), or `{}`

@@ -114,6 +114,9 @@ SKIP_MEMORY = "low memory"
 SKIP_SLEEPING = "sleeping"
 #: Held offline after a crash (core.held): only a person's Start brings it back.
 SKIP_HELD = "held offline"
+#: Its agent's CLI isn't installed (:func:`missing_agent`): a launch would
+#: only fail again the same way.
+SKIP_MISSING = "agent not installed"
 #: :func:`_revive_one`'s second item on a revive that queued a continue.
 CONTINUED = "continued"
 
@@ -238,9 +241,58 @@ def skip_reason(
             return SKIP_QUIT
     except Exception:  # noqa: BLE001 — no marker reads as "revive it"
         pass
+    if missing_agent(srv, inst, title) is not None:
+        return SKIP_MISSING
     if check_limit and _limited(srv, inst, title, now):
         return SKIP_LIMIT
     return None
+
+
+#: The exit codes of a command that never ran: not found, not executable.
+_NEVER_RAN = (126, 127)
+
+
+def missing_agent(srv, inst, title: str) -> Optional[str]:
+    """The provider name of ``title``'s agent when its CLI isn't installed:
+    its last launch exited 127/126 (the shell couldn't find or run it) AND
+    its binary (honouring a saved binary path) is still not on PATH. Both,
+    so neither a stale marker after an install nor a PATH quirk alone
+    refuses a Start. ``None`` otherwise, and on any doubt. Blocking (a
+    marker read). Never raises."""
+    try:
+        from backend.session import tmux as _tmux
+
+        code = srv._read_exit_marker(_tmux.to_mindflock_tmux_name(title))
+        if code not in _NEVER_RAN:
+            return None
+        if _alive(srv, title):
+            return None
+        import shutil
+
+        from backend import doctor
+
+        name = providers.resolve(getattr(inst, "Program", "") or "").name
+        if not name or name == "generic":
+            return None
+        if shutil.which(doctor._resolve_agent_binary(name)):
+            return None
+        return name
+    except Exception:  # noqa: BLE001 — doubt means "try the launch"
+        return None
+
+
+def missing_agent_error(name: str) -> str:
+    """What a refused Start says about agent ``name``'s missing CLI."""
+    try:
+        from backend.web.addons.connections import agent_product_name
+
+        who = agent_product_name(name)
+    except Exception:  # noqa: BLE001
+        who = name
+    return (
+        "%s isn't installed on this computer. Install it in Settings → "
+        "Agents, then press Start." % who
+    )
 
 
 def _alive(srv, title: str) -> bool:
@@ -411,6 +463,11 @@ def relaunch(
         srv = _server()
     from backend.web.core import held as _held
 
+    # A CLI that isn't installed fails the same way on every launch: say so
+    # rather than relaunch it (and, held, stay held).
+    missing = missing_agent(srv, inst, title)
+    if missing is not None:
+        return "", missing_agent_error(missing), False
     was_held = _held.info(title) if release else None
     if was_held is not None:
         _held.release(title)

@@ -40,6 +40,7 @@ export function RepoListField({
   onChange,
   onPending,
   onSettled,
+  error,
 }: {
   source: TicketingSource;
   onChange(patch: Record<string, string | null>): void;
@@ -47,11 +48,16 @@ export function RepoListField({
   onPending?(): void;
   /** A pending edit turned out to change nothing (typed, then typed back). */
   onSettled?(): void;
+  /** The server refused the repo (a Finish / Test without one): red now. */
+  error?: string;
 }) {
   const stored = sourceRepos(source);
   const storedRef = useRef(stored);
   storedRef.current = stored;
   const [rows, setRows] = useState<RepoEntry[]>(() => rowsFor(source));
+  // A blank Repo URL turns red once the person has been in it and left it
+  // blank (or the server refused it) — never on arrival at the step.
+  const [touched, setTouched] = useState(false);
   // Saved as you type (a short pause), on blur and on Enter — never only on
   // blur, which left a typed URL unsaved under a card reading "Saved ✓".
   const save = useAutosave<RepoEntry[]>((next) => {
@@ -87,6 +93,7 @@ export function RepoListField({
 
   const many = rows.length > 1;
   const missing = cleanRepos(rows).length === 0;
+  const red = missing && (touched || !!error);
   return (
     <div className="set-row tk-repos" role="group" aria-label="Repositories">
       {/* The same required marker the catalog's fields wear (FieldLabel). */}
@@ -104,11 +111,15 @@ export function RepoListField({
             required={i === 0}
             data-tk-field={i === 0 ? "repo_url" : undefined}
             aria-label={many ? `Repo ${i + 1} URL` : "Repo URL"}
-            className={"tk-repo-url" + (i === 0 && missing ? " field-missing" : "")}
+            className={"tk-repo-url" + (i === 0 && red ? " field-missing" : "")}
+            aria-invalid={i === 0 && red ? true : undefined}
             placeholder="git@github.com:org/repo.git"
             value={r.url}
             onChange={(e) => edit(i, { url: e.target.value })}
-            onBlur={save.flush}
+            onBlur={() => {
+              setTouched(true);
+              save.flush();
+            }}
             onKeyDown={onKey}
           />
           {many && (

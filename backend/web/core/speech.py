@@ -35,10 +35,12 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 ``$MINDFLOCK_VOICE_DIR``):
 
 * ``whisper/`` — faster-whisper's ``download_root``: the CTranslate2 models,
-  run as int8 on the CPU. A phrase sent whole uses ``small`` unless
-  ``voice.stt_model`` names another size (``base``, ``medium`` …; a name
-  that is not a faster-whisper size, like the ``whisper-1`` a host wants,
-  reads as ``small``); the live transcript uses the much faster
+  run as int8 on the CPU. A phrase sent whole uses ``small`` — its
+  English-only twin ``small.en`` for English (``lang`` empty or ``en*``:
+  :data:`WHISPER_MODEL_EN`) — unless ``voice.stt_model`` names a size
+  (``base``, ``medium`` …, kept as named in every language; a name that is
+  not a faster-whisper size, like the ``whisper-1`` a host wants, reads as
+  unset); the live transcript uses the much faster
   ``voice.stt_stream_model`` (:func:`stream_whisper_model`: ``base.en`` for
   English, ``base`` otherwise), and at the phrase's end the accurate pass
   re-decodes the whole phrase with ``stt_model`` again unless
@@ -54,7 +56,18 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 :meth:`LocalSTT.stream_transcriber`): ``core.speech_stream`` re-transcribes a
 growing window and commits the words two passes agree on, and
 :meth:`LocalSTT.final_transcriber` is the accurate pass over the whole phrase
-at its end.
+at its end. For English, when ``moonshine-voice`` and its model are
+installed (``core.speech_moonshine``; Settings → Voice installs them), the
+live words come from Moonshine tiny-streaming instead
+(:func:`stream_engine`, :meth:`LocalSTT.stream_engine`): Moonshine hears
+the control words (live, and its own text of the phrase at the end), and
+the whisper accurate pass writes every phrase's final text — Moonshine's
+stands only when that pass fails or times out, or the phrase is nothing
+but a control phrase ("stop", "over", a switch). ``voice.stt_stream_model``: ``""``
+picks Moonshine when it is installed, ``"moonshine"`` the same, a whisper
+name keeps whisper. Its model is cached under ``moonshine:tiny-streaming``
+beside the whisper keys (:func:`is_stt_key`), warmed, kept resident and
+shed the same way.
 
 faster-whisper decodes webm/mp4 clips through its bundled PyAV, so a system
 ``ffmpeg`` is not required; ``ready()`` still says when it is missing because
@@ -141,6 +154,16 @@ OPENAI_STT_MODEL = "gpt-transcribe"
 OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 OPENAI_TTS_VOICE = "alloy"
 WHISPER_MODEL = "small"
+#: The one-shot and accurate-pass model for ENGLISH while ``voice.stt_model``
+#: (and ``voice.stt_final``) name no size: the English-only twin of
+#: :data:`WHISPER_MODEL`, the same size and cost. ``tests/bench/
+#: stt_context_bench.py`` (2026-11-09, the accurate pass with the dictation
+#: context): WER 5.96 % against 6.97 % on LibriSpeech, 7.54 against 8.32 %
+#: under 12 dB SNR noise, 2.35 against 5.03 % on piper coding dictation, a
+#: paired p50 24 ms faster. Until it is on disk the server keeps
+#: :data:`WHISPER_MODEL` and fetches it in the background
+#: (:func:`english_default_model`).
+WHISPER_MODEL_EN = "small.en"
 #: The live transcript's model (``voice.stt_stream_model`` unset): ``base``
 #: decodes ~5x faster than ``small`` on a CPU at a small accuracy cost, and
 #: the English-only build is the better ``base`` for English. Measured
@@ -458,14 +481,20 @@ def stt_loaded() -> bool:
 
 
 def _resident() -> frozenset:
-    """The cache keys :func:`sweep_idle` never drops: the whisper models of
-    ``local`` recognition while it is the configured backend AND a client is
-    listening (:func:`listening`: the wake-word standby is on somewhere).
-    With nobody listening they unload after :data:`IDLE_SECONDS` unused."""
+    """The cache keys :func:`sweep_idle` and :func:`shed_for_memory` never
+    drop while ``local`` recognition is the configured backend: its English
+    streaming model always (:meth:`LocalSTT.stream_key`: Moonshine, ~200
+    MB, or whisper ``base.en``, ~150 MB: reloading it cost the person's next
+    phrase ~2 s, and the server warms it at boot), and all of its models
+    while a client is listening (:func:`listening`: the wake-word standby is
+    on somewhere). The rest unload after :data:`IDLE_SECONDS` unused."""
     try:
-        if _configured("stt") != "local" or not listening():
+        if _configured("stt") != "local":
             return frozenset()
         backend = get("stt", "local")
+        if not listening():
+            key = getattr(backend, "stream_key", None)
+            return frozenset({key()}) if key else frozenset()
         keys = getattr(backend, "resident_keys", None)
         return frozenset(keys()) if keys else frozenset()
     except Exception:  # noqa: BLE001 — an unreadable setting pins nothing
@@ -493,9 +522,9 @@ def sweep_idle(now: Optional[float] = None) -> List[str]:
 
 def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:
     """Memory reads low (the server's memory watch calls this): drop every
-    cached model unused for ``min_idle_s`` — the RESIDENT whisper models too,
-    which :func:`sweep_idle` keeps (``small`` + the stream model are ~1 GB of
-    the server's memory). One in use right now stays. The warm-up record of
+    cached model unused for ``min_idle_s`` but the resident ones
+    (:func:`_resident`: the streaming model, and with a listening lease all
+    of recognition's). One in use right now stays. The warm-up record of
     the dropped kind is forgotten, so the next warm loads again — once
     :func:`_memory_block` lets it. → the keys dropped. Never raises."""
     stamp = _now()
@@ -513,9 +542,9 @@ def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:
                     _CACHE.pop(key, None)
                     _USED.pop(key, None)
                     dropped.append(key)
-            if any(k.startswith("whisper") for k in dropped):
+            if any(is_stt_key(k) for k in dropped):
                 _WARMED.pop("stt", None)
-            if any(not k.startswith("whisper") for k in dropped):
+            if any(not is_stt_key(k) for k in dropped):
                 _WARMED.pop("tts", None)
     except Exception:  # noqa: BLE001 — shedding is best effort
         return dropped
@@ -552,7 +581,8 @@ def unload_all() -> None:
 def _arm_timer() -> None:
     """Make sure a sweep is scheduled while something is loaded: one daemon
     timer at a time, re-armed by its own firing while the cache is non-empty,
-    so an idle model is gone within 10–20 minutes of its last call."""
+    so an idle model is gone within one to two :data:`IDLE_SECONDS` of its
+    last call."""
     global _TIMER
     with _LOCK:
         if _TIMER is not None and _TIMER.is_alive():
@@ -608,6 +638,17 @@ HINT_CHARS = 400
 #: How many live session titles the hints carry at most (the most recently
 #: active first: those are the ones a person switches to by voice).
 HINT_TITLES = 12
+#: The voice commands Moonshine tiny mishears bare and the router reads:
+#: after the voice words, before the titles (``tests/bench/
+#: voice_command_ears.py``: "scroll up" → "grow up", "page down" → "h
+#: down", "summarize that" → "summer eyes that", "status" → "tetris").
+HINT_COMMANDS = (
+    "scroll",
+    "page up",
+    "page down",
+    "summarize",
+    "status",
+)
 #: The fixed MindFlock vocabulary: words whisper's priors spell wrong or
 #: hear as something else, after the voice words and the titles.
 HINT_VOCABULARY = (
@@ -682,7 +723,8 @@ def recognition_hints(
     """The vocabulary a whisper pass is biased towards, one comma-separated
     string of at most ``limit`` characters: the wake word and every voice
     phrase of every kind (``words``: :func:`voice_words.effective`'s dict —
-    these must be heard right, so they come first), then up to
+    these must be heard right, so they come first), then
+    :data:`HINT_COMMANDS` (unless ``vocabulary`` is off), then up to
     :data:`HINT_TITLES` session titles in :func:`speech_form` (``titles``,
     newest first, as :func:`session_titles` orders them), then
     :data:`HINT_VOCABULARY` (unless ``vocabulary`` is off). A phrase that
@@ -696,11 +738,14 @@ def recognition_hints(
     wake = words.get("wake")
     if isinstance(wake, str) and wake.strip():
         wanted.append(wake.strip())
-    for kind in ("send", "end", "clear", "stop", "hush"):
+    # The undo phrases last: the radio words that act at once lead.
+    for kind in ("send", "end", "clear", "stop", "hush", "undo"):
         got = words.get(kind)
         for phrase in got if isinstance(got, (list, tuple)) else ():
             if isinstance(phrase, str) and phrase.strip():
                 wanted.append(phrase.strip())
+    if vocabulary:
+        wanted.extend(HINT_COMMANDS)
     count = 0
     for title in titles or ():
         spoken = speech_form(title)
@@ -784,6 +829,77 @@ def _bias(model, hints: str, prompt: str, hotwords: bool = True) -> dict:
     return kw
 
 
+#: How much of the dictation context (``POST /api/voice/stream``'s
+#: ``context``: the message dictated before this phrase) the accurate pass
+#: takes as its ``initial_prompt``, in characters, from its end: ~70 tokens,
+#: the sentence or two this phrase continues. With the hints' ~100 tokens of
+#: ``hotwords`` it stays well inside Whisper's 224-token prompt slot
+#: (faster-whisper's ``get_prompt`` keeps the hotwords and the prompt side by
+#: side, each cut at 223); :func:`_prompt_room` keeps the decoder's token
+#: cap beside them. ``tests/bench/stt_context_bench.py`` (2026-11-09, 60
+#: LibriSpeech clips in order, each prompted with the text before it): WER on
+#: ``small`` 7.42 → 6.97 % clean and 9.45 → 8.32 % at 12 dB SNR, 0 copies of
+#: the context into a short reply, and no slower (paired p50 −3 ms).
+CONTEXT_CHARS = 300
+#: Whisper's decoder positions: prompt + generated tokens (faster-whisper
+#: refuses a ``max_new_tokens`` that does not fit beside the prompt).
+WHISPER_MAX_LENGTH = 448
+#: The prompt's fixed tokens besides the text: ``<|startofprev|>``, the
+#: start sequence (``<|startoftranscript|>``, the language, the task) and a
+#: timestamp token — rounded up.
+_PROMPT_OVERHEAD = 6
+_CONTROL_CHARS = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]"
+)
+
+
+def dictation_context(raw, limit: int = CONTEXT_CHARS) -> str:
+    """The dictation context a stream's accurate pass is prompted with, from
+    whatever the client sent: a ``str`` only (anything else → ``""``), its
+    control and invisible characters dropped, its whitespace collapsed, and
+    at most ``limit`` characters from its END (the words this phrase
+    follows), cut at a word boundary so the prompt never opens on half a
+    word (a single word longer than ``limit`` is cut as is). Pure."""
+    if not isinstance(raw, str) or limit <= 0:
+        return ""
+    text = " ".join(_CONTROL_CHARS.sub(" ", raw).split())
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    if text[-limit - 1] != " ":  # the cut fell inside a word: drop that word
+        space = tail.find(" ")
+        if space != -1:
+            tail = tail[space + 1 :]
+    return tail.strip()
+
+
+def _prompt_tokens(model, text: str) -> int:
+    """How many tokens faster-whisper's ``get_prompt`` spends on ``text``
+    (``hotwords`` or ``initial_prompt``; each is cut at half of
+    :data:`WHISPER_MAX_LENGTH`): exact through the model's tokenizer, else a
+    generous two characters a token."""
+    if not text:
+        return 0
+    try:
+        count = len(
+            model.hf_tokenizer.encode(" " + text.strip(), add_special_tokens=False).ids
+        )
+    except Exception:  # noqa: BLE001 — a fake or an old version: estimate
+        count = (len(text) + 1) // 2
+    return min(count, WHISPER_MAX_LENGTH // 2 - 1)
+
+
+def _prompt_room(model, hotwords: str, prompt: str) -> int:
+    """The ``max_new_tokens`` that still fits beside a prompt of
+    ``hotwords`` and ``prompt`` (at least 1)."""
+    used = (
+        _PROMPT_OVERHEAD
+        + _prompt_tokens(model, hotwords)
+        + _prompt_tokens(model, prompt)
+    )
+    return max(1, WHISPER_MAX_LENGTH - used)
+
+
 class Backend:
     """One speech engine of one kind. ``ready()`` is cheap and offline; the
     work methods raise :class:`SpeechError` with a sentence for the UI."""
@@ -865,10 +981,14 @@ class Backend:
         decoder towards, for a backend that can."""
         raise SpeechError("%s does not stream" % self.label)
 
-    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
+    def final_transcriber(
+        self, lang: str = "", hints: str = "", context: str = ""
+    ) -> Optional[Callable]:
         """The ``accurate(audio) -> text`` a stream runs over the whole
         phrase at its end (``core.speech_stream``), or ``None``: no accurate
-        pass, the fast words stand. ``hints`` as above."""
+        pass, the fast words stand. ``hints`` as above; ``context``: the
+        text already dictated before this phrase (:func:`dictation_context`),
+        the decoder's prompt for a backend that can take one."""
         return None
 
 
@@ -1031,11 +1151,87 @@ WHISPER_SIZES = frozenset(
 _PIPER_NAME = re.compile(r"^[a-z]{2,3}_[A-Z]{2}-[A-Za-z0-9_]+-(x_low|low|medium|high)$")
 
 
-def whisper_model(raw: str = "") -> str:
-    """The faster-whisper model for ``raw`` (``voice.stt_model``): a size
-    name or a Hugging Face ``org/repo`` id, else :data:`WHISPER_MODEL`."""
+def _named_size(raw: str) -> bool:
+    """Whether ``raw`` names a faster-whisper model (a size or an
+    ``org/repo`` id) — the person's pick, kept as is in every language."""
     name = (raw or "").strip()
-    return name if name in WHISPER_SIZES or "/" in name else WHISPER_MODEL
+    return name in WHISPER_SIZES or "/" in name
+
+
+def _english(lang: str) -> bool:
+    """``lang`` is English or unsaid (the English models' languages)."""
+    return whisper_language(lang) in (None, "en")
+
+
+def whisper_model(raw: str = "", lang: str = "") -> str:
+    """The faster-whisper model for ``raw`` (``voice.stt_model``) in
+    ``lang``: a size name or a Hugging Face ``org/repo`` id as named, else
+    :data:`WHISPER_MODEL_EN` for English (``lang`` empty or ``en*``) and
+    :data:`WHISPER_MODEL` for any other language. Pure: what the install
+    downloads; ``LocalSTT`` runs :data:`WHISPER_MODEL` until the English
+    twin is on disk (:func:`english_default_model`)."""
+    if _named_size(raw):
+        return raw.strip()
+    return WHISPER_MODEL_EN if _english(lang) else WHISPER_MODEL
+
+
+def whisper_on_disk(name: str) -> bool:
+    """Whether faster-whisper ``name`` is downloaded into
+    ``voice_dir()/whisper`` (the Hugging Face cache layout
+    ``models--<org>--faster-whisper-<name>/snapshots/<rev>/model.bin``). A
+    glob, no import; never raises."""
+    try:
+        root = voice_dir() / "whisper"
+        pattern = "models--*--faster-whisper-%s/snapshots/*/model.bin" % name
+        return any(root.glob(pattern))
+    except Exception:  # noqa: BLE001 — unreadable: not there
+        return False
+
+
+#: How long after a failed background fetch of :data:`WHISPER_MODEL_EN`
+#: (offline, a full disk) the next stream open may try again.
+FETCH_RETRY_SECONDS = 600.0
+_FETCH_LOCK = threading.Lock()
+_FETCH: Dict[str, float] = {}  # name → monotonic time its fetch started
+
+
+def english_default_model(fetch: bool = False) -> str:
+    """The English model while ``voice.stt_model`` names no size:
+    :data:`WHISPER_MODEL_EN` once it is on disk — or when
+    :data:`WHISPER_MODEL` is not either (a fresh machine: it downloads on
+    first use, or the install fetched it) — else :data:`WHISPER_MODEL`,
+    which an install from before the twin has. ``fetch`` (a warm, a stream
+    or a clip — real use, never a status read) also starts the twin's
+    download in the background then (:func:`fetch_whisper_model`, outside
+    the model lock: a load under it would stall every pass for the
+    download); the next stream after it lands takes it. Never blocks."""
+    if whisper_on_disk(WHISPER_MODEL_EN) or not whisper_on_disk(WHISPER_MODEL):
+        return WHISPER_MODEL_EN
+    if fetch:
+        _fetch_in_background(WHISPER_MODEL_EN)
+    return WHISPER_MODEL
+
+
+def _fetch_in_background(name: str) -> None:
+    """Download ``name`` on a thread, once at a time, and not again within
+    :data:`FETCH_RETRY_SECONDS` of the last try (a failure is logged)."""
+    now = time.monotonic()
+    with _FETCH_LOCK:
+        started = _FETCH.get(name)
+        if started is not None and now - started < FETCH_RETRY_SECONDS:
+            return
+        _FETCH[name] = now
+
+    def run() -> None:
+        try:
+            fetch_whisper_model(name)
+            _logger.info("voice: faster-whisper %s downloaded", name)
+        except Exception as err:  # noqa: BLE001 — offline, disk: stay on small
+            _logger.warning(
+                "voice: could not download faster-whisper %s: %s", name, err
+            )
+
+    _spawn(run, "whisper-fetch")
 
 
 def stream_whisper_model(raw: str = "", lang: str = "") -> str:
@@ -1051,21 +1247,61 @@ def stream_whisper_model(raw: str = "", lang: str = "") -> str:
     )
 
 
+#: ``voice.stt_stream_model`` that asks for the Moonshine streaming lane
+#: (``core.speech_moonshine``); ``""`` picks it too, when it is installed.
+STREAM_MOONSHINE = "moonshine"
+#: :func:`stream_engine`'s answers.
+ENGINE_MOONSHINE, ENGINE_WHISPER = "moonshine", "whisper"
+
+
+def stream_engine(raw: str = "", lang: str = "") -> str:
+    """Which engine a live transcript in ``lang`` runs for ``raw``
+    (``voice.stt_stream_model``) → :data:`ENGINE_MOONSHINE` when ``raw`` is
+    ``""`` or :data:`STREAM_MOONSHINE`, the language is English
+    (``speech_moonshine.supports``) and Moonshine is installed
+    (``speech_moonshine.available``: the package and the model on disk),
+    else :data:`ENGINE_WHISPER` — any whisper name keeps whisper, and so
+    does Moonshine missing or failing to answer."""
+    name = (raw or "").strip()
+    if name and name.lower() != STREAM_MOONSHINE:
+        return ENGINE_WHISPER
+    try:
+        from backend.web.core import speech_moonshine as _moon
+
+        if _moon.supports(lang) and _moon.available():
+            return ENGINE_MOONSHINE
+    except Exception:  # noqa: BLE001 — a broken install reads as absent
+        pass
+    return ENGINE_WHISPER
+
+
+def _moonshine_key() -> str:
+    from backend.web.core import speech_moonshine as _moon
+
+    return _moon.CACHE_KEY
+
+
+def is_stt_key(key: str) -> bool:
+    """Whether a model-cache key is a recognition model (``whisper:<name>``
+    or ``moonshine:<arch>``) — every other key is a voice."""
+    return key.startswith(("whisper", "moonshine"))
+
+
 #: ``voice.stt_final`` that turns the accurate pass off.
 FINAL_OFF = "off"
 
 
-def final_whisper_model(raw: str = "", stt_model: str = "") -> str:
+def final_whisper_model(raw: str = "", stt_model: str = "", lang: str = "") -> str:
     """The accurate pass's faster-whisper model for ``raw``
-    (``voice.stt_final``): ``""`` for :data:`FINAL_OFF`, ``raw`` when it is
-    a size or ``org/repo`` id, else the one-shot model
-    (:func:`whisper_model` of ``stt_model``)."""
+    (``voice.stt_final``) in ``lang``: ``""`` for :data:`FINAL_OFF`, ``raw``
+    when it is a size or ``org/repo`` id, else the one-shot model
+    (:func:`whisper_model` of ``stt_model`` in ``lang``). Pure."""
     name = (raw or "").strip()
     if name.lower() == FINAL_OFF:
         return ""
-    if name in WHISPER_SIZES or "/" in name:
+    if _named_size(name):
         return name
-    return whisper_model(stt_model)
+    return whisper_model(stt_model, lang)
 
 
 def piper_voice(raw: str = "") -> str:
@@ -1218,12 +1454,32 @@ def _shim_av_open() -> None:
 #: 20 ms) and takes a pass from 374 to 155 ms; at 6 s it starts inventing
 #: words. Whisper windows are at most :data:`speech_stream.WINDOW_SECONDS`.
 STREAM_PAD_SECONDS = 10.0
-#: The same for the accurate pass over a whole phrase — 0: Whisper's own
-#: 30 s. Its text is the one sent, and with the vocabulary as ``hotwords``
-#: a shorter input costs words: small on the 48 clips, WER 4.8% at 30 s,
+#: The same for the accurate pass over a whole phrase (a longer phrase
+#: pads to itself plus a little quiet: :func:`_pad_frames`). It was 0
+#: (Whisper's own 30 s): small on the 48 clips then gave WER 4.8% at 30 s,
 #: 5.9% at 20 s (644 vs 1150 ms p50), 8.5% at 10 s — where a low-confidence
-#: lone word also set off faster-whisper's temperature fallback for 28 s.
-FINAL_PAD_SECONDS = 0.0
+#: lone word set off faster-whisper's temperature fallback for 28 s. With
+#: the fallback off and the tokens capped (:data:`FINAL_TOKENS`), 20 s
+#: measured (voice_bench, base.en+small, 2026-11-07): finish 519/728 ms
+#: p50/p95 and WER 3.6% against 863/1500 ms (4 of 48 timed out) and 4.7%
+#: at 30 s — the 1 s the person waits after "over" is worth more than the
+#: odd word, and a pass that lands beats one that times out to the fast
+#: text. 10 s stays out: it starts inventing words.
+FINAL_PAD_SECONDS = 20.0
+#: The accurate pass decodes greedily, once (temperature 0: no fallback
+#: ladder — a low-confidence phrase decoded up to six times), and its new
+#: tokens are capped at this many plus :data:`FINAL_TOKENS_PER_S` per second
+#: of a 30 s window's audio (a fast speaker says ~6.5 tokens a second, a
+#: code word more) — at most :data:`FINAL_TOKENS_MAX`: the ``hotwords``
+#: prompt may take 228 of Whisper's 448 positions, and faster-whisper
+#: refuses a cap that does not fit beside it.
+FINAL_TOKENS = 20
+FINAL_TOKENS_PER_S = 10
+FINAL_TOKENS_MAX = 220
+#: The accurate pass's beam: 1 is greedy. ``tests/bench/stt_context_bench.py``
+#: (2026-11-09): beam 5 cut ``small``'s WER by about a point but took the
+#: pass from ~1.0 s to ~1.9–2.7 s p50 — past the 1.5 s cap the clients wait.
+FINAL_BEAM = 1
 #: A fast pass decodes greedily, once: faster-whisper's temperature
 #: fallback (5 samples at each of 5 temperatures) takes seconds — never
 #: worth it to a pass the next chunk replaces — and its tokens are capped
@@ -1323,6 +1579,13 @@ def _padded(seconds: float, decode: Callable[[], object]) -> object:
     return out
 
 
+def final_tokens(seconds: float) -> int:
+    """The accurate pass's ``max_new_tokens`` for ``seconds`` of phrase
+    (per 30 s window: see :data:`FINAL_TOKENS`)."""
+    per_window = min(max(0.0, seconds), 30.0)
+    return min(FINAL_TOKENS_MAX, int(FINAL_TOKENS + FINAL_TOKENS_PER_S * per_window))
+
+
 def whisper_threads(role: str, cores: Optional[int] = None) -> int:
     """The CPU threads a whisper model decodes with (CTranslate2's
     ``cpu_threads``, fixed when it loads), for ``role`` ``fast`` (the live
@@ -1361,38 +1624,88 @@ class LocalSTT(Backend):
     label = "faster-whisper on this computer"
     streams = True
 
-    def _model_name(self) -> str:
-        return whisper_model(_voice().stt_model)
+    def _model_name(self, lang: str = "", fetch: bool = False) -> str:
+        """The one-shot model in ``lang`` (:func:`whisper_model`; for
+        English with no size set, :func:`english_default_model`: the
+        English twin once it is on disk, its download started when
+        ``fetch``)."""
+        raw = _voice().stt_model
+        if not _named_size(raw) and _english(lang):
+            return english_default_model(fetch)
+        return whisper_model(raw, lang)
 
     def stream_model_name(self, lang: str = "") -> str:
-        """The live transcript's model for ``lang`` (:func:`stream_whisper_model`)."""
+        """The live transcript's WHISPER model for ``lang``
+        (:func:`stream_whisper_model`) — what a whisper stream runs, and
+        the wake check (:meth:`wake_transcribe`) whichever engine streams."""
         return stream_whisper_model(_voice().stt_stream_model, lang)
 
-    def final_model_name(self) -> str:
-        """The accurate pass's model (:func:`final_whisper_model`; ``""``:
-        off). ``voice.stt_final`` is read with a default, so this works on a
+    def stream_engine(self, lang: str = "") -> str:
+        """The engine a live transcript in ``lang`` runs (:func:`stream_engine`
+        of ``voice.stt_stream_model``): ``moonshine`` or ``whisper``."""
+        return stream_engine(_voice().stt_stream_model, lang)
+
+    def stream_key(self, lang: str = "") -> str:
+        """The model-cache key of the live transcript's model for ``lang``:
+        ``moonshine:tiny-streaming`` or ``whisper:<stream_model_name>``."""
+        if self.stream_engine(lang) == ENGINE_MOONSHINE:
+            return _moonshine_key()
+        return "whisper:" + self.stream_model_name(lang)
+
+    def stream_label(self, lang: str = "") -> str:
+        """The live engine, for people: ``Moonshine`` or ``Whisper base.en``."""
+        if self.stream_engine(lang) == ENGINE_MOONSHINE:
+            return "Moonshine"
+        return "Whisper " + self.stream_model_name(lang)
+
+    def final_model_name(self, lang: str = "", fetch: bool = False) -> str:
+        """The accurate pass's model in ``lang`` (:func:`final_whisper_model`;
+        ``""``: off) — with no size set, the one-shot model
+        (:meth:`_model_name`), so English runs ONE model for both.
+        ``voice.stt_final`` is read with a default, so this works on a
         settings model without the field."""
         v = _voice()
-        return final_whisper_model(getattr(v, "stt_final", ""), v.stt_model)
+        raw = getattr(v, "stt_final", "")
+        if not final_whisper_model(raw, v.stt_model, lang):
+            return ""
+        return raw.strip() if _named_size(raw) else self._model_name(lang, fetch)
 
     def warm_keys(self) -> List[str]:
         """What :meth:`warm` loads: the one-shot model, the streaming one
-        for English (a stream in another language loads its own on open)
-        and the accurate pass's when it is a third."""
-        names = {self._model_name(), self.stream_model_name(), self.final_model_name()}
-        return sorted("whisper:" + n for n in names if n)
+        for English (:meth:`stream_key`: Moonshine when it streams; a
+        stream in another language loads its own on open) and the accurate
+        pass's when it is a third."""
+        names = {self._model_name(), self.final_model_name()}
+        keys = {"whisper:" + n for n in names if n} | {self.stream_key()}
+        return sorted(keys)
+
+    def wake_keys(self) -> List[str]:
+        """The wake check's model (:meth:`wake_transcribe`: whisper's
+        English streaming model) when :meth:`warm_keys` lacks it — Moonshine
+        streams. Loaded by a warm while a client listens."""
+        key = "whisper:" + self.stream_model_name()
+        return [] if key in self.warm_keys() else [key]
+
+    def load_keys(self) -> List[str]:
+        """What :meth:`warm` loads now: the :meth:`warm_keys`, and the
+        :meth:`wake_keys` while a client listens (the wake-word standby)."""
+        return self.warm_keys() + (self.wake_keys() if listening() else [])
 
     def resident_keys(self) -> List[str]:
-        """Never idle-unloaded while ``local`` recognition is configured: the
-        :meth:`warm_keys` and the streaming model of any other language."""
+        """Never idle-unloaded while ``local`` recognition is configured and
+        a client listens: the :meth:`warm_keys`, the wake check's model
+        (:meth:`wake_keys`) and the streaming model of any other language."""
+        other = {self.stream_model_name("xx"), self.final_model_name("xx")}
         return sorted(
-            set(self.warm_keys()) | {"whisper:" + self.stream_model_name("xx")}
+            set(self.warm_keys())
+            | set(self.wake_keys())
+            | {"whisper:" + n for n in other if n}
         )
 
     def ready(self) -> Tuple[bool, str]:
         if not _installed("faster_whisper"):
             return False, NOT_INSTALLED
-        low = _memory_block()
+        low = "" if self._stream_loaded() else _memory_block()
         if low:
             return False, "local recognition held back: " + low
         detail = "faster-whisper %s on this computer" % self._model_name()
@@ -1409,7 +1722,12 @@ class LocalSTT(Backend):
         accurate pass's thread budget (:func:`whisper_threads`)."""
         try:
             fast = {self.stream_model_name(), self.stream_model_name("xx")}
-            slow = {self._model_name(), self.final_model_name()}
+            slow = {
+                self._model_name(),
+                self._model_name("xx"),
+                self.final_model_name(),
+                self.final_model_name("xx"),
+            }
         except Exception:  # noqa: BLE001 — unreadable settings: the big budget
             return "final"
         return "fast" if name in fast and name not in slow else "final"
@@ -1428,17 +1746,34 @@ class LocalSTT(Backend):
             num_workers=1,
         )
 
+    def _stream_loaded(self) -> bool:
+        """Whether the English streaming model is in memory: a stream needs
+        no load to start (the memory check guards LOADS only)."""
+        try:
+            key = self.stream_key()
+        except Exception:  # noqa: BLE001 — unreadable settings: not loaded
+            return False
+        with _LOCK:
+            return key in _CACHE
+
     def _model(self, name: str = ""):
         """The cached model ``name`` (default: the one-shot one), after the
-        install and memory checks."""
+        install check and — only when it must be LOADED — the memory check:
+        a model already in memory costs nothing more to use, and refusing
+        it under pressure only dropped every pass to clip mode, whose clips
+        were refused the same way."""
         if not _installed("faster_whisper"):
             raise SpeechError(NOT_INSTALLED)
-        low = _memory_block()
-        if low:
-            raise SpeechError("local recognition held back: " + low)
         name = name or self._model_name()
+
+        def load():
+            low = _memory_block()
+            if low:
+                raise SpeechError("local recognition held back: " + low)
+            return self._load(name)
+
         try:
-            return _cached("whisper:" + name, lambda: self._load(name))
+            return _cached("whisper:" + name, load)
         except SpeechError:
             raise
         except Exception as err:  # noqa: BLE001 — download, CPU feature, …
@@ -1452,7 +1787,7 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 5}
         if prompt:
             kw["initial_prompt"] = prompt
-        name = self._model_name()
+        name = self._model_name(lang, fetch=True)
         return self._clip(self._model(name), audio, mime, kw, name)
 
     def wake_transcribe(
@@ -1572,19 +1907,30 @@ class LocalSTT(Backend):
         run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
-    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
+    def final_transcriber(
+        self, lang: str = "", hints: str = "", context: str = ""
+    ) -> Optional[Callable]:
         """The accurate pass at a stream's end: the whole phrase (float32)
-        into :meth:`final_model_name`, greedy, no conditioning, the VAD, and
-        ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
-        on a faster-whisper too old for them: :func:`_hotwords_supported`) —
-        the vocabulary, never the fast words (those may be the wrong ones) →
-        its text. ``None`` when ``voice.stt_final`` is ``off``. ``lane`` as
-        in :meth:`stream_transcriber`."""
-        name = self.final_model_name()
+        into :meth:`final_model_name`, greedy, once (temperature 0), its
+        tokens capped (:func:`final_tokens`, and to what the prompt leaves:
+        :func:`_prompt_room`), no conditioning, the VAD, ``hints``
+        (:func:`recognition_hints`) as the ``hotwords`` (the prompt on a
+        faster-whisper too old for them: :func:`_hotwords_supported`) — the
+        vocabulary, never the fast words (those may be the wrong ones) — and
+        ``context`` (the message dictated before this phrase, sanitized by
+        :func:`dictation_context`) as the ``initial_prompt``: the sentence
+        this phrase continues, which settles the words the audio alone
+        leaves open (:data:`CONTEXT_CHARS`) → its text. ``None`` when
+        ``voice.stt_final`` is ``off``. ``lane`` as in
+        :meth:`stream_transcriber`. Every accurate pass of the stream — the
+        early one and the one at ``/end`` — runs this one callable, so all
+        of them carry the context."""
+        name = self.final_model_name(lang, fetch=True)
         if not name:
             return None
         language = whisper_language(lang)
         hints = " ".join(str(hints or "").split())
+        prompt = dictation_context(context)
 
         def run(audio) -> str:
             from backend.web.core import speech_stream as _stream
@@ -1592,13 +1938,22 @@ class LocalSTT(Backend):
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
-            kw = _bias(model, hints, "")
+            kw = _bias(model, hints, prompt)
+            if _takes(model, "temperature"):
+                kw["temperature"] = 0.0
+            if _takes(model, "max_new_tokens"):
+                kw["max_new_tokens"] = min(
+                    final_tokens(len(samples) / 16000.0),
+                    _prompt_room(
+                        model, kw.get("hotwords", ""), kw.get("initial_prompt", "")
+                    ),
+                )
 
             def decode() -> List[str]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
-                    beam_size=1,
+                    beam_size=FINAL_BEAM,
                     condition_on_previous_text=False,
                     vad_filter=True,
                     **kw,
@@ -1620,15 +1975,31 @@ class LocalSTT(Backend):
         return run
 
     def warm(self, prime: bool = True) -> str:
-        """Load every model (:meth:`warm_keys`) ahead of their first use and,
+        """Load every model (:meth:`load_keys`) ahead of their first use and,
         when ``prime`` is set, run one short silent pass through each one
         this call loaded (CTranslate2 allocates its workspaces on the first
         call, another second or two). ``"loaded"`` when this call loaded
-        any, ``"already"`` when all were resident."""
+        any, ``"already"`` when all were resident. An install from before
+        the English twin starts its download here (in the background:
+        :func:`english_default_model`) and warms ``small`` meanwhile."""
+        try:
+            self._model_name(fetch=True)
+        except Exception:  # noqa: BLE001 — unreadable settings: warm what we can
+            pass
         fresh = False
-        for key in self.warm_keys():
+        for key in self.load_keys():
             name = key.split(":", 1)[1]
             was = key in loaded()
+            if key == _moonshine_key():
+                from backend.web.core import speech_moonshine as _moon
+
+                try:
+                    _moon.engine()  # ~0.6 s; its first pass needs no priming
+                except Exception as err:  # noqa: BLE001 — streams fall back to whisper
+                    _logger.warning("voice: Moonshine did not load: %s", err)
+                    continue
+                fresh = fresh or not was
+                continue
             model = self._model(name)
             fresh = fresh or not was
             if prime and not was:
@@ -1894,7 +2265,7 @@ class _Slow(SpeechError):
 
 class _Line:
     """One request of ours in a serial host's lane (:meth:`TtsChain.send`).
-    ``deadline`` (``time.monotonic``) is when a waiting LINE gives up on the
+    ``deadline`` (:meth:`LaneClock.now`) is when a waiting LINE gives up on the
     host — None for one that waits for the answer (the probe, a warm, a line
     with no fallback). ``live`` turns false when it gave up: an orphan if
     the host has it (``started``), dropped from the lane if not. ``learn``:
@@ -1930,6 +2301,19 @@ class _Lane:
         self.queue: List[_Line] = []  # in order; the head is at the host
         self.busy = False  # a drain thread is running
         self.key = key  # the host's health key
+
+
+class LaneClock:
+    """What :class:`TtsChain`'s lanes tell time and wait with: the real
+    monotonic clock and a real :class:`threading.Condition`. A seam: a test
+    hands :class:`TtsChain` a virtual clock, so a line's budget races its
+    host's answer in virtual seconds instead of on a loaded runner."""
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def condition(self, lock: threading.Lock) -> threading.Condition:
+        return threading.Condition(lock)
 
 
 def _lane_thread(target: Callable[[], None], name: str) -> None:
@@ -2051,12 +2435,13 @@ class TtsChain:
       The prewarm asks only past :meth:`idle_for`'s quiet, one at a time.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Optional[LaneClock] = None) -> None:
+        self._clock = clock or LaneClock()  # the lanes' time (budgets, waits)
         self._lock = threading.Lock()
         self._down: Dict[str, _Health] = {}
         self._replies: Dict[str, _Reply] = {}
         self._speed: Dict[str, _Speed] = {}
-        self._cond = threading.Condition(self._lock)
+        self._cond = self._clock.condition(self._lock)
         self._lanes: Dict[str, _Lane] = {}
         self._gen = 0  # bumped by reset(): an old orphan changes nothing
         self._real_at = 0.0  # _now(): a real line was last asked for / said
@@ -2355,7 +2740,7 @@ class TtsChain:
             if lane is None:
                 lane = self._lanes[key] = _Lane(key)
             if budget is not None:
-                now = time.monotonic()
+                now = self._clock.now()
                 ahead = [
                     ln.deadline
                     for ln in lane.queue
@@ -2391,7 +2776,7 @@ class TtsChain:
                 if line.deadline is None:
                     self._cond.wait(1.0)
                     continue
-                left = line.deadline - time.monotonic()
+                left = line.deadline - self._clock.now()
                 reply = self._replies.get(listener)
                 if left <= 0 or (
                     reply is not None and reply.sticky and not line.started
@@ -2404,7 +2789,7 @@ class TtsChain:
                     lane.queue.remove(line)
                 elif learn and line.gen == self._gen:
                     # At the host past its budget: at least this slow.
-                    self._learn(key, text, time.monotonic() - line.sent_at, True)
+                    self._learn(key, text, self._clock.now() - line.sent_at, True)
                 waited = budget or 0.0
                 where = "is still on it" if line.started else "had lines ahead of it"
                 raise _Slow(
@@ -2453,7 +2838,7 @@ class TtsChain:
                     lane.busy = False
                     return
                 line = lane.queue[0]
-                line.started, line.sent_at = True, time.monotonic()
+                line.started, line.sent_at = True, self._clock.now()
             try:
                 line.result = line.engine.speak_within(
                     line.text, line.voice, line.timeout
@@ -2464,7 +2849,7 @@ class TtsChain:
                 with self._lock:
                     if lane.queue and lane.queue[0] is line:
                         lane.queue.pop(0)
-                    line.took = time.monotonic() - line.sent_at
+                    line.took = self._clock.now() - line.sent_at
                     if line.error is None:
                         self._answered[lane.key] = _now()  # it is up (cold)
                     if line.learn and line.error is None and line.gen == self._gen:
@@ -2812,7 +3197,7 @@ def _warm_due(kind: str) -> bool:
     backend, detail = _warm_target(kind)
     if backend is None:
         return False
-    keys = getattr(backend, "warm_keys", None)
+    keys = getattr(backend, "load_keys", None) or getattr(backend, "warm_keys", None)
     if keys is not None:
         with _LOCK:
             return not all(k in _CACHE for k in keys())
@@ -2823,13 +3208,35 @@ def _warm_due(kind: str) -> bool:
     return _now() - last[2] >= window
 
 
+#: How long after boot :func:`warm_stt_at_boot` loads local recognition:
+#: after the server's own startup work and the voice's 6 s warm.
+BOOT_WARM_STT_S = 8.0
+
+
+def warm_stt_at_boot(delay_s: float = BOOT_WARM_STT_S) -> Optional[threading.Thread]:
+    """Load ``local`` recognition (:meth:`LocalSTT.warm`) ``delay_s`` after
+    boot when it is the configured backend, so the first phrase of the day
+    does not wait 2 to 7 s for its models — the streaming one then stays
+    (:func:`_resident`), the accurate one until :data:`IDLE_SECONDS` idle.
+    Skipped under memory pressure (:func:`_memory_block`), for any other
+    backend, or when the settings can't be read. The thread, or None."""
+    try:
+        if _configured("stt") != "local":
+            return None
+    except Exception:  # noqa: BLE001 — warming is best effort
+        return None
+    return warm_in_background("stt", delay_s=delay_s)
+
+
 def warm_in_background(
     kind: str = "stt", delay_s: float = 0.0
 ) -> Optional[threading.Thread]:
     """Run :func:`warm` on a daemon thread unless there is nothing to do
     (:func:`_warm_due`) or a warm-up of ``kind`` is already running: the
-    server calls this at boot for both kinds and whenever a voice client
-    fetches ``GET /api/voice`` (the mic UI mounting). Returns the thread it
+    server calls this at boot (the voice when everything is read aloud;
+    local recognition: :func:`warm_stt_at_boot`), for the voice whenever a
+    voice client fetches ``GET /api/voice`` (the mic UI mounting), and for
+    recognition when a stream opens on it unloaded. Returns the thread it
     started, or None. With ``delay_s`` (boot) the check runs on the thread
     after the delay — choosing the voice backend may probe the OS engine,
     which the event loop must not wait for."""
@@ -2927,6 +3334,18 @@ def _describe_tts(
     return "%s — speaking with %s %s" % (detail, fb_detail, until)
 
 
+def _moonshine_status() -> dict:
+    """``{"available": bool, "reason": str}``: whether the Moonshine
+    streaming lane can run here (``speech_moonshine.unavailable_reason``)."""
+    try:
+        from backend.web.core import speech_moonshine as _moon
+
+        reason = _moon.unavailable_reason()
+    except Exception as err:  # noqa: BLE001 — a broken install reads as absent
+        reason = "Moonshine could not be checked: %s" % err
+    return {"available": not reason, "reason": reason}
+
+
 def describe(probe: bool = True) -> dict:
     """What ``GET /api/voice`` reports about the server side::
 
@@ -2942,14 +3361,22 @@ def describe(probe: bool = True) -> dict:
                     "detail": str, "voices": [names],
                     "recognizers": [culture tags],
                     "stt_quality": "basic"|"good"|"none"},
-         "stream_model": str,
+         "stream_model": str, "stream_engine": "moonshine"|"whisper"|"",
+         "stream_label": str,
+         "moonshine": {"available": bool, "reason": str},
          "warm": {"stt": str, "tts": str}}
 
     ``detail`` is the one-paragraph summary; the per-kind keys are what the
     Settings screen prints under each row; ``stt_stream`` says the ready
     recognition backend streams (``POST /api/voice/stream``: only
     ``local``) and ``stream_model`` names the model its live transcript runs
-    for English (``""`` when it does not stream); ``system`` is the built-in
+    for English (``""`` when it does not stream): ``stream_engine`` is
+    ``moonshine`` (``stream_model`` ``tiny-streaming``) or ``whisper``
+    (``base.en`` …), ``stream_label`` the same for people ("Moonshine",
+    "Whisper base.en"); ``moonshine`` says whether the Moonshine lane could
+    run here at all (``speech_moonshine.available``; ``reason`` why not —
+    what Settings' install button and ``mindflock doctor`` show, whichever
+    backend is configured); ``system`` is the built-in
     engine's own report (:func:`speech_system.describe`); ``warm`` is each
     kind's last warm-up — ``"loaded"``, ``"loading"``, ``"skipped: <why>"``,
     or ``""`` before the first. Offline and cheap: the built-in engine is
@@ -2960,7 +3387,7 @@ def describe(probe: bool = True) -> dict:
     """
     ready: dict = {}
     lines: List[str] = []
-    stream_model = ""
+    stream_model = stream_engine_ = stream_label = ""
     for kind in ("stt", "tts"):
         backend, detail = select(kind)
         ready[kind] = backend is not None
@@ -2975,8 +3402,16 @@ def describe(probe: bool = True) -> dict:
             if ready["stt_stream"] and callable(namer):
                 try:
                     stream_model = str(namer())
+                    engine_of = getattr(backend, "stream_engine", None)
+                    stream_engine_ = str(engine_of()) if engine_of else ENGINE_WHISPER
+                    if stream_engine_ == ENGINE_MOONSHINE:
+                        from backend.web.core import speech_moonshine as _moon
+
+                        stream_model = _moon.ARCH
+                    labeler = getattr(backend, "stream_label", None)
+                    stream_label = str(labeler()) if labeler else ""
                 except Exception:  # noqa: BLE001 — a label, never a failure
-                    stream_model = ""
+                    stream_model = stream_engine_ = stream_label = ""
         word = KIND_WORD[kind]
         lines.append(
             "Server %s ready (%s): %s" % (word, backend.id, detail)
@@ -2992,5 +3427,8 @@ def describe(probe: bool = True) -> dict:
         "server_ready": ready,
         "system": _system.describe(),
         "stream_model": stream_model,
+        "stream_engine": stream_engine_,
+        "stream_label": stream_label,
+        "moonshine": _moonshine_status(),
         "warm": {k: _WARMED.get(k, ("", "", 0.0))[0] for k in ("stt", "tts")},
     }

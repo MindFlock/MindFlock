@@ -369,7 +369,7 @@ function WindowRefresh() {
   };
   const statusLines = opts
     .filter((o) => selected.has(o.name) && o.next_fire)
-    .map((o) => o.name + ": next ~" + fmtWhen(o.next_fire!));
+    .map((o) => agentName(o.name) + ": next ~" + fmtWhen(o.next_fire!));
 
   return (
     <>
@@ -448,7 +448,7 @@ function WindowRefresh() {
                     }}
                   />
                   <span title={o.window?.note || ""}>
-                    {o.name +
+                    {agentName(o.name) +
                       (o.window?.hours
                         ? " · " + o.window.hours + "h window"
                         : o.window?.kind

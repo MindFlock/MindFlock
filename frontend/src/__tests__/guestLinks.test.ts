@@ -154,6 +154,14 @@ describe("the wiring", () => {
     expect(GUESTS).toContain("<InstallMissing steps={install}");
   });
 
+  it("a local-only server offers Make reachable instead of an on-your-network link that hangs", () => {
+    expect(GUESTS).toMatch(/local_live\?: boolean \}\)\.local_live !== false/);
+    expect(GUESTS).toMatch(/\{localLive\(madeRow\) \? \([\s\S]{0,200}Copy on-your-network link/);
+    expect(GUESTS).toMatch(
+      /id="peer-guests-local-reach"[\s\S]{0,600}onClick=\{\(\) => openSettings\("devices"\)\}\s*>\s*On-your-network link: Make reachable first/
+    );
+  });
+
   it("the maker warns that a link is access to this computer; the tick opens the picker, which gates the button", () => {
     expect(GUESTS).toMatch(/id="peer-guests-warn" role="alert"[\s\S]{0,120}access to your computer/);
     expect(GUESTS).toMatch(/id="peer-guests-ack"[\s\S]{0,80}onChange=\{\(e\) => ack\(e\.target\.checked\)\}/);

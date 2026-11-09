@@ -66,22 +66,27 @@ Status codes, in the order they are checked:
 * ``stream/{id}/end`` — 404 as above; 502 the last fast pass failed; 200
   ``{"committed", "partial": ""}`` plus ``{"final", "final_ms",
   "final_wait_ms", "final_early", "same"}`` when the accurate pass ran
-  (``core.speech_stream``'s two tiers), and the stream is gone.
+  (``core.speech_stream``'s two tiers) — a Moonshine stream adds
+  ``"heard"`` and ``"final_by"`` (``core.speech_moonshine``) — and the
+  stream is gone.
   ``DELETE stream/{id}`` — 204, always.
 * ``wake`` — ``transcribe``'s codes; 200 ``{"wake", "reason", "text",
   "plain", "word", "backend", "ms"}``. ``GET wake/recent`` — 200, the last
   :data:`WAKE_RECENT_MAX` checks (docs/voice-wake.md).
-* ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
-  the status (``core.speech_install``). ``GET`` the status, for anyone.
+* ``install-local`` — ``POST`` 403 not the owner; 400 an unknown ``what``;
+  409 already running; 200 the status (``core.speech_install``). ``GET`` the
+  status, for anyone.
 """
 
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import copy
 import hashlib
 import logging
+import os
 import re
 import threading
 import time
@@ -96,14 +101,33 @@ from starlette.requests import ClientDisconnect
 from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
+from backend.web.core import speech_moonshine as _moonshine
 from backend.web.core import speech_stream as _stream
 from backend.web.core import spoken_text as _spoken_text
 from backend.web.core import voice as _voice
 from backend.web.core import voice_words as _voice_words
 from backend.web.core import wake as _wake
 
-router = APIRouter()
 _logger = logging.getLogger(__name__)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_app):
+    """Boot: load ``local`` recognition in the background a few seconds in
+    (:func:`core.speech.warm_stt_at_boot`), so the first phrase does not
+    wait for its models. FastAPI runs an included router's lifespan inside
+    the app's. ``MINDFLOCK_VOICE_WARM=0`` skips it, as it does the server's
+    own voice warm (the test suite: a warm thread left by one app's
+    lifespan would load a model into the next test)."""
+    if os.environ.get("MINDFLOCK_VOICE_WARM", "1") != "0":
+        try:
+            _speech.warm_stt_at_boot()
+        except Exception:  # noqa: BLE001 — warming is best effort
+            _logger.debug("voice: the boot warm of recognition failed", exc_info=True)
+    yield
+
+
+router = APIRouter(lifespan=_lifespan)
 
 #: The raw clip cap (413 above). A minute of webm/opus is well under 1 MB;
 #: 10 MB leaves room for an uncompressed WAV of the same length.
@@ -951,12 +975,30 @@ def voice_wake_recent() -> JSONResponse:
 @router.post("/api/voice/stream")
 def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONResponse:
     """Open a streaming recognition (``core.speech_stream``):
-    ``{"lang": "en-US", "client": optional page id}`` → ``{"id", "ready":
-    true, "hints": n, "loading": bool}`` (``loading``: local recognition was
-    not in memory and is loading now — the first words wait for it; ``n``
-    characters of vocabulary hints the accurate pass is biased towards: the
-    voice words, the live session titles, the MindFlock vocabulary — see
-    :func:`_hints`). Only a backend that streams (``local``) can; ``GET
+    ``{"lang": "en-US", "client": optional page id, "context": optional
+    text}`` → ``{"id", "ready": true, "hints": n, "context": m, "loading":
+    bool, "engine": "moonshine"|"whisper"}`` (``context``: the text already
+    dictated in this message before this phrase — the client sends it when
+    a message is spoken as several phrases split at pauses; the accurate
+    pass takes it as whisper's ``initial_prompt``, so each phrase is decoded
+    as the continuation of its sentence rather than alone. Sanitized by
+    ``core.speech.dictation_context``: a string only, control characters
+    dropped, whitespace collapsed, the last
+    ``core.speech.CONTEXT_CHARS`` (300) characters cut at a word boundary;
+    ``m`` is how many characters of it were used, 0 without one. It is a
+    prompt, never text: the final is still only what whisper hears in this
+    phrase's audio; ``loading``: local recognition was not in memory and is
+    loading now — the first words wait for it; ``n`` characters of
+    vocabulary hints the accurate pass is biased towards: the voice words,
+    the live session titles, the MindFlock vocabulary — see :func:`_hints`;
+    ``engine``: the
+    live words come from Moonshine tiny-streaming (English, installed,
+    ``voice.stt_stream_model`` ``""`` or ``moonshine``:
+    ``core.speech_moonshine`` — it hears the control words, the whisper
+    accurate pass still writes every phrase's final) or from
+    whisper's streaming model (``core.speech_stream``) — a Moonshine model
+    that fails to load falls back to whisper). Only a backend that streams
+    (``local``) can; ``GET
     /api/voice``'s ``server_ready.stt_stream`` says so beforehand. See the
     module doc for the status codes."""
     body = payload if isinstance(payload, dict) else {}
@@ -982,11 +1024,26 @@ def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONR
     if loading:
         _speech.warm_in_background("stt")
     hints = _hints()
-    sid = _stream.open_stream(
-        backend.stream_transcriber(lang),
-        backend.final_transcriber(lang, hints),
-        client=_client_key(request, body),
-    )
+    client = _client_key(request, body)
+    context = _speech.dictation_context(body.get("context"))
+    # Only a phrase with context passes it: a backend (or a test's fake)
+    # without the parameter keeps working, and no context is today's call.
+    if context:
+        accurate = backend.final_transcriber(lang, hints, context=context)
+    else:
+        accurate = backend.final_transcriber(lang, hints)
+    engine = _stream_engine(backend, lang)
+    sid: Optional[str] = None
+    if engine == _speech.ENGINE_MOONSHINE:
+        try:
+            sid = _moonshine.open_stream(hints, accurate, client=client)
+        except Exception as err:  # noqa: BLE001 — the model failed to load
+            _logger.warning("voice: Moonshine failed, streaming on whisper: %s", err)
+            engine = _speech.ENGINE_WHISPER
+    if engine != _speech.ENGINE_MOONSHINE:
+        sid = _stream.open_stream(
+            backend.stream_transcriber(lang), accurate, client=client
+        )
     if sid is None:
         return JSONResponse(
             {
@@ -996,8 +1053,29 @@ def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONR
             status_code=409,
         )
     return JSONResponse(
-        {"id": sid, "ready": True, "hints": len(hints), "loading": loading}
+        {
+            "id": sid,
+            "ready": True,
+            "hints": len(hints),
+            "context": len(context),
+            "loading": loading,
+            "engine": engine,
+        }
     )
+
+
+def _stream_engine(backend: _speech.Backend, lang: str) -> str:
+    """The engine a stream in ``lang`` opens on: the backend's choice
+    (``LocalSTT.stream_engine``: Moonshine for English when it is installed
+    and ``voice.stt_stream_model`` allows it), ``whisper`` for a backend
+    without one or when the choice cannot be read."""
+    pick = getattr(backend, "stream_engine", None)
+    if pick is None:
+        return _speech.ENGINE_WHISPER
+    try:
+        return str(pick(lang))
+    except Exception:  # noqa: BLE001 — unreadable settings: today's stream
+        return _speech.ENGINE_WHISPER
 
 
 def _no_stream() -> JSONResponse:
@@ -1050,7 +1128,9 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
     if isinstance(audio, Response):
         return audio
     try:
-        samples = _stream.decode_wav(audio)
+        # Off the event loop (a per-sample conversion): the default pool,
+        # not the recognition one, so it never queues behind a pass.
+        samples = await asyncio.to_thread(_stream.decode_wav, audio)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=415)
     try:
@@ -1079,8 +1159,11 @@ async def voice_stream_end(sid: str) -> JSONResponse:
     with), ``"final_ms"`` (the pass's time), ``"final_wait_ms"`` (how long
     this call waited for it), ``"final_early"`` and ``"same"`` (``final``
     only differs in case, spacing or punctuation) — absent when it was off,
-    skipped, failed or timed out (``core.speech_stream``). The stream is
-    gone afterwards (404 for a second ``end``)."""
+    skipped, failed or timed out (``core.speech_stream``). A Moonshine
+    stream always has a ``"final"`` once words were heard, plus ``"heard"``
+    (Moonshine's own text: read the control words off it) and
+    ``"final_by"`` (``core.speech_moonshine``). The stream is gone
+    afterwards (404 for a second ``end``)."""
     stream = _stream.close_stream(sid)
     if stream is None:
         return _no_stream()
@@ -1312,6 +1395,7 @@ def voice_install_local_status() -> JSONResponse:
     """The one-click local-models install (``core.speech_install``)::
 
         {"state": "idle"|"running"|"done"|"failed",
+         "what": "local"|"moonshine"|"",
          "step": "installing packages"|"downloading recognition model (small)"
                  |"downloading voice (en_US-lessac-medium)"|"done"|"",
          "log": [the last 20 output lines], "started": epoch|null,
@@ -1323,17 +1407,29 @@ def voice_install_local_status() -> JSONResponse:
 
 @router.post("/api/voice/install-local")
 def voice_install_local(
+    payload: Optional[dict] = None,
     allowed: bool = Depends(_auth.configure_allowed),
 ) -> JSONResponse:
     """Start the one-click install of the local models: faster-whisper and
     piper into the server's own interpreter, then the recognition model and
-    the voice; on success ``voice.stt_backend`` becomes ``"local"``. Runs
-    in the background — poll ``GET`` for the progress. Owner only (403);
-    409 while one is already running; 200 the status (``state:
+    the voice; on success ``voice.stt_backend`` becomes ``"local"``. With
+    ``{"what": "moonshine"}``: the fast streaming recognizer instead —
+    ``moonshine-voice`` and its ``tiny-streaming`` model (~200 MB), no
+    setting changed (``GET /api/voice``'s ``stream_engine`` turns
+    ``moonshine`` once it is in). Runs in the background — poll ``GET`` for
+    the progress (its ``what`` says which). Owner only (403); 400 an unknown
+    ``what``; 409 while one is already running; 200 the status (``state:
     "running"``)."""
     if not allowed:
         return _auth.configure_refused()
-    if not _install.start():
+    body = payload if isinstance(payload, dict) else {}
+    what = body.get("what") or _install.LOCAL
+    if what not in (_install.LOCAL, _install.MOONSHINE):
+        return JSONResponse(
+            {"error": "what must be %r or %r" % (_install.LOCAL, _install.MOONSHINE)},
+            status_code=400,
+        )
+    if not _install.start(what=what):
         body = _install.status()
         body["error"] = body.get("error") or "the install is already running"
         return JSONResponse(body, status_code=409)

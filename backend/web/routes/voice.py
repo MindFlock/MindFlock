@@ -58,6 +58,19 @@ condensation:
   project or the task (the session is created once nothing is missing); any
   other is routed as usual. Always 200 — a failed create is ``{kind:
   "new-failed", say}``; 400 only for a body that is not an object.
+  Acting on a session's pane, done HERE (``core.voice_actions``), no
+  ``say`` (the client captions it): ``scroll`` (``{dir, amount, count,
+  title, ok}`` — the session the client names in ``title``, else
+  ``session``; "more" / "keep going" repeat the same client's last scroll
+  of it within ``voice_actions.SCROLL_AGAIN_S``, and are words otherwise)
+  and ``interrupt`` (``{title, ok}``: Escape, ``/answer``'s key path
+  without its dialog gate). ``switch_back`` / ``where`` are the client's
+  own; ``commands`` is ``{say, items: [{say, does}]}``. An optional
+  ``heard`` (the phrase's Moonshine text, ``/api/voice/stream/…/end``'s
+  ``heard``) is routed instead of ``text`` when it is a command that carries
+  no words (``speech_moonshine.NO_TEXT_KINDS``,
+  ``voice_router.NO_TEXT_KINDS``): Moonshine is keyterm-biased, so it is
+  what decides the control words.
 
 Routes only translate HTTP into core calls; the registry lookup, the tmux
 name and the providers are read through the server module at call time, so
@@ -80,6 +93,7 @@ from backend.web.core import commit_message as _commit_message
 from backend.web.core import session_create as _session_create
 from backend.web.core import spoken as _spoken
 from backend.web.core import voice as _voice
+from backend.web.core import voice_actions as _voice_actions
 from backend.web.core import voice_router as _voice_router
 from backend.web.core import voice_words as _voice_words
 from backend.web.routes import _server
@@ -468,9 +482,82 @@ async def _pending_answer(
 
 
 #: Commands a phrase said to a session showing Claude's question tool may
-#: really be its answer: "go back" (a tab, not the previous session) and, on
+#: really be its answer: "go back", "next" (a tab, not a session) and, on
 #: the review screen, "cancel". A prompt (no command) may be one too.
-_SELECT_FIRST = ("switch_rel", "cancel")
+_SELECT_FIRST = ("switch_rel", "switch_back", "cancel")
+
+
+def _heard_kinds() -> frozenset:
+    """The command kinds routed on the phrase's Moonshine text (``heard``)."""
+    try:
+        from backend.web.core import speech_moonshine as _moonshine
+
+        base = frozenset(_moonshine.NO_TEXT_KINDS)
+    except Exception:  # noqa: BLE001 — this module's own still count
+        base = frozenset()
+    return base | frozenset(_voice_router.NO_TEXT_KINDS)
+
+
+def _client_key(request, payload: dict) -> str:
+    """Who is talking, for "more": the body's ``client`` when it sends one,
+    else its address and user agent (the phone and the desktop differ)."""
+    got = payload.get("client")
+    if isinstance(got, str) and got.strip():
+        return got.strip()[:200]
+    host = getattr(getattr(request, "client", None), "host", "") or ""
+    return "%s|%s" % (host, request.headers.get("user-agent", "")[:200])
+
+
+def _pane_target(title: str):
+    """The agent pane of local session ``title`` (``=<tmux name>:``), or
+    None: unknown, another device's (``<device>::<title>``) or not running."""
+    if not title or "::" in title:
+        return None
+    srv = _server()
+    if srv.ENGINE.instances.get(title) is None:
+        return None
+    name = tmux.to_mindflock_tmux_name(title)
+    if srv._live_session_name(name) is None:
+        return None
+    return "=" + name + ":"
+
+
+def _scroll_pane(title: str, direction: str, amount: str, count: int) -> bool:
+    """Scroll ``title``'s agent pane (``voice_actions.scroll``). Blocking;
+    module-level so tests replace it."""
+    target = _pane_target(title)
+    if target is None:
+        return False
+    return _voice_actions.scroll(target, direction, amount, count)
+
+
+def _press_escape(title: str) -> bool:
+    """Escape in ``title``'s agent pane — ``/answer``'s key path
+    (``agent_io.send_answer``) without its dialog gate. Blocking;
+    module-level so tests replace it."""
+    if _pane_target(title) is None:
+        return False
+    return _agent_io.send_answer(tmux.to_mindflock_tmux_name(title), "", ["Escape"])
+
+
+async def _do_scroll(cmd: dict, title: str, client: str) -> dict:
+    """Carry out a ``scroll`` answer on ``title`` → the answer with ``ok``."""
+    direction = cmd.get("dir") or "up"
+    amount = cmd.get("amount") or "page"
+    count = int(cmd.get("count") or 1)
+    ok = bool(title) and await asyncio.to_thread(
+        _scroll_pane, title, direction, amount, count
+    )
+    if ok:
+        _voice_actions.remember_scroll(client, title, direction, amount, count)
+    return {
+        "kind": "scroll",
+        "dir": direction,
+        "amount": amount,
+        "count": count,
+        "title": title,
+        "ok": ok,
+    }
 
 
 async def _select_answer(text: str, session: str, request):
@@ -501,10 +588,17 @@ async def voice_route(request: Request) -> JSONResponse:
     session = str(payload.get("session") or "")
     title = str(payload.get("title") or "")
     pending = payload.get("pending")
+    heard = payload.get("heard")
     # When the phrase began and when the client first had each dialog, on
     # this clock (read at arrival): an answer pressed only after its dialog.
     spoke, seen = _voice_router.phrase_timing(payload)
     words = await asyncio.to_thread(_words)
+    if isinstance(heard, str) and heard.strip():
+        # Moonshine decides the control words: a command with no words in
+        # it, as Moonshine heard it, is that command.
+        hcmd = _voice_router.command(heard, words)
+        if hcmd is not None and hcmd["kind"] in _heard_kinds():
+            text = heard
     rows = None
     if isinstance(pending, dict) and text.strip():
         rows = await asyncio.to_thread(_session_rows, request)
@@ -512,6 +606,11 @@ async def voice_route(request: Request) -> JSONResponse:
         if got is not None:
             return JSONResponse(got)
     cmd = _voice_router.command(text, words)
+    client = _client_key(request, payload)
+    if cmd is not None and cmd["kind"] == "scroll_more":
+        # "More" right after a scroll scrolls again; else it is words.
+        again = _voice_actions.last_scroll(client, title or session)
+        cmd = dict(again, kind="scroll") if again else None
     if session and (
         cmd is None or cmd["kind"] in _SELECT_FIRST or cmd.get("mode") == "strict"
     ):
@@ -524,11 +623,22 @@ async def voice_route(request: Request) -> JSONResponse:
         return JSONResponse({"kind": "prompt"})
     if cmd["kind"] in _voice_router.LOCAL_KINDS:
         return JSONResponse({"kind": cmd["kind"]})
+    if cmd["kind"] == "scroll":
+        return JSONResponse(await _do_scroll(cmd, title or session, client))
+    if cmd["kind"] == "interrupt" and not cmd.get("name"):
+        target = title or session
+        ok = bool(target) and await asyncio.to_thread(_press_escape, target)
+        return JSONResponse({"kind": "interrupt", "title": target, "ok": ok})
+    if cmd["kind"] == "commands":
+        return JSONResponse(_voice_router.commands_answer(words))
     if rows is None:
         rows = await asyncio.to_thread(_session_rows, request)
     if cmd["kind"] == "new":
         return JSONResponse(await _start_new(text, session, rows, request))
     ans = _voice_router.answer(text, session, rows, title=title, words=words)
+    if ans.get("kind") == "interrupt":
+        ok = await asyncio.to_thread(_press_escape, ans["title"])
+        return JSONResponse({"kind": "interrupt", "title": ans["title"], "ok": ok})
     if ans.get("kind") in ("answer", "question") and ans.get("title"):
         ans = await _finish_answer(ans, rows)
     return JSONResponse(_voice_router.answer_in_time(ans, spoke, seen, rows))

@@ -1973,11 +1973,16 @@ class VoiceSettings:
       For ``system``, ``tts_voice`` is the OS voice name (a Windows voice like
       "Microsoft Zira Desktop", a macOS voice like "Samantha"); a name the OS
       does not have falls back to its default voice.
-    * ``stt_stream_model`` — the faster-whisper model the LIVE transcript
-      (``POST /api/voice/stream``) runs on ``local``: ``""`` = ``base.en`` for
-      English, ``base`` for any other language — about five times faster
-      than the one-shot ``stt_model`` (``small``), which a phrase sent whole
-      still uses.
+    * ``stt_stream_model`` — the engine the LIVE transcript
+      (``POST /api/voice/stream``) runs on ``local``: ``""`` = Moonshine
+      tiny-streaming for English when it is installed
+      (``backend.web.core.speech_moonshine``: final text ~30 ms after the
+      person stops), else ``base.en``; ``base`` for any other language.
+      ``"moonshine"`` asks for Moonshine explicitly (still ``base.en`` while
+      it is not installed, and for other languages); any faster-whisper
+      size or ``org/repo`` id keeps that whisper model. Whisper's stream is
+      about five times faster than the one-shot ``stt_model`` (``small``),
+      which a phrase sent whole still uses.
     * ``stt_final`` — the model the ACCURATE pass at the end of each live
       phrase runs (``POST …/stream/{id}/end`` → ``final``): ``""`` = the
       one-shot ``stt_model``, ``"off"`` = no accurate pass (speed only), any

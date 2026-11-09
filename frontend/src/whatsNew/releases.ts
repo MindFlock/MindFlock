@@ -37,6 +37,62 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.13.1",
+    date: "2026-11-09",
+    big: false,
+    headline: "Dictation that follows the whole sentence.",
+    features: [
+      {
+        title: "Words heard in context",
+        body:
+          "When you dictate a message in several pauses, each part is now transcribed knowing what you already said, so fewer words come out wrong.",
+      },
+      {
+        title: "A sharper English model",
+        body:
+          "English dictation now uses Whisper's English-only model. It makes about half as many mistakes on coding talk and is just as fast.",
+      },
+    ],
+  },
+  {
+    version: "0.13.0",
+    date: "2026-11-09",
+    big: true,
+    headline: "Voice that hears you right, and does more hands-free.",
+    features: [
+      {
+        title: "Accurate words, instant commands",
+        body:
+          "Whisper now writes everything you dictate, while the fast Moonshine model listens only for commands like \"over\", stop and session names, so those still act the moment you say them.",
+      },
+      {
+        title: "Scroll by voice",
+        body:
+          "Say \"scroll up\", \"page down\", \"scroll to the top\" or \"back to the bottom\" to move through a session's output, and \"more\" to keep going.",
+      },
+      {
+        title: "Interrupt, go back, where am I",
+        body:
+          "\"Interrupt\" presses Escape in the session, \"go back\" returns to the session you were on, and \"where am I\" says which one is focused.",
+      },
+      {
+        title: "Scratch that",
+        body:
+          "Say \"scratch that\" to take back just the last phrase instead of everything. \"Disregard\" still clears it all.",
+      },
+      {
+        title: "The rail keeps up",
+        body:
+          "When you switch sessions, the list on the left scrolls to show the one you picked, and a voice switch makes its row blink once so you can spot it.",
+      },
+      {
+        title: "What can I say?",
+        body:
+          "Ask \"what can I say\" for a cheat sheet of every voice command. It's also in the mic's right-click menu.",
+      },
+    ],
+  },
+  {
     version: "0.12.0",
     date: "2026-11-04",
     big: true,

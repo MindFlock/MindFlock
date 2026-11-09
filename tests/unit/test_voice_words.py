@@ -334,7 +334,7 @@ def test_the_fixture_is_what_the_server_serves():
     assert f["custom"]["heard"] == {k: [] for k in list(vw.KINDS) + ["wake"]}
     assert len(f["cases"]) >= 80
     kinds = {c["kind"] for c in f["cases"]}
-    assert kinds == {"send", "end", "clear", "stop", "hush", None}
+    assert kinds == {"send", "end", "clear", "undo", "stop", "hush", None}
 
 
 def test_control_kind_reads_every_fixture_case():
@@ -358,3 +358,78 @@ def test_control_kind_order_hush_then_stop_then_radio():
     assert vw.control_kind("over and out, that's all") == "stop"
     assert vw.control_kind("fix it stop") is None  # one word: the router's
     assert vw.control_kind("stop listening") == "stop"
+
+
+# --- undo: "scratch that" ---------------------------------------------------------
+def test_undo_is_a_kind_after_clear():
+    assert vw.KINDS == ("send", "end", "clear", "undo", "stop", "hush")
+    assert vw.DEFAULTS["undo"] == ["scratch that"]
+    got = vw.effective({})
+    assert got["undo"] == ["scratch that"]
+    assert "undo" in got["heard"]
+    assert vw.normalize({"undo": [" Take That Back "]}) == {"undo": ["take that back"]}
+    assert vw.normalize({"undo": ["scratch that"]}) == {}
+    assert vw.effective({"undo": ["take that back"]})["heard"]["undo"] == []
+
+
+def test_only_undo_claims_scratch_that():
+    # The router's cancel list dropped it; no other kind, kin or heard form
+    # may read it as anything but an undo.
+    for kind in vw.KINDS:
+        if kind != "undo":
+            assert "scratch that" not in vw.DEFAULTS[kind], kind
+    for phrase, forms in vw.HEARD.items():
+        if phrase not in vw.DEFAULTS["undo"]:
+            assert "scratch that" not in forms, phrase
+    for kind, table in vw.KIN.items():
+        for kin in table.values():
+            assert "scratch that" not in kin, kind
+
+
+@pytest.mark.parametrize(
+    "text, kind",
+    [
+        ("Scratch that.", "undo"),
+        ("scratch that", "undo"),
+        # "undo that" is no default: "can you undo that" is words for the agent.
+        ("Undo that!", None),
+        ("can you undo that", None),
+        ("fix the margin on the login page, scratch that", "undo"),
+        ("we should undo that", None),
+        ("scratched that", "undo"),  # alone: sounds like it
+        ("Scratch at.", "undo"),
+        # Dictation ending in "...that" is not an undo unless it is the phrase.
+        ("let's stretch that", None),
+        ("look into that", None),
+        ("please patch that", None),
+        ("can you catch that", None),
+        ("go ahead and do that", None),
+        ("I'll do that", None),
+        # Alone, a sound-alike must start like the phrase: Moonshine writes
+        # "and do that" for both "undo that" and the dictation.
+        ("And do that.", None),
+        ("into that", None),
+        ("under that", None),
+        ("put the row under that", None),
+        # More words after the phrase, or the phrase cut short: words.
+        ("scratch that idea and start again from the parser", None),
+        ("undo that migration", None),
+        ("undo the last commit", None),
+        ("scratch", None),
+        ("undo", None),
+        # The other radio words are unchanged.
+        ("disregard that", "clear"),
+        ("fix it, over", "send"),
+    ],
+)
+def test_control_kind_reads_undo(text, kind):
+    assert vw.control_kind(text) == kind
+
+
+def test_a_person_s_own_undo_phrase():
+    words = vw.effective({"undo": ["take that back"]})
+    assert vw.control_kind("fix it, take that back", words) == "undo"
+    assert vw.control_kind("scratch that", words) is None
+    # Sounds like it only as the whole phrase.
+    assert vw.control_kind("take that bag", words) == "undo"
+    assert vw.control_kind("fix it take that bag", words) is None

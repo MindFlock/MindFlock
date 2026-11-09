@@ -290,7 +290,7 @@ class TestLocalRefusals:
         monkeypatch.setattr(speech.shutil, "which", lambda name: None)
         ok, detail = speech.LocalSTT().ready()
         assert ok is True
-        assert detail.startswith("faster-whisper small on this computer")
+        assert detail.startswith("faster-whisper small.en on this computer")
         assert "ffmpeg" in detail
         monkeypatch.setattr(speech.shutil, "which", lambda name: "/usr/bin/ffmpeg")
         speech.forget_ffmpeg()  # cached until forgotten (or PATH changes)
@@ -368,7 +368,7 @@ class TestLocalSTT:
         text = stt.transcribe(b"\x1aE\xdf\xa3", "audio/webm;codecs=opus", "en")
         assert text == "Hello there."
         name, kw = whisper.loads[0]
-        assert name == "small"
+        assert name == "small.en"
         assert kw == {
             "device": "cpu",
             "compute_type": "int8",
@@ -381,7 +381,7 @@ class TestLocalSTT:
         assert path.endswith(".webm") and existed and size == 4
         assert not os.path.exists(path)  # the temp clip is gone after the call
         assert whisper.calls[0][1] == {"language": "en", "beam_size": 5}
-        assert speech.loaded() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:small.en"]
         stt.transcribe(b"RIFF", "audio/wav", "")
         assert len(whisper.loads) == 1  # cached
         assert whisper.calls[1][1]["language"] is None
@@ -410,7 +410,7 @@ class TestLocalSTT:
         assert whisper.loads[1][0] == "base"  # the stream model for German
         # A phrase sent whole keeps the accurate model.
         stt.transcribe(b"RIFF", "audio/wav", "en")
-        assert whisper.loads[2][0] == "small"
+        assert whisper.loads[2][0] == "small.en"
         assert whisper.calls[2][1]["beam_size"] == 5
 
     def test_the_wake_check_pass_has_no_prompt(self, whisper, monkeypatch):
@@ -452,15 +452,15 @@ class TestLocalSTT:
         clock = [1000.0]
         monkeypatch.setattr(speech, "_now", lambda: clock[0])
         speech.LocalSTT().transcribe(b"x", "audio/wav", "")
-        assert speech.loaded() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:small.en"]
         clock[0] += speech.IDLE_SECONDS - 1
         assert speech.sweep_idle() == []
-        assert speech.loaded() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:small.en"]
         speech.LocalSTT().transcribe(b"x", "audio/wav", "")  # a call restarts the clock
         clock[0] += speech.IDLE_SECONDS - 1
         assert speech.sweep_idle() == []
         clock[0] += 1
-        assert speech.sweep_idle() == ["whisper:small"]
+        assert speech.sweep_idle() == ["whisper:small.en"]
         assert speech.loaded() == []
         speech.LocalSTT().transcribe(b"x", "audio/wav", "")
         assert len(whisper.loads) == 2  # reloaded after the unload
@@ -486,7 +486,7 @@ class TestLocalSTT:
 
         monkeypatch.setattr(speech, "_import", lambda name: _Broken())
         with pytest.raises(
-            speech.SpeechError, match="could not load faster-whisper small: no AVX"
+            speech.SpeechError, match="could not load faster-whisper small.en: no AVX"
         ):
             speech.LocalSTT().transcribe(b"x", "audio/wav", "")
         assert speech.loaded() == []
@@ -687,8 +687,11 @@ class TestHints:
             "stop listening",
             "hush",
         ]
-        assert parts[8:10] == ["sitecheck bot 7", "voice stt"]
-        assert parts[10] == "session"  # the vocabulary follows
+        # The commands Moonshine mishears bare, then the titles.
+        n = len(speech.HINT_COMMANDS)
+        assert parts[8 : 8 + n] == list(speech.HINT_COMMANDS)
+        assert parts[8 + n : 10 + n] == ["sitecheck bot 7", "voice stt"]
+        assert parts[10 + n] == "session"  # the vocabulary follows
         assert "pull request" in parts and "pytest" in parts
         # "mindflock" is the wake word already: the vocabulary's MindFlock is
         # a repeat (compared lower-cased) and is not added twice.
@@ -707,10 +710,12 @@ class TestHints:
         assert len(tight) <= 80 and "xxx" not in tight and "disregard" in tight
 
     def test_odd_input_is_fine(self):
-        assert speech.recognition_hints({}, []) == ", ".join(speech.HINT_VOCABULARY)
-        assert speech.recognition_hints(None, None).startswith("MindFlock, ")
+        assert speech.recognition_hints({}, []) == ", ".join(
+            speech.HINT_COMMANDS + speech.HINT_VOCABULARY
+        )
+        assert speech.recognition_hints(None, None).startswith("scroll, ")
         assert speech.recognition_hints({"send": "over", "wake": 3}, [""]).startswith(
-            "MindFlock"
+            "scroll, "
         )
 
     def test_session_titles_from_the_engine(self, monkeypatch):
@@ -825,9 +830,10 @@ class TestHints:
         assert speech.HINT_TITLES == 12
         titles = ["t%d" % i for i in range(13)]
         parts = speech.recognition_hints(self.WORDS, titles).split(", ")
-        assert parts[8:20] == ["t %d" % i for i in range(12)]
+        n = 8 + len(speech.HINT_COMMANDS)
+        assert parts[n : n + 12] == ["t %d" % i for i in range(12)]
         assert "t 12" not in parts  # the 13th
-        assert parts[20] == "session"  # the vocabulary still follows
+        assert parts[n + 12] == "session"  # the vocabulary still follows
 
     def test_a_title_that_is_a_voice_phrase_is_one_entry(self):
         titles = ["Disregard", "Over", "stop", "Window"]
@@ -996,8 +1002,8 @@ class TestLocalFinal:
             "vad_filter": True,
         }
         assert "initial_prompt" not in kw  # the fast words may be wrong
-        assert model["names"] == ["small"]
-        assert speech.loaded() == ["whisper:small"]
+        assert model["names"] == ["small.en"]
+        assert speech.loaded() == ["whisper:small.en"]
 
     def test_the_text_of_its_segments(self, model, monkeypatch):
         from array import array
@@ -1042,9 +1048,9 @@ class TestLocalFinal:
     @pytest.mark.parametrize(
         "final,stt_model,name",
         [
-            ("", "", "small"),
+            ("", "", "small.en"),
             ("", "medium", "medium"),
-            ("", "whisper-1", "small"),  # a host's name is not a size
+            ("", "whisper-1", "small.en"),  # a host's name is not a size
             ("off", "medium", ""),
             ("OFF", "", ""),
             ("medium.en", "", "medium.en"),
@@ -1071,11 +1077,11 @@ class TestLocalFinal:
         assert stt.final_model_name() == ""
         assert stt.final_transcriber("en") is None
         assert "whisper:" not in stt.warm_keys()
-        assert stt.warm_keys() == ["whisper:base.en", "whisper:small"]
+        assert stt.warm_keys() == ["whisper:base.en", "whisper:small.en"]
 
     def test_unset_is_the_one_shot_model(self, model):
         # Also with a settings model that has no stt_final field yet.
-        assert speech.LocalSTT().final_model_name() == "small"
+        assert speech.LocalSTT().final_model_name() == "small.en"
         _set(stt_model="medium")
         assert speech.LocalSTT().final_model_name() == "medium"
 
@@ -1170,14 +1176,14 @@ class TestLocalNames:
     backends: a host's model or an OS voice must not break ``local``."""
 
     def test_whisper_model(self):
-        assert speech.whisper_model("") == "small"
+        assert speech.whisper_model("") == "small.en"
         assert speech.whisper_model(" medium.en ") == "medium.en"
         assert speech.whisper_model("large-v3-turbo") == "large-v3-turbo"
         assert speech.whisper_model("Systran/faster-whisper-tiny") == (
             "Systran/faster-whisper-tiny"
         )
-        assert speech.whisper_model("whisper-1") == "small"
-        assert speech.whisper_model("whisper-large-v3-turbo") == "small"
+        assert speech.whisper_model("whisper-1") == "small.en"
+        assert speech.whisper_model("whisper-large-v3-turbo") == "small.en"
 
     def test_piper_voice(self):
         assert speech.piper_voice("") == "en_US-lessac-medium"
@@ -1193,7 +1199,7 @@ class TestLocalNames:
 
     def test_a_host_model_in_settings_loads_the_default_size(self):
         _set(stt_model="whisper-1")
-        assert speech.LocalSTT()._model_name() == "small"
+        assert speech.LocalSTT()._model_name() == "small.en"
 
     def test_invalidate_drops_the_import_caches(self, monkeypatch):
         calls = []
@@ -1410,8 +1416,8 @@ class TestWarm:
     def test_warm_loads_and_primes_both_models_once(self, local):
         assert speech.warm("stt") == "loaded"
         # The one-shot model and the live transcript's.
-        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
-        assert sorted(n for n, _kw in local.loads) == ["base.en", "small"]
+        assert speech.loaded() == ["whisper:base.en", "whisper:small.en"]
+        assert sorted(n for n, _kw in local.loads) == ["base.en", "small.en"]
         # One priming pass each: a short silent array, greedy, no VAD.
         assert len(local.calls) == 2
         for path, kw in local.calls:
@@ -1424,9 +1430,9 @@ class TestWarm:
 
     def test_warm_loads_the_one_missing_model(self, local):
         speech.LocalSTT().transcribe(b"x", "audio/wav", "")
-        assert speech.loaded() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:small.en"]
         assert speech.warm("stt") == "loaded"
-        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
+        assert speech.loaded() == ["whisper:base.en", "whisper:small.en"]
         assert len(local.loads) == 2
 
     def test_a_third_final_model_is_warmed_too(self, local, monkeypatch):
@@ -1434,13 +1440,13 @@ class TestWarm:
         assert speech.LocalSTT().warm_keys() == [
             "whisper:base.en",
             "whisper:medium.en",
-            "whisper:small",
+            "whisper:small.en",
         ]
         assert speech.warm("stt") == "loaded"
         assert speech.loaded() == [
             "whisper:base.en",
             "whisper:medium.en",
-            "whisper:small",
+            "whisper:small.en",
         ]
         assert len(local.loads) == 3
         # Resident while local recognition is configured, like the others.
@@ -1478,7 +1484,7 @@ class TestWarm:
         assert t is not None
         t.join(5)
         assert not t.is_alive()
-        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
+        assert speech.loaded() == ["whisper:base.en", "whisper:small.en"]
         assert len(local.loads) == 2
         # Resident: nothing to do.
         assert speech.warm_in_background("stt") is None
@@ -1504,7 +1510,7 @@ class TestWarm:
         assert speech.describe()["warm"]["stt"] == "loading"
         gate.set()
         t.join(5)
-        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
+        assert speech.loaded() == ["whisper:base.en", "whisper:small.en"]
 
 
 def test_a_prompt_biases_the_local_decoder(whisper):
@@ -1607,7 +1613,7 @@ class TestResident:
     idle-unloaded; with nobody listening they unload like everything else
     (piper voices always do)."""
 
-    WHISPERS = ["whisper:base.en", "whisper:small"]
+    WHISPERS = ["whisper:base.en", "whisper:small.en"]
 
     @pytest.fixture(autouse=True)
     def _listening(self, clock):
@@ -1647,7 +1653,7 @@ class TestResident:
         speech.warm("stt")
         _set(stt_backend="local", stt_model="medium")
         clock[0] += speech.IDLE_SECONDS + 1
-        assert speech.sweep_idle() == ["whisper:small"]
+        assert speech.sweep_idle() == ["whisper:small.en"]
         assert speech.loaded() == ["whisper:base.en"]
 
     def test_the_timer_keeps_running_and_unload_all_still_works(
@@ -1664,15 +1670,16 @@ class TestResident:
         speech.unload_all()
         assert speech.loaded() == []
 
-    def test_nobody_listening_unloads_it(self, both, clock):
+    def test_nobody_listening_unloads_all_but_the_stream_model(self, both, clock):
         speech._LISTENING.clear()
         _set(stt_backend="local")
         speech.warm("stt")
         clock[0] += speech.IDLE_SECONDS - 1
         assert speech.sweep_idle() == []  # a recent phrase keeps it a while
         clock[0] += 2
-        assert speech.sweep_idle() == self.WHISPERS
-        assert speech.loaded() == []
+        # The streaming model (~150 MB) stays: reloading it cost ~2 s.
+        assert speech.sweep_idle() == ["whisper:small.en"]
+        assert speech.loaded() == ["whisper:base.en"]
 
     def test_a_lapsed_lease_unloads_it(self, both, clock):
         speech._LISTENING.clear()
@@ -1684,8 +1691,9 @@ class TestResident:
         assert speech.listening() is True
         clock[0] += speech.IDLE_SECONDS  # the page went away long ago
         assert speech.listening() is False
-        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.sweep_idle() == ["whisper:small.en"]
         assert speech.stt_loaded() is False
+        assert speech.loaded() == ["whisper:base.en"]
 
     def test_a_lease_ends_on_off_and_on_unload_all(self, both):
         speech._LISTENING.clear()
@@ -1710,6 +1718,28 @@ class TestResident:
         monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
         assert "memory is low" in speech.warm("stt")
         assert speech.loaded() == []
+        assert speech.LocalSTT().ready()[0] is False
+
+    def test_the_memory_guard_never_refuses_a_loaded_model(self, both, monkeypatch):
+        """Under pressure every fast pass raised, so the client dropped to
+        clip mode — whose clips were refused the same way — though nothing
+        needed loading."""
+        _set(stt_backend="local")
+        speech.warm("stt")
+        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
+        stt = speech.LocalSTT()
+        assert stt.ready()[0] is True
+        assert stt._model("base.en") is not None
+        with pytest.raises(speech.SpeechError, match="memory is low"):
+            stt._model("medium")  # not loaded: the guard holds
+
+    def test_shedding_keeps_the_stream_model(self, both, clock):
+        speech._LISTENING.clear()
+        _set(stt_backend="local")
+        speech.warm("stt")
+        clock[0] += 500
+        assert speech.shed_for_memory() == ["whisper:small.en"]
+        assert speech.loaded() == ["whisper:base.en"]
 
 
 class TestWarmVoice:
@@ -2176,3 +2206,21 @@ class TestRewarmAfterAFailure:
         assert speech.describe()["warm"]["tts"] == "loaded"
         assert speech._warm_due("tts") is False
         assert len(http.calls) == 2  # the line's attempt + the probe
+
+
+def test_the_undo_phrases_and_the_commands_are_hints():
+    from backend.web.core import voice_words
+
+    titles = ["hackathon-2", "sitecheck-bot7", "voice-ears", "login-fix"]
+    hints = speech.recognition_hints(voice_words.effective({}), titles)
+    parts = hints.split(", ")
+    # After every other voice phrase (the radio words that act at once lead).
+    assert parts.index("scratch that") == parts.index("enough") + 1
+    assert "undo that" not in parts  # dictation, not a default (voice_words)
+    # The commands before the titles, the titles before the vocabulary.
+    assert parts.index("scroll") == parts.index("scratch that") + 1
+    assert parts.index("status") < parts.index("hackathon 2") < parts.index("session")
+    assert len(hints) <= speech.HINT_CHARS
+    # Without the vocabulary, no commands either (the fast tier's lone words).
+    bare = speech.recognition_hints(voice_words.effective({}), (), vocabulary=False)
+    assert "scroll" not in bare and bare.endswith("scratch that")

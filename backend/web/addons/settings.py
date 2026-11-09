@@ -442,6 +442,19 @@ def _provider_view(p) -> dict:
     return view
 
 
+def _providers_dir_shown() -> str:
+    """The resolved custom-provider TOML folder, ``$HOME`` as ``~``, with a
+    trailing ``/``. ``""`` if it can't be resolved. Never raises."""
+    try:
+        d = str(provider_config._providers_dir())
+        home = os.path.expanduser("~")
+        if home and home != "/" and (d == home or d.startswith(home + os.sep)):
+            d = "~" + d[len(home) :]
+        return d.rstrip("/\\") + "/"
+    except Exception:  # noqa: BLE001 — a hint, never a failure
+        return ""
+
+
 def _default_provider_name() -> str:
     """The configured default provider (falls back to the registry default, or
     to the first installed agent when that one's CLI is missing)."""
@@ -736,6 +749,13 @@ def _source_cfg_from_body(body: dict):
     stored = next((s for s in all_sources if s.id == src_id), None)
     if stored is None:
         stored = all_sources[0] if all_sources else None
+    # A stored source lends its fields (its token above all) only to a request
+    # for the SAME provider: a new GitHub Issues source tested next to a saved
+    # Shortcut one must never send the Shortcut token to api.github.com.
+    asked = str(body.get("provider") or "").strip().lower()
+    if stored is not None and asked:
+        if str(getattr(stored, "provider", "") or "").strip().lower() != asked:
+            stored = None
 
     def sp(attr: str) -> str:
         return getattr(stored, attr, "") if stored else ""
@@ -2182,6 +2202,10 @@ class SettingsAddon(Addon):
                     # Custom TOMLs that didn't load — a red row each, instead
                     # of a provider that silently isn't there.
                     "errors": provider_config.load_errors(),
+                    # Where custom-agent TOMLs live on THIS server (env
+                    # overrides honoured), ``~``-shortened: the screen's
+                    # "edit the TOML" note names the real folder.
+                    "providers_dir": _providers_dir_shown(),
                 }
             )
 

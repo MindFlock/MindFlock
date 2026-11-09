@@ -32,3 +32,12 @@ describe("the window-refresh settings block", () => {
     expect(CODING).toContain('if (!flashSaved(el)) toast("Saved")');
   });
 });
+
+describe("Keep usage windows warm names agents by product (polish pass 3, area c)", () => {
+  it("labels each checkbox and the next-refresh line with agentName, not the CLI id", () => {
+    const cli = src("components/settings/screens/CodingCli.tsx");
+    expect(cli).toContain('agentName(o.name) + ": next ~"');
+    expect(cli).toContain("{agentName(o.name) +");
+    expect(cli).not.toContain("{o.name +");
+  });
+});

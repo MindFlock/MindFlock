@@ -100,26 +100,30 @@ def test_the_over_budget_follows_how_long_end_takes():
     assert out == [1500, 1500, 1500, 1500, 300, 400, 1300, 1500, 1500, 1500]
 
 
-def test_the_budget_is_measured_seeded_and_grows_when_end_is_late():
+def test_the_budget_is_measured_from_finals_that_came_and_seeded():
     js = _js()
     stt = js[js.index("  function ServerSTT(") : js.index("  // --- ServerTTS")]
     fire = _inner(stt, "controlFire")
-    assert "var budget = voiceEndBudgetMs(voice.rec.endMs);" in fire
-    assert "}, budget);" in fire and "VOICE_CONTROL_END_MS" not in fire
-    # Late: the next budget grows toward 1.2× this one — it took at least this.
-    assert (
-        "voice.rec.endMs = Math.round(((voice.rec.endMs || budget) + budget * 1.2) / 2);"
-        in fire
-    )
+    assert "voiceEndBudgetMs(voice.rec.endMs)" in fire
+    assert "g.endTimer = setTimeout(g.endFire, budget);" in fire
+    assert "VOICE_CONTROL_END_MS" not in fire
     assert "voice.rec.ctl.budget = budget;" in fire
-    # Measured: every /end's round trip into a running mean.
+    # A late /end is never a guess at how long finals take: no growth rule.
+    assert "budget * 1.2" not in fire
+    # Measured: the round trip of every /end that brought a final (late or
+    # not; a timeout brings none) — the median of the last few.
     end = _inner(stt, "streamEnd")
-    assert "var rt = Date.now() - t0;" in end
+    # An accurate final only (voiceTimedFinal: not Moonshine's own text).
+    assert "if (voiceTimedFinal(x.j)) {" in end
     assert (
-        "voice.rec.endMs = voice.rec.endMs ? Math.round((voice.rec.endMs + rt) / 2) : rt;"
+        "voice.rec.ends = voiceKeepLast(voice.rec.ends, Date.now() - t0, VOICE_END_SAMPLES);"
         in end
     )
-    assert end.index("voice.rec.endMs =") < end.index("voiceStreamFinal(text, x.j)")
+    assert (
+        "voice.rec.endMs = voiceEndTypicalMs(voice.rec.ends, voice.rec.endMs);" in end
+    )
+    assert "(voice.rec.endMs + rt) / 2" not in end
+    assert end.index("voice.rec.ends =") < end.index("if (g.late) return;")
     # Seeded by the server's advisory, when it sends one, until measured.
     cfg = _whole(js, "voiceLoadCfg")
     assert (
@@ -127,7 +131,7 @@ def test_the_budget_is_measured_seeded_and_grows_when_end_is_late():
         in cfg
     )
     assert "if (adv > 0 && !voice.rec.endMs) voice.rec.endMs = adv;" in cfg
-    assert "passMs: 0, endMs: 0 }" in js
+    assert "passMs: 0, endMs: 0, ends: [], finals: [] }" in js
     # Diagnostics say what it waited for and what /end takes here.
     diag = _whole(js, "voiceDiag")
     assert (

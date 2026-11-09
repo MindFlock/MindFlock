@@ -97,7 +97,7 @@ describe("the words, before and after the server answers", () => {
 
   it("carries the server's `heard` beside the words, bounded, and drops it when the server sends none", () => {
     W.applyVoiceView({ words: { send: ["over"], heard: { send: ["ova", " Oh  Ver ", "ova", 7, ""], wake: ["mind lock"] } } });
-    expect(W.voiceWords().heard).toEqual({ send: ["ova", "oh ver"], end: [], clear: [], stop: [], hush: [], wake: ["mind lock"] });
+    expect(W.voiceWords().heard).toEqual({ send: ["ova", "oh ver"], end: [], clear: [], undo: [], stop: [], hush: [], wake: ["mind lock"] });
     expect(W.heardOf(W.voiceWords(), "send")).toEqual(["ova", "oh ver"]);
     expect(W.heardOf(W.voiceWords(), "wake")).toEqual(["mind lock"]);
     // A form that is a phrase itself is not a form.
@@ -252,8 +252,8 @@ describe("Settings → Voice → Voice words", () => {
 
   it("one row per kind, then the wake word; the hint says they work everywhere", () => {
     const html = render({});
-    expect(WORD_ROWS.map((r) => r.label)).toEqual(["Send", "End (send and stop)", "Start over", "Stop listening", "Stop talking"]);
-    expect([...html.matchAll(/data-words-kind="(\w+)"/g)].map((m) => m[1])).toEqual(["send", "end", "clear", "stop", "hush", "wake"]);
+    expect(WORD_ROWS.map((r) => r.label)).toEqual(["Send", "End (send and stop)", "Start over", "Undo last phrase", "Stop listening", "Stop talking"]);
+    expect([...html.matchAll(/data-words-kind="(\w+)"/g)].map((m) => m[1])).toEqual(["send", "end", "clear", "undo", "stop", "hush", "wake"]);
     expect(html).toContain('<h3 class="set-section-title">Voice words</h3>');
     expect(html).toMatch(/this computer(&#x27;|')s mic, the phone page and the\s+wake word/);
     expect(html).toContain('id="voice-words"');

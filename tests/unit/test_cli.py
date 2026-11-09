@@ -553,6 +553,85 @@ class TestFixLoopGroups:
         cli._fix_checks([self._TS, self._GH], groups=("run",))
         assert prompts == []
 
+    _IDENT = Check(
+        "git-identity",
+        "git identity",
+        "warn",
+        "user.name and user.email not set — commits will fail on this computer",
+        'git config --global user.name "Your Name" && …',
+    )
+
+    def test_fix_asks_for_the_git_identity_and_writes_it(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        # No command to run (the values are the person's), so --fix used to
+        # pass the row over in silence; it asks for both now.
+        from backend.web.core import github_auth
+
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._IDENT])
+        answers = iter(["Ada Lovelace", "ada@example.com"])
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": prompts.append(prompt) or next(answers)
+        )
+        wrote = {}
+        monkeypatch.setattr(
+            github_auth,
+            "set_git_identity",
+            lambda n, e: wrote.update(name=n, email=e) or {"ok": True},
+        )
+        monkeypatch.setattr(
+            doctor,
+            "check_git_identity",
+            lambda: Check(
+                "git-identity", "git identity", "ok", "Ada Lovelace <ada@example.com>"
+            ),
+        )
+        cli.main(["doctor", "--fix"])
+        assert wrote == {"name": "Ada Lovelace", "email": "ada@example.com"}
+        assert "Your name" in prompts[0] and "Your email" in prompts[1]
+        assert (
+            "✓ git identity  Ada Lovelace <ada@example.com>" in capsys.readouterr().out
+        )
+
+    def test_enter_skips_the_git_identity_and_says_how_later(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        from backend.web.core import github_auth
+
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._IDENT])
+        prompts = []
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": prompts.append(prompt) or ""
+        )
+        monkeypatch.setattr(
+            github_auth,
+            "set_git_identity",
+            lambda n, e: pytest.fail("a skip writes nothing"),
+        )
+        cli.main(["doctor", "--fix"])
+        assert len(prompts) == 1  # Enter on the name: no email question
+        out = capsys.readouterr().out
+        assert "skipped" in out and "git config --global user.name" in out
+
+    def test_a_bad_email_is_not_saved_and_says_why(
+        self, monkeypatch, capsys, tty_stdin
+    ):
+        monkeypatch.setattr(doctor, "run_checks", lambda *a: [self._IDENT])
+        answers = iter(["Ada", "not-an-email"])
+        monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+        monkeypatch.setattr(
+            doctor, "check_git_identity", lambda: pytest.fail("nothing to re-probe")
+        )
+        cli.main(["doctor", "--fix"])
+        assert "not saved — give a name and an email address" in capsys.readouterr().out
+
+    def test_init_never_asks_for_the_git_identity(self, monkeypatch, capsys, tty_stdin):
+        monkeypatch.setattr(
+            "builtins.input", lambda prompt="": pytest.fail("run group only")
+        )
+        cli._fix_checks([self._IDENT], groups=("run",))
+
 
 class TestAbandonedSignIn:
     """F11: an agent closed before signing in gets [R]etry / [s]kip, not a PATH

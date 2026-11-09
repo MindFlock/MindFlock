@@ -192,6 +192,25 @@ export function isRequiredCheck(c: SetupCheck): boolean {
   return !EXTRA_CHECKS.has(String(c.id || ""));
 }
 
+/** A doctor row's name as people read it. The agent rows say "agent" and
+ * "sign-in", the terminal doctor's words (backend/cli.py `_row_label`) —
+ * not the wire labels "agent CLI (claude)" / "agent auth (claude)", which
+ * stay as they are (InstallTerminal reads the agent out of them). */
+export function checkLabel(c: DoctorCheckItem): string {
+  const id = String(c.id || "");
+  if (id === "agent-cli" && c.provider) return `agent (${c.provider})`;
+  if (id === "agent-auth" && c.provider) return `agent sign-in (${c.provider})`;
+  return c.label || id;
+}
+
+/** Whether a row asks for the git name and email in place: the git identity
+ * row while either is unset. Its fix is a terminal command, which is no
+ * answer in a browser — the row writes them itself (POST
+ * /api/github/identity, the global git config). */
+export function asksGitIdentity(c: DoctorCheckItem): boolean {
+  return c.id === "git-identity" && (c.status === "warn" || c.status === "fail");
+}
+
 /** The rows the checklist's "All checks (N)" fold lists. */
 export function requiredChecks<T extends SetupCheck>(checks: readonly T[] | undefined): T[] {
   return (checks || []).filter(isRequiredCheck);

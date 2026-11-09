@@ -124,6 +124,17 @@ describe("isHeldOffline / heldRows", () => {
     ];
     expect(heldRows(rows).map((r) => r.title)).toEqual(["a"]);
   });
+
+  it("leaves out a row whose agent isn't installed: its pane offers Install, not Start", () => {
+    const rows = [row({ ...HELD, title: "a" }), row({ ...HELD, title: "nocli" })];
+    expect(heldRows(rows, (i) => i.title === "nocli").map((r) => r.title)).toEqual(["a"]);
+  });
+
+  it("the rail's OfflineBar passes Setup's install read to both counts", () => {
+    const src = code("components/sidebar/OfflineBar.tsx");
+    expect(src).toMatch(/heldRows\(instances, \(i\) => missingAgent\(i, logins\)\)/);
+    expect(src).toMatch(/offlineRows\(instances, logins\)/);
+  });
 });
 
 describe("the notice's ×", () => {
@@ -189,6 +200,33 @@ describe("HeldBody", () => {
     const html = renderToStaticMarkup(createElement(HeldBody, { title: "s", hidden: true }));
     expect(html).toContain("pane-term agent-term pane-paused pane-held hidden");
     expect(html).toContain("Offline since a crash.");
+  });
+
+  it("an agent that isn't installed: says so and offers Install, not a Start that fails again", async () => {
+    const { queryClient } = await import("../state/queries");
+    queryClient.setQueryData(["instances"], [row({ title: "s", program: "codex", ...HELD })]);
+    queryClient.setQueryData(["setup"], {
+      default_provider: "claude",
+      logins: [{ name: "codex", installed: false, logged_in: null, login_cmd: "", default: false }],
+    });
+    try {
+      let html = renderToStaticMarkup(createElement(HeldBody, { title: "s", reason: "the agent crashed", hidden: false }));
+      expect(html).toContain("Codex isn&#x27;t installed on this computer");
+      expect(html).toContain("Install Codex…");
+      expect(html).not.toContain("▶ Start");
+      expect(html).not.toContain("crashed");
+      // Installed since (Setup re-read): Start is back.
+      queryClient.setQueryData(["setup"], {
+        default_provider: "claude",
+        logins: [{ name: "codex", installed: true, logged_in: true, login_cmd: "", default: false }],
+      });
+      html = renderToStaticMarkup(createElement(HeldBody, { title: "s", reason: "the agent crashed", hidden: false }));
+      expect(html).toContain("▶ Start");
+      expect(html).not.toContain("Install Codex");
+    } finally {
+      queryClient.removeQueries({ queryKey: ["instances"] });
+      queryClient.removeQueries({ queryKey: ["setup"] });
+    }
   });
 
   it("starts through the same POST as the chip, asking nothing through window dialogs", () => {

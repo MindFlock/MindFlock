@@ -1216,7 +1216,7 @@ class TestAnyAssigneeQueries:
         prov = GithubIssuesProvider(
             TicketProviderConfig(
                 provider="github_issues",
-                api_token="t",
+                api_token="ghp_test",
                 project="octo/repo",
                 assignee_scope="anyone",
             )
@@ -1232,7 +1232,7 @@ class TestAnyAssigneeQueries:
         # wearing an assigned-to-me label.
         prov = GithubIssuesProvider(
             TicketProviderConfig(
-                provider="github_issues", api_token="t", project="octo/repo"
+                provider="github_issues", api_token="ghp_test", project="octo/repo"
             )
         )
         monkeypatch.setattr(prov, "_login", lambda *a, **k: _acoro(""))
@@ -1758,7 +1758,7 @@ class TestGithubResolveToken:
         monkeypatch.setattr(ghm, "_PER_SOURCE_TOKEN_NOTICED", True)
         prov = GithubIssuesProvider(
             TicketProviderConfig(
-                provider="github_issues", project="o/r", api_token="per-source"
+                provider="github_issues", project="o/r", api_token="ghp_per_source"
             )
         )
 
@@ -1766,7 +1766,7 @@ class TestGithubResolveToken:
             raise chain.GithubAuthError("none")
 
         monkeypatch.setattr(chain, "resolve_token", none)
-        assert await prov._resolve_token() == "per-source"
+        assert await prov._resolve_token() == "ghp_per_source"
 
 
 class TestGithubLogin:

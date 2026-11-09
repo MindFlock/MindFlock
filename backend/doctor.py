@@ -594,18 +594,45 @@ def check_gh() -> Check:
             docs=_DOCS["gh"],
             cmd=_pkg_fix("gh"),
         )
-    code, out = _run(["gh", "auth", "status"])
+    code, _out = _run(["gh", "auth", "status"])
     if code == 0:
         return Check("gh", "GitHub CLI (gh)", "ok", "installed and authenticated")
+    if _github_token_connected():
+        # A token MindFlock already uses (Connect GitHub, $GH_TOKEN) does gh's
+        # whole job — an unsigned gh is nothing to attend to.
+        return Check(
+            "gh",
+            "GitHub CLI (gh)",
+            "info",
+            "installed, not signed in — not needed: MindFlock uses your "
+            "connected GitHub token",
+            docs=_DOCS["gh"],
+        )
+    # gh's own words ("You are not logged into any GitHub hosts. To log in,
+    # run: gh auth login") repeated the fix line below and read as a
+    # requirement; gh is optional, so say what it is for instead.
     return Check(
         "gh",
         "GitHub CLI (gh)",
         "warn",
-        _first_line(out) or "installed but not authenticated",
+        "installed but not signed in (optional — only Open PR / Merge use it; "
+        "Connect GitHub in the app works too, and pushing uses plain git)",
         "run `gh auth login`",
         docs=_DOCS["gh"],
         cmd="gh auth login",
     )
+
+
+def _github_token_connected() -> bool:
+    """Whether MindFlock already has a GitHub token of its own (Settings, or
+    ``$GH_TOKEN``/``$GITHUB_TOKEN``) — never the ``gh auth token`` rung, which
+    is exactly what an unsigned gh lacks."""
+    try:
+        from backend.web.core import github_auth
+
+        return bool(github_auth.resolve_token(gh=False)[1])
+    except Exception:  # noqa: BLE001 — a probe never breaks the doctor
+        return False
 
 
 def _default_provider_name() -> str:
@@ -697,14 +724,14 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
             label,
             missing,
             f"configured binary {binary} is missing or not executable",
-            "fix the binary path in Settings → Agent CLI",
+            "fix the binary path in Settings → Agents",
             provider=name,
         )
     path = shutil.which(binary)
     if path:
         return Check(cid, label, "ok", _with_version(name, path), provider=name)
     cmd = _agent_install_cmd(name, binary)
-    fix = cmd or f"install `{binary}` or set a binary path in Settings → Agent CLI"
+    fix = cmd or f"install `{binary}` or set a binary path in Settings → Agents"
     return Check(
         cid,
         label,
@@ -720,21 +747,21 @@ def _agent_cli_check(cid: str, name: str, role: str, missing: str) -> Check:
 
 def check_agent_cli() -> Check:
     """Check the default coding-agent CLI is available — whichever provider is
-    the default (Settings → Agent CLI), with that provider's own installer as
+    the default (Settings → Agents), with that provider's own installer as
     the fix. A missing binary is a ``fail``: sessions launch it."""
     return check_agent_cli_for(_default_provider_name())
 
 
 def check_agent_cli_for(name: str) -> Check:
     """The ``agent-cli`` row for provider ``name`` instead of the default —
-    Settings → Agent CLI's **Test agent CLI** with a provider picked."""
+    Settings → Agents's **Test agent CLI** with a provider picked."""
     return _agent_cli_check(
         "agent-cli", name or _default_provider_name(), "agent CLI", "fail"
     )
 
 
 def _assistant_provider_name() -> str:
-    """Settings → Agent CLI's Assistant provider, or ``""`` when unset."""
+    """Settings → Agents's Assistant provider, or ``""`` when unset."""
     try:
         from backend.config.settings import load_settings
 
@@ -793,9 +820,11 @@ def check_git_identity() -> Optional[Check]:
         "git identity",
         "warn",
         f"{unset} not set — commits will fail on this computer",
+        # The fix is the bare command, so it pastes as is; the browser's
+        # checklist asks for the two values in place, and `doctor --fix`
+        # asks for them in the terminal.
         'git config --global user.name "Your Name" && '
-        "git config --global user.email you@example.com "
-        "(or Connect GitHub in the browser fills it in from your account)",
+        "git config --global user.email you@example.com",
     )
 
 
@@ -1042,7 +1071,7 @@ def check_agent_auth() -> Check:
 def check_agent_auth_for(name: str) -> Check:
     """:func:`check_agent_auth` for provider ``name`` instead of the default —
     the same ``agent-auth`` id, so the Setup / Settings sign-in button reads
-    it the same way (Settings → Agent CLI's test with a provider picked)."""
+    it the same way (Settings → Agents's test with a provider picked)."""
     name = name or _default_provider_name()
     return _agent_auth_check("agent-auth", name, f"agent auth ({name})")
 
@@ -1722,6 +1751,48 @@ def check_voice_packages() -> Optional[Check]:
     )
 
 
+def check_fast_recognition() -> Optional[Check]:
+    """While local recognition is on (``voice.stt_backend = "local"``):
+    which engine the live words run (``core.speech.stream_engine``) —
+    Moonshine tiny-streaming, final text ~30 ms after the person stops, or
+    whisper, ~0.5–1 s. A ``warn`` with the one-click install as the fix when
+    Moonshine is not installed and the setting would use it; ``None`` — no
+    row — for any other recognition backend."""
+    from backend.web.core import speech, speech_moonshine
+
+    if speech._configured("stt") != "local":
+        return None
+    raw = str(getattr(speech._voice(), "stt_stream_model", "") or "")
+    engine = speech.stream_engine(raw)
+    label = "Fast recognition"
+    if engine == speech.ENGINE_MOONSHINE:
+        return Check(
+            "fast-recognition",
+            label,
+            "ok",
+            "live words: Moonshine %s" % speech_moonshine.ARCH,
+            group=GROUP_OPTIONAL,
+        )
+    whisper = "live words: Whisper " + speech.stream_whisper_model(raw)
+    if raw.strip() and raw.strip().lower() != speech.STREAM_MOONSHINE:
+        return Check(
+            "fast-recognition",
+            label,
+            "info",
+            whisper + " (voice.stt_stream_model picks it)",
+            group=GROUP_OPTIONAL,
+        )
+    return Check(
+        "fast-recognition",
+        label,
+        "warn",
+        "%s — %s" % (whisper, speech_moonshine.unavailable_reason() or "unavailable"),
+        "Settings → Voice → Install fast recognition (Moonshine, ~200 MB): "
+        "phrase ends land in ~30 ms instead of ~1 s",
+        group=GROUP_OPTIONAL,
+    )
+
+
 def check_builtin_speech() -> Check:
     """Informational, never a failure: the operating system's own speech
     engine the voice features use by default (:mod:`backend.web.core.
@@ -1781,6 +1852,7 @@ CHECKS_BY_ID: dict[str, Callable[[], "Optional[Check] | List[Check]"]] = {
     "cache-seeds": check_cache_seeds,
     "db-drivers": check_db_drivers,
     "voice-packages": check_voice_packages,
+    "fast-recognition": check_fast_recognition,
     "builtin-speech": check_builtin_speech,
 }
 

@@ -443,7 +443,7 @@ export function Devices(p: ScreenProps) {
           className="set-row set-switch-row"
           id="devices-reachable-row"
           data-control="tailscale-mode"
-          title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it — your LAN still can't"
+          title="Listen on this device's Tailscale addresses too (with the access gate on), so your other computers and your phone can reach it. Where Tailscale's addresses can't be bound (userspace networking, WSL) it listens on every interface instead, and the line above says so"
         >
           <span className="set-label">Make reachable — from your other devices and phone, over Tailscale</span>
           {/* label wraps only the switch, so clicking the row text doesn't flip it */}
@@ -1241,10 +1241,9 @@ export function Devices(p: ScreenProps) {
       {/* 8. The older ways to trust a machine, folded. */}
       <DevicesAdvanced focusDevice={focusDevice} />
       {/* The person behind every device here — what pairing shares. Last:
-          you come to this screen to add a device, not to fill in a form. */}
-      <p className="set-hint" id="devices-you-intro">
-        You — the same on every device you pair.
-      </p>
+          you come to this screen to add a device, not to fill in a form. The
+          card's own "You" heading and line introduce it (a hint above it read
+          as part of the folded Advanced block). */}
       <PersonCard />
     </>
   );

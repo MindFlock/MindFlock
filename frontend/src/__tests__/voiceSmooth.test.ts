@@ -1341,7 +1341,7 @@ describe("a dialog is answered only by words begun after it was there (R8-bis)",
 
   it("wired: TopBarMic routes with the phrase's start and feeds the sightings from the rows", () => {
     const MIC = code("components/TopBarMic.tsx");
-    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt)");
+    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt, undefined, r === serverRec ? serverRec.takeHeard() : \"\")");
     expect(MIC).toContain("await routed(reply, text, session, spokeAt)");
     expect(MIC).toContain("spokeAt: () => (r === serverRec ? serverRec.spokeAt : 0)");
     expect(MIC).toContain("void d.flush(t, final, at)");
@@ -1349,7 +1349,7 @@ describe("a dialog is answered only by words begun after it was there (R8-bis)",
     expect(MIC).toContain("route: (t, s, at) => routePhrase(t, s, undefined, at)");
     expect(MIC).toContain('dialogSeen.rows(queryClient.getQueryData<Instance[]>(["instances"]) || [])');
     const VD = code("lib/voiceDesktop.ts");
-    expect(VD).toContain("hh.onFlush?.(wordsOf(r.j.committed), final || undefined, c.spokeAt || undefined)");
+    expect(VD).toContain("hh.onFlush?.(committed, final || undefined, c.spokeAt || undefined)");
     expect(VD).toContain("if (text) hh.onFinal(text, spokeAt || undefined)");
     expect(VD).toContain("if (d?.id) dialogSeen.note(title, d.id)");
   });
@@ -1359,7 +1359,8 @@ describe("each page opens its streams with its own client id", () => {
   it("random once per page load, sent with every POST /api/voice/stream", () => {
     expect(VOICE_CLIENT_ID).toMatch(/^d-[0-9a-z-]{8,}$/);
     expect(VOICE_CLIENT_ID.length).toBeLessThanOrEqual(64);
-    expect(code("lib/voiceDesktop.ts")).toContain("body: JSON.stringify({ lang: langTag(), client: VOICE_CLIENT_ID })");
+    // With the phrase's sentence context (voiceContext.test.ts): streamOpenBody's lang + client always.
+    expect(code("lib/voiceDesktop.ts")).toContain("body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx))");
   });
 });
 

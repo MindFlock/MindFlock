@@ -194,12 +194,23 @@ class TmuxSession:
         # It also runs in its own memory-limited systemd user scope, with the
         # gitnexus-analyze gate on PATH, where those apply
         # (backend.providers.agent_limits; unchanged elsewhere).
-        from backend.providers import agent_limits as _agent_limits
-        from backend.providers import launch_script as _launch_script
+        # Both, and the exit marker, come from the same wrapper a relaunch
+        # uses (backend.web.core.terminal._wrap_launch_cmd): `rm -f <marker>;
+        # …; echo $? > <marker>`. Without it a session's FIRST run recorded no
+        # exit code, so a CLI that isn't installed (127 at create) went
+        # unrecognised until a relaunch. Only the web server reads markers, so
+        # an install without it launches unwrapped.
+        try:
+            from backend.web.core.terminal import _wrap_launch_cmd
+        except ImportError:
+            from backend.providers import agent_limits as _agent_limits
+            from backend.providers import launch_script as _launch_script
 
-        launch = _launch_script.oom_score_prefix() + _agent_limits.wrap_launch(
-            launch, self.sanitized_name
-        )
+            launch = _launch_script.oom_score_prefix() + _agent_limits.wrap_launch(
+                launch, self.sanitized_name
+            )
+        else:
+            launch = _wrap_launch_cmd(launch, self.sanitized_name)
         c = cmd_pkg.command(
             "tmux",
             "new-session",
