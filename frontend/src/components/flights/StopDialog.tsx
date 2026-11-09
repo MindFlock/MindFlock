@@ -25,6 +25,7 @@ import { Modal } from "../Modal";
 import { StopIcon } from "./Bird";
 import { FlField, PromptBox, TextField, Toggle } from "./controls";
 import { StopForm, kindName } from "./StopParts";
+import { VerifyStopBehaviors } from "./VerifyStopFields";
 import "./StopDialog.css";
 
 /** A box's state in words, for the dialog's read-only line and its rows. */
@@ -53,6 +54,10 @@ export interface StopDialogProps {
   busy?: boolean;
   /** Why it can't change, and what the flight noted on it (read-only). */
   note?: string;
+  /** A Verify stop's checklist (its step detail's `plan`): its behaviors
+   * show inside the stop, each marked agent or you. Falls back to the
+   * behaviors the node wears (`node.behaviors.planId`). */
+  behaviorsPlanId?: string;
   /** More under the form (a Split's hint, its "+ Join"). */
   extra?: ReactNode;
   /** The line's steps in flight order: a `dynamic: "stops_before"` field
@@ -207,6 +212,7 @@ function StepDialog(p: StopDialogProps) {
         ) : (
           <p className="fl-note muted">This stop's details haven't loaded yet.</p>
         )}
+        {kind === "verify" && <VerifyStopBehaviors planId={p.behaviorsPlanId || n.behaviors?.planId || ""} />}
         {draft && (editable || p.onToggleHalt) && (
           <div className="stop-dialog-halt">
             <Toggle

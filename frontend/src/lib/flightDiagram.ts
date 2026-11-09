@@ -46,6 +46,7 @@
 
 import type { AutopilotRun, Instance } from "../api/types";
 import { verifyStopFace, type BehaviorTone } from "./behaviors";
+import { verifyFace } from "./verifyStop";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
@@ -277,10 +278,6 @@ const num = (v: unknown, d: number) => {
   return Number.isFinite(n) && v !== "" && v !== null && v !== undefined ? n : d;
 };
 
-/** Who checks a Verify stop's behaviors, in words (round 21: never the
- * internal `who: both`). */
-export const VERIFY_WHO: Readonly<Record<string, string>> = { both: "by the agent and you", agent: "by the agent", you: "by you" };
-
 /** A bare Wait for me stop's line while it is ahead or waiting. */
 export const YOU_WAITS = "waits for your Done";
 
@@ -307,7 +304,9 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
       return (lane === "leave" ? "off" : LANE_LABEL[lane].toLowerCase()) + (c.ask_first ? " · asks first" : "");
     }
     case "verify":
-      return (VERIFY_WHO[String(c.who || "both")] || VERIFY_WHO.both) + (c.wait_live ? " · once live" : "");
+      // "Verify on sandbox · agent, then you · 15 min after the stop before"
+      // (lib/verifyStop.ts; never the internal `who: both`).
+      return verifyFace(c);
     case "land":
       // Finish (backend flight_kinds/land.py): once merged, the tidy-up.
       return "once merged: " + (String(c.close || "delete") === "close" ? "closes" : "deletes") + " the session" + (c.delete_branch === false ? " · keeps the branch" : "");

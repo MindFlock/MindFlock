@@ -8011,6 +8011,130 @@ details.fl-group-waiting > summary {
   width: auto;
   padding-right: 22px;
 }
+
+/* --- The Verify stop's editor (VerifyStopFields.tsx) --------------------------- */
+
+/* ① written → ② checked on <where> → ③ yours park the route: three compact
+   lines over the fields, in the hint's ink. */
+.vf-explain {
+  list-style: none;
+  margin: 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  color: var(--fl-ink-muted, var(--muted));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.vf-explain li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.vf-explain-n {
+  flex: none;
+  color: var(--fl-ink-accent, var(--accent));
+}
+
+.vf-where-hint {
+  white-space: pre-line;
+}
+
+/* Who checks: three radio rows, each its label and what it means. */
+.vf-who {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vf-who-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.vf-who-opt .muted {
+  font-size: 12px;
+}
+
+.vf-who-opt:hover {
+  background: var(--panel-2);
+}
+
+.vf-who-opt.on {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.vf-who-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The stop's checklist inside its dialog: who checks each one. */
+.vf-behaviors {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.vf-behaviors ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.vf-behavior {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+  padding: 2px 0;
+}
+
+.vf-behavior-mark {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  color: var(--muted);
+}
+
+.vf-behavior-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.vf-behavior-who {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.vf-yours .vf-behavior-who {
+  color: var(--fl-ink-accent, var(--accent));
+  font-weight: 600;
+}
 /* A stop's dialog (StopDialog.tsx): the same card as #rename-form
    (smallDialogs.css), wider for a stop's fields. The fields keep the
    inspector's look (.fl-form, StopParts.css). */
@@ -39076,6 +39200,49 @@ button.linklike {
 .fl-source-reach .fl-reach-summary {
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/* Verify repo card: the live fields are the implicit "live" environment, and
+   the Environments list under them (RepoEnvironments.tsx) — one bordered
+   group per environment, in the card's own field look. */
+.vf-live-env,
+.vf-env {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.vf-live-env > legend {
+  padding: 0 4px;
+}
+.vf-envs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.vf-envs-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vf-env textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.vf-env [aria-invalid="true"] {
+  border-color: var(--red, #e8795a);
+}
+.vf-env-error {
+  color: var(--red, #e8795a);
+}
+.vf-env-acts {
+  display: flex;
+  justify-content: flex-end;
 }
 }
 

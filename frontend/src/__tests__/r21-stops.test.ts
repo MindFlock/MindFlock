@@ -137,7 +137,7 @@ describe("a Wait for me stop keeps its name too", () => {
   });
 
   it("subtitles never echo the title or say an internal id", () => {
-    expect(tileOf(html, "stop:s3")).toContain('class="sky-node-sub">by the agent and you</div>');
+    expect(tileOf(html, "stop:s3")).toContain('class="sky-node-sub">Verify on this branch · agent, then you · right away</div>');
     expect(tileOf(html, "stop:s4")).not.toContain("sky-node-sub");
   });
 });
@@ -171,9 +171,10 @@ describe("Let the agent fix it — wherever the server's fix op takes it", () =>
 
 describe("a stop's subtitle in the vocabulary's words", () => {
   it("Verify says who checks in words, never `who: both`", () => {
-    expect(stopSummary(st("a", "verify", "Verify"))).toBe("by the agent and you");
-    expect(stopSummary(st("a", "verify", "Verify", { who: "you" }))).toBe("by you");
-    expect(stopSummary(st("a", "verify", "Verify", { who: "agent", wait_live: true }))).toBe("by the agent · once live");
+    expect(stopSummary(st("a", "verify", "Verify"))).toBe("Verify on this branch · agent, then you · right away");
+    expect(stopSummary(st("a", "verify", "Verify", { who: "you" }))).toBe("Verify on this branch · you · right away");
+    // A legacy `wait_live` reads as where "live", ready "on_branch".
+    expect(stopSummary(st("a", "verify", "Verify", { who: "agent", wait_live: true }))).toBe("Verify on live · agent only · once on live");
   });
 
   it("Finish (`land`) says what it does once merged, never `land`", () => {

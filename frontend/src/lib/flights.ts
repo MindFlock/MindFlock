@@ -157,7 +157,9 @@ export interface FlightHistoryEntry {
   step: string;
   event:
     | "started" | "done" | "failed" | "skipped" | "you" | "halted" | "paused" | "resumed" | "jumped"
-    | "added" | "edited" | "removed" | "moved" | "halted_at" | "attached" | "looped" | "took_off";
+    | "added" | "edited" | "removed" | "moved" | "halted_at" | "attached" | "looped" | "took_off"
+    /** Informational, its words in `note` ("posted the results to PR #12"). */
+    | "noted";
   note: string;
   /** Round 19: on `took_off` — what took a ready chain off. */
   by?: "run" | "prompt";
@@ -240,6 +242,9 @@ export interface StepKindField {
   /** select only. The contract leaves the item shape open: a plain value, or
    * a value with its own label — `fieldOptions` reads both. */
   options?: Array<string | { value: string; label?: string }>;
+  /** select only: the server's words for each value (value → label); a
+   * label here wins over `options`' own. */
+  option_labels?: Record<string, string>;
   default?: unknown;
   placeholder?: string;
   /** Round 16: a select whose options the UI fills from the line —
@@ -509,9 +514,18 @@ export function builtinPlanFor(kind: WaitingKind | TriggerKind, plans?: readonly
 
 /** A select field's options as value/label pairs. */
 export function fieldOptions(f: StepKindField): Array<{ value: string; label: string }> {
-  return (f.options || []).map((o) =>
-    typeof o === "string" ? { value: o, label: o } : { value: String(o.value), label: String(o.label || o.value) }
-  );
+  return (f.options || []).map((o) => {
+    const value = typeof o === "string" ? o : String(o.value);
+    const own = typeof o === "string" ? o : String(o.label || o.value);
+    return { value, label: optionLabel(f, value, own) };
+  });
+}
+
+/** A select value's label: the server's `option_labels` when it names it,
+ * else `fallback`. */
+export function optionLabel(f: Pick<StepKindField, "option_labels"> | undefined, value: string, fallback: string): string {
+  const l = f?.option_labels?.[value];
+  return typeof l === "string" && l.trim() ? l : fallback;
 }
 
 /** One choice of a `dynamic: "stops_before"` select: a stop's id and title,

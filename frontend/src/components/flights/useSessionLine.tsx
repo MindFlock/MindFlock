@@ -297,9 +297,17 @@ export function stopLog(n: DiagramNode, flight: Flight | null, rec: StepRunState
       {hist.length > 0 && (
         <ol className="stop-dialog-hist">
           {hist.slice(-12).map((h, i) => (
-            <li key={i}>
-              <span className="muted">{when(h.at)}</span> <b>{h.event}</b>
-              {h.note ? " — " + h.note : ""}
+            <li key={i} data-event={h.event}>
+              <span className="muted">{when(h.at)}</span>{" "}
+              {h.event === "noted" ? (
+                // Informational ("posted the results to PR #12"): its words only.
+                h.note
+              ) : (
+                <>
+                  <b>{h.event}</b>
+                  {h.note ? " — " + h.note : ""}
+                </>
+              )}
             </li>
           ))}
         </ol>
@@ -799,6 +807,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         node={open}
         def={def}
         lineSteps={flight?.steps}
+        behaviorsPlanId={open.step?.kind === "verify" ? String(rec?.detail?.plan || "") : undefined}
         loopAgent
         busy={busy}
         note={[why, clears, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
