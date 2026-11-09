@@ -10505,6 +10505,32 @@ async def ticket_fleet_holder(
     )
 
 
+@app.get("/api/epics")
+async def list_epics(refresh: str = "") -> JSONResponse:
+    """Epics a ticket source ingests (docs/epics.md): the person's own epics
+    in the source's ``epic_states``, each with the count of their own open
+    stories and whether a lead session already works it."""
+    from backend.web.core import epic_start as _epics
+
+    return JSONResponse(await _epics.list_epics(force=bool(refresh)))
+
+
+@app.post("/api/epics/start")
+async def start_epic(payload: dict) -> JSONResponse:
+    """``{"source", "id"}`` → start the epic's LEAD session (docs/epics.md):
+    202 ``{started, title, stories}``; 404/409/400 with ``error``."""
+    from backend.web.core import epic_start as _epics
+
+    body = payload or {}
+    try:
+        out = await _epics.launch(
+            str(body.get("source") or ""), str(body.get("id") or "")
+        )
+    except _epics.EpicError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(out, status_code=202)
+
+
 @app.post("/api/tickets/start")
 async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
     """Force-start a coding session for one ticket, bypassing auto filters.

@@ -112442,6 +112442,123 @@ function filterSummary(opts) {
 	};
 }
 //#endregion
+//#region src/components/intake/EpicsSection.tsx
+function epicMeta(e) {
+	const bits = [e.state];
+	if (e.mine_open == null) bits.push(e.stories_total + " stories");
+	else bits.push(e.mine_open + " of yours to do" + (e.stories_total ? " (of " + e.stories_total + ")" : ""));
+	if (e.auto) bits.push("starts by itself");
+	return bits.filter(Boolean).join(" · ");
+}
+function EpicsSection() {
+	const [rows, setRows] = (0, import_react.useState)(null);
+	const [errors, setErrors] = (0, import_react.useState)([]);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const load = (0, import_react.useCallback)(async (refresh = false) => {
+		try {
+			const r = await api("/api/epics" + (refresh ? "?refresh=1" : ""));
+			setRows(Array.isArray(r.epics) ? r.epics : []);
+			setErrors(Array.isArray(r.errors) ? r.errors : []);
+		} catch {
+			setRows([]);
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+		const t = setInterval(() => {
+			if (!document.hidden) load();
+		}, 6e4);
+		return () => clearInterval(t);
+	}, [load]);
+	if (!rows || !rows.length && !errors.length) return null;
+	const start = async (e) => {
+		setBusy(e.title);
+		try {
+			const r = await api("/api/epics/start", { json: {
+				source: e.source,
+				id: e.id
+			} });
+			toast("Started " + (r.title || e.title) + " — its lead will run " + (r.stories ?? "your") + " stor" + (r.stories === 1 ? "y" : "ies"));
+			load(true);
+		} catch (err) {
+			errorPop("Couldn't start the epic", err instanceof ApiError ? err.message : String(err));
+		} finally {
+			setBusy("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "ik-epics",
+		"aria-label": "Epics",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-epics-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "Epics" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "one lead agent per epic · a worker and a PR per story"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ik-epics-refresh",
+						title: "Ask Shortcut again",
+						onClick: () => void load(true),
+						children: "↻"
+					})
+				]
+			}),
+			errors.map((x) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "ik-epics-error",
+				children: [
+					x.source,
+					": ",
+					x.error
+				]
+			}, x.source)),
+			!rows.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "muted ik-epics-empty",
+				children: "No epics of yours in those states."
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "ik-epics-list",
+				children: rows.map((e) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "ik-epic",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ik-epic-main",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("a", {
+								className: "ik-epic-name",
+								href: e.url,
+								target: "_blank",
+								rel: "noreferrer",
+								children: e.name
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "ik-epic-meta muted",
+								children: epicMeta(e)
+							}),
+							!e.eligible && !e.has_session && e.reasons.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "ik-epic-why muted",
+								children: e.reasons.join(" · ")
+							})
+						]
+					}), e.has_session ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						onClick: () => void selectSession(e.title),
+						title: "Go to the epic's lead session",
+						children: "Open lead"
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary",
+						disabled: !e.eligible || busy === e.title,
+						onClick: () => void start(e),
+						children: busy === e.title ? "Starting…" : "Start"
+					})]
+				}, e.source + ":" + e.id))
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/intake/addDraft.ts
 function backStep(step) {
 	return step === 3 ? 2 : 1;
@@ -115054,6 +115171,7 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 			kind: "tickets",
 			gotoTab
 		}),
+		stored.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(EpicsSection, {}),
 		stored.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssignedTickets, {
 			sources: stored,
 			catalog,
@@ -115796,7 +115914,30 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 		onDirty("label", false);
 		if (v !== (source.label || "")) onChange({ label: v });
 	}, () => onDirty("label", true));
-	const renderField = (f) => f.type === "state" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatePicker, {
+	const [epicStates, setEpicStates] = (0, import_react.useState)([]);
+	const loadEpicStates = async () => {
+		try {
+			const r = await api("/api/settings/ticketing/epic-states", { json: testPayload() });
+			if (r?.ok && Array.isArray(r.states) && r.states.length) setEpicStates(r.states);
+		} catch {}
+	};
+	const hasEpicFields = !!meta?.fields?.some((f) => f.type === "epic_state" || f.type === "epic_state_one");
+	(0, import_react.useEffect)(() => {
+		if (hasEpicFields && stored?.ok && !epicStates.length) loadEpicStates();
+	}, [source.id, hasEpicFields]);
+	const renderField = (f) => f.type === "epic_state" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatePicker, {
+		field: f,
+		source,
+		states: epicStates,
+		loadStates: loadEpicStates,
+		onChange
+	}, f.key) : f.type === "epic_state_one" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StartStatePicker, {
+		field: f,
+		source,
+		states: epicStates,
+		loadStates: loadEpicStates,
+		onChange
+	}, f.key) : f.type === "state" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StatePicker, {
 		field: f,
 		source,
 		states,

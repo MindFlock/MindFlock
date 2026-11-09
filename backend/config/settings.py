@@ -316,6 +316,17 @@ class TicketingSource:
     # field existed keeps — nobody's working setup changes under them. See
     # backend.ticket_ingestion.providers.base.auto_start_waiting.
     needs_filter: str = ""
+    # EPICS (docs/epics.md): the epic-workflow state ids (comma-separated)
+    # whose epics this source ingests — each one, if it is the person's own,
+    # becomes ONE lead session that works the person's stories in it (in
+    # parallel where independent, stacked where one blocks another). Blank =
+    # no epics. ``epic_auto`` "on" starts them by themselves (like tickets in
+    # ``workflow_state``); blank lists them in Intake to start by hand.
+    # ``epic_start_state``: the epic state an epic moves to when its lead
+    # starts (blank = leave it).
+    epic_states: str = ""
+    epic_auto: str = ""
+    epic_start_state: str = ""
     # The last connection test the Intake card (or its auto-test after a save)
     # ran against THIS configuration: ``{ok, at, message, member_id?, states?,
     # workspaces?}``. Written only by the test route; the sources PUT carries
@@ -347,6 +358,9 @@ class TicketingSource:
             "start_comment",
             "claim_label",
             "needs_filter",
+            "epic_states",
+            "epic_auto",
+            "epic_start_state",
         ):
             v = getattr(self, k)
             if v:
@@ -394,6 +408,13 @@ class TicketingSource:
             start_comment=_on_or_blank(d.get("start_comment")),
             claim_label=str(d.get("claim_label", "") or "").strip(),
             needs_filter=_on_or_blank(d.get("needs_filter")),
+            epic_states=",".join(
+                x.strip()
+                for x in str(d.get("epic_states", "") or "").split(",")
+                if x.strip()
+            ),
+            epic_auto=_on_or_blank(d.get("epic_auto")),
+            epic_start_state=str(d.get("epic_start_state", "") or "").strip(),
             last_test=(
                 dict(d["last_test"]) if isinstance(d.get("last_test"), dict) else {}
             ),

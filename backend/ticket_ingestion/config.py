@@ -217,6 +217,12 @@ class TicketProviderConfig:
     #: Intake creates set it; older ones keep "empty filter = every state").
     #: See :func:`~backend.ticket_ingestion.providers.base.auto_start_waiting`.
     needs_filter: bool = False
+    #: Epics (docs/epics.md; settings.TicketingSource): the epic-workflow
+    #: state ids ingested, auto-start, and the state an epic moves to when
+    #: its lead starts.
+    epic_states: str = ""
+    epic_auto: bool = False
+    epic_start_state: str = ""
     poll_interval_seconds: int = 20
     # Per-source discriminator so you can connect several sources — including
     # multiple of the SAME provider (e.g. two Jira sites) — without their
@@ -1146,6 +1152,13 @@ def _parse_source(
         start_comment=flag_on(src.get("start_comment")),
         claim_label=str(src.get("claim_label", "") or "").strip(),
         needs_filter=flag_on(src.get("needs_filter")),
+        epic_states=",".join(
+            x.strip()
+            for x in str(src.get("epic_states", "") or "").split(",")
+            if x.strip()
+        ),
+        epic_auto=flag_on(src.get("epic_auto")),
+        epic_start_state=str(src.get("epic_start_state", "") or "").strip(),
         poll_interval_seconds=int(poll),
         id=str(src.get("id", "") or ""),
         label=str(src.get("label", "") or ""),
