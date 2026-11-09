@@ -37,6 +37,15 @@ UiActions go back to the client as ``act``; ServerActions run here
 ``help``. Events, in order, as soon as each line completes: ``act``, ``did``,
 ``say``, ``ask``, ``confirm``, ``error``, then always ``done {ms, model}``.
 
+Help is answered by the warm process too, never by a cold one-shot: a
+phrase that is plainly a question about MindFlock (:func:`docs_question`)
+carries ``voice_help.passages``' excerpts in its turn, so ONE model turn
+SAYs the answer; an ``ACT help`` the model asks for anyway is held to the
+end of its turn, then the excerpts go back as a follow-up turn in the SAME
+process (:meth:`Brain.ask`'s ``follow``, :func:`build_help_message`) and
+that reply is the ``say``. A one-shot CLI, a failed turn or no excerpts →
+``ctx.help`` (``voice_help.answer``).
+
 Talk policy (``voice.assistant_talk``): the system prompt tells the model
 how much to say, and :func:`_echo` drops a SAY that merely narrates an
 action taken this turn ("Opening intake.") unless the level is chatty.
@@ -59,6 +68,7 @@ import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from backend.web.core import voice_assistant_catalog as _catalog
+from backend.web.core import voice_help as _help
 from backend.web.core import voice_router as _router
 
 __all__ = [
@@ -66,8 +76,10 @@ __all__ = [
     "Context",
     "LineParser",
     "BRAIN",
+    "build_help_message",
     "build_system_prompt",
     "build_turn_message",
+    "docs_question",
     "instant",
     "parse_line",
     "spawn_process",
@@ -194,7 +206,7 @@ Rules:
 - Replies are heard, not read: plain words, at most two short sentences, no lists, paths or symbols.
 - If the request is ambiguous (two sessions or projects could fit, the project or task is missing), ASK one short question instead of guessing.
 - Destructive actions ALWAYS go through CONFIRM: session_action delete, close or merge; a click on Delete, Remove, Merge, Discard or Reset.
-- Questions about how MindFlock works: ACT help. Questions about what sessions are doing or what needs the person: ACT status (with "session" for one session) unless the state already answers it in a few words.
+- Questions about how MindFlock works: when the turn carries <docs> excerpts that answer it, SAY the answer from them; otherwise ACT help. Never answer them from memory. Questions about what sessions are doing or what needs the person: ACT status (with "session" for one session) unless the state already answers it in a few words.
 - To tell a session to do something: ACT send. To start new work: ACT new_session with a known project.
 - To change a setting: ACT setting with its path; prefer it to opening Settings. Browser-only preferences in the state: ACT pref.
 - "this session" / "it" means the focused session in the state.
@@ -311,8 +323,11 @@ def build_turn_message(
     repos: List[dict],
     settings_changed: Dict[str, Any],
     now: Optional[float] = None,
+    docs: Optional[List[dict]] = None,
 ) -> str:
-    """One user turn: the compact state block, then what was said."""
+    """One user turn: the compact state block, the docs excerpts when the
+    phrase is plainly a question about MindFlock (:func:`docs_question`;
+    ``docs`` as ``voice_help.passages`` gives them), then what was said."""
     now = time.time() if now is None else now
     snap = snapshot if isinstance(snapshot, dict) else {}
     lines = ["<state>"]
@@ -380,8 +395,42 @@ def build_turn_message(
             )
         )
     lines.append("</state>")
+    if docs:
+        lines.append("<docs>")
+        lines.append(_help.format_excerpts(docs))
+        lines.append("</docs>")
     lines.append("The person said: " + str(text).strip())
     return "\n".join(lines)
+
+
+def build_help_message(questions: List[str], docs: List[dict]) -> str:
+    """The follow-up turn that answers an ``ACT help`` in the same warm
+    process: the docs excerpts for the question(s), and how to answer."""
+    asked = " / ".join(str(q).strip() for q in questions if str(q).strip())
+    return (
+        "<docs>\n%s\n</docs>\n"
+        "Answer the person's question (%s) from these MindFlock docs excerpts "
+        "with one SAY line: at most two short spoken sentences, plain words, no "
+        "paths, code or symbols; say where to click or what to say when the "
+        "excerpts tell you. If they don't cover it, SAY that the MindFlock docs "
+        "don't say. No ACT this time." % (_help.format_excerpts(docs), asked)
+    )
+
+
+def docs_question(text: str) -> bool:
+    """Whether ``text`` is plainly a question about MindFlock itself, so its
+    turn carries the docs' best excerpts up front and ONE model turn answers
+    it: the voice router calls it ``help``, or it is question-shaped ("what
+    is a flyway"), no other voice command, and says nothing of the agent's
+    work, the sessions' state or "you" (the router's own help rules)."""
+    try:
+        cmd = _router.command(text)
+        if cmd is not None:
+            return cmd.get("kind") == "help"
+        t = _router.norm(text)
+        return bool(_router._HELP_Q_RE.match(t)) and not _router._HELP_NOT.search(t)
+    except Exception:  # noqa: BLE001 — unsure: the model asks for help itself
+        return False
 
 
 # --- the output protocol --------------------------------------------------------
@@ -932,6 +981,23 @@ class Context:
         return self._repos_got
 
 
+async def _excerpts(questions: List[str]) -> List[dict]:
+    """``voice_help.passages`` for each question, duplicates dropped."""
+    out: List[dict] = []
+    seen = set()
+    for q in questions:
+        try:
+            got = await asyncio.to_thread(_help.passages, q)
+        except Exception:  # noqa: BLE001 — no excerpts: the cold path answers
+            got = []
+        for it in got:
+            k = (it.get("doc"), it.get("text"))
+            if k not in seen:
+                seen.add(k)
+                out.append(it)
+    return out
+
+
 async def _default_help(question: str) -> dict:
     from backend.web.core import voice_help as _voice_help
 
@@ -1386,18 +1452,24 @@ class Brain:
         build: Callable[[Dict[str, Any]], str],
         conversation: str,
         out: "queue.Queue",
+        follow: "Optional[queue.Queue]" = None,
     ) -> None:
         """Ask the model one turn; put each complete output line on ``out``
         as it completes, an ``("error", text)`` on failure, then ``None``.
-        ``build(settings_changed)`` → the user message."""
+        ``build(settings_changed)`` → the user message.
+
+        With ``follow`` (the warm process only), each finished model turn
+        puts ``("turn_end", "")`` on ``out`` and waits for ``follow``: a
+        message is sent as a follow-up turn in the SAME process, under the
+        same lock (the ``help`` action's docs excerpts), None ends."""
         try:
-            self._ask(build, conversation, out)
+            self._ask(build, conversation, out, follow)
         except Exception as err:  # noqa: BLE001
             out.put(("error", "The assistant isn't available: %s" % _clip(err, 100)))
         finally:
             out.put(None)
 
-    def _ask(self, build, conversation: str, out: "queue.Queue") -> None:
+    def _ask(self, build, conversation: str, out: "queue.Queue", follow=None) -> None:
         prov, sig = self._plan()
         if prov is None:
             out.put(("error", "No agent CLI is set up to answer."))
@@ -1432,6 +1504,22 @@ class Brain:
             proc.turns += 1
             proc.conversation = conversation
             ok = self._read_turn(proc, out)
+            while ok and follow is not None:
+                out.put(("turn_end", ""))
+                try:
+                    nxt = follow.get(timeout=TURN_TIMEOUT_S)
+                except queue.Empty:
+                    nxt = None
+                if not nxt:
+                    break
+                try:
+                    proc.write(nxt)
+                except Exception:  # noqa: BLE001 — died mid-turn
+                    out.put(("error", "The assistant stopped unexpectedly."))
+                    ok = False
+                    break
+                proc.turns += 1
+                ok = self._read_turn(proc, out)
             proc.last_used = time.monotonic()
             if not ok:
                 proc.kill()
@@ -1536,12 +1624,12 @@ async def _confirmed(
 
 
 async def _model_lines(
-    brain: Brain, build, conversation: str
+    brain: Brain, build, conversation: str, follow: "queue.Queue"
 ) -> AsyncIterator[Tuple[str, str]]:
     out: "queue.Queue" = queue.Queue()
     worker = threading.Thread(
         target=brain.ask,
-        args=(build, conversation, out),
+        args=(build, conversation, out, follow),
         name="voice-assistant-turn",
         daemon=True,
     )
@@ -1595,56 +1683,99 @@ async def turn(
     except Exception:  # noqa: BLE001 — the names are a hint
         repos = []
     talk = talk_level()
+    # A plain question about MindFlock carries the docs' excerpts up front, so
+    # the model answers it in this one turn instead of asking for ``help``.
+    upfront = await _excerpts([text]) if docs_question(text) else []
 
     def build(changed: Dict[str, Any]) -> str:
-        return build_turn_message(text, snapshot, rows, repos, changed)
+        return build_turn_message(
+            text, snapshot, rows, repos, changed, docs=upfront or None
+        )
 
+    # ``ACT help`` is answered after the model's turn, in the same warm
+    # process (Brain.ask's ``follow``): the docs excerpts go back as a
+    # follow-up turn and its reply is the answer. Without a warm process (a
+    # one-shot CLI, a failed turn) ``ctx.help`` (voice_help.answer) does.
+    follow: "queue.Queue" = queue.Queue()
+    helps: List[str] = []
+    excerpts: List[dict] = []
+    followed = False
+    answered = False
+    tail: List[str] = []  # the follow-up turn's prose
     acted = False
     emitted = False
     prose: List[str] = []
-    async for kind, value in _model_lines(brain, build, conversation):
-        if kind == "error":
-            emitted = True
-            yield {"type": "error", "text": value}
-            continue
-        item = parse_line(value)
-        if item is None:
-            continue
-        k = item["kind"]
-        if k == "prose":
-            prose.append(item["text"])
-            continue
-        if k == "bad":
-            emitted = True
-            yield {"type": "error", "text": "Sorry, I couldn't work out what to do."}
-            continue
-        if k in ("say", "ask"):
-            said = _spoken(item["text"])
-            if not said:
+    try:
+        async for kind, value in _model_lines(brain, build, conversation, follow):
+            if kind == "turn_end":
+                msg = None
+                if helps and not followed:
+                    excerpts = await _excerpts(helps)
+                    if excerpts:
+                        msg = build_help_message(helps, excerpts)
+                        followed = True
+                follow.put(msg)
                 continue
-            if k == "say" and acted and talk != "chatty" and _echo(said):
-                continue  # no spoken echo of what was just done
+            if kind == "error":
+                emitted = True
+                yield {"type": "error", "text": value}
+                continue
+            item = parse_line(value)
+            if item is None:
+                continue
+            k = item["kind"]
+            if k == "prose":
+                (tail if followed else prose).append(item["text"])
+                continue
+            if k == "bad":
+                emitted = True
+                yield {
+                    "type": "error",
+                    "text": "Sorry, I couldn't work out what to do.",
+                }
+                continue
+            if k in ("say", "ask"):
+                said = _spoken(item["text"])
+                if not said:
+                    continue
+                if k == "say" and acted and talk != "chatty" and _echo(said):
+                    continue  # no spoken echo of what was just done
+                emitted = True
+                answered = answered or followed
+                yield {"type": k, "text": said}
+                continue
+            action, problem, destructive = validate(item["action"], snapshot, rows)
             emitted = True
-            yield {"type": k, "text": said}
-            continue
-        action, problem, destructive = validate(item["action"], snapshot, rows)
-        emitted = True
-        if problem is not None:
-            yield problem
-            continue
-        if k == "confirm" or destructive:
-            cid = _hold(action, conversation)
-            question = _spoken(item.get("text") or "") if k == "confirm" else ""
-            yield {
-                "type": "confirm",
-                "id": cid,
-                "text": question or _confirm_text(action),
-                "action": action,
-            }
-            continue
-        acted = True
-        async for ev in _execute(action, ctx, conversation):
-            yield ev
+            if problem is not None:
+                yield problem
+                continue
+            if k == "act" and action["do"] == "help":
+                if not followed:  # the follow-up turn never asks again
+                    helps.append(action["question"])
+                continue
+            if k == "confirm" or destructive:
+                cid = _hold(action, conversation)
+                question = _spoken(item.get("text") or "") if k == "confirm" else ""
+                yield {
+                    "type": "confirm",
+                    "id": cid,
+                    "text": question or _confirm_text(action),
+                    "action": action,
+                }
+                continue
+            acted = True
+            async for ev in _execute(action, ctx, conversation):
+                yield ev
+    finally:
+        follow.put(None)  # never leave the worker waiting for a follow-up
+    if followed:
+        if not answered:
+            said = _spoken(" ".join(tail)) or _spoken(_help.fallback_say(excerpts[0]))
+            yield {"type": "say", "text": said}
+    else:
+        for q in helps:
+            async for ev in _execute({"do": "help", "question": q}, ctx, conversation):
+                yield ev
     if not emitted:
         said = _spoken(" ".join(prose))
         if said:

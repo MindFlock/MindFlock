@@ -135,7 +135,7 @@ class ScriptBrain(va.Brain):
         super().__init__()
         self.lines, self.errors, self.messages = list(lines), list(errors), []
 
-    def ask(self, build, conversation, out):
+    def ask(self, build, conversation, out, follow=None):
         self.messages.append(build({}))
         for e in self.errors:
             out.put(("error", e))
@@ -1360,3 +1360,133 @@ def test_route_send_goes_through_the_voice_send_path(client, monkeypatch):
     assert calls == [("parser", {"text": "go on", "voice": True, "say": True})]
     assert events[0]["type"] == "did" and events[0]["ok"] is False
     assert "paused" in events[0]["text"]
+
+
+# --- help: answered in the warm process ------------------------------------------
+EXCERPTS = [
+    {
+        "doc": "web-ui.md",
+        "heading": "Zones, keep out red",
+        "path": "Zones: keep out (red)",
+        "text": "A red zone is a path the agent can read but not change.",
+    }
+]
+HELP_ACT = 'ACT {"do":"help","question":"how do red zones work"}'
+
+
+@pytest.fixture
+def excerpts(monkeypatch):
+    asked = []
+
+    def passages(q):
+        asked.append(q)
+        return list(EXCERPTS)
+
+    monkeypatch.setattr(va._help, "passages", passages)
+    return asked
+
+
+@pytest.mark.parametrize(
+    "text, want",
+    [
+        ("how do red zones work", True),
+        ("what is a flyway", True),
+        ("how do I add a ticket source", True),
+        ("what needs me", False),
+        ("open intake", False),
+        ("what is my sitecheck session doing", False),
+        ("turn on the bell", False),
+        ("what can you do", False),
+    ],
+)
+def test_docs_question(text, want):
+    assert va.docs_question(text) is want
+
+
+def test_turn_message_carries_docs_before_the_phrase():
+    msg = va.build_turn_message(
+        "how do red zones work", SNAP, ROWS, REPOS, {}, docs=EXCERPTS
+    )
+    assert msg.index("</state>") < msg.index("<docs>") < msg.index("The person said")
+    assert "[1] web-ui.md — Zones: keep out (red)\nA red zone is a path" in msg
+    assert "<docs>" not in va.build_turn_message("x", SNAP, ROWS, REPOS, {})
+
+
+def test_help_is_a_follow_up_turn_in_the_warm_process(proc_env, excerpts, monkeypatch):
+    brain, state = proc_env
+    monkeypatch.setattr(va, "docs_question", lambda t: False)
+    state["reply"] = lambda t: (
+        ["SAY A red zone is read-only for the agent."] if "<docs>" in t else [HELP_ACT]
+    )
+    fake = Fake()
+    events = pturn(brain, "how do red zones work", fake=fake)
+    assert events[:-1] == [
+        {"type": "say", "text": "A red zone is read-only for the agent."}
+    ]
+    assert fake.asked == []  # never the cold one-shot
+    assert excerpts == ["how do red zones work"]
+    p = FakePopen.spawned
+    assert len(p) == 1 and len(p[0].received) == 2
+    assert "<docs>" not in p[0].received[0]
+    assert "A red zone is a path the agent can read" in p[0].received[1]
+    assert "(how do red zones work)" in p[0].received[1]
+    assert brain._proc.turns == 2
+    # The next turn still finds the process idle and answering.
+    state["reply"] = lambda t: ['ACT {"do":"close"}']
+    assert kinds(pturn(brain, "close it")) == ["act", "done"]
+
+
+def test_a_docs_question_carries_the_excerpts_up_front(proc_env, excerpts):
+    brain, state = proc_env
+    state["reply"] = lambda t: ["SAY Agents can read a red zone but not change it."]
+    fake = Fake()
+    events = pturn(brain, "how do red zones work", fake=fake)
+    assert kinds(events) == ["say", "done"]
+    received = FakePopen.spawned[0].received
+    assert len(received) == 1 and "<docs>" in received[0]
+    assert fake.asked == []
+
+
+def test_follow_up_prose_is_said_and_silence_reads_the_excerpt(
+    proc_env, excerpts, monkeypatch
+):
+    brain, state = proc_env
+    monkeypatch.setattr(va, "docs_question", lambda t: False)
+    state["reply"] = lambda t: (
+        ["Red zones are keep-out paths."] if "<docs>" in t else [HELP_ACT]
+    )
+    events = pturn(brain, "how do red zones work")
+    assert events[0] == {"type": "say", "text": "Red zones are keep-out paths."}
+    # The follow-up asks for help again: not followed twice; the excerpt is read.
+    state["reply"] = lambda t: [HELP_ACT]
+    events = pturn(brain, "how do red zones work", "c2")
+    assert events[0] == {
+        "type": "say",
+        "text": "From Zones, keep out red: A red zone is a path the agent can "
+        "read but not change.",
+    }
+    assert len(FakePopen.spawned[-1].received) == 2
+
+
+def test_help_with_no_excerpts_falls_back_to_voice_help(proc_env, monkeypatch):
+    brain, state = proc_env
+    monkeypatch.setattr(va._help, "passages", lambda q: [])
+    state["reply"] = lambda t: [HELP_ACT]
+    fake = Fake()
+    events = pturn(brain, "how do red zones work", fake=fake)
+    assert fake.asked == ["how do red zones work"]
+    assert events[0]["text"] == "From Zones: a red zone is a keep-out path."
+    assert len(FakePopen.spawned[0].received) == 1
+
+
+def test_oneshot_help_falls_back_to_voice_help(monkeypatch, excerpts):
+    monkeypatch.setattr(va, "assistant_program", lambda: "oneshot-cli")
+    monkeypatch.setattr(providers, "resolve", lambda name: _OneShotOnly())
+    monkeypatch.setattr(va, "docs_question", lambda t: False)
+    monkeypatch.setattr(va, "run_oneshot", lambda argv: HELP_ACT + "\n")
+    fake = Fake()
+    events = pturn(va.Brain(), "how do red zones work", fake=fake)
+    assert fake.asked == ["how do red zones work"]
+    assert events[:-1] == [
+        {"type": "say", "text": "From Zones: a red zone is a keep-out path."}
+    ]

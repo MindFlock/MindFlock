@@ -21,6 +21,10 @@ here:
    pytest run, where the model is never asked — and the best passage's first
    sentences are said instead, markdown stripped (``core.spoken``).
 
+The voice assistant (:mod:`core.voice_assistant`) uses step 1 alone —
+:func:`passages`, the same excerpts as ``{doc, heading, path, text}`` — and
+words the answer in its own warm model process instead of step 2's cold one.
+
 Every answer names the section it came from: "From Goes as far as: …".
 """
 
@@ -37,7 +41,14 @@ from typing import Dict, List, Optional, Tuple
 
 from backend.web.core import spoken as _spoken
 
-__all__ = ["answer", "docs_dir", "search"]
+__all__ = [
+    "answer",
+    "docs_dir",
+    "fallback_say",
+    "format_excerpts",
+    "passages",
+    "search",
+]
 
 #: The model that words an answer: small and quick — the passages carry the facts.
 HELP_MODEL = "claude-haiku-5-5"
@@ -395,16 +406,61 @@ class HelpModelError(RuntimeError):
     """The model could not word an answer (missing, failed, timed out)."""
 
 
-def build_prompt(question: str, passages: List[Passage]) -> str:
-    """The one-shot prompt: the rules, the question, the passages."""
-    parts = []
+def _budget(hits: List[Passage]) -> List[Tuple[Passage, str]]:
+    """``hits`` cut to :data:`CONTEXT_MAX` characters together, best first:
+    ``(passage, the part of its text that fits)``."""
+    out: List[Tuple[Passage, str]] = []
     left = CONTEXT_MAX
-    for i, p in enumerate(passages, 1):
+    for p in hits:
         body = p.text[:left]
         left -= len(body)
-        parts.append("[%d] %s — %s\n%s" % (i, p.doc, " › ".join(p.headings), body))
+        out.append((p, body))
         if left <= 0:
             break
+    return out
+
+
+def format_excerpts(items: List[dict]) -> str:
+    """Excerpts as a model reads them: ``[n] doc — heading › path`` then the
+    text, one blank line apart (``items`` as :func:`passages` gives them)."""
+    return "\n\n".join(
+        "[%d] %s — %s\n%s" % (i, it["doc"], it["path"], it["text"])
+        for i, it in enumerate(items, 1)
+    )
+
+
+def _item(p: Passage, body: str) -> dict:
+    return {
+        "doc": p.doc,
+        "heading": speakable_heading(p.heading),
+        "path": " › ".join(p.headings),
+        "text": body,
+    }
+
+
+def passages(question: str) -> List[dict]:
+    """The retrieval half of :func:`answer` on its own: the excerpts its
+    model call would read (the best :data:`TOP_PASSAGES` passages, best
+    first, :data:`CONTEXT_MAX` characters together) as ``{doc, heading,
+    path, text}`` — ``heading`` as said, ``path`` the heading path. [] when
+    nothing matches or there are no docs. Cheap: no model."""
+    q = " ".join(str(question or "").split())
+    if docs_dir() is None:
+        return []
+    return [_item(p, body) for p, body in _budget([p for _, p in search(q)])]
+
+
+def fallback_say(item: dict) -> str:
+    """What is said for an excerpt without a model: "From <heading>: " and
+    its first sentences (:func:`answer`'s own fallback)."""
+    said = _sentences(_plain(item.get("text") or ""))
+    h = str(item.get("heading") or "")
+    return ("From %s: %s" % (h, said)) if h else said
+
+
+def build_prompt(question: str, passages: List[Passage]) -> str:
+    """The one-shot prompt: the rules, the question, the passages."""
+    excerpts = format_excerpts([_item(p, body) for p, body in _budget(passages)])
     return (
         "You answer a spoken question about MindFlock, an app that runs fleets of "
         "coding-agent sessions. Use ONLY the documentation excerpts below. Reply "
@@ -412,7 +468,7 @@ def build_prompt(question: str, passages: List[Passage]) -> str:
         "file paths, URLs, markdown, lists or symbols. Say where to click or what to "
         "say when the excerpts tell you. If the excerpts do not answer the "
         "question, reply exactly: I don't know.\n\n"
-        "Question: %s\n\nExcerpts:\n\n%s" % (str(question).strip(), "\n\n".join(parts))
+        "Question: %s\n\nExcerpts:\n\n%s" % (str(question).strip(), excerpts)
     )
 
 
