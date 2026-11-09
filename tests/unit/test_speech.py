@@ -687,8 +687,11 @@ class TestHints:
             "stop listening",
             "hush",
         ]
-        assert parts[8:10] == ["sitecheck bot 7", "voice stt"]
-        assert parts[10] == "session"  # the vocabulary follows
+        # The commands Moonshine mishears bare, then the titles.
+        n = len(speech.HINT_COMMANDS)
+        assert parts[8 : 8 + n] == list(speech.HINT_COMMANDS)
+        assert parts[8 + n : 10 + n] == ["sitecheck bot 7", "voice stt"]
+        assert parts[10 + n] == "session"  # the vocabulary follows
         assert "pull request" in parts and "pytest" in parts
         # "mindflock" is the wake word already: the vocabulary's MindFlock is
         # a repeat (compared lower-cased) and is not added twice.
@@ -707,10 +710,12 @@ class TestHints:
         assert len(tight) <= 80 and "xxx" not in tight and "disregard" in tight
 
     def test_odd_input_is_fine(self):
-        assert speech.recognition_hints({}, []) == ", ".join(speech.HINT_VOCABULARY)
-        assert speech.recognition_hints(None, None).startswith("MindFlock, ")
+        assert speech.recognition_hints({}, []) == ", ".join(
+            speech.HINT_COMMANDS + speech.HINT_VOCABULARY
+        )
+        assert speech.recognition_hints(None, None).startswith("scroll, ")
         assert speech.recognition_hints({"send": "over", "wake": 3}, [""]).startswith(
-            "MindFlock"
+            "scroll, "
         )
 
     def test_session_titles_from_the_engine(self, monkeypatch):
@@ -825,9 +830,10 @@ class TestHints:
         assert speech.HINT_TITLES == 12
         titles = ["t%d" % i for i in range(13)]
         parts = speech.recognition_hints(self.WORDS, titles).split(", ")
-        assert parts[8:20] == ["t %d" % i for i in range(12)]
+        n = 8 + len(speech.HINT_COMMANDS)
+        assert parts[n : n + 12] == ["t %d" % i for i in range(12)]
         assert "t 12" not in parts  # the 13th
-        assert parts[20] == "session"  # the vocabulary still follows
+        assert parts[n + 12] == "session"  # the vocabulary still follows
 
     def test_a_title_that_is_a_voice_phrase_is_one_entry(self):
         titles = ["Disregard", "Over", "stop", "Window"]
@@ -2200,3 +2206,21 @@ class TestRewarmAfterAFailure:
         assert speech.describe()["warm"]["tts"] == "loaded"
         assert speech._warm_due("tts") is False
         assert len(http.calls) == 2  # the line's attempt + the probe
+
+
+def test_the_undo_phrases_and_the_commands_are_hints():
+    from backend.web.core import voice_words
+
+    titles = ["hackathon-2", "sitecheck-bot7", "voice-ears", "login-fix"]
+    hints = speech.recognition_hints(voice_words.effective({}), titles)
+    parts = hints.split(", ")
+    # After every other voice phrase (the radio words that act at once lead).
+    assert parts.index("scratch that") == parts.index("enough") + 1
+    assert parts.index("undo that") == parts.index("scratch that") + 1
+    # The commands before the titles, the titles before the vocabulary.
+    assert parts.index("scroll") == parts.index("undo that") + 1
+    assert parts.index("status") < parts.index("hackathon 2") < parts.index("session")
+    assert len(hints) <= speech.HINT_CHARS
+    # Without the vocabulary, no commands either (the fast tier's lone words).
+    bare = speech.recognition_hints(voice_words.effective({}), (), vocabulary=False)
+    assert "scroll" not in bare and bare.endswith("scratch that, undo that")
