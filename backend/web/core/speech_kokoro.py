@@ -238,8 +238,14 @@ def _download(
 ) -> None:
     """``RELEASE_URL + name`` → ``folder/name``, through ``name.part``,
     checked against ``size`` and ``sha`` before the rename. Progress every
-    :data:`_PROGRESS_STEP` percent through ``say``."""
-    part = folder / (name + ".part")
+    :data:`_PROGRESS_STEP` percent through ``say``.
+
+    The ``.part`` name carries this process's pid: two servers sharing one
+    config dir (a dev server beside the installed one) can both install at
+    once, and with one shared name the second rename found the first had
+    already moved the file away. Each now downloads to its own name; the
+    replace is atomic, and both land the same checked bytes."""
+    part = folder / ("%s.%d.part" % (name, os.getpid()))
     digest = hashlib.sha256()
     got = 0
     shown = -1
