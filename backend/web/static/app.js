@@ -44665,6 +44665,23 @@ function isAnswerPhrase(text) {
 	return ANSWER_RE.test(routerWords(text).join(" "));
 }
 var joinWords = (a, b) => [a.trim(), b.trim()].filter(Boolean).join(" ");
+var VOICE_CONTEXT_MAX = 400;
+function voiceContext(text, max = VOICE_CONTEXT_MAX) {
+	const t = String(text || "").replace(/\s+/g, " ").trim();
+	if (t.length <= max) return t;
+	const cut = t.slice(t.length - max);
+	return (t[t.length - max - 1] === " " ? cut : cut.replace(/^\S*/, "")).trim();
+}
+function streamOpenBody(lang, client, ctx) {
+	const body = {
+		lang,
+		client
+	};
+	const context = voiceContext(ctx?.context || "");
+	if (context) body.context = context;
+	if (ctx?.session) body.session = ctx.session;
+	return body;
+}
 var VOICE_PREFS_KEY = "cs_voice_desktop";
 function voiceInUse(p) {
 	return p.replies !== "off" || !!p.wake;
@@ -44961,6 +44978,26 @@ var Dictation = class {
 	}
 	get guessed() {
 		return this.phraseAt < 0 ? "" : this.typed.slice(this.phraseAt);
+	}
+	context(ahead) {
+		if (!this.listening) return "";
+		const guessed = this.guessed;
+		let base = ahead ?? this.typed;
+		if (guessed && base.endsWith(guessed)) base = base.slice(0, base.length - guessed.length);
+		const said = joinWords(this.held, this.partial) || guessed.trim();
+		if (!said) return base.trim();
+		if (stopTail(said) !== null || isHushPhrase(said)) return base.trim();
+		const r = parseRadio(said);
+		if (r.kind === "over" || r.kind === "out" || r.kind === "disregard") return "";
+		if (r.kind === "undo") {
+			if (r.text.trim() || guessed) return base.trim();
+			const at = [...this.marks].reverse().find((m) => m < this.typed.length);
+			const last = at === void 0 ? "" : this.typed.slice(at);
+			return (last && base.endsWith(last) ? base.slice(0, base.length - last.length) : base).trim();
+		}
+		const words = holdBack(r.text).type;
+		if (this.routes && !this.before.trim() && isSwitchCommand(words)) return base.trim();
+		return joinWords(base, words);
 	}
 	hearing(t) {
 		if (!this.listening) return { kind: "stopped" };
@@ -45395,6 +45432,7 @@ var LiveDictation = class {
 	checkedAt = 0;
 	unsent = "";
 	unwatch = null;
+	sending = false;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -45403,6 +45441,27 @@ var LiveDictation = class {
 		this.dict.routes = target?.kind !== "field";
 		this.dict.continuous = !!opts.continuous;
 		this.watch(target);
+	}
+	streamContext() {
+		if (this.done) return {
+			context: "",
+			session: ""
+		};
+		const t = this.target;
+		if (this.sending) return {
+			context: "",
+			session: t?.title || ""
+		};
+		let ahead;
+		try {
+			ahead = t?.before?.();
+		} catch {
+			ahead = void 0;
+		}
+		return {
+			context: voiceContext(this.dict.context(ahead)),
+			session: t?.title || ""
+		};
 	}
 	watch(t) {
 		this.unwatch?.();
@@ -45727,7 +45786,8 @@ var LiveDictation = class {
 					this.acted = true;
 					this.hooks.caption("Sending to " + t.name + "…", true);
 					const say = this.hooks.replies();
-					const r = await t.submit(say);
+					this.sending = true;
+					const r = await t.submit(say).finally(() => this.sending = false);
 					if (r.ok && t.title) this.hooks.submitted(t.title, say);
 					this.sent(r, out, from);
 					return;
@@ -45743,17 +45803,23 @@ var LiveDictation = class {
 				}
 				this.acted = true;
 				this.hooks.caption("Sending to " + t.name + "…", true);
-				if (t.gate) await t.gate.settled();
-				else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
-				if (this.done) return;
-				if (this.dialogBlocks(t)) {
-					await this.heldBack(t, "");
-					return;
+				this.sending = true;
+				try {
+					if (t.gate) await t.gate.settled();
+					else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+					if (this.done) return;
+					if (this.dialogBlocks(t)) {
+						await this.heldBack(t, "");
+						return;
+					}
+					const say = this.hooks.replies();
+					const r = await submitDraft(t.title, t.name, say);
+					if (r.ok) this.hooks.submitted(t.title, say);
+					this.sending = false;
+					this.sent(r, out, from);
+				} finally {
+					this.sending = false;
 				}
-				const say = this.hooks.replies();
-				const r = await submitDraft(t.title, t.name, say);
-				if (r.ok) this.hooks.submitted(t.title, say);
-				this.sent(r, out, from);
 				return;
 			}
 		}
@@ -47703,13 +47769,16 @@ function serverRecognizer(opts = {}) {
 		run(c, async () => {
 			if (h !== hh || !c.stream) return;
 			try {
+				let ctx = null;
+				try {
+					ctx = hh?.context?.() || null;
+				} catch {
+					ctx = null;
+				}
 				const r = await call("/api/voice/stream", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						lang: langTag$1(),
-						client: VOICE_CLIENT_ID
-					})
+					body: JSON.stringify(streamOpenBody(langTag$1(), VOICE_CLIENT_ID, ctx))
 				});
 				const id = String(r.j.id || "");
 				if (h !== hh || !c.stream) {
@@ -49321,6 +49390,7 @@ function fieldTarget(el) {
 		kind: "field",
 		title: "",
 		name: "the text box",
+		before: () => el.value.slice(0, el.selectionStart != null ? el.selectionStart : el.value.length),
 		type: (text) => {
 			insertIntoField(el, text);
 			return true;
@@ -49807,6 +49877,7 @@ function TopBarMic() {
 				d.flush(t, final, at);
 			},
 			blank: () => live.current !== d || !d.dict.typed,
+			context: () => live.current === d ? d.streamContext() : null,
 			onPartial: (t) => {
 				if (live.current === d) d.unsure(t);
 			},
