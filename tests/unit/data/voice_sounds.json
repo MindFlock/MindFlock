@@ -12,8 +12,7 @@
    "disregard"
   ],
   "undo": [
-   "scratch that",
-   "undo that"
+   "scratch that"
   ],
   "stop": [
    "stop",
@@ -873,12 +872,12 @@
   },
   {
    "text": "Undo that!",
-   "kind": "undo",
+   "kind": null,
    "words": "default"
   },
   {
    "text": "we should undo that",
-   "kind": "undo",
+   "kind": null,
    "words": "default"
   },
   {

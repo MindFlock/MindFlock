@@ -6795,7 +6795,16 @@
   // words before it, normalized ("" when it was said alone)}, else null.
   function voiceUndoParse(text) {
     var m = VOICE_W.undo.exec(voiceNorm(text));
-    return m ? { before: m[1] || "" } : null;
+    if (m) return { before: m[1] || "" };
+    // Heard a little off ("scratched that"): only as the WHOLE utterance and
+    // from the phrase's first letter (core.voice_words.control_kind) — Moonshine
+    // writes "and do that" for dictation too.
+    var said = voiceNorm(text), first = voiceLetters(said).charAt(0);
+    var undo = (VOICE_W.words && VOICE_W.words.undo) || [];
+    for (var i = 0; i < undo.length; i++) {
+      if (first && voiceLetters(undo[i]).charAt(0) === first && voiceSoundsLike(said, undo[i])) return { before: "" };
+    }
+    return null;
   }
   // Undo: the phrase's own words are dropped (never typed); alone, the last
   // phrase voiceAppend put in the box goes back out — while it is still the

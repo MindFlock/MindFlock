@@ -35,7 +35,7 @@ function kindOf(text: string): string | null {
   if (V.isHushPhrase(text)) return "hush";
   if (V.stopTail(text) !== null) return "stop";
   const r = V.parseRadio(text).kind;
-  return r === "over" ? "send" : r === "out" ? "end" : r === "disregard" ? "clear" : null;
+  return r === "over" ? "send" : r === "out" ? "end" : r === "disregard" ? "clear" : r === "undo" ? "undo" : null;
 }
 
 afterEach(() => W.resetVoiceWords());

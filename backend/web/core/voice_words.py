@@ -66,7 +66,7 @@ DEFAULTS: Dict[str, Any] = {
     "send": ["over"],
     "end": ["over and out", "over, out"],
     "clear": ["disregard"],
-    "undo": ["scratch that", "undo that"],
+    "undo": ["scratch that"],  # not "undo that": "can you undo that" is dictation
     "stop": [
         "stop",
         "stop listening",

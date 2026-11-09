@@ -306,12 +306,15 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
   const sounded = (text: string): RegExpExecArray | null => {
     // A clear phrase heard a little off must start with its letter unless
     // said alone: a false clear throws the draft away ("… in this regard").
-    // An undo the same: a false one takes a phrase back.
+    // An undo stricter still (core.voice_words.control_kind): only as the
+    // WHOLE utterance, from its first letter — "let's stretch that" is
+    // dictation, and a false undo takes a phrase back.
+    const undoHit = soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
     const hit =
       soundTail(text, w.end) ||
       soundTail(text, w.send, RADIO_TAILS) ||
       soundTail(text, w.clear, RADIO_TAILS, true) ||
-      soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
+      (undoHit && !/[\p{L}\p{N}]/u.test(undoHit.before) ? undoHit : null);
     return hit ? heardAs(text, hit.before, hit.phrase) : null;
   };
   const radio = entries.length

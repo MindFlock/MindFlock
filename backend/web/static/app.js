@@ -44567,7 +44567,8 @@ function buildMatchers(w, v = -1) {
 		rx: phraseRx(p)
 	}))].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
 	const sounded = (text) => {
-		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true) || soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
+		const undoHit = soundTail(text, undos.filter((p) => (w.undo || []).includes(p)), [], true);
+		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true) || (undoHit && !/[\p{L}\p{N}]/u.test(undoHit.before) ? undoHit : null);
 		return hit ? heardAs(text, hit.before, hit.phrase) : null;
 	};
 	const radio = entries.length ? new SoundRegExp("^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$", "iu", sounded) : /(?!)/;

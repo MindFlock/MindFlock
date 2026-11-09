@@ -601,6 +601,8 @@ class TestControlWords:
             ("yes", False),
             ("", False),
             # The router's own no-text kinds act at once too.
+            ("Fix the login bug, scratch that.", True),  # undo: nothing to send
+            ("Scratch that.", True),
             ("Scroll up.", True),
             ("Page down.", True),
             ("Interrupt.", True),

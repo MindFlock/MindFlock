@@ -219,7 +219,7 @@ LEADS = [
 ROUTER = [
     ("next session", "switch_rel"),
     ("previous session", "switch_rel"),
-    ("go back", "switch_rel"),
+    ("go back", "switch_back"),
     ("switch to hackathon two", "switch"),
     ("switch to sitecheck bot seven", "switch"),
     ("switch to voice ears", "switch"),
@@ -233,21 +233,21 @@ ROUTER = [
     ("cancel", "cancel"),
     ("never mind", "cancel"),
 ]
-#: The new commands (said, the kind the router branch is expected to give).
+#: The new commands (said, the router's kind: ``voice_router.command``).
 NEW = [
-    ("scroll up", "scroll_up"),
-    ("scroll down", "scroll_down"),
-    ("page up", "page_up"),
-    ("page down", "page_down"),
-    ("scroll to the bottom", "scroll_bottom"),
-    ("go to the top", "scroll_top"),
-    ("keep going", "more"),
-    ("more", "more"),
+    ("scroll up", "scroll"),
+    ("scroll down", "scroll"),
+    ("page up", "scroll"),
+    ("page down", "scroll"),
+    ("scroll to the bottom", "scroll"),
+    ("go to the top", "scroll"),
+    ("keep going", "scroll_more"),
+    ("more", "scroll_more"),
     ("interrupt", "interrupt"),
     ("press escape", "interrupt"),
     ("where am I", "where"),
-    ("what can I say", "help"),
-    ("voice commands", "help"),
+    ("what can I say", "commands"),
+    ("voice commands", "commands"),
 ]
 
 #: Dictation that is not a command, for ``guard`` — several end in words a

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Scroll a session by voice.** "Scroll up", "page down", "scroll up a
+  bit", "scroll up three pages", "scroll to the top", "back to the bottom"
+  move the focused session's output (tmux copy mode, done on the server so
+  the desktop and the phone both get it). Right after a scroll, "more" or
+  "keep going" repeats it; otherwise those words stay dictation. The next
+  thing you type or send leaves the scrolled view first.
+- **More voice commands.** "Interrupt" (or "press escape", "interrupt
+  <session>") presses Escape in the session. "Go back" / "switch back"
+  returns to the session you were on before. "Where am I" says the focused
+  session's name. "What can I say" reads the main groups and opens a
+  cheat sheet of every command, which is also under the mic's right-click
+  menu as **Voice commands…**.
+- **"Scratch that" takes back one phrase.** At the end of a phrase it drops
+  that phrase; said alone it removes the last phrase typed and not yet
+  sent. "Disregard" still clears everything. It has its own row in
+  Settings → Voice → Voice words.
+- **The rail follows the focus.** Switching to a session by voice, keys or
+  the Sky scrolls the left rail so its row is visible, opening a folded
+  group if needed. A voice switch also pulses the row once. A click never
+  makes the rail jump.
+- **Near-instant command words with Moonshine** (#320). Moonshine
+  tiny-streaming, a one-click install in Settings → Voice, hears the live
+  words and the control words ("over", stop, session names) within tens of
+  milliseconds. The Whisper path is faster too: finishing after "over" went
+  from ~1.1 s to ~0.5 s.
+
+### Changed
+
+- **Whisper writes every phrase's text; Moonshine only listens for
+  commands.** With Moonshine installed, short phrases had kept Moonshine's
+  own transcript (about 13% of words wrong on real speech). Now Whisper
+  transcribes every phrase (about 8% on real speech, 7% on commands; long
+  dictation went from 12.5% to 7.6% wrong), while Moonshine still decides
+  "over", stop and switches, which act at once without waiting for Whisper.
+  A phrase ending in "over" costs about half a second more than before.
+- Voice commands are routed on Moonshine's hearing when it heard a command
+  (`heard` on `/api/voice/route`), and the grammar takes more natural
+  phrasings ("switch over to…", "bring … up", "show me …").
+
+### Fixed
+
+- Polish loop passes 1–5 (#321, #322, #324, #325): workers spawned through
+  MCP no longer sit "held" forever when two servers share `~/.mindflock`;
+  route Review stops run on the real branch; a Shortcut token is no longer
+  sent to GitHub when testing a GitHub Issues source; peer invites without a
+  public tunnel work again; the Sky's empty card no longer hides the stop
+  catalog; failed voice model installs say what to do next; plus onboarding,
+  agent setup, Intake and device fixes.
+
 ## [0.12.3] - 2026-11-05
 
 ### Fixed

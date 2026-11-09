@@ -223,17 +223,17 @@ def _kind_rx(kind: str, words: Optional[dict]) -> "re.Pattern":
 _CMDS = [
     # "Scratch that" is the client's radio word (voice_words' ``undo``): it
     # takes back the words said before it, so it is never a command here.
-    ("cancel", re.compile(r"^(?:cancel|never ?mind|forget it)$")),
+    ("cancel", re.compile(r"^(?:cancel|never ?mind|never mine|forget it)$")),
     ("switch", re.compile(r"^%s (.+)$" % _VERB_RX)),
     (
         "list",
         re.compile(
-            r"^(?:(?:what|which) sessions (?:do i have|are (?:up|open|running))"
+            r"^(?:(?:what|which|with) sessions (?:do i have|are (?:up|open|running))"
             r"|list (?:the |my )?sessions"
             r"|what(?:'?s| is) (?:up|open|running))$"
         ),
     ),
-    ("needs", re.compile(r"^(?:what|who) needs (?:me|attention|my attention)$")),
+    ("needs", re.compile(r"^(?:what|who) needs? (?:me|attention|my attention)$")),
     (
         "status",
         re.compile(
@@ -243,9 +243,9 @@ _CMDS = [
     ),
     (
         "condense",
-        re.compile(r"^(?:summari[sz]e(?: that| it)?|summary)$"),
+        re.compile(r"^(?:summ[ae]ri[sz]e(?: that| it)?|summary)$"),
     ),
-    ("repeat", re.compile(r"^(?:say that again|repeat(?: that)?)$")),
+    ("repeat", re.compile(r"^(?:(?:say|save) that again|repeat(?: that)?)$")),
     ("off", re.compile(r"^(?:voice off|turn voice off|turn off voice)$")),
     # "Stop talking": the client cuts what is being said and drops the queue,
     # and keeps listening if it was — unlike "stop", which stops the mic.
@@ -273,7 +273,7 @@ _REL_RE = re.compile(
 # Said around a command and never part of it: "now scroll up", "mindflock,
 # interrupt", "can you go back".
 _FILL_LEAD_RE = re.compile(
-    r"^(?:(?:mind ?flock|now|please|ok|okay|hey|just|can you|could you"
+    r"^(?:(?:mind ?flock|now|please|ok|okay|hey|just|to|can you|could you"
     r"|would you|go ahead and) )+"
 )
 _FILL_TAIL_RE = re.compile(r"(?: (?:now|please|for me))+$")
@@ -292,14 +292,15 @@ _SCROLL_AMT = (
     r"|(?P<twice>twice)))?" % _NUM_RX
 )
 _SCROLL_RE = re.compile(
-    r"^scroll%s (?:back )?(?P<dir>up|down)%s$" % (_SCROLL_OBJ, _SCROLL_AMT)
+    r"^(?:scroll|roll|growl|crawl)%s (?:back )?(?P<dir>up|down)%s$"
+    % (_SCROLL_OBJ, _SCROLL_AMT)
 )
 _PAGE_RE = re.compile(
-    r"^(?P<half>half )?page (?P<dir>up|down)(?: (?P<n>%s) times| (?P<twice>twice))?$"
+    r"^(?P<half>half )?page ?(?P<dir>up|down)(?: (?P<n>%s) times| (?P<twice>twice))?$"
     % _NUM_RX
 )
 _SCROLL_END_RE = re.compile(
-    r"^(?:(?:(?:scroll|go|jump|skip|take me|bring me|get me)"
+    r"^(?:(?:(?:scroll|roll|crawl|growl|go|jump|skip|take me|bring me|get me)"
     r"(?: (?:all the way|right))?(?: back)?(?: up| down)? to"
     r"|(?:go |scroll |jump )?back to) (?:the )?(?:very )?"
     r"(?P<end>top|bottom|end|beginning|latest|newest)"
@@ -324,8 +325,8 @@ _MORE_RE = re.compile(
 )
 # "Interrupt", "press escape", "interrupt docs": Escape in the session's pane.
 _INTERRUPT_RE = re.compile(
-    r"^(?:interrupt(?: (?P<who>.+))?"
-    r"|(?:(?:press|hit|send|tap|push)(?: the| an)? )?(?:escape|esc)(?: key)?)$"
+    r"^(?:interrupts?(?: (?P<who>.+))?"
+    r"|(?:(?:press|hit|send|tap|push)(?: the| an)? ?)?(?:escape|esc)(?: key)?)$"
 )
 #: Who "interrupt …" means when it is the session being talked to.
 _INTERRUPT_SELF = frozenset(
@@ -363,7 +364,7 @@ _COMMANDS_RE = re.compile(
     r"|what (?:voice )?commands (?:are there|can i (?:say|use)|do you (?:know"
     r"|understand|have|take))|what are (?:the|my)(?: voice)? commands"
     r"|(?:list|show|tell|read|give)(?: me)?(?: (?:the|all the|all|my))?(?: voice)?"
-    r" commands|(?:voice )?commands|help|voice help)$"
+    r" commands|voice commands?|commands|help|voice help)$"
 )
 # "What's docs doing?", "how is the parser going?": a session's status by name.
 _STATUS_OF_RE = re.compile(
@@ -471,7 +472,7 @@ _POLITE_RX = (
     r"|i would like to |i wanna |i need to |go ahead and |now )"
 )
 _GO_RE = re.compile(
-    r"^(%s)?(?:(?:switch|go|change|jump|hop)(?: me)? (?:over )?to"
+    r"^(%s)?(?:(?:switch|switched|twitch|go|change|jump|hop)(?: me)? (?:over )?to"
     r"|(?:take|bring) me (?:over )?to|(?:put|get) me (?:on|onto|in)) (.+)$" % _POLITE_RX
 )
 # Softer verbs ("open the file", "show me the logs", "go back to the old

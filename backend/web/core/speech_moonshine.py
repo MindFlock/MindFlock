@@ -422,8 +422,8 @@ def _unwake(toks: List[str], words: Optional[dict]) -> List[str]:
 
 def control_only(heard: str, words: Optional[dict] = None) -> bool:
     """Whether Moonshine's text of a phrase (``heard``) is a control phrase
-    with nothing to type or send: a hush phrase, a clear phrase (the words
-    before it are thrown away), a send / end / stop phrase with no words
+    with nothing to type or send: a hush phrase, a clear or undo phrase (the
+    words before it are thrown away), a send / end / stop phrase with no words
     before it, or — ending in none of those — a ``voice_router.command`` of
     a kind in :data:`NO_TEXT_KINDS` (a switch, "stop", "cancel", "what needs
     me"…); a leading wake word aside. Words before a send, end or stop
@@ -436,7 +436,7 @@ def control_only(heard: str, words: Optional[dict] = None) -> bool:
         return False
     try:
         kind, n = _control_tail(text, words)
-        if kind in ("hush", "clear"):
+        if kind in ("hush", "clear", "undo"):
             return True
         if kind:
             return not _letters(" ".join(toks[:-n]))
@@ -467,7 +467,7 @@ def with_control(final: str, heard: str, words: Optional[dict] = None) -> str:
 
     try:
         kind, n = _control_tail(heard, words)
-        if kind not in ("send", "end", "clear", "stop"):
+        if kind not in ("send", "end", "clear", "undo", "stop"):
             return final
         fkind, fn = _control_tail(final, words)
         if fkind == kind:

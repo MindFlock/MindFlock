@@ -2216,11 +2216,11 @@ def test_the_undo_phrases_and_the_commands_are_hints():
     parts = hints.split(", ")
     # After every other voice phrase (the radio words that act at once lead).
     assert parts.index("scratch that") == parts.index("enough") + 1
-    assert parts.index("undo that") == parts.index("scratch that") + 1
+    assert "undo that" not in parts  # dictation, not a default (voice_words)
     # The commands before the titles, the titles before the vocabulary.
-    assert parts.index("scroll") == parts.index("undo that") + 1
+    assert parts.index("scroll") == parts.index("scratch that") + 1
     assert parts.index("status") < parts.index("hackathon 2") < parts.index("session")
     assert len(hints) <= speech.HINT_CHARS
     # Without the vocabulary, no commands either (the fast tier's lone words).
     bare = speech.recognition_hints(voice_words.effective({}), (), vocabulary=False)
-    assert "scroll" not in bare and bare.endswith("scratch that, undo that")
+    assert "scroll" not in bare and bare.endswith("scratch that")

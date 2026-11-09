@@ -363,12 +363,12 @@ def test_control_kind_order_hush_then_stop_then_radio():
 # --- undo: "scratch that" ---------------------------------------------------------
 def test_undo_is_a_kind_after_clear():
     assert vw.KINDS == ("send", "end", "clear", "undo", "stop", "hush")
-    assert vw.DEFAULTS["undo"] == ["scratch that", "undo that"]
+    assert vw.DEFAULTS["undo"] == ["scratch that"]
     got = vw.effective({})
-    assert got["undo"] == ["scratch that", "undo that"]
+    assert got["undo"] == ["scratch that"]
     assert "undo" in got["heard"]
     assert vw.normalize({"undo": [" Take That Back "]}) == {"undo": ["take that back"]}
-    assert vw.normalize({"undo": ["scratch that", "undo that"]}) == {}
+    assert vw.normalize({"undo": ["scratch that"]}) == {}
     assert vw.effective({"undo": ["take that back"]})["heard"]["undo"] == []
 
 
@@ -391,9 +391,11 @@ def test_only_undo_claims_scratch_that():
     [
         ("Scratch that.", "undo"),
         ("scratch that", "undo"),
-        ("Undo that!", "undo"),
+        # "undo that" is no default: "can you undo that" is words for the agent.
+        ("Undo that!", None),
+        ("can you undo that", None),
         ("fix the margin on the login page, scratch that", "undo"),
-        ("we should undo that", "undo"),  # the phrase itself, at the end
+        ("we should undo that", None),
         ("scratched that", "undo"),  # alone: sounds like it
         ("Scratch at.", "undo"),
         # Dictation ending in "...that" is not an undo unless it is the phrase.
@@ -407,7 +409,7 @@ def test_only_undo_claims_scratch_that():
         # "and do that" for both "undo that" and the dictation.
         ("And do that.", None),
         ("into that", None),
-        ("under that", "undo"),  # alone, what both engines write for it
+        ("under that", None),
         ("put the row under that", None),
         # More words after the phrase, or the phrase cut short: words.
         ("scratch that idea and start again from the parser", None),
