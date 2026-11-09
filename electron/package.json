@@ -38,6 +38,7 @@
       "firstlaunch.js",
       "update.js",
       "engine.js",
+      "launch.js",
       "offline.html",
       "icon.ico"
     ],

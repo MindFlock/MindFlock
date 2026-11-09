@@ -107,7 +107,16 @@ Overrides:
   if you don't want the default distro. `wsl -l -v` lists them.
 - `MINDFLOCK_REPO` — **developer mode**: path of a MindFlock *source checkout*
   (inside WSL on Windows — or a `C:\…` checkout, which runs natively); the app
-  then runs that checkout's `.venv` server instead of the installed CLI.
+  then runs that checkout's `.venv` server instead of the installed CLI,
+  bound to `MINDFLOCK_URL`'s port. It skips the "an enabled systemd
+  `mindflock.service` owns the port" check (that unit serves the installed
+  app's port, never the checkout's); the "something already listens on the
+  port" check still stops a second copy.
+- Launch flags for a shortcut (which cannot set environment variables):
+  `--mindflock-url=`, `--mindflock-engine=`, `--mindflock-profile=` and
+  `--mindflock-repo=` set `MINDFLOCK_URL`, `MINDFLOCK_DESKTOP_ENGINE`,
+  `MINDFLOCK_DEV_PROFILE` and `MINDFLOCK_REPO`; a flag wins over an inherited
+  variable.
 - `MINDFLOCK_UPDATE_REPO` — `owner/name` of the GitHub repo whose Releases the
   app polls for update notifications (default `MindFlock/MindFlock`). The check
   is best-effort: offline or a non-200 (e.g. a private repo's 404) is silent.
@@ -319,10 +328,18 @@ therefore your sessions) stays shared, which is usually what you want:
   print the raw id (*ai.mindflock.desktop.dev*) across the top of every toast.
   The shell now writes that shortcut itself on a dev run, into
   `%APPDATA%\Microsoft\Windows\Start Menu\Programs\MindFlock-dev.lnk`,
-  pointing at `electron.exe` with the app dir and `--mindflock-dev` — so it is
-  also a working launcher, and the thing to pin (see below). It is rewritten
-  only when missing or stale, and a Start menu locked down by policy costs you
-  the label, not the app.
+  pointing at `electron.exe` with the app dir, `--mindflock-dev` and every
+  launch flag this run has (from its flags or its environment — e.g.
+  `--mindflock-url=http://localhost:9000 --mindflock-repo=/home/…/app` for a
+  run-dev.bat launch) — so it is also a working launcher of *that* shell, and
+  the thing to pin (see below). It is rewritten only when missing or stale, and
+  a Start menu locked down by policy costs you the label, not the app.
+
+  **One identity per dev profile** (`MINDFLOCK_DEV_PROFILE` /
+  `--mindflock-profile=`): the default profile keeps `ai.mindflock.desktop.dev`
+  and `MindFlock-dev.lnk`; another gets its own AUMID, taskbar group and
+  shortcut — `MindFlock (native)` → `ai.mindflock.desktop.dev.native` and
+  `MindFlock-dev (native).lnk` — so pinning one dev shell never opens the other.
 
   Its icon is **staged onto the local disk** first (into the dev profile dir).
   A shortcut's `IconLocation` is read by the Windows shell, not by us, and the
