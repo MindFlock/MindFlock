@@ -23,12 +23,15 @@ import { Modal } from "../Modal";
 import {
   prefetchIntakeMeta,
   prefetchIntakePanels,
+  useEpicsQuery,
   usePanelQuery,
   useTicketingSources,
 } from "../../state/queries";
 import { SettingsCtx, useSettingsModel } from "../settings/useSettings";
 import { countInBuckets, loadMineOnly, loadShownBuckets, visibleBuckets } from "./buckets";
 import { TicketsTab } from "./TicketsTab";
+import { EpicsTab } from "./EpicsTab";
+import { epicsToStart } from "./epics";
 import { PullRequestsTab } from "./PullRequestsTab";
 import { IssuesTab } from "./IssuesTab";
 import { QueueTab } from "./QueueTab";
@@ -40,7 +43,7 @@ import { nextScheduledText, useScheduledTemplates } from "./ScheduledTemplates";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
 
-export type IntakeTabKey = "tickets" | "prs" | "issues" | "autostart";
+export type IntakeTabKey = "tickets" | "epics" | "prs" | "issues" | "autostart";
 
 /** What "+ Add source" was asked to add: a tracker (optionally a provider
  * already picked — a tracker tile pressed on another tab hands over here), a
@@ -83,7 +86,7 @@ export function parseIntakeTarget(target: string | null | undefined): {
   return { tab, focus };
 }
 
-const TAB_KEYS: IntakeTabKey[] = ["tickets", "prs", "issues", "autostart"];
+export const TAB_KEYS: IntakeTabKey[] = ["tickets", "epics", "prs", "issues", "autostart"];
 
 /** Legacy Settings screen keys → the tab that took over from them. Kept so a
  * deep link recorded anywhere (a palette entry, a sidebar button, the welcome
@@ -104,6 +107,9 @@ const TABS: Array<{
   el: (p: TabProps) => React.ReactNode;
 }> = [
   { key: "tickets", label: "Tickets", el: (p) => <TicketsTab {...p} /> },
+  // Right after Tickets: epics come from the same sources (Shortcut's), and
+  // which of them auto-start is set on those sources' cards there.
+  { key: "epics", label: "Epics", el: (p) => <EpicsTab {...p} /> },
   // Git only: PR comments and issues run on their own switches and their own
   // GitHub sign-in — the pipeline boots for them with no ticket source at all —
   // so they are not locked behind connecting a tracker.
@@ -167,7 +173,7 @@ function AutoStartCount({ on }: { on: boolean }) {
  * Reads the same cached panel query the tab itself uses, so opening the dialog
  * costs one fan-out per panel either way — and, for tickets, applies the same
  * bucket filter the panel does, so a ticket in a hidden bucket isn't counted. */
-function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart"> }) {
+function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart" | "epics"> }) {
   const key = tab === "tickets" ? "tickets" : tab === "prs" ? "github-prs" : "github-issues";
   const q = usePanelQuery<{
     tickets?: Array<{ bucket?: string; mine?: boolean; eligible?: boolean; has_session?: boolean }>;
@@ -200,6 +206,24 @@ function TabCount({ tab }: { tab: Exclude<IntakeTabKey, "autostart"> }) {
           loadMineOnly()
         )
       : (q.data.prs || q.data.issues || []).length;
+  return (
+    <span
+      className="ik-tab-count"
+      title={n + " ready to start — the ones auto-start would take" + (listed > n ? " (" + listed + " listed)" : "")}
+    >
+      {n}
+    </span>
+  );
+}
+
+/** The Epics tab's badge: the epics auto-start would take (eligible, no lead
+ * yet) — same rule as the other tabs' counts, read from the same query the
+ * tab lists, so the two can't disagree (`epicsToStart`, ./epics.ts). */
+export function EpicsCount() {
+  const q = useEpicsQuery();
+  const n = epicsToStart(q.data?.epics).length;
+  if (!n) return null;
+  const listed = (q.data?.epics || []).length;
   return (
     <span
       className="ik-tab-count"
@@ -414,8 +438,10 @@ export function IntakeDialog({ embedded = false, target: embeddedTarget = null }
                 {t.label}
                 {t.key === "autostart" ? (
                   <AutoStartOn />
+                ) : t.key === "epics" ? (
+                  <EpicsCount />
                 ) : (
-                  <TabCount tab={t.key as Exclude<IntakeTabKey, "autostart">} />
+                  <TabCount tab={t.key as Exclude<IntakeTabKey, "autostart" | "epics">} />
                 )}
               </button>
             ))}

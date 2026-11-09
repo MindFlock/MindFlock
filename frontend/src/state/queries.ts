@@ -18,6 +18,7 @@ import { rememberEnvironments, type VerifyEnvsResponse } from "../lib/verifyStop
 import type { EffortCap } from "../lib/effort";
 import type { MemoryDetail, MemoryHistory } from "../components/usage/memoryModel";
 import type { PeerStatus } from "../lib/peer";
+import type { EpicsResponse } from "../components/intake/epics";
 import type { Flight, FlightPlan, StepKindDef } from "../lib/flights";
 import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
 import type {
@@ -847,6 +848,44 @@ export function prefetchIntakePanels() {
       retry: false,
     });
   }
+}
+
+/* --------------------------------------------------------------------------
+ * Intake → Epics: every not-done epic of yours on each Shortcut source.
+ *
+ * Not a member of PANELS: the server caches it for 60 s on its own clock and
+ * its Refresh is `?refresh=1`, not the panels' `?fresh=1`, and it has no
+ * `stale` flag to re-poll on. One query key, read by both the tab and its
+ * badge on the strip, so the two can never disagree.
+ * ------------------------------------------------------------------------ */
+
+/** Matches the server's cache: polling faster would only be told the same. */
+const EPICS_POLL_MS = 60_000;
+
+/** The Epics list. Polled every 60 s while the page is visible (TanStack
+ * pauses `refetchInterval` in a hidden tab) and only while something that
+ * shows it is mounted — the open Intake dialog's tab strip. `refresh()` is the
+ * ↻ button: `?refresh=1` asks Shortcut again instead of the server's cache. */
+export function useEpicsQuery() {
+  const q = useQuery<EpicsResponse>({
+    queryKey: ["epics"],
+    queryFn: () => api<EpicsResponse>("/api/epics"),
+    staleTime: 30_000,
+    gcTime: PANEL_GC_MS,
+    placeholderData: (prev) => prev,
+    retry: false,
+    refetchInterval: EPICS_POLL_MS,
+  });
+  const refresh = () =>
+    queryClient
+      .fetchQuery({
+        queryKey: ["epics"],
+        queryFn: () => api<EpicsResponse>("/api/epics?refresh=1"),
+        staleTime: 0,
+        retry: false,
+      })
+      .catch(() => undefined);
+  return { ...q, refresh };
 }
 
 /* --------------------------------------------------------------------------
