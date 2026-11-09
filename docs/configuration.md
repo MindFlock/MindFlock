@@ -1443,10 +1443,11 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     (`moonshine-voice` and its model, ~200 MB: Settings → Voice → *Install
     fast recognition (Moonshine, ~200 MB)*, `POST /api/voice/install-local
     {"what": "moonshine"}`; it changes no setting) — a true streaming model
-    whose own text is a short phrase's final, ready ~30 ms after the person
-    stops instead of the ~0.5–1 s of the whisper accurate pass, with the
-    accurate pass (`stt_final`) still polishing a phrase of 4 s of speech
-    or more when its early pass lands within 1 s of the end — else
+    that hears the live words and the control words ("over", the stop
+    phrases, a session's name) ~30 ms after they are said, while the
+    accurate pass (`stt_final`) still writes every phrase's final text; a
+    phrase that is only a control phrase is acted on at once, on
+    Moonshine's words — else
     `base.en`, and `base` for any other language (Moonshine is English
     only); `"moonshine"` asks for Moonshine explicitly (still whisper while
     it is not installed, and for other languages); any faster-whisper size

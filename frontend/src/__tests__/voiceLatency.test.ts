@@ -14,6 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CONTROL_TAIL_MS,
+  Dictation,
   FAST_TRUST_MIN,
   FIRST_PHRASE_HOLD_MS,
   FIRST_PHRASE_PLAIN_HOLD_MS,
@@ -29,6 +30,7 @@ import {
   plainWords,
   serverRecognizer,
   sttWarmWanted,
+  timedFinal,
   turnHoldMs,
   type DictTarget,
   type LiveHooks,
@@ -58,6 +60,31 @@ afterEach(() => {
 });
 
 // --- the clock ------------------------------------------------------------------ //
+
+describe("Moonshine hears the control words, whisper writes the text", () => {
+  it("only the accurate pass's final is a sample for the clock", () => {
+    expect(timedFinal({ final: "fix the bug", final_ms: 700 })).toBe(true);
+    expect(timedFinal({ final: "fix the bug", final_by: "whisper" })).toBe(true);
+    // A control-only phrase (or a timed-out pass): Moonshine's own text.
+    expect(timedFinal({ final: "Stop.", final_by: "moonshine" })).toBe(false);
+    expect(timedFinal({ committed: "bag" })).toBe(false);
+    expect(timedFinal(null)).toBe(false);
+  });
+
+  it("a garbled “over” still sends, with whisper's words before it", () => {
+    // Moonshine heard "send the report over"; whisper wrote "Send the
+    // reports, okay." — /end's final carries Moonshine's control phrase on
+    // whisper's words (speech_moonshine.with_control).
+    const d = new Dictation();
+    d.begin();
+    expect(d.flush("send the report over", "Send the reports over.")).toEqual({
+      kind: "send",
+      text: "Send the reports ",
+      end: true,
+    });
+  });
+});
+
 
 describe("FinalClock", () => {
   it("fastStands: only after enough finals, and only while few of them changed a word", () => {

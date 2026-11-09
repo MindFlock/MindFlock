@@ -3820,6 +3820,15 @@
     if (!fin || j.same === true || fin === fast) return { text: fast, fixed: false, ms: ms };
     return { text: fin, fixed: true, ms: ms };
   }
+  // Whether an /end answer's final is the accurate pass's (a sample for
+  // the "over" budget and the fast-trust window): it has one, and not
+  // Moonshine's own text (`final_by: "moonshine"` — a control-only phrase,
+  // answered at once, or the pass timed out: neither says how long the
+  // accurate pass takes nor whether it changes words).
+  function voiceTimedFinal(j) {
+    j = j || {};
+    return typeof j.final === "string" && j.final_by !== "moonshine";
+  }
   function voiceJoin(a, b) {
     a = String(a || "").trim();
     b = String(b || "").trim();
@@ -4910,11 +4919,12 @@
         if (!x.r.ok) { if (!g.late) streamFail(g, mine, streamWhy(x)); return; }
         g.sid = "";   // ended: nothing to DELETE
         var text = voiceJoin(g.pend, x.j.committed), fin = voiceStreamFinal(text, x.j);
-        // A final came (absent: off, skipped, failed or timed out — that
-        // says nothing of how long one takes): its round trip, late or not,
+        // An accurate final came (absent, or Moonshine's own: off, skipped,
+        // failed, timed out or a control-only phrase — that says nothing of
+        // how long one takes; voiceTimedFinal): its round trip, late or not,
         // is a sample for the next "over"'s budget (voiceEndBudgetMs of the
         // median, voiceEndTypicalMs); and whether it changed a word.
-        if (typeof x.j.final === "string") {
+        if (voiceTimedFinal(x.j)) {
           voice.rec.ends = voiceKeepLast(voice.rec.ends, Date.now() - t0, VOICE_END_SAMPLES);
           voice.rec.endMs = voiceEndTypicalMs(voice.rec.ends, voice.rec.endMs);
           voice.rec.finals = voiceKeepLast(voice.rec.finals, x.j.same !== true && voicePlainWords(x.j.final) !== voicePlainWords(text), VOICE_FAST_TRUST_WINDOW);

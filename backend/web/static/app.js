@@ -44732,6 +44732,7 @@ var FinalClock = class {
 	}
 };
 var finalClock = new FinalClock();
+var timedFinal = (j) => !!j && typeof j.final === "string" && j.final_by !== "moonshine";
 var SWALLOW_MAX_MS = 5e3;
 var SWALLOW_STREAM_MAX_MS = 5e4;
 var withErase = (o, erase) => erase ? {
@@ -47457,13 +47458,14 @@ function serverRecognizer(opts = {}) {
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 				const ran = typeof r.j.final === "string";
+				const timed = timedFinal(r.j);
 				const fms = Number(r.j.final_ms);
-				if (ran && fms > 0) {
+				if (timed && fms > 0) {
 					self.finalMs = fms;
 					voiceMark("final");
 				}
 				const committed = wordsOf(r.j.committed);
-				if (ran) {
+				if (timed) {
 					if (c.byWord && c.endAt) finalClock.note(Date.now() - c.endAt);
 					const fast = joinWords(c.said, committed);
 					finalClock.verdict(r.j.same !== true && plainWords(wordsOf(r.j.final)) !== plainWords(fast));

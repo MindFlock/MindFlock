@@ -57,9 +57,11 @@ growing window and commits the words two passes agree on, and
 at its end. For English, when ``moonshine-voice`` and its model are
 installed (``core.speech_moonshine``; Settings → Voice installs them), the
 live words come from Moonshine tiny-streaming instead
-(:func:`stream_engine`, :meth:`LocalSTT.stream_engine`): its own text is a
-short phrase's final (~30 ms after the person stops), and the whisper
-accurate pass still polishes a long one. ``voice.stt_stream_model``: ``""``
+(:func:`stream_engine`, :meth:`LocalSTT.stream_engine`): Moonshine hears
+the control words (live, and its own text of the phrase at the end), and
+the whisper accurate pass writes every phrase's final text — Moonshine's
+stands only when that pass fails or times out, or the phrase is nothing
+but a control phrase ("stop", "over", a switch). ``voice.stt_stream_model``: ``""``
 picks Moonshine when it is installed, ``"moonshine"`` the same, a whisper
 name keeps whisper. Its model is cached under ``moonshine:tiny-streaming``
 beside the whisper keys (:func:`is_stt_key`), warmed, kept resident and

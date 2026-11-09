@@ -79,6 +79,24 @@ console.log(JSON.stringify([
     assert out[6] == {"text": "submit", "fixed": True, "ms": 0}
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_only_the_accurate_passs_final_is_a_sample():
+    # A Moonshine stream answers a control-only phrase (or a timed-out
+    # pass) with Moonshine's own text: no sample for the "over" budget.
+    script = _whole(_js(), "voiceTimedFinal") + """
+console.log(JSON.stringify([
+  voiceTimedFinal({final: "fix the bug", final_ms: 700}),
+  voiceTimedFinal({final: "fix the bug", final_by: "whisper"}),
+  voiceTimedFinal({final: "Stop.", final_by: "moonshine"}),
+  voiceTimedFinal({committed: "bag"}),
+  voiceTimedFinal(null),
+]));
+"""
+    assert _run(script) == [True, True, False, False, False]
+    end = _inner(_js(), "streamEnd")
+    assert "if (voiceTimedFinal(x.j)) {" in end
+
+
 def test_the_final_is_typed_over_the_phrase_before_the_rules_read_it():
     js = _js()
     end = _inner(js, "streamEnd")

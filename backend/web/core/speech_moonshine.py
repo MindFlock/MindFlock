@@ -1,6 +1,7 @@
-"""Streaming recognition on Moonshine tiny-streaming: final text ~60 ms
-after the person stops, where the whisper pipeline (``core.speech_stream``)
-waits ~1 s for its accurate pass (bench: ``notes/stt-2026-11/bench.md`` on
+"""Streaming recognition on Moonshine tiny-streaming: the live words and
+the control words ~60 ms after they are said, where whisper's own fast tier
+(``core.speech_stream``) takes ~1 s a pass; whisper's accurate pass still
+writes every phrase's final text (bench: ``notes/stt-2026-11/bench.md`` on
 branch ``emandel2630/stt-investigation``; this lane's own numbers come from
 ``tests/bench/moonshine_lane_bench.py``).
 
@@ -8,10 +9,10 @@ branch ``emandel2630/stt-investigation``; this lane's own numbers come from
 subclass, so the routes, the registry's sweep and ``Stream.turn`` work on it
 unchanged: ``feed(samples) → (newly committed words, unstable tail)``,
 ``finish() → {"committed", "partial": "", "final", "final_ms",
-"final_wait_ms", "final_early", "same"}`` (plus ``"final_by"``:
-``"moonshine"`` or ``"whisper"``), ``turn()``, ``last_ms``,
-``last_window_s``, ``held_seconds``, ``text``, ``words``, ``client``,
-``touched``, ``busy``.
+"final_wait_ms", "final_early", "same"}`` (plus ``"heard"``, Moonshine's own
+text, and ``"final_by"``: ``"moonshine"`` or ``"whisper"``), ``turn()``,
+``last_ms``, ``last_window_s``, ``held_seconds``, ``text``, ``words``,
+``client``, ``touched``, ``busy``.
 
 How the words come. Moonshine is a true streaming model: the audio is fed
 into one engine stream that keeps its encoder state, and every pass decodes
@@ -27,20 +28,27 @@ first half of a split wake word ("Mind" of "Mind flock") is held back until
 the next word shows it is not (:func:`join_wake`): the client never types
 half the wake word.
 
-The final. :meth:`MoonshineStream.finish` stops the engine stream (the
-last line completes, ~2–60 ms) and the Moonshine text of the whole phrase
-IS the final for a short phrase — commands, radio words, session names,
-less than :data:`POLISH_MIN_SECONDS` of speech. A longer one (dictation,
-where Moonshine tiny makes ~13% word errors on real speech against whisper
-``small``'s ~8%) still gets the whisper accurate pass when the stream was
-opened with an ``accurate(audio)`` callable (``LocalSTT.final_transcriber``):
-the same early start on the quiet tail and the same lane as
-``speech_stream.Stream``, and its text replaces Moonshine's when it lands
-(``final_by: "whisper"``). Only that early pass polishes: ``finish`` never
-starts one (a phrase cut off mid-speech, or one whose early pass went stale,
-keeps Moonshine's final at once) and waits at most :data:`POLISH_WAIT_S` for
-it; a pass that fails or runs past that leaves Moonshine's final standing. :attr:`MoonshineStream.wants_polish` says beforehand whether
-a phrase qualifies.
+The final. Two jobs, two models. Moonshine (keyterm-biased, ~60 ms) hears
+the CONTROL words — the wake word, "over", the end, clear, stop and hush
+phrases, a session's name: the live words, and ``heard`` at the end (its
+own text of the whole phrase). Whisper (``small`` with the same hints, ~8%
+word errors on real speech and ~5% on commands against Moonshine tiny's
+~13% and ~10%) writes the TEXT: every phrase with at least
+``speech_stream.FINAL_MIN_SECONDS`` of speech gets the accurate pass when
+the stream was opened with an ``accurate(audio)`` callable
+(``LocalSTT.final_transcriber``), exactly as ``speech_stream.Stream`` runs
+it — started early on the quiet tail (:data:`EARLY_QUIET_SECONDS`, or
+``RADIO_QUIET_SECONDS`` once Moonshine's words end in a send, end or stop
+phrase), started fresh by :meth:`MoonshineStream.finish` when there is no
+early pass or the speech went on past it, waited for up to
+``FINAL_TIMEOUT_S`` — and its text is the ``final`` (``final_by:
+"whisper"``) with its trailing control phrase made Moonshine's
+(:func:`with_control`: a "…, over" whisper heard as "ober" still sends,
+with whisper's words before it). Moonshine's text is the ``final``
+(``final_by: "moonshine"``) when the pass is off, skipped, failed or timed
+out — and, at once with no pass at all, for a phrase that is only a
+control phrase (:func:`control_only`: "stop", "over", a switch to a
+session): acting on it never waits for whisper.
 
 Keyterms. Moonshine streaming models take a list of terms to bias towards
 (``Transcriber.set_keyterms``): :func:`keyterms` splits the same hint string
@@ -79,13 +87,14 @@ from backend.web.core import speech_stream as _stream
 __all__ = [
     "ARCH",
     "CACHE_KEY",
+    "EARLY_QUIET_SECONDS",
     "MODULE",
     "MoonshineEngine",
     "MoonshineStream",
     "PACKAGE",
-    "POLISH_MIN_SECONDS",
-    "POLISH_WAIT_S",
+    "NO_TEXT_KINDS",
     "available",
+    "control_only",
     "engine",
     "fetch_model",
     "join_wake",
@@ -94,6 +103,7 @@ __all__ = [
     "open_stream",
     "supports",
     "unavailable_reason",
+    "with_control",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -114,18 +124,40 @@ MODEL_FILES = (
     "tokenizer.bin",
     "streaming_config.json",
 )
-#: Seconds of speech (loud 100 ms frames, ``Stream.voiced_s``) from which a
-#: phrase still gets the whisper accurate pass after Moonshine's final.
-POLISH_MIN_SECONDS = 4.0
-#: How long ``finish`` waits for a long phrase's whisper polish (the early
-#: pass, already running since the quiet tail) before Moonshine's text
-#: stands. A polish is never STARTED at the end: no early pass (the phrase
-#: was cut off mid-speech) or a stale one (speech after it began) → the
-#: Moonshine final, at once. Real-time bench (20 LibriSpeech phrases of
-#: 5-30 s, 900 ms turn hold): /end p50 349 ms; 6-13 s phrases 0.1-0.8 s;
-#: 16-19 s ~0.8-1.1 s; a 30 s one sat out the whole 1.5 s timeout for
-#: nothing. WER 12.5% typed → 8.2% polished.
-POLISH_WAIT_S = 1.0
+#: ``voice_router.command`` kinds that need no text: a phrase Moonshine
+#: hears as one of them is acted on at once, without the whisper pass
+#: (:func:`control_only`). ``new``, ``answer``, ``question`` and ``help``
+#: carry the person's words, so they wait for whisper's.
+NO_TEXT_KINDS = frozenset(
+    {
+        "cancel",
+        "stop",
+        "hush",
+        "off",
+        "repeat",
+        "condense",
+        "switch",
+        "switch_index",
+        "switch_rel",
+        "list",
+        "needs",
+        "status",
+        "read",
+        "pick",
+    }
+)
+#: The quiet after the last loud frame that starts the whisper pass early
+#: when Moonshine's words do not end in a radio word (those start it after
+#: ``speech_stream.RADIO_QUIET_SECONDS``). Longer than whisper's own lane
+#: (``speech_stream.EARLY_QUIET_SECONDS``, 0.3 s): a pass started on a
+#: pause mid-phrase goes stale yet keeps the accurate lane until it
+#: returns, and the pass that counts queues behind it. The clients end a
+#: phrase without a radio word after 0.9 s of quiet or more, so this still
+#: gives that pass a 0.3 s head start. Real-time bench
+#: (``tests/bench/moonshine_lane_bench.py``): 0.3 → 0.6 s took /end p95
+#: 1514 → 1114 ms and timeouts 4 → 0 on the 48 commands, p95 1553 → 1264
+#: ms and timeouts 3 → 1 on 25 LibriSpeech phrases (p50 289 → 569 ms).
+EARLY_QUIET_SECONDS = 0.6
 #: Load the model with ONNX Runtime on one thread (see the module doc).
 SINGLE_THREAD = True
 _THREAD_ENV = "MOONSHINE_ORT_SINGLE_THREAD"
@@ -363,6 +395,111 @@ def _holds(words: Sequence[str], paid: int, n: int, wake: str) -> bool:
     return False
 
 
+def _control_tail(text: str, words: Optional[dict]) -> Tuple[str, int]:
+    """The control phrase ``text`` ends with (``voice_words.control_kind``
+    with ``words``) and how many of its last whitespace-separated tokens
+    say it — the fewest that are that phrase on their own ("…, over it" →
+    ``("send", 2)``) → ``("", 0)`` when there is none."""
+    from backend.web.core import voice_words as _voice_words
+
+    kind = _voice_words.control_kind(text, words) or ""
+    toks = str(text or "").split()
+    if not kind:
+        return "", 0
+    for n in range(1, len(toks) + 1):
+        if _voice_words.control_kind(" ".join(toks[-n:]), words) == kind:
+            return kind, n
+    return kind, len(toks)
+
+
+def _unwake(toks: List[str], words: Optional[dict]) -> List[str]:
+    """``toks`` without a leading wake word ("Mindflock, stop." → "stop.")."""
+    if toks and _letters(toks[0]) == _letters(_wake_of(words)):
+        return toks[1:]
+    return toks
+
+
+def control_only(heard: str, words: Optional[dict] = None) -> bool:
+    """Whether Moonshine's text of a phrase (``heard``) is a control phrase
+    with nothing to type or send: a hush phrase, a clear phrase (the words
+    before it are thrown away), a send / end / stop phrase with no words
+    before it, or — ending in none of those — a ``voice_router.command`` of
+    a kind in :data:`NO_TEXT_KINDS` (a switch, "stop", "cancel", "what needs
+    me"…); a leading wake word aside. Words before a send, end or stop
+    phrase are text ("Open a pull request for this branch, over" is no
+    switch). Such a phrase is acted on at once: no whisper pass is waited
+    for. ``words``: the effective voice words (None: the defaults)."""
+    toks = _unwake(str(heard or "").split(), words)
+    text = " ".join(toks)
+    if not _letters(text):
+        return False
+    try:
+        kind, n = _control_tail(text, words)
+        if kind in ("hush", "clear"):
+            return True
+        if kind:
+            return not _letters(" ".join(toks[:-n]))
+        from backend.web.core import voice_router as _voice_router
+
+        cmd = _voice_router.command(text, words)
+    except Exception:  # noqa: BLE001 — a hint: whisper's text then
+        _logger.debug("voice: control_only failed on %r", text, exc_info=True)
+        return False
+    return cmd is not None and cmd.get("kind") in NO_TEXT_KINDS
+
+
+def with_control(final: str, heard: str, words: Optional[dict] = None) -> str:
+    """Whisper's text of a phrase (``final``) ending in the control phrase
+    Moonshine heard (``heard``) — the control words are Moonshine's, the
+    words before them whisper's. When ``heard`` ends in a send, end, clear
+    or stop phrase and ``final`` does not end in the same kind, ``final``'s
+    own control phrase (one of another kind), or else its last words that
+    sound like Moonshine's control words, or else its last words beyond the
+    count of Moonshine's words before them that are none of those words,
+    make way for Moonshine's: "Send the report, okay." + "Send the report
+    over." → "Send the report over."; "Send the report." → "Send the report
+    over."; "Mind flock, run it." + "Mindflock, run it, over." keeps "it".
+    ``final`` unchanged otherwise (no such phrase in ``heard``, or the same
+    kind in both: the clients strip it as ever)."""
+    from backend.web.core import voice_words as _voice_words
+
+    try:
+        kind, n = _control_tail(heard, words)
+        if kind not in ("send", "end", "clear", "stop"):
+            return final
+        fkind, fn = _control_tail(final, words)
+        if fkind == kind:
+            return final
+        htoks, ftoks = str(heard).split(), str(final).split()
+        tail = htoks[-n:]
+        if fkind:
+            drop = fn
+        else:
+            said = " ".join(tail)
+            drop = next(
+                (
+                    d
+                    for d in range(min(n + 1, len(ftoks)), 0, -1)
+                    if _voice_words.sounds_like(" ".join(ftoks[-d:]), said)
+                ),
+                0,
+            )
+            if not drop:
+                # Words whisper has beyond Moonshine's body, none of them a
+                # word of that body: the garbled control phrase.
+                body = {_letters(w) for w in htoks[:-n]}
+                most = max(0, min(len(ftoks) - (len(htoks) - n), n))
+                while drop < most and _letters(ftoks[-1 - drop]) not in body:
+                    drop += 1
+        keep = ftoks[: len(ftoks) - drop]
+        if keep:
+            keep[-1] = keep[-1].rstrip(".,!?;:")
+        return " ".join(keep + tail)
+    except Exception:  # noqa: BLE001 — whisper's text as it came
+        _logger.debug("voice: with_control failed", exc_info=True)
+        return final
+
+
 # --------------------------------------------------------------------------- #
 # The stream
 # --------------------------------------------------------------------------- #
@@ -373,7 +510,8 @@ def _no_transcribe(audio, prompt):  # pragma: no cover — never called
 class MoonshineStream(_stream.Stream):
     """One live recognition on Moonshine (see the module doc). ``engine``:
     a :class:`MoonshineEngine` (default: :func:`engine`); ``accurate``: the
-    whisper pass for long phrases (``LocalSTT.final_transcriber``, or None);
+    whisper pass that writes every phrase's ``final``
+    (``LocalSTT.final_transcriber``, or None: Moonshine's text stands);
     ``hints``: the keyterm source (``speech.recognition_hints``)."""
 
     def __init__(
@@ -404,17 +542,6 @@ class MoonshineStream(_stream.Stream):
         """Audio since the last line Moonshine completed, in seconds."""
         return max(0.0, self._fed - self._held_from)
 
-    @property
-    def wants_polish(self) -> bool:
-        """This phrase, so far, would get the whisper accurate pass at its
-        end: an ``accurate`` callable, at least :data:`POLISH_MIN_SECONDS`
-        of speech, and not trimmed."""
-        return (
-            self._accurate is not None
-            and not self.phrase_trimmed
-            and self.voiced_s >= POLISH_MIN_SECONDS
-        )
-
     def feed(self, samples: Sequence[float]) -> Tuple[str, str]:
         """Append ``samples`` (float32 at 16 kHz) and run one pass →
         ``(newly committed words, the open line's uncommitted tail)``. No
@@ -433,44 +560,42 @@ class MoonshineStream(_stream.Stream):
                 return "", self._tail_text()
             self._add(samples)
             if quiet:
-                self._start_early()
+                self._start_early(
+                    _stream.RADIO_QUIET_SECONDS if self._radio_end() else None
+                )
             else:
                 self._unheard = True
                 self._stale_early()
             if quiet and not self._tail:
                 return "", ""
             new = self._update(final=False)
+            if self._radio_end():
+                # Moonshine heard the words end in "over", an end or a stop
+                # phrase: the client ends the phrase within 100-350 ms.
+                self._start_early(_stream.RADIO_QUIET_SECONDS)
             self.touched = _stream._now()
             return _stream._join(new), self._tail_text()
 
     def finish(self) -> dict:
         """End the phrase: the engine stream stops (its open line completes)
         → ``{"committed": the words not committed before, "partial": ""}``
-        plus ``final`` (Moonshine's text of the whole phrase, or the whisper
-        pass's for a long one — see the module doc), ``final_ms``,
+        plus, whenever any words were heard, ``final`` (the whisper accurate
+        pass's text of the whole phrase, its control phrase Moonshine's:
+        :func:`with_control`; Moonshine's own text when the pass is off,
+        skipped, failed or timed out, or the phrase is only a control phrase:
+        :func:`control_only`), ``heard`` (Moonshine's own text of the whole
+        phrase: what the control words are read off), ``final_ms``,
         ``final_wait_ms``, ``final_early``, ``same`` (``final`` is the
-        committed text up to ``same_text``) and ``final_by`` — whenever any
-        words were heard."""
+        committed text up to ``same_text``) and ``final_by``."""
         with self._lock:
             self.touched = _stream._now()
             phrase, self._phrase = self._phrase, array("f")
             early, self._early = self._early, None
-            # Polish rides the EARLY pass only (started on the quiet tail):
-            # a fresh one started here would cost the whole pass again,
-            # ~1 s+ on a long phrase (see POLISH_WAIT_S).
-            polish = (
-                self.wants_polish
-                and bool(phrase)
-                and early is not None
-                and not early.stale
-            )
-            if early is not None and not polish:
-                early.cancel("the Moonshine final stands")
             started = time.monotonic()
             try:
                 rest = self._update(final=True)
             except BaseException:
-                if early is not None and polish:
+                if early is not None:
                     early.cancel("the Moonshine flush failed")
                 raise
             finally:
@@ -479,20 +604,45 @@ class MoonshineStream(_stream.Stream):
             out: dict = {"committed": _stream._join(rest), "partial": ""}
             fast = self.text
             spoken = self._spoken()
+            run = (
+                self._accurate is not None
+                and bool(phrase)
+                and not self.phrase_trimmed
+                and self.voiced_s >= _stream.FINAL_MIN_SECONDS
+                and not control_only(spoken, self.words)
+            )
+            job: Optional[_stream._Early] = None
+            if not run:
+                if early is not None:
+                    early.cancel("the Moonshine final stands")
+            elif not self._covers(early):
+                # No early pass, or one the speech went on past: the whole
+                # phrase again (the flush above is Moonshine's ~2-60 ms).
+                job = self._fresh(phrase, early)
         self.final_early = False
+        self.final_outcome = ""
         final, self.final_by = "", ""
-        if polish:
-            final = self._await(early, POLISH_WAIT_S)  # type: ignore[arg-type]
-            if final:
-                final, self.final_by = join_wake(final, _wake_of(self.words)), "whisper"
-        if not final and spoken:
+        if run:
+            if job is not None:
+                final = self._final(job)
+            else:
+                final = self._await(early)  # type: ignore[arg-type]
+            _stream._record(self.final_wait_ms, self.final_outcome)
+            self._log_timing(len(phrase) / _stream.RATE)
+        self.pass_ms = []
+        if final:
+            final = with_control(
+                join_wake(final, _wake_of(self.words)), spoken, self.words
+            )
+            self.final_by = "whisper"
+        elif spoken:
             final, self.final_by = spoken, "moonshine"
             self.final_ms = self.final_wait_ms = moon_ms
             self.final_early = False
         if final:
-            _stream._record(self.final_wait_ms)
             out.update(
                 final=final,
+                heard=spoken,
                 final_ms=self.final_ms,
                 final_wait_ms=self.final_wait_ms,
                 final_early=self.final_early,
@@ -513,10 +663,8 @@ class MoonshineStream(_stream.Stream):
             pass
 
     # -- internals (under the lock) -------------------------------------- #
-    def _start_early(self) -> None:
-        if self.voiced_s < POLISH_MIN_SECONDS:
-            return
-        super()._start_early()
+    def _start_early(self, quiet: Optional[float] = None) -> None:
+        super()._start_early(EARLY_QUIET_SECONDS if quiet is None else quiet)
 
     def _tail_text(self) -> str:
         return _stream._join(self._tail)
@@ -551,6 +699,7 @@ class MoonshineStream(_stream.Stream):
         except Exception as err:  # noqa: BLE001
             raise _speech.SpeechError("Moonshine failed: %s" % err) from err
         self.last_ms = int((time.monotonic() - started) * 1000)
+        self.pass_ms.append(self.last_ms)
         self.last_window_s = max(0.0, self._fed - self._passed_at)
         self._passed_at = self._heard_end = self._fed
         self._unheard = False

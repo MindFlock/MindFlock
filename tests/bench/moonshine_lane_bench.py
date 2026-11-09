@@ -41,8 +41,10 @@ counts). Per setting and set:
 
 ``--polish`` gives the stream the production whisper accurate pass
 (``LocalSTT.final_transcriber`` with the production hints, faster-whisper
-from ``$STT_BENCH_MODELS/mfvoice``), which runs only on phrases with
-``POLISH_MIN_SECONDS`` of speech or more — **polished** counts them.
+from ``$STT_BENCH_MODELS/mfvoice``), which writes every phrase's final but a
+control-only one (``speech_moonshine.control_only``) — **polished** counts
+the finals it wrote. (Until 2026-11-08 it ran only on phrases with 4 s of
+speech or more, ``POLISH_MIN_SECONDS``: the tables below that say so.)
 
 Results 2026-11-07 (8-core Core Ultra 9 275HX under WSL2, 0.8–2.9 other
 cores busy at each start; moonshine-voice 0.1.6, tiny-streaming, keyterms
@@ -86,6 +88,31 @@ speech (Moonshine's final, ~10 ms); 6–13 s clips wait 0.1–0.8 s for the
 polish; 16–19 s clips 0.8–1.1 s; a 30 s clip sat out the whole 1.5 s and
 got Moonshine's text anyway. Hence ``POLISH_WAIT_S``: polish only rides the
 early pass and is waited for at most 1 s.
+
+Results 2026-11-08, ``--polish --realtime``: whisper writes every
+phrase's final (Moonshine hears the control words, ``with_control`` gives
+whisper's text Moonshine's control phrase; a control-only phrase answers at
+once), the early pass after 0.6 s of quiet or 0.1 s after a radio word, the
+wait ``speech_stream.FINAL_TIMEOUT_S`` (1.5 s) — against the 4 s / 1 s
+policy before it, on the same machine the same evening (load ~1.5–3):
+
+| set | hold ms | rule | finish call p50/p95 ms | WER final / typed | ctl | polished |
+|---|---|---|---|---|---|---|
+| piper (48) | 350 | before | 44 / 115 | 8.3 / 8.7% | 45/48 | 0/48 |
+| piper (48) | 350 | now | 541 / 1114 | 6.9 / 8.7% | 46/48 | 28/48 |
+| libri first 25 | 900 | before | 129 / 1029 | 9.6 / 11.6% | — | 10/25 |
+| libri first 25 | 900 | now | 569 / 1264 | 7.7 / 11.6% | — | 24/25 |
+| libri ≥ 4.5 s (20) | 900 | before | 1023 / 1048 | 12.5 / 12.5% | — | 0/20 |
+| libri ≥ 4.5 s (20) | 900 | now | 560 / 1159 | 7.6 / 12.5% | — | 19/20 |
+
+The before row on the long phrases: every polish ran past its 1 s wait
+that evening, so all 20 got Moonshine's text after waiting the second
+anyway. The piper set's 20 control-only phrases ("Over.", "Stop.",
+"Disregard that.", "switch to …") answer in ~2–120 ms either way. The early
+start's quiet: 0.3 s (whisper's own lane) left a stale pass from a
+mid-phrase pause holding the accurate lane — p95 1514 / 1553 ms and 4 / 3
+timeouts on piper / libri-25, against 1114 / 1264 ms and 0 / 1 at 0.6 s
+(p50 481 / 289 → 541 / 569 ms).
 
 Before every process ``all`` waits until the machine's other processes use
 fewer than :data:`MAX_LOAD` cores (``/proc/stat``). Results go to

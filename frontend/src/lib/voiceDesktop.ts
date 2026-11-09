@@ -910,6 +910,13 @@ export class FinalClock {
   }
 }
 export const finalClock = new FinalClock();
+/** Whether an /end answer's final is the accurate pass's — a sample for
+ * {@link finalClock}: it has one, and not Moonshine's own text (`final_by:
+ * "moonshine"`: a control-only phrase answered at once, or a pass that
+ * timed out — neither says how long the accurate pass takes, nor whether
+ * it changes words). */
+export const timedFinal = (j: Record<string, unknown> | null | undefined): boolean =>
+  !!j && typeof j.final === "string" && j.final_by !== "moonshine";
 /** A phrase taken from its guess: its own late words and end are ignored —
  * for at most this long (a phrase whose end never comes). */
 export const SWALLOW_MAX_MS = 5000;
@@ -5162,15 +5169,17 @@ export function serverRecognizer(
         // otherwise (`same`: nothing to correct; absent — off, skipped,
         // failed or timed out — the fast words stand).
         const ran = typeof r.j.final === "string";
+        const timed = timedFinal(r.j);
         const fms = Number(r.j.final_ms);
-        if (ran && fms > 0) {
+        if (timed && fms > 0) {
           self.finalMs = fms;
           voiceMark("final");
         }
         const committed = wordsOf(r.j.committed);
-        if (ran) {
-          // Measured only when a final came (a timeout says nothing of how
-          // long one takes), late or not; and whether it changed a word.
+        if (timed) {
+          // Measured only when an accurate final came (a timeout, or
+          // Moonshine's own text, says nothing of how long one takes), late
+          // or not; and whether it changed a word.
           if (c.byWord && c.endAt) finalClock.note(Date.now() - c.endAt);
           const fast = joinWords(c.said, committed);
           finalClock.verdict(r.j.same !== true && plainWords(wordsOf(r.j.final)) !== plainWords(fast));
