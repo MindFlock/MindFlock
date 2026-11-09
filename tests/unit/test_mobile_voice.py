@@ -1496,7 +1496,7 @@ def test_voice_matchers_under_node():
         "go to API docs": "switch:api docs",
         "What's it doing?": "status",
         "Never mind.": "cancel",
-        "scratch that": "cancel",
+        "scratch that": None,  # the undo radio word, not a command
         "who needs me": "needs",
         "summarize that": "condense",
         "Say that again": "repeat",

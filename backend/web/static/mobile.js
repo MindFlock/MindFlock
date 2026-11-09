@@ -57,6 +57,7 @@
   var ws = null;
   var closedByUs = false;       // true when we intentionally tear down a ws
   var current = null;           // selected session title
+  var previousSel = null;       // the one selected before it: voice's "go back" (switch_back)
   // Two different "which tab": `view` is what the screen shows (the Diff panel
   // is a view with no PTY behind it), `tab` is which tmux session the terminal
   // is attached to. Splitting them is what lets Diff overlay the terminal
@@ -175,6 +176,7 @@
   function select(title) {
     if (title === current && term) return;
     disconnect();
+    if (current && title && title !== current) previousSel = current;
     current = title;
     awaitingReady = "";          // a new selection supersedes a provisioning wait
     setCtrl(false);
@@ -4930,6 +4932,9 @@
           voice.rec.finals = voiceKeepLast(voice.rec.finals, x.j.same !== true && voicePlainWords(x.j.final) !== voicePlainWords(text), VOICE_FAST_TRUST_WINDOW);
         }
         if (g.late) return;   // "over" went with the fast words already
+        // Moonshine's own text of the phrase: the router decides the
+        // control words on it (voiceRouteBody's `heard`).
+        voice.heardEnd = typeof x.j.heard === "string" && x.j.heard.trim() ? { final: fin.text, heard: x.j.heard, at: Date.now() } : null;
         
         voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: String(x.j.backend || "stream"), error: "", at: Date.now(),
                            finalMs: fin.ms, fixed: fin.fixed };
@@ -6165,6 +6170,7 @@
   var VOICE_CHIMES = {
     start: { tones: [[660, 0], [990, 0.06]], gain: 0.25, len: 0.06 },
     stop: { tones: [[880, 0], [660, 0.07]], gain: 0.16, len: 0.07 },
+    done: { tones: [[990, 0]], gain: 0.12, len: 0.05 },   // a voice action done (a scroll, an interrupt): no words
   };
   var VOICE_CHIME_MS = 230;   // a chime and the audio engine's latency: the recorder skips this long
   // A context not running yet (the tap's resume() is still on its way; iOS
@@ -6200,7 +6206,7 @@
       });
       voice.micMuteUntil = Math.max(voice.micMuteUntil || 0, Date.now() + VOICE_CHIME_MS);
       voice.chimes = voice.chimes || { start: 0, stop: 0 };
-      voice.chimes[kind]++;
+      voice.chimes[kind] = (voice.chimes[kind] || 0) + 1;
     }
     try {
       if (ctx.state === "running") {
@@ -6716,6 +6722,10 @@
     if (stop) { voiceStopPhrase(stop.text, mode); return; }
     // A select question the ask sheet shows: its words, its buttons.
     if (mode === "dialog" && askSelVoiceOn()) { askSelVoice(text, spokeAt); return; }
+    // "Scratch that" (the undo words) at the end: the words said before it
+    // in this phrase never go in; said alone, the last phrase typed and not
+    // yet sent comes back out of the box.
+    if (mode !== "dialog" && voiceUndoParse(text)) { voiceUndo(voiceUndoParse(text)); return; }
     var p = voiceDictParse(text);
     p.spokeAt = spokeAt;
     if (mode === "dialog") {
@@ -6779,6 +6789,31 @@
     box.value = cur ? cur + " " + text : text;
     vboxSized();
     voice.dictated = true;
+    voice.lastAppend = { box: box, text: String(text) };   // what "scratch that" alone takes back
+  }
+  // A phrase ending in an undo phrase ("…, scratch that") → {before: the
+  // words before it, normalized ("" when it was said alone)}, else null.
+  function voiceUndoParse(text) {
+    var m = VOICE_W.undo.exec(voiceNorm(text));
+    return m ? { before: m[1] || "" } : null;
+  }
+  // Undo: the phrase's own words are dropped (never typed); alone, the last
+  // phrase voiceAppend put in the box goes back out — while it is still the
+  // box's tail (sent or edited since: nothing to take back).
+  function voiceUndo(u) {
+    var took = !!u.before;
+    if (!took) {
+      var last = voice.lastAppend, box = last && last.box;
+      var cur = box ? box.value.replace(/\s+$/, "") : "";
+      if (box && last.text && cur.slice(cur.length - last.text.length) === last.text) {
+        box.value = cur.slice(0, cur.length - last.text.length).replace(/\s+$/, "");
+        if (box === composeEl) autosizeCompose();
+        took = true;
+      }
+      voice.lastAppend = null;
+    }
+    voiceStripNote(took ? "Taken back" : "Nothing to take back");
+    voiceListenContinue();
   }
   // --- the guess: a streamed phrase in the box while it is said -------------
   // Like a phone keyboard's dictation: after every chunk ServerSTT hands
@@ -6987,8 +7022,13 @@
                             "no nope nah deny denied reject don't dont not skip cancel stop always and ask me again never " +
                             "thanks thank you please").split(" ");
   var VOICE_MAY_CMD = [
-    "cancel", "never mind", "nevermind", "scratch that", "forget it",
-    VOICE_VERBS + " to *", VOICE_VERBS + " over to *", "focus|open|show|select *", "go back",
+    "cancel", "never mind", "nevermind", "forget it",
+    VOICE_VERBS + " to *", VOICE_VERBS + " over to *", "focus|open|show|select *", "go|switch|take back *", "back",
+    "the one before", "scroll *", "page up|down *", "half page *", "jump|go|scroll back to *", "back to the *",
+    "show me the *", "show the *", "more", "keep going|scrolling", "scroll more", "further", "again", "a bit|little more",
+    "some more", "once more", "interrupt *", "press|hit|send escape *", "press|hit|send the escape *", "escape", "escape key",
+    "where am|are *", "which|what session *", "what can i say *", "help", "voice commands", "list|show the|voice commands",
+    "bring|pull *",
     "what|which sessions *", "list sessions", "list the|my sessions",
     "what's|whats *", "what is|was *", "what does *", "what did it say", "what|who needs *",
     "status", "summarize|summarise", "summarize|summarise that|it", "summary",
@@ -7124,12 +7164,12 @@
   // (voiceIsHush); the stop tail (voiceTail) takes a stop phrase heard a
   // letter off only after every exact reading (as the server and desktop).
   var VOICE_WORDS_DEFAULT = {
-    send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"],
+    send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"], undo: ["scratch that", "undo that"],
     stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
     hush: ["stop talking", "be quiet", "quiet", "hush", "shut up", "enough"],
     wake: "mindflock",
   };
-  var VOICE_WORD_KINDS = ["send", "end", "clear", "stop", "hush"];
+  var VOICE_WORD_KINDS = ["send", "end", "clear", "stop", "hush", "undo"];
   var VOICE_WORD_VARIANTS = {
     "stop listening": ["stop recording", "stop dictating", "stop the mic", "stop the microphone"],
     "mic off": ["microphone off"],
@@ -7290,6 +7330,7 @@
     var stop = voiceWordsWide(w.stop, H.stop), hush = voiceWordsWide(w.hush, H.hush);
     var clear = voiceWordsWide(w.clear, H.clear), tails = [];
     var send = voiceWordsWide(w.send, H.send), end = voiceWordsWide(w.end, H.end);
+    var undo = voiceWordsWide(w.undo, H.undo);
     clear.forEach(function (p) { VOICE_CLEAR_TAILS.forEach(function (t) { tails.push(p + " " + t); }); });
     VOICE_W = {
       words: w,
@@ -7304,8 +7345,10 @@
       stopSaid: stop.filter(function (p) { return p.indexOf(" ") > 0; }),
       stopCmd: new RegExp("^" + voiceWordsAlt(stop.concat(w.stop.indexOf("mic off") >= 0 ? VOICE_WORD_CMD_VARIANTS["mic off"] : []), " ", "'") + "$"),
       hush: new RegExp("^" + voiceWordsAlt(hush, " ", "'") + "$"),
+      // voiceUndoParse, on normalized words: an undo phrase at the END.
+      undo: new RegExp("^(?:(.*) )?" + voiceWordsAlt(undo, " ", "'") + "$"),
       holdStop: voiceWordsBare(stop),
-      holdAlways: voiceWordsBare(send.concat(end, clear, tails, hush)),
+      holdAlways: voiceWordsBare(send.concat(end, clear, tails, hush, undo)),
       // voiceMayBeCommand's patterns: one slot per word ("that's|thats").
       mayCmd: voiceWordsBare(stop.concat(hush)).map(function (p) { return p.split(" ").map(function (x) { return [x]; }); }),
     };
@@ -7325,7 +7368,9 @@
   // hush ("stop talking") is not "stop": it cuts the voice, the mic goes on.
   var VOICE_CMD = [
     { kind: "hush",     words: "hush" },   // the owner's (VOICE_W)
-    { kind: "cancel",   re: /^(?:cancel|never ?mind|scratch that|forget it)$/ },
+    { kind: "cancel",   re: /^(?:cancel|never ?mind|forget it)$/ },   // "scratch that" is the undo radio word (voiceUndoParse)
+    { kind: "switch_back", re: /^(?:(?:go|switch|take me) back|back|go back to the (?:last|previous) one|(?:the )?last session|the one before)$/ },
+    { kind: "where",    re: /^(?:where am i|(?:which|what) session is this|what session am i (?:in|on))$/ },
     { kind: "switch_index", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?session (?:number )?(\S+)$/ },
     { kind: "switch_rel", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?(?:the )?(next|previous|prev) (?:session|one)$/ },
     { kind: "switch",   re: /^(?:switch|go|change|jump) (?:over )?to (.+)$/ },
@@ -7399,6 +7444,8 @@
         if (voiceNumber(cmd.arg)) voiceSwitchIndex(voiceNumber(cmd.arg)); else voiceSwitch(cmd.arg);
         return;
       case "switch_rel": voiceSwitchRel(cmd.arg === "next" ? 1 : -1); return;
+      case "switch_back": voiceSwitchBack(); return;
+      case "where": voiceWhere(); return;
       case "question": voiceQuestion(voice.session); return;
       case "stop": voiceIdle(vbox().value.trim() ? voiceKept() : undefined); return;
       case "needs": voiceNeedsMe(); return;
@@ -7429,6 +7476,7 @@
                            "needs", "status", "cancel", "stop", "off", "repeat", "condense",
                            "switch_index", "switch_rel", "answer", "question", "hush"];
   VOICE_ROUTE_KINDS.push("ask", "read", "early");
+  VOICE_ROUTE_KINDS.push("scroll", "interrupt", "switch_back", "where", "commands");
   // What the router last asked back ("Which one: a or b?", "In which
   // project?"): its answer's `pending`, sent with the next phrase so the
   // router reads that phrase as the pick, the project or the task — for
@@ -7512,6 +7560,17 @@
     if (!routed || !voiceRouteSafe(p.text)) return;
     L.early = { norm: voiceNorm(p.text), gen: L.gen, at: Date.now(), answer: voiceRoute(p.text, "", true, spokeAt) };
   }
+  // Moonshine's text of the phrase being routed (the last /end's `heard`,
+  // its radio word off as the final's is), when that /end's final is this
+  // phrase — else "".
+  var VOICE_HEARD_MAX_MS = 15000;
+  function voiceHeardFor(text) {
+    var h = voice.heardEnd;
+    if (!h || Date.now() - h.at > VOICE_HEARD_MAX_MS) return "";
+    var t = voiceNorm(text), fin = voiceNorm(h.final), cut = voiceNorm(voiceDictParse(h.final).text);
+    if (!t || (t !== fin && t !== cut)) return "";
+    return voiceDictParse(String(h.heard)).text.trim();
+  }
   // May this phrase go to the router before its final words? Not while the
   // router waits for an answer to its own question (`pending`: the pick, a
   // new session's project or task), and not when it may start a session
@@ -7525,6 +7584,8 @@
   function voiceRouteBody(text, session, spokeAt) {
     var body = { text: text, session: session }, pending = voicePendingTake();
     if (pending) body.pending = pending;
+    var heard = voiceHeardFor(text);
+    if (heard) body.heard = heard;
     // When the phrase began — as an age at send time, so the server reads
     // it on its own clock (spoke_at, this page's clock, is for the record)
     // — and when this page first had each session's dialog: the server
@@ -7590,6 +7651,17 @@
       case "help":
         voiceStopForCommand();
         voiceHelp(res);
+        return true;
+      // Done on the server (a scroll, Escape): the strip says what, a chime,
+      // no words (the owner hears an echo of their own action as noise) —
+      // and the mic listens on, so "more" can follow.
+      case "scroll":
+      case "interrupt":
+        voiceActed(res);
+        return false;
+      case "commands":
+        voiceStopForCommand();
+        voiceCommandsShow(res);
         return true;
       case "needs":
       case "status":
@@ -8811,6 +8883,71 @@
       return endSentence(name + " is " + voiceStateWord(ss));
     }).join(" ") : "Nothing needs you.";
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
+  }
+  // "go back": the session selected before this one (select() keeps it).
+  function voiceSwitchBack() {
+    if (!previousSel || !instByTitle(previousSel) || previousSel === current) {
+      voiceSayThenIdle("There's no session to go back to.");
+      return;
+    }
+    voiceSwitchTo(previousSel);
+  }
+  // "where am I": the focused session's name — an answer, not an echo.
+  function voiceWhere() {
+    var title = voice.session || current;
+    voiceSayThenIdle(title ? endSentence(nameOf(title)) : "No session is open.");
+  }
+  // A scroll / interrupt the router carried out → the strip's word.
+  function voiceActedWord(res) {
+    var other = res.title && res.title !== (voice.session || current) ? " " + nameOf(String(res.title)) : "";
+    if (res.kind === "interrupt") return res.ok ? "Interrupted" + other : "Couldn't interrupt";
+    if (!res.ok) return "Couldn't scroll";
+    if (res.amount === "top") return "At the top";
+    if (res.amount === "bottom") return "At the bottom";
+    return res.dir === "down" ? "Scrolled down" : "Scrolled up";
+  }
+  function voiceActed(res) {
+    voiceStripNote(voiceActedWord(res));
+    voiceChime("done");
+  }
+  // "what can I say": its sentence said, the whole list on a sheet (built
+  // here once; the page's sheets share .sheet / .sheet-box).
+  var voiceCmdSheet = null;
+  function voiceCommandsShow(res) {
+    var items = Array.isArray(res.items) ? res.items : [];
+    if (items.length) {
+      if (!voiceCmdSheet) {
+        voiceCmdSheet = document.createElement("div");
+        voiceCmdSheet.id = "voice-commands-sheet";
+        voiceCmdSheet.className = "sheet hidden";
+        voiceCmdSheet.setAttribute("role", "dialog");
+        voiceCmdSheet.setAttribute("aria-label", "Voice commands");
+        voiceCmdSheet.innerHTML = '<div class="sheet-box"><div class="sheet-title">Say…</div>' +
+          '<div class="sheet-list voice-cmd-list"></div><div class="sheet-actions">' +
+          '<button type="button" class="voice-cmd-close">Done</button></div></div>';
+        voiceCmdSheet.addEventListener("click", function (e) {
+          if (e.target === voiceCmdSheet || (e.target.classList && e.target.classList.contains("voice-cmd-close"))) closeSheet(voiceCmdSheet);
+        });
+        (sessionsSheet.parentNode || document.body).appendChild(voiceCmdSheet);
+      }
+      var list = voiceCmdSheet.querySelector(".voice-cmd-list");
+      list.textContent = "";
+      items.forEach(function (it) {
+        var row = document.createElement("div");
+        row.className = "voice-cmd";
+        var say = document.createElement("div");
+        say.className = "voice-cmd-say";
+        say.textContent = "“" + String(it.say || "") + "”";
+        var does = document.createElement("div");
+        does.className = "voice-cmd-does";
+        does.textContent = String(it.does || "");
+        row.appendChild(say);
+        row.appendChild(does);
+        list.appendChild(row);
+      });
+      openSheet(voiceCmdSheet);
+    }
+    voiceSayThenIdle(String(res.say || "") || "Every command is on the screen.");
   }
   function voiceStatus() {
     var inst = instByTitle(voice.session);

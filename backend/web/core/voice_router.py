@@ -37,6 +37,18 @@ the title against the registry and creates the session. Nothing here
 presses a key: an answer carries the keys, and the client posts them to
 ``/answer``.
 
+Acting on the session itself: ``scroll`` ("scroll up", "page down", "a bit
+more", "back to the bottom" — :func:`scroll_of`) and ``interrupt``
+("interrupt", "press escape", "interrupt docs") come back for the route to
+carry out on the pane (``core.voice_actions``); "more" / "keep going"
+(``scroll_more``) repeat the last scroll only when the route remembers one,
+else they are words. ``switch_back`` ("go back", "last session": the
+client's previously focused session — "previous session" is still the rail
+order's ``switch_rel``), ``where`` ("where am I") and ``commands`` ("what
+can I say", answered from :data:`GUIDE`, the one table of every command)
+complete the set. "Scratch that" is no command: it is the client's radio
+word (``voice_words``' ``undo``).
+
 The default is ``{"kind": "prompt"}``: anything that is not plainly a command
 is words for the current session. A false command is worse than a missed one
 (the missed one still reaches the agent), so every pattern matches the WHOLE
@@ -58,11 +70,14 @@ from backend.web.core.spoken import strip_markdown
 __all__ = [
     "ANSWER_AFTER_S",
     "ANSWERED_MARGIN_S",
+    "GUIDE",
     "LOCAL_KINDS",
+    "NO_TEXT_KINDS",
     "answer",
     "answer_in_time",
     "choice_of",
     "command",
+    "commands_answer",
     "continue_new",
     "dialog_choices",
     "dialog_speech",
@@ -78,6 +93,7 @@ __all__ = [
     "phrase_timing",
     "pick",
     "plan_new",
+    "scroll_of",
     "select_answer",
     "select_choices",
     "select_route",
@@ -89,7 +105,27 @@ __all__ = [
 ]
 
 #: Commands the client carries out itself: the answer has no ``say``.
-LOCAL_KINDS = ("cancel", "stop", "hush", "off", "repeat", "condense")
+LOCAL_KINDS = (
+    "cancel",
+    "stop",
+    "hush",
+    "off",
+    "repeat",
+    "condense",
+    "switch_back",
+    "where",
+)
+#: This module's kinds that carry none of the person's words (beside
+#: ``speech_moonshine.NO_TEXT_KINDS``): the route reads them off the
+#: phrase's Moonshine text (``heard``) when it has one.
+NO_TEXT_KINDS = (
+    "scroll",
+    "scroll_more",
+    "interrupt",
+    "switch_back",
+    "where",
+    "commands",
+)
 #: At most this many names in a "Which one" / "No session called" sentence.
 MAX_NAMES = 6
 #: At most this many sessions read out by "what needs me".
@@ -185,7 +221,9 @@ def _kind_rx(kind: str, words: Optional[dict]) -> "re.Pattern":
 # "stop" are the person's words (``voice.words``): :func:`command` swaps in
 # their patterns; these are the defaults'.
 _CMDS = [
-    ("cancel", re.compile(r"^(?:cancel|never ?mind|scratch that|forget it)$")),
+    # "Scratch that" is the client's radio word (voice_words' ``undo``): it
+    # takes back the words said before it, so it is never a command here.
+    ("cancel", re.compile(r"^(?:cancel|never ?mind|forget it)$")),
     ("switch", re.compile(r"^%s (.+)$" % _VERB_RX)),
     (
         "list",
@@ -225,11 +263,115 @@ _INDEX_RES = [
 ]
 # "the second one" alone: an option when the session is asking, else a session.
 _PICK_RE = re.compile(r"^(?:the )?(%s) one$" % _ORD_RX)
-# "next session", "go to the previous one", "go back".
+# "next session", "go to the previous one", a bare "next" — the client's own
+# order ("go back" and "last session" are ``switch_back``: :data:`_BACK_RE`).
 _REL_RE = re.compile(
-    r"^(?:(?:%s )?(?:the )?(next|previous|prev|last) (?:session|one|window)"
-    r"|go (back))$" % _VERB_RX
+    r"^(?:(?:%s )?(?:the )?(next|previous|prev) (?:session|one|window)"
+    r"|(next|previous))$" % _VERB_RX
 )
+# --- acting on the session: scroll, interrupt; where am I, back, help --------
+# Said around a command and never part of it: "now scroll up", "mindflock,
+# interrupt", "can you go back".
+_FILL_LEAD_RE = re.compile(
+    r"^(?:(?:mind ?flock|now|please|ok|okay|hey|just|can you|could you"
+    r"|would you|go ahead and) )+"
+)
+_FILL_TAIL_RE = re.compile(r"(?: (?:now|please|for me))+$")
+# The output being scrolled, when it is named: "scroll the output up".
+_SCROLL_OBJ = (
+    r"(?: (?:it|this|that|the (?:output|screen|terminal|session|window|pane|text"
+    r"|page|log|logs|conversation)))?"
+)
+# How far: "a bit", "half a page", "a line", "three pages", "5 lines", "twice".
+_SCROLL_AMT = (
+    r"(?: (?:by )?(?:(?P<bit>a bit|a little(?: bit)?|a touch|slightly|a tad)"
+    r"|(?P<half>half a page|half a screen|half page|a half page)"
+    r"|(?:a|one) (?P<unit1>page|line|screen)"
+    r"|(?P<n>%s|a couple(?: of)?|a few) (?P<unit>pages|lines|screens|page|line"
+    r"|screen|times)"
+    r"|(?P<twice>twice)))?" % _NUM_RX
+)
+_SCROLL_RE = re.compile(
+    r"^scroll%s (?:back )?(?P<dir>up|down)%s$" % (_SCROLL_OBJ, _SCROLL_AMT)
+)
+_PAGE_RE = re.compile(
+    r"^(?P<half>half )?page (?P<dir>up|down)(?: (?P<n>%s) times| (?P<twice>twice))?$"
+    % _NUM_RX
+)
+_SCROLL_END_RE = re.compile(
+    r"^(?:(?:(?:scroll|go|jump|skip|take me|bring me|get me)"
+    r"(?: (?:all the way|right))?(?: back)?(?: up| down)? to"
+    r"|(?:go |scroll |jump )?back to) (?:the )?(?:very )?"
+    r"(?P<end>top|bottom|end|beginning|latest|newest)"
+    r"(?: of (?:it|the (?:output|screen|terminal|session|page|log|conversation)))?"
+    r"|scroll all the way (?P<dir>up|down)"
+    r"|show(?: me)? the (?P<last>latest|newest|end|bottom)(?: output)?)$"
+)
+_SCROLL_ENDS = {
+    "top": "top",
+    "beginning": "top",
+    "bottom": "bottom",
+    "end": "bottom",
+    "latest": "bottom",
+    "newest": "bottom",
+}
+# "More", "keep going": the last scroll again — only right after one (the
+# route remembers it), else words for the agent.
+_MORE_RE = re.compile(
+    r"^(?:(?:scroll )?(?:some |a (?:bit|little(?: bit)?|touch) )?(?:more|further)"
+    r"|keep (?:going|scrolling|on scrolling)|(?:scroll )?again|once more"
+    r"|one more time)$"
+)
+# "Interrupt", "press escape", "interrupt docs": Escape in the session's pane.
+_INTERRUPT_RE = re.compile(
+    r"^(?:interrupt(?: (?P<who>.+))?"
+    r"|(?:(?:press|hit|send|tap|push)(?: the| an)? )?(?:escape|esc)(?: key)?)$"
+)
+#: Who "interrupt …" means when it is the session being talked to.
+_INTERRUPT_SELF = frozenset(
+    (
+        "it",
+        "this",
+        "that",
+        "him",
+        "her",
+        "them",
+        "the session",
+        "the agent",
+        "this session",
+        "this agent",
+        "this one",
+        "the current session",
+        "the current one",
+    )
+)
+# Back to the session focused before this one (the client's own memory).
+_BACK_RE = re.compile(
+    r"^(?:(?:go|switch|jump|flip|hop|change|take me|bring me) back"
+    r"(?: (?:again|to (?:the )?(?:last|previous|other) (?:one|session|window)"
+    r"|to where i was))?"
+    r"|back|(?:(?:switch|go|change|jump) (?:over )?to )?(?:the )?last (?:session|window"
+    r"|one)|the one before(?: (?:that|this))?)$"
+)
+_WHERE_RE = re.compile(
+    r"^(?:where am i|where are we|(?:which|what) session (?:is this|am i (?:in|on)"
+    r"|are we (?:in|on)|is open)|what(?:'?s| is) (?:this|the current) session"
+    r"(?: called)?|which one am i (?:in|on))$"
+)
+_COMMANDS_RE = re.compile(
+    r"^(?:what can i say(?: to you| here)?|what (?:can|do) i say"
+    r"|what (?:voice )?commands (?:are there|can i (?:say|use)|do you (?:know"
+    r"|understand|have|take))|what are (?:the|my)(?: voice)? commands"
+    r"|(?:list|show|tell|read|give)(?: me)?(?: (?:the|all the|all|my))?(?: voice)?"
+    r" commands|(?:voice )?commands|help|voice help)$"
+)
+# "What's docs doing?", "how is the parser going?": a session's status by name.
+_STATUS_OF_RE = re.compile(
+    r"^(?:what(?:'?s| is) (?P<a>.+?) (?:doing|up to|working on)"
+    r"|how(?:'?s| is) (?P<b>.+?) (?:doing|going|getting on|coming along))$"
+)
+# "Bring docs up", "pull the parser up": a soft switch, like "open docs".
+_UP_RE = re.compile(r"^(?:bring|pull|call) (?P<a>.+) up$")
 # "what is it asking", "what does docs want", "read the question".
 _QUESTION_RE = re.compile(
     r"^(?:what(?:'?s| is) (?P<a>.+?) asking(?: me)?(?: for| about)?"
@@ -276,7 +418,19 @@ _BODY_WORDS = frozenset(
 _PICK_NOUNS = ("one", "option", "choice")
 # Who "it" is: the session being talked to.
 _SELF = frozenset(
-    ("it", "him", "her", "them", "the agent", "the session", "this session", "this one")
+    (
+        "it",
+        "him",
+        "her",
+        "them",
+        "they",
+        "he",
+        "she",
+        "the agent",
+        "the session",
+        "this session",
+        "this one",
+    )
 )
 _NOUNS = ("session", "window", "number")
 
@@ -324,8 +478,8 @@ _GO_RE = re.compile(
 # approach" are words for the agent): only a session's whole name or its
 # start in whole words — or any name match when "session" is said.
 _SHOW_RE = re.compile(
-    r"^%s?(?:open|show(?: me)?|focus(?: on)?|select|pull up|bring up|go back to"
-    r"|back to|talk to) (?!(?:over )?to )(.+)$" % _POLITE_RX
+    r"^%s?(?:open(?: up)?|show(?: me)?|focus(?: on)?|select|pull up|bring up"
+    r"|go back to|back to|talk to|let me see) (?!(?:over )?to )(.+)$" % _POLITE_RX
 )
 #: Words said around a session's name, never part of it.
 _AROUND = frozenset(
@@ -338,8 +492,9 @@ _SOFT = frozenset(("bot", "bots", "agent"))
 # "What did it say?", "read it", "what did docs reply": the last reply, read
 # on demand (a switch reads it only when it is news).
 _READ_RE = re.compile(
-    r"^(?:what did (?P<a>.+?) (?:say|reply|answer|write)(?: last)?"
+    r"^(?:what did (?P<a>.+?)(?: just)? (?:say|reply|answer|write)(?: last)?"
     r"|what was (?:the|its|it's) (?:last )?(?:reply|answer|message)"
+    r"|what was the last thing (?:it|they) said"
     r"|read (?:me )?(?:it|that|it out|the (?:last )?(?:reply|answer|message)"
     r"|its (?:last )?(?:reply|answer|message)|what it said))$"
 )
@@ -392,6 +547,83 @@ _NEW_CANCEL_RE = re.compile(
     r"^(?:no(?:pe)? (?:cancel|forget it|never ?mind)|don'?t (?:start|create|bother)"
     r"(?: it| one)?|forget the new session|cancel that|abort)$"
 )
+
+
+#: Every voice command — "what can I say" (``commands``) reads it out and
+#: lists it, and tests/unit/test_voice_router.py routes every phrase to its
+#: kind, so it can't drift from the grammar. ``(kind, phrase, what it
+#: does)``: the kind :func:`command` gives the phrase ("radio": the
+#: client's own words, never a command here); ``<name>``, ``<project>`` and
+#: ``<task>`` stand for the person's own. The radio, stop and hush phrases
+#: are the defaults: :func:`commands_answer` says the person's own.
+GUIDE = (
+    ("switch", "switch to <name>", "Go to a session by its name"),
+    ("switch", "show me <name>", "Go to a session by its name"),
+    ("switch_index", "session three", "Go to a session by its number in the list"),
+    ("switch_rel", "next session", "Go to the next session in the list"),
+    ("switch_rel", "previous session", "Go to the session above in the list"),
+    ("switch_back", "go back", "Back to the session you were on before"),
+    ("where", "where am I", "Hear which session this is"),
+    ("scroll", "scroll up", "Scroll the session's output up a page"),
+    ("scroll", "scroll down", "Scroll the output down a page"),
+    ("scroll", "scroll up a bit", "Scroll half a page"),
+    ("scroll", "scroll up five lines", "Scroll by lines or pages"),
+    ("scroll", "page up", "Scroll up a page"),
+    ("scroll", "scroll to the top", "Jump to the oldest output"),
+    ("scroll", "back to the bottom", "Back to the latest output"),
+    ("scroll_more", "more", "Scroll again the same way, right after a scroll"),
+    ("interrupt", "interrupt", "Press Escape in the session: stop the agent"),
+    ("interrupt", "interrupt <name>", "Interrupt another session by name"),
+    ("needs", "what needs me", "Hear which sessions are waiting on you"),
+    ("list", "list sessions", "Hear every session and what it is doing"),
+    ("status", "what's it doing", "Hear what this session is doing"),
+    ("status", "what's <name> doing", "Hear what another session is doing"),
+    ("read", "what did it say", "Hear the session's last reply"),
+    ("question", "what is it asking", "Hear the question a session is asking"),
+    ("repeat", "say that again", "Hear the last thing said again"),
+    ("condense", "summarize that", "Hear a short summary of the last reply"),
+    ("new", "new session in <project> to <task>", "Start a new session"),
+    ("answer", "yes", "Answer a question: yes, no, always, option two"),
+    ("answer", "tell <name> yes", "Answer another session's question"),
+    ("radio", "over", "Send what you said, and keep listening"),
+    ("radio", "over and out", "Send it and stop listening"),
+    ("radio", "disregard", "Throw away everything said so far"),
+    ("radio", "scratch that", "Take back the words just said"),
+    ("cancel", "cancel", "Drop the command"),
+    ("hush", "stop talking", "Stop speaking, keep listening"),
+    ("stop", "stop listening", "Turn the microphone off"),
+    ("off", "voice off", "Turn voice off for this session"),
+    ("commands", "what can I say", "Hear and see this list"),
+)
+#: What "what can I say" says (the list itself is on the screen).
+COMMANDS_SAY = (
+    "You can switch sessions by name or number, go back, scroll, interrupt, "
+    "hear what needs you, and answer questions. Every command is on the screen."
+)
+#: A GUIDE radio phrase → the ``voice.words`` kind it is the default of.
+_GUIDE_WORDS = {
+    "over": "send",
+    "over and out": "end",
+    "disregard": "clear",
+    "scratch that": "undo",
+    "stop talking": "hush",
+    "stop listening": "stop",
+}
+
+
+def commands_answer(words: Optional[dict] = None) -> dict:
+    """The ``commands`` answer: :data:`COMMANDS_SAY` and every
+    :data:`GUIDE` row as ``{say, does}`` — a radio, stop or hush phrase as
+    the person's ``words`` say it (their first phrase of that kind; "stop
+    listening" while it is still theirs)."""
+    items = []
+    for _kind, said, does in GUIDE:
+        kind = _GUIDE_WORDS.get(said)
+        got = (words or {}).get(kind) if kind else None
+        if isinstance(got, (list, tuple)) and got and said not in got:
+            said = str(got[0])
+        items.append({"say": said, "does": does})
+    return {"kind": "commands", "say": COMMANDS_SAY, "items": items}
 
 
 def _end(text) -> str:
@@ -491,7 +723,7 @@ def _switch_command(text: str) -> Optional[dict]:
             {"kind": "switch", "arg": m.group(2)},
             **({"mode": "must"} if m.group(1) else {}),
         )
-    m = _SHOW_RE.match(text)
+    m = _SHOW_RE.match(text) or _UP_RE.match(text)
     if m:
         named = any(x in ("session", "sessions", "window") for x in m.group(1).split())
         return {
@@ -500,6 +732,102 @@ def _switch_command(text: str) -> Optional[dict]:
             "mode": "must" if named else "strict",
         }
     return None
+
+
+def _bare(text: str) -> str:
+    """``text`` (normalised) without the fillers said around a command
+    (:data:`_FILL_LEAD_RE`, :data:`_FILL_TAIL_RE`)."""
+    return _FILL_TAIL_RE.sub("", _FILL_LEAD_RE.sub("", text))
+
+
+def _scroll_amount(m) -> Tuple[str, int]:
+    """``(amount, count)`` of a :data:`_SCROLL_RE` match."""
+    gd = m.groupdict()
+    if gd.get("bit") or gd.get("half"):
+        return "half", 1
+    if gd.get("twice"):
+        return "page", 2
+    unit = gd.get("unit1") or gd.get("unit") or ""
+    amount = "line" if unit.startswith("line") else "page"
+    n = gd.get("n")
+    if not n:
+        return amount, 1
+    count = {"a couple": 2, "a couple of": 2, "a few": 3}.get(n) or _count(n) or 1
+    return amount, count
+
+
+def scroll_of(text) -> Optional[dict]:
+    """A scroll phrase → ``{"kind": "scroll", "dir": "up"|"down", "amount":
+    "page"|"half"|"line"|"top"|"bottom", "count"}``, or None. The whole
+    phrase: "scroll up", "scroll the output down", "scroll up a bit" (half),
+    "scroll down three lines", "page up", "scroll back up", "scroll to the
+    top", "go to the bottom", "back to the bottom", "show me the latest";
+    "scroll down to the footer" is words for the agent."""
+    t = _bare(norm(text))
+    m = _SCROLL_RE.match(t)
+    if m:
+        amount, count = _scroll_amount(m)
+        return {
+            "kind": "scroll",
+            "dir": m.group("dir"),
+            "amount": amount,
+            "count": count,
+        }
+    m = _PAGE_RE.match(t)
+    if m:
+        count = 2 if m.group("twice") else _count(m.group("n") or "") or 1
+        return {
+            "kind": "scroll",
+            "dir": m.group("dir"),
+            "amount": "half" if m.group("half") else "page",
+            "count": count,
+        }
+    m = _SCROLL_END_RE.match(t)
+    if m:
+        end = m.group("end") or m.group("last")
+        if end:
+            amount = _SCROLL_ENDS[end]
+        else:
+            amount = "top" if m.group("dir") == "up" else "bottom"
+        return {
+            "kind": "scroll",
+            "dir": "up" if amount == "top" else "down",
+            "amount": amount,
+            "count": 1,
+        }
+    return None
+
+
+def _interrupt_command(text: str) -> Optional[dict]:
+    """ "Interrupt", "press escape" → ``{"kind": "interrupt"}`` (the session
+    being talked to); "interrupt docs" → ``{"kind": "interrupt", "name",
+    "mode"}`` — the name matched as a soft switch's (:func:`_switch_command`):
+    only a whole name or its start, any match once "session" is said, and no
+    match leaves the phrase words ("interrupt handler is broken")."""
+    m = _INTERRUPT_RE.match(text)
+    if m is None:
+        return None
+    who = (m.group("who") or "").strip()
+    if not who or who in _INTERRUPT_SELF:
+        return {"kind": "interrupt"}
+    named = any(x in ("session", "sessions", "window", "agent") for x in who.split())
+    return {"kind": "interrupt", "name": who, "mode": "must" if named else "strict"}
+
+
+def _status_command(text: str) -> Optional[dict]:
+    """ "What's docs doing?" → ``{"kind": "status", "target"}`` (a name only
+    as :func:`_strict_match` finds it: "what is the test doing" is words for
+    the agent), or None."""
+    m = _STATUS_OF_RE.match(text)
+    if m is None:
+        return None
+    tgt = _target((m.group("a") or m.group("b")).split(), False)
+    if tgt is None or "index" in tgt:
+        return None
+    if tgt.get("self"):
+        return {"kind": "status", "arg": ""}
+    tgt["strict"] = True
+    return {"kind": "status", "arg": "", "target": tgt}
 
 
 def _read_command(text: str) -> Optional[dict]:
@@ -757,14 +1085,31 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
             "repo": " ".join(w.words[p["repo"][0] : p["repo"][1]]) if p["repo"] else "",
             "task": w.original(p["task"]) if p["task"] is not None else "",
         }
+    bare = _bare(w.text)
+    got = scroll_of(bare)
+    if got is not None:
+        return got
+    if _MORE_RE.match(bare):
+        return {"kind": "scroll_more"}
+    got = _interrupt_command(bare)
+    if got is not None:
+        return got
+    for kind, rx in (
+        ("switch_back", _BACK_RE),
+        ("where", _WHERE_RE),
+        ("commands", _COMMANDS_RE),
+    ):
+        if rx.match(bare):
+            return {"kind": kind}
     m = _REL_RE.match(w.text)
     if m:
-        return {"kind": "switch_rel", "delta": 1 if m.group(1) == "next" else -1}
+        rel = m.group(1) or m.group(2)
+        return {"kind": "switch_rel", "delta": 1 if rel == "next" else -1}
     for rx in _INDEX_RES:
         m = rx.match(w.text)
         if m:
             return {"kind": "switch_index", "index": _count(m.group(1))}
-    got = _switch_command(w.text) or _read_command(w.text)
+    got = _switch_command(w.text) or _read_command(w.text) or _status_command(w.text)
     if got is not None:
         return got
     for kind, rx in _CMDS[1:]:
@@ -1512,7 +1857,39 @@ def answer(
         return _list(rows, now)
     if kind == "needs":
         return _needs(rows, now)
+    if kind == "scroll":
+        return dict(cmd, title=title or session)
+    if kind == "scroll_more":
+        return {"kind": "prompt"}  # nothing to repeat: the route remembers
+    if kind == "interrupt":
+        return _interrupt(cmd, session, rows, title)
+    if kind == "commands":
+        return commands_answer(words)
+    if cmd.get("target"):
+        row, out = _resolve(cmd["target"], session, rows, title)
+        if row is None:
+            return out
+        return _status(row["title"], rows, now)
     return _status(session, rows, now)
+
+
+def _interrupt(cmd: dict, session: str, rows, title: str) -> dict:
+    """``{"kind": "interrupt", "title"}`` — the session to press Escape in
+    (the route presses it): the named one, else the one the client names
+    (``title``), else the one talked to. A name that matches no session is
+    a prompt; several are asked about (no ``pending``: say it again)."""
+    said = cmd.get("name")
+    if not said:
+        return {"kind": "interrupt", "title": title or session}
+    hit, cands = find_sessions(said, rows, cmd.get("mode") or "strict")
+    if hit is None and not cands:
+        return {"kind": "prompt"}
+    if hit is None:
+        return {
+            "kind": "ambiguous",
+            "say": "Which one: %s?" % _or([_name(r) for r in cands[:MAX_NAMES]]),
+        }
+    return {"kind": "interrupt", "title": hit["title"], "name": _name(hit)}
 
 
 # --- answering dialogs -----------------------------------------------------------

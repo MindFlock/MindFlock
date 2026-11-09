@@ -135,7 +135,6 @@ def test_conservative_non_matches_are_prompts(text):
     "text,kind",
     [
         ("Never mind.", "cancel"),
-        ("scratch that", "cancel"),
         ("please cancel", "cancel"),
         ("forget it", "cancel"),
         ("Stop talking.", "hush"),
@@ -571,10 +570,11 @@ def test_switch_index_is_the_clients_number(text, index):
         ("next one", 1),
         ("go to the next window", 1),
         ("previous session", -1),
-        ("last one", -1),
+        ("previous one", -1),
         ("switch to the previous one", -1),
-        ("go back", -1),
-        ("ok go back please", -1),
+        ("next", 1),
+        ("Next.", 1),
+        ("previous", -1),
     ],
 )
 def test_switch_rel(text, delta):
@@ -1741,7 +1741,8 @@ def test_route_permission_dialogs_are_untouched(env):
     """Only the question tool reads a prompt phrase as an answer."""
     env.dialogs["docs"] = PERM
     assert route("red", "docs") == {"kind": "prompt"}
-    assert route("go back", "docs")["kind"] == "switch_rel"
+    assert route("go back", "docs")["kind"] == "switch_back"
+    assert route("next", "docs")["kind"] == "switch_rel"
 
 
 # --- switching in plain speech ---------------------------------------------------------
@@ -2549,3 +2550,276 @@ def test_route_a_yes_begun_before_a_hand_answer_presses_nothing(env, monkeypatch
     # Session removal drops the stamp (forget without an id).
     voice_actions.forget("docs")
     assert voice_actions.answered_at("docs") == 0.0
+
+
+# --- the voice sweep (2026-11): back, where, commands, natural phrasings ----------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        "go back",
+        "Go back.",
+        "ok go back please",
+        "switch back",
+        "back",
+        "go back to the last one",
+        "go back to the previous one",
+        "take me back",
+        "go back again",
+        "last session",
+        "the last one",
+        "go to the last session",
+        "the one before",
+        "now go back",
+    ],
+)
+def test_switch_back(text):
+    assert ans(text) == {"kind": "switch_back"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "where am I",
+        "Where am I?",
+        "where are we",
+        "which session is this",
+        "what session is this",
+        "what session am I in",
+        "which session am I on",
+        "what's this session called",
+    ],
+)
+def test_where(text):
+    assert ans(text) == {"kind": "where"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what can I say",
+        "What can I say?",
+        "what commands are there",
+        "list the commands",
+        "show the voice commands",
+        "show me the commands",
+        "voice commands",
+        "help",
+        "Help!",
+    ],
+)
+def test_commands(text):
+    got = ans(text)
+    assert got["kind"] == "commands"
+    assert got["say"] == vr.COMMANDS_SAY
+    assert got["items"] and all(set(i) == {"say", "does"} for i in got["items"])
+
+
+def test_scratch_that_is_the_clients_radio_word():
+    """ "Scratch that" takes back words on the client (voice_words' undo)."""
+    assert vr.command("scratch that") is None
+    assert ans("scratch that") == {"kind": "prompt"}
+    assert ans("cancel") == {"kind": "cancel"}
+
+
+@pytest.mark.parametrize(
+    "text,arg,mode",
+    [
+        ("switch over to docs", "docs", None),
+        ("go to docs please", "docs", None),
+        ("jump over to docs", "docs", None),
+        ("bring docs up", "docs", "strict"),
+        ("pull the parser up", "the parser", "strict"),
+        ("show me docs", "docs", "strict"),
+        ("open up docs", "docs", "strict"),
+        ("let me see docs", "docs", "strict"),
+    ],
+)
+def test_natural_switch_phrasings(text, arg, mode):
+    got = vr.command(text)
+    assert got["kind"] == "switch" and got["arg"] == arg
+    assert got.get("mode") == mode
+
+
+def test_natural_switches_reach_the_session():
+    assert ans("bring API docs up")["title"] == "docs"
+    assert ans("switch over to login fix")["title"] == "login-fix"
+    assert ans("open up invoice parser")["title"] == "invoice-parser"
+    # a soft verb that names no session is words for the agent
+    assert ans("bring the logs up") == {"kind": "prompt"}
+    assert ans("let me see the diff") == {"kind": "prompt"}
+
+
+@pytest.mark.parametrize(
+    "text,title",
+    [
+        ("what's invoice parser doing", "invoice-parser"),
+        ("what is login fix doing", "login-fix"),
+        ("how is invoice parser going", "invoice-parser"),
+        ("what's API docs up to", "docs"),
+    ],
+)
+def test_status_of_a_named_session(text, title):
+    got = ans(text, session="docs")
+    assert got["kind"] == "status"
+    name = next(r["name"] for r in ROWS if r["title"] == title)
+    assert got["say"].startswith(name + " is ")
+
+
+def test_status_of_self_and_unknowns():
+    assert ans("how's it going", session="login-fix")["say"].startswith("login-fix is ")
+    assert ans("what is it working on", session="login-fix")["kind"] == "status"
+    assert ans("what is the test doing", session="docs") == {"kind": "prompt"}
+    assert ans("how is the refactor going", session="docs") == {"kind": "prompt"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what did it just say",
+        "read me the last reply",
+        "what was the last thing it said",
+        "what did they say",
+    ],
+)
+def test_read_phrasings(text):
+    assert ans(text, session="invoice-parser")["kind"] == "read"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "scroll down to the footer and fix the margin",
+        "go back and fix the test",
+        "interrupt handler is broken",
+        "more tests please",
+        "press escape twice in the dialog to close it",
+        "go back to the old approach",
+        "keep the last session's settings",
+        "where am I supposed to put this config",
+        "help me fix the login bug",
+        "what commands does the CLI support",
+        "the previous session had the same bug",
+        "next we should refactor the parser",
+        "bring the margin up a few pixels",
+        "show me the latest test results",
+    ],
+)
+def test_sweep_dictation_stays_words(text):
+    assert ans(text, session="docs") == {"kind": "prompt"}
+
+
+def _guide_phrase(said: str) -> str:
+    return (
+        said.replace("<name>", "invoice parser")
+        .replace("<project>", "sitecheck bot5")
+        .replace("<task>", "fix the login bug")
+    )
+
+
+@pytest.mark.parametrize("kind,said,does", vr.GUIDE)
+def test_guide_rows_route_to_their_kind(kind, said, does):
+    """The "what can I say" table cannot drift from the grammar: every
+    phrase in it is that command (radio words are the client's, never one)."""
+    got = vr.command(_guide_phrase(said))
+    if kind == "radio":
+        assert got is None or got["kind"] not in ("cancel", "stop", "hush"), got
+        return
+    assert got is not None and got["kind"] == kind, (said, got)
+    assert does and does[0].isupper()
+
+
+def test_guide_covers_every_new_kind():
+    kinds = {k for k, _, _ in vr.GUIDE}
+    for kind in (
+        "switch",
+        "switch_index",
+        "switch_rel",
+        "switch_back",
+        "where",
+        "scroll",
+        "scroll_more",
+        "interrupt",
+        "list",
+        "needs",
+        "status",
+        "read",
+        "repeat",
+        "condense",
+        "new",
+        "answer",
+        "radio",
+        "hush",
+        "stop",
+        "commands",
+    ):
+        assert kind in kinds, kind
+
+
+def test_commands_say_the_persons_own_radio_words():
+    words = {"send": ["roger"], "undo": ["strike that"], "hush": ["quiet please"]}
+    items = {i["does"]: i["say"] for i in vr.commands_answer(words)["items"]}
+    assert items["Send what you said, and keep listening"] == "roger"
+    assert items["Take back the words just said"] == "strike that"
+    assert items["Stop speaking, keep listening"] == "quiet please"
+    assert (
+        items["Send it and stop listening"] == "over and out"
+    )  # theirs is the default
+
+
+def test_route_commands_and_local_kinds(env):
+    got = route("what can I say", "docs")
+    assert got["kind"] == "commands" and got["items"]
+    assert route("go back", "docs") == {"kind": "switch_back"}
+    assert route("where am I", "docs") == {"kind": "where"}
+    assert env.row_reads == 0
+
+
+def test_route_heard_decides_a_switch_back(env):
+    r = client.post(
+        "/api/voice/route",
+        json={"text": "go bag", "heard": "go back", "session": "docs"},
+    )
+    assert r.json() == {"kind": "switch_back"}
+
+
+def test_route_heard_only_when_it_is_a_no_text_command(env):
+    """Moonshine's text wins whenever IT is a command with no words in it
+    (the contract); a heard prompt or a heard command with words never does."""
+    r = client.post(
+        "/api/voice/route",
+        json={
+            "text": "new session to fix the login bug",
+            "heard": "go back",
+            "session": "docs",
+        },
+    )
+    assert r.json() == {"kind": "switch_back"}  # heard IS a no-text command
+    r = client.post(
+        "/api/voice/route",
+        json={"text": "go back", "heard": "fix the go back button", "session": "docs"},
+    )
+    assert r.json() == {"kind": "switch_back"}
+    r = client.post(
+        "/api/voice/route",
+        json={"text": "yes", "heard": "new session to fix it", "session": ""},
+    )
+    assert r.json()["kind"] != "new"
+
+
+def test_heard_kinds_include_the_new_ones():
+    from backend.web.routes import voice as voice_routes
+
+    kinds = voice_routes._heard_kinds()
+    for kind in (
+        "switch",
+        "stop",
+        "scroll",
+        "scroll_more",
+        "interrupt",
+        "switch_back",
+        "where",
+        "commands",
+    ):
+        assert kind in kinds
+    for kind in ("new", "answer", "question", "help", "prompt"):
+        assert kind not in kinds
