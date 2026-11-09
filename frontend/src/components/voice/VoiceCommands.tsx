@@ -18,6 +18,24 @@ import "./VoiceCommands.css";
 /** The sheet's width (px), as the mic's options. */
 export const SHEET_W = 340;
 
+/** The voice assistant's group (lib/voiceAssistant): talking to MindFlock
+ * itself. Added to whatever list the sheet shows (the server's or the
+ * built-in one) unless that list has the group already. */
+export const ASSISTANT_GROUP = "MindFlock (the assistant)";
+export const ASSISTANT_COMMANDS: readonly VoiceCommandItem[] = [
+  { say: "MindFlock, open intake", does: "Anything you'd do by hand — start with “MindFlock,”", group: ASSISTANT_GROUP },
+  { say: "MindFlock, start a session in the web app to fix the login bug", does: "Starts it and takes you there", group: ASSISTANT_GROUP },
+  { say: "MindFlock, which sessions need me?", does: "Answers out loud", group: ASSISTANT_GROUP },
+  { say: "MindFlock, turn off the birds", does: "Changes a setting", group: ASSISTANT_GROUP },
+  { say: "MindFlock, delete the old docs session", does: "Asks first — say yes or no", group: ASSISTANT_GROUP },
+  { say: "Alt+M … that's all", does: "Talk to MindFlock: every phrase goes to it until “that's all”", group: ASSISTANT_GROUP },
+];
+
+/** `items` with the assistant's rows after them (once). */
+export function withAssistant(items: readonly VoiceCommandItem[]): VoiceCommandItem[] {
+  return items.some((i) => i && i.group === ASSISTANT_GROUP) ? [...items] : [...items, ...ASSISTANT_COMMANDS];
+}
+
 /** `items` in groups, in the order each group first appears; a list with no
  * groups at all is one untitled group. Rows without words are dropped. */
 export function groupCommands(items: readonly VoiceCommandItem[]): Array<{ group: string; items: VoiceCommandItem[] }> {
@@ -68,7 +86,7 @@ export function VoiceCommands({
     };
   }, []);
 
-  const groups = groupCommands(items);
+  const groups = groupCommands(withAssistant(items));
   const rect = anchor?.getBoundingClientRect();
   const w = Math.min(SHEET_W, window.innerWidth - 32);
   const place = rect ? placeUnder(rect, w, window.innerWidth, window.innerHeight) : null;
