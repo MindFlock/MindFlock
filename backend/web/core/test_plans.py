@@ -216,6 +216,7 @@ MAX_SUMMARY = 300
 #: it cannot become a second prompt.
 MAX_FOCUS = 500
 MAX_RUNS = 20  # per plan, newest kept
+MAX_ENV_SEEN = 40  # env_seen entries per plan (two per environment is plenty)
 
 #: How many times a later push may re-read a branch and rewrite its checklist.
 #: Nothing else bounds it: ``generated`` holds for the whole life of an unmerged
@@ -662,6 +663,13 @@ def _blank(plan_id: str) -> dict:
         # plan that has already shipped used to re-announce it days later, which
         # is the single most confidence-destroying thing this feature can do.
         "notified_at": 0.0,
+        # ENVIRONMENT NAME -> when this work was first seen on that
+        # environment's branch (:func:`env_reached_at`). A route's Verify stop
+        # waits on it ("ready when it reaches the sandbox branch, then its
+        # deploy minutes"), and the deploy clock has to start at the FIRST
+        # sighting: re-stamping on every probe would push "ready" forward for
+        # ever. Written by nothing else, so it survives a rewrite.
+        "env_seen": {},
         "steps": [],
         "runs": [],
         "run_session": "",
@@ -960,6 +968,14 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # Where the steps were worked: the repo's deployment when it has one,
         # "" when the checkout itself was the system under test.
         "target": _text(raw.get("target"), 500),
+        # WHICH "WHERE" A ROUTE'S VERIFY STOP ASKED FOR: "" for a run started
+        # without one (today's behaviour — the live branch or the plan's own
+        # commit, the repo's target), "branch" for the plan's own code with no
+        # deployment, else an environment's name. ``checkout`` is the ref the
+        # checker was told to detach to. Both stamped by :func:`start_run` so
+        # the results comment and the tree check can say where it was checked.
+        "where": _text(raw.get("where"), 40),
+        "checkout": _text(raw.get("checkout"), 250),
         "results": results,
         # Made while the work was only on its branch — a check before merge.
         # Once the plan ships, such a run is history rather than the current
@@ -1020,6 +1036,16 @@ def _normalize(plan_id: str, entry) -> dict:
     plan["summary"] = _text(entry.get("summary"), MAX_SUMMARY)
     plan["focus"] = _text(entry.get("focus"), MAX_FOCUS)
     plan["conversation"] = _text(entry.get("conversation"), CONV_BUDGET)
+    seen = entry.get("env_seen")
+    plan["env_seen"] = (
+        {
+            str(k)[:40]: _f(t)
+            for k, t in list(seen.items())[:MAX_ENV_SEEN]
+            if str(k or "").strip() and _f(t) > 0
+        }
+        if isinstance(seen, dict)
+        else {}
+    )
     plan["steps"] = _normalize_steps(entry.get("steps"))
     state = str(entry.get("state") or "").strip().lower()
     if state in STATES:
@@ -1691,8 +1717,20 @@ def mark_notified(plan_id: str) -> Optional[dict]:
     return _mutate(plan_id, apply)
 
 
-def start_run(plan_id: str, session_title: str) -> Optional[dict]:
+def start_run(
+    plan_id: str,
+    session_title: str,
+    where: str = "",
+    target: Optional[str] = None,
+    checkout: str = "",
+) -> Optional[dict]:
     """A verify session has been created for this plan.
+
+    ``where``/``target``/``checkout`` record what a run with an explicit
+    environment was pointed at (see the ``where`` note in
+    :func:`_normalize_run`). ``target`` is stamped only when given — ``None``
+    leaves the run to be stamped with the repo's target when it finishes, as
+    before; ``""`` says "no deployment" outright.
 
     Opens a run record immediately rather than at the finish, for two reasons:
     the due loop's give-up clock needs a start time (the run's ``at``), and a
@@ -1731,16 +1769,20 @@ def start_run(plan_id: str, session_title: str) -> Optional[dict]:
             for step_id, entry in (current.get("results") or {}).items():
                 if entry.get("by") == "human" and entry.get("result"):
                     carried[step_id] = dict(entry)
-        plan["runs"].append(
-            {
-                "at": time.time(),
-                "by": "agent",
-                "session": session_title,
-                "results": carried,
-                "verdict": _verdict(plan["steps"], carried),
-                "prelive": prelive,
-            }
-        )
+        run = {
+            "at": time.time(),
+            "by": "agent",
+            "session": session_title,
+            "results": carried,
+            "verdict": _verdict(plan["steps"], carried),
+            "prelive": prelive,
+        }
+        if where:
+            run["where"] = _text(where, 40)
+            run["checkout"] = _text(checkout, 250)
+        if target is not None:
+            run["target"] = _text(target, 500)
+        plan["runs"].append(run)
         del plan["runs"][:-MAX_RUNS]
 
     return _mutate(plan_id, apply)
@@ -2716,6 +2758,219 @@ def resolve_deploy_delay(repo_root: str = "") -> float:
         return 300.0
 
 
+# --------------------------------------------------------------------------- #
+# Environments — the places a route's Verify stop can check
+# --------------------------------------------------------------------------- #
+#: The name of the environment every repo has whether or not anyone configured
+#: one: the block's own ``target`` / ``live_branch`` / ``deploy_delay_minutes``.
+LIVE_ENV = "live"
+
+#: The Verify stop's "where" that is NOT an environment: the plan's own commit,
+#: checked out fresh, with no deployment under test. Reserved in settings (see
+#: ``settings.VERIFY_ENV_RESERVED``) so no environment can shadow it.
+BRANCH_WHERE = "branch"
+
+
+def _env_row(raw: dict, implicit: bool) -> dict:
+    """One environment in the shape every caller reads. Never raises."""
+    try:
+        minutes = max(0, int(raw.get("deploy_minutes") or 0))
+    except (TypeError, ValueError):
+        minutes = 0
+    return {
+        "name": str(raw.get("name") or "").strip(),
+        "reach": str(raw.get("reach") or "").strip(),
+        "branch": str(raw.get("branch") or "").strip(),
+        "deploy_minutes": minutes,
+        "implicit": bool(implicit),
+    }
+
+
+def _environments_from(block: dict, live_branch: str, deploy_s: float) -> List[dict]:
+    """The environment list for one repo's Verify block, given its resolved
+    live branch and deploy delay. Shared by :func:`environments` (asked by
+    checkout) and :func:`environments_by_slug` (asked by the settings list) so
+    the two cannot describe the same repo differently."""
+    block = block if isinstance(block, dict) else {}
+    implicit = _env_row(
+        {
+            "name": LIVE_ENV,
+            "reach": block.get("target") or "",
+            "branch": live_branch,
+            "deploy_minutes": int(round(max(0.0, deploy_s) / 60.0)),
+        },
+        implicit=True,
+    )
+    configured = [
+        _env_row(e, implicit=False)
+        for e in (block.get("environments") or [])
+        if isinstance(e, dict) and str(e.get("name") or "").strip()
+    ]
+    # A configured `live` REPLACES the implicit one, in the implicit one's slot:
+    # `live` stays first whichever of the two answers it, so a picker's default
+    # does not move because somebody filled in a row.
+    override = next((e for e in configured if e["name"] == LIVE_ENV), None)
+    rest = [e for e in configured if e["name"] != LIVE_ENV]
+    return [override or implicit] + rest
+
+
+def environments(repo_root: str) -> List[dict]:
+    """Where a route's Verify stop can check this repo's work.
+
+    ``[{name, reach, branch, deploy_minutes, implicit}]`` — the implicit
+    ``live`` first (the repo's own target, its resolved live branch, its deploy
+    delay in minutes; ``implicit: True``), then each configured environment in
+    the order the settings list them. A configured ``live`` overrides the
+    implicit one in place.
+
+    WHY THE IMPLICIT ONE EXISTS. Before environments, the repo's card asked
+    exactly one "where" question — the target, the live branch, the deploy
+    wait — and every plan already written was checked there. Listing it as an
+    environment like any other means a stop that says ``live`` means precisely
+    what Verify always meant, and a repo nobody has configured still has
+    somewhere to check.
+
+    Never raises: unreadable settings give the implicit ``live`` built from the
+    flock-wide chain, which is what every other reader answers in that case.
+    """
+    try:
+        return _environments_from(
+            verify_block(repo_root) if repo_root else {},
+            resolve_live_branch(repo_root),
+            resolve_deploy_delay(repo_root),
+        )
+    except Exception:  # noqa: BLE001 — see the docstring
+        return [
+            _env_row(
+                {"name": LIVE_ENV, "branch": "main", "deploy_minutes": 5},
+                implicit=True,
+            )
+        ]
+
+
+def environment(repo_root: str, name: str) -> Optional[dict]:
+    """One of :func:`environments` by name (case-folded), or ``None``.
+
+    ``"branch"`` is not an environment and answers ``None`` here — it is the
+    stop's other "where", and the caller tests for it first. Never raises.
+    """
+    want = str(name or "").strip().lower()
+    if not want or want == BRANCH_WHERE:
+        return None
+    for env in environments(repo_root):
+        if env["name"] == want:
+            return env
+    return None
+
+
+def environments_by_slug() -> Dict[str, List[dict]]:
+    """``{"owner/name": [env, …]}`` for every repo on ``repository.verify_repos``.
+
+    The same lists :func:`environments` answers, asked by SLUG rather than by
+    checkout: a route editor picks a "where" before any plan (and so any
+    checkout) exists. The live branch is the block's own override, else the
+    flock-wide chain — :func:`resolve_live_branch` with no repo is exactly that
+    chain. Keyed by the slug as the user typed it on the list. Never raises.
+    """
+    try:
+        from backend.config.settings import load_settings
+
+        r = load_settings().repository
+        blocks = {
+            str(k or "").strip().lower(): v
+            for k, v in (r.verify_repo_settings or {}).items()
+            if isinstance(v, dict)
+        }
+        flock_live = resolve_live_branch("")
+        flock_delay = resolve_deploy_delay("")
+        out: Dict[str, List[dict]] = {}
+        for raw in r.verify_repos or []:
+            slug = str(raw or "").strip()
+            if not slug or slug in out:
+                continue
+            block = blocks.get(slug.lower(), {})
+            live = str(block.get("live_branch") or "").strip() or flock_live
+            own = str(block.get("deploy_delay_minutes") or "").strip()
+            try:
+                delay = float(int(own)) * 60.0 if own else flock_delay
+            except ValueError:
+                delay = flock_delay
+            out[slug] = _environments_from(block, live, delay)
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+#: How often one (repo, environment branch) pair may be fetched by
+#: :func:`env_reached_at`. A route's Verify stop polls it every pass while it
+#: waits, and the answer only changes when somebody merges — a minute is fresh
+#: enough to start a deploy clock and cheap enough to ask for forever.
+ENV_FETCH_TTL = 60.0
+_ENV_FETCHED: Dict[tuple, float] = {}
+_ENV_LOCK = threading.Lock()
+
+
+def env_reached_at(plan_id: str, env: dict) -> float:
+    """When this plan's work was FIRST seen on ``env``'s branch, or ``0.0``.
+
+    Blocking (a ``git fetch``, at most once per :data:`ENV_FETCH_TTL` per repo
+    and branch). The plan's commit — its anchor ``sha``, else ``tip_sha`` — is
+    "there" once it is an ancestor of ``origin/<env.branch>``; the first time
+    that is seen the time is written into the plan's ``env_seen[name]`` and
+    every later call answers that stamp without touching git, so the stop's
+    deploy clock starts once and never restarts.
+
+    ``0.0`` for every "not yet / cannot tell": no such plan, an environment
+    with no branch (nothing to wait for — the caller decides what that means),
+    an unreachable remote, a commit not on the branch. Never raises.
+
+    The ancestry rule is the same one :func:`probe_live` applies to the live
+    branch, with the same blind spot: a SQUASH merge rewrites the commit, so an
+    environment branch that only takes squash PRs never reports the work here.
+    A stop in front of such a branch waits on time instead ("after the previous
+    stop"), which is why that choice exists.
+    """
+    try:
+        name = str((env or {}).get("name") or "").strip()
+        branch = str((env or {}).get("branch") or "").strip()
+        if not name or not branch:
+            return 0.0
+        plan = get(plan_id)
+        if plan is None:
+            return 0.0
+        seen = _f((plan.get("env_seen") or {}).get(name))
+        if seen:
+            return seen
+        sha = str(plan.get("sha") or plan.get("tip_sha") or "").strip()
+        root = str(plan.get("repo_root") or "")
+        if not sha or not root:
+            return 0.0
+        key = (root, branch)
+        now = time.time()
+        with _ENV_LOCK:
+            fetch = now - _ENV_FETCHED.get(key, 0.0) >= ENV_FETCH_TTL
+            if fetch:
+                # Stamped BEFORE the fetch, like fetch_all_heads: a remote that
+                # blackholes TCP has been asked, and must not be asked again by
+                # the next caller while this one is still waiting on it.
+                _ENV_FETCHED[key] = now
+        if probe_live(root, sha, branch, fetch=fetch) != "live":
+            return 0.0
+        stamp: dict = {}
+
+        def apply(p: dict) -> None:
+            seen_map = p.setdefault("env_seen", {})
+            # First sighting wins, even against a racing caller.
+            stamp["at"] = _f(seen_map.get(name)) or now
+            seen_map[name] = stamp["at"]
+
+        if _mutate(plan_id, apply) is None:
+            return 0.0
+        return stamp.get("at", now)
+    except Exception:  # noqa: BLE001 — a probe that cannot answer is "not yet"
+        return 0.0
+
+
 def retarget_live_branch(plan_id: str, live_branch: str) -> Optional[dict]:
     """Point a still-waiting checklist at the branch its repo ships from TODAY.
 
@@ -2869,7 +3124,7 @@ _NO_SUCH_REF_RE = re.compile(
 )
 
 
-def probe_live(repo_root: str, sha: str, live_branch: str) -> str:
+def probe_live(repo_root: str, sha: str, live_branch: str, fetch: bool = True) -> str:
     """One of :data:`LIVE_STATES` for a plan that is waiting to ship.
 
     THE BUG THIS EXISTS FOR, and it silently broke the entire feature for a whole
@@ -2903,33 +3158,38 @@ def probe_live(repo_root: str, sha: str, live_branch: str) -> str:
 
     Every failure mode still degrades to "keep waiting" rather than raising: this
     runs in a loop over every plan and one bad repo must not stop the rest.
+
+    ``fetch=False`` skips the network half and answers from the remote-tracking
+    ref already on disk — :func:`env_reached_at` throttles its own fetches and
+    asks the local half in between.
     """
     if not repo_root or not sha or not live_branch:
         return "unreachable"
     unreachable = False
-    # Offline, no remote, slow: all tolerable (a failed run, never a raise).
-    cp = gitutil.git(
-        [
-            "fetch",
-            "origin",
-            # THE EXPLICIT DESTINATION. `fetch origin <branch>` alone is what
-            # broke this: with a narrow refspec it updates FETCH_HEAD and
-            # nothing else, so the ref the ancestry test needs is never
-            # written and the plan waits for ever.
-            "+refs/heads/%s:refs/remotes/origin/%s" % (live_branch, live_branch),
-            "--quiet",
-        ],
-        repo_root,
-        stdin=subprocess.DEVNULL,
-        env=git_auth_hints.github_signin(git_auth_hints.NO_PROMPT_ENV),
-        timeout=TIMEOUT_FETCH,
-    )
-    if cp.returncode != 0:
-        if not (cp.timed_out or cp.not_run) and _NO_SUCH_REF_RE.search(cp.stderr):
-            # The remote answered, and it does not have that branch. This is
-            # a configuration answer, not a network one.
-            return "missing"
-        unreachable = True
+    if fetch:
+        # Offline, no remote, slow: all tolerable (a failed run, never a raise).
+        cp = gitutil.git(
+            [
+                "fetch",
+                "origin",
+                # THE EXPLICIT DESTINATION. `fetch origin <branch>` alone is what
+                # broke this: with a narrow refspec it updates FETCH_HEAD and
+                # nothing else, so the ref the ancestry test needs is never
+                # written and the plan waits for ever.
+                "+refs/heads/%s:refs/remotes/origin/%s" % (live_branch, live_branch),
+                "--quiet",
+            ],
+            repo_root,
+            stdin=subprocess.DEVNULL,
+            env=git_auth_hints.github_signin(git_auth_hints.NO_PROMPT_ENV),
+            timeout=TIMEOUT_FETCH,
+        )
+        if cp.returncode != 0:
+            if not (cp.timed_out or cp.not_run) and _NO_SUCH_REF_RE.search(cp.stderr):
+                # The remote answered, and it does not have that branch. This is
+                # a configuration answer, not a network one.
+                return "missing"
+            unreachable = True
     if not _rev_ok(repo_root, "origin/%s" % live_branch):
         # Nothing local to compare against. If the remote could not be consulted
         # this is simply "we don't know yet"; if it could, the branch is not
@@ -4510,8 +4770,20 @@ def _default_program() -> str:
         return ""
 
 
-def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
+def _generate_steps(
+    plan: dict,
+    program: str,
+    worktree: str,
+    target: Optional[str] = None,
+    focus: str = "",
+) -> tuple:
     """The one-shot itself — ``(summary, steps, conversation)``.
+
+    ``target`` (when not ``None``) REPLACES the repo's own deployment target for
+    this one generation, and ``focus`` is ADDED after the plan's stored one: the
+    way a route's Verify stop says "write this for the sandbox, and mind the
+    migration" without touching the repo's settings or the person's own
+    correction on the plan (see :func:`generate`).
 
     Raises :class:`TestPlanError` for every failure. ``conversation`` is handed
     back so the caller can snapshot it onto the plan: it can only be read while
@@ -4541,9 +4813,17 @@ def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
     conversation = str(plan.get("conversation") or "") or _session_conversation(
         plan["id"], worktree
     )
+    stored_focus = str(plan.get("focus") or "").strip()
+    extra = str(focus or "").strip()
     kwargs = dict(
-        focus=str(plan.get("focus") or ""),
-        target=verify_target(plan.get("repo_root") or ""),
+        focus=_text(
+            "\n".join(f for f in (stored_focus, extra) if f), MAX_FOCUS + NOTES_BUDGET
+        ),
+        target=(
+            verify_target(plan.get("repo_root") or "")
+            if target is None
+            else str(target or "").strip()
+        ),
     )
     args = (
         _ticket_context(plan),
@@ -4605,9 +4885,21 @@ def _generate_steps(plan: dict, program: str, worktree: str) -> tuple:
 
 
 def generate(
-    plan_id: str, program: str = "", worktree: str = "", refresh: bool = False
+    plan_id: str,
+    program: str = "",
+    worktree: str = "",
+    refresh: bool = False,
+    target: Optional[str] = None,
+    focus: str = "",
 ) -> dict:
     """Fill in a plan's steps by asking the session's own CLI. **Never raises.**
+
+    ``target``/``focus`` steer THIS generation only and are never stored: a
+    route's Verify stop that checks a sandbox passes the sandbox's ``reach`` as
+    the target (``None`` = the repo's own) and its notes as extra focus. Not
+    persisted on purpose — the plan's ``focus`` is the person's correction and
+    must not be overwritten by a route's notes, and a later push's refresh has
+    no stop to ask, so it falls back to the repo's own answers.
 
     Called from a background thread right after a push, and from the regenerate
     route. Both callers are unattended paths where an exception has nowhere to
@@ -4649,7 +4941,9 @@ def generate(
     with _INFLIGHT_LOCK:
         _INFLIGHT.add(plan_id)
     try:
-        return _generate_inner(plan_id, plan, program, worktree, refresh)
+        return _generate_inner(
+            plan_id, plan, program, worktree, refresh, target=target, focus=focus
+        )
     finally:
         # In a ``finally`` because everything below is already never-raise: the
         # one way this set leaks is an exception nobody expected, and a leaked id
@@ -4660,7 +4954,13 @@ def generate(
 
 
 def _generate_inner(
-    plan_id: str, plan: dict, program: str, worktree: str, refresh: bool = False
+    plan_id: str,
+    plan: dict,
+    program: str,
+    worktree: str,
+    refresh: bool = False,
+    target: Optional[str] = None,
+    focus: str = "",
 ) -> dict:
     """:func:`generate`'s body, once the plan is claimed. Never raises.
 
@@ -4678,7 +4978,9 @@ def _generate_inner(
     # perfectly good plan in ``failed``.
     was = (plan["branch"], plan["sha"])
     try:
-        summary, steps, conversation = _generate_steps(plan, program, worktree)
+        summary, steps, conversation = _generate_steps(
+            plan, program, worktree, target=target, focus=focus
+        )
     except TestPlanError as err:
         return (
             _refresh_failed(plan_id, was) if refresh else _fail(plan_id, str(err), was)
@@ -4973,8 +5275,30 @@ def build_run_prompt(
     live: bool = True,
     repo_notes: str = "",
     target: str = "",
+    where: str = "",
+    checkout_branch: str = "",
+    notes: str = "",
 ) -> str:
     """The seed prompt for a verify session.
+
+    ``where`` is a route Verify stop's explicit choice, and when it is given it
+    decides the tree and the system under test instead of ``live``:
+
+    * ``"branch"`` — this branch's own code: a detached checkout of the plan's
+      newest commit, and NO deployment (``target`` is ignored), so the checker
+      starts the product itself.
+    * an environment's name — the DEPLOYMENT is what is checked (``target`` is
+      that environment's ``reach``; blank means "find it the way this repo
+      says"), and the checkout is ``origin/<checkout_branch>`` — the code that
+      environment deploys from — or the plan's commit when it names no branch.
+      The prompt says the checkout is only for reading code, because the
+      failure this guards is an agent "verifying" a sandbox by running a local
+      copy of the tree.
+
+    ``""`` (the default) is the behaviour before environments existed, exactly.
+
+    ``notes`` are this one check's instructions, printed after the repo's
+    standing ones as "Notes for this check: …".
 
     ``only`` narrows the run to a subset of step ids — the per-step Re-check.
     A narrowed run still gets the whole plan's shape in front of it (the other
@@ -5063,7 +5387,58 @@ def build_run_prompt(
     sha = str(plan.get("tip_sha") or plan.get("sha") or "").strip()
     target = _text(target, 500)
     repo_notes = _text(repo_notes, NOTES_BUDGET)
-    if live or not sha:
+    notes = _text(notes, NOTES_BUDGET)
+    where = str(where or "").strip().lower()
+    checkout_branch = str(checkout_branch or "").strip()
+    # The environment's name when the stop chose one; "" for "branch" and for
+    # a run that predates the choice.
+    env_name = where if where and where != BRANCH_WHERE else ""
+    if where == BRANCH_WHERE:
+        # Nothing deployed is under test, whatever the repo's card says.
+        target = ""
+    if env_name and checkout_branch:
+        opening = (
+            "Verify that this work does what it was supposed to do on the %s "
+            "environment. Report what you find. Do not fix anything." % env_name
+        )
+        step_one = (
+            "1. First: `git fetch origin %s && git checkout --detach origin/%s` "
+            "— the code the %s environment deploys from. You check it out ONLY "
+            "TO READ CODE: the thing you are checking is the %s environment "
+            "itself (below), never this tree. A detached checkout of the fetched "
+            "remote ref is the one form that works in this linked worktree. If "
+            "it fails, carry on against the environment and say so in your "
+            "first note." % (checkout_branch, checkout_branch, env_name, env_name)
+        )
+    elif env_name:
+        opening = (
+            "Verify that this work does what it was supposed to do on the %s "
+            "environment. Report what you find. Do not fix anything." % env_name
+        )
+        step_one = (
+            "1. First: `git fetch --all && git checkout --detach %s` — this "
+            "change's own newest commit (the %s environment names no branch it "
+            "deploys from). You check it out ONLY TO READ CODE: the thing you "
+            "are checking is the %s environment itself (below), never this "
+            "tree. If it fails, carry on against the environment and say so in "
+            "your first note." % (sha or "HEAD", env_name, env_name)
+        )
+    elif where == BRANCH_WHERE and sha:
+        opening = (
+            "Verify that this work does what it was supposed to do, checking "
+            "THIS BRANCH'S OWN CODE — a fresh checkout of its newest commit, "
+            "not any deployment. Say so in any note you write. Report what you "
+            "find. Do not fix anything."
+        )
+        step_one = (
+            "1. First: `git fetch --all && git checkout --detach %s` — that "
+            "commit is the newest one pushed on this branch, the tree these "
+            "steps are about. A detached checkout is the one form that works in "
+            "this linked worktree. If it fails, stop: mark every step "
+            '"blocked" with a note saying you could not reach the commit, and '
+            "report that." % sha
+        )
+    elif live or not sha:
         opening = (
             "Verify that this work actually does what it was supposed to do, "
             "now that it is live. Report what you find. Do not fix anything."
@@ -5110,7 +5485,32 @@ def build_run_prompt(
         # supposed to do" and, without this, never says what that was.
         parts += ["", "What it was supposed to do: %s" % summary]
     parts += ["", step_one]
-    if target:
+    if env_name:
+        # NAMED, because a report is evidence about one system and has to say
+        # which: "it works" about the sandbox is not "it works" in production.
+        if target:
+            parts += [
+                "",
+                "2. THE PRODUCT YOU ARE CHECKING IS THE %s ENVIRONMENT, already "
+                "running. Reach it here: %s" % (env_name, target),
+            ]
+        else:
+            parts += [
+                "",
+                "2. THE PRODUCT YOU ARE CHECKING IS THE %s ENVIRONMENT, already "
+                "running. Nobody wrote down how to reach it: use what you know "
+                "about this repository — the standing instructions below, then "
+                "its README and deploy config — to find it." % env_name,
+            ]
+        parts.append(
+            "   Do not start a local copy — that is a different system from the "
+            "one this check is about. The checkout above is only for reading "
+            "code and running repo tooling against that environment. Name the "
+            "%s environment in your first note. If you cannot reach it, mark "
+            'those steps "blocked" with a note saying what you tried — never '
+            '"fail".' % env_name
+        )
+    elif target:
         # THE PRODUCT UNDER TEST IS THE DEPLOYMENT, and the checkout is
         # reference material. Said immediately after the checkout step so the
         # two cannot be confused: the tree tells you what the code says, the
@@ -5179,6 +5579,15 @@ def build_run_prompt(
             "they say:",
             repo_notes,
         ]
+    if notes:
+        # AFTER the standing ones: the narrower instruction reads last, and it
+        # is this check's own. Same subordination to the output contract.
+        parts += [
+            "",
+            "Notes for this check: %s" % notes,
+            "(From whoever set up this check. Like the standing instructions, "
+            "they do NOT change the answers file below.)",
+        ]
     parts += ["", "Steps:"]
     for step in steps:
         sid = step.get("id", "")
@@ -5229,3 +5638,93 @@ def build_run_prompt(
         "once every step has an answer.",
     ]
     return "\n".join(parts)
+
+
+# --------------------------------------------------------------------------- #
+# Reporting a run — what a route posts to the PR
+# --------------------------------------------------------------------------- #
+#: How each answer reads in :func:`results_markdown`.
+_RESULT_MARKS = {
+    "pass": "✅ pass",
+    "fail": "❌ fail",
+    "blocked": "⏸ blocked",
+    "": "⬜ open",
+}
+
+
+def run_target(plan: dict) -> str:
+    """The deployment the plan's newest run was pointed at, for stamping it
+    when the run finishes.
+
+    A run started with an explicit "where" carries its own (stamped by
+    :func:`start_run` — ``""`` for "branch", the environment's ``reach``
+    otherwise), and the repo's target must not overwrite it. A run without one
+    is stamped with the repo's target, as it always was.
+    """
+    runs = (plan or {}).get("runs") or []
+    run = runs[-1] if runs else {}
+    if run.get("where"):
+        return str(run.get("target") or "")
+    return verify_target((plan or {}).get("repo_root") or "")
+
+
+def _one_line(text, limit: int = 300) -> str:
+    """Collapse to one Markdown-safe line: a step or a note with a newline in
+    it would otherwise break the list it is printed in."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+def _where_phrase(plan: dict, run: dict) -> str:
+    """Where a run checked, in the words a PR reader needs."""
+    where = str(run.get("where") or "").strip()
+    sha7 = str(plan.get("tip_sha") or plan.get("sha") or "")[:7]
+    if where == BRANCH_WHERE:
+        return "this branch's own code" + (" (`%s`)" % sha7 if sha7 else "")
+    target = _one_line(run.get("target"), 200)
+    if where:
+        return "the **%s** environment" % where + (" (%s)" % target if target else "")
+    if target:
+        return target
+    if run.get("prelive"):
+        return "this branch's own code" + (" (`%s`)" % sha7 if sha7 else "")
+    live = str(plan.get("live_branch") or "").strip() or "main"
+    return "the live branch (`%s`)" % live
+
+
+def results_markdown(plan: dict) -> str:
+    """A short Markdown summary of the plan's newest run, for a PR comment.
+
+    A header naming where it was checked, then one line per behavior — ✅ pass,
+    ❌ fail, ⏸ blocked or ⬜ open — with its actor and the note if there is one.
+    Every step is listed, answered or not: a comment that left out the open
+    ones would read as "all passed" to anyone skimming the PR.
+
+    Pure: no git, no settings, never raises on a plan of any shape.
+    """
+    plan = plan if isinstance(plan, dict) else {}
+    runs = plan.get("runs") or []
+    run = runs[-1] if runs and isinstance(runs[-1], dict) else {}
+    results = run.get("results") or {}
+    if run:
+        lines = ["### Verify: checked on %s" % _where_phrase(plan, run)]
+    else:
+        lines = ["### Verify: not checked yet"]
+    summary = _one_line(plan.get("summary"), 300)
+    if summary:
+        lines += ["", "_%s_" % summary]
+    lines.append("")
+    steps = [s for s in (plan.get("steps") or []) if isinstance(s, dict)]
+    if not steps:
+        lines.append("No behaviors written yet.")
+    for step in steps:
+        entry = results.get(step.get("id")) or {}
+        result = str(entry.get("result") or "")
+        mark = _RESULT_MARKS.get(result, _RESULT_MARKS[""])
+        actor = "human" if step.get("actor") == "human" else "agent"
+        line = "- %s · %s · %s" % (mark, actor, _one_line(step.get("text")))
+        note = _one_line(entry.get("note"), 300)
+        if note:
+            line += " — %s" % note
+        lines.append(line)
+    return "\n".join(lines) + "\n"

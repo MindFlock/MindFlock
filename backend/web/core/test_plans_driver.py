@@ -205,9 +205,18 @@ def _verify_auto_for(repo_root: str, wt: str) -> bool:
     return _test_plans.is_tracked(repo_root)
 
 
-def _ensure_test_plan(title: str, manual: bool = False) -> None:
+def _ensure_test_plan(
+    title: str, manual: bool = False, environment: str = "", notes: str = ""
+) -> None:
     """Idempotent: create + generate a test plan for a session that just landed
     on origin. **Never raises, never blocks the caller.**
+
+    ``environment``/``notes`` are a route Verify stop steering the WRITING: the
+    named environment's ``reach`` becomes the generation's target (``"branch"``
+    = no deployment, the checklist is about the code itself; ``""`` or an
+    unknown name = the repo's own target), and ``notes`` are added to its
+    focus. They only touch a plan being created or rewritten by THIS call, and
+    are never stored on it (see ``test_plans.generate``).
 
     ``manual`` is the button saying a person asked for this plan by name, and it
     skips the repo's ``verify_on_push`` opt-in (see
@@ -239,7 +248,7 @@ def _ensure_test_plan(title: str, manual: bool = False) -> None:
     try:
         threading.Thread(
             target=_ensure_test_plan_blocking,
-            args=(title, manual),
+            args=(title, manual, environment, notes),
             name="mf-testplan-%s" % title[:48],
             daemon=True,
         ).start()
@@ -248,7 +257,23 @@ def _ensure_test_plan(title: str, manual: bool = False) -> None:
         pass
 
 
-def _ensure_test_plan_blocking(title: str, manual: bool = False) -> None:
+def _generation_steer(repo_root: str, environment: str) -> Optional[str]:
+    """The generation target a Verify stop's ``environment`` asks for, or
+    ``None`` for "the repo's own" (no environment, or one this repo does not
+    have — writing for the wrong place is worse than writing for the usual
+    one)."""
+    where = str(environment or "").strip().lower()
+    if not where:
+        return None
+    if where == _test_plans.BRANCH_WHERE:
+        return ""
+    env = _test_plans.environment(repo_root, where)
+    return None if env is None else str(env.get("reach") or "")
+
+
+def _ensure_test_plan_blocking(
+    title: str, manual: bool = False, environment: str = "", notes: str = ""
+) -> None:
     """The body of :func:`_ensure_test_plan`, on its own thread.
 
     Resolves everything the plan must outlive its session with, then generates.
@@ -322,10 +347,21 @@ def _ensure_test_plan_blocking(title: str, manual: bool = False) -> None:
             owner = _test_plans.owner_for_branch(title, repo_root, branch)
             if owner and _test_plans.refresh_for_push(owner, branch, sha) is not None:
                 _generate_test_plan(
-                    owner, getattr(inst, "Program", "") or "", wt, refresh=True
+                    owner,
+                    getattr(inst, "Program", "") or "",
+                    wt,
+                    refresh=True,
+                    target=_generation_steer(repo_root, environment),
+                    focus=notes,
                 )
             return
-        _generate_test_plan(title, getattr(inst, "Program", "") or "", wt)
+        _generate_test_plan(
+            title,
+            getattr(inst, "Program", "") or "",
+            wt,
+            target=_generation_steer(repo_root, environment),
+            focus=notes,
+        )
     except Exception as err:  # noqa: BLE001 — nothing above may surface: this
         # thread has no caller left to raise into, and a missing test plan must
         # never look like a failed push.
@@ -337,7 +373,12 @@ def _ensure_test_plan_blocking(title: str, manual: bool = False) -> None:
 
 
 def _generate_test_plan(
-    plan_id: str, program: str, worktree: str, refresh: bool = False
+    plan_id: str,
+    program: str,
+    worktree: str,
+    refresh: bool = False,
+    target: Optional[str] = None,
+    focus: str = "",
 ) -> None:
     """Run the generation one-shot and announce the result. Blocking (up to
     ``test_plans.TIMEOUT_GENERATE``); call it on a thread.
@@ -355,7 +396,12 @@ def _generate_test_plan(
     bare traceback on stderr with nobody's request attached to it.
     """
     try:
-        plan = _test_plans.generate(plan_id, program, worktree, refresh) or {}
+        plan = (
+            _test_plans.generate(
+                plan_id, program, worktree, refresh, target=target, focus=focus
+            )
+            or {}
+        )
     except Exception as err:  # noqa: BLE001
         if log.ErrorLog is not None:
             try:
@@ -1309,6 +1355,26 @@ def _verify_run_trees(plan: dict) -> tuple:
     if not wt:
         return "", ""
     tested = _server()._git_head_sha(wt)
+    runs = plan.get("runs") or []
+    run = runs[-1] if runs else {}
+    if run.get("where"):
+        # A route chose where this ran, and the checkout it was told to make is
+        # stamped on the run: the plan's own commit (``"branch"``, or an
+        # environment with no branch), or ``origin/<env branch>``.
+        checkout = str(run.get("checkout") or "").strip()
+        if not checkout.startswith("origin/"):
+            return tested, checkout or str(plan.get("tip_sha") or plan.get("sha") or "")
+        root = str(plan.get("repo_root") or "") or wt
+        out = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--verify", "-q", checkout],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=15,
+        )
+        if out.returncode != 0:
+            return tested, ""  # unknown, never "mismatched"
+        return tested, out.stdout.decode("utf-8", "replace").strip()
     live = str(plan.get("live_branch") or "").strip()
     if not plan.get("live_at"):
         # "Check it early" — the honest expectation is the branch's own tip.
@@ -1473,7 +1539,10 @@ def _poll_running_test_plans(plans: list) -> None:
                     results if isinstance(results, list) else [],
                     tested_sha=tested,
                     expected_sha=expected,
-                    target=_test_plans.verify_target(plan.get("repo_root") or ""),
+                    # The run's own stamp when a route chose where it ran
+                    # (the sandbox's reach, or nothing for "branch"); the
+                    # repo's target otherwise, as before.
+                    target=_test_plans.run_target(plan),
                 )
                 # Only when the store actually took it. `finish_run` answers
                 # None for a plan that was deleted while the run was working,
