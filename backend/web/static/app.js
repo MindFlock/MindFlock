@@ -113784,7 +113784,7 @@ function RepoFields({ use, repo, liveBranch }) {
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "set-hint",
-								children: "A new “changes requested” review or batch of comments on one of your PRs goes to its session, which decides per request: do it, push back with a reply, or ask you."
+								children: "New change requests on your PRs: do them, push back, or ask you."
 							})
 						]
 					}),

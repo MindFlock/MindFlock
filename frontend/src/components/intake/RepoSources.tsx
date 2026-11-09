@@ -417,7 +417,7 @@ export function RepoFields({
               <option value="off">Leave it to me</option>
             </select>
             <span className="set-hint">
-              A new “changes requested” review or batch of comments on one of your PRs goes to its session, which decides per request: do it, push back with a reply, or ask you.
+              New change requests on your PRs: do them, push back, or ask you.
             </span>
           </label>
         )}
