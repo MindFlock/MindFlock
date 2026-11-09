@@ -46,6 +46,7 @@ const TIERS: Record<string, string> = {
   // documented exceptions: whole rows / cards that are one button
   "fl-check-row": "a card row (Flights.css)",
   "fl-palette-item": "a palette card (StopParts.css)",
+  "vf-who-opt": "a Verify stop's who-checks choice card (StopParts.css)",
 };
 
 const FLIGHTS = Object.entries(SRC).filter(([p]) => p.startsWith("components/flights/") && p.endsWith(".tsx"));

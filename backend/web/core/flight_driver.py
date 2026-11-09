@@ -356,10 +356,47 @@ def _repo_root(title: str) -> str:
     return root
 
 
-def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
-    """The behaviors' facts for a verify step (blocking)."""
+def _verify_cfg(flight: dict) -> dict:
+    """The current verify stop's config (``{}`` when the cursor is on none)."""
+    step = _flights._current(flight) if flight.get("steps") else None
+    if step is None or step.get("kind") != "verify":
+        return {}
+    return step.get("config") or {}
+
+
+def _verify_env(flight: dict, where: str) -> Tuple[Optional[dict], bool]:
+    """``(env, missing)`` for a verify stop's ``where`` (blocking): the
+    repo's environment of that name, or ``(None, False)`` for "branch" or
+    when the environments could not be read, ``(None, True)`` when the repo
+    has no environment of that name."""
     from backend.web.core import test_plans as _tp
 
+    if not where or where == _flights.VERIFY_WHERE_BRANCH:
+        return None, False
+    repo = flight.get("repo_root") or _repo_root(flight["session"])
+    try:
+        env = _tp.environment(repo, where)
+    except Exception as err:  # noqa: BLE001 — unknown is not "no such env"
+        _log("flight %s: environments unavailable: %v", flight.get("id"), err)
+        return None, False
+    if env is None:
+        # The implicit "live" falls back to the checklist's own live mark.
+        return None, where != "live"
+    return dict(env), False
+
+
+def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
+    """The behaviors' facts for a verify step (blocking): the checklist, plus
+    ``env`` (the stop's environment, None for "branch") and, for ``ready``
+    "on_branch", ``env_reached_at`` (0 until the plan's commit is on the
+    environment's branch)."""
+    from backend.web.core import test_plans as _tp
+
+    cfg = _verify_cfg(flight)
+    where = str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH)
+    env, missing = _verify_env(flight, where) if cfg else (None, False)
+    if missing:
+        return {"env_missing": where}
     title = flight["session"]
     pid = str(ss["detail"].get("plan") or "")
     if not pid:
@@ -371,6 +408,13 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
     plan = _tp.get(pid) if pid else None
     if plan is None:
         return {}
+    reached = 0.0
+    if env is not None and cfg.get("ready") == "on_branch":
+        try:
+            reached = float(_tp.env_reached_at(pid, env) or 0.0)
+        except Exception as err:  # noqa: BLE001 — not reached (yet)
+            _log("flight %s: env reach unknown: %v", flight.get("id"), err)
+            reached = 0.0
     run = plan["runs"][-1] if plan.get("runs") else None
     results = (run or {}).get("results") or {}
     open_agent = [
@@ -403,6 +447,8 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         ),
         "live": plan.get("state") in ("due", "done") or bool(plan.get("live_at")),
         "live_branch": plan.get("live_branch") or "",
+        "env": env,
+        "env_reached_at": reached,
     }
 
 
@@ -1161,20 +1207,33 @@ def _arm(flight: dict, lane: str, ask_first: bool = False, message: str = "") ->
 def _ensure_checklist(flight: dict) -> dict:
     """Ask for the session's behaviors (Verify's own manual path: create +
     generate on a daemon thread — the stop's face reads "Writing…" until they
-    are written). The plan id is observed on later passes."""
+    are written), for the stop's environment and with its notes. The plan id
+    is observed on later passes. An environment the repo does not have fails
+    the stop."""
     srv = _server()
     title = flight["session"]
+    cfg = _verify_cfg(flight)
+    where = str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH)
+    if _verify_env(flight, where)[1]:
+        raise _StepFailed("no environment named %s in this repo" % where)
     try:
-        srv._ensure_test_plan(title, manual=True)
+        srv._ensure_test_plan(
+            title, manual=True, environment=where, notes=str(cfg.get("notes") or "")
+        )
     except Exception as err:  # noqa: BLE001
         raise _StepFailed("could not ask for the behaviors: %s" % err)
     return {}
 
 
-async def _start_verify_run(plan_id: str) -> None:
-    """``POST /api/test-plans/{id}/run`` in process (its body is the route)."""
+async def _start_verify_run(
+    plan_id: str, where: str = "branch", notes: str = ""
+) -> None:
+    """``POST /api/test-plans/{id}/run`` in process (its body is the route):
+    checked on ``where`` (this branch or an environment), with ``notes``."""
     srv = _server()
-    resp = await srv.run_test_plan(plan_id, None, {})
+    resp = await srv.run_test_plan(
+        plan_id, None, {"environment": where or "branch", "notes": notes or ""}
+    )
     if resp.status_code >= 400 and resp.status_code != 409:
         import json as _json
 
@@ -1660,7 +1719,12 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
         sk = step["kind"]
         if phase == "agent_run":
             pid = str((action.get("detail") or {}).get("plan") or "")
-            await _start_verify_run(pid)
+            cfg = step.get("config") or {}
+            await _start_verify_run(
+                pid,
+                str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH),
+                str(cfg.get("notes") or ""),
+            )
             return dict(
                 action, detail=dict(action.get("detail") or {}, run_started=True)
             )
@@ -1921,8 +1985,81 @@ async def _step_member(
     ):
         with _JOBS_LOCK:
             _JOBS.pop((fid, cur["id"]), None)
+    if (
+        cur is not None
+        and cur["kind"] == "verify"
+        and action["action"] in ("done", "fail")
+        and (cur.get("config") or {}).get("post_to_pr")
+    ):
+        posted = await _post_verify_results(fid, cur, obs, now)
+        after = posted or after
     await asyncio.to_thread(_announce, f, after)
     return after, action
+
+
+async def _post_verify_results(
+    fid: str, step: dict, obs: dict, now: float
+) -> Optional[dict]:
+    """A finished Verify stop with ``post_to_pr``: comment its results
+    (``test_plans.results_markdown``) on the session's PR — the driver posts,
+    never the checker. Once per attempt (``detail.pr_comment`` records what
+    happened); no PR or no checklist is skipped with a history note, and a
+    posting error never fails the stop. Returns the flight after the record,
+    or None."""
+    from backend.web.core import github_pr as _gh
+    from backend.web.core import test_plans as _tp
+
+    flight = _flights.get(fid)
+    ss = (flight or {}).get("step_states", {}).get(step["id"])
+    if flight is None or ss is None or ss["detail"].get("pr_comment"):
+        return None
+    sess = obs.get("session") or {}
+    pid = str((obs.get("verify") or {}).get("plan") or ss["detail"].get("plan") or "")
+    try:
+        plan = await asyncio.to_thread(_tp.get, pid) if pid else None
+        if plan is None:
+            outcome = "skipped: no checklist to post"
+        else:
+            pr, slug = await _pr_of(sess, flight)
+            if pr is None or not slug:
+                outcome = "skipped: the session has no PR"
+            else:
+                body = await asyncio.to_thread(_tp.results_markdown, plan)
+                token = await _gh.api_token()
+                if not token:
+                    outcome = "skipped: no GitHub token"
+                else:
+                    status, data = await _gh._request(
+                        "POST",
+                        "/repos/%s/issues/%d/comments" % (slug, int(pr.number)),
+                        token=token,
+                        body={"body": body},
+                    )
+                    outcome = (
+                        "posted"
+                        if status == 201
+                        else "failed: %s" % _gh._api_message(status, data)
+                    )
+    except Exception as err:  # noqa: BLE001 — never fails the stop
+        outcome = "failed: %s" % err
+    _log("flight %s: verify results to the PR: %v", fid, outcome)
+
+    def fn(x: dict) -> None:
+        st = x["step_states"].get(step["id"])
+        if st is None:
+            return
+        st["detail"]["pr_comment"] = outcome
+        note = (
+            "posted the results to the PR"
+            if outcome == "posted"
+            else "results not posted to the PR (%s)" % outcome.split(": ", 1)[-1]
+        )
+        _flights._hist(x, now, step["id"], "noted", note)
+
+    try:
+        return await asyncio.to_thread(_flights.mutate, fid, fn)
+    except _flights.FlightError:
+        return None
 
 
 async def step_flight(fid: str) -> None:

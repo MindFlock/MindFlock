@@ -60,6 +60,46 @@ in `repository.verify_repo_settings["owner/name"]` and edited in Verify →
 | `deploy_delay_minutes` | How long after merging the change is actually running. Behaviors wait this long before they turn up to be checked — merged is not deployed, and checking too early records a failure against code that is fine. `0` when merging *is* shipping. Blank inherits the flock-wide default (5). |
 | `target` | Where this repo's running product is — a URL, plus whatever is needed to reach it. **This is the key that decides what "it works" is checked against.** With it set, both the behaviors and the agent that checks them are aimed at that deployment. Blank is a real answer, not a missing one: a library or a CLI has no environment to point at, and its behaviors are checked against a fresh checkout of the live branch on this machine. |
 | `prompt` | Standing instructions for this repo — where the app runs, what to always check, what to ignore. Folded into **both** the prompt that writes the behaviors and the one the agent checks them with. Steers *what* gets tested; it can never change the format either model must answer in. |
+| `environments` | The places a route's **Verify** stop can check this repo's work (its **Where** choice), as a list of `{"name", "reach", "branch", "deploy_minutes"}` — a sandbox that only takes squash PRs, a staging site, a canary. See below. |
+
+**Environments.** The repo's own `target` / `live_branch` /
+`deploy_delay_minutes` are always an environment named **`live`** (listed
+first); `environments` adds more, and an entry named `live` overrides the
+implicit one. Each entry:
+
+| Field | Rule |
+| --- | --- |
+| `name` | 1–40 of lowercase letters, digits, `-`, `_` (case is folded on save), unique per repo, and never `branch` — that is the stop's other **Where** answer ("this branch's own code, no deployment"). A bad or repeated name is dropped (the first of a repeat wins). |
+| `reach` | How the checker reaches and drives that environment — a URL, a Slack channel, a log search, or blank for "use what you know about this repo". Up to 500 characters. |
+| `branch` | The git branch the environment deploys from. A Verify stop set to **ready when it reaches the branch** waits until the work's commit is an ancestor of `origin/<branch>`, then its `deploy_minutes`; the checker checks it out to read code (the plan's own commit when blank). Blank, or anything that is not a plausible ref name (up to 200 of letters, digits, `.`, `_`, `/`, `-`, not starting with `/` or `-`, no `..`), means none. A branch that only takes **squash** merges never shows the original commit — wait on time ("after the previous stop") instead. |
+| `deploy_minutes` | Minutes from reaching the branch to being deployed, `0`–`1440`; larger is clamped to 1440, blank or not a number reads as `0`. |
+
+At most 20 per repo (`VERIFY_ENVIRONMENTS_MAX`; the rest are dropped). Bad
+entries are dropped on load, never an error. An `environments` list alone is
+enough to keep a repo's block; an empty list drops the key. See
+[behaviors.md](behaviors.md#where-ready-who-notes-post-to-the-pr-2026-11-09)
+for how a route's Verify stop uses them.
+
+```json
+"verify_repo_settings": {
+  "acme/app": {
+    "target": "https://app.acme.dev",
+    "live_branch": "main",
+    "environments": [
+      {"name": "sandbox", "reach": "https://sandbox.acme.dev",
+       "branch": "sandbox", "deploy_minutes": 10}
+    ]
+  }
+}
+```
+
+Here the repo has two environments: the implicit `live` (`https://app.acme.dev`
+from `main`, after `deploy_delay_minutes`) and `sandbox`.
+
+Saved like the rest of the block, with `POST
+/api/settings` (`{"repository": {"verify_repo_settings": {"owner/name": {…,
+"environments": [...]}}}}`), and listed for pickers by `GET
+/api/test-plans/environments`.
 
 Each session also gets a **port block** (O4): 10 consecutive ports starting
 at a deterministic base (persisted in `~/.mindflock/ports.json`), exported

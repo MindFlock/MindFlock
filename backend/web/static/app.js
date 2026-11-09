@@ -24437,13 +24437,17 @@ function builtinPlanFor(kind, plans) {
 	return own === "builtin:issue" ? "builtin:ticket" : own;
 }
 function fieldOptions(f) {
-	return (f.options || []).map((o) => typeof o === "string" ? {
-		value: o,
-		label: o
-	} : {
-		value: String(o.value),
-		label: String(o.label || o.value)
+	return (f.options || []).map((o) => {
+		const value = typeof o === "string" ? o : String(o.value);
+		return {
+			value,
+			label: optionLabel$1(f, value, typeof o === "string" ? o : String(o.label || o.value))
+		};
 	});
+}
+function optionLabel$1(f, value, fallback) {
+	const l = f?.option_labels?.[value];
+	return typeof l === "string" && l.trim() ? l : fallback;
 }
 function stopsBefore(steps, step) {
 	const list = steps || [];
@@ -27956,6 +27960,197 @@ function publishWindowName() {
 	w.mindflock.slotNumber = slotNumber;
 }
 //#endregion
+//#region src/lib/verifyStop.ts
+var WHERE_BRANCH = "branch";
+var READY_MINUTES_MAX = 1440;
+var ENV_NAME_MAX = 40;
+var ENV_REACH_MAX = 500;
+var VERIFY_NOTES_MAX = 2e3;
+var READY = [
+	"now",
+	"on_branch",
+	"after_prev"
+];
+var WHO = [
+	"both",
+	"agent",
+	"you"
+];
+var int = (v, d) => {
+	const n = Number(v);
+	return v !== "" && v !== null && v !== void 0 && Number.isFinite(n) ? Math.trunc(n) : d;
+};
+function verifyConfig(c) {
+	const cfg = c || {};
+	const legacy = cfg.wait_live === true || cfg.wait_live === "true";
+	const where = String(cfg.where ?? "").trim() || (legacy ? "live" : WHERE_BRANCH);
+	const rawReady = String(cfg.ready ?? "");
+	const ready = READY.includes(rawReady) ? rawReady : legacy ? "on_branch" : "now";
+	const rawWho = String(cfg.who ?? "");
+	const who = WHO.includes(rawWho) ? rawWho : "both";
+	return {
+		where,
+		ready: where === WHERE_BRANCH && ready === "on_branch" ? "now" : ready,
+		ready_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(cfg.ready_minutes, 0))),
+		who,
+		notes: String(cfg.notes ?? ""),
+		post_to_pr: cfg.post_to_pr === true || cfg.post_to_pr === "true"
+	};
+}
+function withVerifyChoice(c, patch) {
+	const next = {
+		...verifyConfig(c),
+		...patch
+	};
+	if (next.where === WHERE_BRANCH && next.ready === "on_branch") next.ready = "now";
+	const out = {
+		...c || {},
+		...next
+	};
+	delete out.wait_live;
+	return out;
+}
+function readyChoices(where) {
+	const all = [
+		{
+			value: "now",
+			label: "Right away"
+		},
+		{
+			value: "on_branch",
+			label: "When it reaches the environment's branch"
+		},
+		{
+			value: "after_prev",
+			label: "Minutes after the stop before"
+		}
+	];
+	return where === WHERE_BRANCH ? all.filter((o) => o.value !== "on_branch") : all;
+}
+function showsReadyMinutes(ready) {
+	return ready === "on_branch" || ready === "after_prev";
+}
+var READY_MINUTES_HINT = "0 = the environment's deploy time";
+var WHO_CHOICES = [
+	{
+		value: "both",
+		label: "Agent, then me",
+		explain: "The agent checks what it can; the ones only a person can check park the route here for you."
+	},
+	{
+		value: "agent",
+		label: "Agent only",
+		explain: "Person-only checks stay open on the checklist but don't hold the route."
+	},
+	{
+		value: "you",
+		label: "Only me",
+		explain: "Every check waits for you."
+	}
+];
+var VERIFY_FACE_WHO = {
+	both: "agent, then you",
+	agent: "agent only",
+	you: "you"
+};
+var known$1 = null;
+function rememberEnvironments(r) {
+	known$1 = r && typeof r === "object" ? {
+		repos: r.repos || {},
+		names: r.names || []
+	} : null;
+}
+function envBranch(name, envs = known$1) {
+	const branches = /* @__PURE__ */ new Set();
+	for (const list of Object.values(envs?.repos || {})) for (const e of list || []) if (e.name === name && e.branch) branches.add(e.branch);
+	return branches.size === 1 ? [...branches][0] : "";
+}
+function verifyFace(c, envs = known$1) {
+	const v = verifyConfig(c);
+	return "Verify on " + (v.where === WHERE_BRANCH ? "this branch" : v.where) + " · " + VERIFY_FACE_WHO[v.who] + " · " + readyWords(v, envs);
+}
+function readyWords(v, envs = known$1) {
+	const onBranch = v.where === WHERE_BRANCH;
+	if (v.ready === "on_branch" && !onBranch) return "once on " + (envBranch(v.where, envs) || v.where) + (v.ready_minutes > 0 ? " + " + v.ready_minutes + " min" : "");
+	if (v.ready === "after_prev") {
+		if (v.ready_minutes > 0) return v.ready_minutes + " min after the stop before";
+		return onBranch ? "after the stop before" : "after the deploy time";
+	}
+	return "right away";
+}
+function whereOptions(envs, current = "") {
+	const out = [{
+		value: WHERE_BRANCH,
+		label: "This branch's code",
+		title: "A fresh checkout of this branch — no deployment"
+	}];
+	const names = [];
+	for (const n of envs?.names || []) if (n && n !== WHERE_BRANCH && !names.includes(n)) names.push(n);
+	for (const list of Object.values(envs?.repos || {})) for (const e of list || []) if (e.name && e.name !== WHERE_BRANCH && !names.includes(e.name)) names.push(e.name);
+	for (const n of names) out.push({
+		value: n,
+		label: n,
+		title: envTitle(n, envs) || void 0
+	});
+	const cur = current.trim();
+	if (cur && !out.some((o) => o.value === cur)) out.push({
+		value: cur,
+		label: cur,
+		title: "Not an environment of any watched repo yet",
+		custom: true
+	});
+	return out;
+}
+function envTitle(name, envs) {
+	const lines = [];
+	for (const [repo, list] of Object.entries(envs?.repos || {})) {
+		const e = (list || []).find((x) => x.name === name);
+		if (!e) continue;
+		const bits = [
+			e.reach?.trim() ? clip$8(e.reach.trim(), 60) : "",
+			e.branch ? "deploys from " + e.branch : "",
+			e.deploy_minutes ? e.deploy_minutes + " min to deploy" : ""
+		].filter(Boolean);
+		lines.push(repo + (bits.length ? ": " + bits.join(" · ") : ""));
+	}
+	return lines.join("\n");
+}
+var clip$8 = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var ENV_NAME_RE = /^[a-z0-9_-]+$/;
+function envNameError(name, others = []) {
+	const n = name.trim();
+	if (!n) return "Give it a name";
+	if (n.length > ENV_NAME_MAX) return "At most 40 characters";
+	if (!ENV_NAME_RE.test(n)) return "Lowercase letters, digits, - and _ only";
+	if (n === WHERE_BRANCH) return "“branch” means this branch's own code — pick another name";
+	if (others.includes(n)) return "Another environment has this name";
+	return "";
+}
+function envRowErrors(rows) {
+	return rows.map((r, i) => envNameError(r.name, rows.filter((_, j) => j !== i).map((x) => x.name.trim())));
+}
+function envsOf(block) {
+	const list = block && typeof block === "object" ? block.environments : null;
+	if (!Array.isArray(list)) return [];
+	return list.filter((e) => !!e && typeof e === "object").map((e) => ({
+		name: String(e.name ?? ""),
+		reach: String(e.reach ?? ""),
+		branch: String(e.branch ?? ""),
+		deploy_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(e.deploy_minutes, 0)))
+	}));
+}
+var isBlankEnv = (r) => !r.name.trim() && !r.reach.trim() && !r.branch.trim() && !int(r.deploy_minutes, 0);
+function envsToSave(rows) {
+	const kept = rows.filter((r) => !isBlankEnv(r));
+	if (envRowErrors(kept).some(Boolean)) return null;
+	return kept.map((r) => ({
+		name: r.name.trim(),
+		reach: r.reach.trim().slice(0, ENV_REACH_MAX),
+		branch: r.branch.trim(),
+		deploy_minutes: Math.min(READY_MINUTES_MAX, Math.max(0, int(r.deploy_minutes, 0)))
+	}));
+}
+//#endregion
 //#region src/state/queries.ts
 var queryClient = new QueryClient({ defaultOptions: { queries: {
 	retry: 1,
@@ -28584,6 +28779,21 @@ function useCachedLiveBranch() {
 		queryFn: () => api("/api/test-plans"),
 		enabled: false
 	}).data?.live_branch || "";
+}
+function useVerifyEnvironments(enabled = true) {
+	return useQuery({
+		queryKey: ["test-plan-environments"],
+		queryFn: async () => {
+			const r = await api("/api/test-plans/environments");
+			const ok = r && typeof r === "object" && Array.isArray(r.names) ? r : null;
+			rememberEnvironments(ok);
+			if (!ok) throw new Error("no environments list");
+			return ok;
+		},
+		enabled,
+		staleTime: 6e4,
+		retry: false
+	}, queryClient);
 }
 function refreshTestPlans() {
 	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
@@ -87178,11 +87388,6 @@ var num = (v, d) => {
 	const n = Number(v);
 	return Number.isFinite(n) && v !== "" && v !== null && v !== void 0 ? n : d;
 };
-var VERIFY_WHO = {
-	both: "by the agent and you",
-	agent: "by the agent",
-	you: "by you"
-};
 var YOU_WAITS = "waits for your Done";
 function youFlownSub(step, state) {
 	if (step.kind !== "you" || state !== "done" && state !== "skipped") return "";
@@ -87199,7 +87404,7 @@ function stopSummary(step) {
 			const lane = normalizeLane(String(c.lane ?? "push")) || "push";
 			return (lane === "leave" ? "off" : LANE_LABEL[lane].toLowerCase()) + (c.ask_first ? " · asks first" : "");
 		}
-		case "verify": return (VERIFY_WHO[String(c.who || "both")] || VERIFY_WHO.both) + (c.wait_live ? " · once live" : "");
+		case "verify": return verifyFace(c);
 		case "land": return "once merged: " + (String(c.close || "delete") === "close" ? "closes" : "deletes") + " the session" + (c.delete_branch === false ? " · keeps the branch" : "");
 		case "you": {
 			const items = youItems(step);
@@ -94924,6 +95129,222 @@ var DURATION_UNITS = {
 	h: 3600
 };
 //#endregion
+//#region src/components/flights/VerifyStopFields.tsx
+var VERIFY_OWN_FIELDS = [
+	"where",
+	"ready",
+	"ready_minutes",
+	"who",
+	"notes",
+	"post_to_pr",
+	"wait_live"
+];
+var isVerifyEditor = (kind, def) => kind === "verify" && !!def?.fields?.some((f) => f.name === "where");
+var OTHER = "\0other";
+function verifySteps(v) {
+	const on = v.where === WHERE_BRANCH ? "this branch's code" : v.where;
+	return [
+		"behaviors are written from the branch's changes",
+		v.who === "you" ? "you check every one on " + on : "the agent checks its ones on " + on,
+		v.who === "agent" ? "yours stay open on the checklist — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)"
+	];
+}
+function VerifyExplainer({ v }) {
+	const lines = verifySteps(v);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "vf-explain fl-fld-wide",
+		"aria-label": "What this stop does",
+		children: lines.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "vf-explain-n",
+			"aria-hidden": "true",
+			children: "①②③"[i]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: t })] }, i))
+	});
+}
+function VerifyStopFields({ config, def, readOnly, onChange, renderField }) {
+	const v = verifyConfig(config);
+	const envs = useVerifyEnvironments(!readOnly);
+	const set = (patch) => !readOnly && onChange(withVerifyChoice(config, patch));
+	const fieldOf = (name) => def?.fields.find((f) => f.name === name);
+	const label = (name, d) => fieldOf(name)?.label || d;
+	const extra = (def?.fields || []).filter((f) => !VERIFY_OWN_FIELDS.includes(f.name));
+	const minutes = showsReadyMinutes(v.ready);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyExplainer, { v }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WherePicker, {
+			label: label("where", "Where"),
+			value: v.where,
+			envs: envs.isError ? null : envs.data || null,
+			failed: envs.isError,
+			readOnly,
+			onChange: (where) => set({ where })
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			label: label("ready", "Ready when"),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+				label: label("ready", "Ready when"),
+				value: v.ready,
+				options: readyChoices(v.where).map((o) => ({
+					v: o.value,
+					label: optionLabel$1(fieldOf("ready"), o.value, o.label),
+					disabled: readOnly
+				})),
+				onChange: (ready) => set({ ready })
+			})
+		}),
+		minutes && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			label: label("ready_minutes", "Minutes"),
+			hint: v.where === WHERE_BRANCH ? "0 = right after it" : READY_MINUTES_HINT,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, {
+				label: label("ready_minutes", "Minutes"),
+				unit: "min",
+				value: v.ready_minutes,
+				onChange: (x) => set({ ready_minutes: x === "" ? 0 : Math.min(1440, x) })
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			label: label("who", "Who checks"),
+			wide: true,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "vf-who",
+				role: "radiogroup",
+				"aria-label": label("who", "Who checks"),
+				children: WHO_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					role: "radio",
+					"aria-checked": v.who === c.value,
+					className: "vf-who-opt" + (v.who === c.value ? " on" : ""),
+					"data-value": c.value,
+					onClick: () => set({ who: c.value }),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: optionLabel$1(fieldOf("who"), c.value, c.label) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: c.explain
+					})]
+				}, c.value))
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			label: label("notes", "Notes for this check"),
+			wide: true,
+			hint: "For this stop only — on top of the repo's standing notes.",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptBox, {
+				label: label("notes", "Notes for this check"),
+				rows: 2,
+				value: v.notes,
+				placeholder: "e.g. Log in as the QA user; check the export button too.",
+				onChange: (t) => set({ notes: t.slice(0, VERIFY_NOTES_MAX) })
+			})
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fl-fld",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+				on: v.post_to_pr,
+				label: label("post_to_pr", "Post the results to the PR"),
+				title: "When the stop finishes, its results go on the session's PR as a comment",
+				onChange: (x) => set({ post_to_pr: x })
+			})
+		}),
+		extra.map((f) => renderField(f))
+	] });
+}
+function WherePicker({ label, value, envs, failed, readOnly, onChange }) {
+	const [typing, setTyping] = (0, import_react.useState)(false);
+	if (failed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+		label,
+		wide: true,
+		hint: "“branch” = this branch's own code, or an environment's name",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+			label,
+			value,
+			placeholder: "branch or an environment name",
+			onChange: (x) => !readOnly && onChange(x.trim())
+		})
+	});
+	const opts = whereOptions(envs, value);
+	const shown = typing ? OTHER : value;
+	const hint = value === WHERE_BRANCH ? "A fresh checkout of this branch — nothing deployed." : envTitle(value, envs) || (envs ? "No watched repo has this environment yet — add it on the repo's Verify card (Intake)." : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
+		label,
+		wide: true,
+		hint: hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "vf-where-hint",
+			children: hint
+		}) : void 0,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+			label,
+			value: shown,
+			options: [...opts.map((o) => ({
+				value: o.value,
+				label: o.label,
+				title: o.title
+			})), {
+				value: OTHER,
+				label: "Other…",
+				title: "Type an environment's name"
+			}],
+			onChange: (x) => {
+				if (readOnly) return;
+				if (x === OTHER) return setTyping(true);
+				setTyping(false);
+				onChange(x);
+			}
+		}), typing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+			label: label + " — another environment",
+			value: value === WHERE_BRANCH ? "" : value,
+			placeholder: "an environment's name",
+			onChange: (x) => !readOnly && onChange(x.trim() || WHERE_BRANCH)
+		})]
+	});
+}
+function VerifyStopBehaviors({ planId }) {
+	const q = useQuery({
+		queryKey: ["test-plans"],
+		queryFn: () => api("/api/test-plans"),
+		enabled: false
+	}, queryClient);
+	const plan = planId ? (q.data?.plans || []).find((p) => p.id === planId) : void 0;
+	if (!plan || !(plan.steps || []).length) return null;
+	const steps = plan.steps;
+	const yours = steps.filter((s) => whoOf(plan, s).you).length;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "vf-behaviors",
+		"aria-label": "This stop's behaviors",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "fl-fld-label",
+			children: [
+				"Behaviors — ",
+				steps.length,
+				" · ",
+				yours ? yours + " yours" : "none yours"
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: steps.map((s) => {
+			const who = whoOf(plan, s);
+			const chip = rowChip(plan, s.id);
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				className: "vf-behavior" + (who.you ? " vf-yours" : ""),
+				"data-check": chip.state,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vf-behavior-mark",
+						title: chip.label,
+						"aria-label": chip.label,
+						children: chip.glyph
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vf-behavior-text",
+						children: s.text
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vf-behavior-who",
+						title: who.title,
+						children: who.label
+					})
+				]
+			}, s.id);
+		}) })]
+	});
+}
+//#endregion
 //#region src/components/flights/StopParts.tsx
 function kindName(def, kind = "") {
 	const k = def?.kind || kind;
@@ -95368,6 +95789,13 @@ function StopForm({ step, def, onChange, readOnly, lineSteps }) {
 		...step.config,
 		[name]: v
 	} });
+	const field = (f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopField, {
+		f,
+		value: step.config?.[f.name],
+		readOnly,
+		choices: f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : void 0,
+		onChange: (v) => setField(f.name, v)
+	}, f.name);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-form",
 		children: [
@@ -95380,20 +95808,20 @@ function StopForm({ step, def, onChange, readOnly, lineSteps }) {
 					onChange: (t) => !readOnly && onChange({ title: t })
 				})
 			}),
-			(def?.fields || []).map((f) => step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhenField, {
+			isVerifyEditor(step.kind, def) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopFields, {
+				config: step.config,
+				def,
+				readOnly,
+				onChange: (config) => onChange({ config }),
+				renderField: (f) => field(f)
+			}) : (def?.fields || []).map((f) => step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhenField, {
 				label: cleanLabel(f),
 				placeholder: f.placeholder,
 				hint: "Empty: only the count stops it. ⓘ lists the conditions.",
 				value: String(step.config?.[f.name] ?? ""),
 				readOnly,
 				onChange: (w) => setField(f.name, w)
-			}, f.name) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopField, {
-				f,
-				value: step.config?.[f.name],
-				readOnly,
-				choices: f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : void 0,
-				onChange: (v) => setField(f.name, v)
-			}, f.name)),
+			}, f.name) : field(f)),
 			step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-form-note muted",
 				role: "note",
@@ -96125,6 +96553,7 @@ function StepDialog(p) {
 					className: "fl-note muted",
 					children: "This stop's details haven't loaded yet."
 				}),
+				kind === "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopBehaviors, { planId: p.behaviorsPlanId || n.behaviors?.planId || "" }),
 				draft && (editable || p.onToggleHalt) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "stop-dialog-halt",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
@@ -96524,15 +96953,17 @@ function stopLog(n, flight, rec, row) {
 			}),
 			hist.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 				className: "stop-dialog-hist",
-				children: hist.slice(-12).map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: when(h.at)
-					}),
-					" ",
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: h.event }),
-					h.note ? " — " + h.note : ""
-				] }, i))
+				children: hist.slice(-12).map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					"data-event": h.event,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "muted",
+							children: when(h.at)
+						}),
+						" ",
+						h.event === "noted" ? h.note : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: h.event }), h.note ? " — " + h.note : ""] })
+					]
+				}, i))
 			}),
 			rec?.note && !hist.some((h) => h.note === rec.note) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-note",
@@ -96957,6 +97388,7 @@ function useSessionLine(title, src, opts) {
 			node: open,
 			def,
 			lineSteps: flight?.steps,
+			behaviorsPlanId: open.step?.kind === "verify" ? String(rec?.detail?.plan || "") : void 0,
 			loopAgent: true,
 			busy,
 			note: [
@@ -111127,8 +111559,11 @@ function fieldPatch(blocks, use, repo, field, value) {
 	const { group, map } = USE_STORE[use];
 	const next = { ...blocks };
 	const block = { ...next[repo] || {} };
-	const v = value.trim();
-	if (!v) delete block[field];
+	const v = Array.isArray(value) ? value : value.trim();
+	if (Array.isArray(v)) {
+		if (v.length) block[field] = v;
+		else delete block[field];
+	} else if (!v) delete block[field];
 	else if (field === "skip_authors") block[field] = v.split(",").map((x) => x.trim()).filter(Boolean);
 	else block[field] = v;
 	if (Object.keys(block).length) next[repo] = block;
@@ -111137,6 +111572,163 @@ function fieldPatch(blocks, use, repo, field, value) {
 		patch: { [group]: { [map]: next } },
 		blocks: next
 	};
+}
+//#endregion
+//#region src/components/intake/RepoEnvironments.tsx
+var blank = () => ({
+	name: "",
+	reach: "",
+	branch: "",
+	deploy_minutes: 0
+});
+function RepoEnvironments({ value, onSave }) {
+	const [rows, setRows] = (0, import_react.useState)(() => value.map((e) => ({ ...e })));
+	const savedKey = JSON.stringify(value);
+	const sent = (0, import_react.useRef)(savedKey);
+	const autosave = useAutosave((list) => {
+		const clean = envsToSave(list);
+		if (!clean) return;
+		const key = JSON.stringify(clean);
+		if (key === sent.current) return;
+		sent.current = key;
+		onSave(clean);
+	});
+	(0, import_react.useEffect)(() => {
+		if (savedKey !== sent.current && !autosave.isPending()) {
+			sent.current = savedKey;
+			setRows(value.map((e) => ({ ...e })));
+		}
+	}, [savedKey]);
+	const errors = envRowErrors(rows);
+	const change = (next) => {
+		setRows(next);
+		autosave.schedule(next);
+	};
+	const edit = (i, patch) => change(rows.map((r, j) => j === i ? {
+		...r,
+		...patch
+	} : r));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "vf-envs",
+		"aria-label": "Environments",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-envs-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					children: "Environments"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "More places a Verify stop can check on — its “Where” lists them by name."
+				})]
+			}),
+			rows.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vf-env",
+				"data-env": r.name || void 0,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "ik-grid ik-grid-3",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "set-row",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "set-label",
+										children: "Name"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "text",
+										autoComplete: "off",
+										spellCheck: false,
+										maxLength: ENV_NAME_MAX,
+										"data-env-field": "name",
+										placeholder: "e.g. sandbox",
+										value: r.name,
+										"aria-invalid": errors[i] ? true : void 0,
+										onChange: (e) => edit(i, { name: e.target.value.toLowerCase() }),
+										onBlur: () => autosave.flush()
+									}),
+									errors[i] ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "set-hint vf-env-error",
+										children: errors[i]
+									}) : null
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "set-row",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-label",
+									children: "Deploys from branch"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "text",
+									autoComplete: "off",
+									spellCheck: false,
+									"data-env-field": "branch",
+									placeholder: "blank = none",
+									value: r.branch,
+									onChange: (e) => edit(i, { branch: e.target.value }),
+									onBlur: () => autosave.flush()
+								})]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "set-row",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-label",
+									children: "Deploy time (minutes)"
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "number",
+									className: "num-sm",
+									min: 0,
+									max: 1440,
+									step: 1,
+									"data-env-field": "deploy_minutes",
+									value: String(r.deploy_minutes),
+									onChange: (e) => edit(i, { deploy_minutes: Math.min(1440, Math.max(0, Math.trunc(Number(e.target.value) || 0))) }),
+									onBlur: () => autosave.flush()
+								})]
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-label",
+							children: "How to reach it"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+							rows: 2,
+							spellCheck: false,
+							maxLength: ENV_REACH_MAX,
+							"data-env-field": "reach",
+							placeholder: "URL, Slack channel, log search… or 'use what you know about this repo'",
+							value: r.reach,
+							onChange: (e) => edit(i, { reach: e.target.value }),
+							onBlur: () => autosave.flush()
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "vf-env-acts",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							"aria-label": "Remove the environment " + (r.name || "without a name"),
+							onClick: () => {
+								const next = rows.filter((_, j) => j !== i);
+								change(next);
+								autosave.flush();
+							},
+							children: "Remove"
+						})
+					})
+				]
+			}, i)),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				onClick: () => setRows([...rows, blank()]),
+				children: "+ Add an environment"
+			}) })
+		]
+	});
 }
 //#endregion
 //#region src/components/intake/RepoSources.tsx
@@ -111255,41 +111847,59 @@ function RepoFields({ use, repo, liveBranch }) {
 			className: "ik-fields",
 			"data-use": "verify",
 			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ik-grid ik-grid-2",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-						label: "Live branch",
-						field: "live_branch",
-						value: text("live_branch"),
-						placeholder: live || "main",
-						hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							"Blank uses ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.liveBranch || "main" }),
-							"."
-						] }),
-						onSave: save
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-						label: "Deploy delay (minutes)",
-						field: "deploy_delay_minutes",
-						type: "number",
-						value: text("deploy_delay_minutes"),
-						placeholder: defaults.deployDelay || "5",
-						hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							"Time to deploy; 0 = no deploy. Blank uses ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.deployDelay || "5" }),
-							"."
-						] }),
-						onSave: save
-					})]
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+					className: "vf-live-env",
+					"data-env": "live",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+							className: "set-label",
+							children: "Live environment"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "ik-grid ik-grid-2",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+								label: "Live branch",
+								field: "live_branch",
+								value: text("live_branch"),
+								placeholder: live || "main",
+								hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+									"Blank uses ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.liveBranch || "main" }),
+									"."
+								] }),
+								onSave: save
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+								label: "Deploy delay (minutes)",
+								field: "deploy_delay_minutes",
+								type: "number",
+								value: text("deploy_delay_minutes"),
+								placeholder: defaults.deployDelay || "5",
+								hint: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+									"Time to deploy; 0 = no deploy. Blank uses ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: defaults.deployDelay || "5" }),
+									"."
+								] }),
+								onSave: save
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+							label: "Where it runs (optional)",
+							field: "target",
+							value: text("target"),
+							maxLength: VERIFY_TARGET_MAX,
+							placeholder: "e.g. https://app.example.com — log in as qa@example.com",
+							hint: "URL and test login the checks use. Blank checks a fresh checkout.",
+							onSave: save
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "A Verify stop names it “live”."
+						})
+					]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-					label: "Where it runs (optional)",
-					field: "target",
-					value: text("target"),
-					maxLength: VERIFY_TARGET_MAX,
-					placeholder: "e.g. https://app.example.com — log in as qa@example.com",
-					hint: "URL and test login the checks use. Blank checks a fresh checkout.",
-					onSave: save
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoEnvironments, {
+					value: envsOf(o),
+					onSave: (list) => saveFields({ environments: list })
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "set-row",

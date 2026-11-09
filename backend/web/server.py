@@ -11056,6 +11056,24 @@ async def list_test_plan_repos() -> JSONResponse:
     return JSONResponse({"repos": await asyncio.to_thread(_known_repo_roots)})
 
 
+# Registered with the other literal GETs, ahead of every
+# ``/api/test-plans/{plan_id:path}`` route: that converter is greedy, and a
+# future GET on it would otherwise read "environments" as a plan id.
+@app.get("/api/test-plans/environments")
+async def list_test_plan_environments() -> JSONResponse:
+    """Where a route's Verify stop can check: ``{"repos": {"owner/name":
+    [env, …]}, "names": [sorted unique names]}`` over ``repository.verify_repos``.
+
+    Each env is ``{name, reach, branch, deploy_minutes, implicit}`` — the
+    implicit ``live`` first (see ``test_plans.environments``). ``names`` is
+    what a stop's picker offers when it does not yet know which repo the route
+    will fly in. Read-only. A thread because resolving the live-branch chain
+    reads settings, which may touch disk."""
+    repos = await asyncio.to_thread(_test_plans.environments_by_slug)
+    names = sorted({e["name"] for envs in repos.values() for e in envs})
+    return JSONResponse({"repos": repos, "names": names})
+
+
 @app.post("/api/test-plans/branch")
 async def write_test_plan_for_branch(payload: dict) -> JSONResponse:
     """Ask the agent for a checklist for a BRANCH no session has been on.
@@ -11384,8 +11402,28 @@ async def run_test_plan(
     refused with a 400 rather than quietly dropped, because the request is a
     category error and silently running nothing would look like it worked: a
     step is ``human`` precisely because no shell can observe what it asks about.
+
+    ``{"environment": …, "notes": …}`` is a route's Verify stop choosing WHERE
+    (both optional; absent = exactly the behaviour above). ``"branch"`` checks
+    out the plan's own commit with no deployment under test; an environment's
+    name (``test_plans.environments``) puts that DEPLOYMENT under test — its
+    ``reach`` is the target — with ``origin/<its branch>`` checked out for
+    reading code (the plan's commit when it names no branch). An unknown name
+    is a 400, never a silent fallback to somewhere else: a check run in the
+    wrong place reports on the wrong system. ``notes`` (≤ 2000 chars, longer is
+    cut) reach the checker after the repo's standing notes.
     """
     payload = payload or {}
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+    where = payload.get("environment")
+    if where is not None and not isinstance(where, str):
+        return JSONResponse({"error": "environment must be a string"}, status_code=400)
+    where = str(where or "").strip().lower()
+    notes = payload.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        return JSONResponse({"error": "notes must be a string"}, status_code=400)
+    notes = str(notes or "").strip()[:2000]
     if not git_available():
         return _no_git_response()
     plan = _test_plans.get(plan_id)
@@ -11500,12 +11538,37 @@ async def run_test_plan(
     # not only the writer. The settings field's own placeholder is "The UI runs
     # on :3000 — check there, not :8080" — a sentence written for the agent that
     # works the checklist, which until now only the model that wrote it ever saw.
+    #
+    # A route's explicit "where" overrides both answers: the environment's own
+    # reach and branch, or the plan's commit with nothing deployed. Resolved
+    # BEFORE any session is touched, so an unknown name costs nothing.
+    run_target: Optional[str] = None
+    checkout = ""
+    checkout_branch = ""
+    if where:
+        sha = str(plan.get("tip_sha") or plan.get("sha") or "")
+        if where == _test_plans.BRANCH_WHERE:
+            run_target, checkout = "", sha
+        else:
+            env = await asyncio.to_thread(_test_plans.environment, repo_root, where)
+            if env is None:
+                return JSONResponse(
+                    {"error": "no such environment: %s" % where}, status_code=400
+                )
+            run_target = env["reach"]
+            checkout_branch = env["branch"]
+            checkout = ("origin/%s" % checkout_branch) if checkout_branch else sha
     prompt = _test_plans.build_run_prompt(
         plan,
         only,
         live=plan["state"] in ("due", "running", "done"),
         repo_notes=_test_plans.repo_notes(repo_root),
-        target=_test_plans.verify_target(repo_root),
+        target=(
+            _test_plans.verify_target(repo_root) if run_target is None else run_target
+        ),
+        where=where,
+        checkout_branch=checkout_branch,
+        notes=notes,
     )
     # Clear the previous run's answers BEFORE starting another one. The result
     # file is the session's only return channel and the poller believes the
@@ -11577,7 +11640,14 @@ async def run_test_plan(
     # Only now: start_run stamps the plan "running" and opens the run record the
     # due loop's give-up clock reads, and a plan claiming a session that was
     # never created would be stuck there for two hours.
-    started = await asyncio.to_thread(_test_plans.start_run, plan_id, title)
+    started = await asyncio.to_thread(
+        _test_plans.start_run,
+        plan_id,
+        title,
+        where=where,
+        target=run_target,
+        checkout=checkout,
+    )
     if started is None:
         # The plan was deleted while the session was being provisioned. Answering
         # `ok` here left a real, billed agent working a checklist that no longer
