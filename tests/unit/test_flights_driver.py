@@ -273,10 +273,12 @@ def test_ticket_step_calls_the_provider(srv, row, monkeypatch):
 
 def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
     asked, ran = [], []
-    srv._ensure_test_plan = lambda title, manual=False: asked.append((title, manual))
+    srv._ensure_test_plan = lambda title, manual=False, environment="", notes="": (
+        asked.append((title, manual, environment, notes))
+    )
 
     async def fake_run(pid, req, payload):
-        ran.append(pid)
+        ran.append((pid, payload))
         return SimpleNamespace(status_code=202, body=b"{}")
 
     srv.run_test_plan = fake_run
@@ -284,7 +286,7 @@ def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
     monkeypatch.setattr(D, "_verify_obs", lambda f, ss, sess: dict(facts))
     f = fly({"kind": "verify", "config": {"who": "both"}})
     run(D.step_flight(f["id"]))
-    assert asked == [("s", True)]
+    assert asked == [("s", True, "branch", "")]
     facts.update(
         plan="s",
         state="generated",
@@ -296,7 +298,7 @@ def test_verify_step_asks_for_the_checklist_then_runs_it(srv, row, monkeypatch):
         live=False,
     )
     run(D.step_flight(f["id"]))
-    assert ran == ["s"]
+    assert ran == [("s", {"environment": "branch", "notes": ""})]
     assert F.get(f["id"])["step_states"]["s1"]["detail"]["run_started"] is True
     facts.update(open_agent=[])
     run(D.step_flight(f["id"]))

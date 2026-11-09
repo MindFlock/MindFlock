@@ -108,10 +108,15 @@ STOPS: Dict[str, dict] = {
         fixable=True,
     ),
     "verify": _s(
-        "check the branch's behaviors in real use before the PR or merge "
-        "(who=agent|you|both)",
+        "check the branch's behaviors in real use before the PR or merge. "
+        "where=branch (this branch's own code, no deploy) or the name of one "
+        "of the repo's environments (a deployed place with its own branch, "
+        "e.g. live, sandbox)",
         "unit tests (test); with no agent work before it",
-        "who=both, wait_live=true to check the deployed site",
+        "where, ready=now|on_branch|after_prev (on_branch: once the work "
+        "reaches the environment's branch; after_prev: ready_minutes after "
+        "the stop before), who=both|agent|you, notes, post_to_pr=true to "
+        "comment the results on the PR",
         "you, on the behaviors that are yours",
         fixable=True,
     ),
@@ -574,6 +579,37 @@ def _int(v, default: int) -> int:
         return default
 
 
+#: A Verify stop's ``who`` in a sentence (the editor's labels say "me").
+VERIFY_WHO_WORDS = {"both": "agent, then you", "agent": "agent only", "you": "only you"}
+
+
+def verify_sentence(config: dict, env_branch: str = "") -> str:
+    """A Verify stop in words, as its face says it: ``Verify on sandbox ·
+    agent, then you · 15 min after the stop before`` (``env_branch``: the
+    environment's branch, when known, for "once on <branch>"). Reads an old
+    ``wait_live`` config too."""
+    c = config if isinstance(config, dict) else {}
+    legacy = bool(c.get("wait_live"))
+    where = str(c.get("where") or ("live" if legacy else "branch"))
+    ready = str(c.get("ready") or ("on_branch" if legacy else "now"))
+    minutes = max(0, min(1440, _int(c.get("ready_minutes"), 0)))
+    place = "this branch" if where == "branch" else where
+    who = VERIFY_WHO_WORDS.get(str(c.get("who") or "both"), "agent, then you")
+    if ready == "on_branch" and where != "branch":
+        when = "once on %s" % (env_branch or "the %s branch" % where)
+        if minutes:
+            when += " + %d min" % minutes
+    elif ready == "after_prev":
+        when = (
+            "%d min after the stop before" % minutes
+            if minutes
+            else "after the stop before, once %s has deployed" % place
+        )
+    else:
+        when = "right away"
+    return "Verify on %s · %s · %s" % (place, who, when)
+
+
 def step_phrase(step: dict, labels: Optional[Dict[str, str]] = None) -> str:
     """One stop in words: ``Test (agent fixes failures ×2)``."""
     kind = str(step.get("kind") or "?")
@@ -611,7 +647,9 @@ def step_phrase(step: dict, labels: Optional[Dict[str, str]] = None) -> str:
     elif kind == "reviews":
         p = "Reviews settle"
     elif kind == "verify":
-        p = "Verify behaviors (%s)" % (c.get("who") or "both")
+        p = verify_sentence(c)
+        if c.get("post_to_pr"):
+            p += " (posts the results to the PR)"
     elif kind == "split":
         lines = [ln for ln in str(c.get("prompts") or "").splitlines() if ln.strip()]
         n = len(lines) if len(lines) > 1 else max(1, _int(c.get("count"), 1))
