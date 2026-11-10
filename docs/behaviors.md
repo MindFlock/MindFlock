@@ -5,6 +5,40 @@ creator of the app. It may be better suited to being more integrated with the
 Sky instead of being a tab on the top. A redesign with more of a focus on
 behaviors in the Sky."
 
+## 2026-11-10: Verify is the session's own agent
+
+The owner: "I think I want verification to be a pill like other states where
+it says verifying, and just have it be like an agent that comes up with some
+actionable testing steps within the session itself and then works on them. I
+really don't love the steps we come up with right now. Also if a human needs
+to do anything the agent should just tell them. Humans must validate that
+validation is complete if there are human steps."
+
+What that changed (the rest of this contract is amended where it says so):
+
+- **Verify** (a session's ⋯ / ⋮ menu, the Behaviors card's one action —
+  `POST /api/instances/{title}/verify`) has the session's own agent write its
+  own actionable steps and work them **in its own terminal**. It tells the
+  person in its reply whatever only a person can do.
+- The session row's `verify` drives a **pill**, like every other state
+  (`lib/sessionState.ts`; docs/web-ui.md "One session state"): **Verifying**
+  (its own violet tone, out of the bell, "3 of 5 steps done") · **Confirm
+  verified** (needs you, in the bell, listing the person's steps) · **Verify
+  failed** / **Verify blocked** (red, in the bell) · **Verified** (calm, ten
+  minutes).
+- **A person confirms verification is complete** when there are human steps:
+  **Confirm verified** / **Not verified…** (with a note; never
+  `window.prompt`) → `POST /api/test-plans/{plan}/confirm`. The buttons sit
+  under the person's steps on the pane's verify row, the bell's row, the
+  Behaviors card and a Verify stop parked on you (`VerifyConfirm`).
+- **The steps are read-only.** Nobody rewrites, adds, edits, removes or answers
+  them one by one: §2's per-step answers, keys, Edit/Remove, "+ Add a
+  behavior", Rewrite behaviors, the "after #n" needs picker and "Let the agent
+  walk every behavior" are gone.
+- **Words.** On screen these are the agent's **steps** (the owner's word); a
+  person's part is to **confirm verified**. "Behaviors" stays the name of the
+  tile, the card and the board.
+
 ## What was wrong
 
 - Verify was a **separate place** (top-bar button, Alt+V, a big dialog) for
@@ -61,21 +95,24 @@ US spelling: **behavior**.
 The ONE editor/answerer — replaces VerifyDialog's per-plan row, VerifyPlan,
 VerifyStep. Props are frozen in the seam (`BehaviorsCardProps`).
 
-- Head: status sentence (`summary.sentence`), ONE primary action
-  (`summary.action`: Check now · Rerun · See what failed · Write them), ⋯ menu:
-  Rewrite behaviors · It's deployed — check now · Fix in a new session (on
-  failure) · Open the checking run · Cancel the check · Open the work session ·
-  View diff · Delete these behaviors.
-- Body: one row per behavior — its text (+ expect), who checks it (🤖 agent /
-  🙋 you, a toggle), its result chip. Rows checked by you show **Pass · Fail ·
-  Can't check** + a note field; agent rows show the agent's note as evidence.
-  Undo on an answer. Edit/Remove on a row (remove only person-added, as now).
-  "+ Add a behavior" inline at the foot.
-- Keys while a row is focused: 1/p pass, 2/f fail, 3/b can't check, u undo,
-  n note (as before).
-- When the card belongs to a Verify stop that is parked on you, answering the
-  last open behavior wakes the chain (the server already does this via
-  `session.test_plan_settled`). There is **no blanket Done** any more.
+*Amended 2026-11-10 (read-only steps, one confirm — see the top).*
+
+- Head: the status sentence and ONE primary action, read from the session's
+  `verify` when there is one (`verifyCardView`, cardModel.ts): **Verify** /
+  **Verify again** (the session's own agent; with the session gone, the older
+  `POST /api/test-plans/{plan}/run`), **Open its agent** while it verifies,
+  none while it waits on you. ⋯ menu: Verify again (when it isn't the
+  primary) · It's deployed — check now · Fix in a new session (on failure) ·
+  Open the checking run · Cancel the check · Open the work session · View
+  diff · What could break · Open PR · Delete these behaviors.
+- When the verify waits on a person: their steps (text + what should happen)
+  with **Confirm verified** / **Not verified…**. When it failed: what failed,
+  with the agent's note.
+- Body: one READ-ONLY row per step — its text (+ expect), who does it
+  (🤖 agent / 🙋 you, a mark, not a toggle), its result chip, the agent's
+  evidence, and **Fix** on a failed one. Rows start collapsed; Expand all.
+- There is **no blanket Done**: a Verify stop parked on you moves on when a
+  person confirms (or on Skip).
 - Honest timing line where it applies: "Checked before merge · checks again
   once live" (pre-merge run vs live, from planVerdict's logic).
 
@@ -122,10 +159,14 @@ too; openBehaviors from the grid switches to the Sky.
 
 ## 5. The Verify stop
 
-- Parked on you: its card is the BehaviorsCard (per-behavior answers). The
-  blanket "Done" (`_verify_done` → "Done on the chain") is removed — the
-  server refuses Done on it (409 `answer_behaviors`): the stop moves on when
-  the behaviors are answered, or the person presses **Skip**.
+- Parked on you: when the session's `verify` waits on a person, the stop shows
+  their steps with **Confirm verified** / **Not verified…** (2026-11-10 — it
+  moves on when they confirm; "I did it — check again" is not offered then);
+  otherwise its card is the BehaviorsCard. The blanket "Done" (`_verify_done`
+  → "Done on the chain") is removed — the server refuses Done on it (409
+  `answer_behaviors`): the stop moves on when the verify is confirmed, or the
+  person presses **Skip**. In the pane's one-line strip only Skip shows: the
+  pane's verify row carries the confirm.
 - **Failed: the route HALTS** (`on_fail` halt is the default). The reason leads
   with the count ("Failed · 2: login works; logout works"); the card says
   "Failed · 2 — halted…" and offers **Retry · Skip · Let the agent fix it**

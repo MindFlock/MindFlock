@@ -143,7 +143,7 @@ GONE_GRACE_S = 1800.0
 LEASE_STALE_S = 45.0
 #: An agent step whose agent never showed any work gives up after this.
 AGENT_START_DEADLINE_S = 7200.0
-#: A verify step whose behaviors are never written gives up after this.
+#: A verify step that never gets a plan to check under gives up after this.
 VERIFY_WRITE_DEADLINE_S = 3600.0
 
 # A Verify stop is NEVER silently stuck (docs/flights.md "Verify stops: when
@@ -166,9 +166,10 @@ VERIFY_BUDGET_GRACE_S = 5 * 60.0
 #: The nudge typed into a stalled checker.
 VERIFY_NUDGE = (
     "Write your results file now: every step you have checked with its answer, "
-    'every other step "blocked" with a note saying what you were waiting for '
-    '(start it with "needs you: " when a person has to do something first), '
-    '"finished": true — and stop any background job before you end your turn.'
+    'every other step of yours "blocked" with a note saying what you were '
+    'waiting for, each step only a person can do as actor "human" (and tell '
+    'them what to do), "finished": true — and stop any background job before '
+    "you end your turn."
 )
 #: A reviews step with no pull request to watch gives up after this.
 NO_PR_DEADLINE_S = 1800.0
@@ -2708,9 +2709,9 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
         )
     if cur["kind"] == "verify":
         items = [str(i) for i in d.get("items") or []]
-        if d.get("ask") in ("needs_you", "blocked", "memory"):
+        if d.get("ask") in ("needs_you", "blocked", "memory", "confirm"):
             # Why the check came to you (flights._verify_guard /
-            # _verify_handover): the stop's own sentence, not a count.
+            # _judge_verify): the stop's own sentence, not a count.
             note = str(flight["step_states"][cur["id"]].get("note") or "")
             return ("%s: %s" % (cur["title"], note) if note else cur["title"]), items
         return (
@@ -3314,20 +3315,24 @@ def _awaiting_go(rec: dict) -> bool:
 
 
 def _judge_verify(flight, step, ss, obs, now) -> dict:
-    """A Verify stop (docs/behaviors.md §5): the session's behaviors are
-    written (the face reads "Writing…"), the agent checks the ones it can, a
-    person answers the rest (the route is on **Needs you**), and a failed
-    behavior fails the stop — which HALTS the route by default (``on_fail``
-    halt: Retry · Skip · Let the agent fix it). There is no blanket Done: the
-    stop moves on when every behavior has an answer, or on Skip.
+    """A Verify stop (docs/flights.md "Verify stops"): SELF-VERIFY — the
+    session's own agent is told to verify the work it just did; it writes its
+    own steps and walks them, and tells the person about any only they can do.
 
-    A failure answered BEFORE this attempt started (a Retry, the agent's fix)
-    is not this attempt's verdict: the agent checks its behaviors again first
-    (``recheck``), and a person's old Fail is theirs to answer again — so a
-    fixed behavior can pass, and a Fail given again halts again."""
+    * no check from this attempt yet → start one (``agent_run``); one already
+      running when the stop arrived is waited on rather than restarted;
+    * ``verifying`` → wait (the guard: progress, stall nudge, budget close);
+    * ``needs_you`` → park on the person until they confirm (``POST
+      /api/test-plans/{id}/confirm``, or Done here = "verified") — it never
+      passes silently;
+    * ``passed`` → done; ``failed`` → fail with the failing steps (HALTS the
+      route by default); ``blocked`` (closed, its session gone, no steps) →
+      park on the person with the reason: Retry or Skip.
+
+    ``who`` "you" asks a person to sign off even when every step passes;
+    "agent" has the agent attempt a person's steps with its own tools."""
     v = obs.get("verify") or {}
     d = ss["detail"]
-    who = step["config"]["who"]
     if v.get("env_missing"):
         return {
             "action": "fail",
@@ -3337,92 +3342,80 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         if now - ss["since"] > VERIFY_WRITE_DEADLINE_S:
             return {
                 "action": "fail",
-                "reason": "no behaviors were written for this branch",
+                "reason": "no check could be set up for this branch",
             }
-        return _wait("writing the behaviors")
+        return _wait("getting the check ready")
     up = {"plan": v["plan"], "branch": v.get("branch") or flight.get("branch") or ""}
-    state = v.get("state") or ""
-    if state == "generating":
-        return _wait("writing the behaviors", **up)
-    if state == "failed" and not v.get("steps"):
-        return {
-            "action": "fail",
-            "reason": "the behaviors could not be written: %s"
-            % (v.get("error") or "no reason given"),
-        }
-    # The ready gate: the behaviors are written meanwhile (above); only the
-    # agent's run and a person's turn wait for the environment to be ready.
     gate = _verify_ready_gate(step["config"], ss, v, now)
     if gate:
         return _wait(gate, **up)
+    state = v.get("state") or ""
+    latest = float(v.get("latest_run_at") or 0.0)
+    if state == "running" and not d.get("run_started") and not d.get("adopted_run_at"):
+        # A check already under way when the stop got here (started from the
+        # session's own Verify): this attempt waits on it, never restarts it.
+        return _wait(
+            "the agent is verifying its work", **dict(up, adopted_run_at=latest)
+        )
     guard = _verify_guard(ss, v, now, up)
     if guard is not None:
         return guard
-    failed = list(v.get("failed") or [])
-    # Stale: every failure was answered before this attempt began.
-    failed_at = v.get("failed_at")
-    stale = (
-        bool(failed)
-        and isinstance(failed_at, (int, float))
-        and float(failed_at) < float(ss["since"] or 0.0)
+    started = float(d.get("run_started_at") or 0.0) if d.get("run_started") else 0.0
+    mine = latest > 0 and (
+        latest >= float(ss["since"] or 0.0) - 1.0
+        or (started and latest >= started - 1.0)
+        or latest == float(d.get("adopted_run_at") or -1.0)
     )
-    if (
-        stale
-        and who in ("agent", "both")
-        and not d.get("run_started")
-        and state != "running"
-    ):
+    if not mine:
+        if d.get("run_started"):
+            return _wait("starting the check", **up)
         return {
             "action": "run",
             "phase": "agent_run",
-            "note": "checking the behaviors again",
-            "detail": dict(up, recheck=True),
-        }
-    if failed and not stale:
-        return {"action": "fail", "reason": _verify_failed_reason(failed)}
-    open_agent = list(v.get("open_agent") or [])
-    open_human = list(v.get("open_human") or [])
-    if state == "running":
-        return _wait("the agent is checking the behaviors", **up)
-    if who in ("agent", "both") and open_agent and not d.get("run_started"):
-        return {
-            "action": "run",
-            "phase": "agent_run",
-            "note": "the agent is checking the behaviors",
+            "note": "the agent is verifying its work",
             "detail": up,
         }
-    handed = _verify_handover(ss, v, up)
-    if handed is not None:
-        return handed
-    if who == "agent":
-        if stale:
-            # Only a person's Fail is left, and this stop checks the agent's.
-            return {"action": "fail", "reason": _verify_failed_reason(failed)}
-        if v.get("settled") or not open_agent:
-            return _receipt(
-                {"action": "done", "note": "the agent's behaviors are checked"},
-                _verify_receipt(v),
-            )
-        return _wait("the agent's behaviors are still open", **up)
-    if who == "you":
-        open_human = open_human + open_agent
-    elif open_agent and d.get("run_started"):
-        # The agent's run ended with behaviors it never answered: a person's now.
-        open_human = open_human + open_agent
-    if stale:
-        # A person's Fail from before the fix (the agent's own were checked
-        # again above): theirs to answer again — Fail once more halts.
-        open_human = open_human + [t for t in failed if t not in open_human]
-    if (v.get("settled") and not stale) or not open_human:
+    outcome = str(v.get("outcome") or "")
+    if outcome == "verifying" and state != "running":
+        outcome = "blocked"  # released without a report (window gone, deadline)
+    if outcome == "passed":
         return _receipt(
-            {"action": "done", "note": "every behavior has an answer"},
+            {"action": "done", "note": "verified"},
             _verify_receipt(v),
         )
+    if outcome == "failed":
+        failed = list(v.get("failed") or [])
+        if failed:
+            return {"action": "fail", "reason": _verify_failed_reason(failed)}
+        return {
+            "action": "fail",
+            "reason": "a person said it doesn't work"
+            + (": %s" % v["outcome_note"] if v.get("outcome_note") else ""),
+        }
+    if outcome == "needs_you":
+        items = [str(i) for i in v.get("confirm_items") or []][:40]
+        if not items:
+            items = ["Every step passed — confirm it works"]
+        return {
+            "action": "you",
+            "note": (
+                "%d step%s for you to check, then confirm"
+                % (len(items), "" if len(items) == 1 else "s")
+                if v.get("confirm_items")
+                else "confirm the check"
+            ),
+            "detail": dict(up, ask="confirm", items=items),
+        }
+    why = str(v.get("outcome_note") or v.get("error") or "").strip()
+    why = why or "the check stopped before it finished"
     return {
         "action": "you",
-        "note": "%d behavior%s for you"
-        % (len(open_human), "" if len(open_human) == 1 else "s"),
-        "detail": dict(up, items=open_human[:40]),
+        "note": "the check couldn't finish: %s" % why,
+        "detail": dict(
+            up,
+            ask="blocked",
+            items=["%s — press Retry to verify again, or Skip" % why],
+        ),
     }
 
 
@@ -3525,68 +3518,6 @@ def _verify_guard(ss: dict, v: dict, now: float, up: dict) -> Optional[dict]:
     if checker.get("background_waiting"):
         note += " · its background job is still running"
     return _wait(note, **up)
-
-
-def _verify_handover(ss: dict, v: dict, up: dict) -> Optional[dict]:
-    """The agent's steps it handed to the person, after its run → a perch, or
-    None. Whatever ``who`` says ("Agent only" too): a manual step or a check
-    the agent could not do must never pass silently (it used to — a run that
-    answered every step "blocked" read "the agent's behaviors are checked").
-
-    * ``needs you: …`` answers (test_plans.NEEDS_YOU): a person has to DO
-      something first. Answered before this attempt (the person pressed Done =
-      "I did it", which retries the stop) → check again, telling the checker
-      what was done; otherwise park: "The check needs you to: …".
-    * Plain ``blocked`` answers: park listing them with the checker's why; the
-      person answers them on the Behaviors card (or Skips)."""
-    if (v.get("state") or "") == "running":
-        return None
-    d = ss["detail"]
-    needs = [n for n in v.get("needs_you") or [] if isinstance(n, dict)]
-    blocked = [b for b in v.get("blocked_steps") or [] if isinstance(b, dict)]
-    if needs:
-        done_by_you = [
-            n for n in needs if float(n.get("at") or 0.0) < float(ss["since"] or 0.0)
-        ]
-        if done_by_you and not d.get("rechecked"):
-            did = "; ".join(str(n.get("do") or "") for n in done_by_you)
-            return {
-                "action": "run",
-                "phase": "agent_run",
-                "note": "checking again now that you've done it",
-                "detail": dict(
-                    up,
-                    rechecked=True,
-                    extra_notes="The person says they have now done: " + did,
-                ),
-            }
-        items = [
-            "%s (for: %s)" % (n.get("do") or "do the manual step", n.get("text") or "")
-            for n in needs
-        ][:40]
-        return {
-            "action": "you",
-            "note": "the check needs you to do %d thing%s, then press Done"
-            % (len(items), "" if len(items) == 1 else "s"),
-            "detail": dict(up, ask="needs_you", items=items),
-        }
-    if blocked:
-        items = [
-            "%s — %s"
-            % (b.get("text") or "", b.get("why") or "the agent couldn't check it")
-            for b in blocked
-        ][:40]
-        return {
-            "action": "you",
-            "note": "%d behavior%s the agent couldn't check — answer %s"
-            % (
-                len(items),
-                "" if len(items) == 1 else "s",
-                "it" if len(items) == 1 else "them",
-            ),
-            "detail": dict(up, ask="blocked", items=items),
-        }
-    return None
 
 
 def _verify_ready_gate(cfg: dict, ss: dict, v: dict, now: float) -> str:

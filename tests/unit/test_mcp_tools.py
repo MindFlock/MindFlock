@@ -1231,6 +1231,23 @@ class TestWaitForSession:
         out = box.wait_for_session({"title": "w1", "timeout_s": 60}, _ctx(clock))
         assert out["timed_out"] is True
 
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"order": {"state": "held", "word": "waiting"}},
+            {"waiting_for_memory": {"reason": "memory", "position": 1}},
+        ],
+    )
+    def test_a_held_worker_reading_offline_is_not_done(self, change):
+        """A held worker's agent is not started until its turn (it reads
+        offline), and a released one may wait in the launch gate: neither is
+        finished."""
+        rows = _tree()
+        rows[2].update(activity="offline", **change)
+        box, _, clock = _wait_box(rows)
+        out = box.wait_for_session({"title": "w1", "timeout_s": 120}, _ctx(clock))
+        assert out["timed_out"] is True
+
     def test_message_for_me_ends_the_wait(self):
         rows = _tree()
         rows[2]["activity"] = "working"

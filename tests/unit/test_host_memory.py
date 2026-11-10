@@ -493,8 +493,8 @@ def test_the_server_under_pytest_never_starts_the_reader(monkeypatch):
 def test_host_low_line_is_the_headroom_floor_whatever_the_size():
     assert mp.host_low_line(16 * GiB) == 2 * GiB
     assert mp.host_low_line(64 * GiB) == 2 * GiB
-    assert mp.host_thresholds()["low"] == (2 * GiB, 85.0, 3000.0)
-    assert mp.host_thresholds()["critical"] == (GiB, 90.0, 8000.0)
+    assert mp.host_thresholds()["low"] == (2 * GiB, 1000.0, 3000.0)
+    assert mp.host_thresholds()["critical"] == (GiB, 97.0, 8000.0)
 
 
 def test_only_a_short_windows_still_reads_low_to_every_caller(box):
@@ -520,15 +520,16 @@ def test_raw_windows_available_alone_is_not_distress(box):
 
 
 def test_the_commit_charge_is_the_hosts_real_danger(box):
-    """At the commit limit an allocation fails, whatever "available" says."""
+    """At the commit limit an allocation fails, whatever "available" says —
+    but only near it: a WSL VM commits its whole size, so 75-85 % is this
+    machine's normal (2026-11-10: "low" at 85 % held every start)."""
     assert box(10, 16, commit=0.75) == "ok"  # what this machine reads
-    assert box(10, 16, commit=0.86) == "low"
-    assert box(10, 16, commit=0.91) == "critical"
-    assert "Windows commit charge is at 91% of its limit" in mp.describe()
-    assert box(10, 16, commit=0.88) == "critical"  # recovery needs ≤ 87
-    assert box(10, 16, commit=0.86) == "low"
-    assert box(10, 16, commit=0.82) == "low"  # recovery needs ≤ 80
-    assert box(10, 16, commit=0.79) == "ok"
+    assert box(10, 16, commit=0.85) == "ok"
+    assert box(10, 16, commit=0.96) == "ok"
+    assert box(10, 16, commit=0.98) == "critical"
+    assert "Windows commit charge is at 98% of its limit" in mp.describe()
+    assert box(10, 16, commit=0.95) == "critical"  # recovery needs ≤ 94
+    assert box(10, 16, commit=0.93) == "ok"
 
 
 def test_hard_paging_alone_is_reported_not_a_level(box):

@@ -257,6 +257,51 @@ def _ensure_test_plan(
         pass
 
 
+def _ensure_verify_plan(title: str) -> Tuple[str, str]:
+    """Find or create session ``title``'s plan for a SELF-VERIFY → ``(plan id,
+    "")``, or ``("", why)``. Blocking.
+
+    No generation: the agent writes its own steps when the verify starts, so a
+    session with no plan gets an EMPTY one (``ensure_plan_for(manual=True)``).
+    Its own plan on its current branch is reused; one on an older branch is
+    replaced; a branch another window already covers answers that window's
+    plan (one checklist per branch, ``owner_for_branch``)."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        return "", "no such session: %s" % title
+    try:
+        wt = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        wt = ""
+    if not wt or not os.path.isdir(wt):
+        return "", "this session's workspace isn't ready"
+    try:
+        repo_root = inst.GetGitWorktree().GetRepoPath() or ""
+    except Exception:  # noqa: BLE001 — raises before Start has finished
+        repo_root = ""
+    repo_root = repo_root or wt
+    branch = srv._current_branch(wt)
+    if not branch:
+        return "", "this session isn't on a branch"
+    existing = _test_plans.get(title)
+    if existing is not None and existing.get("branch") == branch:
+        return title, ""
+    plan = _test_plans.ensure_plan_for(
+        title,
+        branch,
+        srv._git_head_sha(wt) or "",
+        repo_root,
+        _test_plans.resolve_live_branch(repo_root),
+        intent=_test_plan_intent(title),
+        manual=True,
+    )
+    if plan is not None:
+        return title, ""
+    owner = _test_plans.owner_for_branch(title, repo_root, branch)
+    return (owner, "") if owner else ("", "couldn't make a plan for this session")
+
+
 def _generation_steer(repo_root: str, environment: str) -> Optional[str]:
     """The generation target a Verify stop's ``environment`` asks for, or
     ``None`` for "the repo's own" (no environment, or one this repo does not
@@ -1765,6 +1810,8 @@ def _announce_test_plan_checked(plan: dict) -> None:
                 # A check of the BRANCH, before merge: the plan stays open and
                 # comes back after merge, so a toast must not read as "done".
                 "before_merge": bool(run.get("prelive")),
+                # The Verify pill's state (test_plans.OUTCOMES), "" for none.
+                "outcome": str(run.get("outcome") or ""),
             },
         )
     except Exception:  # noqa: BLE001 — an announcement must never stop the pass
@@ -2027,6 +2074,7 @@ async def close_run(plan_id: str, reason: str) -> Optional[dict]:
         plan_id,
         results,
         target=_test_plans.run_target(plan),
+        closed=reason or "the check was closed",
     )
     if run_session:
         await asyncio.to_thread(_clear_verify_results, run_session)
@@ -2085,16 +2133,21 @@ def _poll_running_test_plans(plans: list) -> None:
         live_titles.add(run_session)
         try:
             data = _read_verify_results(plan)
+            runs = plan.get("runs") or []
+            if data and runs and runs[-1].get("self"):
+                # SELF-VERIFY: the agent writes its own steps into the file,
+                # and they become the plan's before any answer lands on them.
+                _test_plans.adopt_reported_steps(pid, data.get("steps"))
             if data and not data.get("finished"):
                 # PROGRESS, not an end: the checker rewrites its file after
                 # every step it settles ("finished": false), so whoever waits
                 # on the run sees the answers so far and can tell a slow
                 # check from a stalled one (`run_progress`'s progress_at).
-                partial = data.get("results")
-                if isinstance(partial, list) and partial:
+                partial = _test_plans.reported_results(data)
+                if partial:
                     _test_plans.record_progress(pid, partial)
             if data and data.get("finished"):
-                results = data.get("results")
+                results = _test_plans.reported_results(data)
                 tested, expected = _verify_run_trees(plan)
                 done = _test_plans.finish_run(
                     pid,

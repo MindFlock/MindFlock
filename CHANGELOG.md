@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A held worker starts its agent only when its turn comes.** An
+
+  orchestrator's serial chain (`spawn_session` with `after=[…]`, overlapping
+
+  fences, one or N at a time) used to start every worker's agent CLI at once,
+
+  each then sitting at an empty prompt (~230 MB) until its turn. Now a held
+
+  worker's session is made at once — worktree, branch, fence, queued task —
+
+  but no agent runs (no tmux, no memory) until the order releases it. On
+
+  release MindFlock fast-forwards its branch, starts its agent through the
+
+  launch gate as an automatic start (it waits in the gate's queue while
+
+  memory is short), and the queue types the task in once the agent is idle.
+
+  Its row still reads *waiting · after …*; nothing revives it or holds it
+
+  "offline after a crash", since it never ran. A person can still press
+
+  Start to run it early; its task waits for its turn either way. The create
+
+  answers `order.agent_deferred: true`.
+
+- **Verify is the session's own agent checking its own work.** Verify no
+
+  longer has a model write steps after the work is done and hand them to the
+
+  agent to walk. It sends the session's agent one prompt — "verify the work
+
+  you just did" — and the agent comes up with its own concrete test steps
+
+  (real usage, not the unit tests it already ran), writes them to its results
+
+  file, puts them on its todo list and works through them, recording each
+
+  pass / fail / blocked with its evidence. A step only a person can do, it
+
+  tells the person in its reply: what to do and what to look for. The session
+
+  row carries the result as a pill (`verify`: `verifying`, `needs_you`,
+
+  `passed`, `failed`, `blocked`; a settled one shows for 10 minutes). When
+
+  there are steps for a person, the check waits on them: **nothing passes
+
+  until a person confirms** (`POST /api/test-plans/{id}/confirm`, verified
+
+  or not). `POST /api/instances/{title}/verify` starts it on any session, no
+
+  plan needed. A route's Verify stop does the same: it waits while the agent
+
+  verifies, parks on you while the check needs you, moves on when it passes,
+
+  and halts naming the failed steps. The written checklist (and its
+
+  one-shot author) is now only for a checker run after the session is gone.
+
+### Fixed
+
+- **Terminals no longer stay white until you scroll.** Nothing repainted a
+  terminal without new output, so after the window was restored, uncovered,
+  moved to another display or the GPU restarted, a pane could stay blank (white
+  in the light theme). Every visible terminal now repaints when the window
+  comes back (focus, visibility, `pageshow`), and the desktop shell
+  invalidates the page on restore/show/focus/display changes and wake, and
+  logs a GPU process restart ("GPU process gone") to main.log.
+
+- **"That's all" at the end of a sentence no longer stops dictation.**
+  Conversational stop phrases ("that's all", "done talking") stop listening
+  only when said on their own; "make sure that that's all" is typed. Clear
+  ones ("stop listening", "mic off", "pause listening") still end any phrase.
+  The desktop, the phone page and the server read it the same way.
+
+- **Opening a terminal can no longer freeze the server.** A session's terminal
+  websocket spawned its `tmux attach` client (a `fork()` of the whole server)
+  on the event loop; on 2026-11-10 that fork never returned and every request
+  hung until the server was killed. The spawn now runs on a worker thread, two
+  at a time server-wide, and gives up after 15 s: the pane shows *terminal
+  attach timed out* and the socket closes with 1013 (new on the terminal
+  websockets; a client should treat it as transient) while the server keeps
+  answering. Keystrokes to the client and the detach (which slept up to
+  0.4 s per pane on the loop) are off the loop too. And the client no longer
+  forks the server at all: `mux.attach` starts it with `posix_spawn`
+  (`mux.spawn_pty`), which copies no page tables and runs no Python in the
+  child — a fork holds the GIL, so even on a thread it stalled every request.
+
+- **Windows' commit charge no longer holds starts at 85 %.** A WSL VM
+  commits its whole `memory=` size, so the charge sits at 75-85 % all day;
+  "low" at 85 % made every new agent wait with 11 GB of headroom. It is now
+  never a "low" signal, and critical only at 97 % of the limit (cleared at
+  94 %), where an allocation can really fail.
+
 ## [0.14.3] - 2026-11-10
 
 ### Changed

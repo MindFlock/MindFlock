@@ -2492,6 +2492,22 @@ function injectChrome() {
   win.webContents.executeJavaScript(TITLEBAR_JS + UPDATE_JS).catch(() => {})
 }
 
+// One repaint per burst: restore + show + focus arrive together, and 'moved'
+// fires continuously while a window is dragged. See createWindow's handlers.
+let repaintTimer = null
+function scheduleRepaint() {
+  if (repaintTimer) clearTimeout(repaintTimer)
+  repaintTimer = setTimeout(() => {
+    repaintTimer = null
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+    if (win.isMinimized() || !win.isVisible()) return
+    try { win.webContents.invalidate() } catch (e) { /* best effort */ }
+    // Only the app page listens; offline.html ignores the event.
+    win.webContents.executeJavaScript(
+      "window.dispatchEvent(new Event('mindflock:repaint'))", true).catch(() => {})
+  }, 120)
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1280,
@@ -2717,6 +2733,19 @@ function createWindow() {
 
   win.on('closed', () => { win = null })
 
+  // Repaint on the way back: the fix for panes that went blank WHITE until a
+  // small scroll (docs/development.md "Blank white panes"). Coming back from
+  // minimized, from behind another window (Windows' native occlusion tracking
+  // hides the page while covered), onto another display, or out of a GPU
+  // process restart, Chromium can show a surface whose raster was dropped and
+  // nothing re-rasters a pane that has no new output. Two halves: invalidate()
+  // repaints the native window, and the page event makes the web UI redraw
+  // every terminal on screen (frontend lib/wsTerm installRepaintTriggers).
+  for (const ev of ['restore', 'show', 'focus', 'maximize', 'unmaximize', 'moved',
+    'enter-full-screen', 'leave-full-screen']) {
+    win.on(ev, scheduleRepaint)
+  }
+
   // The page sets document.title (with unread-badge counts), which otherwise
   // overrides the "(dev)" window title — keep the marker in alt-tab / taskbar.
   if (DEV) {
@@ -2941,6 +2970,25 @@ app.whenReady().then(() => {
   if (first) openDeepLink(first)
   createWindow()
   startUpdateChecks()
+  // The page's raster lives in the GPU process: when it dies (a driver reset,
+  // the laptop's dGPU switched off or on) Chromium starts another, and panes
+  // with no new output can stay blank. Logged — so a "white panes" report can
+  // be matched against main.log — and answered with a repaint.
+  app.on('child-process-gone', (_e, details) => {
+    if (!details || details.type !== 'GPU') return
+    console.error('[mindflock] GPU process gone (' + details.reason + ', exit ' +
+      details.exitCode + ') — repainting')
+    setTimeout(scheduleRepaint, 500)
+  })
+  // Waking from sleep or unlocking: the same lost-surface case, no window event.
+  powerMonitor.on('resume', scheduleRepaint)
+  powerMonitor.on('unlock-screen', scheduleRepaint)
+  try {
+    const { screen } = require('electron')
+    screen.on('display-metrics-changed', scheduleRepaint)
+    screen.on('display-added', scheduleRepaint)
+    screen.on('display-removed', scheduleRepaint)
+  } catch (e) { /* no screen module: nothing to watch */ }
 })
 app.on('window-all-closed', () => app.quit())
 // Native Windows: the server this app started goes with it (its whole tree,

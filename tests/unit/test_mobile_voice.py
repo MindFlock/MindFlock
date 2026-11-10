@@ -1854,7 +1854,8 @@ def test_voice_control_phrases_under_node():
     assert out["tails"] == [
         ["stop", "", 0, "fix the parser", "stop recording"],
         ["stop", "", 0, "", "Stop listening"],
-        ["stop", "", 0, "remove the logs", "that's all"],
+        # "that's all" only on its own (test_voice_stop_alone.py).
+        None,
         ["stop", "", 0, "", "mic off"],
         ["stop", "", 0, "", "I'm done talking"],
         None,

@@ -73,6 +73,13 @@ def facts(**kw):
     return base
 
 
+#: A self-verify that settled after the stop began (``latest_run_at`` far
+#: ahead of the driver's real clock): passed, or failed on one step.
+DONE = facts(open_agent=[], settled=True, outcome="passed", latest_run_at=NOW * 2)
+FAILED = facts(
+    failed=["login works"], failed_at=NOW * 2, outcome="failed", latest_run_at=NOW * 2
+)
+
 SANDBOX = {
     "name": "sandbox",
     "reach": "https://sandbox.example",
@@ -206,13 +213,9 @@ def test_now_has_no_gate():
     assert a["action"] == "run" and a["phase"] == "agent_run"
 
 
-def test_writing_is_not_gated():
+def test_setting_up_is_not_gated():
     f = started(fly(vstep(where="sandbox", ready="on_branch")))
-    assert judge(f, {"env": SANDBOX}, NOW)["note"] == "writing the behaviors"
-    assert (
-        judge(f, facts(state="generating", env=SANDBOX), NOW)["note"]
-        == "writing the behaviors"
-    )
+    assert judge(f, {"env": SANDBOX}, NOW)["note"] == "getting the check ready"
 
 
 def test_on_branch_waits_for_the_branch_then_the_deploy_minutes():
@@ -245,7 +248,10 @@ def test_on_branch_live_without_env_facts_uses_the_live_mark():
     f = started(fly(vstep(wait_live=True, who="agent")))
     a = judge(f, facts(open_agent=[]), NOW)
     assert a["action"] == "wait" and "reach main" in a["note"]
-    assert judge(f, facts(open_agent=[], live=True), NOW)["action"] == "done"
+    a = judge(f, facts(open_agent=[], live=True), NOW)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+    ok = facts(live=True, outcome="passed", latest_run_at=NOW + 5)
+    assert judge(f, ok, NOW + 10)["action"] == "done"
 
 
 def test_after_prev_waits_minutes_after_the_stop_started():
@@ -260,10 +266,11 @@ def test_after_prev_waits_minutes_after_the_stop_started():
 
 def test_a_person_is_not_asked_before_the_gate():
     f = started(fly(vstep(where="sandbox", ready="on_branch", who="you")))
-    a = judge(f, facts(env=SANDBOX), NOW)
+    need = dict(outcome="needs_you", latest_run_at=NOW + 5)
+    a = judge(f, facts(env=SANDBOX, **need), NOW)
     assert a["action"] == "wait"
-    a = judge(f, facts(env=SANDBOX, env_reached_at=NOW), NOW + 15 * 60)
-    assert a["action"] == "you"
+    a = judge(f, facts(env=SANDBOX, env_reached_at=NOW, **need), NOW + 15 * 60)
+    assert a["action"] == "you" and a["detail"]["ask"] == "confirm"
 
 
 def test_unknown_environment_fails_the_stop():
@@ -302,9 +309,12 @@ def srv(monkeypatch):
         asked=[],
         ran=[],
     )
-    ns._ensure_test_plan = lambda title, manual=False, environment="", notes="": (
-        ns.asked.append((title, manual, environment, notes))
-    )
+
+    def ensure(title):
+        ns.asked.append(title)
+        return "tp1", ""
+
+    ns._ensure_verify_plan = ensure
 
     async def fake_run(pid, req, payload):
         ns.ran.append((pid, payload))
@@ -357,7 +367,7 @@ def test_driver_passes_where_and_notes_to_the_checklist_and_the_run(
     monkeypatch.setattr(D, "_verify_obs", lambda f, ss, sess: dict(facts_now))
     f = fly(vstep(where="sandbox", notes="log in as qa"))
     run(D.step_flight(f["id"]))
-    assert srv.asked == [("s", True, "sandbox", "log in as qa")]
+    assert srv.asked == ["s"]  # the plan, made empty: nothing is generated
     facts_now.update(facts(env=SANDBOX))
     run(D.step_flight(f["id"]))
     assert srv.ran == [
@@ -435,7 +445,7 @@ def _settle(f, monkeypatch, v):
 def test_post_to_pr_posts_once_when_the_stop_is_done(srv, envs, pr, monkeypatch):
     f = fly(vstep(post_to_pr=True, who="agent"), {"kind": "notify", "config": {}})
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(open_agent=[], settled=True))
+    got = _settle(f, monkeypatch, DONE)
     assert got["step_states"]["s1"]["state"] == "done"
     assert pr["posted"] == [
         ("POST", "/repos/o/r/issues/7/comments", {"body": "## Results\n- ok"})
@@ -452,7 +462,7 @@ def test_post_to_pr_posts_once_when_the_stop_is_done(srv, envs, pr, monkeypatch)
 def test_post_to_pr_posts_when_the_stop_fails(srv, envs, pr, monkeypatch):
     f = fly(vstep(post_to_pr=True))
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(failed=["login works"], failed_at=NOW * 2))
+    got = _settle(f, monkeypatch, FAILED)
     assert got["step_states"]["s1"]["state"] == "failed"
     assert len(pr["posted"]) == 1
 
@@ -461,7 +471,7 @@ def test_no_pr_is_skipped_with_a_note(srv, envs, pr, monkeypatch):
     pr["pr"] = None
     f = fly(vstep(post_to_pr=True, who="agent"))
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(open_agent=[], settled=True))
+    got = _settle(f, monkeypatch, DONE)
     assert got["state"] == "done" and pr["posted"] == []
     assert got["step_states"]["s1"]["detail"]["pr_comment"].startswith("skipped")
     assert any(h["event"] == "noted" and "no PR" in h["note"] for h in got["history"])
@@ -471,7 +481,7 @@ def test_a_posting_error_does_not_fail_the_stop(srv, envs, pr, monkeypatch):
     pr["raise"] = RuntimeError("boom")
     f = fly(vstep(post_to_pr=True, who="agent"))
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(open_agent=[], settled=True))
+    got = _settle(f, monkeypatch, DONE)
     assert got["state"] == "done" and got["step_states"]["s1"]["state"] == "done"
     assert got["step_states"]["s1"]["detail"]["pr_comment"] == "failed: boom"
 
@@ -479,7 +489,7 @@ def test_a_posting_error_does_not_fail_the_stop(srv, envs, pr, monkeypatch):
 def test_without_post_to_pr_nothing_is_posted(srv, envs, pr, monkeypatch):
     f = fly(vstep(who="agent"))
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(open_agent=[], settled=True))
+    got = _settle(f, monkeypatch, DONE)
     assert got["state"] == "done" and pr["posted"] == []
     assert "pr_comment" not in got["step_states"]["s1"]["detail"]
 
@@ -972,12 +982,12 @@ def test_a_retried_stop_posts_again(srv, envs, pr, monkeypatch):
     """Retry blanks the stop's state, so a new attempt is a new posting."""
     f = fly(vstep(post_to_pr=True))
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(failed=["login works"], failed_at=NOW * 2))
+    got = _settle(f, monkeypatch, FAILED)
     assert got["state"] == "halted" and len(pr["posted"]) == 1
     F.mutate(f["id"], lambda x: F.op_retry(x, "s1"))
     assert "pr_comment" not in F.get(f["id"])["step_states"]["s1"]["detail"]
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(failed=["login works"], failed_at=NOW * 2))
+    got = _settle(f, monkeypatch, FAILED)
     assert got["step_states"]["s1"]["state"] == "failed"
     assert len(pr["posted"]) == 2
 
@@ -1006,6 +1016,6 @@ def test_a_refused_record_keeps_the_pass_result(srv, envs, pr, monkeypatch):
     monkeypatch.setattr(F, "mutate", mutate)
     f = fly(vstep(post_to_pr=True, who="agent"))
     run(D.step_flight(f["id"]))
-    got = _settle(f, monkeypatch, facts(open_agent=[], settled=True))
+    got = _settle(f, monkeypatch, DONE)
     assert got["state"] == "done" and len(pr["posted"]) == 1
     assert "pr_comment" not in got["step_states"]["s1"]["detail"]

@@ -717,9 +717,20 @@ async def create(
     # CLI with no prompt argument (a custom script, aider, goose, …) has no
     # launch-time seed at all — without the queue its task silently vanished.
     prompt_delivery = "seeded" if prompt else "none"
+    # A held worker's agent starts only when its turn comes: its session is
+    # made now (worktree, branch, fence, queued task) but no agent CLI runs —
+    # no tmux, no memory — until the order releases it (through the launch
+    # gate, core.worker_order_driver.start_on_turn). Workers of an
+    # orchestrator only: a person's fenced session waits a moment for its
+    # fence and is never queued behind other launches.
+    deferred = False
     if prompt and order and order.get("held"):
         inst.Prompt = ""  # parked in its queue by on_create
         prompt_delivery = "held"
+        if parent:
+            deferred = srv._worker_order_driver.defer_agent(inst)
+            if deferred:
+                order["agent_deferred"] = True
     hold_prompt = (
         bool(prompt)
         and prompt_delivery != "held"
@@ -787,6 +798,10 @@ async def create(
     async def _bg_start() -> None:
         try:
             await asyncio.to_thread(inst.Start, True)
+            if deferred:
+                # Its agent never ran: nothing revives it, and a person's early
+                # Start begins a fresh conversation (see mark_never_ran).
+                srv._worker_order_driver.mark_never_ran(title, inst)
             srv.ENGINE.save()
             await asyncio.to_thread(_remember_folder)
             if setup_cfg is not None and setup_cfg.has_setup:
@@ -831,8 +846,10 @@ async def create(
 
     # Tracked in _BG_TASKS so lifespan teardown cancels it (an untracked task
     # can also be GC'd mid-flight).
-    # Counted as warming from now (core.launch_gate), before its tmux exists.
-    _launch_gate.note_start(title)
+    # Counted as warming from now (core.launch_gate), before its tmux exists —
+    # unless its agent waits for its turn (it is counted when that comes).
+    if not deferred:
+        _launch_gate.note_start(title)
     srv._register_task(_bg_start())
     # Seed the *_changed diff snapshot with the initial state so the first real
     # transition (loading->running etc.) emits instead of being swallowed (F6).

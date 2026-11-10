@@ -272,6 +272,74 @@ every stored tmux session as a side effect of changing one field.
 - CLI attach (`Attach()`): Ctrl-Q detaches; a resize monitor uses `SIGWINCH` on
   Unix and 250 ms polling on Windows (WSL follows the Unix path).
 
+### Web terminal attach: never on the event loop
+
+Each terminal websocket (the agent pane `/api/instances/{title}/terminal` and
+the shell `/shell`) gets its own `tmux attach-session` client in a PTY
+(`mux.attach`). On 2026-11-10 that spawn ran on the event loop: ptyprocess
+`fork()`ed the 1.7 GB, ~50-thread server under WSL memory pressure, the fork
+never returned, and every request hung until the server was SIGKILLed — an
+app reload reconnects every pane, so it forked once per pane, back to back.
+`web/core/terminal_ws.py` now keeps every blocking step of a client off the
+loop:
+
+- **Attach** (`attach_off_loop`): the spawn runs on a daemon thread, at most
+  2 at once server-wide (a reload's panes queue rather than fork together),
+  within 15 s including the wait for a slot. Past it the socket gets an
+  `error` frame with the reason and closes with **1013** (try again later),
+  and the server keeps answering. The app's panes (`lib/terminals.ts`
+  `closeAction`) treat 1013 like any non-final code and reconnect with backoff
+  capped at 2.5 s, each retry a fresh 15 s attempt. A client that starts after
+  its socket gave up is reaped, never leaked; a spawn that never returns keeps
+  its slot, so at most 2 threads can ever be stuck. Guests' read-only attach
+  (`guest_terminal.spawn_readonly_attach`) takes the same path and cap.
+- **Writes** (`PtyWriter`): keystrokes reach the client in order on one thread
+  per socket — a blocking PTY write to a client that is not reading (a wedged
+  `tmux attach`, a long paste) would hold the loop.
+- **Detach** (`reap`): ptyprocess's `terminate` sleeps 0.1 s per signal and
+  `close` another 0.1 s; both now run on a thread (for the shell socket, whose
+  `pump_pty` terminates the client itself, through the `detaching` wrapper).
+  The fd closes only after the writer is done, so a late write never lands in
+  a reused fd.
+- Reads stay on the loop (`add_reader` → `os.read` of a readable fd), and a
+  resize is one `ioctl`.
+
+A thread alone does not make a slow fork harmless: CPython forks while
+holding the GIL, and the copy of the page tables stalls every thread (≈13 ms
+at 600 MB resident, measured; unbounded under memory pressure).
+So `mux.attach` starts every client with `mux.spawn_pty`: `posix_spawn` (glibc's
+`clone(CLONE_VM|CLONE_VFORK)`: nothing copied, no Python in the child, ~1 ms):
+`openpty`, the window size set on the slave, the child a session leader that
+opens the slave by path as fd 0 — on Linux that makes it the controlling tty
+with the child's group in the foreground, as `forkpty` does, so resizes still
+SIGWINCH the client and closing the master still hangs it up. It returns the
+same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. Tests that
+must not start a real client stub `mux.spawn_pty`.
+
+`spawn_pty(argv, *, dimensions=(24, 80), env=None)` contract: it returns a
+`ptyprocess.PtyProcess`; a missing command raises `FileNotFoundError` with
+ptyprocess's exact message; the child inherits only fds 0/1/2. The
+`posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
+`os.posix_spawn`) — on macOS opening a tty does not make it the controlling
+tty, so it falls back.
+
+**Limits and recovery.** A spawn that never returns holds its slot for
+good: after two, every attach times out after 15 s until the server
+restarts (nothing frees a wedged slot, and no health signal shows it). Look
+for these WARNINGs on the `mindflock.terminal` logger: *attach timed out
+after 15 s (queued|spawning)*, *a PTY client started after its socket gave
+up; reaped*, *PTY writer still blocked; leaving its fd open* (the writer was
+still blocked 2 s into a detach, so the fd is left open rather than risk a
+write into a reused fd number). Each terminal socket costs up to three
+daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). Not yet routed
+through `attach_off_loop`: the assistant terminal, `core.pty_run`'s tmux
+attach and peer-forwarded terminals (`term_open`) spawn on the loop, but
+through `mux.attach`, so by `posix_spawn` — no fork. Still a real `fork()`
+(ptyprocess): the provider and `gh` login terminals (`core.pty_run`'s
+command PTY, `/api/providers/{name}/login-terminal`,
+`/api/github/gh-login-terminal`), the ticket log stream (`spawn_tail`), and
+the engine's own PTY (`session/tmux/pty.py`).
+
 ### Other people's keystrokes
 
 The owner's own browsers attach a writable `tmux attach-session` client per
@@ -726,7 +794,7 @@ pages/s to leave `critical`), so a box hovering at a line doesn't flap.
 plain words, and `describe()` (every refusal, the banner's message, the
 shield's log) joins them: *memory is critical: processes stalled on memory
 34% of the last minute*, *memory is low: swapping 1.6 MB/s back in from
-disk*, *memory is critical: Windows commit charge is at 93% of its limit
+disk*, *memory is critical: Windows commit charge is at 98% of its limit
 (55.8 GB of 60.0 GB)*. A reading is cached for 2 s, and the level is per
 process: the ticket pipeline keeps its own, so it and the server can briefly
 disagree near a line.
@@ -765,7 +833,7 @@ minutes on 2026-11-10 with nothing short. The host's signals:
 
 | Signal | low at | critical at | leaves low / critical |
 |---|---|---|---|
-| Commit charge / commit limit (at the limit an allocation fails) | ≥ 85 % | ≥ 90 % | ≤ 80 % / ≤ 87 % |
+| Commit charge / commit limit (at the limit an allocation fails) | never — a WSL VM commits its whole `memory=` size, so 75-85 % is normal | ≥ 97 % | — / ≤ 94 % |
 | Hard paging (`PagesInputPersec`, the median of the last 6 readings) | reported only (`pages_in_median`) — never a level by itself: it counts file-backed reads too, and read 30-100 MB/s on 2026-11-10 with WSL barely stalled | — | — |
 | Headroom (below) | ≤ 2 GB | ≤ 1 GB | ≥ 3 GB / ≥ 1.5 GB |
 | Windows' own available | — | ≤ 256 MB | > 512 MB |

@@ -981,6 +981,9 @@
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
     stuck: "Idle",
+    verify_confirm: "Confirm verified",
+    verify_failed: "Verify failed",
+    verify_blocked: "Verify blocked",
   };
   // Idle this long on uncommitted work and the rail's bell lists it as stuck.
   var STUCK_IDLE_S = 20 * 60;
@@ -998,6 +1001,41 @@
   }
   function needsYou(reason, hint) {
     return st("needs_you", { reason: reason, label: REASON_LABEL[reason], inBell: true, hint: hint });
+  }
+  // The row's `verify` — the session's own agent checking its work
+  // (sessionState.ts verifyOf / verifyHint): null on an older server.
+  function verifyOf(inst) {
+    var v = inst && inst.verify;
+    return v && typeof v === "object" && typeof v.state === "string" ? v : null;
+  }
+  function verifyLines(steps, key) {
+    return (steps || []).map(function (s) {
+      var tail = String(s[key] || "").trim();
+      return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+    }).join("\n");
+  }
+  function verifyProgress(v) {
+    var total = Number(v.steps && v.steps.total) || 0, human = Number(v.steps && v.steps.human) || 0;
+    var done = Number(v.steps && v.steps.agent_done) || 0, mine = Math.max(0, total - human);
+    if (!total) return "writing its steps";
+    if (!mine) return "every step needs a person";
+    return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
+  }
+  // Waits on a person, failed or blocked: a needs-you state (null otherwise).
+  function verifyNeedsYou(v) {
+    if (v.state === "needs_you") {
+      var list = verifyLines(v.human_steps, "expect");
+      return needsYou("verify_confirm", "The agent checked what it can. Do these steps, then confirm verified on the desktop:" + (list ? "\n" + list : ""));
+    }
+    if (v.state === "failed") {
+      var failed = verifyLines(v.failed_steps, "note");
+      return st("needs_you", { reason: "verify_failed", label: REASON_LABEL.verify_failed, tone: "broken", inBell: true,
+                               hint: "Verify failed" + (failed ? ":\n" + failed : v.detail ? " — " + v.detail : "") });
+    }
+    if (v.state === "blocked")
+      return st("needs_you", { reason: "verify_blocked", label: REASON_LABEL.verify_blocked, tone: "broken", inBell: true,
+                               hint: "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") });
+    return null;
   }
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
   // the old "You: …") is read without it (lib/flights.ts perchLabel).
@@ -1055,7 +1093,11 @@
     // typed to since) is a Question whatever the activity reads — a prose
     // question sits on an idle agent and is not "waiting for input".
     var asking = inst.asking;
-    if (asking && (asking.kind === "dialog" || asking.kind === "question"))
+    var verify = verifyOf(inst);
+    // A verify waiting on a person: the agent's reply IS the person's steps,
+    // so a question in it reads Confirm verified (sessionState.ts), not Question.
+    var verifyWaits = !!verify && (verify.state === "needs_you" || verify.state === "failed" || verify.state === "blocked");
+    if (asking && (asking.kind === "dialog" || (asking.kind === "question" && !verifyWaits)))
       return needsYou("question", "The agent asked you a question" + (asking.text ? ": " + String(asking.text) : ""));
     if (act === "clarify") return needsYou("question", "The agent asked you a question");
     // A flight perched on you waits for Done, whatever the agent does.
@@ -1072,6 +1114,11 @@
                                hint: "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
                                      " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip" });
     }
+    // The agent checking its own work: its own pill, mid-turn or between
+    // steps — a usage limit and a dead terminal still say so below.
+    if (verify && verify.state === "verifying" && act !== "limit" && act !== "offline")
+      // Painted in the phone's working tone (mobile.css has no violet).
+      return st("working", { label: "Verifying", hint: "Checking its work: " + verifyProgress(verify) });
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
       var until = Number(inst.queue && inst.queue.limited_until) || 0;
@@ -1084,6 +1131,8 @@
     if (act === "offline")
       return st("offline", { inBell: true, restartable: !inst.device,
                              hint: "The agent's terminal is gone — Restart relaunches it" });
+    var verifyYou = verify && verifyNeedsYou(verify);
+    if (verifyYou) return verifyYou;
     if (inst.stage === "interrupt")
       return needsYou("precommit_failed", inst.failed_step ? "Pre-commit failed at: " + inst.failed_step : "Pre-commit failed");
     if (inst.check && inst.check.state === "failed" && !inst.check.stale)
@@ -1096,6 +1145,8 @@
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
                           hint: "Route “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
+    if (verify && verify.state === "passed")
+      return st("idle", { label: "Verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
     if (idleFor > STUCK_IDLE_S && dirty)
       return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
@@ -3106,8 +3157,8 @@
   //              with the next phrase (voicePendingTake); the local VOICE_CMD
   //              table answers when the server cannot.
   //              At the END of any phrase (and of every streamed run of
-  //              words) a stop phrase ("stop recording", "that's all") stops
-  //              listening with the box kept, and while the session is asking
+  //              words) a stop phrase ("stop recording"; "that's all" only
+  //              as the whole phrase) stops listening with the box kept, and while the session is asking
   //              (voiceAsks) an answer ("yes", "no thanks", "option two")
   //              answers it — neither ever lands in the box
   //   sending    POST /send (or /answer) in flight
@@ -4860,13 +4911,14 @@
     // unstable tail) to onGuess — typed into the box as a guess, corrected
     // by the next answer — and to the caption (onInterim, the tail greyed).
     // The phrase reaches onFinal whole at its end (streamEnd) — but a stop
-    // phrase acts the moment it settles.
+    // phrase acts the moment it settles ("stop listening"; never "that's
+    // all", which waits for the phrase's end: voiceTail's inFlight).
     function streamWords(g, mine, committed, partial) {
       var h = mine.h;
       if (String(committed || "").trim()) voiceTraceMark(g, "settled");
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
-      var tail = voiceTail(g.pend, false);
+      var tail = voiceTail(g.pend, false, true);
       if (tail && tail.kind === "stop") {
         var all = g.pend;
         g.pend = g.partial = "";
@@ -7030,8 +7082,9 @@
   }
 
   // --- control phrases: they act at the END of any phrase -------------------
-  // A stop phrase ("stop recording", "that's all", "mic off"…) ends listening
-  // wherever it is said, the words before it kept in the box. While the
+  // A stop phrase ("stop recording", "mic off"…) ends listening wherever it
+  // is said, the words before it kept in the box; a conversational one
+  // ("that's all", "done talking") only said on its own (voiceTail). While the
   // session is asking (voiceAsks: a dialog, or a Say line with a question),
   // an answer ("yes", "no thanks", "always", "option two") at the end of a
   // phrase answers it. Both are matched on the last VOICE_TAIL_MAX words
@@ -7147,12 +7200,21 @@
   // The control phrase a phrase ENDS with: {kind: "stop"} or (answers: the
   // session is asking) {kind: "answer", choice, number?}, plus `text` (the
   // words before it, as said) and `said` (the phrase itself, as said).
-  // The longest match wins: "no thanks" over "thanks".
-  function voiceTail(text, answers) {
+  // The longest match wins: "no thanks" over "thanks". A conversational
+  // stop phrase ("that's all") only as the whole phrase (voiceStopBefore),
+  // and never while `inFlight` (a stream's committed words so far: the
+  // phrase may go on, "that's all I need").
+  function voiceTail(text, answers, inFlight) {
     var words = String(text || "").trim().split(/\s+/).filter(Boolean);
     for (var k = Math.min(VOICE_TAIL_MAX, words.length); k >= 1; k--) {
       var t = voiceNorm(words.slice(words.length - k).join(" "));
       var hit = VOICE_W.stop.test(t) ? { kind: "stop" } : null;
+      if (!hit && !inFlight && VOICE_W.stopAlone.test(t)) {
+        var alone = voiceStopBefore(words.slice(0, words.length - k).join(" "));
+        if (alone !== null) {
+          return { kind: "stop", text: alone.replace(/[\s,;:.!?-]+$/, ""), said: words.slice(words.length - k).join(" ").replace(/[.!?]+$/, "") };
+        }
+      }
       if (!hit && answers) {
         hit = voiceAnswerWords(t, k === words.length);
         if (hit) hit.kind = "answer";
@@ -7175,6 +7237,14 @@
       }
     }
     near = near || voiceSoundTail(text, VOICE_W.stopSaid);
+    // ...and a conversational one heard a letter off, on its own only.
+    for (var a = 0; a < VOICE_W.stopAloneSaid.length && !near && !inFlight; a++) {
+      var m = voiceNorm(VOICE_W.stopAloneSaid[a]).split(" ").length;
+      if (words.length >= m && voiceSoundsLike(words.slice(words.length - m).join(" "), VOICE_W.stopAloneSaid[a])) {
+        var ok = voiceStopBefore(words.slice(0, words.length - m).join(" "));
+        if (ok !== null) near = { before: ok };
+      }
+    }
     if (near) {
       var said = voiceNorm(text).split(" ").slice(voiceNorm(near.before).split(" ").filter(Boolean).length).join(" ");
       return { kind: "stop", text: near.before.replace(/[\s,;:.!?-]+$/, ""), said: said };
@@ -7219,7 +7289,9 @@
   // send ("over": the box goes, listening on), end ("over and out": sent,
   // listening over), clear ("disregard", and "… that / it / all /
   // everything"), stop (a phrase of two words or more ends ANY phrase —
-  // "fix it, that's all"; a one-word one, "stop", only on its own), hush (on
+  // "fix it, stop listening"; a one-word one, "stop", and a conversational
+  // one, "that's all" / "done talking" (VOICE_STOP_ALONE), only on its own),
+  // hush (on
   // its own: the voice stops, the mic listens on) and the wake word (the
   // server hears it; the page only names it). Ours until GET /api/voice says
   // otherwise; the desktop's Settings → Voice changes them (synced), the
@@ -7245,6 +7317,31 @@
     wake: "mindflock",
   };
   var VOICE_WORD_KINDS = ["send", "end", "clear", "stop", "hush", "undo"];
+  // The stop forms that are also ordinary English endings ("…so make sure
+  // that that's all"): they stop only said on their own, a filler before
+  // them allowed (VOICE_STOP_FILLERS) or an end phrase ("over and out,
+  // that's all"). The defaults "that's all" and "done talking", their
+  // variants and heard forms — core.voice_words STOP_ALONE and
+  // lib/voiceWords STOP_ALONE, the same list (test_voice_stop_alone.py).
+  // A one-word stop phrase is whole-only too (voiceStopAlone).
+  var VOICE_STOP_ALONE = [
+    "stop",
+    "that's all", "that is all", "that's al", "that's hall",
+    "done talking", "i'm done talking", "i am done talking", "done talkin", "dun talking", "done torking", "then talking",
+  ];
+  var VOICE_STOP_FILLERS = ["ok", "okay", "um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "oh", "so", "well", "alright"];
+  function voiceStopAlone(p) {
+    var k = voiceNorm(p).replace(/'/g, "");
+    return k.indexOf(" ") < 0 || VOICE_STOP_ALONE.some(function (a) { return a.replace(/'/g, "") === k; });
+  }
+  // The words before a lone stop phrase that leave it alone: fillers only
+  // ("Okay, that's all.") → "" (never typed), an end phrase at their end →
+  // them (voiceStopPhrase sends, then stops); else null: it is dictation.
+  function voiceStopBefore(before) {
+    var ws = voiceNorm(before).replace(/'/g, "").split(" ").filter(Boolean);
+    if (ws.every(function (w) { return VOICE_STOP_FILLERS.indexOf(w) >= 0; })) return "";
+    return voiceDictParse(before).kind === "out" ? before : null;
+  }
   var VOICE_WORD_VARIANTS = {
     "stop listening": ["stop recording", "stop dictating", "stop the mic", "stop the microphone"],
     "mic off": ["microphone off"],
@@ -7413,11 +7510,14 @@
       // — each the owner's phrases and what is heard for them.
       dict: new RegExp("^(.*?)[\\s,.!?]*\\b(?:(" + voiceWordsAlt(w.end.concat(H.end), R, "['’]") + ")|(" + voiceWordsAlt(w.clear.concat(H.clear), R, "['’]") +
         "(?:\\s+(?:" + VOICE_CLEAR_TAILS.join("|") + "))?)|" + voiceWordsAlt(w.send.concat(H.send), R, "['’]") + ")[.!?\\s]*$", "i"),
-      // On normalized words: a stop phrase at the end (two words or more),
-      // the stop command and the hush phrase (the whole phrase).
-      stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0; }), " ", "'") + "$"),
+      // On normalized words: a stop phrase at the end (two words or more,
+      // not a conversational one), a conversational one (the whole phrase:
+      // voiceTail), the stop command and the hush phrase (the whole phrase).
+      stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0 && !voiceStopAlone(p); }), " ", "'") + "$"),
+      stopAlone: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0 && voiceStopAlone(p); }), " ", "'") + "$"),
       // ...and those phrases as said, for voiceTail's sound-alike stop.
-      stopSaid: stop.filter(function (p) { return p.indexOf(" ") > 0; }),
+      stopSaid: stop.filter(function (p) { return p.indexOf(" ") > 0 && !voiceStopAlone(p); }),
+      stopAloneSaid: stop.filter(function (p) { return p.indexOf(" ") > 0 && voiceStopAlone(p); }),
       stopCmd: new RegExp("^" + voiceWordsAlt(stop.concat(w.stop.indexOf("mic off") >= 0 ? VOICE_WORD_CMD_VARIANTS["mic off"] : []), " ", "'") + "$"),
       hush: new RegExp("^" + voiceWordsAlt(hush, " ", "'") + "$"),
       // voiceUndoParse, on normalized words: an undo phrase at the END.

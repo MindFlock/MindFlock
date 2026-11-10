@@ -2260,13 +2260,17 @@ class Toolbox(_ship.ShipTools, _runs.RunTools, _flights.FlightTools):
         if status == "loading":
             st["offline_seen"] = None
             return None
+        order = row.get("order") if isinstance(row.get("order"), dict) else {}
+        if order.get("state") == "held" or row.get("waiting_for_memory"):
+            # Created, waiting its turn (its agent is not started until then:
+            # it reads offline), or released with its start queued in the
+            # launch gate: not finished.
+            st["offline_seen"] = None
+            return None
         if activity == "offline":
             st["offline_seen"] = st["offline_seen"] or now
             return "offline" if now - st["offline_seen"] >= OFFLINE_DONE_S else None
         st["offline_seen"] = None
-        order = row.get("order") if isinstance(row.get("order"), dict) else {}
-        if order.get("state") == "held":
-            return None  # created, waiting its turn: not finished, not started
         if activity != "idle":
             st["busy"] = True
             st["idle_seen"] = None

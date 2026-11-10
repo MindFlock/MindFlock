@@ -134,6 +134,153 @@ export function controlNotice(frame: unknown): { notice: string } | { notice: nu
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Repaint: the "pane went white until I scrolled" fix (docs/web-ui.md)
+// ---------------------------------------------------------------------------
+//
+// A terminal pane could turn blank — white, on the light theme, where the
+// terminal background IS white — and come back on the smallest scroll. The
+// content was never lost: a wheel tick makes tmux redraw, xterm rewrites its
+// row elements, and that rewrite is what makes Chromium paint the pane again.
+// Nothing else ever did. xterm 6 renders with the DOM renderer here (no WebGL
+// addon, so no GL context to lose); what goes stale is the PAINTED surface:
+// the window was minimized, covered (Windows' native occlusion tracking hides
+// the page), moved to another display, or the GPU process restarted (the
+// owner switches the laptop dGPU off and on), and the raster of a pane that
+// had no new output was never redone. Each of those now ends in a repaint of
+// every terminal on screen: fit (in case the size changed meanwhile) plus a
+// full `refresh` — exactly the row rewrite the scroll used to provoke.
+
+/** A terminal surface that can be repainted. Kept to the two xterm members
+ * used so the tests can hand in fakes (vitest is node-only: no DOM, no xterm). */
+export interface RepaintTerm {
+  readonly rows: number;
+  refresh(start: number, end: number): void;
+}
+
+/** Fit (when given) then redraw every row of `term`. Never throws: a terminal
+ * disposed between the trigger and the frame is simply skipped. */
+export function repaintTerm(term: RepaintTerm | null | undefined, fit?: () => void): boolean {
+  if (!term) return false;
+  try {
+    fit?.();
+  } catch {
+    /* hidden / zero-sized: the refresh below still repaints what is there */
+  }
+  try {
+    const rows = term.rows;
+    if (!(rows > 0)) return false;
+    term.refresh(0, rows - 1);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether an element is on screen enough to be worth painting: laid out
+ * (not `display: none` itself or by an ancestor) and with an area. */
+export function isShown(el: { clientWidth: number; clientHeight: number; offsetParent: unknown } | null | undefined): boolean {
+  return !!el && el.clientWidth > 0 && el.clientHeight > 0 && el.offsetParent !== null;
+}
+
+/** One terminal the repaint hub knows: whether it is showing now, and how to
+ * repaint it. Both are read at repaint time, so a pane that switched tab or
+ * reconnected (a new xterm) is handled by the same entry. */
+export interface Repaintable {
+  shown(): boolean;
+  repaint(): void;
+}
+
+const tracked = new Set<Repaintable>();
+
+/** Put a terminal on the repaint list; returns the untrack function. */
+export function trackRepaint(r: Repaintable): () => void {
+  tracked.add(r);
+  return () => {
+    tracked.delete(r);
+  };
+}
+
+/** Repaint every entry that is showing; hidden ones are skipped (xterm repaints
+ * them itself when they are revealed, and the pane's reveal refit repaints them
+ * again). Returns how many were repainted. One bad entry never stops the rest. */
+export function repaintShown(items: Iterable<Repaintable> = tracked): number {
+  let n = 0;
+  for (const r of items) {
+    try {
+      if (!r.shown()) continue;
+      r.repaint();
+      n++;
+    } catch {
+      /* torn down mid-pass */
+    }
+  }
+  return n;
+}
+
+/** The event the desktop shell (electron/main.js) dispatches on the page when
+ * the native window is restored, shown, un-occluded, moved between displays,
+ * or the GPU process came back — the cases a page cannot see for itself. */
+export const REPAINT_EVENT = "mindflock:repaint";
+
+/** Second pass after a trigger, in ms: Chromium can show a restored window a
+ * frame or two before its compositor is ready, and a single repaint landing
+ * in that gap is lost the same way the original paint was. */
+export const REPAINT_SETTLE_MS = 300;
+
+type Listenable = {
+  addEventListener(type: string, fn: () => void): void;
+  removeEventListener(type: string, fn: () => void): void;
+};
+
+/** Wire the triggers: the window regaining focus, the page becoming visible
+ * again (minimize/restore, a background tab, occlusion), a bfcache restore,
+ * and the shell's own REPAINT_EVENT. Bursts (focus + visibilitychange arrive
+ * together) coalesce into one pass on the next frame, plus one settle pass.
+ * Returns the uninstall function. Dependencies are parameters for the test. */
+export function installRepaintTriggers(
+  win: Listenable,
+  doc: Listenable & { readonly hidden: boolean },
+  run: () => void = () => {
+    repaintShown();
+  },
+  schedule: {
+    frame: (fn: () => void) => void;
+    later: (fn: () => void, ms: number) => unknown;
+    cancel: (t: unknown) => void;
+  } = {
+    frame: (fn) => requestAnimationFrame(() => fn()),
+    later: (fn, ms) => setTimeout(fn, ms),
+    cancel: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  },
+): () => void {
+  let queued = false;
+  let settle: unknown;
+  const trigger = () => {
+    if (doc.hidden) return; // nothing is painted while hidden; the show will come
+    if (!queued) {
+      queued = true;
+      schedule.frame(() => {
+        queued = false;
+        run();
+      });
+    }
+    if (settle !== undefined) schedule.cancel(settle);
+    settle = schedule.later(() => {
+      settle = undefined;
+      run();
+    }, REPAINT_SETTLE_MS);
+  };
+  const winEvents = ["focus", "pageshow", REPAINT_EVENT];
+  for (const e of winEvents) win.addEventListener(e, trigger);
+  doc.addEventListener("visibilitychange", trigger);
+  return () => {
+    for (const e of winEvents) win.removeEventListener(e, trigger);
+    doc.removeEventListener("visibilitychange", trigger);
+    if (settle !== undefined) schedule.cancel(settle);
+  };
+}
+
 /** A ws-streamed terminal over a fixed path.
  *
  * `reconnect` makes the socket survive a session that is not up yet. It is off
@@ -272,13 +419,23 @@ export function useWsTerm(
       term.onData((d) => {
         if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
       });
-    const obs = new ResizeObserver(() => doFit(true));
+    const obs = new ResizeObserver(() => {
+      doFit(true);
+      repaintTerm(term);
+    });
     obs.observe(host);
     const t = setTimeout(() => doFit(true), 50);
+    // Repainted with the grid's panes when the window comes back (see
+    // installRepaintTriggers): the Verify watcher can go white the same way.
+    const untrack = trackRepaint({
+      shown: () => isShown(host),
+      repaint: () => repaintTerm(term, () => doFit(true)),
+    });
     connect();
 
     return () => {
       dead = true;
+      untrack();
       clearTimeout(t);
       if (timer) clearTimeout(timer);
       obs.disconnect();

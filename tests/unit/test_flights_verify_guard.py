@@ -11,8 +11,8 @@ Found live 2026-11-09 on two real routes:
   behavior "blocked", the stop called that "the agent's behaviors are checked"
   and moved on.
 
-Plus the owner's rule: a check that needs a PERSON to do something first parks
-the route and asks them; Done means "I did it" and the check runs again.
+Plus the owner's rule (2026-11-10, self-verify): a check with steps only a
+PERSON can do parks the route until a person confirms it.
 """
 
 import asyncio
@@ -199,71 +199,44 @@ def test_past_the_budget_the_check_is_closed():
 # After the run: blocked never passes; needs-you asks the person
 # --------------------------------------------------------------------------- #
 def test_blocked_answers_never_pass_even_agent_only():
-    """sc-25845: every behavior blocked used to read 'checked' and move on."""
+    """sc-25845: a check that could not finish used to read 'checked' and move
+    on. Now its outcome is ``blocked`` and the stop parks on the person."""
     f = _started(_fly(_step(who="agent")))
     done = _facts(
         state="generated",
         latest_run_at=NOW + 2,
         open_agent=[],
-        blocked_steps=[
-            {
-                "step": "s1",
-                "text": "the ticket has the screenshot",
-                "why": "not on sandbox",
-            },
-        ],
+        outcome="blocked",
+        outcome_note="not checked: the checker stopped answering",
     )
     a = _next(f, done, NOW + 100)
     assert a["action"] == "you"
     assert a["detail"]["ask"] == "blocked"
-    assert a["detail"]["items"] == ["the ticket has the screenshot — not on sandbox"]
+    assert "stopped answering" in a["detail"]["items"][0]
 
 
-def test_a_needs_you_answer_parks_then_done_checks_again():
+def test_a_needs_you_check_parks_until_a_person_confirms():
+    """Self-verify: steps only a person can do park the stop (never a silent
+    pass); the person's confirm settles it and the stop moves on."""
     f = _started(_fly(_step(who="agent")))
-    need = {
-        "step": "s1",
-        "text": "the ticket shows the screenshot",
-        "do": "approve one takedown ticket in Freshdesk",
-        "at": NOW + 50,
-    }
     after = _facts(
-        state="generated", latest_run_at=NOW + 2, open_agent=[], needs_you=[need]
+        state="generated",
+        latest_run_at=NOW + 2,
+        open_agent=[],
+        outcome="needs_you",
+        confirm_items=["open the page — look for: the badge reads 3"],
     )
     a = _next(f, after, NOW + 100)
-    assert a["action"] == "you" and a["detail"]["ask"] == "needs_you"
-    assert a["detail"]["items"] == [
-        "approve one takedown ticket in Freshdesk (for: the ticket shows the screenshot)"
-    ]
+    assert a["action"] == "you" and a["detail"]["ask"] == "confirm"
+    assert a["detail"]["items"] == ["open the page — look for: the badge reads 3"]
     f = F.apply(f, a, NOW + 100)
     assert f["state"] == "waiting_you"
-    # Done on this perch is "I did it" → the driver turns it into a retry.
-    assert D._needs_you_perch(f, "s1") is True
-    f = F.op_retry(f, "s1", now=NOW + 200)
-    # A retry puts the stop back to pending; the driver's next pass starts it
-    # fresh (a new attempt: `since` moves on).
-    start = F.next_action(f, {"session": _sess()}, NOW + 200)
-    assert start["action"] == "run" and not start.get("phase"), start
-    f = F.apply(f, start, NOW + 200)
-    assert f["step_states"]["s1"]["state"] == "running"
-    assert f["step_states"]["s1"]["since"] == NOW + 200
-    # The needs-you answer is from before this attempt: check again, telling
-    # the checker what the person did.
-    r = _next(f, after, NOW + 201)
-    assert r["action"] == "run" and r["phase"] == "agent_run"
-    assert r["detail"]["rechecked"] is True
-    assert "approve one takedown ticket" in r["detail"]["extra_notes"]
-    f = F.apply(f, r, NOW + 201)
-    # The re-check asked the person again (still needs you, answered AFTER
-    # this attempt began) → parks again rather than looping.
-    still = _facts(
-        state="generated",
-        latest_run_at=NOW + 300,
-        open_agent=[],
-        needs_you=[dict(need, at=NOW + 300)],
-    )
-    again = _next(f, still, NOW + 400)
-    assert again["action"] == "you" and again["detail"]["ask"] == "needs_you"
+    assert D._confirm_perch(f, "s1") == "p"
+    # Still waiting on the person: stays parked.
+    assert _next(f, after, NOW + 150)["action"] == "wait"
+    # Confirmed (POST /api/test-plans/p/confirm): passed → done.
+    ok = dict(after, outcome="passed", confirm_items=[])
+    assert _next(f, ok, NOW + 200)["action"] == "done"
 
 
 def test_done_is_still_refused_on_a_plain_behaviors_perch():
@@ -282,7 +255,7 @@ def test_done_is_still_refused_on_a_plain_behaviors_perch():
 
 def test_all_passed_is_still_done():
     f = _started(_fly(_step(who="agent")))
-    ok = _facts(state="done", latest_run_at=NOW + 2, open_agent=[], settled=True)
+    ok = _facts(state="done", latest_run_at=NOW + 2, open_agent=[], outcome="passed")
     assert _next(f, ok, NOW + 100)["action"] == "done"
 
 
