@@ -7318,8 +7318,8 @@
     return null;
   }
   // "docs yes", "docs, no": a session's name said first (the page's list),
-  // then nothing yet or only answer words.
-  function voiceGateNamed(w) {
+  // then only answer words.
+  function voiceGateNamed(w, bare) {
     var list = typeof instances !== "undefined" && instances ? instances : [];
     var t = w.join(" ");
     for (var i = 0; i < list.length; i++) {
@@ -7328,7 +7328,11 @@
       for (var k = 0; k < names.length; k++) {
         var n = names[k];
         if (!n) continue;
-        if ((n + " ").indexOf(t + " ") === 0) return true;
+        // The name alone — or its first words — is not held: a prompt that
+        // starts with a word of a session's name types as it comes, and
+        // "docs yes" is taken back from the box when its answer word lands.
+        // (`bare`, after "switch the": the name, or its first words, is enough.)
+        if (bare && (n + " ").indexOf(t + " ") === 0) return true;
         if (t.indexOf(n + " ") === 0 && t.slice(n.length + 1).split(" ").every(function (x) {
           return VOICE_ANSWER_WORDS.indexOf(x) >= 0;
         })) return true;
@@ -7344,7 +7348,7 @@
     // "docs yes": a session's name, then (maybe) an answer to it.
     if (voiceGateNamed(w)) return true;
     // "switch the docs": only a session's name after it ("switch the bug" is words).
-    if (w[0] === "switch" && w[1] === "the") return w.length === 2 || voiceGateNamed(w.slice(2));
+    if (w[0] === "switch" && w[1] === "the") return w.length === 2 || voiceGateNamed(w.slice(2), true);
     return VOICE_MAY_CMD.concat(VOICE_W.mayCmd).some(function (p) {
       for (var i = 0; i < w.length; i++) {
         if (i >= p.length) return false;
@@ -7933,8 +7937,8 @@
         voicePendingKeep(j);
         voice.routeWhy = "";
         if (VOICE_ROUTE_KINDS.indexOf(j.kind) < 0) {
-          // A newer server's kind: never typed (it may be a command) — the strip says so.
-          voice.lastRoute = String(j.kind) + " (unknown here: not done)";
+          // A newer server's kind: typed as words, and the strip says so.
+          voice.lastRoute = String(j.kind) + " (unknown here: a prompt)";
           return { kind: "unknown", said: String(j.kind) };
         }
         voice.lastRoute = String(j.kind) + (j.kind === "switch_index" || (j.kind === "answer" && j.index) ? " " + j.index
@@ -8043,9 +8047,13 @@
         voiceStopForCommand();
         voiceAssistTurn(String(res.text || "").trim() || voiceWakeRestOf(p.text) || p.text);
         return true;
-      case "unknown":
-        voiceRouteUnknown(res.said);
-        return true;
+      case "unknown": {
+        // A newer server's kind: the words stay words (in the box, as the
+        // desktop keeps them) and the strip says why nothing was done.
+        var kept = voiceHeardRest(p);
+        voiceStripNote("Typed — this page doesn't know “" + String(res.said || "?") + "” yet (reload it)");
+        return kept;
+      }
       case "hush": voiceHush(); return false;   // the mic goes on, nothing typed or said
       case "switch":
       case "new":
@@ -8327,10 +8335,6 @@
   }
   // The router's reply named a kind this page does not know (a newer
   // server): never typed — the words may be a command it can't do here.
-  function voiceRouteUnknown(kind) {
-    voiceStopForCommand();
-    voiceIdle("Not done — this page doesn't know “" + String(kind || "?") + "” yet (reload it)");
-  }
   // A phrase typed because the router read it as a near miss of a command
   // ({kind: "prompt", near: {kind, why, arg?, suggest?}}): the strip says why.
   function voiceNearNote(near) {

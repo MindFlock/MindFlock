@@ -496,7 +496,6 @@ function voiceStrictMatch() { return false; }
 """
         + _whole(js, "voiceNearNote")
         + _whole(js, "voiceRouteMissNote")
-        + _whole(js, "voiceRouteUnknown")
         + _whole(js, "voiceRouted")
     )
 
@@ -505,7 +504,7 @@ function voiceStrictMatch() { return false; }
 def test_routed_assistant_unknown_near_and_a_fallback_say_why():
     """voiceRouted: `assistant` ends the listen and goes to the assistant
     (the router's words, not the phrase) — nothing typed; an unknown kind is
-    not typed and the strip says so; a prompt with `near` is typed and the
+    typed as words and the strip says so; a prompt with `near` is typed and the
     strip says why ("Typed — no session called docks (did you mean
     docs?)"); a route that timed out says the phone's own table acted, or
     that a phrase that may have been a command was typed."""
@@ -527,8 +526,8 @@ console.log(JSON.stringify(o));
     assert a["r"] is True and ["voiceAssistTurn", "open settings"] in a["did"]
     assert not any(d[0] == "voiceHeardRest" for d in a["did"])
     u = out["unknown"]
-    assert u["r"] is True and not any(d[0] == "voiceHeardRest" for d in u["did"])
-    assert any(d[0] == "voiceIdle" and "teleport" in d[1] for d in u["did"])
+    assert any(d[0] == "voiceHeardRest" for d in u["did"])
+    assert any(d[0] == "voiceStripNote" and "teleport" in d[1] for d in u["did"])
     assert [
         "voiceStripNote",
         "Typed — no session called docks (did you mean docs?)",

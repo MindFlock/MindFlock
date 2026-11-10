@@ -509,6 +509,18 @@ a session first*).
   stops) — Enter is never pressed in a text box (the ask card's answer field
   is the exception: it sends itself, and once the card closes or moves on the
   next message goes to the focused session).
+- **Which phrases are offered.** The page decides locally whether a first
+  phrase may be a command (`mayBeCommand`, a word-slot port of the router's
+  grammar, pinned against it by `tests/unit/data/voice_gate_phrases.json`
+  on the desktop, the phone and the server): such a phrase is held whole
+  and sent to the router, anything else types as it is said. A reply that
+  does not come within 2 s (15 s for a phrase that may start a session) is
+  decided here for the commands that need no server (next/previous/numbered
+  session, where, commands, cancel, repeat, stop, hush); otherwise the words
+  are typed and the strip says so (*Typed — the voice router didn't answer
+  in time*). A near miss is typed with its reason (*Typed — no session
+  called docks (did you mean docs?)*). These lines are captions, never
+  spoken.
 - **Routing.** A dictation's first phrase is first offered to the voice
   router: “switch to the login fix”, “take me to the sitecheck session”,
   “open settings” selects that session (and the conversation stays there —

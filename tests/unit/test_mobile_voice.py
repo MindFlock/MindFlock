@@ -649,8 +649,8 @@ def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
     kinds = v.split("var VOICE_ROUTE_KINDS = [")[1].split("];")[0]
     for kind in ("switch_index", "switch_rel", "answer", "question"):
         assert '"%s"' % kind in kinds, kind
-    # An unknown kind (a newer server) is never typed and not the local
-    # table: the strip says it wasn't done (voiceRouteUnknown).
+    # An unknown kind (a newer server) is not the local table: its words
+    # are typed and the strip says why nothing was done.
     route = _fn(js, "voiceRoute")
     assert 'return { kind: "unknown", said: String(j.kind) };' in route
     # Stop phrases: first in voiceHeard (any mode, before a dialog's "no"),

@@ -13633,7 +13633,7 @@ var M = (s, t, e, i) => {
 	for (var r = i > 1 ? void 0 : i ? Rl(t, e) : t, n = s.length - 1, o; n >= 0; n--) (o = s[n]) && (r = (i ? o(t, e, r) : o(r)) || r);
 	return i && r && zs(t, e, r), r;
 };
-var S = (s, t) => (e, i) => t(e, i, s);
+var S$1 = (s, t) => (e, i) => t(e, i, s);
 var Gs = "Terminal input";
 var mi = {
 	get: () => Gs,
@@ -14088,9 +14088,9 @@ var wt = class {
 	}
 };
 wt = M([
-	S(0, F),
-	S(1, H),
-	S(2, sr)
+	S$1(0, F),
+	S$1(1, H),
+	S$1(2, sr)
 ], wt);
 function Ol(s, t) {
 	if (confirm(`Do you want to navigate to ${t}?
@@ -17268,12 +17268,12 @@ var zt = class extends D {
 	}
 };
 zt = M([
-	S(2, F),
-	S(3, ae),
-	S(4, rr),
-	S(5, Re),
-	S(6, H),
-	S(7, ce)
+	S$1(2, F),
+	S$1(3, ae),
+	S$1(4, rr),
+	S$1(5, Re),
+	S$1(6, H),
+	S$1(7, ce)
 ], zt);
 var Gt = class extends D {
 	constructor(e, i, r, n, o) {
@@ -17332,10 +17332,10 @@ var Gt = class extends D {
 	}
 };
 Gt = M([
-	S(1, F),
-	S(2, ae),
-	S(3, Be),
-	S(4, ce)
+	S$1(1, F),
+	S$1(2, ae),
+	S$1(3, Be),
+	S$1(4, ce)
 ], Gt);
 var Gr = class {
 	constructor() {
@@ -17479,12 +17479,12 @@ var bt = class extends D {
 	}
 };
 bt = M([
-	S(2, F),
-	S(3, Be),
-	S(4, ce),
-	S(5, H),
-	S(6, Re),
-	S(7, ae)
+	S$1(2, F),
+	S$1(3, Be),
+	S$1(4, ce),
+	S$1(5, H),
+	S$1(6, Re),
+	S$1(7, ae)
 ], bt);
 var b;
 ((E) => (E.NUL = "\0", E.SOH = "", E.STX = "", E.ETX = "", E.EOT = "", E.ENQ = "", E.ACK = "", E.BEL = "\x07", E.BS = "\b", E.HT = "	", E.LF = `
@@ -17568,10 +17568,10 @@ var $t = class {
 	}
 };
 $t = M([
-	S(2, F),
-	S(3, H),
-	S(4, ge),
-	S(5, ce)
+	S$1(2, F),
+	S$1(3, H),
+	S$1(4, ge),
+	S$1(5, ce)
 ], $t);
 var ue = 0;
 var he = 0;
@@ -17873,7 +17873,7 @@ var ct = class {
 		return i ? t[t.length - 1][1] = e[1] : t.push(e), t;
 	}
 };
-ct = M([S(0, F)], ct);
+ct = M([S$1(0, F)], ct);
 function Oa(s) {
 	return 57508 <= s && s <= 57558;
 }
@@ -18026,12 +18026,12 @@ var Vt = class {
 	}
 };
 Vt = M([
-	S(1, or),
-	S(2, H),
-	S(3, ae),
-	S(4, ge),
-	S(5, Be),
-	S(6, Re)
+	S$1(1, or),
+	S$1(2, H),
+	S$1(3, ae),
+	S$1(4, ge),
+	S$1(5, Be),
+	S$1(6, Re)
 ], Vt);
 function qo(s, t, e) {
 	for (; s.length < e;) s = t + s;
@@ -18248,13 +18248,13 @@ var Yt = class extends D {
 	}
 };
 Yt = M([
-	S(7, xt),
-	S(8, nt),
-	S(9, H),
-	S(10, F),
-	S(11, ge),
-	S(12, ae),
-	S(13, Re)
+	S$1(7, xt),
+	S$1(8, nt),
+	S$1(9, H),
+	S$1(10, F),
+	S$1(11, ge),
+	S$1(12, ae),
+	S$1(13, Re)
 ], Yt);
 var jt = class extends D {
 	constructor(e, i, r) {
@@ -18279,7 +18279,7 @@ var jt = class extends D {
 		(e.width !== this.width || e.height !== this.height) && (this.width = e.width, this.height = e.height, this._onCharSizeChange.fire());
 	}
 };
-jt = M([S(2, H)], jt);
+jt = M([S$1(2, H)], jt);
 var Zr = class extends D {
 	constructor() {
 		super(...arguments);
@@ -18411,7 +18411,7 @@ var Xt = class {
 		};
 	}
 };
-Xt = M([S(0, ce), S(1, nt)], Xt);
+Xt = M([S$1(0, ce), S$1(1, nt)], Xt);
 var en = class {
 	constructor(t, e) {
 		this._renderCallback = t;
@@ -18678,13 +18678,13 @@ var Qt = class extends D {
 	}
 };
 Qt = M([
-	S(2, H),
-	S(3, nt),
-	S(4, ge),
-	S(5, Be),
-	S(6, F),
-	S(7, ae),
-	S(8, Re)
+	S$1(2, H),
+	S$1(3, nt),
+	S$1(4, ge),
+	S$1(5, Be),
+	S$1(6, F),
+	S$1(7, ae),
+	S$1(8, Re)
 ], Qt);
 var xs = class {
 	constructor(t, e, i) {
@@ -19131,12 +19131,12 @@ var ei = class extends D {
 	}
 };
 ei = M([
-	S(3, F),
-	S(4, ge),
-	S(5, Dt),
-	S(6, H),
-	S(7, ce),
-	S(8, ae)
+	S$1(3, F),
+	S$1(4, ge),
+	S$1(5, Dt),
+	S$1(6, H),
+	S$1(7, ce),
+	S$1(8, ae)
 ], ei);
 var Hi = class {
 	constructor() {
@@ -19295,7 +19295,7 @@ var ti = class extends D {
 		};
 	}
 };
-ti = M([S(0, H)], ti);
+ti = M([S$1(0, H)], ti);
 function K(s, t) {
 	if (s !== void 0) try {
 		return z.toColor(s);
@@ -19388,7 +19388,7 @@ var ii = class extends D {
 		this._logLevel <= 4 && this._log(this._optionsService.options.logger?.error.bind(this._optionsService.options.logger) ?? console.error, e, i);
 	}
 };
-ii = M([S(0, H)], ii);
+ii = M([S$1(0, H)], ii);
 var ic;
 var zi = class extends D {
 	constructor(e) {
@@ -20202,7 +20202,7 @@ var ni = class extends D {
 		r.ydisp = Math.max(Math.min(r.ydisp + e, r.ybase), 0), n !== r.ydisp && (i || this._onScroll.fire(r.ydisp));
 	}
 };
-ni = M([S(0, H)], ni);
+ni = M([S$1(0, H)], ni);
 var si = {
 	cols: 80,
 	rows: 24,
@@ -20397,9 +20397,9 @@ var li = class extends D {
 	}
 };
 li = M([
-	S(0, F),
-	S(1, nr),
-	S(2, H)
+	S$1(0, F),
+	S$1(1, nr),
+	S$1(2, H)
 ], li);
 var dl = {
 	NONE: {
@@ -20520,9 +20520,9 @@ var ai = class extends D {
 	}
 };
 ai = M([
-	S(0, F),
-	S(1, ge),
-	S(2, H)
+	S$1(0, F),
+	S$1(1, ge),
+	S$1(2, H)
 ], ai);
 var Os = [
 	[768, 879],
@@ -22366,7 +22366,7 @@ var Zi = class {
 		this.markRangeDirty(0, this._bufferService.rows - 1);
 	}
 };
-Zi = M([S(0, F)], Zi);
+Zi = M([S$1(0, F)], Zi);
 function Sl(s) {
 	return 0 <= s && s < 256;
 }
@@ -22478,7 +22478,7 @@ var ui$1 = class {
 		i !== -1 && (t.lines.splice(i, 1), t.lines.length === 0 && (t.data.id !== void 0 && this._entriesWithId.delete(t.key), this._dataByLinkId.delete(t.id)));
 	}
 };
-ui$1 = M([S(0, F)], ui$1);
+ui$1 = M([S$1(0, F)], ui$1);
 var Tl = !1;
 var Sn = class extends D {
 	constructor(e) {
@@ -23013,9 +23013,9 @@ var Tt = class extends D {
 	}
 };
 Tt = M([
-	S(1, xt),
-	S(2, ae),
-	S(3, ce)
+	S$1(1, xt),
+	S$1(2, ae),
+	S$1(3, ce)
 ], Tt);
 var hi = class extends D {
 	constructor(e, i, r, n, o) {
@@ -23185,10 +23185,10 @@ var hi = class extends D {
 	}
 };
 hi = M([
-	S(1, Dt),
-	S(2, ce),
-	S(3, F),
-	S(4, lr)
+	S$1(1, Dt),
+	S$1(2, ce),
+	S$1(3, F),
+	S$1(4, lr)
 ], hi);
 function Ec(s, t) {
 	return s.text === t.text && s.range.start.x === t.range.start.x && s.range.start.y === t.range.start.y && s.range.end.x === t.range.end.x && s.range.end.y === t.range.end.y;
@@ -42415,7 +42415,7 @@ var stripAddress = (t) => {
 	const r = addressed(t);
 	return r === null ? t : norm(r);
 };
-var ENDS$1 = [
+var ENDS$2 = [
 	"that's all",
 	"thats all",
 	"that is all",
@@ -42440,7 +42440,7 @@ var ENDS$1 = [
 ];
 function isAssistantEnd(text) {
 	const t = stripAddress(norm(text)).replace(/\s+(mind\s?flock|flock)$/, "").trim();
-	return ENDS$1.includes(t);
+	return ENDS$2.includes(t);
 }
 var ASSISTANT_IDLE_MS = 6e4;
 function talkLevel$1(v) {
@@ -44132,8 +44132,82 @@ var WAKE_PLAIN = [
 	"minh flock"
 ];
 var PAUSE_AFTER = /[,.:;!?—–-]$/;
+var WAKE_SOUND = {
+	first: "(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)",
+	second: "(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}",
+	my: "(?:my|mi|mai)",
+	my_second: "(?:[fck]l|fr|f)[ou][a-z]{0,4}"
+};
+var WAKE_ONE = new RegExp(`^(?:${WAKE_SOUND.first}${WAKE_SOUND.second}|${WAKE_SOUND.my}${WAKE_SOUND.my_second})$`);
+var WAKE_FIRST$1 = new RegExp(`^${WAKE_SOUND.first}$`);
+var WAKE_SECOND = new RegExp(`^${WAKE_SOUND.second}$`);
+var WAKE_MY = new RegExp(`^${WAKE_SOUND.my}$`);
+var WAKE_MY_SECOND = new RegExp(`^${WAKE_SOUND.my_second}$`);
+var WAKE_TAILS = [
+	"ill",
+	"ive",
+	"luck",
+	"lock",
+	"look",
+	"out"
+];
+var WAKE_NEAR = 2;
+var WAKE_MINE = [
+	"my",
+	"mi",
+	"mai",
+	"me"
+];
+var WAKE_ASKS = [
+	"open",
+	"opened",
+	"go",
+	"show",
+	"tell me",
+	"which",
+	"what",
+	"whats",
+	"where",
+	"who",
+	"how",
+	"list",
+	"start",
+	"new",
+	"create",
+	"spin",
+	"switch",
+	"next",
+	"previous",
+	"session",
+	"scroll",
+	"page",
+	"read",
+	"summarize",
+	"summarise",
+	"status",
+	"help",
+	"turn",
+	"focus",
+	"jump"
+];
+var WAKE_ASK_FILLERS = [
+	"please",
+	"um",
+	"uh",
+	"so",
+	"now",
+	"ok",
+	"okay"
+];
+var WAKE_ASK_YOU = [
+	"can",
+	"could",
+	"would",
+	"will"
+];
 var wordsOf$1 = (t) => String(t || "").toLowerCase().replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
 var tokensOf = (text) => String(text || "").trim().split(/\s+/).filter(Boolean);
+var hasApos = (toks) => /['’]/.test(toks.join(""));
 function wakeForms(w) {
 	const own = normPhrase(w.wake || "") || BUILTIN_VOICE_WORDS.wake;
 	return {
@@ -44142,28 +44216,68 @@ function wakeForms(w) {
 		heard: new Set(heardOf(w, "wake").map(letters))
 	};
 }
+function wakeLike(words, w = current$1) {
+	const ws = words.filter(Boolean);
+	if (!ws.length || ws.length > 2) return "";
+	const heard = ws.join("");
+	const word = BUILTIN_VOICE_WORDS.wake;
+	if (heard === word) return "word";
+	if (wakeForms(w).heard.has(heard)) return "form";
+	if (ws.length === 1 && WAKE_ONE.test(heard)) return "sound";
+	if (ws.length === 2 && (WAKE_FIRST$1.test(ws[0]) && WAKE_SECOND.test(ws[1]) || WAKE_MY.test(ws[0]) && WAKE_MY_SECOND.test(ws[1]) || ws[0] === "mindful" && WAKE_TAILS.includes(ws[1]))) return "sound";
+	if (Math.abs(heard.length - word.length) <= WAKE_NEAR && edits(heard, word) <= WAKE_NEAR) return "near";
+	return "";
+}
+function wakeAsks(text) {
+	const ws = wordsOf$1(text);
+	if (!ws.length) return true;
+	let i = 0;
+	while (i < ws.length && i < 2 && WAKE_ASK_FILLERS.includes(ws[i])) i++;
+	if (i + 1 < ws.length && WAKE_ASK_YOU.includes(ws[i]) && ws[i + 1] === "you") i += 2;
+	if (i >= ws.length) return false;
+	return WAKE_ASKS.includes(ws[i]) || WAKE_ASKS.includes(ws.slice(i, i + 2).join(" "));
+}
+function wakeSpan(span, w) {
+	const ws = span.flatMap(wordsOf$1);
+	if (hasApos(span)) {
+		if (!(span.length === 2 && !hasApos(span.slice(0, 1)) && ws[0] === "mindful") || !["ill", "ive"].includes(ws[ws.length - 1])) return "";
+	}
+	return wakeLike(ws, w);
+}
+var leadStart = (toks) => toks.length > 1 && WAKE_LEADS.includes(wordsOf$1(toks[0]).join(" ")) ? 1 : 0;
 function wakeAt(text, w = current$1) {
 	const toks = tokensOf(text);
 	const f = wakeForms(w);
-	let start = 0;
-	if (toks.length > 1 && WAKE_LEADS.includes(wordsOf$1(toks[0]).join(" "))) start = 1;
+	const start = leadStart(toks);
 	for (const k of [1, 2]) {
 		const span = toks.slice(start, start + k);
-		if (span.length < k || /['’]/.test(span.join(""))) continue;
+		if (span.length < k) continue;
 		const said = span.map((t) => wordsOf$1(t).join("")).join("");
 		if (!said) continue;
-		if (f.plain.has(said)) return start + k;
-		if (PAUSE_AFTER.test(span[span.length - 1]) && (f.heard.has(said) || f.names.some((n) => soundsLike(said, n)))) return start + k;
+		const paused = PAUSE_AFTER.test(span[span.length - 1]);
+		if (!hasApos(span)) {
+			if (f.plain.has(said)) return start + k;
+			if (paused && (f.heard.has(said) || f.names.some((n) => soundsLike(said, n)))) return start + k;
+		}
+		const mine = k === 2 && WAKE_MINE.includes(wordsOf$1(span[0]).join(" "));
+		if (wakeSpan(span, w) && (paused || !mine) && wakeAsks(toks.slice(start + k).join(" "))) return start + k;
 	}
 	return null;
 }
 function wakeRest(text, w = current$1) {
 	const at = wakeAt(text, w);
 	if (at === null) return null;
-	return tokensOf(text).slice(at).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+	const toks = tokensOf(text);
+	let rest = toks.slice(at).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+	if (at >= 1 && wordsOf$1(toks[at - 1]).join(" ") === "ive") rest = rest.replace(/^opened\b/i, "open");
+	return rest;
 }
 function isWakePhrase(text, w = current$1) {
 	return !!wakeRest(text, w);
+}
+function mayAsk(after) {
+	if (!after.length || wakeAsks(after.join(" "))) return true;
+	return after.every((x, i) => WAKE_ASK_FILLERS.includes(x) || WAKE_ASK_YOU.includes(x) || x === "you" || i === after.length - 1 && x === "tell");
 }
 function mayBeWake(text, w = current$1) {
 	if (wakeAt(text, w) !== null) return true;
@@ -44175,14 +44289,15 @@ function mayBeWake(text, w = current$1) {
 		...f.names,
 		...heardOf(w, "wake")
 	].map(wordsOf$1);
-	let s = 0;
-	if (WAKE_LEADS.includes(wordsOf$1(toks[0]).join(" "))) s = 1;
+	const s = WAKE_LEADS.includes(wordsOf$1(toks[0]).join(" ")) ? 1 : 0;
 	const rest = toks.slice(s).map((t) => wordsOf$1(t).join(""));
 	if (!rest.length) return false;
-	if (/['’]/.test(toks.slice(s, s + 2).join(""))) return false;
+	const span = toks.slice(s, s + 2);
 	const one = rest[0];
+	if (hasApos(span) && !(span.length === 2 && !hasApos(span.slice(0, 1)) && one === "mindful" && ["ill", "ive"].includes(rest[1]))) return false;
 	if (forms.some((p) => p.join("") === one) || f.names.some((n) => soundsLike(one, n))) return true;
-	if (rest.length < 2) return forms.some((p) => p[0] === one);
+	for (const k of [1, 2]) if (rest.length >= k && wakeSpan(span.slice(0, k), w) && mayAsk(rest.slice(k))) return true;
+	if (rest.length < 2) return forms.some((p) => p[0] === one) || WAKE_FIRST$1.test(one) || WAKE_MY.test(one) || one === "mindful";
 	const two = one + rest[1];
 	return forms.some((p) => p.join("") === two) || f.names.some((n) => soundsLike(two, n));
 }
@@ -46599,7 +46714,7 @@ async function resampleTo(samples, fromRate, toRate) {
 		return resample(samples, fromRate, toRate);
 	}
 }
-var MUTE_HOLD_S$1 = .5;
+var MUTE_HOLD_S = .5;
 function startWavRecording(stream, ctx, opts = {}) {
 	const targetRate = opts.targetRate ?? DEFAULT_TARGET_RATE;
 	const onLevel = opts.onLevel;
@@ -46616,7 +46731,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let muted = false;
 	let held = [];
 	let heldFrames = 0;
-	const hold = Math.round(MUTE_HOLD_S$1 * ctx.sampleRate);
+	const hold = Math.round(MUTE_HOLD_S * ctx.sampleRate);
 	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 	processor.onaudioprocess = (e) => {
 		if (done) return;
@@ -46928,6 +47043,7 @@ var MicKeeper = class {
 	ring = null;
 	cap = null;
 	lostSubs = /* @__PURE__ */ new Set();
+	lead = null;
 	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS }), ringCtx = () => null) {
 		this.keepMs = keepMs;
 		this.open = open;
@@ -47057,6 +47173,20 @@ var MicKeeper = class {
 		const r = this.ring;
 		return r && r.stream === this.live() ? r.floor() : 0;
 	}
+	markLead(soundEnd, now = Date.now()) {
+		this.lead = {
+			from: soundEnd,
+			at: now
+		};
+	}
+	takeLead(now = Date.now()) {
+		const m = this.lead;
+		this.lead = null;
+		if (!m || now - m.at > LEAD_MARK_FRESH_MS) return null;
+		const ms = now - m.from;
+		if (!(ms > 0) || ms > RING_KEEP_MS) return null;
+		return this.preRoll(ms);
+	}
 	onLost(cb) {
 		this.lostSubs.add(cb);
 		return () => {
@@ -47083,6 +47213,8 @@ var MicKeeper = class {
 var PRE_ROLL_MS = 500;
 var PRE_ROLL_ONSET_S = .3;
 var PRE_ROLL_RATE = 16e3;
+var RING_KEEP_MS = 4e3;
+var LEAD_MARK_FRESH_MS = 1e3;
 var RING_BLOCK = 2048;
 function downsample(src, from, to) {
 	if (from === to || !src.length) return src;
@@ -47098,13 +47230,23 @@ function downsample(src, from, to) {
 	}
 	return out;
 }
+function ringFloor(blocks, span) {
+	let min = Infinity;
+	let n = 0;
+	for (let i = blocks.length - 1; i >= 0 && n < span; i--) {
+		min = Math.min(min, blocks[i].rms);
+		n += blocks[i].pcm.length;
+	}
+	return Number.isFinite(min) ? min : 0;
+}
 function startPreRoll(stream, ctx) {
 	try {
 		const src = ctx.createMediaStreamSource(stream);
 		const proc = ctx.createScriptProcessor(RING_BLOCK, 1, 1);
 		const zero = ctx.createGain();
 		zero.gain.value = 0;
-		const keep = Math.round(PRE_ROLL_MS / 1e3 * ctx.sampleRate) + RING_BLOCK;
+		const keep = Math.round(RING_KEEP_MS / 1e3 * ctx.sampleRate) + RING_BLOCK;
+		const quietSpan = Math.round(PRE_ROLL_MS / 1e3 * ctx.sampleRate) + RING_BLOCK;
 		let blocks = [];
 		let frames = 0;
 		let fresh = 0;
@@ -47153,7 +47295,7 @@ function startPreRoll(stream, ctx) {
 				return downsample(out, ctx.sampleRate, rate);
 			},
 			floor() {
-				return blocks.length ? Math.min(...blocks.map((b) => b.rms)) : 0;
+				return ringFloor(blocks, quietSpan);
 			}
 		};
 	} catch {
@@ -47223,7 +47365,8 @@ var MicCapture = class {
 	kept = 0;
 	fresh = 0;
 	stopped = false;
-	keep = Math.round(PRE_ROLL_MS / 1e3 * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
+	keep = Math.round(RING_KEEP_MS / 1e3 * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
+	quietSpan = Math.round(PRE_ROLL_MS / 1e3 * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
 	constructor(stream, ctx, teardown = () => {}) {
 		this.stream = stream;
 		this.ctx = ctx;
@@ -47271,7 +47414,7 @@ var MicCapture = class {
 		return downsample(out, CAPTURE_RATE, rate);
 	}
 	floor() {
-		return this.blocks.length ? Math.min(...this.blocks.map((b) => b.rms)) : 0;
+		return ringFloor(this.blocks, this.quietSpan);
 	}
 	record(opts = {}) {
 		return recordBlocks(this, opts);
@@ -47318,7 +47461,7 @@ function recordBlocks(cap, opts) {
 	let muted = false;
 	let held = [];
 	let heldFrames = 0;
-	const hold = Math.round(MUTE_HOLD_S * rate);
+	const hold = Math.round(CAPTURE_MUTE_HOLD_S * rate);
 	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * rate)) : 0;
 	const wav = (pcm) => pcmWav(downsample(pcm, rate, outRate), outRate);
 	const off = cap.on((b) => {
@@ -47413,7 +47556,7 @@ function recordBlocks(cap, opts) {
 		}
 	};
 }
-var MUTE_HOLD_S = .5;
+var CAPTURE_MUTE_HOLD_S = 1.5;
 var TAKE_MIN_S = .3;
 async function withPreRoll(pre, wav, rate = PRE_ROLL_RATE) {
 	if (!pre?.length) return wav;
@@ -48738,6 +48881,8 @@ function parseRadio(text) {
 function routerWords(text) {
 	return String(text || "").toLowerCase().replace(/[’`]/g, "'").replace(/[^a-z0-9' ]+/g, " ").split(" ").filter(Boolean);
 }
+var NUM_WORDS = new Set("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty thirty forty fifty sixty seventy eighty ninety".split(" "));
+var ORD_WORDS = new Set("first second third fourth fifth sixth seventh eighth ninth tenth".split(" "));
 var NUMS = [
 	"one",
 	"two",
@@ -48767,139 +48912,379 @@ var NUMS = [
 	"8",
 	"9"
 ].join("|");
-var COMMANDS = [
+var isNumWord = (w) => NUM_WORDS.has(w) || /^[1-9][0-9]?$/.test(w);
+var isOrdWord = (w) => ORD_WORDS.has(w) || /^[1-9][0-9]?(?:st|nd|rd|th)$/.test(w);
+var SESSION_HOMOPHONES = [
+	"won",
+	"to",
+	"too",
+	"free",
+	"tree",
+	"for",
+	"fore",
+	"ate"
+];
+var VOCAB = {
+	SCROLL: new Set("up down it this that the output screen terminal session window pane text page log logs conversation back by a bit little touch slightly tad half line lines pages screens times twice couple of few way lot lots some further more to top bottom end beginning latest newest very all again right".split(" ")),
+	PAGE: new Set("times twice".split(" ")),
+	BIT: new Set("a bit little".split(" ")),
+	BACK: new Set("again to the last previous other one session window where i was".split(" ")),
+	SAY: new Set("to you here".split(" ")),
+	READ: new Set("me it out that the its it's last reply answer message question again what said".split(" ")),
+	ANSWER: new Set("yes yeah yep yup sure ok okay approve approved allow allowed go ahead do it that this all no nope deny denied reject don't dont not skip cancel stop always and ask me again never thanks thank you please".split(" "))
+};
+function gateSlot(s) {
+	if (s === "*") return { any: Infinity };
+	if (s === "*?") return {
+		any: Infinity,
+		opt: true
+	};
+	if (/^\*\d+$/.test(s)) return { any: Number(s.slice(1)) };
+	if (/^~\d+$/.test(s)) return {
+		any: Number(s.slice(1)),
+		grow: true
+	};
+	if (s.startsWith("+")) return { vocab: new Set([...VOCAB[s.slice(1)]].map(wordKey)) };
+	const opt = s.endsWith("?");
+	return {
+		alts: new Set((opt ? s.slice(0, -1) : s).split("|").map(wordKey)),
+		opt
+	};
+}
+var gatePattern = (p) => {
+	const whole = p.startsWith("!");
+	return {
+		slots: (whole ? p.slice(1) : p).split(" ").map(gateSlot),
+		whole
+	};
+};
+var S = "switch|switched|twitch|go|change|jump|hop|focus|open|show|select";
+var YES_NO = "yes|yeah|yep|yup|sure|ok|okay|allow|approve|no|nope|deny|reject|always";
+var ENDS$1 = "top|bottom|end|beginning|latest|newest";
+var NAMED = "the|my? *3 session|one?";
+var GATE = [
 	"cancel",
 	"never mind",
 	"nevermind",
-	"scratch that",
+	"never mine",
 	"forget it",
-	"switch|go|change|jump to *",
-	"switch|go|change|jump over to *",
-	"what|which sessions do i have",
-	"what|which sessions are up|open|running",
-	"list sessions *",
-	"list the|my sessions",
-	"what's|whats up|open|running",
-	"what is up|open|running",
-	"what|who needs me|attention",
-	"what|who needs my attention",
-	"what's|whats it doing",
-	"what is it doing",
-	"status",
-	"what's|whats happening",
+	`${S} me? over? to *`,
+	"take|bring|get me over? to *",
+	"put|get me on|onto|in *",
+	`open up? ${NAMED}`,
+	`show me? ${NAMED}`,
+	`focus on? ${NAMED}`,
+	`select ${NAMED}`,
+	`pull|bring up ${NAMED}`,
+	`talk to ${NAMED}`,
+	`let me see ${NAMED}`,
+	`go? back to ${NAMED}`,
+	"bring|pull|call ~2 up",
+	"switch|switched the *2",
+	`session|window|row number? #|${SESSION_HOMOPHONES.join("|")} #? +ANSWER`,
+	"number # #?",
+	"the? #o session|window|row|one|option|choice",
+	"option|choice #",
+	"#|#o",
+	"the? next|previous|prev session|one|window|page?",
+	"go|switch|jump|flip|hop|change back +BACK",
+	"take|bring me back +BACK",
+	"back +BACK",
+	"the? last|other session|window|one",
+	"the one before that|this?",
+	"where am|are i|we",
+	"which|what session is|am|are this|that|it|open|i|we in|on?",
+	"what's|whats this|the current? session called?",
+	"what is this|the current? session called?",
+	"which one am|is i|this|that in|on?",
+	"what am i looking at",
+	"what can|do i say +SAY",
+	"what voice? commands *4",
+	"what are the|my voice? commands",
+	"list|show|tell|read|give me? all? the|my? voice? commands",
+	"voice? help|commands|command",
+	"what|who needs|need me|attention",
+	"what|who needs|need my attention",
+	"what|which|with sessions do i have",
+	"what|which|with sessions are up|open|running",
+	"list the|my? sessions",
+	"what's|whats up|open|running|happening",
+	"what is up|open|running|happening",
 	"what's|whats going on",
-	"summarize|summarise",
-	"summarize|summarise that|it",
-	"what did it say",
+	"what is going on",
+	"status",
+	"what's|whats ~2 doing|up|working to|on?",
+	"what is ~2 doing|up|working to|on?",
+	"how's|hows ~2 doing|going|getting|coming on|along?",
+	"how is ~2 doing|going|getting|coming on|along?",
+	"what did ~2 just? say|reply|answer|write last?",
+	"what was the|its|it's last? reply|answer|message",
+	"what was the last thing it|they said",
+	"read +READ",
+	"what's|whats ~2 asking me? for|about?",
+	"what is ~2 asking me? for|about?",
+	"what does ~2 want me? to? do?",
+	"what's|whats the question",
+	"what is the question",
+	"summarize|summarise|summerize|summerise that|it?",
 	"summary",
-	"say that again",
-	"repeat",
-	"repeat that",
+	"say|save that again",
+	"repeat that?",
 	"voice off",
 	"turn voice off",
 	"turn off voice",
-	"stop listening|recording",
+	"stop listening|recording|dictating",
+	"stop the mic|microphone",
 	"stop",
 	"mic|microphone off",
 	"turn mic|microphone off",
+	"turn off the mic|microphone",
+	"turn the mic|microphone off",
 	"stop talking|speaking|reading",
+	"stop saying that",
 	"be quiet",
 	"quiet",
 	"shut up",
 	"hush",
 	"enough",
+	"enough talking",
+	"enough of that",
 	"that's|thats enough",
+	"that is enough",
 	"that's|thats all",
 	"that is all",
-	"focus|open|show|select *",
-	"next|previous session|one",
-	`session|number|row ${NUMS} *`,
-	"yes|yeah|yep|yup|sure|ok|okay|allow|approve|no|nope|deny|reject|always",
-	"yes|yeah always",
-	"always allow *",
-	"don't|dont ask again",
-	"do not ask again",
-	"go ahead",
-	"do it",
-	`option|choice ${NUMS}`,
-	NUMS,
-	`the ${NUMS} one`,
-	"answer|tell|reply *",
-	"what is|what's|whats it asking",
-	"what's|whats|what is the question",
-	"what does it want",
-	"new session *",
-	"a|another new session *",
-	"start|open|create|make new session *",
-	"start|open|create|make a|another new session *",
-	"spin up new session *",
-	"spin up a|another new session *",
-	"scroll *",
-	"page up|down *",
-	"go|jump|back to the top|bottom *",
-	"top|bottom",
+	"done talking",
+	"i'm|im done talking",
+	"i am done talking",
+	"pause listening",
+	"scroll|roll|growl|crawl +SCROLL",
+	"page up|down # +PAGE",
+	"page up|down +PAGE",
+	"half page up|down",
+	"go|move up|down +BIT",
 	"up|down",
-	"to the top|bottom",
-	"more",
-	"keep going",
-	"some more",
-	"further",
-	"interrupt *",
-	"escape",
-	"press|hit escape *",
-	"stop it",
-	"stop that",
-	"go|switch|jump|flip|change back *",
-	"back",
-	"last session|one",
-	"the other one",
-	"previous",
-	"where am i *",
-	"which|what session is this|that",
-	"which|what session am i in|on",
-	"what am i looking at",
-	"what can i say *",
-	"commands",
-	"voice commands",
-	"show|list|read the|my commands *",
-	"what are the commands *",
-	"what commands *",
-	"help"
-].map((p) => p.split(" ").map((slot) => slot.split("|")));
+	"top|bottom",
+	"the very? top|bottom",
+	"to the very? top|bottom",
+	"all the way up|down",
+	"all the way to the very? top|bottom",
+	`skip to the? very? ${ENDS$1}`,
+	"more|further|again",
+	"a bit|little|touch bit? more|further",
+	"some more|further",
+	"keep going|scrolling",
+	"keep on scrolling",
+	"once more",
+	"one more time",
+	"interrupt|interrupts",
+	"interrupt|interrupts *",
+	"press|hit the|an? escape|esc key?",
+	"escape|esc key?",
+	"stop it|that|this",
+	`${YES_NO}|allowed|approved|denied|don't|dont|do|go|skip|never|thanks|thank +ANSWER`,
+	`!*2 ${YES_NO} +ANSWER`,
+	`${YES_NO} to *3`,
+	"tell|answer|reply *",
+	"a|another? new session|agent *?",
+	"another session|agent *?",
+	"start|open|create|make|launch a|another? new? session|agent *?",
+	"spin|fire|set up a|another? new? session|agent *?",
+	"kick off a|another? new? session|agent *?",
+	"give me a|another? new? session|agent *?",
+	"i want|need a|another? new? session|agent *?",
+	"i'd like a|another? new? session|agent *?",
+	"spin one up",
+	"spin another one? up",
+	"spin a new one up",
+	"spin up a new one",
+	"spin up another one"
+].map(gatePattern);
+var FILLERS = [
+	"um",
+	"umm",
+	"uh",
+	"uhh",
+	"uhm",
+	"er",
+	"erm",
+	"hmm",
+	"mm",
+	"mmm",
+	"ah",
+	"oh",
+	"so",
+	"alright",
+	"all right",
+	"right",
+	"well",
+	"and",
+	"now",
+	"then",
+	"actually",
+	"anyway",
+	"just",
+	"please",
+	"ok",
+	"okay",
+	"hey",
+	"can you",
+	"could you",
+	"would you",
+	"will you",
+	"go ahead and",
+	"i want to",
+	"i'd like to",
+	"i would like to",
+	"i wanna",
+	"i need to",
+	"let's",
+	"lets"
+].map((f) => f.split(" ").map(wordKey));
+var TAILS = [
+	"please",
+	"now",
+	"thanks"
+];
+function gateWords(text) {
+	return routerWords(text).filter((x, i, a) => i === 0 || x !== a[i - 1]).map(wordKey);
+}
+var fillerAt = (w, i) => {
+	for (const f of FILLERS) if (f.every((x, k) => w[i + k] === x)) return f.length;
+	return 0;
+};
+function stripFillers(w) {
+	let i = 0;
+	for (let n = fillerAt(w, i); n && i < w.length; n = fillerAt(w, i)) i += n;
+	let words = w.slice(i);
+	const partial = words.length > 0 && FILLERS.some((f) => f.length > words.length && words.every((x, k) => f[k] === x));
+	while (words.length > 1 && TAILS.includes(words[words.length - 1])) words = words.slice(0, -1);
+	if (words.length > 2 && words[words.length - 2] === "for" && words[words.length - 1] === "me") words = words.slice(0, -2);
+	return {
+		words,
+		partial
+	};
+}
+function slotHas(s, w) {
+	return s.alts.has(w) || s.alts.has("#") && isNumWord(w) || s.alts.has("#o") && isOrdWord(w);
+}
+function fits(w, p, whole, i = 0, j = 0) {
+	if (i === w.length) {
+		if (!whole) return true;
+		return p.slice(j).every((s) => "vocab" in s || !!s.opt);
+	}
+	if (j === p.length) return false;
+	const s = p[j];
+	if ("vocab" in s) return w.slice(i).every((x) => s.vocab.has(x));
+	if ("any" in s) {
+		if (s.opt && fits(w, p, whole, i, j + 1)) return true;
+		const most = Math.min(whole && s.grow ? Infinity : s.any, w.length - i);
+		for (let n = 1; n <= most; n++) if (fits(w, p, whole, i + n, j + 1)) return true;
+		return false;
+	}
+	if (s.opt && fits(w, p, whole, i, j + 1)) return true;
+	return slotHas(s, w[i]) && fits(w, p, whole, i + 1, j + 1);
+}
+var wordPatterns = /* @__PURE__ */ new WeakMap();
+function personPatterns() {
+	const M = matchers();
+	let got = wordPatterns.get(M);
+	if (!got) {
+		got = M.commands.map((p) => ({ slots: p.map((alts) => ({ alts: new Set(alts.map(wordKey)) })) }));
+		wordPatterns.set(M, got);
+	}
+	return got;
+}
+function mayBeCommand(text, whole = false) {
+	const raw = gateWords(text);
+	if (!raw.length) return true;
+	const { words, partial } = stripFillers(raw);
+	if (!whole && (partial || !words.length)) return true;
+	const tries = words.length && words.length !== raw.length ? [raw, words] : [raw];
+	const all = GATE.concat(personPatterns());
+	return tries.some((w) => all.some((p) => (whole || !p.whole) && fits(w, p.slots, whole)));
+}
+function mayStartSession(text) {
+	const w = stripFillers(gateWords(text)).words.join(" ");
+	return /\b(?:new|another) (?:session|agent)\b|\bspin\b|^(?:start|open|create|make|launch|give me|i want|i need) a session\b/.test(w);
+}
+function isSwitchCommand(text) {
+	let w = routerWords(text);
+	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
+	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+	if (isFastCommand(w.join(" "))) return true;
+	if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
+		const at = w[1] === "over" ? 2 : 1;
+		return w[at] === "to" && w.length > at + 1;
+	}
+	return /^(?:focus|select)$/.test(w[0] || "") && w.length > 1;
+}
 var ROUTER_LEADS = /* @__PURE__ */ new Set([
 	"ok",
 	"okay",
 	"hey",
 	"please"
 ]);
-function mayBeCommand(text) {
-	let w = routerWords(text).filter((x, i, a) => i === 0 || x !== a[i - 1]);
-	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
-	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
-	if (!w.length) return true;
-	const keys = w.map(wordKey);
-	return COMMANDS.concat(matchers().commands).some((p) => {
-		for (let i = 0; i < w.length; i++) {
-			if (i >= p.length) return false;
-			if (p[i][0] === "*") return true;
-			if (!p[i].includes(w[i]) && !p[i].includes(keys[i])) return false;
-		}
-		return true;
-	});
-}
-function isSwitchCommand(text) {
+var FAST_NUM = "[1-9][0-9]?|" + [...NUM_WORDS, ...ORD_WORDS].join("|");
+function isFastCommand(text) {
 	let w = routerWords(text);
 	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
 	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
 	const all = w.join(" ");
 	if (/^(?:scroll (?:up|down)(?: a bit| more)?|page (?:up|down)|scroll to the (?:top|bottom)|switch back)$/.test(all)) return true;
-	if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
-		const at = w[1] === "over" ? 2 : 1;
-		return w[at] === "to" && w.length > at + 1;
-	}
-	if (/^(?:focus|select)$/.test(w[0] || "")) return w.length > 1;
-	if (/^(?:next|previous)$/.test(w[0] || "")) return w.length === 2 && /^(?:session|one)$/.test(w[1]);
-	return w.length >= 2 && /^(?:session|number|row)$/.test(w[0]) && new RegExp("^(?:" + NUMS + ")$").test(w[1]);
+	if (/^(?:next|previous) (?:session|one)$/.test(all)) return true;
+	if (/^(?:focus|select) (?:[1-9][0-9]?|one|two|three|four|five|six|seven|eight|nine)$/.test(all)) return true;
+	return new RegExp("^(?:session|number|row)(?: number)? (?:" + FAST_NUM + ")(?: (?:" + FAST_NUM + "))?$").test(all);
+}
+var WAKE_FIRST = /* @__PURE__ */ new Set([
+	"my",
+	"mine",
+	"mind",
+	"min",
+	"mi",
+	"me",
+	"mai",
+	"line",
+	"mime"
+]);
+var FLOCKISH = /* @__PURE__ */ new Set([
+	"flock",
+	"flocks",
+	"flog",
+	"flak",
+	"fluck",
+	"flunk",
+	"lock",
+	"luck",
+	"block",
+	"clock",
+	"fock",
+	"flop"
+]);
+var WAKE_LEAD_WORDS = /* @__PURE__ */ new Set([
+	"hey",
+	"ok",
+	"okay",
+	"please",
+	"ask"
+]);
+function mayAddress(text) {
+	if (mayBeWake(text)) return true;
+	let w = routerWords(text).map(wordKey);
+	if (w.length > 1 && WAKE_LEAD_WORDS.has(w[0])) w = w.slice(1);
+	if (!w.length) return false;
+	if (/^min[det]/.test(w[0]) && w[0].length > 4) return true;
+	if (!WAKE_FIRST.has(w[0])) return false;
+	return w.length === 1 || FLOCKISH.has(w[1]);
+}
+var ASSIST_LEADS = new Set("open show close hide turn toggle enable disable tell ask what whats which who how hows where is are".split(" "));
+function addressedRoute(text, wake = wakeName()) {
+	const said = String(text || "").trim();
+	const { words } = stripFillers(gateWords(said));
+	if (!words.length) return null;
+	if (wakeAt(said) !== null) return said;
+	if (mayBeCommand(said, true) && !/^(?:open|show)$/.test(words[0])) return said;
+	if (ASSIST_LEADS.has(words[0])) return wake + ", " + said;
+	return null;
 }
 var bareWord = (w) => w.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}']+/gu, "");
 var RADIO_TAILS = [
@@ -49223,6 +49608,10 @@ function undoLine(o) {
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
+var NOTE_CAPTION_MS = 3e3;
+var ADDRESSED_MS = 6e3;
+var ADDRESSED_LINE = "Yes? — say the command";
+var WAKE_MISS_LINE = "Didn't catch anything";
 var MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 function micPill(s) {
 	if (s.quiet) return HUSH_LINE;
@@ -49335,6 +49724,14 @@ var Dictation = class {
 	answering = false;
 	phraseAt = -1;
 	marks = [];
+	addressedUntil = 0;
+	phraseAddressed = false;
+	address(ms) {
+		this.addressedUntil = Date.now() + ms;
+	}
+	get addressed() {
+		return this.phraseAt >= 0 ? this.phraseAddressed : Date.now() < this.addressedUntil;
+	}
 	begin() {
 		this.listening = true;
 		this.typed = "";
@@ -49361,7 +49758,7 @@ var Dictation = class {
 			kind: r,
 			text: all
 		};
-		if (this.routes && !this.before && isSwitchCommand(all)) return {
+		if (this.routes && !this.before && isFastCommand(all)) return {
 			kind: "route",
 			text: all
 		};
@@ -49549,9 +49946,12 @@ var Dictation = class {
 		};
 	}
 	guess() {
-		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
+		if (this.phraseAt < 0) {
+			this.phraseAddressed = Date.now() < this.addressedUntil;
+			this.phraseAt = this.typed.length;
+		}
 		const hb = holdBack(joinWords(this.held, this.partial));
-		const want = this.mayRoute(hb.type) ? "" : hb.type;
+		const want = this.mayRoute(hb.type, false) ? "" : hb.type;
 		const fix = retype(this.guessed, want);
 		if (!fix.erase && !fix.type) return { kind: "continue" };
 		return withErase({
@@ -49563,19 +49963,27 @@ var Dictation = class {
 	}
 	settle(text) {
 		const guessed = this.guessed;
-		const whole = this.mayRoute(text);
+		const addressed = this.addressed && !!text.trim();
+		const whole = this.mayRoute(text, true);
 		if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
 		this.phraseAt = -1;
 		this.held = "";
 		this.partial = "";
+		if (text.trim()) {
+			this.phraseAddressed = false;
+			if (addressed) this.addressedUntil = 0;
+		}
 		const fix = whole ? {
 			erase: guessed,
 			type: text
 		} : retype(guessed, text);
-		return withErase({ text: fix.type }, fix.erase);
+		return withErase(addressed ? {
+			text: fix.type,
+			addressed
+		} : { text: fix.type }, fix.erase);
 	}
-	mayRoute(text) {
-		return this.routes && (!this.before && mayBeCommand(text) || mayBeWake(text));
+	mayRoute(text, whole) {
+		return this.routes && (!this.before && mayBeCommand(text, whole) || mayAddress(text) || this.addressed);
 	}
 	control(all, whole) {
 		if (whole && isHushPhrase(all)) return withErase({ kind: "hush" }, this.settle("").erase || "");
@@ -49861,6 +50269,9 @@ var LiveDictation = class {
 	unsent = "";
 	unwatch = null;
 	sending = false;
+	note = "";
+	noteUntil = 0;
+	noteTimer;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -49869,6 +50280,9 @@ var LiveDictation = class {
 		this.dict.routes = target?.kind !== "field";
 		this.dict.continuous = !!opts.continuous;
 		this.watch(target);
+	}
+	address(ms = ADDRESSED_MS) {
+		if (!this.done && this.dict.routes) this.dict.address(ms);
 	}
 	streamContext() {
 		if (this.done) return {
@@ -50106,11 +50520,19 @@ var LiveDictation = class {
 		const kept = this.dict.typed.trim() && this.target?.kind === "session";
 		this.end(kept ? line + " — the words so far stay in the field" : line, true, "stopped");
 	}
-	drop() {
-		this.end("", false, "missed");
+	drop(line = "") {
+		this.end(line, false, "missed");
 	}
 	show() {
 		if (this.done) return;
+		const noteLeft = this.noteUntil - Date.now();
+		if (this.note && noteLeft > 0) {
+			this.hooks.caption(this.note, true);
+			clearTimeout(this.noteTimer);
+			this.noteTimer = setTimeout(() => this.show(), noteLeft);
+			return;
+		}
+		this.note = "";
 		if (this.dict.shown || this.dict.partial) {
 			this.hooks.caption(this.dict.shown, true, this.dict.partial);
 			return;
@@ -50143,6 +50565,7 @@ var LiveDictation = class {
 		clearTimeout(this.sendWait);
 		this.sendNow = null;
 		clearTimeout(this.swallowing);
+		clearTimeout(this.noteTimer);
 		clearInterval(this.early?.timer);
 		this.early = null;
 		this.dict.listening = false;
@@ -50170,7 +50593,10 @@ var LiveDictation = class {
 				this.end("");
 				return;
 			case "type":
-				if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
+				if (await this.put(out.text, out.route !== false, out.erase, out.guess, {
+					phrase: true,
+					addressed: !!out.addressed
+				})) this.show();
 				return;
 			case "erase":
 				if (out.text && t && this.dialogBlocks(t)) {
@@ -50309,7 +50735,7 @@ var LiveDictation = class {
 		this.hooks.caption(HUSH_LINE, true);
 		setTimeout(() => this.show(), HUSH_CAPTION_MS);
 	}
-	async put(text, route = true, erase = "", guess = false) {
+	async put(text, route = true, erase = "", guess = false, o = {}) {
 		const t = this.target;
 		if (guess) {
 			if (!t) return true;
@@ -50319,7 +50745,27 @@ var LiveDictation = class {
 			}
 			return this.keys(t, erase, text);
 		}
-		if (route && t?.kind !== "field" && this.dict.routes && this.dict.typed.length > erase.length && isWakePhrase(text)) {
+		const toRouter = route && t?.kind !== "field" && this.dict.routes;
+		if (toRouter && o.phrase && this.dict.listening && wakeRest(text) === "") {
+			if (erase && t && !this.keys(t, erase, "")) return false;
+			this.dict.address(ADDRESSED_MS);
+			voiceTrace("wake", {
+				phrase: text.trim(),
+				alone: true,
+				typed: this.dict.typed.length
+			});
+			this.hooks.caption(ADDRESSED_LINE, true);
+			return false;
+		}
+		if (toRouter && o.addressed) {
+			const said = addressedRoute(text);
+			if (said !== null) {
+				const r = await this.wakeCommand(t, said, erase);
+				if (r !== null) return r;
+				erase = "";
+				route = false;
+			}
+		} else if (toRouter && this.dict.typed.length > erase.length && isWakePhrase(text)) {
 			const wake = await this.wakeCommand(t, text, erase);
 			if (wake !== null) return wake;
 			erase = "";
@@ -50331,7 +50777,7 @@ var LiveDictation = class {
 			if (!text) return true;
 			const words = text.trim();
 			if (route) this.hooks.caption(this.dict.shown, true, words);
-			const routed = route ? await this.hooks.route(words, this.stepSpoke) : false;
+			const routed = this.verdict(route ? await this.hooks.route(words, this.stepSpoke) : false);
 			if (routed === "hush") {
 				this.hushed();
 				return false;
@@ -50362,7 +50808,7 @@ var LiveDictation = class {
 		if (erase && t && !this.keys(t, erase, "")) return false;
 		const words = text.trim();
 		this.hooks.caption(this.dict.shown, true, words);
-		const routed = await this.hooks.route(words, this.stepSpoke);
+		const routed = this.verdict(await this.hooks.route(words, this.stepSpoke));
 		voiceTrace("wake", {
 			phrase: words,
 			routed,
@@ -50375,10 +50821,23 @@ var LiveDictation = class {
 		if (routed) {
 			this.acted = true;
 			if (routed === "end") this.end(null);
-			else this.show();
+			else if (!this.dict.typed) {
+				if (this.dict.continuous) this.next(null);
+				else this.end(null);
+			} else this.show();
 			return false;
 		}
 		return this.done ? false : null;
+	}
+	verdict(v) {
+		if (v && typeof v === "object") {
+			if (v.note) {
+				this.note = v.note;
+				this.noteUntil = Date.now() + NOTE_CAPTION_MS;
+			}
+			return false;
+		}
+		return v;
 	}
 	dialogBlocks(t) {
 		if (t.kind !== "session") return false;
@@ -50430,6 +50889,23 @@ var LiveDictation = class {
 		return true;
 	}
 };
+function routeMissLine(r) {
+	if (r.kind !== "prompt") return "";
+	if (r.failed === "timeout") return "Typed — the voice router didn't answer in time";
+	if (r.failed) return "Typed — couldn't reach the voice router";
+	if (typeof r.unknown === "string") return "Typed — this page doesn't know “" + (r.unknown || "?") + "” yet (reload it)";
+	const n = r.near && typeof r.near === "object" ? r.near : null;
+	if (!n) return "";
+	const str = (v) => typeof v === "string" ? v.trim() : "";
+	if (n.why === "no_dialog") return "Typed — nothing is being asked";
+	if (n.why === "no_focus") return "Typed — no session is focused";
+	if (n.why === "no_session") {
+		const arg = str(n.arg);
+		const suggest = str(n.suggest);
+		return (arg ? "Typed — no session called " + arg : "Typed — no such session") + (suggest ? " (did you mean " + suggest + "?)" : "");
+	}
+	return "";
+}
 var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"prompt",
 	"switch",
@@ -50567,7 +51043,11 @@ async function recheckDialog(title, fetch, seen = dialogSeen, waitMs = DIALOG_RE
 	}
 }
 var earlyLine = (name) => name + " asked just now: say your answer again";
-async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen, heard) {
+var ROUTE_TIMEOUT_MS = 2e3;
+var ROUTE_NEW_TIMEOUT_MS = 15e3;
+async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen, heard, timeoutMs) {
+	const ms = timeoutMs ?? (mayStartSession(text) ? ROUTE_NEW_TIMEOUT_MS : ROUTE_TIMEOUT_MS);
+	let failed = "error";
 	try {
 		const json = {
 			text,
@@ -50582,11 +51062,115 @@ async function routePhrase(text, session, pending = routePending, spokeAt, seen 
 		}
 		const had = seen.body();
 		if (Object.keys(had).length) json.dialog_seen = had;
-		const r = await api("/api/voice/route", { json });
-		if (r && typeof r === "object") pending.keep(r);
-		if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
+		let timer;
+		const late = new Promise((resolve) => {
+			timer = setTimeout(() => {
+				failed = "timeout";
+				resolve(null);
+			}, ms);
+		});
+		const r = await Promise.race([api("/api/voice/route", { json }), late]).finally(() => clearTimeout(timer));
+		if (r && typeof r === "object") {
+			pending.keep(r);
+			if (ROUTE_KINDS.has(String(r.kind))) return r;
+			return {
+				kind: "prompt",
+				unknown: String(r.kind ?? "")
+			};
+		}
 	} catch {}
-	return { kind: "prompt" };
+	const local = localRoute(text);
+	return local ? {
+		...local,
+		failed
+	} : {
+		kind: "prompt",
+		failed
+	};
+}
+function spokenCount(words, homophones) {
+	const units = [
+		"one",
+		"two",
+		"three",
+		"four",
+		"five",
+		"six",
+		"seven",
+		"eight",
+		"nine"
+	];
+	const teens = [
+		"ten",
+		"eleven",
+		"twelve",
+		"thirteen",
+		"fourteen",
+		"fifteen",
+		"sixteen",
+		"seventeen",
+		"eighteen",
+		"nineteen"
+	];
+	const tens = [
+		"twenty",
+		"thirty",
+		"forty",
+		"fifty",
+		"sixty",
+		"seventy",
+		"eighty",
+		"ninety"
+	];
+	const homo = {
+		won: 1,
+		to: 2,
+		too: 2,
+		free: 3,
+		tree: 3,
+		for: 4,
+		fore: 4,
+		ate: 8
+	};
+	const [a, b] = words;
+	if (words.length === 1) {
+		if (/^[1-9][0-9]?$/.test(a)) return Number(a);
+		if (units.includes(a)) return units.indexOf(a) + 1;
+		if (teens.includes(a)) return teens.indexOf(a) + 10;
+		if (tens.includes(a)) return (tens.indexOf(a) + 2) * 10;
+		if (homophones && a in homo) return homo[a];
+		return null;
+	}
+	if (words.length === 2 && tens.includes(a) && units.includes(b)) return (tens.indexOf(a) + 2) * 10 + units.indexOf(b) + 1;
+	return null;
+}
+function localRoute(text) {
+	const said = String(text || "").trim();
+	if (!said) return null;
+	if (isHushPhrase(said)) return { kind: "hush" };
+	if (stopTail(said) === "") return { kind: "stop" };
+	const all = stripFillers(gateWords(said)).words.join(" ");
+	if (!all) return null;
+	if (all === "stop") return { kind: "stop" };
+	if (/^(?:cancel|never ?mind|forget it)$/.test(all)) return { kind: "cancel" };
+	if (/^(?:repeat(?: that)?|say that again)$/.test(all)) return { kind: "repeat" };
+	let m = /^(?:(?:switch|go|change|jump|focus) (?:over )?to )?(?:the )?(next|previous|prev) (?:session|one|window)$|^(next|previous)$/.exec(all);
+	if (m) return {
+		kind: "switch_rel",
+		delta: (m[1] || m[2]) === "next" ? 1 : -1
+	};
+	m = /^(?:(?:switch|go|change|jump|focus) (?:over )?to )?(?:(session|window|row)(?: number)?|number) (.+)$/.exec(all);
+	if (m) {
+		const n = spokenCount(m[2].split(" "), !!m[1]);
+		if (n) return {
+			kind: "switch_index",
+			index: n
+		};
+	}
+	if (/^(?:(?:go|switch|jump|flip|hop|change) back|take me back|back|the other one|the one before)$/.test(all)) return { kind: "switch_back" };
+	if (/^(?:where am i|where are we|(?:which|what) session (?:is this|am i (?:in|on))|which one am i (?:in|on)|what am i looking at)$/.test(all)) return { kind: "where" };
+	if (/^(?:what can i say|what do i say|voice commands|commands|help|voice help|list commands)$/.test(all)) return { kind: "commands" };
+	return null;
 }
 var isWindowRow = (key) => key.startsWith("\0");
 function railRow(order, n) {
@@ -50651,7 +51235,7 @@ function builtinCommands(w = voiceWords()) {
 			group: dict
 		},
 		{
-			say: "switch to <name>",
+			say: "switch to <name> / take me to <name>",
 			does: "Focus a session by name",
 			group: "Sessions"
 		},
@@ -50673,6 +51257,16 @@ function builtinCommands(w = voiceWords()) {
 		{
 			say: "where am I",
 			does: "Says the focused session's name",
+			group: "Sessions"
+		},
+		{
+			say: "what needs me",
+			does: "The sessions waiting on you",
+			group: "Sessions"
+		},
+		{
+			say: "what's <name> doing",
+			does: "What a session is up to",
 			group: "Sessions"
 		},
 		{
@@ -50708,6 +51302,11 @@ function builtinCommands(w = voiceWords()) {
 		{
 			say: "yes / no / option 2",
 			does: "Answer the dialog on screen",
+			group: "Agent"
+		},
+		{
+			say: wakeName(w) + ", <request>",
+			does: "Ask MindFlock itself: open settings, what needs me…",
 			group: "Agent"
 		},
 		{
@@ -52024,6 +52623,48 @@ var BARGE_REWIND_MS = 270;
 var MIC_LOST_LINE = "The microphone went away — listening on the default one";
 var MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
 var MIC_LOST_RETRY_MS = 3e3;
+var STREAM_OPEN_RETRY_MS = 300;
+var STREAM_OPEN_RETRIES = 5;
+var streamFull = (error) => /already open|end one first/i.test(String(error || ""));
+var LEAD_IN_MS = 300;
+var ONSET_RUN = 2;
+var FLOOR_RELEARN_MS = 5e3;
+var PhraseLevel = class {
+	floor;
+	run = 0;
+	best = 0;
+	speechMs = 0;
+	constructor(floor = 0) {
+		this.floor = floor;
+	}
+	feed(rms, blockMs, o = {}) {
+		if (o.speech) this.speechMs += Math.max(0, blockMs);
+		const learn = !o.hush && (!o.speech || this.speechMs > FLOOR_RELEARN_MS);
+		this.floor = learn || this.floor === 0 ? noiseFloor(this.floor, rms) : Math.min(this.floor, rms);
+		const loud = !o.hush && isLoud(rms, this.floor);
+		this.run = loud ? this.run + 1 : 0;
+		this.best = Math.max(this.best, this.run);
+		return loud;
+	}
+};
+function leadSpeech(pcm, rate, floor = 0) {
+	const n = Math.max(1, Math.round(rate * .085));
+	const lv = new PhraseLevel(floor);
+	let start = -1;
+	let end = -1;
+	let runAt = 0;
+	for (let at = 0; at + n / 2 <= pcm.length; at += n) {
+		const b = pcm.subarray(at, Math.min(pcm.length, at + n));
+		if (!lv.feed(rmsOf(b), b.length / rate * 1e3, { speech: start >= 0 })) continue;
+		if (lv.run === 1) runAt = at;
+		if (start < 0 && lv.run >= ONSET_RUN) start = runAt;
+		if (start >= 0) end = at + b.length;
+	}
+	return start < 0 ? null : {
+		startS: start / rate,
+		endS: end / rate
+	};
+}
 var BargeDetector = class {
 	bleed = 0;
 	loud = false;
@@ -52076,14 +52717,20 @@ function serverRecognizer(opts = {}) {
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
 	let firstSkipMs = 0;
+	let hushUntil = 0;
+	let firstHushMs = 0;
 	const skipFromNow = () => {
 		if (firstSkipMs) skipUntil = Math.max(skipUntil, Date.now() + firstSkipMs);
+		if (firstHushMs) hushUntil = Math.max(hushUntil, Date.now() + firstHushMs);
 	};
+	let wakeLead = null;
 	let muted = false;
 	const barge = new BargeDetector();
 	let bargeTimer;
 	let bargeTap = null;
 	let lastBargeAt = 0;
+	let bargeFrom = 0;
+	let loudOver = 0;
 	let lostAt = 0;
 	let micStream = null;
 	let micCtx = null;
@@ -52112,8 +52759,11 @@ function serverRecognizer(opts = {}) {
 			const t = bargeTap;
 			if (!t || !muted || !h) return;
 			t.an.getFloatTimeDomainData(t.buf);
-			if (!barge.block(rmsOf(t.buf))) return;
+			const hit = barge.block(rmsOf(t.buf));
+			if (bargeFrom && barge.loud) loudOver = Date.now();
+			if (!hit) return;
 			lastBargeAt = Date.now();
+			if (!bargeFrom) bargeFrom = loudOver = lastBargeAt;
 			h.onBarge?.();
 		}, BARGE_POLL_MS);
 	};
@@ -52252,11 +52902,17 @@ function serverRecognizer(opts = {}) {
 				} catch {
 					ctx = null;
 				}
-				const r = await call("/api/voice/stream", {
+				const ask = () => call("/api/voice/stream", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(streamOpenBody(langTag$1(), VOICE_CLIENT_ID, ctx))
 				});
+				let r = await ask();
+				for (let n = 0; r.status === 409 && streamFull(r.j.error) && n < STREAM_OPEN_RETRIES; n++) {
+					await new Promise((res) => setTimeout(res, STREAM_OPEN_RETRY_MS));
+					if (h !== hh || !c.stream) return;
+					r = await ask();
+				}
 				const id = String(r.j.id || "");
 				if (h !== hh || !c.stream) {
 					if (r.ok && id) apiRaw(streamPath(id, ""), { method: "DELETE" }).catch(() => {});
@@ -52268,6 +52924,15 @@ function serverRecognizer(opts = {}) {
 					open.add(id);
 					voiceMark("stream");
 					if (r.j.loading === true) setLoading(true);
+				} else if (r.status === 409 && streamFull(r.j.error)) {
+					self.lastError = String(r.j.error);
+					c.stream = false;
+					if (cur === c) {
+						clearTimeout(capTimer);
+						capTimer = setTimeout(() => {
+							if (cur === c) endClip();
+						}, CLIP_MAX_MS);
+					}
 				} else if (r.status === 409) {
 					self.lastError = String(r.j.error || "the server can't stream");
 					fallBack(c, "");
@@ -52314,7 +52979,7 @@ function serverRecognizer(opts = {}) {
 	};
 	const pump = (c) => {
 		if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
-		const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+		const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS + FIRST_CHUNK_S);
 		const takenAt = Date.now();
 		const blob = c.rec.take(min);
 		if (!blob) return;
@@ -52361,11 +53026,12 @@ function serverRecognizer(opts = {}) {
 				return;
 			}
 			if (!c.sid) return;
+			if (c.heard && c.run < ONSET_RUN && c.passAt && !c.said && !c.partial) c.heard = false;
 			if (!c.heard) {
 				discard(c);
 				return;
 			}
-			if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+			if (tail && c.fresh && (tail.size > TAIL_MIN_BYTES || c.pre && tail.size > 44)) await sendChunk(c, tail, hh);
 			heard();
 			if (h !== hh || !c.stream || !c.sid) return;
 			const sid = c.sid;
@@ -52471,6 +53137,7 @@ function serverRecognizer(opts = {}) {
 			loudAt: 0,
 			turn: null,
 			pre: null,
+			run: 0,
 			said: "",
 			partial: "",
 			passAt: 0,
@@ -52521,25 +53188,42 @@ function serverRecognizer(opts = {}) {
 		}
 		const skip = Math.max(0, skipUntil - Date.now());
 		firstSkipMs = 0;
+		firstHushMs = 0;
 		const pre = skip || muted ? null : mic.preRoll();
-		let floor = mic.quietFloor();
+		const level = new PhraseLevel(mic.quietFloor());
+		const lead = wakeLead;
+		wakeLead = null;
+		const said = lead && !skip && !muted ? leadSpeech(lead, PRE_ROLL_RATE, level.floor) : null;
 		let blockAt = 0;
 		const onLevel = (rms) => {
 			if (cur !== c) return;
 			const at = blockAt;
 			blockAt = c.rec?.seconds() ?? 0;
 			h?.onLevel?.(rms);
-			floor = noiseFloor(floor, rms);
 			const now = Date.now();
 			c.clock.block(blockAt, now);
-			if (isLoud(rms, floor)) {
+			const hush = !c.heard && hushUntil > 0 && c.clock.at(at) < hushUntil;
+			const loud = level.feed(rms, (blockAt - at) * 1e3, {
+				hush,
+				speech: c.heard
+			});
+			c.run = Math.max(c.run, level.best);
+			if (loud) {
 				if (!c.heard) {
 					lastHeard = null;
 					c.speechS = at;
 					c.spokeAt = c.clock.at(at);
-					if (at < PRE_ROLL_ONSET_S) {
+					if (at < PRE_ROLL_ONSET_S && !c.trimS) {
 						c.pre = pre;
 						if (pre) c.spokeAt -= PRE_ROLL_MS;
+					} else if (c.stream && cap) {
+						const blockS = blockAt - at;
+						const ring = mic.preRoll(LEAD_IN_MS + blockS * 1e3);
+						if (ring && ring.length >= Math.floor(blockS * PRE_ROLL_RATE)) {
+							c.rec?.take(0);
+							c.pre = ring;
+							c.trimS = blockAt;
+						}
 					}
 					h?.onSpeech?.();
 					if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
@@ -52575,8 +53259,19 @@ function serverRecognizer(opts = {}) {
 		}
 		if (muted) c.rec.mute?.(true);
 		cur = c;
+		if (said && lead) {
+			const t0 = Date.now() - lead.length / PRE_ROLL_RATE * 1e3;
+			lastHeard = null;
+			c.pre = lead;
+			c.heard = true;
+			c.fresh = true;
+			c.run = ONSET_RUN;
+			c.spokeAt = Math.round(t0 + said.startS * 1e3);
+			c.loudAt = Math.round(t0 + said.endS * 1e3);
+		}
 		voiceMark("mic");
 		h?.onReady?.();
+		if (said && lead && cur === c) h?.onSpeech?.();
 		if (!c.stream) capTimer = setTimeout(() => {
 			if (cur === c) endClip();
 		}, CLIP_MAX_MS);
@@ -52618,12 +53313,31 @@ function serverRecognizer(opts = {}) {
 			return cur?.heard ? cur.spokeAt : 0;
 		},
 		mute(on) {
+			const was = muted;
 			muted = on;
 			if (on) listenOver();
 			else unlistenOver();
-			const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
-			cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1e3, barged ? BARGE_REWIND_MS / 1e3 : 0);
+			if (on && !was) bargeFrom = loudOver = 0;
+			const now = Date.now();
+			const over = !on && was && bargeFrom > 0;
+			const barged = over || !on && now - lastBargeAt < BARGE_FRESH_MS;
+			const rewindMs = over ? Math.min(CAPTURE_MUTE_HOLD_S * 1e3, now - bargeFrom + BARGE_REWIND_MS) : BARGE_REWIND_MS;
+			cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1e3, barged ? rewindMs / 1e3 : 0);
 			cur?.clock.reset();
+			const c = cur;
+			if (over && c?.rec) {
+				if (!c.heard) {
+					lastHeard = null;
+					c.heard = true;
+					c.speechS = c.trimS;
+					c.spokeAt = Math.max(0, bargeFrom - BARGE_REWIND_MS);
+					h?.onSpeech?.();
+				}
+				c.fresh = true;
+				c.run = Math.max(c.run, ONSET_RUN);
+				c.loudAt = Math.max(c.loudAt, loudOver);
+			}
+			if (!on) bargeFrom = loudOver = 0;
 		},
 		endPhrase() {
 			if (cur?.heard && want) {
@@ -52634,10 +53348,13 @@ function serverRecognizer(opts = {}) {
 		start(handlers, o = {}) {
 			self.stop();
 			if (!self.available()) return false;
+			wakeLead = mic.takeLead();
 			skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
 			firstSkipMs = Math.max(0, o.skipMs || 0);
+			firstHushMs = Math.max(0, o.chimeMs || 0);
+			hushUntil = firstHushMs ? Date.now() + firstHushMs : 0;
 			const cold = audioCtx && audioCtx.state !== "running" ? audioCtx : null;
-			if (cold && firstSkipMs) {
+			if (cold && (firstSkipMs || firstHushMs)) {
 				const mine = handlers;
 				whenRunning(cold).then((ok) => {
 					if (ok && h === mine) skipFromNow();
@@ -53437,12 +54154,13 @@ function subscribeMicState(cb) {
 var WAKE_QUIET_MS = 350;
 var WAKE_TAIL_MS = 200;
 var WAKE_MIN_MS = 250;
-var WAKE_MAX_MS = 1600;
+var WAKE_MAX_MS = 4e3;
+var WAKE_WORD_MAX_MS = 1600;
 var WAKE_LEAD_MS = 100;
 var WAKE_CHECK_GAP_MS = 400;
 var WAKE_PENDING_MS = 2500;
 var WAKE_AFTER_SPEECH_MS = 500;
-var WAKE_KEEP_S = 3;
+var WAKE_KEEP_S = 5;
 var WAKE_LISTEN_MS = 8e3;
 var WAKE_HINT = "Yes?";
 var CHIME_MS = 120;
@@ -53526,11 +54244,13 @@ async function postWake(clip, lang = langTag()) {
 			signal: ac.signal
 		});
 		const j = await r.json().catch(() => ({}));
+		const rest = typeof j.rest === "string" ? j.rest.trim() : "";
 		return {
 			status: r.status,
 			wake: r.ok && j.wake === true,
 			text: String(j.text || ""),
-			error: String(j.error || "")
+			error: String(j.error || ""),
+			rest
 		};
 	} catch (err) {
 		return {
@@ -53719,6 +54439,7 @@ var WakeStandby = class {
 			return;
 		}
 		const gate = this.gate(now, cand.clipMs, speaking);
+		if (gate === "busy" && cand.loudMs > WAKE_WORD_MAX_MS) return;
 		if (gate === "busy" || gate === "soon") {
 			this.pending = {
 				clip: rec.last(cand.clipMs / 1e3),
@@ -53771,7 +54492,12 @@ var WakeStandby = class {
 		if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
 		if (v.wake && !this.deps.recording()) {
 			this.pending = null;
-			this.deps.onWake(soundEnd);
+			const rest = (v.rest || "").trim();
+			if (rest) this.deps.onWake(soundEnd, rest);
+			else {
+				this.deps.mic.markLead?.(soundEnd);
+				this.deps.onWake(soundEnd);
+			}
 			this.sync();
 			return;
 		}
@@ -54538,8 +55264,10 @@ function TopBarMic() {
 		voiceMark("start");
 		const ctx = voiceAudioCtx();
 		confirmer.current?.prime();
-		const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
-		const chimeSkip = prefsRef.current.sounds !== false ? queue.cueLead + CHIME_MS + 30 : 0;
+		const recOpts = {
+			skipMs: Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0),
+			chimeMs: prefsRef.current.sounds !== false ? queue.cueLead + CHIME_MS + 30 : 0
+		};
 		const continuous = opts.continuous !== false;
 		idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
 		const d = new LiveDictation(opts.assistant ? null : target(into, opts.title), {
@@ -54569,10 +55297,19 @@ function TopBarMic() {
 					return true;
 				}
 				const reply = await routePhrase(text, session, void 0, spokeAt, void 0, r === serverRec ? serverRec.takeHeard() : "");
+				voiceTrace("route", {
+					phrase: text,
+					kind: reply.kind,
+					...reply.failed ? { failed: reply.failed } : {},
+					...reply.unknown !== void 0 ? { unknown: reply.unknown } : {},
+					...reply.near ? { near: reply.near } : {}
+				});
 				if (reply.kind === "assistant") {
 					askAssistant(reply.text || addressed(text) || text);
 					return true;
 				}
+				const missed = reply.kind === "prompt" && !answering && (into || session) ? routeMissLine(reply) : "";
+				if (missed) return { note: missed };
 				if (reply.kind === "prompt") {
 					if (!answering && (into || session)) return false;
 					askAssistant(text);
@@ -54716,7 +55453,7 @@ function TopBarMic() {
 				}
 				d.expire();
 			}
-		}, { skipMs: Math.max(skipMs, chimeSkip) });
+		}, recOpts);
 		refreshCfg();
 		if (!ok) {
 			halt();
@@ -55070,7 +55807,7 @@ function TopBarMic() {
 		supported: () => recEngine(cfgNow) !== "none",
 		warm: () => warmMic(false)
 	}), []);
-	const woken = (soundEnd) => {
+	const woken = (soundEnd, rest) => {
 		if (live.current) return;
 		const d = start(textField(document.activeElement), {
 			hint: WAKE_HINT,
@@ -55081,8 +55818,11 @@ function TopBarMic() {
 			d,
 			at: soundEnd
 		};
+		d.address(WAKE_LISTEN_MS);
+		const said = typeof rest === "string" ? rest.trim() : "";
+		if (said) d.heard(said, soundEnd || void 0);
 		setTimeout(() => {
-			if (live.current === d && !d.heardAnything) d.drop();
+			if (live.current === d && !d.heardAnything) d.drop(WAKE_MISS_LINE);
 		}, WAKE_LISTEN_MS);
 	};
 	const latestWake = (0, import_react.useRef)(woken);
@@ -55090,9 +55830,9 @@ function TopBarMic() {
 	if (!standby.current) standby.current = new WakeStandby({
 		mic: serverRec.mic,
 		ctx: voiceAudioCtx,
-		speaking: () => queue.busy,
+		speaking: () => queue.audibleNow,
 		recording: () => !!live.current,
-		onWake: (soundEnd) => latestWake.current(soundEnd),
+		onWake: (soundEnd, rest) => latestWake.current(soundEnd, rest),
 		onLevel: (rms) => {
 			if (!live.current) meterFeed(rms);
 		},
