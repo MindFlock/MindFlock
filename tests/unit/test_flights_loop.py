@@ -592,12 +592,17 @@ def test_route_round_trip(tmp_path, monkeypatch, sent):
             "limited": False,
         },
     )
-    # An attached start: the session is already doing the Agent stop (the
-    # cursor starts on the Loop), so only the repeat is typed.
-    assert f["cursor"] == 1
+    # An attached start on an idle session: the Agent stop HAS a prompt, so
+    # it is sent (flow-polish round: only a prompt-less one is the session's
+    # own work), then the repeat is typed.
+    assert f["cursor"] == 0
     got = _drive(f["id"])
     assert got["state"] == "done"
-    assert sent == [("sess", "/clear"), ("sess", "improve the sky")]
+    assert sent == [
+        ("sess", "improve the sky"),
+        ("sess", "/clear"),
+        ("sess", "improve the sky"),
+    ]
     view = client.get("/api/flights/" + f["id"]).json()["flight"]
     assert view["step_states"]["s2"]["detail"]["receipt"] == "looped 2 times"
     assert any(h["event"] == "looped" for h in view["history"])

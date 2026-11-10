@@ -501,7 +501,8 @@ def test_start_attach_and_create(srv, monkeypatch):
         }
     )
     f = run(D.start({"plan_id": plan["id"], "title": "s"}))
-    assert f["cursor"] == 1 and f["session"] == "s"
+    # Attached to an idle session: an Agent stop with a prompt is sent.
+    assert f["cursor"] == 0 and f["session"] == "s"
     with pytest.raises(F.FlightError) as err:
         run(D.start({"plan_id": plan["id"], "title": "s"}))
     assert err.value.error == "in_flight"

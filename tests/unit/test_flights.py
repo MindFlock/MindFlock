@@ -325,7 +325,9 @@ def test_attach_starts_at_the_first_non_agent_step():
     f = fly(step("agent"), step("ship", lane="commit"), step("notify"), attach=True)
     assert f["cursor"] == 1 and f["state"] == "running"
     assert f["step_states"]["s1"]["state"] == "skipped"
-    assert f["history"][-1]["event"] == "jumped"
+    # One line per stop passed over, saying why (flow-polish round).
+    assert f["history"][-1]["event"] == "skipped"
+    assert "no prompt to send" in f["history"][-1]["note"]
 
 
 def test_attach_to_a_busy_session_runs_its_agent_step_on_that_work():
@@ -1764,7 +1766,8 @@ def test_removing_a_flown_stop_shifts_the_cursor():
 
 
 def test_removing_a_halted_stop_pauses_and_halt_points_still_count():
-    f = fly(step("command", command="false"), step("notify", halt=True))
+    # (halt is the stop's own field, not an option of its config)
+    f = fly(step("command", command="false"), dict(step("notify"), halt=True))
     f = F.apply(f, {"action": "fail", "then": "halt", "reason": "exit 1"}, NOW)
     assert f["state"] == "halted"
     F.op_remove_step(f, "s1", now=NOW)

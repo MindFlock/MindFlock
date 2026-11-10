@@ -243,9 +243,10 @@ def test_strict_bad_when_names_the_field():
     assert err.value.field == "steps[0].when" and "300" in err.value.message
 
 
-def test_lenient_drops_a_bad_when():
+def test_lenient_keeps_a_bad_when_so_the_stop_halts_on_it():
+    # Dropping it would run the stop unconditionally (flow-polish round).
     s = F.normalize_step({"kind": "agent", "when": "nonsense"}, 0, strict=False)
-    assert s is not None and "when" not in s
+    assert s is not None and s["when"] == "nonsense"
 
 
 def test_saved_plans_keep_when():

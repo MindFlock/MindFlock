@@ -130,18 +130,28 @@ def test_config_and_title():
         "webhook": "",
     }
     assert step["title"] == "Ask Dana"
-    assert F.normalize_step({"kind": "someone"}, 0)["title"] == "Ask someone"
+    # Strict (a saved or started plan) needs someone to ask; a stored one
+    # (lenient) still loads without.
+    assert (
+        F.normalize_step({"kind": "someone"}, 0, strict=False)["title"] == "Ask someone"
+    )
+    with pytest.raises(F.PlanError, match="who to ask") as err:
+        F.normalize_step({"kind": "someone", "config": {"text": "look"}}, 0)
+    assert err.value.field == "steps[0].config.who"
     with pytest.raises(F.PlanError) as err:
         F.normalize_step({"kind": "someone", "config": {"webhook": "x.dev"}}, 0)
     assert err.value.field == "steps[0].config.webhook"
 
 
 def test_nobody_to_ask_fails_the_stop():
-    f = _flight({"text": "look"})
+    # Only a stored (leniently loaded) stop can get here: a saved one is refused.
+    f = _flight({"text": "look", "who": "Dana"})
+    f["steps"][0]["config"]["who"] = ""
     with pytest.raises(StepFailed, match="nobody to ask"):
         asyncio.run(S._run(f, f["steps"][0], {"action": "run"}, NOW))
     out = asyncio.run(D._perform(f, {"action": "run", "note": ""}, NOW))
-    assert out["action"] == "fail" and out["reason"] == "nobody to ask"
+    assert out["action"] == "fail" and out["reason"].startswith("nobody to ask — ")
+    assert "Skip" in out["reason"]
 
 
 def test_a_peer_gets_the_ask_and_the_flight_perches(peers):
@@ -161,10 +171,10 @@ def test_a_peer_gets_the_ask_and_the_flight_perches(peers):
     ((link, text),) = peers.sent
     assert link == "aa11"
     assert text == "Try Ship it\n• login\n• logout\n\nDone: " + ss["detail"]["done_url"]
-    # Parked: the planner waits on you from here on.
+    # Parked: the planner waits on you from here on, keeping the reason.
     assert F.next_action(f, {"session": {}}, NOW) == {
         "action": "wait",
-        "note": "needs you",
+        "note": "Try Ship it",
     }
 
 

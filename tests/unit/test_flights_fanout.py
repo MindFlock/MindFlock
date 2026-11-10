@@ -132,8 +132,16 @@ def test_normalise_split_join_and_agent_join():
     with pytest.raises(F.PlanError) as err:
         F.normalize_step({"kind": "split", "config": {"prompts": "  "}})
     assert err.value.field == "steps[0].config.prompts"
+    # Strict refuses a count out of range (it used to be clamped silently);
+    # a stored plan (lenient) still clamps it.
+    with pytest.raises(F.PlanError, match="at most %d" % F.MAX_SPLIT) as err:
+        F.normalize_step(
+            {"kind": "split", "config": {"prompts": ["a", "b"], "count": 999}}
+        )
+    assert err.value.field == "steps[0].config.count"
     s = F.normalize_step(
-        {"kind": "split", "config": {"prompts": ["a", "b"], "count": 999}}
+        {"kind": "split", "config": {"prompts": ["a", "b"], "count": 999}},
+        strict=False,
     )
     assert s["config"] == {
         "prompts": "a\nb",

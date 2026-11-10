@@ -878,9 +878,100 @@ def _verify_config(c: dict, strict: bool, at: str) -> dict:
     }
 
 
+#: Older spellings a kind still READS (never writes back): allowed in a
+#: strict config on top of the kind's fields and what it stores.
+_LEGACY_OPTIONS = {
+    "verify": ("wait_live",),
+    "wait": ("minutes",),
+    "loop": ("every_minutes",),
+}
+_TRUE_WORDS = ("1", "true", "yes", "on")
+_FALSE_WORDS = ("0", "false", "no", "off")
+
+
 def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
     """``raw`` coerced to ``kind``'s config, raising :class:`PlanError` (in
-    strict mode) for the few things that make a step meaningless."""
+    strict mode) for the few things that make a step meaningless — and, in
+    strict mode, for any option the stop would silently change: an unknown
+    key, a number out of range or not a number, a true/false that is
+    neither, a choice that is not one of its choices (:func:`_check_options`).
+    Lenient mode (a stored or synced plan) coerces as it always has."""
+    config = _step_config_body(kind, raw, strict, where)
+    if strict:
+        _check_options(kind, raw if isinstance(raw, dict) else {}, config, where)
+    return config
+
+
+def _option_value(value) -> str:
+    text = repr(value) if isinstance(value, str) else json.dumps(value, default=str)
+    return text if len(text) <= 40 else text[:39] + "…"
+
+
+def _check_options(kind: str, raw: dict, config: dict, where: str) -> None:
+    """Refuse (:class:`PlanError` naming the stop's kind, the option, what was
+    wrong and what is allowed) what :func:`_step_config_body` would have
+    quietly dropped, clamped or defaulted."""
+    spec = STEP_KINDS.get(kind) or {}
+    label = str(spec.get("label") or kind)
+    fields = {f["name"]: f for f in spec.get("fields") or []}
+    allowed = set(fields) | set(config) | set(_LEGACY_OPTIONS.get(kind, ()))
+    unknown = sorted(str(k) for k in raw if str(k) not in allowed)
+    if unknown:
+        raise PlanError(
+            "unknown option %r on a %s stop — it has: %s"
+            % (unknown[0], label, ", ".join(fields) or "no options"),
+            "%s.%s" % (where, unknown[0]),
+        )
+    for name, f in fields.items():
+        value = raw.get(name)
+        if value is None or value == "":
+            continue
+        at = "%s.%s" % (where, name)
+        if f["type"] == "int":
+            ok = not isinstance(value, bool)
+            n = 0
+            if ok:
+                try:
+                    n = int(value)  # 15.7 reads as 15, as it always has
+                except (TypeError, ValueError):
+                    ok = False
+            if not ok:
+                raise PlanError(
+                    "%s on a %s stop must be a whole number (got %s)"
+                    % (name, label, _option_value(value)),
+                    at,
+                )
+            got = config.get(name)
+            if isinstance(got, int) and not isinstance(got, bool) and got != n:
+                raise PlanError(
+                    "%s on a %s stop must be %s %d (got %d)"
+                    % (name, label, "at most" if got < n else "at least", got, n),
+                    at,
+                )
+        elif f["type"] == "bool":
+            if isinstance(value, bool) or (isinstance(value, int) and value in (0, 1)):
+                continue
+            if isinstance(value, str) and value.strip().lower() in (
+                _TRUE_WORDS + _FALSE_WORDS
+            ):
+                continue
+            raise PlanError(
+                "%s on a %s stop is true or false (got %s)"
+                % (name, label, _option_value(value)),
+                at,
+            )
+        elif f["type"] == "select" and f.get("options") and not f.get("dynamic"):
+            options = [str(o) for o in f["options"]]
+            if str(value).strip().lower() not in [o.lower() for o in options]:
+                raise PlanError(
+                    "%s on a %s stop is one of %s (got %s)"
+                    % (name, label, ", ".join(options), _option_value(value)),
+                    at,
+                )
+
+
+def _step_config_body(kind: str, raw: dict, strict: bool, where: str) -> dict:
+    """:func:`_step_config` without the strict option checks."""
     c = raw if isinstance(raw, dict) else {}
     if kind == "agent":
         return {
@@ -949,6 +1040,17 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
         # not only minutes); an older `minutes` still reads. `minutes` stays in
         # the config (rounded up) for readers that only know it.
         seconds = _int(c.get("seconds"), 0, 0, 60 * 60 * 24 * 14)
+        if strict and c.get("seconds") not in (None, ""):
+            try:
+                ok = 0 <= int(c["seconds"]) <= 60 * 60 * 24 * 14
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                raise PlanError(
+                    "seconds on a Wait stop is 0 to 1209600 (14 days), got %s"
+                    % _option_value(c["seconds"]),
+                    where + ".seconds",
+                )
         if seconds <= 0:
             seconds = _int(c.get("minutes"), 0, 0, 60 * 24 * 14) * 60
         if not until and seconds <= 0:
@@ -1121,7 +1223,9 @@ def _normalize_when(raw, strict: bool, where: str) -> str:
     except _when.WhenError as err:
         if strict:
             raise PlanError(err.message, where + ".when")
-        return ""
+        # Kept as written: dropping it would make the stop run unconditionally;
+        # the stop halts on it instead (:func:`_when_verdict`).
+        return text[: _when.MAX_LEN * 2]
 
 
 def _default_title(kind: str, config: dict) -> str:
@@ -2191,9 +2295,12 @@ def _first_agent_index(steps: List[dict]) -> Optional[int]:
 
 
 def start_cursor(plan: dict, start_at: str = "", attach: bool = False) -> int:
-    """Where a flight of ``plan`` starts: ``start_at``'s index, the first
-    non-agent step when attaching, else 0. Raises :class:`FlightError`
-    ``unknown_step`` — call it BEFORE creating anything for the flight."""
+    """Where a flight of ``plan`` starts: ``start_at``'s index; when attaching
+    to an existing session, past each LEADING Agent stop with no prompt (the
+    work the agent already did is that stop) — an Agent stop that has a
+    prompt is the author's instruction and is sent; else 0. Raises
+    :class:`FlightError` ``unknown_step`` — call it BEFORE creating anything
+    for the flight."""
     steps = plan["steps"]
     if start_at:
         ids = [s["id"] for s in steps]
@@ -2204,7 +2311,13 @@ def start_cursor(plan: dict, start_at: str = "", attach: bool = False) -> int:
         return ids.index(start_at)
     if attach:
         return next(
-            (i for i, s in enumerate(steps) if s["kind"] != "agent"), len(steps)
+            (
+                i
+                for i, s in enumerate(steps)
+                if s["kind"] != "agent"
+                or str((s.get("config") or {}).get("prompt") or "").strip()
+            ),
+            len(steps),
         )
     return 0
 
@@ -2291,7 +2404,16 @@ def take_off(
     for i, s in enumerate(flight["steps"][:cursor]):
         flight["step_states"][s["id"]]["state"] = "skipped"
         flight["step_states"][s["id"]]["since"] = ts
-    if cursor:
+        if attach and not start_at:
+            # One line per stop passed over, saying why (it had no prompt).
+            _hist(
+                flight,
+                ts,
+                s["id"],
+                "skipped",
+                "no prompt to send — the session's own work counts as this stop",
+            )
+    if cursor and (start_at or not attach):
         _hist(
             flight,
             ts,
@@ -2353,16 +2475,34 @@ def arm_pending(
 ADHOC_PLAN_ID = "adhoc"
 
 
-def adhoc_plan(raw_steps, base: Optional[dict] = None, name: str = "") -> dict:
+def adhoc_plan(
+    raw_steps,
+    base: Optional[dict] = None,
+    name: str = "",
+    id_map: Optional[dict] = None,
+) -> dict:
     """The plan an ad-hoc ``POST /api/flights/start`` flies: ``raw_steps``
     validated like a plan's (strict: :class:`PlanError` with ``steps[i]…``),
     after ``base``'s steps when a ``plan_id`` came too — those keep their ids,
     the given ones take the next free ``sN``. Alone, the given steps are
-    numbered ``s1..sN`` and the plan is :data:`ADHOC_PLAN_ID`."""
+    numbered ``s1..sN`` and the plan is :data:`ADHOC_PLAN_ID`.
+
+    The author's own ids are not kept, but what names them follows: a Loop's
+    ``back_to`` naming one of the given steps is re-aimed at its new id, and
+    ``id_map`` (a dict, filled in place) maps each author id to its new id —
+    the caller translates a ``start_at`` with it."""
     if not isinstance(raw_steps, list):
         raise PlanError("steps is a list", "steps")
+    was = [_text(s.get("id"), 32) if isinstance(s, dict) else "" for s in raw_steps]
     stripped = [dict(s, id="") if isinstance(s, dict) else s for s in raw_steps]
     given = normalize_steps(stripped, strict=True)
+    if base is not None:
+        if len(base["steps"]) + len(given) > MAX_STEPS:
+            raise PlanError("a route has at most %d stops" % MAX_STEPS, "steps")
+        _renumber_after(base["steps"], given)
+    _follow_loop_targets(given, was)
+    if id_map is not None:
+        id_map.update({old: st["id"] for old, st in zip(was, given) if old})
     if base is None:
         return {
             "id": ADHOC_PLAN_ID,
@@ -2371,9 +2511,6 @@ def adhoc_plan(raw_steps, base: Optional[dict] = None, name: str = "") -> dict:
             "steps": given,
         }
     steps = copy.deepcopy(base["steps"])
-    if len(steps) + len(given) > MAX_STEPS:
-        raise PlanError("a route has at most %d stops" % MAX_STEPS, "steps")
-    _renumber_after(steps, given)
     return dict(copy.deepcopy(base), steps=steps + given)
 
 
@@ -2709,13 +2846,13 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
         )
     if cur["kind"] == "verify":
         items = [str(i) for i in d.get("items") or []]
-        if d.get("ask") in ("needs_you", "blocked", "memory", "confirm"):
+        if d.get("ask") in ("blocked", "memory", "confirm"):
             # Why the check came to you (flights._verify_guard /
             # _judge_verify): the stop's own sentence, not a count.
             note = str(flight["step_states"][cur["id"]].get("note") or "")
             return ("%s: %s" % (cur["title"], note) if note else cur["title"]), items
         return (
-            "Check %d behavior%s" % (len(items), "" if len(items) == 1 else "s"),
+            "Check %d step%s" % (len(items), "" if len(items) == 1 else "s"),
             items,
         )
     return cur["title"], []
@@ -3809,15 +3946,24 @@ def fail_action(flight: dict, reason: str, obs: Optional[dict] = None) -> dict:
 def _when_verdict(step: dict, obs: dict) -> Optional[dict]:
     """A pending step's ``when`` (docs/flights.md "Round 15"): None to carry
     on; ``skip_when`` when the condition is false against ``obs["facts"]``;
+    a halting ``fail`` when it can't be read (a stored plan keeps it as
+    written: :func:`_normalize_when`);
     a visible wait while the facts are missing (the driver gathers them for
     every pending step with a ``when``, so that is a safety net)."""
     when = str(step.get("when") or "")
     if not when:
         return None
     try:
+        if len(when) > _when.MAX_LEN:
+            raise _when.WhenError("too long", _when._HINT)
         cond = _when.parse(when)
     except _when.WhenError:
-        return None  # a stored condition nobody can read never blocks a flight
+        # Never run a stop whose condition nobody can read as if it had none.
+        return {
+            "action": "fail",
+            "then": "halt",
+            "reason": "this stop's 'Only when' can't be read — edit or remove it",
+        }
     facts = obs.get("facts")
     if not isinstance(facts, dict):
         return _wait("checking %s" % when)
@@ -3924,7 +4070,9 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
                     if out["action"] == "fail"
                     else out
                 )
-        return _wait("needs you")
+        # Keep the stop's own reason ("2 steps for you to check, then
+        # confirm"): a bare "needs you" would overwrite it on the next pass.
+        return _wait(str(ss.get("note") or "") or "needs you")
     # running
     tripped = _guard_trip(flight, ss, obs, now, sess)
     if tripped is not None:
@@ -4333,13 +4481,13 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
         ss["state"] in ("failed", "running")
         or ss["detail"].get("failed_reason")
         or flight["state"] == "halted"
-        # A Verify stop parked because the check needs the person to DO
-        # something (or memory refused its checker): their Done is "I did it"
-        # — the stop runs again (flight_driver._needs_you_perch).
+        # A Verify stop parked because the check couldn't finish (blocked,
+        # unreadable) or memory refused to start it: its own sentence says
+        # "press Retry" — the stop runs again from a fresh check.
         or (
             ss["state"] == "waiting_you"
             and flight["steps"][i]["kind"] == "verify"
-            and ss["detail"].get("ask") in ("needs_you", "memory")
+            and ss["detail"].get("ask") in ("blocked", "memory")
         )
     )
     lo, hi = current_group(flight)
