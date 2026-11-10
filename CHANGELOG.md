@@ -150,6 +150,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "shown in the bell — phone notifications are off", or "not sent: <why>"), and
   the bell lists the notification (`flight.notified`).
 
+### Fixed
+
+- **A Verify whose agent's window closed shows "Verify blocked"** with the
+  reason, instead of losing the check or showing the previous result, and no
+  longer marks unshipped work as shipped.
+- **Verify reads results files more forgivingly** ("passed", "ok", "failed",
+  "skipped", steps without an id or actor) and says when the file can't be
+  read. Only `"finished": true` ends a check.
+- **An on-demand Verify that stalls** gets one nudge and is then closed as
+  "Verify blocked" with the reason, instead of reading "Verifying" for hours.
+  Cancelling, closing or deleting a Verify takes a check still waiting behind
+  the agent's turn off its queue.
+- **A Verify whose agent writes no steps** reads "Verify blocked — its agent
+  wrote no steps" with Verify again, instead of an empty plan that sat in
+  Needs you.
+- **A push from an open session no longer spends a model call writing Verify
+  steps**, and a finished Verify checker session is closed 15 minutes after its
+  run ends.
+- **One Verify is one Needs-you row**, not two or three.
+- **A route stop that hits an unexpected error halts and says what went
+  wrong** ("<stop> hit an error: …") instead of "carrying out" for 10 minutes
+  and repeating.
+- **A CI checks stop that can't read the checks fails after 5 minutes saying
+  why**, instead of waiting an hour.
+- **A stop whose "Only when" can't be read halts** ("edit or remove it")
+  instead of running anyway.
+- **Ad-hoc routes keep a Loop pointed at the stop its author meant**, and a
+  start at the author's stop id.
+- **A stop that needs you again after Retry, Jump or Loop notifies you
+  again**, and a reviewer that never started says so ("couldn't start the
+  reviewer: <why>").
+
+## [0.14.4] - 2026-11-10
+
+### Changed
+
 - **A held worker starts its agent only when its turn comes.** An
 
   orchestrator's serial chain (`spawn_session` with `after=[…]`, overlapping
@@ -194,7 +230,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   row carries the result as a pill (`verify`: `verifying`, `needs_you`,
 
-  `passed`, `failed`, `blocked`; a pass shows for 10 minutes). When
+  `passed`, `failed`, `blocked`; a settled one shows for 10 minutes). When
 
   there are steps for a person, the check waits on them: **nothing passes
 
@@ -212,35 +248,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A Verify whose agent's window closed shows "Verify blocked"** with the
-  reason, instead of losing the check or showing the previous result, and no
-  longer marks unshipped work as shipped.
-- **Verify reads results files more forgivingly** ("passed", "ok", "failed",
-  "skipped", steps without an id or actor) and says when the file can't be
-  read. Only `"finished": true` ends a check.
-- **An on-demand Verify that stalls** gets one nudge and is then closed as
-  "Verify blocked" with the reason, instead of reading "Verifying" for hours.
-  Cancelling, closing or deleting a Verify takes a check still waiting behind
-  the agent's turn off its queue.
-- **A Verify whose agent writes no steps** reads "Verify blocked — its agent
-  wrote no steps" with Verify again, instead of an empty plan that sat in
-  Needs you.
-- **A push from an open session no longer spends a model call writing Verify
-  steps**, and a finished Verify checker session is closed 15 minutes after its
-  run ends.
-- **One Verify is one Needs-you row**, not two or three.
-- **A route stop that hits an unexpected error halts and says what went
-  wrong** ("<stop> hit an error: …") instead of "carrying out" for 10 minutes
-  and repeating.
-- **A CI checks stop that can't read the checks fails after 5 minutes saying
-  why**, instead of waiting an hour.
-- **A stop whose "Only when" can't be read halts** ("edit or remove it")
-  instead of running anyway.
-- **Ad-hoc routes keep a Loop pointed at the stop its author meant**, and a
-  start at the author's stop id.
-- **A stop that needs you again after Retry, Jump or Loop notifies you
-  again**, and a reviewer that never started says so ("couldn't start the
-  reviewer: <why>").
+- **Terminals no longer stay white until you scroll.** Nothing repainted a
+  terminal without new output, so after the window was restored, uncovered,
+  moved to another display or the GPU restarted, a pane could stay blank (white
+  in the light theme). Every visible terminal now repaints when the window
+  comes back (focus, visibility, `pageshow`), and the desktop shell
+  invalidates the page on restore/show/focus/display changes and wake, and
+  logs a GPU process restart ("GPU process gone") to main.log.
 
 - **"That's all" at the end of a sentence no longer stops dictation.**
   Conversational stop phrases ("that's all", "done talking") stop listening
@@ -5500,7 +5514,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.3...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.14.4...HEAD
+[0.14.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.4
 [0.14.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.3
 [0.14.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.2
 [0.14.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.14.1
