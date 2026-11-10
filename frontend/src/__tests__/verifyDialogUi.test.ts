@@ -13,7 +13,7 @@ const toast = vi.fn();
 vi.mock("../api/client", async (orig) => ({ ...((await orig()) as object), api: (...a: unknown[]) => api(...a) }));
 vi.mock("../lib/toast", () => ({ toast: (...a: unknown[]) => toast(...a) }));
 
-const { cancelChecklistRun, writePlanFor } = await import("../lib/verifyActions");
+const { cancelChecklistRun } = await import("../lib/verifyActions");
 
 describe("Cancel run", () => {
   it("POSTs the plan's cancel route", async () => {
@@ -29,12 +29,4 @@ describe("the second-window rule", () => {
     expect(src("components/dialogs/verify.ts")).toContain("coverageKey(repoName(plan.repo_root), plan.branch)");
   });
 
-  it("names the window the behaviors are under when a press lands on it", async () => {
-    api.mockReset().mockResolvedValue({ plan: "bot7", existing: true });
-    toast.mockReset();
-    await writePlanFor("bot7-copy");
-    expect(toast).toHaveBeenCalledWith(
-      "bot7-copy's branch already has behaviors — they're under bot7 — they're on its route in the Sky"
-    );
-  });
 });

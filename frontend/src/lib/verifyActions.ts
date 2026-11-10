@@ -26,7 +26,15 @@
  * until dismissed; this surface now uses the same corner for the same reason. */
 
 import { api } from "../api/client";
-import type { SessionVerifyStarted, TestPlan, TestPlanRunStarted, TestPlansResponse, TestRunWalk } from "../api/types";
+import type {
+  SessionVerifyConfirmed,
+  SessionVerifyFixStarted,
+  SessionVerifyStarted,
+  SessionVerifyStepAnswer,
+  TestPlan,
+  TestPlanRunStarted,
+  TestPlansResponse,
+} from "../api/types";
 import { planName } from "../components/dialogs/verify";
 import { queryClient, refreshInstances, refreshTestPlans } from "../state/queries";
 import { useUi } from "../state/store";
@@ -65,14 +73,10 @@ export function patchPlan(id: string, apply: (plan: TestPlan) => TestPlan) {
   );
 }
 
-/** The bare run request — the row's Run, the per-step Re-check and the bulk
- * bar's Run all send exactly this. `only` scopes it to those step ids.
- * `walk: "all"` asks the walker to attempt the person's steps too (it answers
- * one only with evidence, else "needs you"); absent = the server's default,
- * "agent" — so the ordinary call's body is unchanged. */
-export function requestPlanRun(planId: string, only?: string[], walk?: TestRunWalk) {
-  const json: { steps?: string[]; walk?: TestRunWalk } = only ? { steps: only } : {};
-  if (walk === "all") json.walk = walk;
+/** The bare run request — the Behaviors card's Verify when the plan's
+ * session is gone. `only` scopes it to those step ids. */
+export function requestPlanRun(planId: string, only?: string[]) {
+  const json: { steps?: string[] } = only ? { steps: only } : {};
   return api<TestPlanRunStarted>(planPath(planId) + "/run", {
     method: "POST",
     json,
@@ -86,20 +90,15 @@ export function requestPlanRun(planId: string, only?: string[], walk?: TestRunWa
  * terminal, and the person talks to it there — so the sentence names it and
  * says so. Otherwise a separate checker session was started (the plan's own
  * session is gone): "Starting", because nothing has been provisioned yet. */
-export function runStartedMessage(plan: TestPlan, r: TestPlanRunStarted | null | undefined, walk?: TestRunWalk): string {
-  const all = walk === "all";
+export function runStartedMessage(plan: TestPlan, r: TestPlanRunStarted | null | undefined): string {
   if (r?.in_session && r.session) {
     return (
       "Handed the steps to " + r.session + "'s agent" +
       (r.queued ? " — it takes them once its current turn ends" : "") +
-      (all ? ". It walks every behavior, yours too" : "") +
       ". Talk to it there"
     );
   }
-  return (
-    "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") +
-    (all ? " — it walks every behavior, yours too" : "")
-  );
+  return "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session");
 }
 
 /** Open the session walking a check on its Agent tab — the terminal where
@@ -113,23 +112,44 @@ export function openWalkingSession(title: string) {
   ui.setLastTab(title, "agent");
 }
 
+/** "This branch" in the start form's Where: no environment in the body. */
+export const VERIFY_WHERE_BRANCH = "branch";
+
 /** `POST /api/instances/{title}/verify` — the bare request. `notes` is what
- * the person wants checked (optional); the body is `{}` without it. */
-export function requestSessionVerify(title: string, notes = "") {
+ * the person wants it to prove (optional); `environment` is where (a Verify
+ * environment's name; "" or "branch" = this branch, left out). The body is
+ * `{}` with neither. */
+export function requestSessionVerify(title: string, notes = "", environment = "") {
   const n = notes.trim();
+  const env = environment.trim();
+  const json: { notes?: string; environment?: string } = {};
+  if (n) json.notes = n;
+  if (env && env !== VERIFY_WHERE_BRANCH) json.environment = env;
   return api<SessionVerifyStarted>("/api/instances/" + encodeURIComponent(title) + "/verify", {
     method: "POST",
-    json: n ? { notes: n } : {},
+    json,
   });
+}
+
+/** What the app says once a Verify has been taken (pure — the toast's text).
+ * QUEUED: the session's agent is mid-turn, so nothing has started yet — say
+ * when it will, never that it is writing its steps. */
+export function verifyStartedMessage(title: string, r: Partial<SessionVerifyStarted> | null | undefined): string {
+  const session = r?.session || title;
+  if (r?.queued) return "Verify starts when " + session + "'s current turn ends";
+  return "Verifying " + session + " — its agent writes its steps and works them in its terminal";
 }
 
 /** "Verify" on a session: its own agent writes its steps and works them in
  * its terminal. Opens that terminal (its Agent tab) unless `open` is false —
  * the person follows it and talks to it there. Resolves whether it started. */
-export async function startSessionVerify(title: string, opts: { notes?: string; open?: boolean } = {}): Promise<boolean> {
+export async function startSessionVerify(
+  title: string,
+  opts: { notes?: string; environment?: string; open?: boolean } = {},
+): Promise<boolean> {
   try {
-    await requestSessionVerify(title, opts.notes || "");
-    toast("Verifying " + title + " — its agent writes its steps and works them in its terminal");
+    const r = await requestSessionVerify(title, opts.notes || "", opts.environment || "");
+    toast(verifyStartedMessage(title, r));
     await refreshInstances();
     void refreshTestPlans();
     if (opts.open !== false) openWalkingSession(title);
@@ -140,23 +160,46 @@ export async function startSessionVerify(title: string, opts: { notes?: string; 
   }
 }
 
-/** `POST /api/test-plans/{plan}/confirm` — the bare request. */
-export function requestVerifyConfirm(planId: string, verified: boolean, note = "") {
+/** `POST /api/test-plans/{plan}/confirm` — the bare request. `steps` is the
+ * person's answer per step (`{id: "pass" | "fail"}`), sent only when given. */
+export function requestVerifyConfirm(
+  planId: string,
+  verified: boolean,
+  note = "",
+  steps?: Record<string, SessionVerifyStepAnswer> | null,
+) {
   const n = note.trim();
-  return api<{ ok: boolean; plan: string }>(planPath(planId) + "/confirm", {
+  const json: { verified: boolean; note?: string; steps?: Record<string, SessionVerifyStepAnswer> } = { verified };
+  if (n) json.note = n;
+  if (steps && Object.keys(steps).length) json.steps = steps;
+  return api<SessionVerifyConfirmed>(planPath(planId) + "/confirm", {
     method: "POST",
-    json: n ? { verified, note: n } : { verified },
+    json,
   });
 }
 
+/** What the app says once a person answered (pure — the toast's text). Not
+ * verified: "Sent to <session>'s agent" only when the server says the note
+ * reached it (`delivered`); otherwise it is on the check, nothing more. */
+export function confirmMessage(verified: boolean, r: Partial<SessionVerifyConfirmed> | null | undefined, session: string): string {
+  if (verified) return "Confirmed verified";
+  return r?.delivered ? "Sent to " + session + "'s agent" : "Saved on the check";
+}
+
 /** "Confirm verified" (true) / "Not verified…" (false, with what the person
- * saw): a person closing a verify that had steps only a person could do.
- * Resolves whether the server took it — a 409 means it wasn't waiting any
- * more (someone else answered), said in the card that stays up. */
-export async function confirmVerified(planId: string, verified: boolean, note = ""): Promise<boolean> {
+ * saw): a person closing a verify that waits on them. `session` names the
+ * session in the toast (the plan id when not given). Resolves whether the
+ * server took it — a 409 means it wasn't waiting any more (someone else
+ * answered), said in the card that stays up. */
+export async function confirmVerified(
+  planId: string,
+  verified: boolean,
+  note = "",
+  opts: { steps?: Record<string, SessionVerifyStepAnswer> | null; session?: string } = {},
+): Promise<boolean> {
   try {
-    await requestVerifyConfirm(planId, verified, note);
-    toast(verified ? "Confirmed verified" : "Marked not verified — the agent gets your note");
+    const r = await requestVerifyConfirm(planId, verified, note, opts.steps);
+    toast(confirmMessage(verified, r, opts.session || planId));
     await refreshInstances();
     void refreshTestPlans();
     return true;
@@ -182,10 +225,10 @@ export function requestPlanDelete(planId: string) {
  * terminal there. */
 export async function startChecklistRun(
   plan: TestPlan,
-  opts: { only?: string[]; walk?: TestRunWalk; onStarted?(): void } = {}
+  opts: { only?: string[]; onStarted?(): void } = {}
 ): Promise<void> {
   try {
-    const r = await requestPlanRun(plan.id, opts.only, opts.walk);
+    const r = await requestPlanRun(plan.id, opts.only);
     // The server already has a provisioning row for the verify session: pull
     // it now rather than leaving the grid unable to attach a pane to a
     // session it has never heard of, which is what Watch needs a moment later.
@@ -213,7 +256,7 @@ export async function startChecklistRun(
     // tmux all happen afterwards, and when they fail the app's only statement
     // about this run must not have been a claim that it was under way.
     // `session.create_failed` retracts it (see bridgeTestPlanEvents).
-    toast(runStartedMessage(plan, r, opts.walk));
+    toast(runStartedMessage(plan, r));
     // IN THE SESSION: the steps are that agent's tasks now, in its own
     // terminal — open it there, which is the whole point of walking it in
     // place (unlike a checker, which Watch reaches on purpose; see above).
@@ -236,7 +279,7 @@ export async function startChecklistRun(
  * the endpoint — so whatever it found is still there to read. */
 export async function cancelChecklistRun(plan: TestPlan): Promise<void> {
   try {
-    const r = await api<{ session?: string; plan?: TestPlan }>(
+    const r = await api<VerifyCancelled>(
       planPath(plan.id) + "/cancel",
       { method: "POST" }
     );
@@ -250,10 +293,100 @@ export async function cancelChecklistRun(plan: TestPlan): Promise<void> {
     // showing it as live work.
     await refreshInstances();
     await refreshTestPlans();
-    toast(r?.session ? "Stopped " + r.session : "Check cancelled");
+    toast(cancelMessage(plan.id, r));
   } catch (err) {
-    errorPop("Couldn't cancel the check", errMsg(err));
+    errorPop("Couldn't stop verifying", errMsg(err));
     void refreshTestPlans();
+  }
+}
+
+/** `POST /api/test-plans/{id}/cancel` → `verify_stopped: true` from a newer
+ * server when it stopped the session's own agent verifying. */
+interface VerifyCancelled {
+  session?: string;
+  plan?: TestPlan;
+  verify_stopped?: boolean;
+}
+
+/** What the app says once a verify was stopped (pure). The SESSION keeps
+ * running — "Stopped my-session" read as if the session itself had been
+ * stopped. Only a separate session the plan's run opened (its own session
+ * gone) is actually closed, and that is said by name. */
+export function cancelMessage(planId: string, r: VerifyCancelled | null | undefined): string {
+  const session = r?.session || "";
+  if (r?.verify_stopped || !session || session === planId)
+    return "Stopped verifying " + (session || planId) + " — the session keeps running";
+  return "Stopped verifying " + planId + " — closed " + session;
+}
+
+/** "Stop verifying" on the pane's verify row and the ⋯ menu: the session's
+ * own agent stops working its steps; the session itself keeps running. */
+export async function stopVerifying(planId: string, session = ""): Promise<boolean> {
+  try {
+    const r = await api<VerifyCancelled>(planPath(planId) + "/cancel", { method: "POST" });
+    if (r?.plan) patchPlan(planId, () => r.plan as TestPlan);
+    toast(cancelMessage(planId, { ...r, session: r?.session || session }));
+    await refreshInstances();
+    void refreshTestPlans();
+    return true;
+  } catch (err) {
+    errorPop("Couldn't stop verifying " + (session || planId), errMsg(err));
+    void refreshInstances();
+    return false;
+  }
+}
+
+/** "Dismiss" on a failed or blocked verify row: they stay until a person
+ * says they've seen it (`POST /api/test-plans/{id}/dismiss`). */
+export async function dismissVerify(planId: string, session = ""): Promise<boolean> {
+  try {
+    await api<{ ok: boolean }>(planPath(planId) + "/dismiss", { method: "POST" });
+    await refreshInstances();
+    return true;
+  } catch (err) {
+    errorPop("Couldn't dismiss the verify on " + (session || planId), errMsg(err));
+    return false;
+  }
+}
+
+/** What the app says once "Let its agent fix it" was taken (pure).
+ * IN THE SESSION (`in_session`): the failed steps and their evidence went to
+ * the session's own agent, and Verify runs again after its turn. An older
+ * server ignores `in_session` and opens a NEW session — said as such, so the
+ * person knows where the fix is happening. */
+export function fixMessage(session: string, r: SessionVerifyFixStarted | null | undefined): string {
+  if (r?.in_session) {
+    const who = r.session || session;
+    return (
+      "Sent what failed to " + who + "'s agent" +
+      (r.queued ? " — it starts once its current turn ends" : "") +
+      "; Verify runs again after it fixes it"
+    );
+  }
+  return (
+    "Opened a new session, " + (r?.session || "a new session") + ", to fix what failed" +
+    (r?.reclaimed ? " (cleared the last one's empty workspace)" : "")
+  );
+}
+
+/** "Let its agent fix it" on a failed verify: hand the failed steps and
+ * their evidence to the session's OWN agent, which fixes them and then
+ * verifies again (`{in_session: true}` on the fix route). Resolves whether
+ * the server took it. */
+export async function fixInSession(planId: string, session = ""): Promise<boolean> {
+  try {
+    const r = await api<SessionVerifyFixStarted>(planPath(planId) + "/fix", {
+      method: "POST",
+      json: { in_session: true },
+    });
+    toast(fixMessage(session || planId, r));
+    await refreshInstances();
+    void refreshTestPlans();
+    if (r?.in_session) openWalkingSession(r.session || session || planId);
+    return true;
+  } catch (err) {
+    errorPop("Fix didn't start", errMsg(err));
+    return false;
   }
 }
 
@@ -344,63 +477,10 @@ export async function fetchVerifyRepos(): Promise<VerifyRepo[]> {
   return Array.isArray(r?.repos) ? r.repos : [];
 }
 
-/** "Ask the agent for a checklist" for a BRANCH no session has been on
- * (New checklist → Another branch…). Same answers as `writePlanFor`; resolves
- * whether the server took it, so the form can clear. */
-export async function writePlanForBranch(repo: VerifyRepo, branch: string): Promise<boolean> {
-  try {
-    const r = await api<{ plan: string; existing: boolean }>("/api/test-plans/branch", {
-      json: { repo: repo.root, branch },
-    });
-    toast(
-      r.existing
-        ? branch + " already has behaviors — they're on the Behaviors board in the Sky"
-        : "Asked the agent to write the behaviors for " + branch + " — they'll appear on the Behaviors board (up to three minutes)"
-    );
-    refreshTestPlans();
-    return true;
-  } catch (err) {
-    errorPop("Couldn't write the behaviors", errMsg(err));
-    return false;
-  }
-}
-
-/** "Ask the agent for a checklist" for a session. Resolves whether the server
- * took it, so a "No checklist yet" banner stays up (to try again) when not. */
-export async function writePlanFor(target: string): Promise<boolean> {
-  try {
-    const r = await api<{ plan: string; existing: boolean }>(
-      "/api/instances/" + encodeURIComponent(target) + "/test-plan",
-      { method: "POST" }
-    );
-    // `r.plan` names the checklist that already exists, which is not always
-    // this session: a branch open in two windows has ONE checklist between
-    // them, filed under whichever window got there first. Saying "<target>
-    // already has a checklist" would send the user looking for a row that is
-    // there under another name.
-    toast(
-      r.existing
-        ? (r.plan && r.plan !== target
-            ? target + "'s branch already has behaviors — they're under " + r.plan
-            : target + " already has behaviors") + " — they're on its route in the Sky"
-        // "up to three minutes", matching the row this press creates and the
-        // server's own budget. It used to promise "a minute" 200px above a row
-        // saying three, which makes the faster of the two promises a broken one.
-        : "Asked the agent to write the behaviors for " + target + " — they'll appear on its route in the Sky (up to three minutes)"
-    );
-    refreshTestPlans();
-    return true;
-  } catch (err) {
-    errorPop("Couldn't write the behaviors", errMsg(err));
-    return false;
-  }
-}
-
 /** The Behaviors board's "Check another branch…" (docs/behaviors.md §3): ask
  * the agent for behaviors for a branch no session has been on, or (`empty`)
  * start an empty set to write by hand. Resolves to the plan id ("" when the
- * server refused — the reason is popped). Behaviors words, unlike
- * `writePlanForBranch` (the dialog's, kept until it retires). */
+ * server refused — the reason is popped). */
 export async function askBehaviorsForBranch(repo: VerifyRepo, branch: string, opts: { empty?: boolean } = {}): Promise<string> {
   try {
     const r = await api<{ plan: string; existing: boolean }>("/api/test-plans/branch", {

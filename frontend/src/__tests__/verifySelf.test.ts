@@ -267,11 +267,12 @@ describe("the pane's verify row", () => {
     expect(html).toContain(">Not verified…</button>");
   });
 
-  it("failed: what failed and Verify again; passed or none: nothing", () => {
+  it("failed: what failed and Verify again; passed: one line; none: nothing", () => {
     const html = strip(verify({ state: "failed", failed_steps: FAILED }));
     expect(visible(html)).toContain("Verify failed — 1 step");
     expect(html).toContain(">Verify again</button>");
-    expect(strip(verify({ state: "passed" }))).toBe("");
+    // Flow polish: passed says so on the row for its ten minutes.
+    expect(visible(strip(verify({ state: "passed" })))).toContain("All 6 steps passed");
     expect(strip(null)).toBe("");
   });
 });
@@ -294,12 +295,12 @@ describe("the bell and the ⋯ menu", () => {
     expect(bell).toMatch(/className="attn-title linklike" title="Open the session" onClick=\{\(\) => jump\(it\.title\)\}/);
   });
 
-  it("Verify sits before Behaviors… in Ship — only while nothing is verifying or waiting", () => {
+  it("Verify sits before Behaviors… in Ship — Stop verifying while it runs, nothing while it waits", () => {
     const model = { groups: [{ id: "ship" as const, label: "Ship", items: [{ key: "push", label: "Push", run() {} }, { key: "checklist", label: "Behaviors…", run() {} }] }], more: [] };
     const keys = (inst: Partial<Instance>) => withVerifyItem(model, inst).groups[0].items.map((i) => i.label);
     expect(keys(row())).toEqual(["Push", "Verify", "Behaviors…"]);
     expect(keys(row({ verify: verify({ state: "failed" }) }))).toEqual(["Push", "Verify again", "Behaviors…"]);
-    expect(keys(row({ verify: verify() }))).toEqual(["Push", "Behaviors…"]);
+    expect(keys(row({ verify: verify() }))).toEqual(["Push", "Stop verifying", "Behaviors…"]);
     expect(keys(row({ verify: verify({ state: "needs_you" }) }))).toEqual(["Push", "Behaviors…"]);
     expect(canStartVerify(row({ device: "mac-mini" } as Partial<Instance>))).toBe(false);
     expect(canStartVerify(row({ workspace_missing: true }))).toBe(false);

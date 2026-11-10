@@ -1,13 +1,16 @@
 /** "Verify" on a session's ⋯ menu (the rail row's and the pane header's —
  * both draw lib/sessionMenu's model; this adds the item to it): the session's
  * own agent writes the steps to check its work and works them in its
- * terminal (POST /api/instances/{title}/verify). Offered only while no verify
- * is under way or waiting on a person — the pill says those. */
+ * terminal (POST /api/instances/{title}/verify). The item opens the start
+ * form in the session's pane (what it should prove, where — VerifyStartForm),
+ * not a modal. While a verify is under way the item is "Stop verifying"
+ * instead; while one waits on a person there is none — the pill says it. */
 
 import type { Instance } from "../../api/types";
 import { sessionMenu as baseSessionMenu, type MenuItem, type SessionMenuModel } from "../../lib/sessionMenu";
 import { verifyOf } from "../../lib/sessionState";
-import { startSessionVerify } from "../../lib/verifyActions";
+import { stopVerifying } from "../../lib/verifyActions";
+import { openVerifyForm } from "../behaviors/VerifyStartForm";
 
 /** Whether a session can be asked to verify now. */
 export function canStartVerify(inst: Partial<Instance>): boolean {
@@ -17,18 +20,30 @@ export function canStartVerify(inst: Partial<Instance>): boolean {
   return !v || v.state === "passed" || v.state === "failed" || v.state === "blocked";
 }
 
-/** The menu item, or null when Verify isn't offered. */
+/** The menu item, or null when Verify isn't offered: "Verify" / "Verify
+ * again" (opens the start form in the pane), or "Stop verifying" while its
+ * agent is working the steps. */
 export function verifyMenuItem(inst: Partial<Instance>): MenuItem | null {
+  const v = verifyOf(inst);
+  if (v?.state === "verifying" && inst.title && !inst.peer_share && !inst.device) {
+    const title = inst.title;
+    return {
+      key: "verify-stop",
+      label: "Stop verifying",
+      note: "the session keeps running",
+      title: "Its agent stops working the steps — the session itself keeps running",
+      run: () => void stopVerifying(v.plan, title),
+    };
+  }
   if (!canStartVerify(inst)) return null;
-  const again = !!verifyOf(inst);
   const title = inst.title as string;
   return {
     key: "verify",
-    label: again ? "Verify again" : "Verify",
+    label: v ? "Verify again" : "Verify",
     note: "its agent checks its own work",
     title:
-      "The agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do, and you confirm once you have",
-    run: () => void startSessionVerify(title),
+      "Say what it should prove (optional), then its agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do",
+    run: () => openVerifyForm(title),
   };
 }
 
