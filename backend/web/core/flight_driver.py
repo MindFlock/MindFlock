@@ -31,6 +31,7 @@ import os
 import subprocess
 import threading
 import time
+import traceback
 import uuid
 from typing import Dict, List, Optional, Tuple
 
@@ -68,14 +69,26 @@ def _server():
     return server
 
 
-def _log(fmt: str, *args) -> None:
+def _log(fmt: str, *args, level: str = "error") -> None:
+    """Log at ``level``: "error" for what nobody handled (a pass that blew
+    up, an executor's unexpected exception), "warning" for a failure the
+    route handled (an unreadable fact, a refused post), "info" for a routine
+    outcome."""
     try:
         from backend import log
 
-        if log.ErrorLog is not None:
-            log.ErrorLog.Printf(fmt, *args)
+        logger = {
+            "info": log.InfoLog,
+            "warning": log.WarningLog,
+        }.get(level, log.ErrorLog)
+        if logger is not None:
+            logger.Printf(fmt, *args)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _warn(fmt: str, *args) -> None:
+    _log(fmt, *args, level="warning")
 
 
 # --------------------------------------------------------------------------- #
@@ -182,8 +195,11 @@ def _announce(before: Optional[dict], after: Optional[dict]) -> None:
     if after["state"] == "waiting_you" and step:
         cur = _flights.waiting_step(after)
         sid = cur["id"] if cur is not None else step["id"]
-        rounds = after["step_states"][sid]["rounds"]
-        key = "%s:%d:you" % (sid, rounds)
+        ss = after["step_states"][sid]
+        # Keyed on when the stop STARTED: Retry / Jump / Loop start it afresh
+        # (``since``) but reset ``rounds``, so a rounds key never rang again
+        # for a stop that parked a second time.
+        key = "%s:%d:you" % (sid, int(float(ss.get("since") or 0.0)))
         quiet = (
             cur is not None
             and cur["kind"] == "you"
@@ -377,7 +393,7 @@ def _verify_env(flight: dict, where: str) -> Tuple[Optional[dict], bool]:
     try:
         env = _tp.environment(repo, where)
     except Exception as err:  # noqa: BLE001 — unknown is not "no such env"
-        _log("flight %s: environments unavailable: %v", flight.get("id"), err)
+        _warn("flight %s: environments unavailable: %v", flight.get("id"), err)
         return None, False
     if env is None:
         # The implicit "live" falls back to the checklist's own live mark.
@@ -413,15 +429,19 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         if not branch:
             return {}
         pid = _tp.owner_for_branch(title, repo, branch)
-    plan = _tp.get(pid) if pid else None
+    if not pid:
+        return {}  # no check yet: the stop makes one (_ensure_checklist)
+    plan = _tp.get(pid)
     if plan is None:
-        return {}
+        # The stop's check is gone (deleted, or its record lost): say so —
+        # an empty observation read as "getting the check ready" for an hour.
+        return {"plan_gone": pid}
     reached = 0.0
     if env is not None and cfg.get("ready") == "on_branch":
         try:
             reached = float(_tp.env_reached_at(pid, env) or 0.0)
         except Exception as err:  # noqa: BLE001 — not reached (yet)
-            _log("flight %s: env reach unknown: %v", flight.get("id"), err)
+            _warn("flight %s: env reach unknown: %v", flight.get("id"), err)
             reached = 0.0
     run = plan["runs"][-1] if plan.get("runs") else None
     results = (run or {}).get("results") or {}
@@ -449,6 +469,7 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
     # The steps the AGENT walks: its own, or — for an "Agent only" stop, whose
     # run walks "all" — every step, so a plan of person's steps still starts
     # the walker and the stop is done only once each one is settled.
+    left = _agent_left(plan)
     walks = {s["id"] for s in _tp.agent_steps(plan, walk=_verify_walk(cfg))}
     open_agent = [
         s["text"]
@@ -467,7 +488,9 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "settled": _tp.is_settled(plan),
         "open_human": [s["text"] for s in _tp.open_human_steps(plan)],
         "open_agent": open_agent,
-        "failed": [f["step"]["text"] for f in _tp.failed_steps(plan)],
+        # Each failed step with what was seen ("— saw: …"), so the halted
+        # stop and the agent's fix round both know what went wrong.
+        "failed": [_failed_line(f) for f in _tp.failed_steps(plan)],
         # When the newest of those failures was answered: older than the
         # stop's attempt (a Retry, the agent's fix) = check again first.
         "failed_at": max(
@@ -501,14 +524,64 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "outcome": str((run or {}).get("outcome") or ""),
         "outcome_note": str((run or {}).get("outcome_note") or ""),
         "confirm_items": [
-            (
-                ("%s — look for: %s" % (s["text"], s["expect"]))
-                if s.get("expect")
-                else s["text"]
-            )
+            _confirm_line(s, results.get(s["id"]) or {}, left.get(s["id"]))
             for s in _tp.confirm_steps(plan)
         ],
     }
+
+
+#: How much of a step's evidence note a one-line face carries.
+_EVIDENCE_FACE = 200
+
+
+def _one_line(text, limit: int = _EVIDENCE_FACE) -> str:
+    """``text`` folded onto one line, clipped to ``limit`` with "…"."""
+    flat = " ".join(str(text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+def _failed_line(f: dict) -> str:
+    """A failed step for the stop's reason: its text, and what was seen."""
+    text = str((f.get("step") or {}).get("text") or "")
+    saw = _one_line(f.get("note"))
+    return "%s — saw: %s" % (text, saw) if saw else text
+
+
+def _agent_left(plan: dict) -> Dict[str, str]:
+    """``{step id: why}`` for the steps the agent left to the person, from
+    ``test_plans.verify_status(plan)["human_steps"][i]["why"]`` ("agent
+    couldn't: <note>") — ``{}`` when that is not there to read."""
+    from backend.web.core import test_plans as _tp
+
+    status_of = getattr(_tp, "verify_status", None)
+    if status_of is None:
+        return {}
+    try:
+        steps = (status_of(plan) or {}).get("human_steps") or []
+    except Exception:  # noqa: BLE001 — the result's own note is the fallback
+        return {}
+    return {
+        str(h.get("id") or ""): _one_line(h.get("why"))
+        for h in steps
+        if isinstance(h, dict) and h.get("why")
+    }
+
+
+def _confirm_line(step: dict, entry: dict, left: Optional[str] = None) -> str:
+    """One thing a person is asked to check before confirming: the step, what
+    to look for, and — for a step the agent could not do — why not
+    (``left``: Verify's own "agent couldn't: …" for it; else the result's
+    ``why``, else its note)."""
+    line = step["text"]
+    if step.get("expect"):
+        line = "%s — look for: %s" % (line, step["expect"])
+    if left:
+        return "%s — %s" % (line, left)
+    if entry.get("result") == "blocked" and str(entry.get("by") or "") != "human":
+        why = _one_line(entry.get("why") or entry.get("note"))
+        if why:
+            line = "%s — the agent couldn't: %s" % (line, why)
+    return line
 
 
 async def _pr_of(sess: dict, flight: dict):
@@ -570,7 +643,7 @@ async def _reviews_obs(flight: dict, step: dict, sess: dict, now: float) -> dict
                 comments[str(c.id)] = c
             ids = list(comments)
     except Exception as err:  # noqa: BLE001 — "could not ask" is not "no comments"
-        _log("flight %s: review comments unavailable: %v", flight["id"], err)
+        _warn("flight %s: review comments unavailable: %v", flight["id"], err)
         ids = None
     _REVIEWS[flight["id"]] = {"at": now, "ids": ids, "comments": comments, "pr": pr}
     return {"ids": ids}
@@ -583,15 +656,23 @@ async def _checks_obs(flight: dict, sess: dict, now: float) -> dict:
     if cache and now - cache["at"] < _CHECKS_EVERY_S:
         return cache
     wt, branch = sess.get("folder") or "", sess.get("branch") or ""
-    verdict, failing = "unknown", []
-    if wt and branch:
+    verdict, failing, why = "unknown", [], ""
+    if not wt:
+        why = "the session has no folder"
+    elif not branch:
+        why = "the session is not on a branch"
+    else:
         try:
-            verdict = await _gh.pr_checks(wt, branch)
+            verdict, why = await _gh.pr_checks_why(wt, branch)
             if verdict == "failed":
                 failing = await _failing_checks(wt, branch)
-        except Exception:  # noqa: BLE001
-            verdict = "unknown"
+        except Exception as err:  # noqa: BLE001 — unknown, saying why
+            verdict, why = "unknown", "couldn't ask GitHub: %s" % _error_line(err)
     out = {"at": now, "verdict": verdict, "failing": failing}
+    if verdict == "unknown":
+        # flights._judge_checks fails the stop with this after a while of
+        # unknown, instead of "could not read the checks yet" for good.
+        out["why"] = why or "GitHub gave no answer"
     _CHECKS[flight["id"]] = out
     return out
 
@@ -797,7 +878,7 @@ async def _when_labels(flight: dict, sess: dict, now: float) -> List[str]:
                     if isinstance(d, dict) and d.get("name")
                 ]
     except Exception as err:  # noqa: BLE001 — no labels, the condition says so
-        _log("flight %s: labels unavailable: %v", flight["id"], err)
+        _warn("flight %s: labels unavailable: %v", flight["id"], err)
         labels = []
     _WHEN_LABELS[flight["id"]] = {"at": now, "labels": labels}
     return list(labels)
@@ -846,7 +927,7 @@ async def when_facts(flight: dict, step: dict, sess: dict, now: float) -> dict:
         try:
             d = await asyncio.to_thread(when_diff, flight, sess.get("folder") or "")
         except Exception as err:  # noqa: BLE001
-            _log("flight %s: diff facts unavailable: %v", flight["id"], err)
+            _warn("flight %s: diff facts unavailable: %v", flight["id"], err)
             d = {"files": [], "added": 0, "removed": 0}
         facts["files"] = d["files"]
         facts["added"] = d["added"]
@@ -888,8 +969,9 @@ async def observe(flight: dict, now: float) -> dict:
     if kind == "verify":
         try:
             obs["verify"] = await asyncio.to_thread(_verify_obs, flight, ss, sess)
-        except Exception:  # noqa: BLE001
-            obs["verify"] = {}
+        except Exception as err:  # noqa: BLE001 — said, never "getting ready"
+            _warn("flight %s: the check is unreadable: %v", flight["id"], err)
+            obs["verify"] = {"error": "couldn't read the check: %s" % _one_line(err)}
     if (
         kind == "reviews"
         and sess.get("pr_url")
@@ -909,16 +991,79 @@ async def observe(flight: dict, now: float) -> dict:
                 _messages_pending, flight["session"]
             )
         except Exception as err:  # noqa: BLE001 — unknown, never "no workers"
-            _log("flight %s: workers unreadable: %v", flight["id"], err)
+            _warn("flight %s: workers unreadable: %v", flight["id"], err)
             obs["children"] = None
+    if kind in _LAUNCHED_WORKER and ss["state"] == "running":
+        try:
+            obs["launch"] = await asyncio.to_thread(_launch_obs, ss)
+        except Exception as err:  # noqa: BLE001 — unknown: the kind judges alone
+            _warn("flight %s: launch queue unreadable: %v", flight["id"], err)
     if plug is not None and plug.observe is not None:
         try:
             obs[kind] = await plug.observe(flight, step, ss, sess, now)
         except _StepFailed as err:
             obs[kind] = {"failed": str(err), "detail": dict(err.detail or {})}
         except Exception as err:  # noqa: BLE001 — unknown, the judge waits
-            _log("flight %s: %s unobservable: %v", flight["id"], kind, err)
+            _warn("flight %s: %s unobservable: %v", flight["id"], kind, err)
     return obs
+
+
+#: Kinds whose stop waits on a worker it spawned (``spawn_worker``, the
+#: worker's title first in ``detail.children``) → what a person calls it.
+_LAUNCHED_WORKER = {"review": "the reviewer"}
+
+
+def _launch_obs(ss: dict) -> Optional[dict]:
+    """Whether the worker a stop spawned ever started (blocking): ``{"title",
+    "waiting": True, "why", "since"}`` while the launch gate still holds it
+    (memory), ``{"title", "failed": <error>}`` when its queued launch failed,
+    else None (it started, or nothing is known)."""
+    from backend.web.core import launch_gate as _lg
+
+    kids = (ss.get("detail") or {}).get("children") or []
+    if not kids:
+        return None
+    title = str(kids[0])
+    rec = _lg.waiting(title)
+    if rec is not None:
+        return {
+            "title": title,
+            "waiting": True,
+            "why": str(rec.get("reason") or "") or "memory is low",
+            "since": float(rec.get("since") or 0.0),
+        }
+    if title in _server().ENGINE.instances:
+        return None
+    done = _lg.last_outcome(title)
+    if done and not done.get("started") and done.get("error"):
+        return {"title": title, "failed": str(done["error"])}
+    return None
+
+
+def _launch_verdict(flight: dict, obs: dict, action: dict, now: float) -> dict:
+    """``action`` for a stop whose spawned worker never started: while the
+    launch gate holds it, a wait saying why and for how long — a park on the
+    person past :data:`MEMORY_PARK_S` — and a launch that failed fails the
+    stop with "couldn't start the reviewer: <why>" (not "did not finish").
+    Any other stop, or a worker that started, keeps ``action``."""
+    step = _flights._current(flight)
+    if step is None or step["kind"] not in _LAUNCHED_WORKER:
+        return action
+    ss = flight["step_states"][step["id"]]
+    launch = obs.get("launch")
+    if ss["state"] != "running" or not isinstance(launch, dict):
+        return action
+    what = _LAUNCHED_WORKER[step["kind"]]
+    if launch.get("failed"):
+        out = _flights.fail_action(
+            flight, "couldn't start %s: %s" % (what, launch["failed"]), obs
+        )
+        # Memory or a refused create is nothing the agent can fix.
+        return dict(out, then="halt") if out.get("then") == "agent" else out
+    if not launch.get("waiting") or action.get("action") not in ("wait", "fail"):
+        return action
+    since = float(launch.get("since") or 0.0) or float(ss.get("since") or now)
+    return _memory_wait(what, str(launch.get("why") or ""), since, now, {})
 
 
 async def _guard_obs(flight: dict, sess: dict, now: float, obs: dict) -> None:
@@ -938,7 +1083,7 @@ async def _guard_obs(flight: dict, sess: dict, now: float, obs: dict) -> None:
         except _StepFailed as err:
             guards[gstep["id"]] = {"failed": str(err), "detail": dict(err.detail or {})}
         except Exception as err:  # noqa: BLE001 — unknown, the guard holds its fire
-            _log("flight %s: %s unobservable: %v", flight["id"], gstep["kind"], err)
+            _warn("flight %s: %s unobservable: %v", flight["id"], gstep["kind"], err)
 
 
 def _messages_pending(title: str) -> bool:
@@ -1375,8 +1520,46 @@ async def _start_verify_run(
             "detail": str(body.get("detail") or body.get("error") or "memory is low"),
         }
     raise _StepFailed(
-        str(body.get("error") or "") or "the behaviors check could not start"
+        "couldn't start Verify: %s"
+        % (str(body.get("error") or "") or "the server answered %d" % resp.status_code)
     )
+
+
+#: How long a stop waits on memory to start what it needs (Verify's check, a
+#: reviewer) before it asks the person. Real flights waited 13–44 min on
+#: "memory is low" with nobody asked; past this they park on you.
+MEMORY_PARK_S = 5 * 60.0
+#: What works on a stop parked on memory (Done there is "retry" too).
+MEMORY_ITEMS = [
+    "Free some memory (close a session or an app), then press Retry — or "
+    "Skip this stop",
+]
+
+
+def _waited_word(seconds: float) -> str:
+    """How long something has waited, in whole minutes once past one."""
+    s = max(0.0, float(seconds))
+    return _flights.duration_word(s if s < 60 else s - s % 60)
+
+
+def _memory_wait(what: str, why: str, since: float, now: float, detail: dict) -> dict:
+    """The verdict for a stop whose ``what`` ("Verify", "the reviewer") could
+    not start because memory is short: a wait that says why and for how long,
+    or — past :data:`MEMORY_PARK_S` — a park on the person (``ask``
+    "memory": Retry / Skip / Done = retry)."""
+    why = str(why or "").strip() or "memory is low"
+    waited = now - since
+    if waited >= MEMORY_PARK_S:
+        return {
+            "action": "you",
+            "note": "couldn't start %s: %s (waited %s)"
+            % (what, why, _waited_word(waited)),
+            "detail": dict(detail, ask="memory", items=list(MEMORY_ITEMS)),
+        }
+    note = "waiting for memory to start %s: %s" % (what, why)
+    if waited >= 60:
+        note += " · waited %s" % _waited_word(waited)
+    return {"action": "wait", "note": note, "detail": detail}
 
 
 def _start_command(flight: dict, step: dict, folder: str) -> None:
@@ -1511,21 +1694,62 @@ async def _resolve_state(provider, want: str) -> str:
     )
 
 
-def _run_notify(flight: dict, step: dict) -> None:
+def _run_notify(flight: dict, step: dict) -> dict:
+    """A notify stop (blocking) → what really happened: ``{"delivered":
+    "phone" | "bell", "why"}``. The bell always gets the row (the
+    ``flight.notified`` event the bell lists); the phone gets it only when
+    phone notifications (ntfy) are on, and the push is awaited, so "sent to
+    your phone" is said only when the phone's server took it."""
     from backend.web.core import ntfy as _ntfy
 
     text = _flights.fill_prompt(step["config"].get("text") or step["title"], flight)
+    title = "%s · %s" % (flight["plan_name"], flight["session"] or "route")
     try:
         cfg = _ntfy.load()
-        if cfg.active:
-            _ntfy.publish_soon(
-                cfg,
-                title="%s · %s" % (flight["plan_name"], flight["session"] or "flight"),
-                message=text,
-                tags=["bird"],
+        active = bool(cfg.active)
+    except Exception as err:  # noqa: BLE001 — unreadable settings: the bell only
+        _warn("flight %s: notify settings unreadable: %v", flight["id"], err)
+        cfg, active = None, False
+    out = {"delivered": "bell", "why": "phone notifications are off"}
+    if active:
+        try:
+            ok, why = asyncio.run(
+                _ntfy.publish(cfg, title=title, message=text, tags=["bird"])
             )
-    except Exception as err:  # noqa: BLE001 — a notify step never blocks
-        _log("flight %s: notify failed: %v", flight["id"], err)
+        except Exception as err:  # noqa: BLE001 — a notify stop never blocks
+            ok, why = False, _error_line(err)
+        if ok:
+            out = {"delivered": "phone", "why": ""}
+        else:
+            out = {"delivered": "bell", "why": str(why or "the push failed")}
+            _warn("flight %s: notify not sent: %v", flight["id"], out["why"])
+    _emit(
+        "flight.notified",
+        flight,
+        {
+            "text": text,
+            "title": title,
+            "phone": out["delivered"] == "phone",
+            "why": out["why"],
+        },
+    )
+    return out
+
+
+def _notify_outcome(res) -> dict:
+    """A notify stop's verdict from :func:`_run_notify`'s answer: the note
+    and receipt say where it went — never "sent" when it was not."""
+    if not isinstance(res, dict):
+        return {"action": "done", "note": "notified", "detail": {"receipt": "notified"}}
+    why = str(res.get("why") or "")
+    if res.get("delivered") == "phone":
+        note = receipt = "sent to your phone"
+    elif why == "phone notifications are off":
+        note = receipt = "shown in the bell — phone notifications are off"
+    else:
+        note = "not sent to your phone: %s (shown in the bell)" % (why or "unknown")
+        receipt = "not sent: %s" % (why or "unknown")
+    return {"action": "done", "note": note, "detail": {"receipt": receipt}}
 
 
 async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> dict:
@@ -1844,9 +2068,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
         return action
     try:
         if kind == "fail" and action.get("then") == "agent":
-            await asyncio.to_thread(
-                _deliver, flight["session"], _fix_note(step, action)
-            )
+            await asyncio.to_thread(_deliver_fix, flight, step, action)
             return action
         if kind != "run":
             return action
@@ -1857,14 +2079,10 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             pid = str(got.get("plan") or "")
             cfg = step.get("config") or {}
             ss = flight["step_states"][step["id"]]["detail"]
-            notes = str(cfg.get("notes") or "")
-            extra = str(got.get("extra_notes") or ss.get("extra_notes") or "")
-            if extra:
-                notes = (notes + "\n" + extra).strip()
             res = await _start_verify_run(
                 pid,
                 str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH),
-                notes,
+                str(cfg.get("notes") or ""),
                 _verify_walk(cfg),
                 # "You" signs the check off even when every step passes.
                 confirm=str(cfg.get("who") or "both") == "you",
@@ -1896,19 +2114,24 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                     ),
                 )
             # The memory guard refused the checker: NOT started. The stop
-            # waits with the reason and retries (flights._verify_guard).
-            return {
-                "action": "wait",
-                "note": "waiting for memory to start the check (%s)" % res["detail"],
-                "detail": dict(
+            # waits with the reason on screen at once, and how long it has
+            # waited, retrying (flights._verify_guard); past MEMORY_PARK_S it
+            # parks on the person with what works.
+            since = float(ss.get("memory_since") or now)
+            return _memory_wait(
+                "Verify",
+                res["detail"],
+                since,
+                now,
+                dict(
                     got,
                     run_started=False,
                     run_wait="memory",
-                    memory_since=float(ss.get("memory_since") or now),
+                    memory_since=since,
                     memory_detail=res["detail"],
                     last_try=now,
                 ),
-            }
+            )
         if phase == "nudge":
             v = action.get("detail") or {}
             pid = str(v.get("plan") or "")
@@ -1987,8 +2210,8 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                 "detail": {"receipt": _flights.ticket_receipt(step["config"])},
             }
         if sk == "notify":
-            await asyncio.to_thread(_run_notify, flight, step)
-            return {"action": "done", "note": "sent", "detail": {"receipt": "sent"}}
+            res = await asyncio.to_thread(_run_notify, flight, step)
+            return _notify_outcome(res)
         if sk == "split":
             return await _run_split(flight, step, action)
         if sk == "join":
@@ -2005,20 +2228,86 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
         if out.get("then") == "agent":
             # Handed to the agent: tell it, or there is nobody to fix it.
             try:
-                await asyncio.to_thread(
-                    _deliver, flight["session"], _fix_note(step, out)
-                )
+                await asyncio.to_thread(_deliver_fix, flight, step, out)
             except Exception:  # noqa: BLE001
                 out = dict(out, then="halt")
+        return out
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:  # noqa: BLE001 — never a silent "carrying out"
+        # Anything else used to escape to the pass, which only logged it: the
+        # stop kept its in-progress mark and read "carrying out <stop>" for
+        # PERFORM_STALE_S, then ran the effect AGAIN, forever. Now it fails
+        # here, saying what broke (the traceback goes to the log), and the
+        # mark is cleared by the outcome record like any other verdict.
+        _log(
+            "flight %s: %s hit an error: %v\n%s",
+            flight.get("id"),
+            step.get("title") or step.get("kind"),
+            err,
+            traceback.format_exc(),
+        )
+        out = _flights.fail_action(
+            flight,
+            "%s hit an error: %s"
+            % (step.get("title") or step.get("kind"), _error_line(err)),
+            {"session": {"present": bool(flight["session"])}},
+        )
+        if out.get("then") == "agent":
+            # A server error is not the agent's to fix, and the retry after
+            # its fix would carry out an effect that may have happened.
+            out = dict(out, then="halt")
         return out
     return action
 
 
-def _fix_note(step: dict, action: dict) -> str:
-    return (
-        "[MindFlock route] %s failed: %s\nFix it; the route retries the stop "
-        "once you are done." % (step["title"], action.get("reason") or "failed")
+def _error_line(err: BaseException) -> str:
+    """An exception as one plain line: its message, else its type."""
+    return _one_line(str(err)) or type(err).__name__
+
+
+def _verify_evidence(flight: Optional[dict], step: dict) -> List[str]:
+    """For a failed Verify stop: each failed step of its check with what it
+    should do and what was seen (blocking; ``[]`` when unreadable)."""
+    if not flight or step.get("kind") != "verify":
+        return []
+    from backend.web.core import test_plans as _tp
+
+    ss = (flight.get("step_states") or {}).get(step.get("id")) or {}
+    pid = str((ss.get("detail") or {}).get("plan") or "")
+    try:
+        plan = _tp.get(pid) if pid else None
+        failures = _tp.failed_steps(plan) if plan else []
+    except Exception:  # noqa: BLE001 — the reason still says which steps
+        return []
+    out: List[str] = []
+    for f in failures[:12]:
+        s = f.get("step") or {}
+        line = "- %s" % (s.get("text") or "a step")
+        if s.get("expect"):
+            line += "\n  expected: %s" % _one_line(s["expect"], 400)
+        if f.get("note"):
+            line += "\n  seen: %s" % _one_line(f["note"], 1200)
+        out.append(line)
+    return out
+
+
+def _deliver_fix(flight: dict, step: dict, action: dict) -> None:
+    """Hand a stop's failure to the flight's agent (blocking)."""
+    _deliver(flight["session"], _fix_note(step, action, flight))
+
+
+def _fix_note(step: dict, action: dict, flight: Optional[dict] = None) -> str:
+    """What the agent is told when a stop's failure is handed to it — for a
+    Verify stop, with each failed step's evidence."""
+    text = "[MindFlock route] %s failed: %s" % (
+        step.get("title") or step.get("kind") or "a stop",
+        action.get("reason") or "failed",
     )
+    evidence = _verify_evidence(flight, step)
+    if evidence:
+        text += "\nWhat Verify saw:\n" + "\n".join(evidence)
+    return text + "\nFix it; the route retries the stop once you are done."
 
 
 # --------------------------------------------------------------------------- #
@@ -2158,7 +2447,7 @@ async def _step_member(
     nothing changed."""
     view = _flights.member_view(f, i)
     obs = await observe(view, now)
-    action = _flights.next_action(view, obs, now)
+    action = _launch_verdict(view, obs, _flights.next_action(view, obs, now), now)
     sess = obs.get("session") or {}
     if not f["repo_root"] and sess.get("present"):
         root = await asyncio.to_thread(_repo_root, f["session"])
@@ -2251,7 +2540,12 @@ async def _post_verify_results(
                     )
     except Exception as err:  # noqa: BLE001 — never fails the stop
         outcome = "failed: %s" % err
-    _log("flight %s: verify results to the PR: %v", fid, outcome)
+    _log(
+        "flight %s: verify results to the PR: %v",
+        fid,
+        outcome,
+        level="warning" if outcome.startswith("failed") else "info",
+    )
 
     def fn(x: dict) -> None:
         st = x["step_states"].get(step["id"])
@@ -2323,7 +2617,7 @@ async def step_flight(fid: str) -> None:
             if f["state"] not in _flights.ACTIVE or f["cursor"] == cursor:
                 return
     except Exception as err:  # noqa: BLE001 — one flight never stops a pass
-        _log("flight %s pass failed: %v", fid, err)
+        _log("flight %s pass failed: %v\n%s", fid, err, traceback.format_exc())
 
 
 def _disarm_if_removed(fid: str, sid: str) -> None:
@@ -2526,6 +2820,202 @@ def _subject_of(raw) -> dict:
     return _flights._normalize_subject(raw if isinstance(raw, dict) else {})
 
 
+class PreflightError(_flights.PlanError):
+    """A start refused by :func:`preflight` before anything was created: the
+    first problem's sentence and ``field`` (a route answers it like a bad
+    step), every problem in ``problems``, and ``session`` — the session a
+    client can offer instead (the one holding the branch, the one sharing the
+    folder), "" when none."""
+
+    def __init__(self, problems: List[dict]) -> None:
+        first = problems[0]
+        super().__init__(
+            str(first.get("detail") or "this route can't start"),
+            str(first.get("field") or ""),
+            str(first.get("code") or "bad_step"),
+        )
+        self.problems = [dict(p) for p in problems]
+        self.session = str(first.get("session") or "")
+
+
+def _adhoc(raw_steps, base: Optional[dict], name: str) -> Tuple[dict, dict]:
+    """:func:`flights.adhoc_plan` → ``(plan, {author's step id → new id})``:
+    the ids the author gave are renumbered, so a ``start_at`` naming one
+    ("build") goes through the map. An older ``adhoc_plan`` without
+    ``id_map`` gives an empty map."""
+    id_map: dict = {}
+    try:
+        plan = _flights.adhoc_plan(raw_steps, base, name, id_map=id_map)
+    except TypeError as err:
+        if "id_map" not in str(err):
+            raise
+        plan = _flights.adhoc_plan(raw_steps, base, name)
+    return plan, {str(k): str(v) for k, v in id_map.items()}
+
+
+def branch_holder(repo: str, branch: str, exclude: str = "") -> str:
+    """The live session (not ``exclude``) whose checkout is on ``branch`` of
+    ``repo`` (blocking), "" when none: a new session cut on that branch
+    would fail with "branch … is already checked out at …"."""
+    branch = str(branch or "").strip()
+    if not branch:
+        return ""
+    want = os.path.realpath(repo) if repo else ""
+    srv = _server()
+    for title, inst in list(srv.ENGINE.instances.items()):
+        if title == exclude or str(getattr(inst, "Branch", "") or "") != branch:
+            continue
+        if want:
+            root = _repo_root(title)
+            if root and os.path.realpath(root) != want:
+                continue
+        return str(title)
+    return ""
+
+
+def preflight(
+    plan_or_steps,
+    *,
+    repo,
+    session=None,
+    attach=False,
+    start_at=None,
+    branch: str = "",
+) -> List[dict]:
+    """Everything that would stop a route AFTER it has created things, checked
+    BEFORE (blocking) → ``[{"field", "detail", "session"?}]``, empty when it
+    is clear to start. :func:`start` and :func:`attach` refuse with
+    :class:`PreflightError` on the first one; a dry run lists them all.
+
+    * ``start_at`` names no stop (``start_at``);
+    * a Verify stop's ``where`` names an environment ``repo`` does not have
+      (``steps[i].config.where``, with the ones it has) — it used to fly
+      Agent → Commit → Push → PR and only then halt;
+    * ``branch`` (the branch a NEW session would be cut on) is already a
+      live session's: "<session> already has this branch — run the route on
+      that session instead" (``session`` names it);
+    * a Ship stop on ``session`` (an existing session) that shares its
+      folder with another session, or is a copy window of a branch another
+      window drives — the fast-track refusal, said now rather than at the
+      first Ship stop (``session`` names the other one).
+
+    ``plan_or_steps``: a plan (``{"steps": [...]}``) or an ad-hoc steps list
+    (a bad list is a problem too, with its ``field``)."""
+    problems: List[dict] = []
+    id_map: dict = {}
+    if isinstance(plan_or_steps, dict):
+        plan = plan_or_steps
+    else:
+        try:
+            plan, id_map = _adhoc(plan_or_steps, None, "")
+        except _flights.PlanError as err:
+            return [{"field": err.field or "steps", "detail": err.message}]
+    steps = list(plan.get("steps") or [])
+    title = str(session or "").strip()
+    at = str(start_at or "").strip()
+    at = id_map.get(at, at)
+    cursor = 0
+    try:
+        cursor = _flights.start_cursor(plan, at, attach=bool(attach))
+    except _flights.FlightError as err:
+        problems.append({"field": "start_at", "detail": err.detail})
+    repo = str(repo or "").strip()
+    if not repo and title:
+        repo = _repo_root(title)
+    problems += _where_problems(steps, cursor, repo)
+    if branch and not (title and attach):
+        holder = branch_holder(repo, branch, exclude=title)
+        if holder:
+            problems.append(
+                {
+                    "field": "branch",
+                    "code": "branch_taken",
+                    "detail": "%s already has this branch — run the route on "
+                    "that session instead" % holder,
+                    "session": holder,
+                }
+            )
+    if title:
+        shared = _ship_problem(steps, cursor, title)
+        if shared is not None:
+            problems.append(shared)
+    return problems
+
+
+def _where_problems(steps: List[dict], cursor: int, repo: str) -> List[dict]:
+    """A problem for each Verify stop from ``cursor`` on whose ``where`` the
+    repo has no environment of (none when the repo is unknown)."""
+    from backend.web.core import test_plans as _tp
+
+    if not repo:
+        return []
+    out: List[dict] = []
+    have: Optional[List[str]] = None
+    for i, st in enumerate(steps):
+        if i < cursor or st.get("kind") != "verify":
+            continue
+        where = str((st.get("config") or {}).get("where") or "").strip()
+        # "live" always exists: the repo's own target (see _verify_env).
+        if not where or where.lower() in (_flights.VERIFY_WHERE_BRANCH, "live"):
+            continue
+        try:
+            if _tp.environment(repo, where) is not None:
+                continue
+            if have is None:
+                have = [str(e.get("name") or "") for e in _tp.environments(repo)]
+        except Exception as err:  # noqa: BLE001 — unknown is not "no such env"
+            _warn("preflight: environments of %s unreadable: %v", repo, err)
+            return out
+        out.append(
+            {
+                "field": "steps[%d].config.where" % i,
+                "detail": "%s: no environment named %s in this repo — it has %s"
+                % (
+                    st.get("title") or "Verify",
+                    where,
+                    ", ".join(n for n in have if n) or "none",
+                ),
+            }
+        )
+    return out
+
+
+def _ship_problem(steps: List[dict], cursor: int, title: str) -> Optional[dict]:
+    """The fast-track refusal the first Ship stop from ``cursor`` on would
+    meet on ``title`` (a folder shared with another session, a copy window),
+    as a problem — None when it would ship."""
+    import json as _json
+
+    srv = _server()
+    refusal_of = getattr(srv, "_lane_refusal", None)
+    if refusal_of is None:
+        return None
+    for i, st in enumerate(steps):
+        if i < cursor or st.get("kind") != "ship":
+            continue
+        lane = str((st.get("config") or {}).get("lane") or "")
+        try:
+            refused = refusal_of(title, lane)
+            if refused is None:
+                continue
+            body = _json.loads(refused.body)
+        except Exception as err:  # noqa: BLE001 — the stop says it later
+            _warn("preflight: lane check on %s: %v", title, err)
+            return None
+        return {
+            "field": "steps[%d]" % i,
+            "code": "shared_folder",
+            "detail": str(body.get("error") or "this session can't ship by itself"),
+            "session": str(body.get("shared_with") or body.get("driver") or ""),
+        }
+    return None
+
+
+def _refuse(problems: List[dict]) -> None:
+    if problems:
+        raise PreflightError(problems)
+
+
 async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     """``POST /api/flights/start``. Raises :class:`flights.FlightError`, and
     :class:`flights.PlanError` for a bad ad-hoc ``steps`` list. The lanes of
@@ -2552,16 +3042,38 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
             raise _flights.FlightError(
                 "needs_title", 400, "an ad-hoc route needs a session (or a folder)"
             )
-        plan = _flights.adhoc_plan(
+        plan, id_map = _adhoc(
             body.get("steps"),
             plan,
             subject.get("title") or ("Route on %s" % title if title else ""),
         )
+        # The author's own step id ("build") → the id it was given.
+        start_at = id_map.get(start_at, start_at)
     if title and title not in srv.ENGINE.instances:
         raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
     # Everything that can refuse is checked BEFORE a session is created: a
-    # bad step id used to leave an orphan session with no flight.
+    # bad step id used to leave an orphan session with no flight, a
+    # mistyped Verify environment flew to the PR before it halted.
     _flights.start_cursor(plan, start_at, attach=bool(title))
+    repo_hint = (
+        ""
+        if title
+        else (
+            str(body.get("repo_path") or "").strip()
+            or str((plan.get("session") or {}).get("repo_path") or "")
+        )
+    )
+    _refuse(
+        await asyncio.to_thread(
+            lambda: preflight(
+                plan,
+                repo=repo_hint,
+                session=title or None,
+                attach=bool(title),
+                start_at=start_at,
+            )
+        )
+    )
     take = body.get("absorb_fasttrack")
     rec = None
     if title and (take is None or bool(take)):
@@ -2742,18 +3254,30 @@ def set_start_on(flight_id: str, value) -> dict:
     return _changed(flight_id, lambda f: _flights.op_start_on(f, value))
 
 
+#: Why a stop is parked on the person where Done means "check again" — a
+#: retry of the stop: Verify's check stopped before it finished
+#: (``blocked``), or memory kept it from starting (``memory``, any stop that
+#: waits on memory to start something — Verify, a reviewer).
+_RETRY_ASKS = ("blocked", "memory")
+
+
 def _needs_you_perch(flight: dict, sid: str) -> bool:
-    """Whether ``sid`` is a Verify stop parked on the person because the check
-    needs them to DO something (``ask`` "needs_you" or "memory"): there Done
-    means "I did it — check again", which is a retry of the stop."""
+    """Whether ``sid`` is the current stop, parked on the person for a reason
+    where Done means "I sorted it — try again" (:data:`_RETRY_ASKS`): a
+    Verify stop whose check could not finish, or a stop memory kept from
+    starting its check or its reviewer."""
     cur = _flights._current(flight)
     ss = flight["step_states"].get(sid) or {}
+    ask = (ss.get("detail") or {}).get("ask")
     return (
         cur is not None
         and cur["id"] == sid
-        and cur["kind"] == "verify"
         and ss.get("state") == "waiting_you"
-        and (ss.get("detail") or {}).get("ask") in ("needs_you", "memory")
+        and not (ss.get("detail") or {}).get("failed_reason")
+        and (
+            (cur["kind"] == "verify" and ask in _RETRY_ASKS)
+            or (ask == "memory" and cur["kind"] in _LAUNCHED_WORKER)
+        )
     )
 
 
@@ -2775,11 +3299,13 @@ def _confirm_perch(flight: dict, sid: str) -> str:
 
 
 def _no_blanket_done(flight: dict, sid: str) -> None:
-    """There is no blanket Done on a Verify stop waiting on you
-    (docs/behaviors.md §5): it moves on when its behaviors are answered, or on
-    Skip. (It used to pass every open behavior unseen — "Done on the chain".)
-    A Verify stop whose FAILURE was handed to you (``on_fail`` you) still takes
-    Done: that answers the failure, not the behaviors."""
+    """There is no blanket Done on a Verify stop waiting on you: Done is
+    "Confirm verified" on a check waiting for your confirm, "check again" on
+    one that could not finish (:func:`_needs_you_perch`), and refused
+    anywhere else — it would pass a check nobody saw. A Verify stop whose
+    FAILURE was handed to you (``on_fail`` you) still takes Done: that
+    answers the failure, not the check. (The machine word stays
+    ``answer_behaviors``: clients read it.)"""
     cur = _flights._current(flight)
     ss = flight["step_states"].get(sid) or {}
     if (
@@ -2792,8 +3318,7 @@ def _no_blanket_done(flight: dict, sid: str) -> None:
         raise _flights.FlightError(
             "answer_behaviors",
             409,
-            "answer its behaviors (or Skip it) — %s moves on once every one has "
-            "an answer" % cur["title"],
+            "%s isn't verified yet — Retry to verify again, or Skip" % cur["title"],
         )
 
 
@@ -2819,9 +3344,7 @@ def fix(flight_id: str, step_id: str) -> dict:
         (after["step_states"].get(step_id) or {}).get("detail", {}).get("reason") or ""
     )
     try:
-        _deliver(
-            after["session"], _fix_note(step or {"title": step_id}, {"reason": reason})
-        )
+        _deliver_fix(after, step or {"title": step_id}, {"reason": reason})
     except Exception as err:  # noqa: BLE001 — _StepFailed, or the queue's own
         # The agent can't be asked: the stop halts again, saying why.
         said = str(err) or "the agent could not be asked"
@@ -2854,15 +3377,20 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
             raise _flights.FlightError("not_needs_you", 409, str(err))
         wake()
         return _flights.get(flight_id) or before
-    if op == "done" and _needs_you_perch(before, step):
-        # "I did it": the stop runs again, and the judge checks the behaviors
-        # that were waiting on the person.
+    perch = _needs_you_perch(before, step)
+    if op == "done" and perch:
+        # "I sorted it": the stop runs again — Verify checks again, memory
+        # gets another try.
         op = "retry"
     fn = _OPS[op]
     if op == "done":
         _no_blanket_done(before, step)
 
     def _do(f: dict) -> None:
+        if op == "retry" and perch and _needs_you_perch(f, step):
+            # The planner retries a failed stop; a park whose sentence says
+            # "press Retry" is one, so Retry is never refused there.
+            f["step_states"][step]["state"] = "failed"
         if op == "done":
             fn(f, step, note)
         elif op in ("skip", "retry", "jump"):
@@ -2897,6 +3425,22 @@ def _is_its_reviewer(session: str, title: str, since: float) -> bool:
     return not since or born >= since - 5.0
 
 
+def _cancel_queued(title: str, parent: str) -> bool:
+    """Drop ``title`` from the launch gate's queue when it still waits there
+    as ``parent``'s worker (never started: nothing to close). True if it was
+    dropped."""
+    try:
+        from backend.web.core import launch_gate as _lg
+
+        rec = _lg.waiting(title)
+        if rec is None or str(rec.get("parent") or "") not in ("", parent):
+            return False
+        return bool(_lg.cancel(title))
+    except Exception as err:  # noqa: BLE001 — never fails the op
+        _warn("flights: dropping queued %s: %v", title, err)
+        return False
+
+
 def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
     """Close the reviewer of every ``review`` stop that was waiting on one
     and no longer is — jumped back over, skipped, retried, cancelled or
@@ -2916,12 +3460,12 @@ def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
             continue
         was = before["step_states"].get(s["id"]) or {}
         kids = [str(k) for k in (was.get("detail") or {}).get("children") or [] if k]
-        if was.get("state") != "running" or not kids:
-            continue
+        if was.get("state") not in ("running", "waiting_you") or not kids:
+            continue  # waiting_you: parked while its reviewer waited on memory
         now = (after.get("step_states") or {}).get(s["id"]) or {}
         if (
             after.get("state") not in _flights.FINAL
-            and now.get("state") == "running"
+            and now.get("state") == was.get("state")
             and [str(k) for k in (now.get("detail") or {}).get("children") or []]
             == kids
         ):
@@ -2929,13 +3473,16 @@ def _close_abandoned_reviewers(before: dict, after: dict) -> List[str]:
             # with its child, but nothing will read that verdict any more.
             continue
         for k in kids:
+            if _cancel_queued(k, title):
+                out.append(k)  # it never started: it leaves the launch queue
+                continue
             if not _is_its_reviewer(title, k, float(was.get("since") or 0.0)):
                 continue  # gone, or the title now names someone else's session
             try:
                 if _review._close(title, k):
                     out.append(k)
             except Exception as err:  # noqa: BLE001 — never fails the op
-                _log("flight %s: closing reviewer %s: %v", after.get("id"), k, err)
+                _warn("flight %s: closing reviewer %s: %v", after.get("id"), k, err)
     return out
 
 
@@ -3166,6 +3713,7 @@ async def attach(flight_id: str, body: dict) -> dict:
             raise _flights.FlightError(
                 "in_flight", 409, "%s is already on a route" % title
             )
+        _refuse(await asyncio.to_thread(_preflight_attach, f, title, ""))
     else:
         plan = _flights.get_plan(f["plan_id"]) or {}
         defaults = dict(_flights._blank_session(), **(plan.get("session") or {}))
@@ -3189,6 +3737,7 @@ async def attach(flight_id: str, body: dict) -> dict:
             raise _flights.FlightError(
                 "no_repo", 400, "pick a folder for the new session"
             )
+        _refuse(await asyncio.to_thread(_preflight_attach, f, "", repo))
         title = await _create_session(_session_payload(defaults, repo, prompt))
         seeded = first_agent and bool(prompt)
         no_prompt = first_agent and not prompt
@@ -3217,6 +3766,21 @@ async def attach(flight_id: str, body: dict) -> dict:
     _emit("flight.changed", flight)
     wake()
     return flight
+
+
+def _preflight_attach(f: dict, title: str, repo: str) -> List[dict]:
+    """:func:`preflight` for a grounded flight about to fly: from its cursor,
+    on ``title`` (an existing session) or a new session in ``repo``."""
+    steps = f.get("steps") or []
+    cur = int(f.get("cursor") or 0)
+    at = steps[cur]["id"] if 0 <= cur < len(steps) else ""
+    return preflight(
+        {"steps": steps},
+        repo=repo,
+        session=title or None,
+        attach=False,
+        start_at=at or None,
+    )
 
 
 def step_op(flight_id: str, step_id: str, name: str, body: Optional[dict]) -> dict:
