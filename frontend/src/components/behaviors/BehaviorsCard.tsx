@@ -32,8 +32,11 @@ import { cardMenuItems, haltedLine, verifyCardView, verifyStopStand, watchSessio
  * lib/verifyActions.ts has `fixInSession(planId)`, make this
  * `actions.fixInSession(plan.id)` — the one place the card's fix is wired
  * (the head's primary and every failed row's button both call it). */
-export function defaultFixInSession(plan: TestPlan, stepIds?: string[]): Promise<unknown> {
-  return actions.fixPlanFailures(plan, stepIds);
+export function defaultFixInSession(plan: TestPlan, _stepIds?: string[]): Promise<unknown> {
+  // The server hands EVERY failed step, with its evidence, to the session's
+  // own agent and verifies again after its turn; when that session is gone it
+  // answers without `in_session` and `fixInSession` says a new one was opened.
+  return actions.fixInSession(plan.id, plan.title || plan.id);
 }
 import { FailedSteps, VerifyConfirm } from "./VerifyConfirm";
 import "./BehaviorsCard.css";

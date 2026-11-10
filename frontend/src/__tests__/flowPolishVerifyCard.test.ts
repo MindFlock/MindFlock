@@ -146,13 +146,13 @@ describe("the card's fix is a prop: Let its agent fix it", () => {
     expect(v.sentence).toBe("1 step failed: do a.");
   });
 
-  it("the default calls the existing fix; the head and every failed row go through the one prop", () => {
+  it("the default hands the failures to the session's own agent; the head and every failed row go through the one prop", () => {
     expect(typeof defaultFixInSession).toBe("function");
     const src = code("components/behaviors/BehaviorsCard.tsx");
     expect(src).toContain("onFixInSession = defaultFixInSession");
     expect(src).toContain('else if (a.key === "agentfix") void withBusy("primary", () => onFixInSession(plan));');
     expect(src).toContain('withBusy("fix", () => onFixInSession(plan, [step.id]))');
-    expect(src).toContain("return actions.fixPlanFailures(plan, stepIds);");
+    expect(src).toContain("return actions.fixInSession(plan.id, plan.title || plan.id);");
   });
 });
 
