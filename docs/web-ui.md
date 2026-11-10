@@ -376,10 +376,14 @@ a session first*).
   stop path cancels or skips the queue; a per-session cancel never drops a
   confirmation.
 - **Stop at any moment**: **“stop recording”**, “stop listening”, “mic off”
-  or “that's all” at the end of any committed words — mid-phrase too, not only
+  or “pause listening” at the end of any committed words — mid-phrase too, not only
   as the last word of a phrase — stops listening at once; the phrase is never
   typed and what was typed before it stays in the field (*Stopped listening*
-  when nothing was).
+  when nothing was). “That's all” and “done talking” are ordinary English
+  endings, so they stop only **said on their own** — the whole phrase since
+  the last pause, an “okay” / “um” before it allowed, or after “over and
+  out” — once the phrase ends: “…so make sure that that's all.” is typed
+  and listening goes on.
 - **Push to talk.** *Click to talk* (the default): a click starts listening
   (the mic turns red inside a thin, still red ring) and it **stays on** —
   message after message, no idle timeout — until “over and out”, a stop
@@ -7193,7 +7197,7 @@ words (Enter, after the server's dialog checks), one ending in "disregard"
 takes back what was typed and keeps listening, one ending in "scratch that"
 drops just that phrase — said alone it takes back the last
 phrase typed and not yet sent — and Esc takes it all back and stops;
-"stop recording" (or "that's all", "mic off") stops at any point, never typed,
+"stop recording" (or "mic off"; "that's all" said on its own) stops at any point, never typed,
 and leaves the words in the field unsent — as letting go of push to talk does.
 "Submit" is an ordinary word here (only Claude's question prompt's review step
 takes it, through the router). A click keeps listening across messages until
@@ -7502,7 +7506,17 @@ every save), then the server's.
   "enough") and go when it goes; a stop phrase of
   **two words or more** ends any committed words at once, while a one-word one
   ("stop", "halt") counts only said on its own (the router's), so "make it
-  stop" stays a prompt; a stop-talking phrase counts only as the whole
+  stop" stays a prompt; so does a **conversational** one ("that's all", "that
+  is all", "done talking", "I'm done talking" and their heard forms:
+  `STOP_ALONE` in `lib/voiceWords.ts`, the server's `voice_words.STOP_ALONE`
+  and mobile.js `VOICE_STOP_ALONE`, one list): it stops only as the whole
+  phrase once it is over (never on a stream's committed words so far), a
+  filler before it allowed ("okay", "um", "so": `STOP_FILLERS`) and dropped,
+  or after an end phrase ("over and out, that's all" sends, then stops) — at
+  the end of a sentence it is words (the owner's "…so make sure that that's
+  all." stopped listening mid-message before 2026-11-10). The person's own
+  stop phrases of two words or more ("we're done") end any phrase like "stop
+  listening"; a single word of their own only counts said on its own; a stop-talking phrase counts only as the whole
   phrase, with an optional "ok" / "okay" / "hey" / "please" before and
   "please" / "now" after; and the stop and stop-talking phrases wait whole for
   the router like its own commands. The wake word is checked by the server
@@ -8243,7 +8257,10 @@ and hush, the fast control on a streamed guess), longest first, each phrase
 escaped, an apostrophe optional, a comma optional (*over, out* is also
 *over out*), the clear words keeping their tails (*… that / it / all /
 everything*). A stop phrase of two words or more ends any phrase (*fix it,
-that's all*); a one-word one (*stop*) stops only said on its own. A default
+stop listening*); a one-word one (*stop*) and a conversational one (*that's
+all*, *done talking*: `VOICE_STOP_ALONE`, the server's and the desktop's
+list) stop only said on their own — an *okay* / *um* before it allowed, or
+an *over and out* — and never on a streamed phrase before its end. A default
 phrase keeps the spoken variants the router keeps while it is in the list
 (*stop listening* → *stop recording*, *mic off* → *microphone off*, *done
 talking* → *I'm done talking*, *stop talking* → *stop speaking*, *okay
@@ -8645,7 +8662,7 @@ act whatever is in the box, and never land in it:
 
 | Say (at the end) | Does |
 |---|---|
-| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), answered by the falling chime alone (no *Stopped.*) — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
+| *stop recording* · *stop listening* · *stop dictating* · *mic off* — and, said on their own only, *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), answered by the falling chime alone (no *Stopped.*) — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
 | *yes* · *no (thanks)* · *always* · *yes and don't ask again* · *option two* · *the second one* · *answer yes* | **only while the session is asking** — a dialog is up, or its last `Say:` line asked a question: answers it. A bare number counts only as the whole phrase (*add two* is words) |
 
 An answer to a **dialog** is the option the dialog's own words pick (the

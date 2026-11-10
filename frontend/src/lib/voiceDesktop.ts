@@ -38,7 +38,7 @@
  *    the one {@link SpeechQueue}, and prefixed with the session's name
  *    unless it is the one you are looking at.
  * And at any point "stop recording" (the stop family, {@link stopTail})
- * stops; the router's numbered sessions, answers and questions are carried
+ * stops — "that's all" and "done talking" only said on their own; the router's numbered sessions, answers and questions are carried
  * out by {@link runVoiceCommand}; with replies on, {@link HandsFree} reads a
  * dialog or a question out and listens for the answer; and the keymap's Talk
  * hotkey ({@link TALK_EVENT}) is push to talk from anywhere.
@@ -224,7 +224,7 @@ const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(
 
 // The sound-alike tolerance (lib/voiceWords: `heard`, soundTail, soundsLikeAny),
 // imported here beside the matchers that use it.
-import { heardOf, isWakePhrase, mayBeWake, soundTail, soundsLikeAny } from "./voiceWords";
+import { heardOf, isWakePhrase, mayBeWake, soundTail, soundsLikeAny, STOP_FILLERS, stopAlone } from "./voiceWords";
 
 /** The radio words' optional tails: "disregard that", "over it". */
 const RADIO_TAILS = ["that", "it", "all", "everything"];
@@ -274,13 +274,20 @@ export interface VoiceMatchers {
   /** Which kind the matched phrase is: the first whole match, longest first. */
   radioKinds: Array<[RegExp, RadioKind]>;
   /** The stop phrases (their older wordings and heard forms too) of two
-   * words or more, longest first, as word keys: they end any committed
+   * words or more that say nothing but "stop the mic" ("stop listening",
+   * "mic off"), longest first, as word keys: they end any committed
    * words, word for word ({@link stopSaid}: a letter off). A one-word one ("stop") is the router's, said
    * as a whole phrase — at the end of words it is a word ("make it stop"). */
   stop: string[][];
-  /** The stop phrases of two words or more as said (kin and heard forms
-   * too), for the sound-alike stop tail ({@link stopTail}). */
+  /** Those phrases as said (kin and heard forms too), for the sound-alike
+   * stop tail ({@link stopTail}). */
   stopSaid: string[];
+  /** The conversational stop phrases of two words or more ("that's all",
+   * "done talking": lib/voiceWords stopAlone), longest first, as word keys:
+   * they stop only as the whole phrase ({@link stopTail}'s `whole`). */
+  stopAlone: string[][];
+  /** Those phrases as said, for their sound-alike reading. */
+  stopAloneSaid: string[];
   hush: RegExp;
   /** Every phrase the hold-back keeps whole while it may still be said. */
   control: string[][];
@@ -343,8 +350,11 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
   const stops = [...new Set([...withKin(w, "stop"), ...heardOf(w, "stop")])];
   const hushes = [...new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
   const stopAll = [...stops].sort(longestFirst).map(keysOf);
-  const stop = stopAll.filter((p) => p.length > 1);
-  const stopSaid = stops.filter((p) => phraseWords(p).length > 1);
+  const stopMulti = stopAll.filter((p) => p.length > 1);
+  const stop = stopMulti.filter((p) => !stopAlone(p.join(" ")));
+  const stopAlonePs = stopMulti.filter((p) => stopAlone(p.join(" ")));
+  const stopSaid = stops.filter((p) => phraseWords(p).length > 1 && !stopAlone(p));
+  const stopAloneSaid = stops.filter((p) => phraseWords(p).length > 1 && stopAlone(p));
   const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
   // A hush a letter off: the whole phrase, its lead and tail word dropped.
   const hushSounded = (keys: string): RegExpExecArray | null => {
@@ -369,10 +379,10 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
     ...undos.map(keysOf),
     ...ends.map(keysOf),
     // "Over and out, that's all": the end phrase, then a stop phrase.
-    ...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
+    ...ends.map(keysOf).flatMap((e) => stopMulti.map((s) => [...e, ...s])),
   ].filter((p) => p.length);
   const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
-  return { v, radio, radioKinds, stop, stopSaid, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };
+  return { v, radio, radioKinds, stop, stopSaid, stopAlone: stopAlonePs, stopAloneSaid, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };
 }
 
 let built: VoiceMatchers | null = null;
@@ -410,12 +420,26 @@ export function holdBack(text: string): { type: string; held: string } {
   return { type: ws.slice(0, n).join(" "), held: ws.slice(n).join(" ") };
 }
 
+/** The words before a lone stop phrase ({@link VoiceMatchers.stopAlone})
+ * that leave it alone: none but fillers (lib/voiceWords STOP_FILLERS: "Okay,
+ * that's all.") → "" (they are not typed), or words ending in an end phrase
+ * ("over and out, that's all": the send goes, then the stop) → them; any
+ * other words → null (it is dictation: "…so make sure that that's all"). */
+function aloneBefore(before: string): string | null {
+  if (phraseWords(before).every((w) => STOP_FILLERS.includes(wordKey(w)))) return "";
+  return parseRadio(before).kind === "out" ? before : null;
+}
+
 /** `text` ends with a stop phrase (of two words or more — {@link
  * VoiceMatchers.stop}) word for word, else its last words sound like one
  * ("Dop recording", "stop lisening": lib/voiceWords soundTail; the server's
  * core.voice_words.control_kind reads it the same): the words before it
- * (maybe ""), else null. "fix the bug, stop recording." → "fix the bug,". */
-export function stopTail(text: string): string | null {
+ * (maybe ""), else null. "fix the bug, stop recording." → "fix the bug".
+ * A conversational stop phrase ("that's all", "done talking": {@link
+ * VoiceMatchers.stopAlone}) counts only when `whole` (the phrase is over —
+ * a pause, not a stream's committed words so far) and it is all that was
+ * said ({@link aloneBefore}): "make sure that that's all" → null. */
+export function stopTail(text: string, whole = true): string | null {
   const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
   const idx = wordIndexes(ws);
   const M = matchers();
@@ -433,7 +457,24 @@ export function stopTail(text: string): string | null {
     if (soundsLikeAny(tail.map((i) => ws[i]).join(" "), [p])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:.!?]+$/, "");
   }
   const hit = soundTail(text, M.stopSaid);
-  return hit ? hit.before.replace(/[\s,;:]+$/, "") : null;
+  if (hit) return hit.before.replace(/[\s,;:]+$/, "");
+  if (!whole) return null;
+  for (const p of M.stopAlone) {
+    if (idx.length < p.length) continue;
+    const tail = idx.slice(-p.length);
+    if (!tail.every((i, j) => wordKey(bareWord(ws[i])) === p[j])) continue;
+    const before = aloneBefore(ws.slice(0, tail[0]).join(" "));
+    if (before !== null) return before.replace(/[\s,;:]+$/, "");
+  }
+  for (const p of M.stopAloneSaid) {
+    const n = phraseWords(p).length;
+    if (idx.length < n) continue;
+    const tail = idx.slice(-n);
+    if (!soundsLikeAny(tail.map((i) => ws[i]).join(" "), [p])) continue;
+    const before = aloneBefore(ws.slice(0, tail[0]).join(" "));
+    if (before !== null) return before.replace(/[\s,;:.!?]+$/, "");
+  }
+  return null;
 }
 
 const ANSWER_RE = new RegExp(
@@ -1349,12 +1390,15 @@ export class Dictation {
 
   /** The control phrases: "stop talking" said as a whole phrase (`whole`:
    * the phrase is over), the stop family any committed words can end with
-   * (stop now; the words before it go in) and, while {@link answering}, an
+   * (stop now; the words before it go in; "that's all" only as the whole
+   * phrase, once it is over: {@link stopTail}) and, while {@link answering}, an
    * answer said as the whole dictation (to the router at once, without
    * waiting for the phrase's end). Else null. */
   private control(all: string, whole: boolean): DictOutcome | null {
     if (whole && isHushPhrase(all)) return withErase({ kind: "hush" as const }, this.settle("").erase || "");
-    const before = stopTail(all);
+    // "That's all" waits for the phrase's end too: "…that's all I need" is
+    // words, and so is a sentence that ends in it.
+    const before = stopTail(all, whole);
     if (before !== null) {
       this.listening = false;
       // "Over and out, that's all": the "over and out" sends.
