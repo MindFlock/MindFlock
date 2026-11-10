@@ -5911,6 +5911,17 @@
     if (ss.reason === "setup_failed") return "stuck on a failed setup";
     return String(ss.label || "").toLowerCase();
   }
+  // "<name> is <state word>", or a Verify state's own sentence: its pills
+  // ("Confirm verified", "Verify failed") are chips, not words after "is".
+  // The router's _state_clause says the same.
+  function voiceStateLine(name, ss) {
+    if (ss.reason === "verify_confirm") return name + " needs you to confirm it's verified";
+    if (ss.reason === "verify_failed") return name + " failed its verify";
+    if (ss.reason === "verify_blocked") return name + "'s verify is blocked";
+    if (ss.tone === "verifying") return name + " is verifying its work";
+    if (ss.tone === "verified") return name + " is verified";
+    return name + " is " + voiceStateWord(ss);
+  }
   function firstSentence(text) {
     var s = stripMarkdown(text);
     var m = /^(.*?[.!?])(?:\s|$)/.exec(s);
@@ -9317,7 +9328,7 @@
       if (kind === "halted") return endSentence(name + "'s route is " + haltedWords(i).toLowerCase());
       if (kind === "plan") return endSentence(name + " has a plan waiting for Go");
       if (kind === "ready") return endSentence(name + " is pushed and ready for its PR");
-      return endSentence(name + " is " + voiceStateWord(ss));
+      return endSentence(voiceStateLine(name, ss));
     }).join(" ") : "Nothing needs you.";
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
   }
@@ -9397,7 +9408,7 @@
       var since = Number(inst.activity_since) || 0;
       var mins = since ? Math.round((Date.now() / 1000 - since) / 60) : 0;
       var dur = inst.activity === "working" && mins >= 1 ? " for " + mins + " minute" + (mins === 1 ? "" : "s") : "";
-      line = name + " is " + voiceStateWord(ss) + dur + "." +
+      line = voiceStateLine(name, ss) + dur + "." +
              (inst.last_turn ? " " + endSentence(stripMarkdown(inst.last_turn)) : "");
     }
     speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
