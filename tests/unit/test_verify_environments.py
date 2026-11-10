@@ -1091,7 +1091,7 @@ def test_results_markdown_with_no_steps():
     assert md.splitlines() == [
         "### Verify: not checked yet",
         "",
-        "No behaviors written yet.",
+        "No steps written yet.",
     ]
 
 

@@ -257,7 +257,7 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Behaviors — next that needs you"',
+        'label: "Verify — next that needs you"',
         'label: "Show the Behaviors board"',
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
