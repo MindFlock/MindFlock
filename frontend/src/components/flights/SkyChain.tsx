@@ -322,10 +322,10 @@ export function tileLabel(n: DiagramNode, head = false): string {
   return n.title + (word ? " — " + word : "") + (n.by === "agent" ? " by the agent" : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
 }
 
-/** What a screen reader says for the Behaviors tile (or the Verify stop
+/** What a screen reader says for the derived Verify tile (or the Verify stop
  * standing in for it). */
 export function behaviorsLabel(n: Pick<DiagramNode, "kind" | "title">, bh: BehaviorsMark): string {
-  return (n.kind === "behaviors" ? "Behaviors" : n.title + ", the behaviors") + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
+  return (n.kind === "behaviors" ? "Verify" : n.title) + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
 }
 
 interface Drag {

@@ -596,7 +596,7 @@ export const KEYMAP: KeymapEntry[] = [
     // flies the Sky to the next behaviors that need you, else the next failed,
     // else the Behaviors board.
     id: "verify",
-    help: ["Navigation", "Alt+V", "Behaviors — the next that needs you"],
+    help: ["Navigation", "Alt+V", "Verify — the next that needs you"],
     when: () => !isEditingTarget(document.activeElement),
     run: () => openBehaviors({ next: true }),
   },

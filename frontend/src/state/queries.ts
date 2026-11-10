@@ -1159,7 +1159,7 @@ function bridgeTestPlanEvents() {
     const data = (env?.data || {}) as Record<string, unknown>;
     errorPop(
       isVerifySession(session)
-        ? "The verify session couldn't start"
+        ? "Verify couldn't start."
         : "The session to fix it couldn't start",
       String(data.error || "no reason recorded"),
     );

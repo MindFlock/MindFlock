@@ -335,7 +335,7 @@ export function YouStepActions({ flight, compact = false, inTile = false }: { fl
             type="button"
             className="test-btn fl-btn fl-fix"
             disabled={busy}
-            title={step.kind === "verify" ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix"}
+            title={step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix"}
             onClick={() => void run(() => stepFix(flight.id, step.id))}
           >
             Let the agent fix it

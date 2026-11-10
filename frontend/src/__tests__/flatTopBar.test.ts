@@ -88,7 +88,7 @@ describe("the keys", () => {
     useUi.getState().closeDialog();
     const k = KEYMAP.find((e) => e.id === "verify")!;
     expect(k).toMatchObject({ key: "v", alt: true });
-    expect(k.help?.[2]).toBe("Behaviors — the next that needs you");
+    expect(k.help?.[2]).toBe("Verify — the next that needs you");
     run("verify");
     expect(open()).toEqual([null, null]);
     expect(useUi.getState().view).toBe("sky");
@@ -101,7 +101,7 @@ describe("the palette", () => {
   it("Intake… / Schedule… open the dialogs; Behaviors fly the Sky; Switch to the Sky / grid; Saved routes… is the shelf", () => {
     expect(p).toContain('run: () => ui.openDialogFor("intake"),');
     expect(p).not.toContain('label: "Verify…"');
-    expect(p).toContain('label: "Behaviors — next that needs you",');
+    expect(p).toContain('label: "Verify — next that needs you",');
     expect(p).toContain("run: () => openBehaviors({ next: true }),");
     expect(p).toContain('label: "Show the Behaviors board",');
     expect(p).toContain("run: () => openBehaviors({ board: true }),");

@@ -153,3 +153,38 @@ describe("this round's classes have styles", () => {
     expect((await import("../components/flights/StopParts.css?raw")).default).toContain(".fl-fld-error");
   });
 });
+
+describe("one vocabulary across the pieces", () => {
+  it("a ready route says the server's words; the end + says Add a stop", async () => {
+    const { startWord } = await import("../components/flights/ReadyHead");
+    expect(startWord({ start_on: "run" })).toBe("runs when you press Run");
+    expect(startWord({ start_on: "prompt" })).toBe("runs on your next prompt");
+    const d = flywayDiagram([step("s1", "agent", "Work")], KINDS);
+    const src = (await import("../lib/flightDiagram.ts?raw")).default;
+    expect(src).not.toContain('"Tack on a stop"');
+    expect(src).toContain('title: "Verify", sub: mark.short');
+    expect(d.nodes.length).toBeGreaterThan(0);
+  });
+
+  it("the Sky's tools are Select (V) and Pan (H) everywhere", async () => {
+    for (const f of ["../components/flights/SkyGuide.tsx?raw", "../components/flights/SkySelection.tsx?raw", "../lib/skyShortcuts.ts?raw"]) {
+      const src = (await import(/* @vite-ignore */ f)).default as string;
+      expect(src, f).not.toMatch(/✥ Drag|☝ Click|Drag tool|Click tool/);
+    }
+  });
+
+  it("the empty Sky says what a route is; Verify couldn't start.", async () => {
+    const { VISION_BREATH } = await import("../lib/onboarding");
+    const sky = (await import("../components/onboarding/SkyEmpty.tsx?raw")).default;
+    expect(sky).toContain("{VISION_BREATH[1]} {VISION_BREATH[2]}");
+    expect(VISION_BREATH[2]).toMatch(/route/);
+    const q = (await import("../state/queries.ts?raw")).default;
+    expect(q).toContain(`"Verify couldn't start."`);
+    expect(q).not.toContain("verify session couldn't");
+  });
+
+  it("halt points and added stops fail in plain words", async () => {
+    const src = (await import("../lib/flightsApi.ts?raw")).default;
+    expect(src).not.toMatch(/"(Tack on|Halt here|Carry on past here)[^"]*"/);
+  });
+});

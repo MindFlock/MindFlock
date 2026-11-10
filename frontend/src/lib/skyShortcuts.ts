@@ -26,13 +26,13 @@ export const SKY_SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["Shift", "2"], what: "Fit the selection" },
       { keys: ["1"], what: "Fit the focused route" },
       { keys: ["Shift", "0"], what: "Zoom to 100 %" },
-      { keys: ["H"], what: "Click tool: a drag pans" },
+      { keys: ["H"], what: "Pan tool: a drag pans" },
     ],
   },
   {
     title: "Select",
     items: [
-      { keys: ["V"], what: "Drag tool: a drag on empty sky selects" },
+      { keys: ["V"], what: "Select tool: a drag on empty sky selects" },
       { keys: ["drag"], what: "Select what the marquee touches (on empty sky)" },
       { keys: ["Shift", "drag"], what: "Add to the selection" },
       { keys: ["Shift", "click"], what: "Add or take out one route or stop" },

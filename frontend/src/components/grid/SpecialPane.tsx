@@ -151,7 +151,7 @@ function VerifyBody({ desc, headDrag }: { desc: SpecialPaneDesc; headDrag: HeadD
               window; the run keeps going either way.) */}
           <button
             className="act verify-pane-back"
-            title="Back to these behaviors on the route, in the Sky (Alt+V: the next that needs you)"
+            title="Back to this Verify on the route, in the Sky (Alt+V: the next that needs you)"
             onClick={(e) => {
               e.stopPropagation();
               openBehaviors(planId ? { planId } : { next: true });

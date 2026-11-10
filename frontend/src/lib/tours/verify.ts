@@ -15,7 +15,7 @@ export const VERIFY_TOUR: TourDef = {
   steps: [
     {
       target: '[data-tour="behaviors-stop"], .sky-node.sky-behaviors',
-      title: "Behaviors live on the route",
+      title: "Verify lives on the route",
       body: "What the work should do in real use sits on its route as a Verify stop, and its face says how they stand.",
     },
     {

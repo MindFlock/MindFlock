@@ -15,7 +15,7 @@
  *                     parent above, the session box, its children branching
  *                     below, then the fast-track ladder's rungs (armed and no
  *                     flight) or the flight's stops, and always a trailing +
- *                     ("Tack on a stop").
+ *                     ("Add a stop").
  *
  * A child spawned DURING one of the flight's stops (its row's `flight.branch`
  * names that stop) is drawn as a BRANCH instead of below the session: the
@@ -924,7 +924,7 @@ export function receiptOf(detail: Record<string, unknown> | null | undefined): s
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
   const { line, loops } = liftLoops(flightStops(f, kinds));
   const rets = returnEdges(line);
-  if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
+  if (isShown(f) || f.state === "grounded") line.push(addNode("Add a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
@@ -1103,7 +1103,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
         });
     }
   }
-  line.push(addNode("Tack on a stop"));
+  line.push(addNode("Add a stop"));
 
   const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
   if (fans) {
@@ -2223,7 +2223,7 @@ export function withBehaviors(d: Diagram, mark: BehaviorsMark | null | undefined
   const line = main.filter((n) => n.kind !== "session");
   const last = line[line.length - 1] || session;
   if (!last) return d;
-  const node: DiagramNode = { id: BEHAVIORS_ID, kind: "behaviors", row: "main", title: "Behaviors", sub: mark.short, state: "pending", icon: "behaviors", behaviors: mark };
+  const node: DiagramNode = { id: BEHAVIORS_ID, kind: "behaviors", row: "main", title: "Verify", sub: mark.short, state: "pending", icon: "behaviors", behaviors: mark };
   // A trailing parallel group joins into the tile out of each member.
   const pid = last.parallel?.id;
   const from = pid ? line.filter((n) => n.parallel?.id === pid) : [last];
