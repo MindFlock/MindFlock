@@ -73,8 +73,12 @@ and 3.4 GB within minutes on 2026-11-10 with nothing short. The host's
 signals:
 
 * **Commit charge** against the commit limit (RAM plus page file): at the
-  limit an allocation fails — the real "can't allocate" danger. Low at
-  :data:`HOST_COMMIT_LOW` %, critical at :data:`HOST_COMMIT_CRITICAL` %.
+  limit an allocation fails — the real "can't allocate" danger. Never
+  ``low``: the WSL VM commits its whole ``memory=`` size, so on a 31 GB
+  laptop with a 26 GB VM the charge sits at 75-85 % all day (on 2026-11-10
+  "low" at 85 % held every start with 11.5 GB of headroom — the owner:
+  "we have so much memory left"). Critical only at
+  :data:`HOST_COMMIT_CRITICAL` %, where an allocation can really fail.
 * **Hard paging** (PagesInputPersec, the median of the last minute) is
   REPORTED (``pages_in_median``) but never sets the level: the counter
   includes file-backed reads, and on 2026-11-10 it read 30-100 MB/s with
@@ -166,8 +170,9 @@ _RECOVER_FROM_CRITICAL_FIXED = (int(1.5 * _GiB), 30.0, 8.0, SWAPIN_CRITICAL // 4
 
 # The Windows host's lines (WSL only).
 #: Commit charge, percent of the commit limit.
-HOST_COMMIT_LOW = 85.0
-HOST_COMMIT_CRITICAL = 90.0
+#: Commit charge is never a ``low`` signal (a line no reading reaches).
+HOST_COMMIT_LOW = 1000.0
+HOST_COMMIT_CRITICAL = 97.0
 #: Hard paging (PagesInputPersec, the minute's median), pages/s: ~12 / ~32 MB/s.
 HOST_PAGING_LOW = 3000.0
 HOST_PAGING_CRITICAL = 8000.0
@@ -187,8 +192,8 @@ _HOST_RAW_RECOVER_BYTES = 512 * _MiB
 # Each host line: (headroom bytes, commit %, hard paging pages/s).
 _HOST_LOW = (HOST_HEADROOM_LOW, HOST_COMMIT_LOW, HOST_PAGING_LOW)
 _HOST_CRITICAL = (HOST_HEADROOM_CRITICAL, HOST_COMMIT_CRITICAL, HOST_PAGING_CRITICAL)
-_HOST_RECOVER_FROM_LOW = (3 * _GiB, 80.0, HOST_PAGING_LOW / 2)
-_HOST_RECOVER_FROM_CRITICAL = (int(1.5 * _GiB), 87.0, HOST_PAGING_CRITICAL / 2)
+_HOST_RECOVER_FROM_LOW = (3 * _GiB, HOST_COMMIT_LOW, HOST_PAGING_LOW / 2)
+_HOST_RECOVER_FROM_CRITICAL = (int(1.5 * _GiB), 94.0, HOST_PAGING_CRITICAL / 2)
 
 _RANK = {"ok": 0, "low": 1, "critical": 2}
 

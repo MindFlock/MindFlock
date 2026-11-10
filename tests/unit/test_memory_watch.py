@@ -637,11 +637,11 @@ def test_the_history_replays_to_the_live_level(fake, monkeypatch, client):
     psi["full_avg60"] = 0.0
     monkeypatch.setattr(mp, "_read_psi", lambda: dict(psi))  # guest: low
     monkeypatch.setattr(mp, "_read_vmstat", lambda: None)
-    host_memory._set_reading(  # Windows: commit at 93%, critical
+    host_memory._set_reading(  # Windows: commit at 98%, critical
         {
             "available": 4 * GiB,
             "total": 32 * GiB,
-            "committed": int(0.93 * 60 * GiB),
+            "committed": int(0.98 * 60 * GiB),
             "commit_limit": 60 * GiB,
             "pages_in": 0,
         }
@@ -665,7 +665,7 @@ def test_the_history_replays_to_the_live_level(fake, monkeypatch, client):
             )
             == ("critical", "low", "critical")
         )
-        assert got["why"][0].startswith("Windows commit charge is at 93%")
+        assert got["why"][0].startswith("Windows commit charge is at 98%")
     finally:
         host_memory._reset_for_tests()
         mp._reset_for_tests()

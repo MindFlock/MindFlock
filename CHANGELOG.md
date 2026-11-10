@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`mux.spawn_pty`), which copies no page tables and runs no Python in the
   child — a fork holds the GIL, so even on a thread it stalled every request.
 
+- **Windows' commit charge no longer holds starts at 85 %.** A WSL VM
+  commits its whole `memory=` size, so the charge sits at 75-85 % all day;
+  "low" at 85 % made every new agent wait with 11 GB of headroom. It is now
+  never a "low" signal, and critical only at 97 % of the limit (cleared at
+  94 %), where an allocation can really fail.
+
 ## [0.14.3] - 2026-11-10
 
 ### Changed
