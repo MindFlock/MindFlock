@@ -1770,6 +1770,9 @@ export class LiveDictation {
   private done = false;
   /** The router acted on a phrase, or a draft was submitted. */
   private acted = false;
+  /** A message was sent in this listen ("over"): an "over and out" with
+   * nothing typed after it only stops ({@link apply}'s send). */
+  private sentOne = false;
   /** Any words came in (interim, committed, final, unsure). */
   heardAnything = false;
   /** The mic records (the caption says "Listening…"). */
@@ -2305,8 +2308,15 @@ export class LiveDictation {
         const typedNow = !!(out.erase || out.text.trim());
         if (typedNow && !(await this.put(out.text, true, out.erase))) return;
         if (this.done) return;
-        // "Over and out" with nothing said since the last "over": just stop.
-        if (out.out && !this.dict.typed) {
+        // "Over and out" with nothing said since the last "over" (a message
+        // went this listen, and nothing was typed after it): just stop — a
+        // second Enter would only send an empty prompt. With no send yet it
+        // sends what is in the box: words an earlier listen left there, or
+        // that the person typed or pasted (owner report 2026-11-10: "over and
+        // out does not submit what is in the box"). A box that can't be sent
+        // from here (a plain text box, no session) just stops too.
+        const unsendable = !t || (t.kind === "field" && !t.submit);
+        if (out.out && !this.dict.typed && (this.sentOne || unsendable)) {
           this.hooks.confirm?.("bye");
           this.end(STOPPED_LINE, false, "stopped");
           return;
@@ -2367,6 +2377,7 @@ export class LiveDictation {
    * words are still in the field: listening ends, so nothing is typed after
    * them). The next words wait their turn while a send is under way. */
   private sent(r: { ok: boolean; line: string }, how: { end?: boolean; out?: boolean }, from = 0): void {
+    if (r.ok) this.sentOne = true;
     if (r.ok) this.hooks.confirm?.(how.out ? "out" : "sent");
     if (r.ok && from) {
       const ms = Date.now() - from;
