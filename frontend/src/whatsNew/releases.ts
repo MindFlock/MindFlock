@@ -37,6 +37,24 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.5",
+    date: "2026-11-10",
+    big: false,
+    headline: "Verify on your phone, and a steadier server.",
+    features: [
+      {
+        title: "Confirm verified from the phone",
+        body:
+          "The phone shows Verifying and Verified like the desktop, lists the steps that need you, and has Confirm verified and Not verified buttons, plus a Verify action in a session's menu.",
+      },
+      {
+        title: "Login terminals can't freeze the server",
+        body:
+          "Sign-in terminals and the ticket log no longer copy the whole server to start, and terminal typing and closing happen off its main thread.",
+      },
+    ],
+  },
+  {
     version: "0.14.4",
     date: "2026-11-10",
     big: false,
