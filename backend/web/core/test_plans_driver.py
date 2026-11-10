@@ -2215,6 +2215,10 @@ def _release_wedged_run(
     if released is None:
         return
     _SELF_NUDGED_AT.pop(pid, None)
+    # A check still waiting on the session's queue must not run later for a
+    # run that is over.
+    if run_session:
+        withdraw_walk(run_session)
     _VERIFY_DEAD_SINCE.pop(run_session, None)
     # `mark_due` cleared `run_session` AND dropped the empty run record, which is
     # what actually hands the session to `_sweep_orphan_verify_sessions`: it
