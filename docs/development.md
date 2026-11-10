@@ -581,6 +581,17 @@ Re-verified against the codebase 2026-10-10; useful when touching these areas:
    "another device". Fixed — such marks are now ignored with a warning, and
    no mark is written until the roster resolves; deleting
    `automation_here.json` is safe and clears an old one.
+9. **Blank white panes in the desktop app** that come back on a small scroll.
+   The shell (`electron/main.js`) answers every way-back event — window
+   `restore` / `show` / `focus` / `(un)maximize` / `moved` / full screen,
+   `screen` display changes, `powerMonitor` resume / unlock, and a `GPU`
+   `child-process-gone` (logged to `main.log` as "GPU process gone") — with
+   `webContents.invalidate()` plus a `mindflock:repaint` page event that
+   redraws every visible terminal ([web-ui.md](web-ui.md#terminals-repaint-when-the-window-comes-back)).
+   Shell changes need the Electron app restarted. If panes still go white,
+   check `main.log` for GPU restarts; the untried next step is
+   `app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')`
+   (Windows occlusion tracking), held back until there is evidence for it.
 
 Two other lists are kept next to the code they describe and are not repeated
 here — read them before touching those areas:

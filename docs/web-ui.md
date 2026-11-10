@@ -1042,6 +1042,27 @@ agent receives an absolute path, so the experience on the CLI side is
 identical. Both directories are transient: each new upload prunes its own
 directory back to the newest few files.
 
+### Terminals repaint when the window comes back
+
+A pane could go blank — white on the light theme, where the terminal
+background *is* white — until the smallest scroll brought it back. The content
+was never lost: a wheel tick makes tmux redraw, xterm rewrites its rows, and
+that rewrite is what got the pane painted again. The terminals use xterm's DOM
+renderer (no WebGL addon, so there is no GL context to lose); what went stale
+was the painted surface after the window was minimized, covered, moved to
+another display, or the GPU process restarted, on a pane with no new output.
+
+Now every terminal on screen is repainted (fit + a full `refresh`) when the
+page regains focus or visibility, on `pageshow`, and on the desktop shell's
+`mindflock:repaint` event (restore / show / move / display change / wake / GPU
+restart — [development.md](development.md#known-issues)); a burst coalesces
+into one pass on the next frame plus one ~300 ms later, and hidden terminals
+are skipped. A pane also repaints when it adopts its terminal (a grid move, the
+trip to the sky and back) and on every refit, including a tab revealing the
+terminal again. The rules live in `lib/wsTerm.ts` (`repaintTerm`,
+`repaintShown`, `installRepaintTriggers`, installed in `main.tsx`); each grid
+pane and each `useWsTerm` terminal registers itself with `trackRepaint`.
+
 ## Workflow stages and the guided next step
 
 Each session shows a stage badge (sidebar + pane) computed from git, plus a
