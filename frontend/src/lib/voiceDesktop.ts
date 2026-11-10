@@ -29,7 +29,9 @@
  *    no idle timeout, until "over and out" or a stop;
  *  - a dictation's first phrase is first offered to the voice router (POST
  *    /api/voice/route), so "switch to the login fix" or "start a new session
- *    for…" act instead of being typed into the focused session;
+ *    for…" act instead of being typed into the focused session — and so is
+ *    any phrase that starts with the wake word ("My flock, open settings."),
+ *    mid-message too (lib/voiceWords wakeAt);
  *  - replies are read aloud only when you turn that on (off by default):
  *    "mine" for drafts THIS app submitted by voice, "all" for every
  *    session's finished turn — once per turn, one line at a time through
@@ -222,7 +224,7 @@ const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(
 
 // The sound-alike tolerance (lib/voiceWords: `heard`, soundTail, soundsLikeAny),
 // imported here beside the matchers that use it.
-import { heardOf, soundTail, soundsLikeAny } from "./voiceWords";
+import { heardOf, isWakePhrase, mayBeWake, soundTail, soundsLikeAny } from "./voiceWords";
 
 /** The radio words' optional tails: "disregard that", "over it". */
 const RADIO_TAILS = ["that", "it", "all", "everything"];
@@ -523,6 +525,12 @@ export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", 
  * a load or focus ready the server's voice (`loadVoiceCfg(…, warm)`). */
 export function voiceInUse(p: VoicePrefs): boolean {
   return p.replies !== "off" || !!p.wake;
+}
+
+/** Whether a voice command that opens something says so out loud
+ * ("Opening Settings."): spoken replies or spoken confirmations are on. */
+export function announcesActions(p: VoicePrefs): boolean {
+  return p.replies !== "off" || p.confirm === true;
 }
 
 /** Whether something said on this desktop goes to the SERVER's voice: replies
@@ -1151,6 +1159,8 @@ export class Dictation {
     }
     const words = holdBack(r.text).type;
     if (this.routes && !this.before.trim() && isSwitchCommand(words)) return base.trim();
+    // Said to MindFlock: no words of the message either.
+    if (this.routes && isWakePhrase(words)) return base.trim();
     return joinWords(base, words);
   }
 
@@ -1302,8 +1312,10 @@ export class Dictation {
     // asked of the words that would be typed, the radio word held back, as
     // its end asks it ({@link settle}): "do it over" is "do it", an answer,
     // so nothing is typed only to be taken back and typed again.
+    // So does a phrase said to MindFlock ("MindFlock, open settings"),
+    // wherever it falls in the message.
     const hb = holdBack(all);
-    const want = this.routes && !this.before && mayBeCommand(hb.type) ? "" : hb.type;
+    const want = this.mayRoute(hb.type) ? "" : hb.type;
     const fix = retype(this.guessed, want);
     if (!fix.erase && !fix.type) return { kind: "continue" };
     return withErase({ kind: "type" as const, text: fix.type, route: false, guess: true }, fix.erase);
@@ -1314,13 +1326,22 @@ export class Dictation {
    * router reads it before any of it is in the field. */
   private settle(text: string): { text: string; erase?: string } {
     const guessed = this.guessed;
-    const whole = this.routes && !this.before && mayBeCommand(text);
+    const whole = this.mayRoute(text);
     if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
     this.phraseAt = -1;
     this.held = "";
     this.partial = "";
     const fix = whole ? { erase: guessed, type: text } : retype(guessed, text);
     return withErase({ text: fix.type }, fix.erase);
+  }
+
+  /** The phrase `text` may be the router's, so its guess waits whole: a
+   * message's first phrase that may be a command ({@link mayBeCommand}), or
+   * a phrase that starts with the wake word ({@link mayBeWake}) anywhere in
+   * the message — "MindFlock, open settings" after words already typed is
+   * the router's too ({@link LiveDictation}'s put). Never in a text box. */
+  private mayRoute(text: string): boolean {
+    return this.routes && ((!this.before && mayBeCommand(text)) || mayBeWake(text));
   }
 
   /** The control phrases: "stop talking" said as a whole phrase (`whole`:
@@ -2463,6 +2484,14 @@ export class LiveDictation {
       }
       return this.keys(t, erase, text);
     }
+    // Said to MindFlock mid-message ("My flock, open settings."): the
+    // router's, never typed — the words before it stay in the box, and
+    // listening goes on (unless what it did ends it).
+    if (route && t?.kind !== "field" && this.dict.routes && this.dict.typed.length > erase.length && isWakePhrase(text)) {
+      const wake = await this.wakeCommand(t, text, erase);
+      if (wake !== null) return wake;
+      erase = "";
+    }
     // A dialog came up mid-message: not a key more — nor one taken back.
     if (t && (this.dict.typed || this.unsent) && this.dialogBlocks(t)) return this.heldBack(t, text);
     // What stays typed once the guess is corrected: nothing — the router and
@@ -2501,6 +2530,29 @@ export class LiveDictation {
       return false;
     }
     return this.keys(t, erase, text);
+  }
+
+  /** A phrase said to MindFlock in the middle of a message: its guess taken
+   * back, then the router asked. Acted on: false (nothing typed; the
+   * message so far stays, listening goes on unless the command ends it).
+   * Not a command after all: null, the guess gone — the caller types it. */
+  private async wakeCommand(t: DictTarget | null, text: string, erase: string): Promise<boolean | null> {
+    if (erase && t && !this.keys(t, erase, "")) return false;
+    const words = text.trim();
+    this.hooks.caption(this.dict.shown, true, words);
+    const routed = await this.hooks.route(words, this.stepSpoke);
+    voiceTrace("wake", { phrase: words, routed, typed: this.dict.typed.length });
+    if (routed === "hush") {
+      this.hushed();
+      return false;
+    }
+    if (routed) {
+      this.acted = true;
+      if (routed === "end") this.end(null);
+      else this.show();
+      return false;
+    }
+    return this.done ? false : null;
   }
 
   /** A dialog is up on the session words go to (MF2: typed words could
@@ -4123,10 +4175,11 @@ export class Confirmer {
   /** Say `kind`'s line ({@link CONFIRM_LINES}), or a line of the router's
    * (a switch). Resolves once it was said, cut or dropped. The mic is muted
    * from its first sound to its end — unless the line after it already
-   * sounds by then (its own mute stands). */
-  say(kind: ConfirmKind | { line: string }): Promise<void> {
+   * sounds by then (its own mute stands). `force`: said with the switch
+   * off too (the caller decided: {@link announcesActions}). */
+  say(kind: ConfirmKind | { line: string }, opts: { force?: boolean } = {}): Promise<void> {
     const x = this.deps;
-    if (!x.on()) return Promise.resolve();
+    if (!opts.force && !x.on()) return Promise.resolve();
     const line = typeof kind === "string" ? CONFIRM_LINES[kind] : kind.line;
     const mic = x.mic();
     let muted = false;

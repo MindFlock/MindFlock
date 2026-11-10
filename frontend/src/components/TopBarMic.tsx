@@ -95,6 +95,7 @@ import { placeUnder } from "../lib/menuPlace";
 import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
 import {
   Confirmer,
+  announcesActions,
   dictHint,
   DICT_IDLE_MS,
   HUSH_CAPTION_MS,
@@ -250,13 +251,19 @@ function loadAssistantTalk() {
 }
 /** What the component lends the one session (its chime, the mic opening for
  * an answer): set while it is mounted. */
-const assistantHooks: { chime?: () => void; asked?: (kind: "ask" | "confirm") => void } = {};
+const assistantHooks: {
+  chime?: () => void;
+  asked?: (kind: "ask" | "confirm") => void;
+  confirm?: (line: string) => boolean;
+} = {};
 const assistant = new AssistantSession({
   stream: (body, on, signal) => streamAssistant(body, on, { signal }),
   snapshot: assistantSnapshot,
   exec: (a) => execUiAction(a),
   speak: (text) => void queue.say(text, { title: ASSISTANT_LINES, voice: ttsEngine(cfgNow) === "server" ? assistantSp : undefined }),
   chime: () => assistantHooks.chime?.(),
+  // "Opening Settings.": said as a confirmation when the prefs speak them.
+  confirm: (line) => assistantHooks.confirm?.(line) ?? false,
   // A session the server just started: focused once the rows know it.
   focus: (title) => void refreshInstances().then(() => selectSession(title, { noKeyboard: true, voice: true })),
   talk: assistantTalk,
@@ -1455,13 +1462,19 @@ export function TopBarMic() {
     } else begin();
   };
 
-  // The one session's hooks into this mic: its chime (a silent action — your
-  // own navigation is never said back), and the mic opening for the answer
+  // The one session's hooks into this mic: its chime (a silent action), the
+  // spoken "Opening Settings." when spoken replies or confirmations are on
+  // (lib/voiceDesktop announcesActions), and the mic opening for the answer
   // once a question has been said.
   const latestAssist = useRef({ start, sound });
   latestAssist.current = { start, sound };
   useEffect(() => {
     assistantHooks.chime = () => latestAssist.current.sound("start");
+    assistantHooks.confirm = (line) => {
+      if (!announcesActions(prefsRef.current)) return false;
+      void confirmer.current?.say({ line }, { force: true });
+      return true;
+    };
     assistantHooks.asked = () => {
       void queue.drained().then(() => {
         if (live.current || !assistant.wantsNext()) return;
@@ -1471,6 +1484,7 @@ export function TopBarMic() {
     return () => {
       assistantHooks.chime = undefined;
       assistantHooks.asked = undefined;
+      assistantHooks.confirm = undefined;
     };
   }, []);
 
