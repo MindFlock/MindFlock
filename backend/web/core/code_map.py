@@ -121,10 +121,17 @@ def _feed_path(tmux_name: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def _git(wt: str, *args: str, timeout: float = 60) -> Optional[bytes]:
+def _git(
+    wt: str,
+    *args: str,
+    timeout: float = 60,
+    env: Optional[Dict[str, str]] = None,
+) -> Optional[bytes]:
     """stdout of ``git -C wt <args>``, or None on any failure (non-zero exit,
     timeout, git missing). Callers treat None as "unknown", never as empty."""
-    cp = gitutil.git(args, wt, timeout=timeout, text=False, stderr=subprocess.DEVNULL)
+    cp = gitutil.git(
+        args, wt, timeout=timeout, env=env, text=False, stderr=subprocess.DEVNULL
+    )
     return cp.stdout if cp.returncode == 0 else None
 
 
@@ -391,16 +398,16 @@ def changed_files(inst: Any, wt: str) -> List[dict]:
     """``[{"path", "status", "added", "removed"}]`` — the session's total
     change vs its fork point, sorted by path.
 
-    The Diff-tab convention exactly: ``git add -N .`` (so new files count),
-    then ``--numstat`` + ``--name-status`` against
+    The Diff-tab convention exactly: untracked files count (both diffs run
+    against a scratch intent-to-add index — ``scratch_index_env`` — never
+    the worktree's own), ``--numstat`` + ``--name-status`` against
     ``srv._session_fork_point`` with ``-z --no-renames`` (a moved file is a
     delete plus an add — both halves land on the map, and no path arrives
     quoted or as an ``a => b`` pseudo-path). Status is git's letter (A/M/D/T/U).
 
     Cached against the fingerprint taken BEFORE anything is read (before
-    ``add -N`` and both diffs). A key older than the data can only cost one
-    extra recompute (intent-to-add turns ``??`` into ``A``, so the next probe
-    misses once, then settles); a key NEWER than the data — a fingerprint
+    both diffs). A key older than the data can only cost one extra
+    recompute; a key NEWER than the data — a fingerprint
     taken after the diffs — would pin a write that landed between the diff
     and the fingerprint as "already seen", hiding a red-zone edit until some
     other file moved. Unknown fingerprint → 3 s TTL.
@@ -421,9 +428,17 @@ def changed_files(inst: Any, wt: str) -> List[dict]:
         fork = _rev(srv._session_fork_point(inst, wt))
         if fork is None:
             return []
-        _git(wt, "add", "-N", "--", ".")
-        num = _git(wt, "diff", "--numstat", "-z", "--no-renames", fork, "--")
-        ns = _git(wt, "diff", "--name-status", "-z", "--no-renames", fork, "--")
+        # Lazy: config/red_zones imports this module and must not pull in
+        # the session engine.
+        from backend.session.git.diff import scratch_index_env_or_none
+
+        with scratch_index_env_or_none(wt) as env:
+            num = _git(
+                wt, "diff", "--numstat", "-z", "--no-renames", fork, "--", env=env
+            )
+            ns = _git(
+                wt, "diff", "--name-status", "-z", "--no-renames", fork, "--", env=env
+            )
         if num is None or ns is None:
             return []
         counts = _parse_numstat_z(num)

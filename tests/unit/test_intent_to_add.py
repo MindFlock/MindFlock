@@ -12,6 +12,8 @@ numbers still count untracked files.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import subprocess
 import tempfile
@@ -23,6 +25,8 @@ from backend.session.git import diff as diff_mod
 from backend.session.git.worktree_git import GitWorktreeGitMixin
 from backend.session.storage import Status
 from backend.web import server
+from backend.web.core import code_map
+from backend.web.core import commit_message
 from backend.web.core import snapshot
 
 
@@ -119,9 +123,11 @@ class _Worktree(diff_mod.GitWorktreeDiffMixin, GitWorktreeGitMixin):
 def _clear_caches():
     diff_mod._DIFF_CACHE.clear()
     server._DIFF_STAT_CACHE.clear()
+    code_map._CHANGED_CACHE.clear()
     yield
     diff_mod._DIFF_CACHE.clear()
     server._DIFF_STAT_CACHE.clear()
+    code_map._CHANGED_CACHE.clear()
 
 
 def test_engine_diff_counts_untracked_without_writing_index(work, private_tmp):
@@ -167,6 +173,9 @@ class _Inst:
 
     def GetWorktreePath(self):  # noqa: N802
         return self._wt
+
+    def GetGitWorktree(self):  # noqa: N802
+        return self
 
 
 def test_session_diff_stat_counts_untracked_without_writing_index(
@@ -220,3 +229,70 @@ def test_scratch_index_env_ignores_an_inherited_index_file(work, monkeypatch):
             env=env,
         ).stdout
     assert "a.txt" in ls and "new.txt" in ls  # tracked + intent-to-added
+
+
+# --------------------------------------------------------------------------- #
+# The other read paths: Diff tab routes, Code Map change set, commit drafting.
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def routed(work, monkeypatch):
+    """``work`` served as session "t", its fork point pinned to HEAD."""
+    inst = _Inst(str(work))
+    monkeypatch.setattr(server, "_inst_or_404", lambda title: (inst, None))
+    monkeypatch.setattr(server, "_session_fork_point", lambda inst, wt: "HEAD")
+    return inst
+
+
+def _body(resp) -> dict:
+    assert resp.status_code == 200, resp.body
+    return json.loads(resp.body)
+
+
+def test_diff_tab_fork_mode_without_writing_index(work, routed, private_tmp):
+    before = _snapshot(work)
+    d = _body(asyncio.run(server.instance_diff("t", base="fork")))
+    assert d["error"] is None
+    assert "+++ b/new.txt" in d["content"]
+    assert (d["added"], d["removed"]) == (4, 1)
+    _assert_untouched(work, before)
+    assert list(private_tmp.iterdir()) == []
+
+
+def test_file_diff_of_an_untracked_file_without_writing_index(
+    work, routed, private_tmp
+):
+    before = _snapshot(work)
+    d = _body(asyncio.run(server.instance_file_diff("t", path="new.txt")))
+    assert d["error"] is None
+    assert "+n1\n+n2\n+n3" in d["content"]
+    _assert_untouched(work, before)
+    assert list(private_tmp.iterdir()) == []
+
+
+def test_code_map_changed_files_without_writing_index(work, routed, private_tmp):
+    before = _snapshot(work)
+    rows = code_map.changed_files(routed, str(work))
+    assert rows == [
+        {"path": "a.txt", "status": "M", "added": 1, "removed": 0},
+        {"path": "gone.txt", "status": "D", "added": 0, "removed": 1},
+        {"path": "new.txt", "status": "A", "added": 3, "removed": 0},
+    ]
+    _assert_untouched(work, before)
+    assert list(private_tmp.iterdir()) == []
+
+
+def test_commit_message_draft_without_writing_index(work, private_tmp):
+    """Drafting a message is a read: the person may cancel and never commit."""
+    before = _snapshot(work)
+    stat, patch = commit_message.collect_diff(str(work))
+    assert "new.txt" in stat and "gone.txt" in stat
+    assert "+++ b/new.txt" in patch
+    _assert_untouched(work, before)
+    assert list(private_tmp.iterdir()) == []
+
+
+def test_lenient_variant_falls_back_to_plain_diffs(tmp_path, private_tmp):
+    """Not a repo: no scratch index, ``None`` — and nothing left behind."""
+    with diff_mod.scratch_index_env_or_none(str(tmp_path)) as env:
+        assert env is None
+    assert list(private_tmp.iterdir()) == []

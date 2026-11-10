@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **MindFlock no longer writes your git index.** Its diff counts (the
+  sidebar's change stat, the Diff tab, the Code Map's change set and commit
+  message drafting) used `git add -N .` so new files would count, every few
+  seconds, in the session's checkout. In a checkout you share with sessions
+  running in place, that marked your new files intent-to-add (` A` instead of
+  `??`) and staged deletions (`D `), and it raced your own git commands for
+  `index.lock`. Those diffs now run against a throwaway copy of the index
+  (`GIT_INDEX_FILE`) and give the same numbers; a polled `git status` takes
+  `--no-optional-locks`. Entries an older version already left behind stay
+  until you clear them (`git rm --cached <path>` for each ` A` file, or
+  `git restore --staged <path>` for each `D ` file).
+
 ## [0.14.6] - 2026-11-10
 
 ### Fixed

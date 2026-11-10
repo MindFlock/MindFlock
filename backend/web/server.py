@@ -180,6 +180,7 @@ from backend.session import mux
 from backend.session import provisioned as provisioning
 from backend.session import tmux
 from backend.session.git import gh_available
+from backend.session.git.diff import scratch_index_env_or_none
 from backend.session.git import remote_url as _remote_url
 from backend.session.storage import Loading, Paused
 from backend.workspace_setup import exclude_artifacts as _exclude_artifacts
@@ -5002,7 +5003,9 @@ async def instance_diff(title: str, base: str = "fork") -> JSONResponse:
     point from the base branch — committed + uncommitted, the same baseline as
     the header's ``diff_stat`` badge, so the tab always matches the number the
     user clicked. ``base=head``: only working-tree changes since the last
-    commit. Both stage untracked files with ``add -N`` so new files show.
+    commit. Both count untracked files, via a scratch intent-to-add index
+    (``scratch_index_env``), so new files show and the worktree's own index
+    is never written.
     """
     if not git_available():
         return _no_git_response()
@@ -5028,27 +5031,24 @@ async def instance_diff(title: str, base: str = "fork") -> JSONResponse:
                 "base": mode,
             }
         wtp = inst.GetWorktreePath()
-        subprocess.run(
-            ["git", "-C", wtp, "add", "-N", "."],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                wtp,
-                *_DIFF_STABLE_CONFIG,
-                "--no-pager",
-                "diff",
-                *_DIFF_STABLE_FLAGS,
-                _session_fork_point(inst, wtp),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-        )
+        fork = _session_fork_point(inst, wtp)
+        with scratch_index_env_or_none(wtp) as env:
+            cp = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    wtp,
+                    *_DIFF_STABLE_CONFIG,
+                    "--no-pager",
+                    "diff",
+                    *_DIFF_STABLE_FLAGS,
+                    fork,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=60,
+            )
         if cp.returncode != 0:
             err = cp.stderr.decode("utf-8", "replace").strip() or "git diff failed"
             return {"added": 0, "removed": 0, "content": "", "error": err, "base": mode}
@@ -5080,8 +5080,9 @@ async def instance_file_diff(
     """Whole-file diff for one file: the full file content with added/removed
     lines marked (huge ``--unified`` so every line is shown, not just hunks).
 
-    Same base modes + ``add -N`` as the summary diff (``fork`` default /
-    ``head``), so it lines up with the file headers shown there. Driven by
+    Same base modes (``fork`` default / ``head``) and scratch-index untracked
+    files as the summary diff, so it lines up with the file headers shown
+    there. Driven by
     clicking a file in the Diff tab.
     """
     if not git_available():
@@ -5099,28 +5100,24 @@ async def instance_file_diff(
         wt = inst.GetGitWorktree()
         wtp = wt.GetWorktreePath()
         base_ref = "HEAD" if base == "head" else _session_fork_point(inst, wtp)
-        subprocess.run(
-            ["git", "-C", wtp, "add", "-N", "."],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
-        cp = subprocess.run(
-            [
-                "git",
-                "-C",
-                wtp,
-                "--no-pager",
-                "diff",
-                "--unified=100000",
-                base_ref,
-                "--",
-                rel,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-        )
+        with scratch_index_env_or_none(wtp) as env:
+            cp = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    wtp,
+                    "--no-pager",
+                    "diff",
+                    "--unified=100000",
+                    base_ref,
+                    "--",
+                    rel,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=60,
+            )
         if cp.returncode != 0:
             return {
                 "content": "",

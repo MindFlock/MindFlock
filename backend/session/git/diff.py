@@ -29,6 +29,7 @@ __all__ = [
     "parseNumstat",
     "GitWorktreeDiffMixin",
     "scratch_index_env",
+    "scratch_index_env_or_none",
 ]
 
 
@@ -100,6 +101,24 @@ def scratch_index_env(
         yield env
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def scratch_index_env_or_none(
+    worktree_path: str,
+) -> Iterator[Optional[Dict[str, str]]]:
+    """:func:`scratch_index_env`, or ``None`` when it cannot be set up (not a
+    repo, git trouble), for callers that then run their read-only diffs
+    plainly (untracked files left out) rather than fail. Only the setup is
+    caught; an error inside the ``with`` body propagates as usual."""
+    with contextlib.ExitStack() as stack:
+        try:
+            env: Optional[Dict[str, str]] = stack.enter_context(
+                scratch_index_env(worktree_path)
+            )
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            env = None
+        yield env
 
 
 def _scratch_git(worktree_path: str, *args: str) -> str:

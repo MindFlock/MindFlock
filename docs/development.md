@@ -557,7 +557,9 @@ cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
   files as `D ` (with a pathspec, `add -N` records removals too). Run the
   diff inside `scratch_index_env(wt)` (`backend/session/git/diff.py`)
   instead: it intent-to-adds into a throwaway copy of the index
-  (`GIT_INDEX_FILE`) and gives the same output. A polled `git status` takes
+  (`GIT_INDEX_FILE`) and gives the same output (`scratch_index_env_or_none`
+  when a failed setup should mean "plain diff" rather than an error — the
+  Diff tab, Code Map and commit drafting use it). A polled `git status` takes
   `--no-optional-locks`, so it does not refresh their index either.
   `tests/unit/test_intent_to_add.py` checks the index bytes stay identical.
 
