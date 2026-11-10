@@ -269,21 +269,16 @@ def test_a_dead_window_releases_through_release_run(monkeypatch, tmp_path):
     T.start_run("sc-1", "sc-1", in_session=True, self_authored=True)
     monkeypatch.setattr(server.ENGINE, "instances", {"sc-1": _inst(tmp_path)})
     monkeypatch.setattr(TPD, "_verify_window_gone", lambda t: True)
-    calls: list = []
-
-    def _release(pid, reason):
-        calls.append((pid, reason))
-        return T.cancel_run(pid)
-
-    monkeypatch.setattr(T, "release_run", _release, raising=False)
-    monkeypatch.setattr(
-        T, "mark_due", lambda *a, **k: pytest.fail("marked unshipped work live")
-    )
     TPD._poll_running_test_plans(T.list_plans())
-    assert len(calls) == 1 and calls[0][0] == "sc-1"
-    reason = calls[0][1]
+    # The outcome, whichever store function did it: the run is KEPT as
+    # blocked with the reason, and unshipped work is not marked as shipped.
+    plan = T.get("sc-1")
+    run = plan["runs"][-1]
+    assert run.get("outcome") == "blocked"
+    reason = run.get("outcome_note") or ""
     assert "sc-1" in reason and "verify session" not in reason.lower()
     assert "press Verify" in reason
+    assert not plan.get("live_at")
 
 
 # --------------------------------------------------------------------------- #

@@ -2205,13 +2205,11 @@ def _release_wedged_run(
     checked it yet", so a session that had been started, been billed and died
     read exactly like a button nobody pressed.
     """
-    release = getattr(_test_plans, "release_run", None)
-    if release is not None:
-        # Puts the plan back where it was before the run (unshipped work stays
-        # unshipped) and settles the run as blocked with the reason.
-        released = release(pid, reason)
-    else:
-        released = _test_plans.mark_due(pid, reason=reason)
+    # `mark_due` picks the release by the kind of run: a self / in-session run
+    # is kept as blocked with the reason and unshipped work stays unshipped
+    # (`test_plans.release_run`); a checker session's run is put back to due
+    # and its empty record dropped, which hands that session to the sweep.
+    released = _test_plans.mark_due(pid, reason=reason)
     if released is None:
         return
     _SELF_NUDGED_AT.pop(pid, None)

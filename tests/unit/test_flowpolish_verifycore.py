@@ -574,3 +574,13 @@ def test_an_in_session_tree_mismatch_names_the_branch_not_the_live_tree():
 
 def test_results_markdown_says_steps():
     assert "No steps written yet." in T.results_markdown(_plan())
+
+
+def test_an_empty_file_error_message_clears_it():
+    """The driver passes "" once the results file parses again."""
+    _self_run([A1])
+    T.note_file_error("sc-1", "bad")
+    plan = T.note_file_error("sc-1", "")
+    assert "file_error" not in plan["runs"][-1]
+    # And "" on a run with no error stamps nothing.
+    assert "file_error" not in T.note_file_error("sc-1", "")["runs"][-1]

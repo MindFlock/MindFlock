@@ -2859,18 +2859,23 @@ def note_file_error(plan_id: str, message: str) -> Optional[dict]:
     ``file_error`` so the Verify pill can say why nothing is moving
     (:func:`verify_status`); the next good read clears it
     (:func:`record_progress`, :func:`adopt_reported_steps`,
-    :func:`finish_run`). Writes only on change (the poller asks every few
-    seconds)."""
-    text = _text(message, 300) or "it is not valid JSON"
+    :func:`finish_run`), and so does an empty ``message`` (the driver
+    passes "" once the file parses again). Writes only on change (the poller
+    asks every few seconds)."""
+    text = _text(message, 300)
 
     def apply(plan: dict) -> None:
-        if plan["runs"] and plan["runs"][-1].get("file_error") != text:
+        if not plan["runs"]:
+            return
+        if text:
             plan["runs"][-1]["file_error"] = text
+        else:
+            plan["runs"][-1].pop("file_error", None)
 
     current = get(plan_id)
     if current is None:
         return None
-    if current["runs"] and current["runs"][-1].get("file_error") == text:
+    if not current["runs"] or (current["runs"][-1].get("file_error") or "") == text:
         return current
     return _mutate(plan_id, apply)
 
