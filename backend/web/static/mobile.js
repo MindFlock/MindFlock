@@ -981,6 +981,9 @@
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
     stuck: "Idle",
+    verify_confirm: "Confirm verified",
+    verify_failed: "Verify failed",
+    verify_blocked: "Verify blocked",
   };
   // Idle this long on uncommitted work and the rail's bell lists it as stuck.
   var STUCK_IDLE_S = 20 * 60;
@@ -998,6 +1001,41 @@
   }
   function needsYou(reason, hint) {
     return st("needs_you", { reason: reason, label: REASON_LABEL[reason], inBell: true, hint: hint });
+  }
+  // The row's `verify` — the session's own agent checking its work
+  // (sessionState.ts verifyOf / verifyHint): null on an older server.
+  function verifyOf(inst) {
+    var v = inst && inst.verify;
+    return v && typeof v === "object" && typeof v.state === "string" ? v : null;
+  }
+  function verifyLines(steps, key) {
+    return (steps || []).map(function (s) {
+      var tail = String(s[key] || "").trim();
+      return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+    }).join("\n");
+  }
+  function verifyProgress(v) {
+    var total = Number(v.steps && v.steps.total) || 0, human = Number(v.steps && v.steps.human) || 0;
+    var done = Number(v.steps && v.steps.agent_done) || 0, mine = Math.max(0, total - human);
+    if (!total) return "writing its steps";
+    if (!mine) return "every step needs a person";
+    return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
+  }
+  // Waits on a person, failed or blocked: a needs-you state (null otherwise).
+  function verifyNeedsYou(v) {
+    if (v.state === "needs_you") {
+      var list = verifyLines(v.human_steps, "expect");
+      return needsYou("verify_confirm", "The agent checked what it can. Do these steps, then confirm verified on the desktop:" + (list ? "\n" + list : ""));
+    }
+    if (v.state === "failed") {
+      var failed = verifyLines(v.failed_steps, "note");
+      return st("needs_you", { reason: "verify_failed", label: REASON_LABEL.verify_failed, tone: "broken", inBell: true,
+                               hint: "Verify failed" + (failed ? ":\n" + failed : v.detail ? " — " + v.detail : "") });
+    }
+    if (v.state === "blocked")
+      return st("needs_you", { reason: "verify_blocked", label: REASON_LABEL.verify_blocked, tone: "broken", inBell: true,
+                               hint: "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") });
+    return null;
   }
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
   // the old "You: …") is read without it (lib/flights.ts perchLabel).
@@ -1055,7 +1093,11 @@
     // typed to since) is a Question whatever the activity reads — a prose
     // question sits on an idle agent and is not "waiting for input".
     var asking = inst.asking;
-    if (asking && (asking.kind === "dialog" || asking.kind === "question"))
+    var verify = verifyOf(inst);
+    // A verify waiting on a person: the agent's reply IS the person's steps,
+    // so a question in it reads Confirm verified (sessionState.ts), not Question.
+    var verifyWaits = !!verify && (verify.state === "needs_you" || verify.state === "failed" || verify.state === "blocked");
+    if (asking && (asking.kind === "dialog" || (asking.kind === "question" && !verifyWaits)))
       return needsYou("question", "The agent asked you a question" + (asking.text ? ": " + String(asking.text) : ""));
     if (act === "clarify") return needsYou("question", "The agent asked you a question");
     // A flight perched on you waits for Done, whatever the agent does.
@@ -1072,6 +1114,11 @@
                                hint: "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
                                      " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip" });
     }
+    // The agent checking its own work: its own pill, mid-turn or between
+    // steps — a usage limit and a dead terminal still say so below.
+    if (verify && verify.state === "verifying" && act !== "limit" && act !== "offline")
+      // Painted in the phone's working tone (mobile.css has no violet).
+      return st("working", { label: "Verifying", hint: "Checking its work: " + verifyProgress(verify) });
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
       var until = Number(inst.queue && inst.queue.limited_until) || 0;
@@ -1084,6 +1131,8 @@
     if (act === "offline")
       return st("offline", { inBell: true, restartable: !inst.device,
                              hint: "The agent's terminal is gone — Restart relaunches it" });
+    var verifyYou = verify && verifyNeedsYou(verify);
+    if (verifyYou) return verifyYou;
     if (inst.stage === "interrupt")
       return needsYou("precommit_failed", inst.failed_step ? "Pre-commit failed at: " + inst.failed_step : "Pre-commit failed");
     if (inst.check && inst.check.state === "failed" && !inst.check.stale)
@@ -1096,6 +1145,8 @@
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
                           hint: "Route “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
+    if (verify && verify.state === "passed")
+      return st("idle", { label: "Verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
     if (idleFor > STUCK_IDLE_S && dirty)
       return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
