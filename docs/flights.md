@@ -72,7 +72,7 @@ side of the journey. Routes are drawn in the Sky.
 |---|---|---|
 | Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's waiting items**: each eligible item is a route that has not started, under its kind's heading with a kind badge, a **Run** button and the saved route as chips | pipeline `state.json`, settings sources |
 | Intake source cards + Auto-start switches | the **Intake** dialog, each source card saying which saved route its items take | settings |
-| Verify (behaviors) | a **Verify** stop on a route; behaviors still open for you make the route **Need you** (the Sky's drawer lists it) | `test_plans.json` |
+| Verify (behaviors) | a **Verify** stop on a route: the session's agent verifies its own work; steps only you can do make the route **Need you** until you confirm (the Sky's drawer lists it) | `test_plans.json` |
 | Schedule (templates) | the **Schedule** dialog; a saved route may carry its own schedule trigger, and Schedule lists those beside the templates | `session_templates.json` |
 | Goes as far as (Agent only · Commit · Push · Open PR · Merge when green) | the **ship** stops of a route; a per-source setting still works and maps to the plain ladder at that rung (the agent, then Commit → … → that rung — nothing else); an armed session's rungs are drawn as stops on its route ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
@@ -171,13 +171,29 @@ saved routes — with that record (next run, last result, history), **Run now**,
 
 ### Verify stops
 
-A Verify stop asks for the session's behaviors through Verify's own button
-path and makes the route **Need you** while behaviors that are yours to check
-are open. Checking them moves the route on at once
-(`session.test_plan_settled` wakes the driver); **Done** on the stop records
-them as verified. The behaviors the push watcher writes for the same branch
-are the same behaviors — Verify keys them by (repo, branch). The checklist is
-always written, whatever the stop's settings.
+A Verify stop is **self-verify** (2026-11-10): it sends the session's own
+agent ONE prompt — "verify the work you just did" — and the agent comes up
+with its own concrete test steps (real usage, not the unit tests it already
+ran), writes them to its results file, puts them on its todo list and works
+through them. A step only a person can do, it **tells the person** in its
+reply (what to do, what to look for) and records as `actor: "human"`. No
+steps are written beforehand: starting the stop finds or makes the session's
+plan (an empty one, nothing generated) and starts the check.
+
+The stop follows the check's outcome — the same **Verify pill** the session's
+row shows (`verify` on `/api/instances`, docs/web-api.md):
+
+| Outcome | The stop |
+|---|---|
+| `verifying` | waits ("the agent is checking the behaviors · 3 of 7 answered"); the stall nudge and the budget close below apply |
+| `needs_you` — there are steps only a person can do (or an agent step it could not settle, or `who: you`) | parks the route on you ("2 steps for you to check, then confirm"; `detail.ask: "confirm"`, `items` = the steps with what to look for). It **never passes silently**: it moves on when a person confirms — `POST /api/test-plans/{id}/confirm`, or **Done** on the stop (= "verified") |
+| `passed` — every agent step passed, nothing for a person | done |
+| `failed` — an agent step failed, or a person confirmed "it doesn't work" | fails with the failing steps ("Failed · 2: login works; logout works") — **halts** the route by default (Retry · Skip · Let the agent fix it) |
+| `blocked` — the check stopped before it finished (closed for a stall or the budget, its window gone, no steps written) | parks on you with the reason: Retry (a new check) or Skip |
+
+Only a check from **this attempt** counts: a Retry (or the agent's fix)
+starts a new one, and a check already running when the stop arrives (started
+from the session's own Verify) is waited on, never restarted.
 
 The stop carries four plain choices and a checkbox; its face reads them as one
 sentence, **"Verify on *where* · *who* · *ready*"** — e.g. "Verify on sandbox ·
@@ -212,8 +228,8 @@ only · right away", "Verify on live · agent, then you · once on release".
 
   `ready_minutes` (0..1440) is ignored when `ready` is `now`.
 
-  The gate never holds up the writing: the behaviors are written meanwhile,
-  and only the agent's run and a person's turn wait. The face says why it
+  The gate holds the check itself: the agent is not asked to verify until
+  the environment is ready. The face says why it
   waits: "waiting for the work to reach sandbox", "12 min for sandbox to be
   ready".
 
@@ -224,14 +240,15 @@ only · right away", "Verify on live · agent, then you · once on release".
   min* checks the sandbox a quarter of an hour after the merge stop finished,
   which is when its deploy has landed. Use `on_branch` when the branch takes
   the commits themselves (a fast-forward or merge-commit release branch).
-- **Who checks** (`who`) — `both` "Agent, then me" (default: the agent checks
-  its behaviors — a run with `walk: "agent"` — then yours park the route on
-  you), `agent` "Agent only" (the agent walks **everything**, your behaviors
-  too — a run with `walk: "all"`, see [The walkthrough](#the-walkthrough-walk-expect-needs)
-  — and only what it truly cannot do parks on you; the stop is done once
-  every behavior is settled, agent-walked ones included), `you` "Only me".
+- **Who checks** (`who`) — `both` "Agent, then me" (default: the agent
+  checks what it can; steps only you can do park the route on you until you
+  confirm), `agent` "Agent only" (the run has `walk: "all"`: the agent
+  attempts a person's steps too with its own tools, and only what it truly
+  cannot do parks on you), `you` "Only me" (the agent still writes and walks
+  its steps, but the check always waits for your sign-off — the run route's
+  `confirm: true` — even when every step passed).
 - **Notes** (`notes`) — text for this check only, on top of the repo's
-  standing notes; handed to the checklist and to the agent's run.
+  standing notes; handed to the agent's check.
 - **Post the results to the PR** (`post_to_pr`) — when the stop finishes
   (done **or** failed) the driver comments `test_plans.results_markdown(plan)`
   on the session's PR, once per attempt (`detail.pr_comment` says what
@@ -252,41 +269,49 @@ Plan JSON sent through the MCP tools, the CLI or the API should use
 `where` / `ready`.
 
 
-#### Walked in the session that wrote the work
+#### Verified in the session that wrote the work
 
 When the session that wrote the work is still open (the plan's own session,
 or another window on the same repo + branch), the check runs **in that
-session**: once the steps are written, the run route hands them to its own
-agent as a prompt (it starts `MindFlock Verify: walk the behaviors of …`).
-The agent puts each step on its own todo list, walks them in order and
-records each answer in its worktree's git-excluded results file, exactly as a
-checker did — so the steps show up as that agent's tasks in its own terminal,
-and you can talk to it while it walks. Nothing is created and nothing is
-checked out: for `where: branch` the code under test is the session's branch
-as it stands (the commit the steps were written about or a descendant of it —
-a HEAD that no longer contains it has its passes downgraded); for an
-environment the deployment is under test and the tree is only read.
+session**: the run route hands its own agent the self-verify prompt (it
+starts `MindFlock Verify: verify the work you just did …`). The agent writes
+`{"plan", "finished", "steps": [{id, text, expect, actor, result?, note?}]}`
+to its worktree's git-excluded results file (`.mindflock_verify.json`),
+rewriting it after every step; the server adopts its steps as the plan's
+(`test_plans.adopt_reported_steps` — the plan's generated steps are dropped
+when the check starts, a person's own are kept and handed to it) and folds
+its answers in. With `"finished": true` the outcome settles: any agent
+`fail` → `failed`; otherwise any step without a `pass` (a person's step, an
+agent step it answered `blocked`) → `needs_you`; no steps at all →
+`blocked`; else `passed`. Nothing is created and nothing is checked out: for
+`where: branch` the code under test is the session's branch as it stands
+(its HEAD when the check started, or a descendant — a HEAD that no longer
+contains it has its passes downgraded); for an environment the deployment is
+under test and the tree is only read.
 
-A session mid-turn gets the walk on its prompt queue (never typed over a
+A session mid-turn gets the prompt on its prompt queue (never typed over a
 running turn); a sleeping one is woken; one whose agent is not running is
 relaunched by the queue's drain. The stop's stall and budget clocks start when
-the agent picks the walk up, not while it waits on the queue. A paused
-session refuses it (409 `reason: "send_failed"` → the stop fails with the
-sentence). The run record carries `in_session: true` and `session` = that
-session; the stop's detail carries `in_session` / `walk_session`, and the
-pane strip offers **Walking here — talk to it** (opens the Agent tab). A
-nudge goes to that agent; the stop closing the check (stall, budget) tells
-it the check is over, and nothing that ends a run — that close, Cancel,
-Delete — **ever closes the session**.
+the agent picks it up, not while it waits on the queue. A paused session
+refuses it (409 `reason: "send_failed"` → the stop fails with the sentence).
+The run record carries `in_session: true`, `self: true` and `session` = that
+session; the stop's detail carries `in_session` / `walk_session`, and the pane
+strip offers **Walking here — talk to it** (opens the Agent tab). A nudge goes
+to that agent; the stop closing the check (stall, budget) tells it the check
+is over, and nothing that ends a run — that close, Cancel, Delete — **ever
+closes the session**.
 
 Only when the plan's session is gone (closed or deleted) does a separate
-`verify-<plan>-<sha7>` checker session walk it, as before — the server
-prepares its checkout, and the memory guard can refuse it (below).
+`verify-<plan>-<sha7>` checker session walk the plan's **written** steps, as
+before — the server prepares its checkout, and the memory guard can refuse it
+(below). That fallback is the one path that still needs steps written
+beforehand (the one-shot author behind Verify's "Write behaviors" button and
+`verify_on_push`); it settles the same outcomes.
 
 #### The walkthrough (`walk`, `expect`, `needs`)
 
-The checklist is a **walkthrough**: ordered steps the checker (the *walker*)
-performs itself. Each step is `{id, text, actor, expect?, needs?}` —
+*(The fallback checker's steps.)* A written checklist is a
+**walkthrough**: ordered steps the checker (the *walker*) performs itself. Each step is `{id, text, actor, expect?, needs?}` —
 `text` is what to **do** (the walker triggers the behaviour itself: an API
 call, a Slack slash command via the API, an HTTP request, a CLI against the
 deployment, a DB query, browser automation — never "after someone has done
@@ -328,8 +353,8 @@ moving, and comes to you when only you can move it:
 | A check is running | says progress: "the agent is checking the behaviors · 3 of 7 answered · quiet 6 min" (the checker rewrites its results file after every step) |
 | No new answer for 8 min and the checker's turn is over | nudges it once: write the file, mark the rest blocked, stop background jobs |
 | Still nothing 15 min after the nudge, or past the 30-minute budget (+5) | closes the check: answered steps keep their answers, the rest become `blocked` ("not checked: …") |
-| The checker answered `blocked` with `needs you: <action>` (a manual step: approve something, click as a reviewer, start a paused job) | parks on you: "the check needs you to do N things, then press Done". **Done = "I did it"**: the stop runs again and the whole check re-runs, told what you did |
-| The checker answered plain `blocked` | parks on you listing them with its why — answer them on the Behaviors card, or Skip. **Never** counted as a pass, whatever `who` says ("Agent only" too) |
+| The check finished with steps only a person can do, or agent steps it answered `blocked` (`needs_you`) | parks on you: "N steps for you to check, then confirm". **Done = "verified"** (`test_plans.confirm_verify`); "it doesn't work" goes through the confirm route with `verified: false` and fails the stop. **Never** counted as a pass, whatever `who` says ("Agent only" too) |
+| The check was closed, its window died, or it wrote no steps (`blocked`) | parks on you with the reason: Retry or Skip |
 
 ### The CLI
 
@@ -412,7 +437,7 @@ editor's palette and forms are driven by the server):
 | `split` | robot | `prompts` (textarea: one worker per non-empty line; `{index}` / `{n}` and the flight's placeholders filled), `count` (int, default 1: a single line is spawned this many times), `model` (text, optional: the workers' `profile_model`), `fence_only` (text, optional: comma-separated paths each worker may change → its fence's `only`), `report_back` (bool, default true: the `spawn_session` report footer) | every worker was created as a child of the session (`parent`, `spawned`, forked from the session's HEAD); their titles are in `step_states[sid].detail.children`. Follow it with a `join` |
 | `join` | robot | `of`: `all` (every live child, default) \| `spawned` (only the workers the nearest `split` before it made); `on_failed`: `halt` (default: a worker whose report is `failed` fails the step with its summary) \| `continue` | every worker in the set has finished ([Fan-out and join](#fan-out-and-join)) |
 | `ship` | robot | `lane`: `commit` \| `push` \| `pr` \| `merge`; `ask_first` (bool); `message` (optional commit message hint) | the autopilot record armed with `source="flight"` reaches `done`; a `halted` record fails the step with its reason (the autopilot's own fix hand-off runs first) |
-| `verify` | robot (+you) | `where` (`branch` or an environment's name, default branch); `ready`: `now` \| `on_branch` \| `after_prev` (default now); `ready_minutes` (0..1440, 0 = the environment's deploy minutes); `who`: `both` \| `agent` \| `you` (default both); `notes` (≤2000 chars); `post_to_pr` (bool, default false) — see [Verify stops](#verify-stops); a legacy `wait_live` true reads as `live` + `on_branch` | the checklist exists for (repo, branch) and every step is settled; open *you* items park the flight as waiting on you with a deep link to the checklist |
+| `verify` | robot (+you) | `where` (`branch` or an environment's name, default branch); `ready`: `now` \| `on_branch` \| `after_prev` (default now); `ready_minutes` (0..1440, 0 = the environment's deploy minutes); `who`: `both` \| `agent` \| `you` (default both); `notes` (≤2000 chars); `post_to_pr` (bool, default false) — see [Verify stops](#verify-stops); a legacy `wait_live` true reads as `live` + `on_branch` | the session's self-verify `passed` (or a person confirmed it); `needs_you` parks the flight on you until confirmed, `failed` fails the stop, `blocked` parks on you (Retry / Skip) |
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
 | `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true) | the PR has had no new unresolved review comments for `quiet_minutes`; each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail |
@@ -984,16 +1009,18 @@ had to choose. Field and route names are unchanged.
   lane is armed. `include_bots: false` drops `*[bot]` and CodeRabbit authors.
 - **`checks` step**: `none` (nothing reports) counts as passed only after 2
   minutes; the failing names come from the check-runs API.
-- **`verify` step** asks for the checklist through Verify's own manual path
-  (`_ensure_test_plan(title, manual=True, environment=where, notes=notes)`)
-  and starts the agent's run through the `POST /api/test-plans/{id}/run`
-  route body (`{"environment": where, "notes": notes}`). `_verify_obs` adds
-  `env` (`test_plans.environment(repo_root, where)`, None for `branch`) and,
-  for `ready: on_branch`, `env_reached_at`; an unknown environment fails the
-  stop. With `post_to_pr` the driver comments the results on the PR when the
-  stop is done or failed (`_post_verify_results`). `who: agent` is done once
-  the agent's items are answered (human items stay on the checklist); open
-  agent items left after a run become yours under `both`.
+- **`verify` step** finds or makes the session's plan
+  (`_ensure_verify_plan(title)`: its own on its current branch, else an empty
+  `origin: "manual"` one — nothing is generated) and starts the self-verify
+  through the `POST /api/test-plans/{id}/run` route body (`{"environment":
+  where, "notes": notes, "walk": …}`, plus `"confirm": true` for `who: you`).
+  `_verify_obs` adds `env` (`test_plans.environment(repo_root, where)`, None
+  for `branch`), for `ready: on_branch` `env_reached_at`, and the newest
+  run's `outcome` / `outcome_note` and `confirm_items` (the steps a person
+  checks before confirming); an unknown environment fails the stop. Done on a
+  stop parked with `ask: "confirm"` confirms the check (verified). With
+  `post_to_pr` the driver comments the results on the PR when the stop is
+  done or failed (`_post_verify_results`).
 
 - **Steps changed in the air.** The four step routes are pure operations
   (`flights.op_add_step` / `op_edit_step` / `op_remove_step` /

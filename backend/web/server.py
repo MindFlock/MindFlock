@@ -396,6 +396,7 @@ from backend.web.core.snapshot import (
     _DIFF_STAT_CACHE,
     _folder_label,
     _instance_json,
+    _row_verify,
     _live_parent,
     _parse_shortstat,
     _repo_name,
@@ -538,6 +539,7 @@ from backend.web.core.test_plans_driver import (
     _closed_session_plan_inputs,
     _deliver_walk,
     _end_verify_session,
+    _ensure_verify_plan,
     _run_is_in_session,
     _tell_walk_closed,
     _ensure_test_plan,
@@ -1893,6 +1895,10 @@ def _session_snapshot(i, queues: dict) -> dict:
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
     d["autopilot"] = _autopilot_dto(i.Title)
     d["flight"] = _flight_dto(i.Title, i)
+    # The Verify pill (core.snapshot._row_verify → test_plans.verify_status):
+    # {"state", "plan", "steps", "human_steps", "failed_steps", "detail",
+    # "at"} or null — docs/web-api.md. A memoised read of the plans store.
+    d["verify"] = _row_verify(i.Title)
     # A killed agent coming back by itself, or left Offline and why
     # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
     d["auto_revive"] = _revive.auto_state(i.Title)
@@ -2023,6 +2029,10 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
     d["flight"] = _flight_dto(i.Title, i)
+    # The Verify pill (core.snapshot._row_verify → test_plans.verify_status):
+    # {"state", "plan", "steps", "human_steps", "failed_steps", "detail",
+    # "at"} or null — docs/web-api.md. A memoised read of the plans store.
+    d["verify"] = _row_verify(i.Title)
     d["auto_revive"] = _revive.auto_state(i.Title)
     d["waiting_for_memory"] = _launch_gate.waiting(i.Title)
     d["tokens"] = d["tokens_in"] = 0
@@ -2074,6 +2084,7 @@ def _pending_rows() -> list:
     out = _pending.rows()
     for r in out:
         r["waiting_for_memory"] = _launch_gate.waiting(str(r.get("title") or ""))
+        r["verify"] = None  # no session yet, so nothing verified
     return out
 
 
@@ -11468,21 +11479,26 @@ async def instance_write_test_plan(
 async def run_test_plan(
     plan_id: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """Walk this plan's steps in a real agent session.
+    """Verify this plan's work.
 
-    IN THE SESSION THAT WROTE THE WORK, when it is still open
-    (:func:`_verify_owner_session`): the walk is handed to that session's own
-    agent as a prompt (``build_run_prompt(..., in_session=True)``) — queued
-    while it is mid-turn or asleep, never typed over a running turn — and the
-    run is recorded with ``session`` = that session and ``in_session``. The
-    person sees the steps as that agent's tasks in its own terminal and can
-    talk to it while it walks. Nothing is created and nothing checked out, so
-    the memory gate does not apply → 202 ``{"ok", "session", "in_session":
-    true, "queued", "plan"}``. Its agent paused, over budget or otherwise
-    unreachable → 409 ``reason: "send_failed"`` with the sentence.
+    SELF-VERIFY IN THE SESSION THAT WROTE THE WORK, when it is still open
+    (:func:`_verify_owner_session`): ONE prompt to that session's own agent —
+    "verify the work you just did" (``test_plans.build_self_verify_prompt``),
+    with no pre-written steps, so a plan with none is fine — queued while it
+    is mid-turn or asleep, never typed over a running turn. The agent writes
+    its own steps into the results file, walks them and tells the person about
+    any only they can do; the run is recorded with ``session`` = that session,
+    ``in_session`` and ``self``, and its ``outcome`` is the row's Verify pill.
+    ``steps`` is ignored there. ``{"confirm": true}`` (a flight's who "you")
+    asks a person to sign off even when every step passes. Nothing is created
+    and nothing checked out, so the memory gate does not apply → 202 ``{"ok",
+    "started": true, "session", "in_session": true, "queued", "plan"}``. Its
+    agent paused, over budget or otherwise unreachable → 409 ``reason:
+    "send_failed"`` with the sentence.
 
-    Otherwise (the session was closed or deleted) a separate checker session,
-    as below.
+    Otherwise (the session was closed or deleted) a separate checker session
+    walks the plan's WRITTEN steps, as below — the one path that still needs
+    them (409 ``no_steps`` without).
 
     Deliberately a full session and not a headless one-shot (the asymmetry the
     core module's docstring is built around): checking a feature means checking
@@ -11537,6 +11553,7 @@ async def run_test_plan(
     if notes is not None and not isinstance(notes, str):
         return JSONResponse({"error": "notes must be a string"}, status_code=400)
     notes = str(notes or "").strip()[:2000]
+    confirm = payload.get("confirm") is True
     if not git_available():
         return _no_git_response()
     plan = _test_plans.get(plan_id)
@@ -11559,6 +11576,27 @@ async def run_test_plan(
                 "reason": "busy",
             },
             status_code=409,
+        )
+    # SELF-VERIFY WHEN THE SESSION IS STILL OPEN: its own agent is told to
+    # verify the work it just did — it writes its own steps and walks them —
+    # so no steps are needed here and none are checked.
+    owner = await asyncio.to_thread(_verify_owner_session, plan)
+    if owner:
+        run_target, checkout, checkout_branch, bad = await _run_where(plan, where)
+        if bad is not None:
+            return bad
+        return await _run_test_plan_in_session(
+            plan,
+            owner,
+            None,
+            live=plan["state"] in ("due", "running", "done"),
+            where=where,
+            run_target=run_target,
+            checkout=checkout,
+            checkout_branch=checkout_branch,
+            notes=notes,
+            walk=walk,
+            confirm=confirm,
         )
     if not plan["steps"]:
         # A plan still generating, or one that failed to: there is nothing for a
@@ -11661,37 +11699,10 @@ async def run_test_plan(
     # A route's explicit "where" overrides both answers: the environment's own
     # reach and branch, or the plan's commit with nothing deployed. Resolved
     # BEFORE any session is touched, so an unknown name costs nothing.
-    run_target: Optional[str] = None
-    checkout = ""
-    checkout_branch = ""
-    if where:
-        sha = str(plan.get("tip_sha") or plan.get("sha") or "")
-        if where == _test_plans.BRANCH_WHERE:
-            run_target, checkout = "", sha
-        else:
-            env = await asyncio.to_thread(_test_plans.environment, repo_root, where)
-            if env is None:
-                return JSONResponse(
-                    {"error": "no such environment: %s" % where}, status_code=400
-                )
-            run_target = env["reach"]
-            checkout_branch = env["branch"]
-            checkout = ("origin/%s" % checkout_branch) if checkout_branch else sha
+    run_target, checkout, checkout_branch, bad = await _run_where(plan, where)
+    if bad is not None:
+        return bad
     live = plan["state"] in ("due", "running", "done")
-    owner = await asyncio.to_thread(_verify_owner_session, plan)
-    if owner:
-        return await _run_test_plan_in_session(
-            plan,
-            owner,
-            only,
-            live=live,
-            where=where,
-            run_target=run_target,
-            checkout=checkout,
-            checkout_branch=checkout_branch,
-            notes=notes,
-            walk=walk,
-        )
     # The commit the checker must start on, the one step one of the prompt
     # names. The SERVER checks it out (below), not the agent.
     want = _verify_checkout_ref(plan, live, checkout)
@@ -11846,6 +11857,31 @@ async def run_test_plan(
     )
 
 
+async def _run_where(plan: dict, where: str) -> tuple:
+    """A run's explicit ``where`` → ``(run_target, checkout, checkout_branch,
+    refusal)``: ``"branch"`` is the plan's own commit with nothing deployed,
+    an environment's name its ``reach`` and branch; ``""`` leaves the repo's
+    own target (``run_target`` None). An unknown environment is a 400
+    ``refusal`` — a check run in the wrong place reports on the wrong system."""
+    if not where:
+        return None, "", "", None
+    sha = str(plan.get("tip_sha") or plan.get("sha") or "")
+    if where == _test_plans.BRANCH_WHERE:
+        return "", sha, "", None
+    env = await asyncio.to_thread(
+        _test_plans.environment, str(plan.get("repo_root") or ""), where
+    )
+    if env is None:
+        return (
+            None,
+            "",
+            "",
+            JSONResponse({"error": "no such environment: %s" % where}, status_code=400),
+        )
+    branch = str(env.get("branch") or "")
+    return env["reach"], ("origin/%s" % branch) if branch else sha, branch, None
+
+
 async def _run_test_plan_in_session(
     plan: dict,
     owner: str,
@@ -11858,8 +11894,14 @@ async def _run_test_plan_in_session(
     checkout_branch: str,
     notes: str,
     walk: str,
+    confirm: bool = False,
 ) -> JSONResponse:
-    """``run_test_plan``'s walk in the plan's OWN session ``owner``.
+    """``run_test_plan``'s SELF-VERIFY in the plan's OWN session ``owner``:
+    one prompt — "verify the work you just did"
+    (``test_plans.build_self_verify_prompt``) — with no pre-written steps;
+    the agent writes its own into the results file and walks them, and tells
+    the person about any only they can do. ``only`` and ``live`` are not
+    used (the agent picks its own steps; its tree is its own branch).
 
     The run is opened FIRST and the prompt handed over second: a session that
     is idle starts answering at once, and its answers need a running plan to
@@ -11867,10 +11909,8 @@ async def _run_test_plan_in_session(
     says why — nothing was created, so there is nothing to close."""
     plan_id = str(plan["id"])
     repo_root = str(plan.get("repo_root") or "")
-    prompt = _test_plans.build_run_prompt(
+    prompt = _test_plans.build_self_verify_prompt(
         plan,
-        only,
-        live=live,
         repo_notes=_test_plans.repo_notes(repo_root),
         target=(
             _test_plans.verify_target(repo_root) if run_target is None else run_target
@@ -11878,9 +11918,16 @@ async def _run_test_plan_in_session(
         where=where,
         checkout_branch=checkout_branch,
         notes=notes,
-        walk=walk,
-        in_session=True,
+        confirm=confirm,
     )
+    # The session's HEAD now: what the tree check holds the walk to.
+    tip = ""
+    inst = ENGINE.instances.get(owner)
+    try:
+        wt = inst.GetWorktreePath() if inst is not None else ""
+        tip = (await asyncio.to_thread(_git_head_sha, wt)) if wt else ""
+    except Exception:  # noqa: BLE001 — unknown, never a refusal
+        tip = ""
     # The previous run's answers go first, exactly as for a checker: the
     # poller believes the first `finished: true` it reads.
     await asyncio.to_thread(_clear_verify_results, owner)
@@ -11893,6 +11940,9 @@ async def _run_test_plan_in_session(
         checkout=checkout,
         walk=walk,
         in_session=True,
+        self_authored=True,
+        confirm=confirm,
+        tip_sha=str(tip or ""),
     )
     if started is None:
         return JSONResponse(
@@ -11903,7 +11953,7 @@ async def _run_test_plan_in_session(
         await asyncio.to_thread(_test_plans.cancel_run, plan_id)
         return JSONResponse(
             {
-                "error": "couldn't hand the steps to %s: %s" % (owner, reason),
+                "error": "couldn't hand the check to %s: %s" % (owner, reason),
                 "reason": "send_failed",
                 # NOT "session": a 409 naming one reads as "already
                 # verifying" to the flight driver.
@@ -11915,6 +11965,7 @@ async def _run_test_plan_in_session(
     return JSONResponse(
         {
             "ok": True,
+            "started": True,
             "session": owner,
             "in_session": True,
             "queued": told == "queued",
@@ -11991,6 +12042,95 @@ def _fix_detail_for(resp: JSONResponse) -> JSONResponse:
         body["detail"] = _FIX_GENERIC_DETAIL
     body.setdefault("error", first or "fix session failed")
     return JSONResponse(body, status_code=resp.status_code)
+
+
+@app.post("/api/test-plans/{plan_id:path}/confirm")
+async def confirm_test_plan(
+    plan_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """A PERSON confirms a verify waiting on them (``needs_you``).
+
+    Body ``{"verified": true|false, "note"?: str}``. ``verified`` true → the
+    steps still waiting are answered pass and the verify is ``passed``; false
+    → they are answered fail with the note and it is ``failed``
+    (``test_plans.confirm_verify``) → 200 ``{"ok": true, "plan": <plan>}``.
+    409 ``{"error"}`` when the plan's verify is not in ``needs_you``; 404 for
+    no such plan; 400 for a body without a boolean ``verified``."""
+    payload = payload if isinstance(payload, dict) else {}
+    verified = payload.get("verified")
+    if not isinstance(verified, bool):
+        return JSONResponse(
+            {"error": "verified must be true or false"}, status_code=400
+        )
+    note = payload.get("note")
+    if note is not None and not isinstance(note, str):
+        return JSONResponse({"error": "note must be a string"}, status_code=400)
+    try:
+        plan = await asyncio.to_thread(
+            _test_plans.confirm_verify, plan_id, verified, str(note or "").strip()
+        )
+    except _test_plans.NotNeedsYou as err:
+        return JSONResponse({"error": str(err)}, status_code=409)
+    if plan is None:
+        return JSONResponse(
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
+        )
+    try:
+        _events.BUS.emit(
+            "session.test_plan_checked",
+            session=plan_id,
+            new="" if verified else "failed",
+            data={
+                "plan": plan_id,
+                "title": plan.get("title") or plan_id,
+                "confirmed": True,
+                "verified": verified,
+                "outcome": (plan["runs"][-1] if plan["runs"] else {}).get(
+                    "outcome", ""
+                ),
+            },
+        )
+    except Exception:  # noqa: BLE001 — an announcement never fails a confirm
+        pass
+    return JSONResponse({"ok": True, "plan": _test_plan_row(plan)})
+
+
+@app.post("/api/instances/{title}/verify")
+async def instance_verify(title: str, request: Request, payload: Optional[dict] = None):
+    """Verify this session's work NOW: find or create its plan (an empty one —
+    nothing is generated; the agent writes its own steps) and start the
+    self-verify in the session (``run_test_plan``) → 202 ``{"started": true,
+    "plan": "<id>"}``. Body ``{"notes"?: str}``. A refusal is the run route's
+    own answer (409 busy / send_failed, …); 404 for no such session, 409 for
+    one with no workspace or not on a branch."""
+    payload = payload if isinstance(payload, dict) else {}
+    notes = payload.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        return JSONResponse({"error": "notes must be a string"}, status_code=400)
+    if not git_available():
+        return _no_git_response()
+    inst, err = _inst_or_404(title)
+    if err is not None:
+        return err
+    peer_err = _peer_guard.refusal(inst, "Verify")
+    if peer_err is not None:
+        return peer_err
+    pid, why = await asyncio.to_thread(_ensure_verify_plan, title)
+    if not pid:
+        return JSONResponse({"error": why or "couldn't start a check"}, status_code=409)
+    resp = await run_test_plan(pid, request, {"notes": str(notes or "")})
+    if resp.status_code >= 400:
+        return resp
+    body = _json_body(resp)
+    return JSONResponse(
+        {
+            "started": True,
+            "plan": pid,
+            "session": body.get("session") or "",
+            "queued": bool(body.get("queued")),
+        },
+        status_code=202,
+    )
 
 
 @app.post("/api/test-plans/{plan_id:path}/fix")
