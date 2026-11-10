@@ -298,7 +298,7 @@ describe("the group box on the canvas", () => {
     expect(g).toContain('aria-label="Edit “Ticket to merge”"');
     expect(g).toMatch(/aria-label="Move “Ticket to merge” earlier" title="A group doesn&#x27;t move yet" disabled=""/);
     expect(g).toMatch(/aria-label="Move “Ticket to merge” later"[^>]*disabled=""/);
-    expect(g).toContain('aria-label="Halt here — “Ticket to merge”"');
+    expect(g).toContain('aria-label="Add halt point — “Ticket to merge”"');
     expect(g).toMatch(/aria-label="Remove “Ticket to merge”" title="Remove this group and its 3 stops from the route"/);
     // It never drags.
     expect(g).not.toContain("fl-draggable");
@@ -328,10 +328,10 @@ describe("the group box on the canvas", () => {
     expect(menuItemsFor(ahead, { ...ctx, expanded: true }).find((i) => i.key === "expand")!.label).toBe("Fold its stops");
     const flying = node(at(2), "group:g1");
     expect(menuItemsFor(flying, { ...ctx, here: true }).map((i) => i.label)).toEqual([
-      "Halt now",
+      "Pause",
       "Details",
       "Show its stops",
-      "Halt here",
+      "Add halt point",
       "Remove",
       "The route is in this group — only what is still ahead can change",
     ]);

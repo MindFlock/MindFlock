@@ -17,13 +17,17 @@
  *                   flight is at (removing it halts the flight there);
  *  - `stopDropOf`   what a drop on a line carries: a stop kind, or a saved
  *                   stop (round 11: a group of stops);
- *  - `birdAction`   what a click on the bird does (Halt now / Carry on /
+ *  - `birdAction`   what a click on the bird does (Pause / Carry on /
  *                   Retry), and `canJumpTo` / `jumpTargets` where a dragged
- *                   bird may land (docs/flights.md "As built: round 12 bird"). */
+ *                   bird may land (docs/flights.md "As built: round 12 bird");
+ *  - `FIELD_HINT` / `FIELD_RANGE` / `onFailHint` / `stopSentence`  what each
+ *                   option of a stop's form makes the route do, in plain
+ *                   words (the form's hints and its read-back sentence). */
 
 import type { BirdTone, Diagram, DiagramNode, Placed } from "./flightDiagram";
-import { STOP_MIME, type Flight, type FlightStep } from "./flights";
+import { STOP_MIME, type Flight, type FlightStep, type OnFail } from "./flights";
 import { FLYWAY_MIME } from "./skyLayout";
+import { FIX_ROUNDS, VERIFY_ON_FAIL } from "./verifyStop";
 
 // --- Gaps on the line -------------------------------------------------------------
 
@@ -139,6 +143,9 @@ export interface StopMenuItem {
   disabled?: boolean;
   danger?: boolean;
   note?: boolean;
+  /** A toggle that is on (the halt point toggle on a halt point): the
+   * toolbar draws its button pressed. */
+  pressed?: boolean;
 }
 
 export interface StopMenuCtx {
@@ -149,11 +156,11 @@ export interface StopMenuCtx {
   later?: boolean;
   /** The stop belongs to a live flight the menu can act on (Done / Skip / Retry). */
   live?: boolean;
-  /** The box is the live flight's current stop: Halt now / Carry on. */
+  /** The box is the live flight's current stop: Pause / Carry on. */
   here?: boolean;
   /** A group box drawn open (its sub-steps on the line): Fold, not Show. */
   expanded?: boolean;
-  /** The bird may be jumped to this box (`canJumpTo`): Jump the bird here. */
+  /** The bird may be jumped to this box (`canJumpTo`): Jump here. */
   jump?: boolean;
 }
 
@@ -181,20 +188,21 @@ export function canHalt(n: DiagramNode, here = false): boolean {
 
 const FLIGHT_HERE: ReadonlySet<DiagramNode["state"]> = new Set(["current", "perched", "paused", "halted"]);
 
-/** ⏸ Halt here on a stop, or Carry on past here on a halt point. */
+/** ⏸ Add halt point on a stop, or Remove halt point on one that is. ("Carry
+ * on" is only ever the resume of a paused route.) */
 export function haltToggle(n: DiagramNode): StopMenuItem {
   if (n.kind === "group") n = groupHaltStep(n) || n;
   return n.step?.halt
-    ? { key: "halt", label: "Carry on past here", title: "Take the halt point off this stop — the route goes on through it" }
-    : { key: "halt", label: "Halt here", title: "Make this stop a halt point — the route stops when it gets here, before doing it" };
+    ? { key: "halt", label: "Remove halt point", title: "Take the halt point off this stop — the route goes on through it", pressed: true }
+    : { key: "halt", label: "Add halt point", title: "Make this stop a halt point — the route pauses when it gets here, before doing it" };
 }
 
-/** ⏹ Halt now (the flight under way or waiting on you) or ▶ Carry on (held),
+/** ⏸ Pause (the flight under way or waiting on you) or ▶ Carry on (paused),
  * on the flight's current stop; none on a stop halted by a failure (Retry). */
 export function flightHold(n: DiagramNode): StopMenuItem | null {
   if (n.state === "paused") return { key: "resume", label: "Carry on", title: "Go on from this stop" };
   if (n.state === "halted") return null;
-  return { key: "pause", label: "Halt now", title: "Halt the route where it is — Carry on picks it up again" };
+  return { key: "pause", label: "Pause", title: "Pause the route where it is — Carry on picks it up again" };
 }
 
 /** The badge a halt point wears in its corner (null on any other box). */
@@ -205,33 +213,33 @@ export function haltMark(n: DiagramNode): { glyph: string; title: string } | nul
   }
   if (n.kind !== "stop" || !n.step?.halt) return null;
   return n.state === "paused"
-    ? { glyph: "⏸", title: "Halt point — the route stopped here. Carry on to go on" }
-    : { glyph: "⏸", title: "Halt point — the route stops here before doing this stop" };
+    ? { glyph: "⏸", title: "Halt point — the route paused here. Carry on to go on" }
+    : { glyph: "⏸", title: "Halt point — the route pauses here before doing this stop" };
 }
 
 const note = (label: string): StopMenuItem => ({ key: "note", label, title: label, note: true });
 
 /** 🗑 on a stop, by where it is on a live line: the one the flight is at
- * (removing it halts the flight right before the stop that followed), one
+ * (removing it pauses the flight right before the stop that followed), one
  * that has flown, or one still ahead; a group takes its sub-steps with it. */
 export function removeTool(n: DiagramNode, here = false): StopMenuItem {
   if (n.kind === "group") {
     const k = n.group?.total || 0;
     return { key: "remove", label: "Remove", title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the route", danger: true };
   }
-  if (here) return { key: "remove", label: "Remove — the route halts here", title: "Remove this stop — the route halts right before the stop that followed it", danger: true };
+  if (here) return { key: "remove", label: "Remove — the route pauses here", title: "Remove this stop — the route pauses right before the stop that followed it", danger: true };
   if (flownState(n.state)) return { key: "remove", label: "Remove from the route", title: "Take this finished stop off the route", danger: true };
   return { key: "remove", label: "Remove", title: "Take this stop off the route (Delete)", danger: true };
 }
 
-/** A group box's menu: Halt now / Carry on while the flight is in it, its
+/** A group box's menu: Pause / Carry on while the flight is in it, its
  * dialog, open / fold its sub-steps on the line, its halt point, Remove (the
  * whole group). Earlier / Later wait for a later
  * round (a group does not move yet). */
 function groupItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const { can } = ctx;
   const items: StopMenuItem[] = [];
-  // The flight is in it: Halt now / Carry on.
+  // The flight is in it: Pause / Carry on.
   const hold = ctx.here && ctx.live && FLIGHT_HERE.has(n.state) ? flightHold(n) : null;
   if (hold) items.push(hold);
   if (can.edit) items.push({ key: "edit", label: n.editable ? "Edit" : "Details", title: "Open this group and its stops (Enter)" });
@@ -247,25 +255,25 @@ function groupItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   return items;
 }
 /** A box's right-click menu: an editable stop is edited, moved, duplicated,
- * made a halt point or removed; the flight's current stop offers Halt now /
+ * made a halt point or removed; the flight's current stop offers Pause /
  * Carry on, what its own parts do (Done on a perch, Skip, Retry when halted)
  * and its halt point; a stop that has flown says so; the
- * trailing + tacks a stop on; a session box opens. */
+ * trailing + adds a stop; a session box opens. */
 export function menuItemsFor(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const items = boxItems(n, ctx);
   if (!ctx.jump || (n.kind !== "stop" && n.kind !== "group")) return items;
-  // Jump the bird here: the keyboard's and a phone's way to the bird's drag,
+  // Jump here: the keyboard's and a phone's way to the bird's drag,
   // above Remove and the notes.
   const at = items.findIndex((i) => i.danger || i.note);
   items.splice(at < 0 ? items.length : at, 0, JUMP_ITEM);
   return items;
 }
 
-const JUMP_ITEM: StopMenuItem = { key: "jump", label: "Jump the bird here", title: "Move the route to this stop — the halt points after it are armed again" };
+const JUMP_ITEM: StopMenuItem = { key: "jump", label: "Jump here", title: "Move the route to this stop — the halt points after it are armed again" };
 
 function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const { can } = ctx;
-  if (n.kind === "add") return can.open ? [{ key: "tackon", label: "Tack on a stop", title: "Pick a stop to tack onto the end of the route" }] : [];
+  if (n.kind === "add") return can.open ? [{ key: "tackon", label: "Add a stop", title: "Pick a stop to add at the end of the route" }] : [];
   if (n.kind === "rung") return [note("Goes as far as — this stop moves as the session ships")];
   if (n.kind === "group") return groupItems(n, ctx);
   if (n.kind !== "stop") return can.open ? [{ key: "open", label: "Open", title: n.session ? "Go to " + n.session : "Open it" }] : [];
@@ -295,13 +303,13 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const hold = ctx.here && ctx.live ? flightHold(n) : null;
   if (hold) items.push(hold);
   if (ctx.live) {
-    // A Verify stop moves on when its behaviors are answered, not on Done
-    // (the server refuses it: 409 answer_behaviors) — its card opens instead.
+    // A Verify stop moves on when its check is confirmed, not on Done —
+    // its Verify card opens instead (the key the hosts already handle).
     const verify = n.step?.kind === "verify";
     if (n.state === "perched")
       items.push(
         verify
-          ? { key: "behaviors", label: "Behaviors", title: "Answer its behaviors — the route goes on once each one has an answer" }
+          ? { key: "behaviors", label: "Open Verify", title: "Check the steps only you can do, then Confirm verified or Not verified… — the route goes on once you answer" }
           : { key: "done", label: "Done", title: "Mark this stop done — the bird flies on" }
       );
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
@@ -310,7 +318,7 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
       items.push({
         key: "fix",
         label: "Let the agent fix it",
-        title: verify ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — this stop runs again after its fix",
+        title: verify ? "Hand the failed steps and their evidence to the agent — it verifies again after its fix" : "Hand the failure to the agent — this stop runs again after its fix",
       });
     items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
   }
@@ -323,15 +331,15 @@ function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
 
 // --- The bird in hand (round 12) ----------------------------------------------------------
 
-/** A click on the bird (Enter / Space on it): ⏹ Halt the flight here while
- * it flies or waits on you, ▶ Carry on while held, Retry when a stop failed.
- * Null for a bird that is not on a live flight's stop (the session box, a
- * fast-track rung): there is nothing to halt. */
+/** A click on the bird (Enter / Space on it): ⏸ Pause the flight here while
+ * it flies or waits on you, ▶ Carry on while paused, Retry when a stop
+ * failed. Null for a bird that is not on a live flight's stop (the session
+ * box, a fast-track rung): there is nothing to pause. */
 export function birdAction(tone: BirdTone, onFlight: boolean): { key: "pause" | "resume" | "retry"; label: string; title: string } | null {
   if (!onFlight) return null;
   if (tone === "paused") return { key: "resume", label: "Carry on", title: "Carry on — the route goes on from this stop" };
   if (tone === "halted") return { key: "retry", label: "Retry", title: "Retry — run this stop again" };
-  return { key: "pause", label: "Halt the route here", title: "Halt the route here — Carry on picks it up again" };
+  return { key: "pause", label: "Pause", title: "Pause the route here — Carry on picks it up again" };
 }
 
 /** The flight a bird is dragged on: its id and the step it is at (null when
@@ -371,4 +379,165 @@ export function canJumpTo(flight: JumpFlight | null, n: DiagramNode): boolean {
 /** Every box of a line the bird can be dropped on, in line order. */
 export function jumpTargets(d: Diagram, flight: JumpFlight | null = jumpFlightOf(d)): DiagramNode[] {
   return flight ? d.nodes.filter((n) => canJumpTo(flight, n)) : [];
+}
+
+// --- What each option does (the stop form's hints) ------------------------------------
+
+/** Every option of every stop kind in plain words — what it makes the route
+ * do, its default and its allowed range — keyed `kind.field`. The server's
+ * kinds (backend flights.py STEP_KINDS and flight_kinds/) are the truth for
+ * the defaults and ranges; it refuses a number out of range or an unknown
+ * value, so the number fields clamp to `FIELD_RANGE`. Verify's own fields
+ * are explained by its editor (VerifyStopFields). */
+export const FIELD_HINT: Readonly<Record<string, string>> = {
+  "agent.prompt": "Typed to the session's agent when the route gets here; the stop is done once its turn has settled. {ticket} {pr} {branch} {subject} are filled in.",
+  "agent.fresh": "Off: this session's agent does it. On: a new session in this repo takes the prompt, with the CLI and model below.",
+  "agent.join": "On: the stop also waits until every worker the agent started has finished. Default on.",
+  "agent.program": "The new session's CLI (claude, codex…). Empty: the same as this session.",
+  "agent.model": "The new session's model. Empty: the same as this session.",
+  "split.prompts": "One worker per line, all started at once. {index} and {n} are filled in.",
+  "split.count": "With a single prompt: how many workers get it. 1 to 20, default 1.",
+  "split.model": "The workers' model. Empty: their CLI's default.",
+  "split.fence_only": "Each worker may change only these paths (comma-separated). Empty: anything.",
+  "split.report_back": "On: each worker reports its result back to this session when it is done. Default on.",
+  "join.of": "All workers = every worker this session has; Its Split's workers = only the ones a Split before it started.",
+  "join.on_failed": "Fail this stop = a failed worker fails it (then “If it fails” decides); Go on = it carries on with the others.",
+  "ship.lane": "How far the work goes: commit only, push, open the PR, or merge it once CI is green.",
+  "ship.ask_first": "On: the route waits on you before anything leaves this machine. Default off.",
+  "ship.message": "A hint for the commit message. Empty: it is written from the changes.",
+  "you.text": "What the route shows you. It waits (under Needs you) until you press Done.",
+  "you.items": "One item per line — each becomes a tick box.",
+  "you.notify": "On: your phone and the bell are told when the route gets here. Default on.",
+  "wait.seconds": "1 second to 14 days, default 10 min.",
+  "wait.until": "A time of day, 24-hour (18:00): today, or tomorrow once it has passed. A time wins over How long.",
+  "reviews.quiet_minutes": "Done once no new review comment has come for this long. 1 to 1440 min, default 10.",
+  "reviews.max_rounds": "Each round sends the new comments to the agent and pushes; more comments after this many rounds fail the stop. 1 to 50, default 5.",
+  "reviews.include_bots": "Off: comments from bot reviewers are left out. Default on.",
+  "checks.timeout_minutes": "The stop fails if CI hasn't finished by then; a failing check fails it at once. 1 to 1440 min, default 60.",
+  "command.command": "Runs in the session's folder; a non-zero exit fails the stop.",
+  "command.timeout_minutes": "Still running then: it is stopped and the stop fails. 1 to 1440 min, default 30.",
+  "ticket.state": "Its exact name or id in your tracker. Empty: comment only. Skipped when the route has no ticket.",
+  "ticket.comment": "Posted on the route's ticket. Empty: no comment.",
+  "notify.text": "Goes to your phone and the bell; the route never waits for it.",
+  "loop.back_to": "The route goes back to this stop for each new run.",
+  "loop.times": "Runs in all, counting the first. 0 = until stopped (or until “Stop looping when”). 0 to 1000, default 3.",
+  "loop.every_seconds": "Runs start at least this far apart; 0 = straight away. Up to 7 days.",
+  "loop.wait_limits": "On: while the agent is at a usage limit the loop waits instead of going round. Default on.",
+  "loop.fresh": "On: the agent's context is cleared before each run (when its CLI can).",
+  "loop.until": "Checked before each run; once true the loop ends. Empty: only the count stops it. ⓘ lists the conditions.",
+  "loop.prompt": "Typed to the agent at each run. Empty: the session's last prompt again.",
+  "budget.max_usd": "The session's estimated spend. Empty: no dollar limit.",
+  "budget.max_minutes": "How long the route has been running. 0 = no limit; up to 10080 min (7 days).",
+  "budget.max_tokens": "Fresh tokens (in, out, cache writes). 0 = no limit.",
+  "budget.scope": "Whole route = it keeps watching every later stop and fails the one running when a limit is passed; Here only = it checks once, at this stop.",
+  "call.method": "GET sends no body.",
+  "call.url": "http(s)://…; {branch} {pr} {ticket} {subject} are filled in.",
+  "call.headers": "One “Name: value” per line.",
+  "call.body": "Sent unless the method is GET; {receipt} = the last finished stop's result.",
+  "call.expect": "The stop is done when the HTTP status starts with this (2 = any 2xx); any other status fails it.",
+  "call.timeout_minutes": "No answer by then fails the stop. 1 to 60 min, default 5.",
+  "checkpoint.note": "Only names it. The stop records the commit and any uncommitted work, so you can rewind to it later.",
+  "handoff.wait": "Off: this stop is done as soon as the other route takes off. On: it waits for that route to finish, and fails if it halts or is cancelled.",
+  "judge.question": "Asked about the work; the answer is recorded on the stop.",
+  "judge.options": "Comma-separated, up to 12. An answer outside them fails the stop. Default: yes, no.",
+  "judge.by": "model = a one-off model reads the diff and answers; agent = the session's agent answers after its turn.",
+  "land.delete_branch": "Deletes the local branch once merged (never the default branch). Default on.",
+  "land.remote_branch": "Deletes it on origin too. Default on.",
+  "land.close": "delete = removes the session and its folder (it closes instead when there is uncommitted work); close = keeps the folder.",
+  "listen.match": "Empty: anything that arrives counts.",
+  "listen.timeout_minutes": "Nothing by then fails the stop. 0 = wait for ever; up to 10080 min (7 days).",
+  "preview.command": "Runs in the session's folder; the URL it prints last becomes {preview}.",
+  "preview.timeout_minutes": "1 to 1440 min, default 20.",
+  "preview.stop_command": "Runs when the route ends or is cancelled. Empty: the preview is left up.",
+  "review.program": "The reviewer's CLI. Empty: the same as this session.",
+  "review.model": "The reviewer's model. Empty: its CLI's default.",
+  "review.focus": "Added to what the reviewer is asked to look at.",
+  "review.block": "On: any finding fails the stop (then “If it fails” decides). Off: findings are only recorded. Default on.",
+  "review.keep": "Off: the reviewer session is closed when it has answered.",
+  "screenshot.urls": "{preview} = the Preview stop's URL; lines that aren't http(s) are skipped.",
+  "screenshot.widths": "Comma-separated, each 200 to 4000 px. Default 1280, 390.",
+  "screenshot.timeout_minutes": "1 to 1440 min, default 10.",
+  "screenshot.comment_pr": "Needs a PR and a GitHub token; without them the stop says why it didn't post.",
+  "someone.who": "A peer link's name. Empty: the webhook below is used.",
+  "someone.text": "Empty: the stop's title is asked. The route waits until they press Done.",
+  "someone.items": "One per line, shown as a list in the ask.",
+  "someone.webhook": "A Slack incoming webhook or any URL that takes a JSON POST.",
+  "sync.with": "Empty: the default branch (main).",
+  "sync.how": "rebase replays this branch on top of it; merge adds a merge commit. A conflict fails the stop, listing the files.",
+  "sync.fetch": "On: it is fetched from origin first. Default on.",
+  "test.command": "Empty: the project's tests are found (pytest, npm test, go test, cargo test).",
+  "test.expect": "pass = done when every test passes; fail = done when something fails (to show a bug is real).",
+  "test.rerun_failures": "1 to 3 failures get one more run, and that run decides. Default on.",
+  "test.timeout_minutes": "1 to 1440 min, default 30.",
+};
+
+/** A number option's allowed range, `kind.field` → [lowest, highest] — the
+ * server's own clamps (seconds for a duration). */
+export const FIELD_RANGE: Readonly<Record<string, readonly [number, number]>> = {
+  "split.count": [1, 20],
+  "wait.seconds": [1, 60 * 60 * 24 * 14],
+  "reviews.quiet_minutes": [1, 1440],
+  "reviews.max_rounds": [1, 50],
+  "checks.timeout_minutes": [1, 1440],
+  "command.timeout_minutes": [1, 1440],
+  "loop.times": [0, 1000],
+  "loop.every_seconds": [0, 60 * 60 * 24 * 7],
+  "budget.max_minutes": [0, 10080],
+  "budget.max_tokens": [0, 1e12],
+  "call.timeout_minutes": [1, 60],
+  "listen.timeout_minutes": [0, 10080],
+  "preview.timeout_minutes": [1, 1440],
+  "screenshot.timeout_minutes": [1, 1440],
+  "test.timeout_minutes": [1, 1440],
+};
+
+/** `kind.field`'s hint, "" when it has none. */
+export const fieldHint = (kind: string, field: string): string => FIELD_HINT[kind + "." + field] || "";
+
+/** A number typed into `kind.field`, kept inside its range ("" stays ""). */
+export function clampField(kind: string, field: string, v: number | ""): number | "" {
+  const r = FIELD_RANGE[kind + "." + field];
+  if (v === "" || !r) return v;
+  return Math.min(r[1], Math.max(r[0], v));
+}
+
+/** What "If it fails" makes the route do, for the pick — under the choice. */
+export function onFailHint(k: OnFail, kind = ""): string {
+  if (kind === "verify") return capital(VERIFY_ON_FAIL[k]) + ".";
+  switch (k) {
+    case "agent":
+      return "The failure goes to the agent; the stop runs again when its turn ends (up to " + FIX_ROUNDS + " rounds, then the route halts).";
+    case "skip":
+      return "The route goes on as if this stop was not there.";
+    case "you":
+      return "The route waits on you, amber, showing the failure.";
+    default:
+      return "The route stops here, red; you Retry or Skip.";
+  }
+}
+
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** The parts of a stop that change how the route treats it, read back as one
+ * sentence: its halt point, its "Only when" and what a failure does — "The
+ * route pauses here first (a halt point). It runs only when weekday —
+ * otherwise it is skipped. If it fails, the route halts, red." `body`
+ * replaces the failure part with a sentence of the stop's own that already
+ * says it (a Verify stop's `verifySentence`). */
+export function stopSentence(step: Pick<FlightStep, "kind" | "halt" | "when" | "on_fail">, fallback: OnFail = "halt", body = ""): string {
+  const out: string[] = [];
+  if (step.halt) out.push("The route pauses here first (a halt point) — Carry on to run it.");
+  const when = (step.when || "").trim();
+  if (when) out.push("It runs only when " + when + " — otherwise it is skipped.");
+  if (body) {
+    out.push(body);
+    return out.join(" ");
+  }
+  const k = (step.on_fail || fallback) as OnFail;
+  out.push(
+    "If it fails, " +
+      (k === "agent" ? "the agent gets the failure and the stop runs again, up to " + FIX_ROUNDS + " rounds" : k === "skip" ? "the route goes on without it" : k === "you" ? "the route waits on you" : "the route halts, red") +
+      "."
+  );
+  return out.join(" ");
 }

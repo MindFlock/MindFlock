@@ -514,7 +514,7 @@ describe("every child a parallel row, each with its own bird (round 12)", () => 
     const html = render({ bird: birdPerch(d), onOpen: () => {} });
     const birds = [...html.matchAll(/<span class="(fl-bird-marker[^"]*)"[^>]*role="(\w+)" aria-label="([^"]*)"[^>]*title="([^"]*)"/g)].map((m) => [m[1], m[2], m[3], m[4]]);
     expect(birds).toEqual([
-      ["fl-bird-marker tone-working", "button", "The bird: flying Push", expect.stringMatching(/^Halt the route here/)],
+      ["fl-bird-marker tone-working", "button", "The bird: flying Push", expect.stringMatching(/^Pause the route here/)],
       ["fl-bird-marker tone-working fl-bird-branch", "button", "a’s bird: working", "Open a — working"],
       ["fl-bird-marker tone-you fl-bird-branch", "button", "b’s bird: needs you", "Open b — needs you"],
     ]);
