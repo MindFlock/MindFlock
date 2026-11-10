@@ -6,10 +6,11 @@
  * Pure — GroundedLine / useGroundedLine / StopShelf hold the state and the
  * saving. */
 
-import { flightDiagram, type Diagram } from "./flightDiagram";
+import { atHaltPoint, flightDiagram, type Diagram } from "./flightDiagram";
 import { isLive, newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type IntakeSourceRef, type StepKindDef } from "./flights";
 import { chainColor, type ChainHead } from "./skyGraph";
 import { relTime } from "./format";
+import { haltedWhy } from "./sessionState";
 
 /** A grounded flight's line is laid out under `"flight:" + id` (a session's
  * line under its title — a title never starts with this). */
@@ -70,9 +71,12 @@ export function sourcePlanId(steps: readonly Pick<FlightStep, "group">[], plans:
 
 /** What Save to the shelf sends: the line's steps as a saved stop — under the
  * saved stop it came from (its trigger, session defaults and description
- * kept), else a new one named after the line. */
-export function planToSave(name: string, steps: readonly FlightStep[], plans: readonly FlightPlan[]): FlightPlan {
-  const id = sourcePlanId(steps, plans);
+ * kept), else a new one named after the line. `into`: write to that saved
+ * route whatever the steps say (a saved route's "Edit its stops" copy);
+ * `fresh`: always a new saved route called `name` (Save as a route…). */
+export function planToSave(name: string, steps: readonly FlightStep[], plans: readonly FlightPlan[], opts: { into?: string; fresh?: boolean } = {}): FlightPlan {
+  const into = opts.into && plans.some((p) => p.id === opts.into) ? opts.into : "";
+  const id = opts.fresh ? "" : into || sourcePlanId(steps, plans);
   const base = id ? plans.find((p) => p.id === id)! : null;
   const fresh = planFromSteps(base ? base.name : name || "New route", steps, base?.trigger);
   if (!base) return { ...fresh, id: "", updated: 0 };
@@ -265,3 +269,87 @@ export function lastRunWords(last: NonNullable<Flight["last_run"]>, now?: number
   const when = last.at ? " · " + relTime(last.at, now === undefined ? {} : { now }) : "";
   return { label, title: label + when + (last.reason ? " — " + last.reason : "") };
 }
+
+// --- A route running on its own (no session): followed and un-stuck --------
+
+/** What a route's state is called on its chip, and why, in the round's one
+ * vocabulary: "Halted" (red) = a stop failed, the reason in the tooltip;
+ * "At your halt point" (amber) = it paused at a halt point a person set and
+ * waits on them; "Paused" (calm) = a person paused it; "Needs you" = a stop
+ * waits on the person; "Running". */
+export function runChip(f: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">): { label: string; tone: string; title: string } {
+  const step = f.steps[f.cursor];
+  if (atHaltPoint(f)) return { label: "At your halt point", tone: "attention", title: "Paused at your halt point before “" + (step?.title || "the next stop") + "” — Carry on to go on" };
+  if (f.state === "halted") {
+    const why = haltedWhy(step?.title, f.reason);
+    return { label: "Halted", tone: "broken", title: "Halted" + (step ? " at “" + step.title + "”" : "") + (why ? " — " + why : "") + ". Retry or Skip it on the stop." };
+  }
+  if (f.state === "waiting_you") {
+    const why = perchWhy(f);
+    return { label: "Needs you", tone: "attention", title: (why || "Waiting on you") + (step ? " — at “" + step.title + "”" : "") };
+  }
+  if (f.state === "paused") return { label: "Paused", tone: "muted", title: "Paused — ⋯ Carry on, or Carry on on its stop, to go on" };
+  if (f.state === "running") return { label: "Running", tone: "working", title: "Running" + (step ? " “" + step.title + "”" : "") };
+  return { label: f.state === "ready" ? "Ready" : f.state === "done" ? "Done" : f.state === "cancelled" ? "Stopped" : "Not started", tone: "muted", title: "" };
+}
+
+/** A free run (no session) that waits on the person: halted, at a Wait for
+ * me stop, or at a halt point — the Needs-you view draws it. */
+export function freeRunNeedsYou(f: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states" | "session"> & { free?: boolean }): boolean {
+  if (!isFreeRun(f)) return false;
+  return f.state === "halted" || f.state === "waiting_you" || atHaltPoint(f);
+}
+
+/** The routes with no session a view of the Sky draws: none in This session;
+ * in Needs you only the free runs that wait on the person (halted, waiting,
+ * at a halt point); else all of them. A search narrows them by name. */
+export function groundedShown<F extends Flight & { free?: boolean }>(flights: readonly F[] | null | undefined, mode: string, query: string, nameOf: (f: F) => string): F[] {
+  if (mode === "one") return [];
+  const q = query.trim().toLowerCase();
+  const all = groundedFlights(flights);
+  return (mode === "perched" ? all.filter(freeRunNeedsYou) : all).filter((f) => !q || nameOf(f).toLowerCase().includes(q));
+}
+
+/** Why a route waits on the person, in plain words: a failed stop's reason
+ * (halted), "Paused at your halt point" (a halt point reached), or the
+ * waiting stop's own note / failure reason / the route's reason — never the
+ * bare "needs you" the server writes when it has nothing better. "" = none
+ * to tell. */
+export function perchWhy(f: Pick<Flight, "state" | "reason" | "steps" | "cursor" | "step_states">): string {
+  const step = f.steps[f.cursor];
+  if (atHaltPoint(f)) return "Paused at your halt point — Carry on when you're ready";
+  const rec = step ? f.step_states?.[step.id] : undefined;
+  const failed = String((rec?.detail as Record<string, unknown> | undefined)?.failed_reason ?? "").trim();
+  if (f.state === "halted") return haltedWhy(step?.title, f.reason || failed);
+  if (f.state !== "waiting_you" && f.state !== "paused") return "";
+  const words = [String(rec?.note || "").trim(), failed, String(f.reason || "").trim()].find((w) => w && !/^needs you\.?$/i.test(w)) || "";
+  return words ? haltedWhy(step?.title, words) : "";
+}
+
+// --- "Edit its stops": an editable copy of a saved route on the Sky ----------
+
+/** Which grounded chains are editing copies of a saved route, per device:
+ * flight id → the saved route's id. The copy's Save writes back to it. */
+export const ROUTE_EDITS_KEY = "mf_sky_route_edits";
+
+/** The stored map, read safely (anything odd reads as none). */
+export function readRouteEdits(raw: string | null | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string" && !!e[1]));
+  } catch {
+    return {};
+  }
+}
+
+/** The saved route a grounded chain edits ("" = none, or it is gone). */
+export function editedPlanOf<P extends Pick<FlightPlan, "id">>(flightId: string, edits: Readonly<Record<string, string>>, plans: readonly P[]): P | null {
+  const id = edits[flightId];
+  return (id && plans.find((p) => p.id === id)) || null;
+}
+
+/** The toast every route save ends with: routes already flying never change. */
+export const SAVED_COPY_NOTE = "routes already running keep their own copy";
+export const savedWords = (name: string, updated: boolean) => (updated ? "Updated “" : "Saved “") + name + "” — " + SAVED_COPY_NOTE;

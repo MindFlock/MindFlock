@@ -15,8 +15,11 @@
  * editable (useGroundedLine).
  *
  * The ⋯: **Add a stop…** (the palette), **Fly on a session…** (the host's
- * line picker → `attachGrounded`), **Save to the shelf** (a line that came
- * from a saved stop updates it, else a new saved stop named after the line),
+ * line picker → `attachGrounded`), **Save as a route…** (the name asked
+ * inline, `SaveRouteAsk`) — or, for a line that came from a saved route or is
+ * its "Edit its stops" copy (`markRouteEdit`), **Save to “<name>”** (writes
+ * back; the copy then leaves the Sky) and **Save as a new route…**; every
+ * save's toast says routes already running keep their own copy,
  * **Remove** (at once, round 14: a grounded line never runs, so nothing to
  * ask — the host's `onRemove` deletes it with an Undo toast and a Ctrl+Z
  * entry). Delete or Backspace with the line itself focused removes it too. The host places it, drags
@@ -49,19 +52,37 @@ import type { Flight, FlightPlan, FlightStep, StepKindDef } from "../../lib/flig
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, getIntakeDefault, renameFlight, savePlan, setIntakeDefault, startGrounded } from "../../lib/flightsApi";
-import { chainRunFor, defaultChanged, editorLabel, editorTitle, isDefaultEditor, isFreeRun, isRemoveKey, lastRunWords, planToSave, sourcePlanId } from "../../lib/groundedLines";
+import {
+  ROUTE_EDITS_KEY,
+  chainRunFor,
+  defaultChanged,
+  editedPlanOf,
+  editorLabel,
+  editorTitle,
+  isDefaultEditor,
+  isFreeRun,
+  isRemoveKey,
+  lastRunWords,
+  planToSave,
+  readRouteEdits,
+  runChip,
+  savedWords,
+  sourcePlanId,
+} from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
+import { liveBoxParts, useCancelAsk } from "./FlightStrip";
 import { nodeById, removableBox } from "../../lib/skySelect";
 import { pushUndo, undoAction } from "../../lib/skyUndo";
 import { pillAimer, useChainMenu } from "./useChainMenu";
-import { SkyChain } from "./SkyChain";
+import { SkyChain, stopTileBoxes } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
 import { useGroundedLine } from "./useGroundedLine";
 import { Bird } from "./Bird";
+import { SaveRouteAsk } from "./StopShelf";
 import "./SkyLine.css";
 import "./GroundedLine.css";
 
@@ -126,6 +147,60 @@ export const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly {
   return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
 };
 
+// --- "Edit its stops": which chains on the Sky are copies of a saved route ---
+
+const ROUTE_EDITS_EVENT = "mf:sky-route-edits";
+
+function storedRouteEdits(): Record<string, string> {
+  try {
+    return readRouteEdits(localStorage.getItem(ROUTE_EDITS_KEY));
+  } catch {
+    return {};
+  }
+}
+
+function writeRouteEdits(next: Record<string, string>) {
+  try {
+    localStorage.setItem(ROUTE_EDITS_KEY, JSON.stringify(next));
+  } catch {
+    /* a private window: the mark lives until the page reloads */
+  }
+  memo = next;
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(ROUTE_EDITS_EVENT));
+}
+
+let memo: Record<string, string> | null = null;
+const routeEdits = () => (memo ??= storedRouteEdits());
+
+/** Mark a grounded chain as the editable copy of saved route `planId` (its
+ * Save writes back there); `planId` "" clears the mark. */
+export function markRouteEdit(flightId: string, planId: string) {
+  const next = { ...routeEdits() };
+  if (planId) next[flightId] = planId;
+  else delete next[flightId];
+  writeRouteEdits(next);
+}
+
+/** The marks, kept in step with every line on this device. */
+export function useRouteEdits(): Record<string, string> {
+  const [edits, setEdits] = useState<Record<string, string>>(() => (typeof window === "undefined" ? {} : routeEdits()));
+  useEffect(() => {
+    const heard = () => setEdits(routeEdits());
+    const other = (e: StorageEvent) => {
+      if (e.key !== ROUTE_EDITS_KEY) return;
+      memo = null;
+      heard();
+    };
+    window.addEventListener(ROUTE_EDITS_EVENT, heard);
+    window.addEventListener("storage", other);
+    return () => {
+      window.removeEventListener(ROUTE_EDITS_EVENT, heard);
+      window.removeEventListener("storage", other);
+    };
+  }, []);
+  return edits;
+}
+
 export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const { flight } = p;
   const line = useGroundedLine(flight, { kinds: p.kinds, plans: p.plans });
@@ -146,6 +221,14 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const edTitle = editorTitle(edLabel);
   const edHint = "New items from " + (edTitle.name || "this source") + " run these stops";
   const lod = lodFor(p.zoom || 1);
+  // A chain with no session runs on its own in a folder — nothing is started
+  // for it (only a stop that needs a session gets one, made in that folder).
+  const running = isFreeRun(flight);
+  // While it runs, its stops carry what a session's route's stops do: the
+  // ⋯, and on the stop it is on Retry / Skip / Done / Carry on (FlightStrip
+  // `liveBoxParts`), with the room for them (SkyChain `stopTileBoxes`).
+  const cancel = useCancelAsk(running ? flight : null);
+  const parts = liveBoxParts(running ? flight : null, true, cancel.ask, { verifyInPlace: true, inTile: true });
   // Whether the source has its own default now (Reset to default only then),
   // and the steps it flies now — Save as default only once these differ.
   const [ownDefault, setOwnDefault] = useState(false);
@@ -185,13 +268,29 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     return () => ro.disconnect();
   }, []);
 
-  const save = async () => {
-    const plan = planToSave(name, flight.steps, p.plans as FlightPlan[]);
+  // "Edit its stops" made this chain a copy of a saved route: its Save
+  // writes back there and takes the copy off the Sky.
+  const edits = useRouteEdits();
+  const editing = ed ? null : editedPlanOf(flight.id, edits, p.plans);
+  // The name being asked for a new saved route (null: not asking).
+  const [asking, setAsking] = useState<string | null>(null);
+  /** Save: `asked` = a new saved route under that name; else the saved route
+   * it edits, or the one it came from (sourcePlanId). */
+  const save = async (asked?: string) => {
+    const plan = planToSave(asked ?? name, flight.steps, p.plans as FlightPlan[], asked !== undefined ? { fresh: true } : { into: editing?.id });
+    setBusy(true);
     try {
       const saved = await savePlan(plan);
-      toast((plan.id ? "Updated “" : "Saved “") + saved.name + "” on the shelf");
+      setAsking(null);
+      toast(savedWords(saved?.name || plan.name, !!plan.id));
+      if (editing) {
+        markRouteEdit(flight.id, "");
+        await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+      }
     } catch (err) {
-      toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+      toast("Saving the route failed: " + errMsg(err), { error: true });
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -234,6 +333,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const remove = async () => {
     if (ed) return discard();
     if (busy) return;
+    if (editing) markRouteEdit(flight.id, "");
     setBusy(true);
     try {
       if (p.onRemove) await p.onRemove();
@@ -247,17 +347,24 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     }
   };
 
-  const updates = !!sourcePlanId(flight.steps, p.plans);
+  const fromId = sourcePlanId(flight.steps, p.plans);
+  const target = editing || (fromId ? p.plans.find((x) => x.id === fromId) || null : null);
+  const saveItems: MenuItem[] = target
+    ? [
+        {
+          key: "save",
+          label: "Save to “" + target.name + "”",
+          title: (editing ? "Write these stops back to the saved route you are editing" : "Update the saved route these came from") + " — routes already running keep their own copy",
+          className: "skl-mi-group",
+          onSelect: () => void save(),
+        },
+        { key: "save-new", label: "Save as a new route…", title: "Keep these stops on the shelf under a new name", onSelect: () => setAsking(name) },
+      ]
+    : [{ key: "save", label: "Save as a route…", title: "Keep these stops on the shelf as a saved route — you name it", className: "skl-mi-group", onSelect: () => setAsking(name) }];
   const items: MenuItem[] = [
     { key: "add", label: "Add a stop…", title: "One stop, or a saved route, at the end of the route", onSelect: () => line.togglePalette(true) },
     ...(ed ? [] : [{ key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn }]),
-    {
-      key: "save",
-      label: "Save to the shelf",
-      title: updates ? "Update the saved route these came from" : "Keep these stops on the shelf as a saved route",
-      className: "skl-mi-group",
-      onSelect: () => void save(),
-    },
+    ...saveItems,
     ed
       ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the Sky — the default stops stay as they are", onSelect: () => void discard() }
       : { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the Sky (Ctrl+Z puts them back)", onSelect: () => void remove() },
@@ -336,7 +443,8 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null);
   const moves = useNodeMoves(flight.id, line.graphDiagram, "flight:" + flight.id);
   const head = p.head || NO_HEAD;
-  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id }), [moves.diagram, head, flight.id]);
+  const big = useMemo(() => (running ? stopTileBoxes(moves.diagram, flight) : undefined), [running, moves.diagram, flight]);
+  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id, big }), [moves.diagram, head, flight.id, big]);
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
   useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
   const gc = line.graphCanvas;
@@ -344,9 +452,6 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const shift = useRef(false);
-  // A chain with no session runs on its own in a folder — nothing is started
-  // for it (only a stop that needs a session gets one, made in that folder).
-  const running = isFreeRun(flight);
   // No ▶ on a default-stops editor (it never runs), nor on a chain another starts.
   const run = chainRunFor(flight, head.kind, () => ({
     running,
@@ -390,7 +495,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       <div
         className="skl-bar skl-label"
         data-tour="sky-grounded"
-        title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's route to give them to it"}
+        title={p.draggable === false ? "Click to focus these stops (Select (V) moves them)" : "Drag to move these stops — onto a session's route to give them to it"}
         onPointerDown={onBarDown}
       >
         <Bird size={14} />
@@ -438,9 +543,31 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         )}
         {/* No Run label up here: the chain's ▶ sits on the left of its first
             stop, where a run starts (n8n's trigger button) — SkyChain `run`. */}
-        {running && (
-          <span className={"fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused")} title={flight.repo_root ? "Running in " + flight.repo_root : undefined}>
-            {flight.state === "waiting_you" ? "Needs you" : flight.state === "running" ? "Running" : "Paused"}
+        {running &&
+          (() => {
+            // "Halted" in red with its reason; "Paused" only for a real pause.
+            const c = runChip(flight);
+            const where = flight.repo_root ? " · in " + flight.repo_root : "";
+            return (
+              <span className={"fl-box-chip skl-chip skl-free-chip tone-" + c.tone} data-run={flight.state} title={c.title + where}>
+                {c.label}
+              </span>
+            );
+          })()}
+        {editing && (
+          <span className="skl-default-acts" data-no-drag>
+            <span className="fl-box-chip skl-chip skl-editing-tag" title={"An editable copy of the saved route “" + editing.name + "” — Save writes these stops back to it"}>
+              Editing “{editing.name}”
+            </span>
+            <button
+              type="button"
+              className="btn-primary fl-btn skl-edit-save"
+              disabled={busy || !flight.steps.length}
+              title={"Write these stops back to “" + editing.name + "” — routes already running keep their own copy"}
+              onClick={() => void save()}
+            >
+              Save
+            </button>
           </span>
         )}
         {!running && flight.last_run && (() => {
@@ -480,6 +607,9 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         </span>
       </div>
       {ed && <div className="skl-default-hint">{edHint}</div>}
+      {editing && <div className="skl-default-hint">Change the stops, then Save — “{editing.name}” takes them; routes already running keep their own copy.</div>}
+      {asking !== null && <SaveRouteAsk initial={asking} plans={p.plans} busy={busy} onSave={(n) => void save(n)} onCancel={() => setAsking(null)} />}
+      {cancel.node}
       <div ref={wrapRef} className="skl-chain-wrap" onPointerDownCapture={(e) => (shift.current = e.shiftKey)}>
         <SkyChain
           graph={graph}
@@ -500,6 +630,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           onNodeMove={moves.move}
           onPortDown={p.onPortDown}
           onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+          renderInBox={running ? parts.renderInBox : undefined}
           run={run}
         />
         {chainMenu.menu}

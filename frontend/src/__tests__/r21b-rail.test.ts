@@ -113,8 +113,10 @@ describe("the halted card says the stop's name once", () => {
   });
 
   it("the Sky's Needs you card and the bell's halted row read it", () => {
+    // Flow polish: the drawer's stop line reads it through lib/groundedLines `perchWhy`.
     const sky = code("components/flights/SkyDrawer.tsx");
-    expect(has(sky, 'haltedWhy(step?.title, flight.reason)')).toBe(true);
+    expect(has(sky, "const why = perchWhy(flight);")).toBe(true);
+    expect(has(code("lib/groundedLines.ts"), "haltedWhy(step?.title, f.reason || failed)")).toBe(true);
     expect(sky).not.toContain('" — " + flight.reason');
     const bell = code("components/outbox/WaitingRow.tsx");
     expect(has(bell, "haltedWhy(at, w.reason)")).toBe(true);

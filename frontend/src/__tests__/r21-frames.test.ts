@@ -57,7 +57,11 @@ describe("frameState: the state → frame mapping (pure)", () => {
     [{ flight: "ready" as const }, "ready"],
     [{ flight: "ready" as const, tone: "working" as const }, "working"],
     [{ flight: "ready" as const, tone: "attention" as const }, "you"],
-    [{ flight: "paused" as const }, "idle"],
+    // Flow polish: a paused route is calm and dashed, never "idle" (nor red / amber)…
+    [{ flight: "paused" as const }, "paused"],
+    // …unless it paused at a halt point: then it waits on you.
+    [{ flight: "paused" as const, haltPoint: true }, "you"],
+    [{ flight: "halted" as const, haltPoint: true }, "you"],
     [{ flight: "grounded" as const }, "idle"],
     [{ flight: null }, "idle"],
   ])("%j → %s", (input, want) => {
