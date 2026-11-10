@@ -316,12 +316,32 @@ SIGWINCH the client and closing the master still hangs it up. It returns the
 same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. Tests that
 must not start a real client stub `mux.spawn_pty`.
 
-`spawn_pty(argv, *, dimensions=(24, 80), env=None)` contract: it returns a
-`ptyprocess.PtyProcess`; a missing command raises `FileNotFoundError` with
-ptyprocess's exact message; the child inherits only fds 0/1/2. The
-`posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
+Every PTY the server starts goes through it — nothing forks on Linux: the
+terminal clients (`mux.attach`), the provider and `gh` login terminals
+(`core.pty_run`'s command PTY), the ticket log stream
+(`core.terminal.spawn_tail`) and the engine's own PTY (`session/tmux/pty.py`'s
+`Pty.start`). `tests/unit/test_no_fork_pty.py` pins each site, and runs them
+for real with `os.fork`/`pty.fork` made to fail.
+
+`spawn_pty(argv, *, dimensions=(24, 80), env=None, cwd=None)` contract: it
+returns a `ptyprocess.PtyProcess`; a missing command raises
+`FileNotFoundError` with ptyprocess's exact message; the child inherits only
+fds 0/1/2. The `posix_spawn` path is gated on `_POSIX_SPAWN_PTY` (Linux with
 `os.posix_spawn`) — on macOS opening a tty does not make it the controlling
 tty, so it falls back.
+
+`cwd`: Python's `os.posix_spawn` has no chdir file action (glibc's
+`posix_spawn_file_actions_addchdir_np` is not exposed), and `chdir`-ing the
+server around the spawn would move every thread's cwd. So with a `cwd` the
+child is `/bin/sh -c 'cd "$1" && shift && exec "$@"' sh <cwd> <command>
+<args…>`: the directory (made absolute, so `CDPATH` never applies) and the
+argv are positional parameters, never pasted into the script, so nothing is
+quoted, split or expanded; `exec` replaces the shell (same pid, same PTY).
+As with ptyprocess, `argv[0]` is then the resolved command path and
+`launch_dir` is set. Differences from ptyprocess: the shell's `cd` sets `PWD`
+to `cwd` (ptyprocess left the server's stale `PWD`), and a missing `cwd`
+raises `FileNotFoundError` before anything is spawned (ptyprocess's forked
+child raised it inside a copy of the server).
 
 **Limits and recovery.** A spawn that never returns holds its slot for
 good: after two, every attach times out after 15 s until the server
@@ -333,12 +353,20 @@ still blocked 2 s into a detach, so the fd is left open rather than risk a
 write into a reused fd number). Each terminal socket costs up to three
 daemon threads (`pty-attach`, `pty-writer`, `pty-reap`). Not yet routed
 through `attach_off_loop`: the assistant terminal, `core.pty_run`'s tmux
-attach and peer-forwarded terminals (`term_open`) spawn on the loop, but
-through `mux.attach`, so by `posix_spawn` — no fork. Still a real `fork()`
-(ptyprocess): the provider and `gh` login terminals (`core.pty_run`'s
-command PTY, `/api/providers/{name}/login-terminal`,
-`/api/github/gh-login-terminal`), the ticket log stream (`spawn_tail`), and
-the engine's own PTY (`session/tmux/pty.py`).
+attach, peer-forwarded terminals (`term_open`) and the ticket log stream
+spawn on the loop, but through `mux.spawn_pty`, so by `posix_spawn` — no
+fork, ~1 ms.
+
+`core.terminal.pump_pty` itself (every websocket terminal: session shell,
+assistant, ticket log, login attach, peer terminals) keeps the same rules:
+input goes through a `PtyWriter`, and its teardown — terminate, let the
+writer finish, then close the PTY — runs on a `pty-detach` thread the pump
+awaits, so the client is gone by the time it returns and no sleeping
+`PtyProcess.__del__` is left for the loop. A `detaching` client (the shell
+socket) is handed to `reap` together with the pump's writer. The no-tmux
+login terminal (`core.pty_run.bridge`) writes through a `PtyWriter` too, and
+`PtyRun.terminate` (`pty_run.kill`/`start`, called from request handlers)
+kills on a `pty-run-kill` thread.
 
 ### Other people's keystrokes
 

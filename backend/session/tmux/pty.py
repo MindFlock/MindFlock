@@ -163,21 +163,20 @@ class Pty(PtyFactory):
     """Production :class:`PtyFactory` backed by :mod:`ptyprocess`.
 
     Stateless, mirroring Go's zero-value ``Pty{}`` struct. ``start`` delegates
-    to ``ptyprocess.PtyProcess.spawn`` (the analogue of ``pty.Start(cmd)``):
-    it allocates a PTY pair, forks/execs the command with the slave as stdio,
-    and returns the master side wrapped in :class:`PtyFile`.
+    to :func:`backend.session.mux.spawn_pty` (the analogue of
+    ``pty.Start(cmd)``): it allocates a PTY pair, starts the command with the
+    slave as stdio — ``posix_spawn`` on Linux, never a fork of the server
+    (ptyprocess's spawn elsewhere) — and returns the master side, a
+    ``ptyprocess.PtyProcess``, wrapped in :class:`PtyFile`.
     """
 
     def start(self, cmd: cmd_pkg.Cmd) -> Tuple[Optional[PtyFile], Optional[Exception]]:
         if _IS_WINDOWS:
             return _start_windows(cmd)
         try:
-            from ptyprocess import PtyProcess
+            from backend.session import mux
 
-            kwargs = {}
-            if cmd.dir is not None:
-                kwargs["cwd"] = cmd.dir
-            proc = PtyProcess.spawn(list(cmd.args), **kwargs)
+            proc = mux.spawn_pty(list(cmd.args), cwd=cmd.dir)
         except Exception as e:  # noqa: BLE001 - mirror Go error return
             return None, e
         return PtyFile(proc), None
