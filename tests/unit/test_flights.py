@@ -508,81 +508,88 @@ def test_ship_step_follows_the_autopilot_record():
 
 
 def _vfacts(**kw):
+    """A Verify stop's facts (``flight_driver._verify_obs``). ``outcome`` is
+    the newest check's (test_plans.OUTCOMES), ``latest_run_at`` when it
+    started — only a check from this attempt counts."""
     base = {
         "plan": "s",
         "branch": "b",
         "state": "generated",
         "steps": ["s1"],
-        "settled": False,
-        "open_human": [],
-        "open_agent": [],
         "failed": [],
         "live": False,
         "live_branch": "main",
+        "latest_run_at": 0.0,
+        "outcome": "",
+        "confirm_items": [],
     }
     base.update(kw)
     return base
 
 
-def test_verify_step_writes_runs_parks_and_settles():
+def _vcheck(outcome, at=NOW, **kw):
+    """A self-verify of this attempt that settled ``outcome``."""
+    return _vfacts(outcome=outcome, latest_run_at=at, **kw)
+
+
+def test_verify_step_starts_the_check_parks_and_settles():
+    """Self-verify: the stop sets up the session's plan (nothing is
+    written), starts the agent's own check, parks on you while it needs you,
+    and carries on once you confirm."""
     f = run_step(fly(step("verify", who="both")))
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW)["note"]
-        == "writing the behaviors"
+        == "getting the check ready"
     )
     assert (
         F.next_action(f, {"session": sess(), "verify": {}}, NOW + 4000)["action"]
         == "fail"
     )
-    gen = _vfacts(state="generating")
-    assert (
-        F.next_action(f, {"session": sess(), "verify": gen}, NOW)["note"]
-        == "writing the behaviors"
-    )
-    v = _vfacts(open_agent=["curl it"], open_human=["look at it"])
-    a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
+    a = F.next_action(f, {"session": sess(), "verify": _vfacts()}, NOW)
     assert a["action"] == "run" and a["phase"] == "agent_run"
-    f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW)
-    assert f["step_states"]["s1"]["state"] == "running"
-    a = F.next_action(f, {"session": sess(), "verify": _vfacts(state="running")}, NOW)
-    assert a["note"] == "the agent is checking the behaviors"
-    a = F.next_action(
-        f, {"session": sess(), "verify": _vfacts(open_human=["look at it"])}, NOW
+    f = F.apply(
+        f, dict(a, detail=dict(a["detail"], run_started=True, run_started_at=NOW)), NOW
     )
+    assert f["step_states"]["s1"]["state"] == "running"
+    running = _vfacts(state="running", outcome="verifying", latest_run_at=NOW)
+    a = F.next_action(f, {"session": sess(), "verify": running}, NOW)
+    assert a["note"] == "the agent is checking the behaviors"
+    need = _vcheck("needs_you", confirm_items=["look at it"])
+    a = F.next_action(f, {"session": sess(), "verify": need}, NOW)
     assert a["action"] == "you" and a["detail"]["items"] == ["look at it"]
+    assert a["detail"]["ask"] == "confirm"
     f = F.apply(f, a, NOW)
     assert (
         f["state"] == "waiting_you" and f["step_states"]["s1"]["state"] == "waiting_you"
     )
-    # Still open: no second "you" (it would re-announce).
-    a = F.next_action(
-        f, {"session": sess(), "verify": _vfacts(open_human=["look at it"])}, NOW
+    # Still waiting on a person: no second "you" (it would re-announce).
+    assert F.next_action(f, {"session": sess(), "verify": need}, NOW)["action"] == (
+        "wait"
     )
-    assert a["action"] == "wait"
-    # Settled in the Checklists tab: the flight carries on by itself.
-    a = F.next_action(f, {"session": sess(), "verify": _vfacts(settled=True)}, NOW)
+    # Confirmed (POST /api/test-plans/{id}/confirm): the flight carries on.
+    a = F.next_action(f, {"session": sess(), "verify": _vcheck("passed")}, NOW)
     assert a["action"] == "done"
     assert F.apply(f, a, NOW)["state"] == "done"
 
 
 def test_verify_legacy_wait_live_agent_only_and_failures():
     """A plan written before where/ready (``wait_live=True``) still waits for
-    the live mark, then judges as before (where=live, ready=on_branch)."""
+    the live mark, then judges the check (where=live, ready=on_branch)."""
     f = run_step(fly(step("verify", who="agent", wait_live=True)))
-    v = _vfacts(open_human=["you look"])
+    v = _vfacts()
     assert (
         "reach main" in F.next_action(f, {"session": sess(), "verify": v}, NOW)["note"]
     )
-    v = _vfacts(open_human=["you look"], live=True)
+    a = F.next_action(f, {"session": sess(), "verify": _vfacts(live=True)}, NOW)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+    v = _vcheck("passed", live=True)
     assert F.next_action(f, {"session": sess(), "verify": v}, NOW)["action"] == "done"
-    v = _vfacts(failed=["login works"], live=True)
+    v = _vcheck("failed", failed=["login works"], live=True)
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
     assert a["action"] == "fail" and "login works" in a["reason"]
-    v = _vfacts(state="failed", steps=[], error="model down", live=True)
-    assert (
-        "model down"
-        in F.next_action(f, {"session": sess(), "verify": v}, NOW)["reason"]
-    )
+    v = _vcheck("blocked", live=True, error="the session's window is gone")
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
+    assert a["action"] == "you" and "window is gone" in a["note"]
 
 
 def test_verify_live_on_branch_agent_only_and_failures():
@@ -590,14 +597,14 @@ def test_verify_live_on_branch_agent_only_and_failures():
     f = run_step(fly(step("verify", who="agent", where="live", ready="on_branch")))
     assert f["steps"][0]["config"]["where"] == "live"
     assert "wait_live" not in f["steps"][0]["config"]
-    v = _vfacts(open_human=["you look"])
+    v = _vfacts()
     assert (
         F.next_action(f, {"session": sess(), "verify": v}, NOW)["note"]
         == "waiting for the work to reach main"
     )
-    v = _vfacts(open_human=["you look"], live=True)
+    v = _vcheck("passed", live=True)
     assert F.next_action(f, {"session": sess(), "verify": v}, NOW)["action"] == "done"
-    v = _vfacts(failed=["login works"], live=True, failed_at=NOW + 1)
+    v = _vcheck("failed", failed=["login works"], live=True)
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 2)
     assert a["action"] == "fail" and "login works" in a["reason"]
 
@@ -615,7 +622,7 @@ def test_verify_kind_reads_as_a_stop_and_halts_by_default():
 
 def test_failed_behaviors_halt_the_route_with_the_count():
     f = run_step(fly(step("verify", who="both"), step("notify")))
-    v = _vfacts(failed=["login works", "logout works"], failed_at=NOW + 1)
+    v = _vcheck("failed", at=NOW + 1, failed=["login works", "logout works"])
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 2)
     assert a["action"] == "fail" and a["then"] == "halt"
     assert a["reason"] == "Failed · 2: login works; logout works"
@@ -626,10 +633,10 @@ def test_failed_behaviors_halt_the_route_with_the_count():
 
 def test_let_the_agent_fix_it_then_the_behaviors_are_checked_again():
     """Halted → op_fix (the agent's turn) → the stop runs again → the old
-    failure is stale: the agent checks again → a pass carries the route on;
-    a fresh failure halts it again."""
+    check is from before this attempt: a new self-verify starts → a pass
+    carries the route on; a fresh failure halts it again."""
     f = run_step(fly(step("verify", who="both"), step("notify")))
-    old = _vfacts(failed=["login works"], failed_at=NOW)
+    old = _vcheck("failed", failed=["login works"])
     f = F.apply(
         f, F.next_action(f, {"session": sess(), "verify": old}, NOW + 1), NOW + 1
     )
@@ -649,35 +656,39 @@ def test_let_the_agent_fix_it_then_the_behaviors_are_checked_again():
     assert a["action"] == "run" and a.get("retry"), a
     f = F.apply(f, a, NOW + 100)
     assert f["step_states"]["s1"]["since"] == NOW + 100
-    # The failure on record is from before this attempt: check again first.
+    # The failed check on record is from before this attempt: check again.
     a = F.next_action(f, {"session": sess(), "verify": old}, NOW + 101)
     assert a["action"] == "run" and a["phase"] == "agent_run"
-    assert a["detail"]["recheck"] is True
-    f = F.apply(f, dict(a, detail=dict(a["detail"], run_started=True)), NOW + 101)
-    running = _vfacts(state="running", failed=["login works"], failed_at=NOW)
+    f = F.apply(
+        f,
+        dict(a, detail=dict(a["detail"], run_started=True, run_started_at=NOW + 101)),
+        NOW + 101,
+    )
+    running = _vfacts(state="running", outcome="verifying", latest_run_at=NOW + 101)
     assert (
         F.next_action(f, {"session": sess(), "verify": running}, NOW + 102)["action"]
         == "wait"
     )
-    # Fixed: every behavior answered → the route carries on.
-    a = F.next_action(
-        f, {"session": sess(), "verify": _vfacts(settled=True)}, NOW + 200
-    )
+    # Fixed: the new check passed → the route carries on.
+    ok = _vcheck("passed", at=NOW + 101)
+    a = F.next_action(f, {"session": sess(), "verify": ok}, NOW + 200)
     assert a["action"] == "done"
-    # …or the fresh check failed again → halted again.
-    again = _vfacts(failed=["login works"], failed_at=NOW + 150)
+    # …or the new check failed again → halted again.
+    again = _vcheck("failed", at=NOW + 101, failed=["login works"])
     a = F.next_action(f, {"session": sess(), "verify": again}, NOW + 200)
     assert a["action"] == "fail" and a["then"] == "halt"
 
 
-def test_a_persons_old_fail_is_theirs_to_answer_again_after_a_retry():
+def test_a_person_who_says_it_doesnt_work_fails_the_stop():
+    """A person confirming "not verified" settles the check ``failed``: the
+    stop fails with their steps (or their note when none failed)."""
     f = run_step(fly(step("verify", who="both")), now=NOW + 100)
-    # The agent's recheck ran; a person's Fail from before the retry is left.
-    f["step_states"]["s1"]["detail"]["run_started"] = True
-    v = _vfacts(failed=["it looks right"], failed_at=NOW, settled=True)
+    v = _vcheck("failed", at=NOW + 100, failed=["it looks right"])
     a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 101)
-    assert a["action"] == "you" and a["detail"]["items"] == ["it looks right"]
-    assert a["note"] == "1 behavior for you"
+    assert a["action"] == "fail" and a["reason"] == "Failed · 1: it looks right"
+    v = _vcheck("failed", at=NOW + 100, outcome_note="the badge is gone")
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW + 101)
+    assert a["reason"] == "a person said it doesn't work: the badge is gone"
 
 
 def test_retry_on_a_halted_verify_checks_again():
@@ -694,19 +705,22 @@ def test_retry_on_a_halted_verify_checks_again():
 
 def test_a_route_parked_on_verify_needs_you():
     f = run_step(fly(step("verify", who="you")))
-    a = F.next_action(
-        f, {"session": sess(), "verify": _vfacts(open_human=["look"])}, NOW
-    )
-    f = F.apply(f, a, NOW)
+    v = _vcheck("needs_you", confirm_items=["look"])
+    f = F.apply(f, F.next_action(f, {"session": sess(), "verify": v}, NOW), NOW)
     assert f["state"] == "waiting_you"
 
 
-def test_verify_who_you_never_starts_the_agent():
+def test_verify_who_you_still_starts_the_agent_then_asks_you():
+    """Self-verify: "Only me" still has the agent write and walk its steps
+    (there is nothing to check otherwise) — the run asks for the person's
+    sign-off (``confirm``), so even an all-pass check waits on them."""
     f = run_step(fly(step("verify", who="you")))
-    a = F.next_action(
-        f, {"session": sess(), "verify": _vfacts(open_agent=["curl"])}, NOW
-    )
-    assert a["action"] == "you" and a["detail"]["items"] == ["curl"]
+    a = F.next_action(f, {"session": sess(), "verify": _vfacts()}, NOW)
+    assert a["action"] == "run" and a["phase"] == "agent_run"
+    v = _vcheck("needs_you")  # all passed, waiting on the sign-off
+    a = F.next_action(f, {"session": sess(), "verify": v}, NOW)
+    assert a["action"] == "you" and a["note"] == "confirm the check"
+    assert a["detail"]["items"] == ["Every step passed — confirm it works"]
 
 
 def test_you_step_parks_and_done_advances():

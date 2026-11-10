@@ -483,7 +483,7 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "env": env,
         "env_reached_at": reached,
         # What keeps the stop from being silently stuck (flights._verify_guard
-        # / _verify_handover): the newest run's progress, when it was opened,
+        # / _judge_verify): the newest run's progress, when it was opened,
         # the checker session's own state, and the steps the agent handed to
         # the person ("needs you: …" vs plain blocked).
         "progress": progress,
@@ -496,6 +496,18 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "needs_you": progress.get("needs_you") or [],
         "blocked_steps": progress.get("blocked") or [],
         "run_budget_s": float(getattr(_tp, "RUN_BUDGET_MIN", 30)) * 60.0,
+        # SELF-VERIFY's verdict on the newest run (test_plans.OUTCOMES) and
+        # what a person is asked to check before confirming a needs_you.
+        "outcome": str((run or {}).get("outcome") or ""),
+        "outcome_note": str((run or {}).get("outcome_note") or ""),
+        "confirm_items": [
+            (
+                ("%s — look for: %s" % (s["text"], s["expect"]))
+                if s.get("expect")
+                else s["text"]
+            )
+            for s in _tp.confirm_steps(plan)
+        ],
     }
 
 
@@ -1252,11 +1264,11 @@ def _arm(flight: dict, lane: str, ask_first: bool = False, message: str = "") ->
 
 
 def _ensure_checklist(flight: dict) -> dict:
-    """Ask for the session's behaviors (Verify's own manual path: create +
-    generate on a daemon thread — the stop's face reads "Writing…" until they
-    are written), for the stop's environment and with its notes. The plan id
-    is observed on later passes. An environment the repo does not have fails
-    the stop."""
+    """Find or make the session's plan for its SELF-VERIFY (blocking) →
+    ``{"plan": id}``. Nothing is generated: the agent writes its own steps
+    once the check starts (the judge starts it next). An environment the repo
+    does not have fails the stop, and so does a session with no plan to be
+    had (no workspace, not on a branch)."""
     srv = _server()
     title = flight["session"]
     cfg = _verify_cfg(flight)
@@ -1264,12 +1276,12 @@ def _ensure_checklist(flight: dict) -> dict:
     if _verify_env(flight, where)[1]:
         raise _StepFailed("no environment named %s in this repo" % where)
     try:
-        srv._ensure_test_plan(
-            title, manual=True, environment=where, notes=str(cfg.get("notes") or "")
-        )
+        pid, why = srv._ensure_verify_plan(title)
     except Exception as err:  # noqa: BLE001
-        raise _StepFailed("could not ask for the behaviors: %s" % err)
-    return {}
+        raise _StepFailed("could not set up the check: %s" % err)
+    if not pid:
+        raise _StepFailed("could not set up the check: %s" % why)
+    return {"plan": pid}
 
 
 #: plan id → when its in-session walk was last seen still waiting on the
@@ -1305,7 +1317,11 @@ def _walk_clock(pid: str, title: str, progress: dict, checker: dict) -> dict:
 
 
 async def _start_verify_run(
-    plan_id: str, where: str = "branch", notes: str = "", walk: str = "agent"
+    plan_id: str,
+    where: str = "branch",
+    notes: str = "",
+    walk: str = "agent",
+    confirm: bool = False,
 ) -> dict:
     """``POST /api/test-plans/{id}/run`` in process (its body is the route):
     checked on ``where`` (this branch or an environment), with ``notes``,
@@ -1329,6 +1345,7 @@ async def _start_verify_run(
             "environment": where or "branch",
             "notes": notes or "",
             "walk": walk or "agent",
+            **({"confirm": True} if confirm else {}),
         },
     )
     try:
@@ -1849,6 +1866,8 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                 str(cfg.get("where") or _flights.VERIFY_WHERE_BRANCH),
                 notes,
                 _verify_walk(cfg),
+                # "You" signs the check off even when every step passes.
+                confirm=str(cfg.get("who") or "both") == "you",
             )
             if res["started"]:
                 # Always written: the step's detail is merged across ticks,
@@ -1861,7 +1880,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                     }
                     action = dict(
                         action,
-                        note="walking the behaviors in %s — talk to it there"
+                        note="verifying in %s — talk to it there"
                         % (res.get("session") or "the session"),
                     )
                 return dict(
@@ -1936,8 +1955,8 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             )
             return dict(action, detail=info)
         if sk == "verify":
-            await asyncio.to_thread(_ensure_checklist, flight)
-            return dict(action, detail={})
+            got = await asyncio.to_thread(_ensure_checklist, flight)
+            return dict(action, detail=got)
         if sk == "wait":
             cfg = step["config"]
             until = (
@@ -2738,6 +2757,23 @@ def _needs_you_perch(flight: dict, sid: str) -> bool:
     )
 
 
+def _confirm_perch(flight: dict, sid: str) -> str:
+    """The plan id when ``sid`` is a Verify stop waiting on a person to
+    confirm its check (``ask`` "confirm"), else ``""``."""
+    cur = _flights._current(flight)
+    ss = flight["step_states"].get(sid) or {}
+    d = ss.get("detail") or {}
+    if (
+        cur is not None
+        and cur["id"] == sid
+        and cur["kind"] == "verify"
+        and ss.get("state") == "waiting_you"
+        and d.get("ask") == "confirm"
+    ):
+        return str(d.get("plan") or "")
+    return ""
+
+
 def _no_blanket_done(flight: dict, sid: str) -> None:
     """There is no blanket Done on a Verify stop waiting on you
     (docs/behaviors.md §5): it moves on when its behaviors are answered, or on
@@ -2806,9 +2842,21 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     before = _flights.get(flight_id)
     if before is None:
         raise _flights.FlightError("unknown_flight", 404, "no such route")
+    pid = _confirm_perch(before, step) if op == "done" else ""
+    if pid:
+        # "Verified": the person confirms the check the agent left with them
+        # (test_plans.confirm_verify); the judge moves the stop on next pass.
+        from backend.web.core import test_plans as _tp
+
+        try:
+            _tp.confirm_verify(pid, True, note)
+        except _tp.NotNeedsYou as err:
+            raise _flights.FlightError("not_needs_you", 409, str(err))
+        wake()
+        return _flights.get(flight_id) or before
     if op == "done" and _needs_you_perch(before, step):
         # "I did it": the stop runs again, and the judge checks the behaviors
-        # that were waiting on the person (flights._verify_handover).
+        # that were waiting on the person.
         op = "retry"
     fn = _OPS[op]
     if op == "done":

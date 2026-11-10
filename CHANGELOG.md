@@ -10,18 +10,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A held worker starts its agent only when its turn comes.** An
+
   orchestrator's serial chain (`spawn_session` with `after=[…]`, overlapping
+
   fences, one or N at a time) used to start every worker's agent CLI at once,
+
   each then sitting at an empty prompt (~230 MB) until its turn. Now a held
+
   worker's session is made at once — worktree, branch, fence, queued task —
+
   but no agent runs (no tmux, no memory) until the order releases it. On
+
   release MindFlock fast-forwards its branch, starts its agent through the
+
   launch gate as an automatic start (it waits in the gate's queue while
+
   memory is short), and the queue types the task in once the agent is idle.
+
   Its row still reads *waiting · after …*; nothing revives it or holds it
+
   "offline after a crash", since it never ran. A person can still press
+
   Start to run it early; its task waits for its turn either way. The create
+
   answers `order.agent_deferred: true`.
+
+- **Verify is the session's own agent checking its own work.** Verify no
+
+  longer has a model write steps after the work is done and hand them to the
+
+  agent to walk. It sends the session's agent one prompt — "verify the work
+
+  you just did" — and the agent comes up with its own concrete test steps
+
+  (real usage, not the unit tests it already ran), writes them to its results
+
+  file, puts them on its todo list and works through them, recording each
+
+  pass / fail / blocked with its evidence. A step only a person can do, it
+
+  tells the person in its reply: what to do and what to look for. The session
+
+  row carries the result as a pill (`verify`: `verifying`, `needs_you`,
+
+  `passed`, `failed`, `blocked`; a settled one shows for 10 minutes). When
+
+  there are steps for a person, the check waits on them: **nothing passes
+
+  until a person confirms** (`POST /api/test-plans/{id}/confirm`, verified
+
+  or not). `POST /api/instances/{title}/verify` starts it on any session, no
+
+  plan needed. A route's Verify stop does the same: it waits while the agent
+
+  verifies, parks on you while the check needs you, moves on when it passes,
+
+  and halts naming the failed steps. The written checklist (and its
+
+  one-shot author) is now only for a checker run after the session is gone.
 
 ### Fixed
 
