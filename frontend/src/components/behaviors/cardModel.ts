@@ -74,7 +74,7 @@ export function cardMenuItems(plan: TestPlan, ctx: CardMenuCtx): CardMenuItem[] 
   if (isFailing(plan))
     items.push({ key: "fix", label: "Fix in a new session", title: "Starts a new session with what failed attached" });
   if (!running && steps.length && plan.state !== "generating" && agentCan && primary !== "check" && primary !== "rerun")
-    items.push({ key: "run", label: latestRun(plan) ? "Rerun" : "Check now", title: "The agent checks the behaviors it can" });
+    items.push({ key: "run", label: latestRun(plan) ? "Rerun" : "Check now", title: "The session's own agent walks the behaviors it can — talk to it in its Agent tab" });
   // Next to the head's Check now / Rerun when that is the primary; here otherwise.
   if (offersWalkAll(plan) && !walkAllBesidePrimary(plan, primary)) items.push(WALK_ALL_ITEM);
   const watch = watchSessionOf(plan);

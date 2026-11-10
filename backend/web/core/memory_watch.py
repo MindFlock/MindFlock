@@ -662,6 +662,21 @@ def _system() -> dict:
         "host_available_mb": int(host["available"] // mib) if host else None,
         "host_level": host.get("level") if host else None,
         "guest_level": s.get("guest_level") if host else None,
+        # The distress signals the level rests on (memory_pressure), so a
+        # later look at this history can replay the rule exactly.
+        "psi_some_avg60": psi.get("some_avg60"),
+        "psi_full_avg60": psi.get("full_avg60"),
+        "swap_in_mb_s": s.get("swap_in_mb_s"),
+        "oom_kills": s.get("oom_kills"),
+        "host_headroom_mb": (
+            int(host["headroom"] // mib)
+            if host and host.get("headroom") is not None
+            else None
+        ),
+        "host_commit_pct": host.get("commit_pct") if host else None,
+        "host_pages_in_median": host.get("pages_in_median") if host else None,
+        "pending": s.get("pending"),
+        "why": list(s.get("why") or []),
     }
 
 

@@ -431,6 +431,7 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         progress = {}
     checker: dict = {}
     run_session = str(plan.get("run_session") or "")
+    in_session = bool((run or {}).get("in_session")) and bool(run_session)
     if plan.get("state") == "running" and run_session:
         try:
             facts = _session_obs({"session": run_session}, time.time(), True)
@@ -441,6 +442,10 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
             }
         except Exception:  # noqa: BLE001
             checker = {}
+        if in_session and progress:
+            progress = _walk_clock(pid, run_session, progress, checker)
+    elif pid:
+        _WALK_QUEUED_AT.pop(pid, None)
     # The steps the AGENT walks: its own, or — for an "Agent only" stop, whose
     # run walks "all" — every step, so a plan of person's steps still starts
     # the walker and the stop is done only once each one is settled.
@@ -484,6 +489,10 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "progress": progress,
         "latest_run_at": float(run.get("at") or 0.0) if run else 0.0,
         "checker": checker,
+        # The run is walked by the session that wrote the work (the run
+        # route's in-session path): which one, for "Walking in <session>".
+        "in_session": in_session,
+        "walk_session": run_session if in_session else "",
         "needs_you": progress.get("needs_you") or [],
         "blocked_steps": progress.get("blocked") or [],
         "run_budget_s": float(getattr(_tp, "RUN_BUDGET_MIN", 30)) * 60.0,
@@ -1263,6 +1272,38 @@ def _ensure_checklist(flight: dict) -> dict:
     return {}
 
 
+#: plan id → when its in-session walk was last seen still waiting on the
+#: session's prompt queue (``_walk_clock``). In memory: a restart falls back
+#: to the run's own start, which only makes the clock stricter.
+_WALK_QUEUED_AT: Dict[str, float] = {}
+
+
+def _walk_clock(pid: str, title: str, progress: dict, checker: dict) -> dict:
+    """``progress`` for an in-session walk, with its clock started when the
+    session's agent PICKED THE WALK UP — not when it was queued.
+
+    A walk handed to a session mid-turn waits on its prompt queue until the
+    turn ends; that wait is the person's own work, not a stalled check, so
+    while the walk is queued the stall/budget clock reads "just started"
+    (and the session ``queued``), and afterwards it runs from the last
+    moment it was seen queued."""
+    from backend.web.core import test_plans_driver as _tpd
+
+    now = time.time()
+    if _tpd.walk_is_queued(title):
+        _WALK_QUEUED_AT[pid] = now
+        checker["activity"] = "queued"
+        return dict(progress, started_at=now, progress_at=now, queued=True)
+    since = float(_WALK_QUEUED_AT.get(pid) or 0.0)
+    started = float(progress.get("started_at") or 0.0)
+    if since <= started:
+        return progress
+    out = dict(progress, started_at=since)
+    if float(progress.get("progress_at") or 0.0) < since:
+        out["progress_at"] = since
+    return out
+
+
 async def _start_verify_run(
     plan_id: str, where: str = "branch", notes: str = "", walk: str = "agent"
 ) -> dict:
@@ -1290,14 +1331,23 @@ async def _start_verify_run(
             "walk": walk or "agent",
         },
     )
-    if resp.status_code < 400:
-        return {"started": True, "reason": "", "detail": ""}
     try:
         body = _json.loads(resp.body)
     except Exception:  # noqa: BLE001
         body = {}
     if not isinstance(body, dict):
         body = {}
+    if resp.status_code < 400:
+        # IN THE SESSION when it is still open: the walk was handed to the
+        # flight's own session as a prompt — nothing created, no memory gate.
+        return {
+            "started": True,
+            "reason": "",
+            "detail": "",
+            "in_session": bool(body.get("in_session")),
+            "session": str(body.get("session") or ""),
+            "queued": bool(body.get("queued")),
+        }
     reason = str(body.get("reason") or "")
     if resp.status_code == 409 and (reason == "busy" or body.get("session")):
         return {"started": True, "reason": "busy", "detail": ""}
@@ -1801,6 +1851,19 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                 _verify_walk(cfg),
             )
             if res["started"]:
+                # Always written: the step's detail is merged across ticks,
+                # so a checker run after an in-session one must clear it.
+                walk = {"in_session": False, "walk_session": ""}
+                if res.get("in_session"):
+                    walk = {
+                        "in_session": True,
+                        "walk_session": res.get("session") or "",
+                    }
+                    action = dict(
+                        action,
+                        note="walking the behaviors in %s — talk to it there"
+                        % (res.get("session") or "the session"),
+                    )
                 return dict(
                     action,
                     detail=dict(
@@ -1810,6 +1873,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                         run_wait=None,
                         memory_since=None,
                         nudged_at=None,
+                        **walk,
                     ),
                 )
             # The memory guard refused the checker: NOT started. The stop
@@ -1833,13 +1897,17 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
 
             plan = await asyncio.to_thread(_tp.get, pid) if pid else None
             checker = str((plan or {}).get("run_session") or "")
-            said = "nudged the checker"
+            runs = (plan or {}).get("runs") or []
+            own = bool(runs and runs[-1].get("in_session"))
+            # Walked in the flight's own session: that agent is the one nudged.
+            who = checker if own and checker else "the checker"
+            said = "nudged %s" % who
             try:
                 if not checker:
                     raise _StepFailed("no checker session")
                 await asyncio.to_thread(_deliver, checker, _flights.VERIFY_NUDGE)
             except Exception as err:  # noqa: BLE001 — the close comes next anyway
-                said = "couldn't nudge the checker (%s)" % (str(err) or "error")
+                said = "couldn't nudge %s (%s)" % (who, str(err) or "error")
             return dict(action, detail=dict(v, nudged_at=now, nudge=said))
         if phase == "close":
             v = action.get("detail") or {}

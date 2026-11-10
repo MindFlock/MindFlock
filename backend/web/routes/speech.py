@@ -49,7 +49,7 @@ Status codes, in the order they are checked:
   voice (``core.speech_kokoro``) in ``voice.assistant_voice`` — or the
   body's ``voice`` when that names a Kokoro voice (Settings' ▶ samples) —
   from a cache of its own (:data:`ASSISTANT_CACHE`), ``X-Voice-Assistant:
-  kokoro``; while Kokoro is not ready (not installed, memory low, a failed
+  kokoro``; while Kokoro is not ready (not installed, a failed
   load) the line goes through the normal chain above instead,
   ``X-Voice-Assistant: fallback``. Any other ``as`` is a 400.
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
@@ -92,6 +92,7 @@ import concurrent.futures
 import contextlib
 import copy
 import hashlib
+import json
 import logging
 import os
 import re
@@ -529,7 +530,8 @@ class Prewarm:
         engine: Optional[_speech.Backend] = primary
         held = chain.memory_yield(primary)
         if held:
-            # Memory is short: a local host is not woken for a prewarm.
+            # The host is held back (never, now: voice is exempt from
+            # memory gating): a local host is not woken for a prewarm.
             engine = chain.fallback_for(primary, held=True)
         elif chain.down_reason(primary) or chain.too_slow(primary):
             engine = chain.fallback_for(primary)
@@ -788,6 +790,21 @@ def voice_get(
     if str(assistant).strip().lower() in ("1", "true", "yes", "on"):
         _kokoro.warm_in_background()
     return JSONResponse(body)
+
+
+@router.post("/api/voice/trace")
+def voice_trace(payload: Optional[dict] = None) -> JSONResponse:
+    """One line from a page's dictation (``lib/voiceDesktop.ts``
+    ``voiceTrace``): what it heard, what it decided, how a send came back,
+    logged as ``voice trace: {...}`` so a word that did not act can be read
+    off the server log. The body is cut to 2000 characters. → ``{"ok": true}``."""
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        line = json.dumps(body, ensure_ascii=False, default=str)[:2000]
+    except Exception:  # noqa: BLE001 - a trace never fails the page
+        line = repr(body)[:2000]
+    _logger.warning("voice trace: %s", line)
+    return JSONResponse({"ok": True})
 
 
 @router.post("/api/voice/listen")
@@ -1458,8 +1475,8 @@ def voice_voices(engine: str = "kokoro") -> JSONResponse:
     """The voices an engine offers: ``?engine=kokoro`` (the only one, and
     the default) → ``{"engine": "kokoro", "voices": [{"id", "label",
     "lang"}], "ready": bool, "reason": str, "voice": the assistant's}``.
-    ``ready`` is whether Kokoro can speak now (installed, model on disk, not
-    held back by memory), ``reason`` why not; the list is the same either
+    ``ready`` is whether Kokoro can speak now (installed, model on disk;
+    never held back by memory), ``reason`` why not; the list is the same either
     way (Settings shows the picker with its install prompt). 400 another
     engine. Readable by any signed-in client."""
     if str(engine or "").strip().lower() != _kokoro.KokoroTTS.id:

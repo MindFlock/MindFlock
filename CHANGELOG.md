@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The memory gauge reads real distress, not a share of "available".** It
+  read critical with 9.7 of 24 GB in use, holding every automatic start and
+  putting idle agents to sleep while nothing was short. Now `low` and
+  `critical` rest on readings that mean the machine is in trouble: processes
+  stalled on memory (PSI, `full` the strongest), swap being read back in at a
+  rate (swap merely in use no longer counts, in the level or the launch
+  budget), OOM kills, and an available floor that is genuinely small (the
+  `general.memory_low_pct` / `memory_critical_pct` defaults drop from 15 / 7
+  to 8 / 4, with 1.5 GB / 1 GB floors). Inside WSL, Windows reads on its
+  commit charge (low at 85 %, critical at 90 % of its limit) and on sustained
+  hard paging; its raw "available" no longer counts except under 256 MB, and
+  its headroom is only a floor. A step up must hold 30 s before it counts, so
+  one bad sample moves nothing, and the memory shield acts only on that
+  sustained critical. Every memory message now names the signal: *memory is
+  critical: processes stalled on memory 34% of the last minute*. Replayed
+  over the last two days of memory history, today's 140 low/critical samples
+  drop to 4 low (a real stall).
+- **Verify walks in the session that wrote the work.** Once the behaviors
+  are written, Check now (and a route's Verify stop) hands the steps to the
+  ticket session's own agent: it puts them on its todo list, walks them, and
+  you talk to it right there. No separate checker session, so no "couldn't
+  start the check: memory is low". A separate checker is only the fallback
+  when that session is gone; Cancel tells the agent to stop and never closes
+  your session (docs/flights.md).
+- **Voice stays on when memory is low.** Local recognition and speech models
+  load and keep loading, the accurate pass runs, and Voice Lab is never
+  stopped for memory. Models still unload after the usual idle time.
+
+### Fixed
+
+- **Saying "over" presses Enter again.** An Enter-only send (the voice
+  "over", `/send {"enter": true}`) ran a bare `tmux` for its empty text,
+  which failed, so nothing was pressed and the mic stopped with "Couldn't
+  submit: failed to send to agent session". Broken since the trailing-`;`
+  fix of 2026-11-01.
+- **"Over and out" sends what is in the box.** With nothing dictated since
+  the last "over" (words left by an earlier listen, or typed or pasted
+  text), it stopped the mic without pressing Enter. It now sends; it only
+  just stops when "over" already sent this listen's message.
+
+- **WSL no longer reads "Windows memory is critically low" while it holds
+  gigabytes it can reuse.** Windows counts WSL's page cache as used, so
+  Windows could read 0.8 GB free of 31.4 GB while WSL had ~11 GB of cache
+  that any new agent would simply reuse. That held every automatic start in
+  the launch queue, put idle agents to sleep, and held back the accurate voice
+  pass, with nothing actually short. The Windows check now counts what WSL
+  can reuse; only a Windows down to its last 256 MB reads critical whatever
+  WSL holds. The memory notice says how much WSL can reuse.
+
 ## [0.14.2] - 2026-11-09
 
 ### Changed

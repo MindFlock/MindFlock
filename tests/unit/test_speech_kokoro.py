@@ -37,7 +37,6 @@ def _isolate(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_VOICE_DIR", str(tmp_path / "voice"))
     monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
-    monkeypatch.setattr(speech, "_memory_block", lambda: "")
     speech.unload_all()
     speech.TTS_CHAIN.reset()
     routes.SPEAK_CACHE.clear()
@@ -173,12 +172,16 @@ class TestReadiness:
             "Kokoro voice af_heart on this computer",
         )
 
-    def test_held_back_while_memory_is_low(self, installed, monkeypatch):
-        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
+    def test_never_held_back_while_memory_is_low(self, installed, monkeypatch):
+        """Voice is exempt from memory gating (owner, 2026-11-10)."""
+        from backend import memory_pressure
+
+        monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
         ok, why = speech.get("tts", "kokoro").ready()
-        assert ok is False and why == "Kokoro held back: memory is low"
-        with pytest.raises(speech.SpeechError):
-            k.synthesize("Hello.")
+        assert ok is True and "held back" not in why
+        assert k.engine().model is installed  # loads, not refused
+        assert k.loaded()
 
 
 # --------------------------------------------------------------------------- #

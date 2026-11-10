@@ -30,8 +30,9 @@ flavour, plus a voice-only fourth, in preference order (:data:`BACKENDS`):
   the optional upgrade installed with ``uv sync --group voice`` (the
   ``voice`` dependency group in pyproject.toml). Both are imported lazily
   inside the call, never at module import, so the server starts without
-  them; both are refused while :func:`backend.memory_pressure.is_low` (this
-  box has been OOM-killed before); a loaded model stays in a module cache
+  them; neither is held back by memory pressure (voice is exempt from
+  memory gating: the owner's rule of 2026-11-10 — nothing here reads the
+  memory level, and the memory watch sheds no voice model); a loaded model stays in a module cache
   and is unloaded after :data:`IDLE_SECONDS` without use — a daemon timer
   armed on load sweeps it, and :func:`sweep_idle` is cheap enough for a
   server tick to call too. The exception: while ``voice.stt_backend`` is
@@ -112,8 +113,6 @@ import wave
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from backend import memory_pressure
-
 __all__ = [
     "Backend",
     "SpeechError",
@@ -149,8 +148,8 @@ _logger = logging.getLogger(__name__)
 #: hour: a model unloaded between two sentences costs the next press ~7 s
 #: (faster-whisper ``small`` loading), which read as "the mic is slow to
 #: start"; :func:`warm` loads it ahead of use when a listening mode starts
-#: (the standby's :func:`listen`, a phrase's stream opening), and
-#: :func:`_memory_block` still refuses a load on a starved box.
+#: (the standby's :func:`listen`, a phrase's stream opening). Time-based
+#: only: low memory never unloads or refuses a voice model.
 IDLE_SECONDS = 1800.0
 #: Where ``openai`` goes when ``voice.stt_url`` / ``voice.tts_url`` are blank.
 OPENAI_URL = "https://api.openai.com/v1"
@@ -289,31 +288,15 @@ def _import(module: str):
     return importlib.import_module(module)
 
 
-def _memory_block() -> str:
-    """Why a local model may not load right now ("" when it may)."""
-    try:
-        if memory_pressure.is_low():
-            return memory_pressure.describe() or "memory is low"
-    except Exception:  # noqa: BLE001 — the guard never breaks a request
-        return ""
-    return ""
-
-
-def host_held_back(url: str) -> str:
+def host_held_back(url: str) -> str:  # noqa: ARG001 — the seam stays
     """Why a request to the voice host at ``url`` must not be sent now ("" =
-    send it): a host on this machine or network (Voice Lab and its kin: a
-    model server that takes gigabytes once woken) while memory reads low or
-    critical (core.memory_shield.voice_lab_yield, which logs it once per
-    episode). A remote API is never held. Never raises."""
-    try:
-        if not _local_host(url):
-            return ""
-        from backend.web.core import memory_shield as _shield
-
-        why = _shield.voice_lab_yield()
-    except Exception:  # noqa: BLE001 — the guard never breaks a request
-        return ""
-    return ("voice host held back: " + why) if why else ""
+    send it): always "". Voice is exempt from memory gating (owner,
+    2026-11-10: "I don't want voice models off when memory gets low"): a
+    local voice host (Voice Lab and its kin) is woken and called, and
+    Moonshine, faster-whisper, kokoro and piper load and warm, whatever the
+    memory level reads; the memory shield never stops Voice Lab. The launch
+    gate and the shield make room elsewhere (agents)."""
+    return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -488,8 +471,7 @@ def stt_loaded() -> bool:
 
 
 def _resident() -> frozenset:
-    """The cache keys :func:`sweep_idle` and :func:`shed_for_memory` never
-    drop while ``local`` recognition is the configured backend: its English
+    """The cache keys :func:`sweep_idle` never drop while ``local`` recognition is the configured backend: its English
     streaming model always (:meth:`LocalSTT.stream_key`: Moonshine, ~200
     MB, or whisper ``base.en``, ~150 MB: reloading it cost the person's next
     phrase ~2 s, and the server warms it at boot), and all of its models
@@ -527,42 +509,13 @@ def sweep_idle(now: Optional[float] = None) -> List[str]:
     return dropped
 
 
-def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:
-    """Memory reads low (the server's memory watch calls this): drop every
-    cached model unused for ``min_idle_s`` but the resident ones
-    (:func:`_resident`: the streaming model, and with a listening lease all
-    of recognition's). One in use right now stays. The warm-up record of
-    the dropped kind is forgotten, so the next warm loads again — once
-    :func:`_memory_block` lets it. → the keys dropped. Never raises."""
-    stamp = _now()
-    dropped: List[str] = []
-    # A live listening lease (wake-word standby) keeps its models: dropping
-    # them would turn the next "MindFlock" into a multi-second reload, and low
-    # memory already puts idle agents to sleep first (core.sleep).
-    keep = _resident()
-    try:
-        with _LOCK:
-            for key in list(_CACHE):
-                if key in keep:
-                    continue
-                if stamp - _USED.get(key, stamp) >= min_idle_s:
-                    _CACHE.pop(key, None)
-                    _USED.pop(key, None)
-                    dropped.append(key)
-            if any(is_stt_key(k) for k in dropped):
-                _WARMED.pop("stt", None)
-            if any(not is_stt_key(k) for k in dropped):
-                _WARMED.pop("tts", None)
-    except Exception:  # noqa: BLE001 — shedding is best effort
-        return dropped
-    if dropped:
-        import gc
-
-        gc.collect()
-        from backend.web.core import malloc_arenas
-
-        malloc_arenas.trim()
-    return dropped
+def shed_for_memory(min_idle_s: float = 120.0) -> List[str]:  # noqa: ARG001
+    """Memory reads low (the server's memory watch calls this) → the voice
+    models dropped: always none. Voice is exempt from memory gating
+    (:func:`host_held_back`; owner, 2026-11-10): a cached model goes only by
+    the time-based idle unload (:data:`IDLE_SECONDS`, :func:`sweep_idle`),
+    never because memory reads low or critical. Never raises."""
+    return []
 
 
 def loaded() -> List[str]:
@@ -1007,9 +960,9 @@ class _OpenAI(Backend):
         self, url: str, headers: Dict[str, str], body: bytes, timeout: float
     ) -> Tuple[str, bytes]:
         """POST and return ``(content-type, body)``; every failure is a
-        :class:`SpeechError` naming the host. A local host is never called
-        while memory reads low (:func:`host_held_back`): nothing would wake
-        Voice Lab then, whichever path asked (a line, a warm, a probe)."""
+        :class:`SpeechError` naming the host. A local host is called
+        whatever the memory level reads (:func:`host_held_back` is the
+        seam, and never holds one back)."""
         host = _host(url)
         held = host_held_back(url)
         if held:
@@ -1712,9 +1665,6 @@ class LocalSTT(Backend):
     def ready(self) -> Tuple[bool, str]:
         if not _installed("faster_whisper"):
             return False, NOT_INSTALLED
-        low = "" if self._stream_loaded() else _memory_block()
-        if low:
-            return False, "local recognition held back: " + low
         detail = "faster-whisper %s on this computer" % self._model_name()
         if ffmpeg_path() == "":
             detail += (
@@ -1753,34 +1703,17 @@ class LocalSTT(Backend):
             num_workers=1,
         )
 
-    def _stream_loaded(self) -> bool:
-        """Whether the English streaming model is in memory: a stream needs
-        no load to start (the memory check guards LOADS only)."""
-        try:
-            key = self.stream_key()
-        except Exception:  # noqa: BLE001 — unreadable settings: not loaded
-            return False
-        with _LOCK:
-            return key in _CACHE
-
     def _model(self, name: str = ""):
         """The cached model ``name`` (default: the one-shot one), after the
-        install check and — only when it must be LOADED — the memory check:
-        a model already in memory costs nothing more to use, and refusing
-        it under pressure only dropped every pass to clip mode, whose clips
-        were refused the same way."""
+        install check. Never refused for memory: voice is exempt from memory
+        gating (:func:`host_held_back`) — refusing a load under pressure
+        failed the accurate pass on every phrase."""
         if not _installed("faster_whisper"):
             raise SpeechError(NOT_INSTALLED)
         name = name or self._model_name()
 
-        def load():
-            low = _memory_block()
-            if low:
-                raise SpeechError("local recognition held back: " + low)
-            return self._load(name)
-
         try:
-            return _cached("whisper:" + name, load)
+            return _cached("whisper:" + name, lambda: self._load(name))
         except SpeechError:
             raise
         except Exception as err:  # noqa: BLE001 — download, CPU feature, …
@@ -2051,9 +1984,6 @@ class LocalTTS(Backend):
     def ready(self) -> Tuple[bool, str]:
         if not _installed("piper"):
             return False, NOT_INSTALLED
-        low = _memory_block()
-        if low:
-            return False, "local voice held back: " + low
         name = self._voice_name()
         have = (voice_dir() / "piper" / (name + ".onnx")).is_file()
         return True, "piper voice %s on this computer%s" % (
@@ -2066,12 +1996,10 @@ class LocalTTS(Backend):
         return _import("piper.voice").PiperVoice.load(str(onnx))
 
     def _model(self, name: str):
-        """The cached voice ``name``, after the install and memory checks."""
+        """The cached voice ``name``, after the install check (never refused
+        for memory: :func:`host_held_back`)."""
         if not _installed("piper"):
             raise SpeechError(NOT_INSTALLED)
-        low = _memory_block()
-        if low:
-            raise SpeechError("local voice held back: " + low)
         try:
             return _cached("piper:" + name, lambda: self._load(name))
         except SpeechError:
@@ -2223,9 +2151,9 @@ PROBE_TIMEOUT = 3.0
 #: The fallback voices, in order, after the configured one (never itself):
 #: the built-in Kokoro voice when it is installed, then piper.
 FALLBACK_TTS: Tuple[str, ...] = ("kokoro", "local")
-#: Also tried while the configured host yields to memory
-#: (:meth:`TtsChain.memory_yield`): piper is held back then too, and the OS
-#: voice costs next to nothing.
+#: Also tried while the configured host is held back
+#: (:meth:`TtsChain.memory_yield`) — which, voice being exempt from memory
+#: gating, it never is now; the OS voice costs next to nothing.
 MEMORY_FALLBACK_TTS: Tuple[str, ...] = ("system",)
 #: :class:`TtsChain`'s switch back: this long after the last fallback line
 #: should have finished playing, with nothing in flight.
@@ -2891,10 +2819,11 @@ class TtsChain:
     # -- choosing -------------------------------------------------------- #
     @staticmethod
     def memory_yield(primary: Backend) -> str:
-        """Why ``primary`` must not be woken or called now ("" = it may): a
-        host that :meth:`Backend.starts_cold` (on this machine or network:
-        Voice Lab) while memory reads low or critical. Its lines go to the
-        fallback meanwhile; nothing is sent to it, not even a probe."""
+        """Why ``primary`` must not be woken or called now ("" = it may):
+        :func:`host_held_back` for a host that :meth:`Backend.starts_cold`
+        (on this machine or network: Voice Lab) — always "" now: voice is
+        exempt from memory gating, so a local host is woken and called
+        whatever the memory level reads."""
         try:
             if not primary.starts_cold():
                 return ""
@@ -2905,9 +2834,8 @@ class TtsChain:
     @staticmethod
     def fallback_for(primary: Backend, held: bool = False) -> Optional[Backend]:
         """The first ready :data:`FALLBACK_TTS` engine that is not
-        ``primary``. ``held`` (the host yields to memory, :meth:`memory_yield`):
-        the OS voice (:data:`MEMORY_FALLBACK_TTS`) may say it too, since piper
-        itself is held back while memory is low."""
+        ``primary``. ``held`` (the host is held back, :meth:`memory_yield`):
+        the OS voice (:data:`MEMORY_FALLBACK_TTS`) may say it too."""
         for backend_id in FALLBACK_TTS + (MEMORY_FALLBACK_TTS if held else ()):
             if backend_id == primary.id:
                 continue
@@ -2932,10 +2860,11 @@ class TtsChain:
         (:class:`TtsChain`). ``engine`` is None when ``primary`` is down and
         no fallback is ready. ``probe``: as :meth:`down_reason`.
 
-        While memory is short (:meth:`memory_yield`) a local host is not
-        asked at all: the line goes to the fallback (piper, else the OS
-        voice), ``why`` says so, and with neither ready ``engine`` is None
-        (the client then uses its own voice). No probe is started."""
+        While a local host is held back (:meth:`memory_yield` — never, now
+        that voice is exempt from memory gating) it is not asked at all:
+        the line goes to the fallback (piper, else the OS voice), ``why``
+        says so, and with neither ready ``engine`` is None (the client then
+        uses its own voice). No probe is started."""
         held = self.memory_yield(primary)
         if held:
             with self._lock:
@@ -3152,8 +3081,8 @@ def _warm_target(kind: str) -> Tuple[Optional[Backend], str]:
         ok = backend is not None
         held = TTS_CHAIN.memory_yield(backend) if backend is not None else ""
         if held:
-            # Memory is short: never wake a local host to warm it; have the
-            # fallback that speaks meanwhile ready instead.
+            # The host is held back (never, now: voice is exempt from
+            # memory gating): have the fallback that speaks meanwhile ready.
             fallback = TTS_CHAIN.fallback_for(backend, held=True)  # type: ignore[arg-type]
             if fallback is None:
                 return None, "skipped: " + held
@@ -3178,7 +3107,7 @@ def warm(kind: str = "stt", prime: bool = True) -> str:
     """Load ``kind``'s model now (:func:`_warm_target`), so the first press
     of the mic — or the first line read aloud — does not pay for it; returns
     ``"loaded"`` / ``"already"``, or ``"skipped: <why>"`` (nothing to warm,
-    not installed, memory low, load or host failed). Never raises;
+    not installed, load or host failed). Never raises;
     blocking — see :func:`warm_in_background`."""
     what = ""
     try:
@@ -3231,8 +3160,9 @@ def warm_stt_at_boot(delay_s: float = BOOT_WARM_STT_S) -> Optional[threading.Thr
     boot when it is the configured backend, so the first phrase of the day
     does not wait 2 to 7 s for its models — the streaming one then stays
     (:func:`_resident`), the accurate one until :data:`IDLE_SECONDS` idle.
-    Skipped under memory pressure (:func:`_memory_block`), for any other
-    backend, or when the settings can't be read. The thread, or None."""
+    Runs whatever the memory level reads (voice is exempt from memory
+    gating, :func:`host_held_back`); skipped for any other backend, or when
+    the settings can't be read. The thread, or None."""
     try:
         if _configured("stt") != "local":
             return None

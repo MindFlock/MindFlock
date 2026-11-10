@@ -687,39 +687,109 @@ draining — can start agents faster than the machine holds them: each is a node
 CLI plus whatever it runs, and once RAM runs out the box swaps (on WSL a
 disk-backed swap that stalls everything) and the OOM killer takes agents down
 mid-turn. `backend/memory_pressure.py` (stdlib only; the pipeline process
-imports it too) reads two signals and returns `ok` / `low` / `critical`
-(`unknown` where there is nothing to read — non-Linux — which never gates):
+imports it too) returns `ok` / `low` / `critical` (`unknown` where there is
+nothing to read — non-Linux — which never gates). The level reads **distress**,
+not a share of "available": until 2026-11-10 it was mostly MemAvailable as a
+share of RAM (low at 15 %, critical at 7 %) plus Windows' raw available, and it
+read critical at 9.7 of 24 GB used with PSI at 0.2 % and no swap-in. `low`
+means distress is near (automatic starts wait); `critical` means the machine
+is in trouble (held, it lets the shield put idle agents to sleep).
 
 | Signal | low at | critical at |
 |---|---|---|
-| `MemAvailable` (`/proc/meminfo`) | ≤ 15 % of `MemTotal` (`general.memory_low_pct`) or ≤ 2 GB | ≤ 7 % (`general.memory_critical_pct`) or ≤ 1 GB |
-| PSI `some avg60` (`/proc/pressure/memory`) | ≥ 20 % | ≥ 40 % |
-| PSI `full avg60` | ≥ 5 % | ≥ 15 % |
+| PSI `full avg60` (`/proc/pressure/memory`) — every non-idle task stalled | ≥ 5 % | ≥ 15 % |
+| PSI `some avg60` — at least one task stalled | ≥ 20 % | ≥ 50 % |
+| Swap-in rate (`pswpin` in `/proc/vmstat`, over the last ~60 s) | ≥ 256 pages/s (~1 MB/s) | ≥ 2048 pages/s (~8 MB/s) |
+| OOM kills (`oom_kill` rising in the last 5 min) | any | any, plus another low signal |
+| `MemAvailable` (`/proc/meminfo`) | ≤ 8 % of `MemTotal` (`general.memory_low_pct`) or ≤ 1.5 GB | ≤ 4 % (`general.memory_critical_pct`) or ≤ 1 GB |
 
-The two shares are settings (per device, never synced; `0` drops the share
-signal, leaving the floors and PSI); the floors and PSI lines are fixed.
-Stepping back down needs every reading past a recovery line a margin beyond the
-entry one (share + 5 points / 2.5 GB / some 10 / full 2 to leave `low`; share +
-3 points / 1.5 GB / some 30 / full 10 to leave `critical` — 20 % and 10 % at
-the defaults), so a box hovering at the line doesn't flap. A reading is cached for 2 s, and the level is per process: the ticket
-pipeline keeps its own, so it and the server can briefly disagree near a line.
+Swap merely **in use** is not a signal (cold pages parked there cost
+nothing); reading them back at a rate is. An OOM kill alone is only `low`:
+the counter also counts kills inside a memory-capped cgroup (a test suite in
+its own scope), which say nothing about the machine. The available floor is
+genuinely small: under ~1 GB one agent starting or a test run pushes the
+kernel into direct reclaim and swap whatever the box; the share keeps the line
+proportional on a big box. The two shares are settings (per device, never
+synced; `0` drops the share, leaving the floors and the other signals); the
+rest is fixed.
+
+**Sustained.** A reading past a line raises the level only once every reading
+for 30 s (`SUSTAIN_SECONDS`) has pointed at least that high; until then the
+snapshot carries `pending` (the level it is heading for) and `why`, and
+`level` stays where it was. One bad sample moves nothing. Stepping back down
+is immediate once every reading clears a recovery line a margin beyond the
+entry one (share + 2 points / 2 GB / some 10 / full 2 / swap-in 64 pages/s to
+leave `low`; share + 2 points / 1.5 GB / some 30 / full 8 / swap-in 512
+pages/s to leave `critical`), so a box hovering at a line doesn't flap.
+
+**Explained.** The snapshot's `why` lists the signals that set the level in
+plain words, and `describe()` (every refusal, the banner's message, the
+shield's log) joins them: *memory is critical: processes stalled on memory
+34% of the last minute*, *memory is low: swapping 1.6 MB/s back in from
+disk*, *memory is critical: Windows commit charge is at 93% of its limit
+(55.8 GB of 60.0 GB)*. A reading is cached for 2 s, and the level is per
+process: the ticket pipeline keeps its own, so it and the server can briefly
+disagree near a line.
+
+`memory_pressure.replay(rows)` runs the rule over `~/.mindflock/logs/memory.jsonl`
+history (each line's `system` dict) for a back-test; the sampler logs every
+signal the rule reads (`psi_*_avg60`, `swap_in_mb_s`, `oom_kills`,
+`host_headroom_mb`, `host_commit_pct`, `host_pages_in_median`, `pending`,
+`why`), so the replay of newer history is exact. Older lines lack MemFree,
+commit and paging, so the back-test of 2026-11-10 approximated (PSI avg60
+from the logged avg10s; WSL reusing half its available, where 81 % was
+measured that day). Over 2026-11-08 to 11-10 (4,596 samples) the old rule
+read 1,032 `low` and 421 `critical`; the new one 99 `low` and 44 `critical`
+(the 44 on 11-08: PSI `full` at 50 %+ with 1.5 GB available, a real thrash).
+Of 11-10's 243 samples the old rule read 96 `low` and 44 `critical`; the new
+one 239 `ok` and 4 `low` (a real 12–19 % full stall during a 3 GB
+`memory.reclaim`).
 
 **Windows under WSL.** A WSL2 guest sees only its own VM: Windows can be
 paging its own apps out while `/proc/meminfo` still reads plenty, because the
 VM has grown into everything `.wslconfig`'s `memory=` allows and Windows
 cannot take memory back from it. Inside WSL the web server starts
-`backend/host_memory.py`: ONE long-lived `powershell.exe` printing Windows'
-available physical memory (`Win32_OperatingSystem.FreePhysicalMemory`, free +
-standby) every 10 s, read by a daemon thread. The host has its own lines —
-low at ≤ 8 % or ≤ 2.5 GB, critical at ≤ 4 % or ≤ 1.25 GB, leaving low at 11 %
-and 3.5 GB, critical at 6 % and 2 GB — and the level is the **worse** of the
-guest's and the host's, so everything below (spawns waiting, the launch gate's
-budget, the [memory shield](#memory-shedding-before-it-bricks) shedding idle agents) acts on a
-short Windows too. The shield frees the bigger of the two shortfalls (memory
-an agent gives back in the guest returns to Windows by free page reporting);
-the launch budget is capped by Windows' headroom over its own low line. The
-snapshot carries `host` and `guest_level`; refusals say *Windows memory is
-low* when Windows is the cause. A reading older than 45 s is ignored (never a
+`backend/host_memory.py`: ONE long-lived `powershell.exe` printing, every
+10 s, Windows' available physical memory
+(`Win32_OperatingSystem.FreePhysicalMemory`, free + standby) and total, and
+from `Win32_PerfFormattedData_PerfOS_Memory` the commit charge, the commit
+limit and `PagesInputPersec` (`mem <avail kB> <total kB> <committed kB>
+<limit kB> <pages/s>`; without perf counters the short `mem <avail> <total>`
+line still goes, and the parser takes both). A daemon thread reads it. The
+host has its own level, sustained on its own, and the level is the **worse**
+of the guest's and the host's, so everything below (spawns waiting, the
+launch gate's budget, the [memory shield](#memory-shedding-before-it-bricks)
+shedding idle agents) acts on a Windows in distress too. Windows' raw
+available is **not** a signal — it swung between 0.7 and 3.4 GB within
+minutes on 2026-11-10 with nothing short. The host's signals:
+
+| Signal | low at | critical at | leaves low / critical |
+|---|---|---|---|
+| Commit charge / commit limit (at the limit an allocation fails) | ≥ 85 % | ≥ 90 % | ≤ 80 % / ≤ 87 % |
+| Hard paging: the **median** `PagesInputPersec` of the last 6 readings (≥ 3), only while Windows' own available is under 2 GB | ≥ 3000 pages/s | ≥ 8000 pages/s | ≤ 1500 / ≤ 4000 |
+| Headroom (below) | ≤ 2 GB | ≤ 1 GB | ≥ 3 GB / ≥ 1.5 GB |
+| Windows' own available | — | ≤ 256 MB | > 512 MB |
+
+The median, not the mean: one 20000 pages/s spike (an app starting, a scan)
+would hold a mean over the line for the whole minute. With GBs available,
+page-ins are cold file reads, not memory being evicted and read back. The
+**headroom** (`memory_pressure.host_headroom`) is a floor only:
+Windows' available plus what the guest can reuse out of memory the VM already holds
+(MemAvailable − MemFree: its page cache). Windows counts those pages as used,
+but a new agent that reuses them costs Windows nothing — on 2026-11-10
+Windows read 0.8 GB free of 31.4 GB with ~11 GB of WSL page cache, and every
+start and the accurate voice pass were held back with nothing short. Freeing
+that cache does not hand it back to Windows soon (a 3 GB `memory.reclaim`
+moved Windows' available by nothing in 30 s). Only when Windows' own
+available is at or under 256 MB does it read critical whatever the guest
+holds. The shield frees the bigger of the two shortfalls, the host's measured
+on its headroom under the 2 GB floor (`host_low_line`); the launch budget is
+capped by that headroom over the same floor. The snapshot carries `host`
+(with `guest_reusable`, `headroom`, `headroom_pct`, `commit_pct`,
+`committed`, `commit_limit`, `pages_in_median`, its own `level`, `pending`
+and `why`) and `guest_level`; refusals name the Windows signal when Windows
+is the cause (*Windows has only 0.9 GB to give (0.9 GB available, 0.0 GB WSL
+can reuse)*). A reading older than 45 s is ignored (never a
 gate); the loop exits when its pipe breaks and restarts with a backoff that
 doubles from 15 s to at most 300 s. If no `powershell.exe` is found the reader
 stops for the life of the process. `MINDFLOCK_HOST_MEMORY=0` turns it off; the
@@ -760,11 +830,11 @@ While the level is `low` or `critical`:
   and review lookups serve their cached answer past its TTL instead of
   forking `gh` per branch per minute (a forced lookup — a person pressing
   something — still asks); Ctrl+F's background pre-indexing skips its pass
-  (Ctrl+F still indexes on demand); and the memory watch unloads the local
-  speech models unused for 2 minutes (`speech.shed_for_memory` — the resident
-  whisper models too, ~1 GB of the server's own memory, then `malloc_trim`).
-  Model loads are refused while the level is low, so nothing reloads until it
-  recovers.
+  (Ctrl+F still indexes on demand). Voice is **not** shed: the local speech
+  models stay loaded and still load on demand whatever the level reads
+  (`speech.shed_for_memory` drops nothing — [Voice is left
+  alone](#memory-voice-is-left-alone)); they go only by the time-based idle
+  unload.
 
 ### Launch gate
 
@@ -811,19 +881,21 @@ room = floor((available − reserve − penalties − to_come) / session_mb)
 - **`peak_mb`** — the 75th percentile of the sessions' peaks, never under
   `session_mb` nor over 2.5× it (a peak from an 8-worker test run is not what
   a CLI starting grows to). Warming agents count at it.
-- **`reserve`** — the low line: `max(2 GB, general.memory_low_pct of RAM)`
-  (15 % by default, 3 GB on 20 GB). The room is what fits *above* it, so
-  room 0 means one more would take the machine to `low`.
-- **`penalties`** — swap in use (up to 10 % of RAM: pages the agents will
-  fault back in, and on WSL a disk-backed swap that drags the Windows host),
-  and a **rising** PSI stall (`some avg10` ≥ 5 % and above `avg60`):
+- **`reserve`** — the low floor: `max(2 GB, general.memory_low_pct of RAM)`
+  (8 % by default: 2 GB on 20 GB, 2.1 GB on 26 GB). The room is what fits
+  *above* it.
+- **`penalties`** — swap in use while it is being **swapped back in**
+  (`swap_in_mb_s` ≥ 1 MB/s; up to 10 % of RAM: pages the agents are faulting
+  back, and on WSL a disk-backed swap that drags the Windows host — swap
+  merely parked costs nothing; a snapshot without the rate keeps the
+  penalty), and a **rising** PSI stall (`some avg10` ≥ 5 % and above `avg60`):
   `avg10 / 200` of RAM, at most 15 % (20 % stalled → 10 % of RAM).
 - **`to_come`** — the warming agents' growth still to come.
 
 The room is 0 while the level reads low or critical, and never past the
-live cap. On 20 GB with 15.6 GB available, no swap, no stall, nothing warming
-and no measurements yet: (15.6 − 3.0) GB / 0.7 GB → room 18 (the live cap,
-16 by default, then bounds it). Measured at 1 GB per session it is 12.
+live cap. On 20 GB with 15.6 GB available, no swap-in, no stall, nothing
+warming and no measurements yet: (15.6 − 2.0) GB / 0.7 GB → room 19 (the live
+cap, 16 by default, then bounds it). Measured at 1 GB per session it is 13.
 
 What the room changes: an agent's `spawn_session` past it queues (`queued:
 waiting for memory`, the reason saying what one more needs: *one more
@@ -843,22 +915,28 @@ Voice Lab's F5 voice (4.1 GB + 1 GB swap) on 19.5 GB of WSL. The **memory
 shield** (`core/memory_shield.py`, called by the server's memory watch every
 10 s) acts:
 
-- **When**: the level has read `critical` for 60 s (inside WSL that includes
-  Windows alone reading critical — see [Windows under WSL](#memory-guard)), or PSI `full avg10` is at
-  25 % or past it (every runnable task stalled on memory a quarter of the last
-  10 s: a thrash under way, where waiting the minute would cost ~15 s of
-  total stall). At most once per 90 s, so the next shed acts on readings
-  taken after the memory came back.
+- **When**: only on **sustained** critical distress. The level itself turns
+  `critical` only after a distress signal held 30 s (above; inside WSL that
+  includes Windows alone — see [Windows under WSL](#memory-guard)); it must
+  then read `critical` for 60 s more — or, already critical, PSI `full avg10`
+  is at 25 % or past it (every runnable task stalled on memory a quarter of
+  the last 10 s: a thrash under way, where waiting the minute would cost
+  ~15 s of total stall). A 10 s burst with the level not critical sheds
+  nothing. At most once per 90 s, so the next shed acts on readings taken
+  after the memory came back. The log line names the signal: *acting on
+  memory has been critical for 61s (swapping 9.5 MB/s back in from disk)*.
 - **Which**: idle agent sessions that `sleep.veto` allows with a two-minute
   idle window — never one working, asking or on a dialog, open in a
   terminal, driven by a person, typed into or woken in the last two minutes,
   holding a background job, in a team run, or with working workers.
   Largest-and-longest-idle first (measured MB × idle time, capped at an hour).
 - **How many**: only enough to bring available memory back over the `low`
-  line, counting each at its measured size (else the learned cost); at least
-  one, at most six. Inside WSL the need is the larger of the guest's shortfall
-  and Windows' shortfall under its own low line (`host_low_line`), since what
-  an agent frees in the VM returns to Windows by free page reporting.
+  floor, counting each at its measured size (else the learned cost); at least
+  one (critical from a stall, a swap-in storm or Windows' commit charge has
+  no byte target: one at a time, the cooldown letting the next pass see the
+  effect), at most six. Inside WSL the need is the larger of the guest's
+  shortfall and Windows' shortfall under its 2 GB headroom floor
+  (`host_low_line`).
 - They are put to sleep exactly as *Put idle agents to sleep* does (Wake,
   opening or messaging one brings it back with its conversation). One notice
   (`system.sessions_slept`): *Memory critical — put 3 idle sessions to sleep
@@ -868,19 +946,20 @@ shield** (`core/memory_shield.py`, called by the server's memory watch every
 - `general.agent_memory.shed_idle: false` (or `MINDFLOCK_SHED_IDLE=0`)
   turns it off. `GET /api/memory/capacity` → `shield` shows the last shed.
 
-#### Memory: Voice Lab yields
+#### Memory: voice is left alone
 
-A local voice host (Voice Lab, or any OpenAI-compatible model server on this
-machine or network) is never woken or called while the level reads low or
-critical: `TtsChain.pick` hands the line to piper, else the OS voice (piper
-itself is held back while low), else the client's own voice; warms, prewarms
-and health probes are not sent; the host call itself refuses
-(`speech.host_held_back`). The log says why once per episode, and again when
-it may be used. When the level turns `critical` and Voice Lab's backend
-(`voicelab-backend.service`, `MINDFLOCK_VOICELAB_UNIT`; `0` = never) runs, it
-is stopped with `systemctl --user stop`. It is socket-activated, so the next
-voice request would start it again, and none reaches it until memory allows.
-No unit, no systemd, no Voice Lab: nothing to do.
+Voice is exempt from memory gating (the owner's rule, 2026-11-10: *"I don't
+want voice models off when memory gets low"*). Whatever the level reads —
+`low` or `critical` — local recognition (the Moonshine fast lane and the
+faster-whisper accurate pass) loads, warms (the boot warm-up included) and
+transcribes; Kokoro and piper load and speak; a local voice host (Voice Lab,
+or any OpenAI-compatible model server on this machine or network) is woken
+and called for lines, warms, prewarms and probes (`speech.host_held_back` is
+always `""`). The memory watch sheds no voice model
+(`speech.shed_for_memory` drops nothing) and the shield never stops Voice
+Lab's backend. A voice model still unloads after
+`speech.IDLE_SECONDS` without use — time-based, never memory-based. Room is
+made by shedding idle agents (above) instead.
 
 **Automatic starts wait in a FIFO queue.** That means an agent-spawned
 create, a queued prompt relaunching or waking its agent, a mailbox wake, a

@@ -1682,9 +1682,25 @@ export interface TestRun {
   /** What the walker was asked to work: "agent" (default) = the agent's steps
    * only; "all" = it also attempted the person's steps with its tools. */
   walk?: TestRunWalk;
+  /** Walked by the session that WROTE the work (`session` is that session):
+   * the steps were handed to its own agent as a prompt, not to a separate
+   * checker. Absent on a checker's run and on an older server. */
+  in_session?: boolean;
 }
 
 export type TestRunWalk = "agent" | "all";
+
+/** `POST /api/test-plans/{id}/run` → 202. `in_session`: the steps were
+ * handed to the plan's own session's agent (`session`), `queued` while it
+ * was mid-turn; absent/false: a separate checker session `session` was
+ * started (the plan's own session is gone). */
+export interface TestPlanRunStarted {
+  ok?: boolean;
+  session?: string;
+  in_session?: boolean;
+  queued?: boolean;
+  plan?: TestPlan;
+}
 
 export interface TestPlan {
   id: string;
@@ -2352,7 +2368,17 @@ export interface MemoryReading {
   message?: string;
   /** WSL only: the Windows host's own reading (memory_pressure._host). The
    * overall `level` is the worse of the guest's (`guest_level`) and this. */
-  host?: { available?: number; total?: number; available_pct?: number; level?: string } | null;
+  host?: {
+    available?: number;
+    total?: number;
+    available_pct?: number;
+    /** Guest memory the VM already holds that a new agent can reuse (MemAvailable − MemFree). */
+    guest_reusable?: number;
+    /** available + guest_reusable: what the host's level is read against. */
+    headroom?: number;
+    headroom_pct?: number;
+    level?: string;
+  } | null;
   guest_level?: "ok" | "low" | "critical" | "unknown";
   /** The launch gate: what waits for memory (absent on an older server). */
   gate?: LaunchGateStatus;

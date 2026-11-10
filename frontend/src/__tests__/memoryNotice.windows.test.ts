@@ -23,4 +23,8 @@ describe("the memory notice names Windows when Windows is the one short", () => 
       "Windows: 0.5 GB free of 31.4 GB (2%) · 5.1 GB of WSL's 19.5 GB is unused inside WSL, but Windows can't take it back while WSL holds it",
     );
   });
+  it("names what WSL can reuse when the server counts it", () => {
+    const m = { ...live, host: { ...live.host, guest_reusable: 0.4 * GB } };
+    expect(windowsDetail(m)).toContain("Windows: 0.5 GB free of 31.4 GB (2%) · WSL can reuse 0.4 GB it already holds · ");
+  });
 });

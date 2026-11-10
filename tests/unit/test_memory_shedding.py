@@ -8,8 +8,9 @@ Pins (2026-11-04: the server stopped answering HTTP under a memory squeeze):
 * while memory reads low the background work sheds itself: the probe pool
   narrows, PR lookups serve their cached answer past its TTL instead of
   forking ``gh``, Ctrl+F's pre-indexing skips its pass;
-* the memory watch gives back the speech models the server holds (the
-  resident whisper models included) once they sit unused.
+* the memory watch leaves the speech models alone: voice is exempt from
+  memory gating (owner, 2026-11-10), so ``speech.shed_for_memory`` drops
+  nothing — only the time-based idle unload does.
 """
 
 from __future__ import annotations
@@ -136,31 +137,23 @@ def test_find_indexing_skips_its_pass_while_memory_is_low(monkeypatch):
     assert touched == []
 
 
-def test_shedding_drops_idle_speech_models_but_not_a_listening_lease(monkeypatch):
+def test_shedding_never_drops_a_speech_model(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(speech, "_now", lambda: clock[0])
     monkeypatch.setattr(speech, "_CACHE", {})
     monkeypatch.setattr(speech, "_USED", {})
     monkeypatch.setattr(speech, "_WARMED", {"stt": ("loaded", "small", 0.0)})
-    # Wake-word standby is on (a live listening lease pins whisper): kept,
-    # so the next "MindFlock" doesn't wait for a reload.
-    monkeypatch.setattr(speech, "_resident", lambda: frozenset({"whisper:small"}))
+    monkeypatch.setattr(speech, "_resident", lambda: frozenset())
     speech._CACHE.update(
         {"whisper:small": object(), "piper:amy": object(), "piper:old": object()}
     )
     speech._USED.update(
         {"whisper:small": 700.0, "piper:amy": 990.0, "piper:old": 700.0}
     )
-    assert speech.sweep_idle() == []
-    assert speech.shed_for_memory() == ["piper:old"]  # piper:amy used 10 s ago
-    assert "whisper:small" in speech._CACHE and "stt" in speech._WARMED
-    # Nobody listening: the idle whisper goes too, and the next warm reloads.
-    monkeypatch.setattr(speech, "_resident", lambda: frozenset())
-    assert speech.shed_for_memory() == ["whisper:small"]
-    assert "whisper:small" not in speech._CACHE and "stt" not in speech._WARMED
-
-
-def test_the_memory_watch_sheds_what_the_server_holds(monkeypatch):
-    shed = []
-    monkeypatch.setattr(speech, "shed_for_memory", lambda: shed.append(1) or ["w"])
-    assert server._shed_for_memory() == ["w"] and shed == [1]
+    # Idle well past the old 2-minute shed, nobody listening: all kept.
+    assert speech.shed_for_memory() == []
+    assert sorted(speech._CACHE) == ["piper:amy", "piper:old", "whisper:small"]
+    assert "stt" in speech._WARMED
+    # The time-based idle unload still applies.
+    clock[0] += speech.IDLE_SECONDS
+    assert sorted(speech.sweep_idle()) == ["piper:amy", "piper:old", "whisper:small"]

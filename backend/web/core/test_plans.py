@@ -36,6 +36,13 @@ TWO MODEL INTERACTIONS, OPPOSITE POSTURES. That asymmetry is the whole design:
   reports back through a file (``.mindflock_verify.json``) that the due loop
   polls. Asking *what to check* is cheap and safe; *checking* is neither.
 
+  WHEN THE SESSION THAT WROTE THE WORK IS STILL OPEN, the run is handed to IT
+  (``build_run_prompt(..., in_session=True)``; the run record carries
+  ``in_session``): the walk is a prompt typed into that session's own agent —
+  queued while it is mid-turn — so the person sees the steps as that agent's
+  tasks and can talk to it while it walks. No second session, no checkout. A
+  separate checker session is the fallback for a plan whose session is gone.
+
 WHAT THE MODEL IS NOT ALLOWED TO DECIDE. Every step carries an ``actor``:
 ``"agent"`` for anything a shell or the agent's own tools can settle,
 ``"human"`` for what only an eye on a real screen can. An unknown or missing
@@ -124,6 +131,7 @@ __all__ = [
     "MAX_RUNS",
     "TIMEOUT_GENERATE",
     "RESULT_FILE",
+    "WALK_MARK",
     "STATES",
     "RESULTS",
     "ACTORS",
@@ -266,6 +274,11 @@ TIMEOUT_MERGE_BASE = 30.0
 #: git-excluded and can never land in a diff or a ``git add -A``. Named here so
 #: the prompt that asks for it and the poller that reads it cannot drift apart.
 RESULT_FILE = ".mindflock_verify.json"
+#: The first words of a walk handed to the plan's OWN session
+#: (``build_run_prompt(..., in_session=True)``) — how a Verify stop tells the
+#: walk still sitting on that session's prompt queue (not started: no clock
+#: runs) from one the agent has picked up.
+WALK_MARK = "MindFlock Verify:"
 
 #: How long a verify run may take before whoever drives it closes it (a
 #: route's Verify stop does; the run prompt tells the checker the same number,
@@ -1175,6 +1188,12 @@ def _normalize_run(raw, steps: List[dict]) -> dict:
         # actor=agent steps; "all" also attempts a person's steps, and only
         # then may an agent's evidenced pass/fail settle one.
         "walk": _walk(raw.get("walk")),
+        # WALKED BY THE SESSION THAT WROTE THE WORK — the run was handed to
+        # the plan's own session as a prompt (``session`` is that session),
+        # not to a separate checker. What keeps a close/cancel from ending
+        # the person's session, and the tree check from comparing its branch
+        # with a checkout nobody made.
+        "in_session": bool(raw.get("in_session")),
         "results": results,
         # Made while the work was only on its branch — a check before merge.
         # Once the plan ships, such a run is history rather than the current
@@ -1923,8 +1942,13 @@ def start_run(
     target: Optional[str] = None,
     checkout: str = "",
     walk: str = WALK_AGENT,
+    in_session: bool = False,
 ) -> Optional[dict]:
     """A verify session has been created for this plan.
+
+    ``in_session=True``: the run was handed to the plan's OWN session
+    (``session_title`` is that session) rather than a checker; stamped on the
+    run as ``in_session``.
 
     ``walk`` (:data:`WALKS`) is stamped on the run: ``"all"`` is what lets
     :func:`finish_run` / :func:`record_progress` accept an agent's evidenced
@@ -1983,6 +2007,8 @@ def start_run(
             "prelive": prelive,
             "walk": walk,
         }
+        if in_session:
+            run["in_session"] = True
         if where:
             run["where"] = _text(where, 40)
             run["checkout"] = _text(checkout, 250)
@@ -5730,8 +5756,18 @@ def build_run_prompt(
     notes: str = "",
     walk: str = WALK_AGENT,
     prepared: bool = False,
+    in_session: bool = False,
 ) -> str:
     """The seed prompt for a verify session.
+
+    ``in_session=True`` is the walk handed to the plan's OWN session — the
+    agent that wrote the work — instead of a separate checker: it opens with
+    :data:`WALK_MARK`, never checks anything out (the code under test is that
+    session's own branch, as it stands — or, for an environment, the
+    deployment, with the tree only for reading), asks the agent to put every
+    step on its own todo list as it walks so the person watching sees them,
+    and says the person may talk to it mid-walk. The rules for answering and
+    the answers file are the same as a checker's. ``prepared`` is ignored.
 
     ``walk`` (:data:`WALKS`): ``"all"`` hands the walker the person's steps
     too, with the evidence rule (see :func:`agent_steps`). ``prepared=True``
@@ -5985,6 +6021,10 @@ def build_run_prompt(
                 "giving both shas (the checkout is at the wrong commit), and "
                 "report that."
             )
+    if in_session:
+        opening, step_one = _in_session_opening(
+            plan, sha, env_name, where, live, live_branch, bool(target)
+        )
     summary = str(plan.get("summary") or "").strip()
     parts = [opening]
     if summary:
@@ -6030,6 +6070,20 @@ def build_run_prompt(
             "read the code and run repo tooling against that deployment. If you "
             'cannot reach it, mark those steps "blocked" with a note saying what '
             'you tried — never "fail".',
+        ]
+    elif in_session:
+        parts += [
+            "",
+            "2. NOTHING IS DEPLOYED FOR THIS CHECK: the product under test is "
+            "the code in this worktree. If a step needs the product up and it "
+            "is not already running, start it from here the way this repo "
+            "starts it (the standing instructions below first, then the "
+            "README, then the obvious dev command) and give it up to 90 "
+            "seconds to come up. This session owns the ports in "
+            "$MINDFLOCK_PORT_BASE and $PORT is the first of them — use those "
+            "unless the instructions below name a port, in which case theirs "
+            "wins. Say in your first note which port you used and how you "
+            "started it.",
         ]
     else:
         parts += [
@@ -6133,12 +6187,26 @@ def build_run_prompt(
         needs = [str(n) for n in (step.get("needs") or []) if str(n).strip()]
         if needs:
             parts.append("    Needs: %s" % ", ".join(needs))
+    if in_session:
+        parts += [
+            "",
+            "Record your answers in %s in the root of your worktree — it is "
+            "git-excluded (it never lands in your diff) and it is how MindFlock "
+            "reads them. While you walk, change nothing else for this check: "
+            "no edits, no commits, no push — unless the person tells you to, "
+            "and then say in the affected step's note that the code changed "
+            "during the walk." % RESULT_FILE,
+            "",
+        ]
+    else:
+        parts += [
+            "",
+            "Write your answers to %s in the root of this worktree, and change "
+            "NOTHING else — no edits, no commits, no push, no PR. That file is "
+            "git-excluded and is the only thing you may write." % RESULT_FILE,
+            "",
+        ]
     parts += [
-        "",
-        "Write your answers to %s in the root of this worktree, and change "
-        "NOTHING else — no edits, no commits, no push, no PR. That file is "
-        "git-excluded and is the only thing you may write." % RESULT_FILE,
-        "",
         "KEEP IT CURRENT. Rewrite that file after EVERY step you settle, with "
         '"finished": false and every answer so far — whoever is waiting on '
         "you sees your progress from it, and a check that writes nothing for "
@@ -6187,7 +6255,80 @@ def build_run_prompt(
         '"pass", "fail" or "blocked" — nothing else. Set "finished" to true only '
         "once every step has an answer.",
     ]
+    if in_session:
+        parts += [
+            "",
+            "When the file says finished, end with a short summary for the "
+            "person: what passed, what failed, and what needs them.",
+        ]
     return "\n".join(parts)
+
+
+def _in_session_opening(
+    plan: dict,
+    sha: str,
+    env_name: str,
+    where: str,
+    live: bool,
+    live_branch: str,
+    deployed: bool = False,
+) -> tuple:
+    """``(opening, step_one)`` of a walk handed to the plan's OWN session.
+
+    NO CHECKOUT, EVER: this is the person's working session on its own
+    branch, and detaching its HEAD (what a checker's step one does) would
+    pull the floor out from under the work. The code under test is that
+    branch as it stands — the commit the plan was written about or a
+    descendant of it, named in the first note so the tree check can hold it
+    to that — and for an environment the DEPLOYMENT is under test, the tree
+    only for reading code."""
+    title = str(plan.get("title") or plan.get("id") or "this work").strip()
+    head = (
+        "%s walk the behaviors of %s — check that the work you did in this "
+        "session does what it was supposed to do." % (WALK_MARK, title)
+    )
+    tasks = (
+        "PUT THE STEPS ON YOUR TODO LIST FIRST: one task per step you walk "
+        '(below), named "<step id>: <what to do>" — use your own todo/task '
+        "tool. Mark each one in progress when you start it and done once its "
+        "answer is recorded: that list is how the person watching this session "
+        "follows the walk."
+    )
+    talk = (
+        "The person may talk to you while you walk — this is your own session, "
+        "and they are watching it. Answer them, then carry on with the walk "
+        "where you left off. Report what you find; do not fix anything unless "
+        "they ask you to."
+    )
+    opening = "\n\n".join([head, tasks, talk])
+    if env_name or deployed:
+        step_one = (
+            "1. First: you are in your own worktree on your own branch — do NOT "
+            "check out, switch, pull or stash anything. You use this tree ONLY "
+            "TO READ CODE: the thing you are checking is %s itself (below), "
+            "never this tree. Put `git rev-parse HEAD` in your first note."
+            % (("the %s environment" % env_name) if env_name else "the deployment")
+        )
+        return opening, step_one
+    if where == BRANCH_WHERE or not live or not sha:
+        what = "THIS BRANCH'S OWN CODE, in your worktree as it stands"
+    else:
+        what = (
+            "the change as it shipped to %s — your branch holds it, so check "
+            "it here" % live_branch
+        )
+    step_one = (
+        "1. First: the code under test is %s — do NOT check out, switch, pull "
+        "or stash anything. Run `git rev-parse HEAD` and put it in your first "
+        "note." % what
+    )
+    if sha:
+        step_one += (
+            " The commit these steps were written about is %s: if HEAD is "
+            "neither it nor a descendant of it (`git merge-base --is-ancestor "
+            "%s HEAD`), say so with both shas in your first note." % (sha, sha)
+        )
+    return opening, step_one
 
 
 # --------------------------------------------------------------------------- #

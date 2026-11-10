@@ -589,7 +589,11 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
             if not _paste_into(name, text):
                 return False
             settle = 0.4  # a long paste takes the TUI a moment to absorb
-        else:
+        elif text:
+            # An empty text types nothing: literal_keys_argv("") is a bare
+            # `tmux`, which fails ("not a terminal") — that turned every
+            # Enter-only send (the voice "over", /send {"enter": true}) into
+            # a 502 with nothing pressed (2026-11-10).
             typed = _proc.run_capped(
                 literal_keys_argv(name, text),
                 stdout=subprocess.DEVNULL,

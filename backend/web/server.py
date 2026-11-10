@@ -534,7 +534,10 @@ from backend.web.core.test_plans_driver import (
     _check_test_plans_for_liveness,
     _clear_verify_results,
     _closed_session_plan_inputs,
+    _deliver_walk,
     _end_verify_session,
+    _run_is_in_session,
+    _tell_walk_closed,
     _ensure_test_plan,
     _ensure_test_plan_blocking,
     _free_stale_verify_worktree,
@@ -565,6 +568,7 @@ from backend.web.core.test_plans_driver import (
     _verify_checkout_ref,
     _verify_enabled,
     _verify_run_trees,
+    _verify_owner_session,
     _verify_session_usable,
     _verify_window_gone,
     _write_test_plan_for_closed,
@@ -3146,11 +3150,10 @@ async def _memory_watch_loop() -> None:
                     data={"message": msg, "memory": snap},
                 )
                 last = lvl
-            if lvl in ("low", "critical"):
-                await asyncio.to_thread(_shed_for_memory)
-            # The memory shield (core.memory_shield): stop Voice Lab at
-            # critical, put idle agents to sleep once critical has held a
-            # minute. Every pass, so its "critical since" clock resets.
+            # The memory shield (core.memory_shield): put idle agents to
+            # sleep once critical has held. Every pass, so its "critical
+            # since" clock resets. Voice is never shed for memory (owner,
+            # 2026-11-10).
             if lvl != "unknown":
                 await asyncio.to_thread(_memory_shield_tick, snap)
         except Exception:  # noqa: BLE001 — a watch must never die
@@ -3166,23 +3169,6 @@ def _memory_shield_tick(snap: dict) -> dict:
         return _shield.tick(sys.modules[__name__], snap)
     except Exception:  # noqa: BLE001
         return {}
-
-
-def _shed_for_memory() -> list:
-    """While memory reads low: give back what the server itself holds and
-    can rebuild — the local speech models (core.speech.shed_for_memory: the
-    resident whisper models are ~1 GB of this process), unused for 2 min.
-    Background work sheds itself on :func:`_memory_low`; idle agents are put
-    to sleep by core.sleep. → what was dropped. Never raises."""
-    try:
-        from backend.web.core import speech as _speech_shed
-
-        dropped = _speech_shed.shed_for_memory()
-    except Exception:  # noqa: BLE001
-        return []
-    if dropped and log.InfoLog is not None:
-        log.InfoLog.Printf("memory: unloaded %s", ", ".join(dropped))
-    return dropped
 
 
 # --------------------------------------------------------------------------- #
@@ -11480,7 +11466,21 @@ async def instance_write_test_plan(
 async def run_test_plan(
     plan_id: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """Start a real session that works through this plan's agent steps.
+    """Walk this plan's steps in a real agent session.
+
+    IN THE SESSION THAT WROTE THE WORK, when it is still open
+    (:func:`_verify_owner_session`): the walk is handed to that session's own
+    agent as a prompt (``build_run_prompt(..., in_session=True)``) — queued
+    while it is mid-turn or asleep, never typed over a running turn — and the
+    run is recorded with ``session`` = that session and ``in_session``. The
+    person sees the steps as that agent's tasks in its own terminal and can
+    talk to it while it walks. Nothing is created and nothing checked out, so
+    the memory gate does not apply → 202 ``{"ok", "session", "in_session":
+    true, "queued", "plan"}``. Its agent paused, over budget or otherwise
+    unreachable → 409 ``reason: "send_failed"`` with the sentence.
+
+    Otherwise (the session was closed or deleted) a separate checker session,
+    as below.
 
     Deliberately a full session and not a headless one-shot (the asymmetry the
     core module's docstring is built around): checking a feature means checking
@@ -11676,6 +11676,20 @@ async def run_test_plan(
             checkout_branch = env["branch"]
             checkout = ("origin/%s" % checkout_branch) if checkout_branch else sha
     live = plan["state"] in ("due", "running", "done")
+    owner = await asyncio.to_thread(_verify_owner_session, plan)
+    if owner:
+        return await _run_test_plan_in_session(
+            plan,
+            owner,
+            only,
+            live=live,
+            where=where,
+            run_target=run_target,
+            checkout=checkout,
+            checkout_branch=checkout_branch,
+            notes=notes,
+            walk=walk,
+        )
     # The commit the checker must start on, the one step one of the prompt
     # names. The SERVER checks it out (below), not the agent.
     want = _verify_checkout_ref(plan, live, checkout)
@@ -11826,6 +11840,84 @@ async def run_test_plan(
     # the list route drops on purpose.
     return JSONResponse(
         {"ok": True, "session": title, "plan": _test_plan_row(started)},
+        status_code=202,
+    )
+
+
+async def _run_test_plan_in_session(
+    plan: dict,
+    owner: str,
+    only: Optional[list],
+    *,
+    live: bool,
+    where: str,
+    run_target: Optional[str],
+    checkout: str,
+    checkout_branch: str,
+    notes: str,
+    walk: str,
+) -> JSONResponse:
+    """``run_test_plan``'s walk in the plan's OWN session ``owner``.
+
+    The run is opened FIRST and the prompt handed over second: a session that
+    is idle starts answering at once, and its answers need a running plan to
+    land on. A hand-over that fails puts the plan back (``cancel_run``) and
+    says why — nothing was created, so there is nothing to close."""
+    plan_id = str(plan["id"])
+    repo_root = str(plan.get("repo_root") or "")
+    prompt = _test_plans.build_run_prompt(
+        plan,
+        only,
+        live=live,
+        repo_notes=_test_plans.repo_notes(repo_root),
+        target=(
+            _test_plans.verify_target(repo_root) if run_target is None else run_target
+        ),
+        where=where,
+        checkout_branch=checkout_branch,
+        notes=notes,
+        walk=walk,
+        in_session=True,
+    )
+    # The previous run's answers go first, exactly as for a checker: the
+    # poller believes the first `finished: true` it reads.
+    await asyncio.to_thread(_clear_verify_results, owner)
+    started = await asyncio.to_thread(
+        _test_plans.start_run,
+        plan_id,
+        owner,
+        where=where,
+        target=run_target,
+        checkout=checkout,
+        walk=walk,
+        in_session=True,
+    )
+    if started is None:
+        return JSONResponse(
+            {"error": "behaviors not found: %s" % plan_id}, status_code=404
+        )
+    told, reason = await asyncio.to_thread(_deliver_walk, owner, prompt)
+    if not told:
+        await asyncio.to_thread(_test_plans.cancel_run, plan_id)
+        return JSONResponse(
+            {
+                "error": "couldn't hand the steps to %s: %s" % (owner, reason),
+                "reason": "send_failed",
+                # NOT "session": a 409 naming one reads as "already
+                # verifying" to the flight driver.
+                "owner": owner,
+                "in_session": True,
+            },
+            status_code=409,
+        )
+    return JSONResponse(
+        {
+            "ok": True,
+            "session": owner,
+            "in_session": True,
+            "queued": told == "queued",
+            "plan": _test_plan_row(_test_plans.get(plan_id) or started),
+        },
         status_code=202,
     )
 
@@ -12394,6 +12486,11 @@ async def cancel_test_plan_run(plan_id: str) -> JSONResponse:
             {"error": "behaviors not found: %s" % plan_id}, status_code=404
         )
     session_title = plan["run_session"]
+    # A walk in the session that wrote the work: the session stays (it is the
+    # person's own; _end_verify_session never closes it), but its agent is
+    # told to stop walking.
+    if _run_is_in_session(plan) and session_title:
+        await asyncio.to_thread(_tell_walk_closed, session_title, "cancelled")
     closed = await _end_verify_session(session_title)
     updated = await asyncio.to_thread(_test_plans.cancel_run, plan_id)
     return JSONResponse(

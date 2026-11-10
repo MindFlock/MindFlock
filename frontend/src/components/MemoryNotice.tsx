@@ -49,12 +49,16 @@ export function windowsIsShort(m: MemoryReading): boolean {
   return host > 0 && host >= guest;
 }
 
-/** "Windows: 0.5 GB free of 31.4 GB (2%) · 5.1 GB of WSL's 19.5 GB is unused
- * inside WSL, but Windows can't take it back while WSL holds it" — exported
- * for tests. */
+/** "Windows: 0.5 GB free of 31.4 GB (2%) · WSL can reuse 0.3 GB it already
+ * holds · 5.1 GB of WSL's 19.5 GB is unused inside WSL, but Windows can't take
+ * it back while WSL holds it" — exported for tests. The reuse part is what
+ * the server counts as Windows headroom (memory_pressure.host_headroom): WSL's
+ * page cache is already Windows' memory spent, so a new agent reusing it costs
+ * Windows nothing; it is named so the reader sees why the level is what it is. */
 export function windowsDetail(m: MemoryReading): string {
   const h = m.host || {};
   const bits = ["Windows: " + gb(h.available) + " free of " + gb(h.total) + " (" + Math.round(h.available_pct || 0) + "%)"];
+  if ((h.guest_reusable || 0) >= 0.1 * GB) bits.push("WSL can reuse " + gb(h.guest_reusable) + " it already holds");
   if (m.total) bits.push(gb(m.available) + " of WSL's " + gb(m.total) + " is unused inside WSL, but Windows can't take it back while WSL holds it");
   return bits.join(" · ");
 }

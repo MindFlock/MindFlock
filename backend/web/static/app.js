@@ -48611,6 +48611,14 @@ function shapeForSpeech(text, overrides) {
 }
 //#endregion
 //#region src/lib/voiceDesktop.ts
+function voiceTrace(event, data = {}) {
+	try {
+		api("/api/voice/trace", { json: {
+			event,
+			...data
+		} }).catch(() => {});
+	} catch {}
+}
 function parseRadio(text) {
 	const t = String(text || "").trim();
 	const M = matchers();
@@ -49330,6 +49338,13 @@ var Dictation = class {
 		return over;
 	}
 	heard(phrase, radio = true) {
+		voiceTrace("heard", {
+			phrase,
+			radio,
+			listening: this.listening,
+			continuous: this.continuous,
+			typed: this.typed.length
+		});
 		if (!this.listening) return { kind: "stopped" };
 		const ctl = this.control(phrase, true);
 		if (ctl) return ctl;
@@ -49671,16 +49686,28 @@ var CONFIRM_LINES = {
 var SUBMIT_SETTLE_MS = 250;
 async function submitDraft(title, name, say) {
 	try {
+		const r = await instApi(title, "/send", { json: {
+			enter: true,
+			say
+		} });
+		voiceTrace("submit", {
+			title,
+			ok: true,
+			queued: !!r?.queued
+		});
 		return {
 			ok: true,
-			line: (await instApi(title, "/send", { json: {
-				enter: true,
-				say
-			} }))?.queued ? "Queued for " + name + "." : "Sent to " + name + "."
+			line: r?.queued ? "Queued for " + name + "." : "Sent to " + name + "."
 		};
 	} catch (err) {
 		const body = err instanceof ApiError ? err.body : null;
 		let line = "Couldn't submit: " + (err?.message || "error") + " — the words are still in the field";
+		voiceTrace("submit", {
+			title,
+			ok: false,
+			status: err instanceof ApiError ? err.status : 0,
+			body
+		});
 		if (err instanceof ApiError && err.status === 409) {
 			if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
 			else if (body?.waking) line = name + " is waking up — say over again in a moment";
@@ -49703,6 +49730,7 @@ var LiveDictation = class {
 	chain = Promise.resolve();
 	done = false;
 	acted = false;
+	sentOne = false;
 	heardAnything = false;
 	recording = false;
 	hearingNow = false;
@@ -49993,6 +50021,11 @@ var LiveDictation = class {
 		return this.chain;
 	}
 	end(line, sticky = false, how) {
+		voiceTrace("end", {
+			line,
+			how: how || "",
+			done: this.done
+		});
 		if (this.done) return;
 		this.done = true;
 		this.unsent = "";
@@ -50009,6 +50042,16 @@ var LiveDictation = class {
 	}
 	async apply(out) {
 		const t = this.target;
+		voiceTrace("apply", {
+			out,
+			target: t ? {
+				kind: t.kind,
+				name: t.name,
+				submit: !!t.submit
+			} : null,
+			typed: this.dict.typed.length,
+			sentOne: this.sentOne
+		});
 		switch (out.kind) {
 			case "continue":
 				this.show();
@@ -50067,7 +50110,8 @@ var LiveDictation = class {
 				const typedNow = !!(out.erase || out.text.trim());
 				if (typedNow && !await this.put(out.text, true, out.erase)) return;
 				if (this.done) return;
-				if (out.out && !this.dict.typed) {
+				const unsendable = !t || t.kind === "field" && !t.submit;
+				if (out.out && !this.dict.typed && (this.sentOne || unsendable)) {
 					this.hooks.confirm?.("bye");
 					this.end(STOPPED_LINE, false, "stopped");
 					return;
@@ -50115,6 +50159,7 @@ var LiveDictation = class {
 		}
 	}
 	sent(r, how, from = 0) {
+		if (r.ok) this.sentOne = true;
 		if (r.ok) this.hooks.confirm?.(how.out ? "out" : "sent");
 		if (r.ok && from) {
 			const ms = Date.now() - from;
@@ -57243,6 +57288,7 @@ function windowsIsShort(m) {
 function windowsDetail(m) {
 	const h = m.host || {};
 	const bits = ["Windows: " + gb(h.available) + " free of " + gb(h.total) + " (" + Math.round(h.available_pct || 0) + "%)"];
+	if ((h.guest_reusable || 0) >= .1 * GB) bits.push("WSL can reuse " + gb(h.guest_reusable) + " it already holds");
 	if (m.total) bits.push(gb(m.available) + " of WSL's " + gb(m.total) + " is unused inside WSL, but Windows can't take it back while WSL holds it");
 	return bits.join(" · ");
 }
@@ -88936,6 +88982,18 @@ function requestPlanRun(planId, only, walk) {
 		json
 	});
 }
+function runStartedMessage(plan, r, walk) {
+	const all = walk === "all";
+	if (r?.in_session && r.session) return "Handed the steps to " + r.session + "'s agent" + (r.queued ? " — it takes them once its current turn ends" : "") + (all ? ". It walks every behavior, yours too" : "") + ". Talk to it there";
+	return "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") + (all ? " — it walks every behavior, yours too" : "");
+}
+function openWalkingSession(title) {
+	if (!title) return;
+	const ui = useUi.getState();
+	ui.closeDialog();
+	selectSession(title, { noKeyboard: true });
+	ui.setLastTab(title, "agent");
+}
 function requestPlanDelete(planId) {
 	return api(planPath$1(planId), { method: "DELETE" });
 }
@@ -88951,7 +89009,8 @@ async function startChecklistRun(plan, opts = {}) {
 		});
 		opts.onStarted?.();
 		await refreshTestPlans();
-		toast("Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") + (opts.walk === "all" ? " — it walks every behavior, yours too" : ""));
+		toast(runStartedMessage(plan, r, opts.walk));
+		if (r?.in_session && r.session) openWalkingSession(r.session);
 	} catch (err) {
 		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
 		refreshTestPlans();
@@ -89208,7 +89267,7 @@ function cardMenuItems(plan, ctx) {
 	if (!running && steps.length && plan.state !== "generating" && agentCan && primary !== "check" && primary !== "rerun") items.push({
 		key: "run",
 		label: latestRun(plan) ? "Rerun" : "Check now",
-		title: "The agent checks the behaviors it can"
+		title: "The session's own agent walks the behaviors it can — talk to it in its Agent tab"
 	});
 	if (offersWalkAll(plan) && !walkAllBesidePrimary(plan, primary)) items.push(WALK_ALL_ITEM);
 	const watch = watchSessionOf(plan);
@@ -93976,6 +94035,27 @@ function VerifyStopActions({ flight, compact = false }) {
 		})
 	});
 }
+function verifyWalkSession(flight) {
+	if (!flight || flight.state === "waiting_you" || flight.state === "halted") return "";
+	const step = flight.steps[flight.cursor];
+	if (!step || step.kind !== "verify") return "";
+	const d = flight.step_states?.[step.id]?.detail;
+	if (!d || d.in_session !== true) return "";
+	return String(d.walk_session || flight.session || "");
+}
+function VerifyWalkHint({ session, here, onOpen }) {
+	if (!session) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn fl-btn fl-walk-hint",
+		title: "The behaviors are " + session + "'s tasks now — open its agent to follow them and talk to it",
+		onClick: (e) => {
+			e.stopPropagation();
+			onOpen();
+		},
+		children: here ? "Walking here — talk to it" : "Walking in " + session + " — talk to it there"
+	});
+}
 function canFixStep(flight) {
 	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you") return false;
 	const step = flight.steps[flight.cursor];
@@ -94355,6 +94435,7 @@ function PaneFlightStrip({ inst }) {
 	if (!row || !live) return null;
 	const line = full ? stripLabel(full, now) : stripLabel(row);
 	const waiting = row.state === "waiting_you" || row.state === "halted";
+	const walking = verifyWalkSession(full);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-strip fl-state-" + row.state + (waiting || rowWaitsOnYou(row) ? " fl-needs" : ""),
 		"data-tour": "flights-strip",
@@ -94375,6 +94456,11 @@ function PaneFlightStrip({ inst }) {
 				full && waiting && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
 					flight: full,
 					compact: true
+				}),
+				walking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyWalkHint, {
+					session: walking,
+					here: walking === inst.title,
+					onOpen: () => walking === inst.title ? useUi.getState().setLastTab(inst.title, "agent") : selectSession(walking)
 				}),
 				full && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightMenu, {
 					flight: full,

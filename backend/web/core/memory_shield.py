@@ -13,11 +13,16 @@ The launch gate (:mod:`backend.web.core.launch_gate`) keeps new agents out
 when there is no room. This module handles what is already running:
 
 * **Shed idle agents** (:func:`tick`, from the server's memory watch every
-  10 s). When the level stays ``critical`` for :data:`SHED_AFTER_SECONDS`, or
+  10 s). Only on SUSTAINED critical distress: the level itself steps up to
+  ``critical`` only once a distress signal (PSI stalls, swap-in, OOM kills,
+  a tiny available floor, Windows' commit charge or hard paging — see
+  :mod:`backend.memory_pressure`) has held for its
+  :data:`~backend.memory_pressure.SUSTAIN_SECONDS`; it must then stay
+  ``critical`` for :data:`SHED_AFTER_SECONDS` more — or, already critical,
   PSI ``full`` avg10 reaches :data:`FULL_AVG10_SHED` (every runnable task on
   the machine stalled on memory for a quarter of the last 10 s: a thrash
-  already under way, where waiting out the minute would cost 15 s of total
-  stall), idle agent sessions are put to sleep through
+  under way, where waiting out the minute would cost 15 s of total stall).
+  Then idle agent sessions are put to sleep through
   :mod:`backend.web.core.sleep` (the same machinery as the memory dialog's
   "Put idle agents to sleep first"; Wake brings them back, resuming their
   conversation). The candidates are what :func:`sleep.veto` allows with a
@@ -28,23 +33,18 @@ when there is no room. This module handles what is already running:
   (:func:`choose_shed`: measured size times idle time, capped at an hour),
   and only as many as it takes, at the learned per-session cost
   (:func:`launch_gate.learned_cost`) where a session is unmeasured, to bring
-  available memory back over the ``low`` line. ONE notification per shed,
-  and each decision is logged. ``general.agent_memory.shed_idle`` (default
+  available memory back over the ``low`` floor (at least one: a stall or a
+  swap-in storm has no byte target). ONE notification per shed, and each
+  decision is logged with the signal that made the shield act. ``general.agent_memory.shed_idle`` (default
   on) turns it off; :data:`SHED_COOLDOWN_SECONDS` separates two sheds so
   the next one acts on readings taken after the memory came back.
 
-* **Voice Lab yields** (:func:`voice_lab_yield`, asked by
-  :mod:`backend.web.core.speech` before any request to a local voice host).
-  While the level reads ``low`` or ``critical``, MindFlock never wakes or
-  calls a voice host on this machine or network (Voice Lab, or any other
-  local model server): lines are said by the local fallback (piper, else the
-  OS voice), and a client with neither uses its own. The log says why once
-  per episode. When the level turns ``critical`` and Voice Lab's backend is
-  running, it is stopped (:func:`stop_voice_lab`: ``systemctl --user stop
-  voicelab-backend.service`` where that unit exists). It is
-  socket-activated, so the next voice request would start it again, and
-  that request only reaches it once memory allows. Everything works without
-  Voice Lab installed: no unit, nothing to stop.
+* **Voice is left alone.** The owner's rule (2026-11-10: "I don't want
+  voice models off when memory gets low"): the shield never stops Voice Lab
+  (or any local voice host), and nothing here holds voice back — local
+  recognition, local TTS and voice-host calls run whatever the level reads
+  (:func:`backend.web.core.speech.host_held_back`). Room is made by
+  shedding idle agents instead.
 
 Stdlib only at import (plus :mod:`backend.memory_pressure`); everything
 else is imported lazily inside the calls.
@@ -53,7 +53,6 @@ else is imported lazily inside the calls.
 from __future__ import annotations
 
 import os
-import subprocess
 import threading
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
@@ -69,17 +68,16 @@ __all__ = [
     "choose_shed",
     "shed_notice_text",
     "tick",
-    "voice_lab_blocked",
-    "voice_lab_yield",
-    "stop_voice_lab",
     "status",
 ]
 
 _MiB = 1024**2
 
-#: How long ``critical`` must hold before idle agents are shed.
+#: How long ``critical`` must hold before idle agents are shed (on top of the
+#: gauge's own sustain before it reads critical at all).
 SHED_AFTER_SECONDS = 60.0
-#: PSI ``full`` avg10 (%) at or past which they are shed at once.
+#: PSI ``full`` avg10 (%) at or past which, while critical, they are shed at
+#: once.
 FULL_AVG10_SHED = 25.0
 #: Between two sheds: the freed memory shows in MemAvailable within seconds,
 #: PSI avg10 decays over ~20 s. The next shed acts on readings taken after.
@@ -96,18 +94,12 @@ IDLE_SCORE_CAP_SECONDS = 3600.0
 #: Rows whose ``activity`` is one of these are never shed (also vetoed).
 _BUSY = frozenset({"working", "clarify", "limit", "asking", "dialog"})
 
-#: The Voice Lab backend unit (``MINDFLOCK_VOICELAB_UNIT``; ``0``/``off`` = never stop it).
-VOICELAB_UNIT = "voicelab-backend.service"
-
 _LOCK = threading.Lock()
 _STATE: Dict[str, object] = {
     "critical_since": None,
     "last_shed_at": 0.0,
     "last_shed": [],
     "last_decision": "",
-    "voice_yield": "",
-    "voicelab_stopped_at": 0.0,
-    "voicelab_last": "",
 }
 
 
@@ -153,9 +145,10 @@ def shed_enabled() -> bool:
 def shed_due(state: dict, snap: dict, now: float) -> Tuple[bool, str]:
     """Whether to shed now → ``(due, why)``; updates ``state``'s
     ``critical_since`` (pure apart from that). Due when the level has read
-    ``critical`` for :data:`SHED_AFTER_SECONDS`, or PSI ``full`` avg10 is at
-    :data:`FULL_AVG10_SHED` or past it; never within
-    :data:`SHED_COOLDOWN_SECONDS` of the last shed."""
+    ``critical`` for :data:`SHED_AFTER_SECONDS`, or reads ``critical`` with
+    PSI ``full`` avg10 at :data:`FULL_AVG10_SHED` or past it; never within
+    :data:`SHED_COOLDOWN_SECONDS` of the last shed. ``why`` names the signal
+    (the snapshot's ``why``, see :func:`memory_pressure.describe`)."""
     lvl = snap.get("level")
     psi = snap.get("psi") or {}
     try:
@@ -169,22 +162,33 @@ def shed_due(state: dict, snap: dict, now: float) -> Tuple[bool, str]:
         state["critical_since"] = None
     if now - float(state.get("last_shed_at") or 0.0) < SHED_COOLDOWN_SECONDS:
         return False, ""
-    if full10 >= FULL_AVG10_SHED and lvl in ("ok", "low", "critical"):
-        return True, "every task stalled on memory %d%% of the last 10 s" % int(
-            round(full10)
+    signals = "; ".join(w for w in (snap.get("why") or []) if w)
+    if full10 >= FULL_AVG10_SHED and lvl == "critical":
+        return True, "every task stalled on memory %d%% of the last 10 s%s" % (
+            int(round(full10)),
+            " (critical: %s)" % signals if signals else "",
         )
     since = state.get("critical_since")
     if since is not None and now - float(since) >= SHED_AFTER_SECONDS:  # type: ignore[arg-type]
-        return True, "memory has been critical for %ds" % int(now - float(since))  # type: ignore[arg-type]
+        return True, "memory has been critical for %ds%s" % (
+            int(now - float(since)),  # type: ignore[arg-type]
+            " (%s)" % signals if signals else "",
+        )
     return False, ""
 
 
 def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
-    """MB to free to bring available memory back over the ``low`` line
-    (``max(low share of RAM, absolute floor)``), 0 when already over. Inside
-    WSL with a host reading, also the host's shortfall under its own low
-    line — memory an agent frees in the guest goes back to Windows (free page
-    reporting), so the bigger of the two is what to free."""
+    """MB to free to bring available memory back over the ``low`` floor
+    (``max(low share of RAM, absolute floor)``), 0 when already over — the
+    shed then takes one session at a time (critical came from a stall,
+    swap-in or Windows' commit charge, which have no byte target; the
+    cooldown lets the next pass see the effect). Inside WSL with a host
+    reading, also the host's shortfall under its headroom floor
+    (:func:`memory_pressure.host_low_line`), measured on its headroom
+    (Windows' available plus what the guest can reuse,
+    :func:`memory_pressure.host_headroom`): while the guest holds reusable
+    memory, putting agents to sleep frees nothing Windows gets back soon, so
+    only a shortfall past that is worth freeing."""
     total = float(snap.get("total") or 0)
     avail = float(snap.get("available") or 0)
     if low_line_bytes is None:
@@ -197,7 +201,7 @@ def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
     host = snap.get("host") or {}
     if host.get("total"):
         host_line = memory_pressure.host_low_line(float(host["total"]))
-        need = max(need, host_line - float(host.get("available") or 0))
+        need = max(need, host_line - memory_pressure.host_headroom(host))
     return max(0, int(round(need / _MiB)))
 
 
@@ -330,10 +334,16 @@ def _shed(srv, snap: dict, why: str, now: float, sleeper=None) -> List[str]:
     picks = choose_shed(cands, max(need, 1), int(cost["session_mb"]))
     skipped = ", ".join("%s ×%d" % (k, n) for k, n in sorted(vetoed.items()))
     _info(
-        "%s (%s): need ~%d MB to get back over the low line; %d idle "
+        "acting on %s%s: need ~%d MB to get back over the low line; %d idle "
         "candidate(s), chose %s%s",
         why,
-        memory_pressure.describe(snap) or "memory critical",
+        # The signals are in ``why`` already (shed_due); an older snapshot's
+        # numbers are not.
+        (
+            ""
+            if snap.get("why")
+            else " (%s)" % (memory_pressure.describe(snap) or "memory critical")
+        ),
         need,
         len(cands),
         ", ".join(
@@ -409,22 +419,16 @@ def tick(
     now: Optional[float] = None,
     *,
     sleeper: Optional[Callable] = None,
-    runner: Optional[Callable] = None,
 ) -> dict:
     """One look (the server's memory watch, every 10 s; blocking: off the
-    loop) → ``{"shed": [titles], "why", "voicelab": str}``. Stops Voice
-    Lab's backend at ``critical`` (:func:`stop_voice_lab`) and sheds idle
-    agents when :func:`shed_due` says so. Under pytest nothing real is
-    touched unless the test passes ``srv`` + ``sleeper`` / ``runner``.
-    Never raises."""
+    loop) → ``{"shed": [titles], "why"}``. Sheds idle agents when
+    :func:`shed_due` says so; never touches voice (Voice Lab keeps running
+    at ``critical``). Under pytest nothing real is touched unless the test
+    passes ``srv`` + ``sleeper``. Never raises."""
     now = time.time() if now is None else now
-    out: dict = {"shed": [], "why": "", "voicelab": ""}
+    out: dict = {"shed": [], "why": ""}
     try:
         snap = memory_pressure.snapshot() if snap is None else snap
-        lvl = snap.get("level")
-        _note_voice_level(snap)
-        if lvl == "critical":
-            out["voicelab"] = stop_voice_lab(runner) or ""
         with _LOCK:
             due, why = shed_due(_STATE, snap, now)
         out["why"] = why
@@ -455,115 +459,9 @@ def tick(
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Voice Lab
-# --------------------------------------------------------------------------- #
-def voice_lab_blocked(snap: dict) -> str:
-    """Why a local voice host must not be woken or called now ("" = it may):
-    the level reads ``low`` or ``critical`` (pure)."""
-    if snap.get("level") not in ("low", "critical"):
-        return ""
-    return memory_pressure.describe(snap) or "memory is %s" % snap.get("level")
-
-
-def _note_voice_level(snap: dict) -> str:
-    """Log once per episode that voice hosts are held back (and once when
-    they may be used again). → the current reason."""
-    why = voice_lab_blocked(snap)
-    with _LOCK:
-        prev = str(_STATE.get("voice_yield") or "")
-        _STATE["voice_yield"] = why
-    if why and not prev:
-        _info(
-            "voice: Voice Lab (a local voice host) is not woken or called while "
-            "%s; lines are said by the local voice instead",
-            why,
-        )
-    elif prev and not why:
-        _info("voice: memory recovered; Voice Lab may be used again")
-    return why
-
-
-def voice_lab_yield() -> str:
-    """The live question :mod:`backend.web.core.speech` asks before a request
-    to a local voice host: why not ("" = go). Never raises."""
-    try:
-        return _note_voice_level(memory_pressure.snapshot())
-    except Exception:  # noqa: BLE001 — the guard never breaks a request
-        return ""
-
-
-def _unit() -> str:
-    raw = os.environ.get("MINDFLOCK_VOICELAB_UNIT")
-    if raw is None:
-        return VOICELAB_UNIT
-    raw = raw.strip()
-    return "" if raw.lower() in ("", "0", "off", "none", "false") else raw
-
-
-def stop_voice_lab(runner: Optional[Callable] = None) -> str:
-    """Stop Voice Lab's backend when its unit exists and runs → what was
-    done (``"stopped voicelab-backend.service"``), or "" (no systemd, no
-    such unit, not running, or turned off).
-    ``runner`` is ``subprocess.run``'s shape (tests inject a fake; under
-    pytest the real one is never used). Never raises."""
-    unit = _unit()
-    if not unit:
-        return ""
-    if runner is None:
-        if _under_pytest():
-            return ""
-        runner = subprocess.run
-    import shutil
-
-    systemctl = shutil.which("systemctl") if runner is subprocess.run else "systemctl"
-    if not systemctl:
-        return ""
-    try:
-        shown = runner(
-            [systemctl, "--user", "show", "-p", "LoadState", "-p", "ActiveState", unit],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        props = dict(
-            line.split("=", 1)
-            for line in (getattr(shown, "stdout", "") or "").splitlines()
-            if "=" in line
-        )
-        if getattr(shown, "returncode", 1) != 0 or props.get("LoadState") != "loaded":
-            return ""
-        if props.get("ActiveState") not in ("active", "activating", "reloading"):
-            return ""
-        done = runner(
-            [systemctl, "--user", "stop", unit],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        ok = getattr(done, "returncode", 1) == 0
-    except Exception as err:  # noqa: BLE001
-        _info("voice: could not stop %s: %s", unit, err)
-        return ""
-    msg = ("stopped %s" if ok else "could not stop %s") % unit
-    with _LOCK:
-        _STATE["voicelab_last"] = msg
-        if ok:
-            _STATE["voicelab_stopped_at"] = time.time()
-    _info(
-        "voice: memory is critical: %s (socket-activated: the next voice use "
-        "starts it again, once memory allows)",
-        msg,
-    )
-    return msg
-
-
 def status() -> dict:
     """For ``GET /api/memory/capacity`` → ``shield``: ``{"shed_idle",
-    "critical_since", "last_shed_at", "last_shed", "last_decision",
-    "voice_yield", "voicelab_last"}``."""
+    "critical_since", "last_shed_at", "last_shed", "last_decision"}``."""
     with _LOCK:
         st = dict(_STATE)
     return {
@@ -572,8 +470,6 @@ def status() -> dict:
         "last_shed_at": st.get("last_shed_at") or None,
         "last_shed": list(st.get("last_shed") or []),
         "last_decision": st.get("last_decision") or "",
-        "voice_yield": st.get("voice_yield") or "",
-        "voicelab_last": st.get("voicelab_last") or "",
     }
 
 
@@ -585,8 +481,5 @@ def _reset_for_tests() -> None:
                 "last_shed_at": 0.0,
                 "last_shed": [],
                 "last_decision": "",
-                "voice_yield": "",
-                "voicelab_stopped_at": 0.0,
-                "voicelab_last": "",
             }
         )

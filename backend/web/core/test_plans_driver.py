@@ -1202,6 +1202,122 @@ def _verify_session_usable(title: str) -> bool:
     return True
 
 
+def _verify_owner_session(plan: dict) -> str:
+    """The open session that WROTE this plan's work — where its walk runs —
+    or ``""`` (then a separate checker session is the fallback).
+
+    Plans are keyed by session title, so the plan's own id is the first
+    answer; a plan asked for by branch (``<repo>@<branch>``), or whose window
+    has gone while a duplicate (``foo-copy``) is still open on the same
+    branch, falls back to any session on that repo + branch. Only a usable
+    one counts: a record with a workspace (asleep is fine — delivery wakes
+    it), never a verify checker itself, and never a session that has since
+    moved to another branch — walking its tree would check different work.
+    """
+    plan = plan or {}
+    srv = _server()
+    branch = str(plan.get("branch") or "").strip()
+    root = _test_plans.norm_repo(str(plan.get("repo_root") or ""))
+
+    def _usable(title: str, need_repo: bool) -> bool:
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None or _hidden_sessions.hidden_by(title) == "verify":
+            return False
+        if str(title).startswith(("verify-", "fix-")):
+            return False
+        try:
+            wt = inst.GetWorktreePath() or ""
+        except Exception:  # noqa: BLE001
+            return False
+        if not wt or not os.path.isdir(wt):
+            return False
+        have = str(getattr(inst, "Branch", "") or "").strip()
+        if branch and have and have != branch:
+            return False
+        if need_repo:
+            if not branch or have != branch:
+                return False
+            repo = str(getattr(inst, "Path", "") or "")
+            if not root or _test_plans.norm_repo(repo) != root:
+                return False
+        return True
+
+    pid = str(plan.get("id") or "")
+    if pid and _usable(pid, False):
+        return pid
+    if not branch or not root:
+        return ""
+    for title in sorted(srv.ENGINE.instances.keys()):
+        if title != pid and _usable(title, True):
+            return title
+    return ""
+
+
+#: ``_deliver_walk``'s reason for a session nobody can type into right now.
+WALK_NOT_RUNNING = "the agent isn't running — open the session to start it"
+
+
+def _deliver_walk(title: str, prompt: str) -> Tuple[str, str]:
+    """Hand the walk ``prompt`` to session ``title``'s own agent → ``(told,
+    reason)``: ``told`` is ``"sent"``, ``"queued"`` or ``""`` with the reason.
+
+    Never typed over a running turn or into a dialog: ``_deliver_to_agent``
+    (the composed-message path) queues it while the agent is working or
+    asking something, and a sleeping session is woken with it queued. A
+    session whose agent is simply not running gets it on its prompt queue
+    too — the drain relaunches the agent (through the launch gate, which may
+    make it wait for memory but never refuses) and sends it once the CLI is
+    idle. Paused and over-budget are refused: the person stopped that agent.
+    Blocking."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        return "", "%s is gone" % title
+    # Its results file must never ride along in the session's own diff.
+    try:
+        wt = inst.GetWorktreePath() or ""
+        if wt:
+            from backend import workspace_setup as _ws
+
+            _ws.exclude_artifacts(wt)
+    except Exception:  # noqa: BLE001 — best-effort, as everywhere else
+        pass
+    told, reason = srv._deliver_to_agent(inst, title, prompt)
+    if told:
+        return str(told), ""
+    if str(reason or "") == WALK_NOT_RUNNING:
+        try:
+            _prompt_queue.enqueue(title, prompt)  # enables the queue's drain
+        except ValueError as err:
+            return "", str(err)
+        try:
+            srv._emit_queue_changed(title)
+        except Exception:  # noqa: BLE001
+            pass
+        return "queued", ""
+    return "", str(reason or "could not send")
+
+
+def walk_is_queued(title: str) -> bool:
+    """Whether a walk (:data:`test_plans.WALK_MARK`) is still waiting on
+    ``title``'s prompt queue — handed over, not yet picked up. Never raises."""
+    try:
+        items = _prompt_queue.get_state(title).get("items") or []
+    except Exception:  # noqa: BLE001
+        return False
+    mark = _test_plans.WALK_MARK
+    return any(str((i or {}).get("text") or "").startswith(mark) for i in items)
+
+
+def _run_is_in_session(plan: dict) -> bool:
+    """Whether the plan's current run is walked by its own session."""
+    runs = (plan or {}).get("runs") or []
+    run = runs[-1] if runs else {}
+    return bool(run.get("in_session")) and run.get("session") == (plan or {}).get(
+        "run_session"
+    )
+
+
 def _test_plan_row(plan: dict, live_branch: Optional[str] = None) -> dict:
     """One plan, shaped the way every reader of this feature expects it.
 
@@ -1685,6 +1801,8 @@ def _verify_run_trees(plan: dict) -> tuple:
     tested = _server()._git_head_sha(wt)
     runs = plan.get("runs") or []
     run = runs[-1] if runs else {}
+    if run.get("in_session"):
+        return _in_session_trees(plan, run, wt, tested)
     if run.get("where"):
         # A route chose where this ran, and the checkout it was told to make is
         # stamped on the run: the plan's own commit (``"branch"``, or an
@@ -1723,6 +1841,44 @@ def _verify_run_trees(plan: dict) -> tuple:
             expected = out.stdout.decode("utf-8", "replace").strip()
             break
     return tested, expected
+
+
+def _in_session_trees(plan: dict, run: dict, wt: str, tested: str) -> tuple:
+    """``_verify_run_trees`` for a walk in the plan's OWN session.
+
+    Nothing was checked out: the code under test is that session's branch as
+    it stands. Against an environment (or the repo's deployment) the tree was
+    only read, so there is nothing to compare — unknown. Otherwise the tree
+    passes when it IS the commit the steps were written about or a descendant
+    of it (the session committed since); a HEAD that no longer contains it
+    (reset, rebased away) is a mismatch, and its passes are downgraded."""
+    where = str(run.get("where") or "")
+    try:
+        deployed = bool(str(_test_plans.run_target(plan) or "").strip())
+    except Exception:  # noqa: BLE001
+        deployed = False
+    if (where and where != _test_plans.BRANCH_WHERE) or deployed:
+        return "", ""
+    want = str(plan.get("tip_sha") or plan.get("sha") or "").strip()
+    if not tested or not want:
+        return tested, ""
+    if tested.startswith(want) or want.startswith(tested):
+        return tested, tested
+    try:
+        out = subprocess.run(
+            ["git", "-C", wt, "merge-base", "--is-ancestor", want, tested],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except Exception:  # noqa: BLE001 — unknown, never "mismatched"
+        return tested, ""
+    if out.returncode == 0:
+        return tested, tested
+    if out.returncode == 1:
+        return tested, want
+    return tested, ""  # git could not answer (unknown commit): unknown
 
 
 #: When each running verify session was first seen with no tmux window, and how
@@ -1850,6 +2006,7 @@ async def close_run(plan_id: str, reason: str) -> Optional[dict]:
     if plan is None or plan["state"] != "running":
         return plan
     run_session = str(plan.get("run_session") or "")
+    in_session = _run_is_in_session(plan)
     run = plan["runs"][-1] if plan["runs"] else {}
     have = run.get("results") or {}
     results = []
@@ -1873,11 +2030,35 @@ async def close_run(plan_id: str, reason: str) -> Optional[dict]:
     )
     if run_session:
         await asyncio.to_thread(_clear_verify_results, run_session)
-        try:
-            await _end_verify_session(run_session)
-        except Exception:  # noqa: BLE001 — the orphan sweep closes it later
-            pass
+        if in_session:
+            # The person's own session stays; its agent is told the walk is
+            # over (queued behind its turn, never typed over it).
+            await asyncio.to_thread(_tell_walk_closed, run_session, reason)
+        else:
+            try:
+                await _end_verify_session(run_session)
+            except Exception:  # noqa: BLE001 — the orphan sweep closes it later
+                pass
     return done
+
+
+def _tell_walk_closed(title: str, reason: str) -> None:
+    """Tell a session walking a check in-session that the check was closed
+    (``close_run``). Best-effort, never raises."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is None:
+        return
+    # Not WALK_MARK: that prefix is what reads as "a walk still queued".
+    text = (
+        "MindFlock Verify — this check was closed (%s). Stop walking it: what "
+        "you already recorded is kept, the rest is marked blocked."
+        % str(reason or "closed").strip()
+    )
+    try:
+        srv._deliver_to_agent(inst, title, text)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _poll_running_test_plans(plans: list) -> None:
@@ -2513,5 +2694,25 @@ async def _end_verify_session(title: str) -> bool:
     """
     if not title or title not in _server().ENGINE.instances:
         return False
+    if not _is_checker_session(title):
+        # A WALK IN THE PERSON'S OWN SESSION (a run handed to the session
+        # that wrote the work) ends with the run, never the session: a
+        # cancel, a delete, a stall close or a re-run must not close the
+        # window someone is working in.
+        return False
     resp = await _server().close_instance(title)
     return resp.status_code < 400
+
+
+def _is_checker_session(title: str) -> bool:
+    """Whether ``title`` is a session MindFlock started to check or fix a
+    plan (flagged ``hidden_by == "verify"``, or named ``verify-…`` /
+    ``fix-…`` by the run and fix routes) — the only kind
+    :func:`_end_verify_session` may close. A session that owns a plan
+    (plans are keyed by their session's title) never is."""
+    title = str(title or "")
+    if _test_plans.get(title) is not None:
+        return False
+    if _hidden_sessions.hidden_by(title) == "verify":
+        return True
+    return title.startswith(("verify-", "fix-"))

@@ -211,9 +211,8 @@ class TestKeys:
         assert set(speech.loaded()) == {KEY, "whisper:small.en", "whisper:base.en"}
         assert speech._warm_due("stt") is False
 
-    def test_shedding_moonshine_forgets_the_stt_warm_not_the_tts_one(
-        self, moon, monkeypatch
-    ):
+    def test_low_memory_sheds_no_voice_model(self, moon, monkeypatch):
+        """Owner 2026-11-10: voice models stay on when memory gets low."""
         now = [1000.0]
         monkeypatch.setattr(speech, "_now", lambda: now[0])
         _set(stt_backend="system")  # nothing resident
@@ -221,8 +220,8 @@ class TestKeys:
         speech._WARMED["stt"] = ("loaded", "local:x", 0.0)
         speech._WARMED["tts"] = ("loaded", "local:piper", 0.0)
         now[0] += 500
-        assert speech.shed_for_memory(min_idle_s=120) == [KEY]
-        assert "stt" not in speech._WARMED
+        assert speech.shed_for_memory(min_idle_s=120) == []
+        assert "stt" in speech._WARMED
         assert "tts" in speech._WARMED
 
     def test_shedding_keeps_the_resident_moonshine_model(self, moon, monkeypatch):

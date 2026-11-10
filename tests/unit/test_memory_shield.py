@@ -12,14 +12,12 @@ stopped or launched):
   over the low line), which (largest-and-longest-idle first, never a
   working / asking / viewed / driven / background session), the one
   notice, and the ``agent_memory.shed_idle`` switch;
-* Voice Lab yields — no local voice host is woken or called while memory
-  reads low (the fallback speaks), and its backend unit is stopped at
-  critical through a fake systemctl.
+* voice is left alone — test_voice_stays_on.py pins that the shield never
+  stops Voice Lab and nothing holds voice back for memory.
 """
 
 from __future__ import annotations
 
-import subprocess
 import time
 from types import SimpleNamespace
 
@@ -43,7 +41,6 @@ def _clean(monkeypatch):
         "MINDFLOCK_MAX_LIVE_AGENTS",
         "MINDFLOCK_AUTO_LAUNCH_SPACING",
         "MINDFLOCK_SHED_IDLE",
-        "MINDFLOCK_VOICELAB_UNIT",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "0")
@@ -316,12 +313,62 @@ def test_shed_waits_for_critical_to_hold_a_minute():
     assert shield.shed_due(st, crit, 1100.0)[0] is False
 
 
-def test_a_full_memory_stall_sheds_at_once():
+def test_a_full_memory_stall_sheds_at_once_once_critical():
+    """A 10 s burst alone (level not critical) never sheds: the shield acts
+    only on sustained distress. Already critical (the gauge held it), a
+    thrash under way skips the extra minute."""
     st = {"critical_since": None, "last_shed_at": 0.0}
     snap = _snap("low", 2 * GiB, psi={"full_avg10": 31.0})
-    due, why = shield.shed_due(st, snap, 1000.0)
-    assert due and "31%" in why
-    assert shield.shed_due(st, _snap(psi={"full_avg10": 24.9}), 1000.0)[0] is False
+    assert shield.shed_due(st, snap, 1000.0) == (False, "")
+    snap = _snap("critical", 2 * GiB, psi={"full_avg10": 31.0})
+    snap["why"] = ["every running process stalled on memory 22% of the last minute"]
+    due, why = shield.shed_due(st, snap, 1001.0)
+    assert due and why == (
+        "every task stalled on memory 31% of the last 10 s (critical: every "
+        "running process stalled on memory 22% of the last minute)"
+    )
+    crit = _snap("critical", 2 * GiB, psi={"full_avg10": 24.9})
+    assert shield.shed_due({"last_shed_at": 0.0}, crit, 1000.0)[0] is False
+
+
+def test_a_stall_burst_never_sheds_below_critical():
+    """Before 2026-11-10 PSI full avg10 shed at any level; now the level must
+    already be critical (sustained by the gauge)."""
+    for lvl in ("ok", "low"):
+        st = {"critical_since": None, "last_shed_at": 0.0}
+        snap = _snap(lvl, 10 * GiB, psi={"full_avg10": 60.0})
+        assert shield.shed_due(st, snap, 1000.0) == (False, "")
+        assert shield.shed_due(st, snap, 2000.0) == (False, "")
+
+
+def test_no_signals_means_no_parentheses():
+    for why in (None, [], [""]):
+        st = {"critical_since": None, "last_shed_at": 0.0}
+        crit = _snap("critical", 1 * GiB, psi={"full_avg10": 30.0})
+        if why is not None:
+            crit["why"] = why
+        assert shield.shed_due(st, crit, 1000.0) == (
+            True,
+            "every task stalled on memory 30% of the last 10 s",
+        )
+        st = {"critical_since": None, "last_shed_at": 0.0}
+        crit["psi"] = None
+        shield.shed_due(st, crit, 1000.0)
+        assert shield.shed_due(st, crit, 1060.0) == (
+            True,
+            "memory has been critical for 60s",
+        )
+
+
+def test_the_shed_names_the_signal_that_made_it_act():
+    st = {"critical_since": None, "last_shed_at": 0.0}
+    crit = _snap("critical", 10 * GiB)
+    crit["why"] = ["swapping 9.5 MB/s back in from disk"]
+    shield.shed_due(st, crit, 1000.0)
+    assert shield.shed_due(st, crit, 1060.0) == (
+        True,
+        "memory has been critical for 60s (swapping 9.5 MB/s back in from disk)",
+    )
 
 
 def test_sheds_are_spaced():
@@ -341,7 +388,7 @@ def test_need_is_what_brings_it_back_over_the_low_line():
 
 def _host(available, total=32 * GiB, level="ok"):
     """A WSL host reading as ``memory_pressure.snapshot()["host"]`` carries
-    it (the low line of a 32 GB Windows is 8%: ~2.56 GB)."""
+    it (the headroom floor of any Windows is 2 GB)."""
     return {
         "available": available,
         "total": total,
@@ -352,7 +399,7 @@ def _host(available, total=32 * GiB, level="ok"):
 
 
 def test_need_is_the_bigger_of_the_guest_and_the_host_shortfall():
-    # Guest 1.2 GB under a 3 GB line (1843 MB) beats Windows' 0.56 GB.
+    # Guest 1.2 GB under a 3 GB line (1843 MB) beats Windows' nothing.
     snap = _snap("critical", int(1.2 * GiB), host=_host(2 * GiB, level="low"))
     assert shield.shed_need_mb(snap, 3 * GiB) == 1843
     # Both over their lines: nothing to free.
@@ -360,7 +407,8 @@ def test_need_is_the_bigger_of_the_guest_and_the_host_shortfall():
     assert shield.shed_need_mb(snap, 3 * GiB) == 0
     # The guest over its (explicit) line still sizes by Windows' shortfall.
     snap = _snap(available=5 * GiB, host=_host(1 * GiB, level="critical"))
-    assert shield.shed_need_mb(snap, 3 * GiB) == round((0.08 * 32 - 1) * 1024)
+    # Windows' headroom floor is 2 GB: 1 GB short.
+    assert shield.shed_need_mb(snap, 3 * GiB) == 1024
 
 
 def test_no_host_or_a_hostless_reading_is_the_guest_need_alone():
@@ -498,11 +546,46 @@ def test_a_critical_windows_alone_sheds_its_shortfall(fake_pass, monkeypatch):
     srv = SimpleNamespace()
     assert shield.tick(srv, snap, 5000.0, sleeper=fake_pass.sleeper)["shed"] == []
     out = shield.tick(srv, snap, 5061.0, sleeper=fake_pass.sleeper)
-    # Windows needs ~1.56 GB back over its 2.56 GB line → a (1200) + b (900).
-    assert out["shed"] == ["a", "b"] == fake_pass.slept
+    # Windows needs 1 GB back over its 2 GB headroom floor → a (1200).
+    assert out["shed"] == ["a"] == fake_pass.slept
     assert out["why"] == "memory has been critical for 61s"
     assert shield.status()["last_decision"] == (
-        "memory has been critical for 61s: put 2 to sleep"
+        "memory has been critical for 61s: put 1 to sleep"
+    )
+
+
+def test_a_critical_stall_with_memory_free_sheds_one_and_logs_why(
+    fake_pass, monkeypatch
+):
+    """Critical from a stall has no byte shortfall: one session per pass,
+    and the log line names the signals (no numbers line on top)."""
+    stall = "every running process stalled on memory 20% of the last minute"
+    _memory(monkeypatch, level="critical", available=10 * GiB, why=[stall])
+    said = []
+    monkeypatch.setattr(shield, "_info", lambda fmt, *a: said.append(fmt % a))
+    snap = memory_pressure.snapshot()
+    assert shield.shed_need_mb(snap) == 0
+    srv = SimpleNamespace()
+    shield.tick(srv, snap, 5000.0, sleeper=fake_pass.sleeper)
+    out = shield.tick(srv, snap, 5061.0, sleeper=fake_pass.sleeper)
+    assert out["shed"] == ["a"] == fake_pass.slept
+    (line,) = [m for m in said if m.startswith("acting on ")]
+    assert line.startswith(
+        "acting on memory has been critical for 61s (%s): need ~0 MB to get "
+        "back over the low line; 3 idle candidate(s), chose a (" % stall
+    )
+
+
+def test_an_older_snapshot_logs_its_numbers(fake_pass, monkeypatch):
+    said = []
+    monkeypatch.setattr(shield, "_info", lambda fmt, *a: said.append(fmt % a))
+    snap = memory_pressure.snapshot()  # no ``why``: 1.5 GB of 20, critical
+    shield.tick(SimpleNamespace(), snap, 5000.0, sleeper=fake_pass.sleeper)
+    shield.tick(SimpleNamespace(), snap, 5061.0, sleeper=fake_pass.sleeper)
+    (line,) = [m for m in said if m.startswith("acting on ")]
+    assert line.startswith(
+        "acting on memory has been critical for 61s (memory is critically low: "
+        "1.5 GB free of 20.0 GB (8%)): need ~1536 MB"
     )
 
 
@@ -542,164 +625,6 @@ def test_under_pytest_nothing_real_is_slept(fake_pass):
 
 
 # --------------------------------------------------------------------------- #
-# Voice Lab
-# --------------------------------------------------------------------------- #
-def test_voice_lab_is_held_back_only_while_memory_is_short():
-    assert shield.voice_lab_blocked(_snap()) == ""
-    assert shield.voice_lab_blocked({"level": "unknown"}) == ""
-    assert shield.voice_lab_blocked(_snap("low", int(2.5 * GiB))).startswith(
-        "memory is low: 2.5 GB free"
-    )
-    assert "critically low" in shield.voice_lab_blocked(_snap("critical", GiB))
-
-
-def test_the_yield_is_logged_once_per_episode(monkeypatch):
-    lines = []
-    monkeypatch.setattr(shield, "_info", lambda fmt, *a: lines.append(fmt % a))
-    snap = {"v": _snap("low", 2 * GiB)}
-    monkeypatch.setattr(memory_pressure, "snapshot", lambda fresh=False: snap["v"])
-    assert shield.voice_lab_yield() and shield.voice_lab_yield()
-    snap["v"] = _snap()
-    assert shield.voice_lab_yield() == ""
-    assert len(lines) == 2
-    assert "is not woken or called while memory is low" in lines[0]
-    assert "may be used again" in lines[1]
-
-
-class _Systemctl:
-    def __init__(self, show="LoadState=loaded\nActiveState=active\n", rc=0):
-        self.show, self.rc, self.calls = show, rc, []
-
-    def __call__(self, argv, **kw):
-        self.calls.append(argv)
-        out = self.show if "show" in argv else ""
-        return subprocess.CompletedProcess(argv, self.rc, out, "")
-
-
-def test_critical_stops_a_running_voice_lab_backend():
-    ctl = _Systemctl()
-    assert shield.stop_voice_lab(ctl) == "stopped voicelab-backend.service"
-    assert ctl.calls[-1] == ["systemctl", "--user", "stop", "voicelab-backend.service"]
-
-
-@pytest.mark.parametrize(
-    "show",
-    [
-        "LoadState=loaded\nActiveState=inactive\n",  # idle already
-        "LoadState=not-found\nActiveState=inactive\n",  # no Voice Lab here
-    ],
-)
-def test_nothing_to_stop_leaves_it_alone(show):
-    ctl = _Systemctl(show)
-    assert shield.stop_voice_lab(ctl) == ""
-    assert not any("stop" in c for c in ctl.calls)
-
-
-def test_no_systemd_or_unit_off_is_a_no_op(monkeypatch):
-    ctl = _Systemctl(rc=1)  # no user manager
-    assert shield.stop_voice_lab(ctl) == ""
-    monkeypatch.setenv("MINDFLOCK_VOICELAB_UNIT", "0")
-    ctl = _Systemctl()
-    assert shield.stop_voice_lab(ctl) == "" and ctl.calls == []
-    # Under pytest the real systemctl is never used.
-    monkeypatch.delenv("MINDFLOCK_VOICELAB_UNIT")
-    assert shield.stop_voice_lab(None) == ""
-
-
-def test_the_tick_stops_voice_lab_only_at_critical(monkeypatch):
-    ctl = _Systemctl()
-    shield.tick(SimpleNamespace(), _snap("low", 2 * GiB), 1000.0, runner=ctl)
-    assert ctl.calls == []
-    out = shield.tick(SimpleNamespace(), _snap("critical", GiB), 1010.0, runner=ctl)
-    assert out["voicelab"] == "stopped voicelab-backend.service"
-
-
-# --------------------------------------------------------------------------- #
-# Voice Lab: the speech side (no request reaches a local host while short)
-# --------------------------------------------------------------------------- #
-@pytest.fixture
-def voice(isolate_settings_store, monkeypatch):
-    from backend.config import settings as S
-    from backend.web.core import speech
-
-    class _Fallback(speech.Backend):
-        kind = "tts"
-
-        def __init__(self, id, ok=True):
-            self.id, self.label, self.ok, self.spoken = id, id, ok, []
-
-        def ready(self):
-            return self.ok, "%s ready" % self.id
-
-        def speak(self, text, voice=""):
-            self.spoken.append(text)
-            return b"RIFF" + self.id.encode(), "audio/wav"
-
-    host = speech.OpenAITTS()
-    piper = _Fallback("local", ok=False)  # piper is held back too while low
-    system = _Fallback("system")
-    monkeypatch.setattr(speech, "BACKENDS", {"stt": [], "tts": [host, piper, system]})
-    S.update_settings(
-        voice={"tts_backend": "openai", "tts_url": "http://127.0.0.1:8770/v1"}
-    )
-    S.invalidate()
-    calls = []
-    monkeypatch.setattr(
-        speech, "_http", lambda *a, **kw: calls.append(a) or (200, "audio/mpeg", b"x")
-    )
-    level = {"v": "low"}
-    monkeypatch.setattr(
-        memory_pressure,
-        "snapshot",
-        lambda fresh=False: _snap(
-            level["v"], 2 * GiB if level["v"] != "ok" else 9 * GiB
-        ),
-    )
-    speech.TTS_CHAIN.reset()
-    yield SimpleNamespace(
-        speech=speech, host=host, piper=piper, system=system, calls=calls, level=level
-    )
-    speech.TTS_CHAIN.reset()
-
-
-def test_a_short_machine_never_calls_the_local_voice_host(voice):
-    sp = voice.speech
-    engine, fell_back, why = sp.TTS_CHAIN.pick(voice.host)
-    assert engine is voice.system and fell_back
-    assert why.startswith("voice host held back: memory is low")
-    audio, _mime, used, fb = sp.TTS_CHAIN.speak(voice.host, "All done.")
-    assert used is voice.system and fb and audio == b"RIFFsystem"
-    # A warm and a direct call are refused too: nothing reaches the host.
-    assert voice.host.warm().startswith("skipped: voice host held back")
-    with pytest.raises(sp.SpeechError):
-        voice.host.speak("hi")
-    assert voice.calls == []
-    st = sp.TTS_CHAIN.status(voice.host, probe=False)
-    assert st["held"] and st["engine"] is voice.system and st["cold"] is False
-
-
-def test_with_no_local_voice_the_client_speaks_for_itself(voice):
-    voice.system.ok = False
-    with pytest.raises(voice.speech.SpeechError) as err:
-        voice.speech.TTS_CHAIN.speak(voice.host, "All done.")
-    assert "held back" in str(err.value) and not err.value.down
-    assert voice.calls == []
-
-
-def test_once_memory_recovers_the_host_speaks_again(voice):
-    voice.level["v"] = "ok"
-    voice.speech.TTS_CHAIN.reset()
-    engine, fell_back, _why = voice.speech.TTS_CHAIN.pick(voice.host)
-    assert engine is voice.host and not fell_back
-
-
-def test_a_remote_voice_api_is_never_held():
-    from backend.web.core import speech
-
-    assert speech.host_held_back("https://api.openai.com/v1") == ""
-
-
-# --------------------------------------------------------------------------- #
 # the routes
 # --------------------------------------------------------------------------- #
 def test_the_capacity_route_and_the_memory_status(monkeypatch):
@@ -725,15 +650,15 @@ def test_the_capacity_route_names_windows_when_it_binds(monkeypatch):
 
     from backend.web import server
 
-    _memory(monkeypatch, available=10 * GiB, host=_host(6 * GiB))
+    _memory(monkeypatch, available=10 * GiB, host=_host(int(5.5 * GiB)))
     _sized({"a": 1000, "b": 1000, "c": 1000})
     body = TestClient(server.app).get("/api/memory/capacity").json()
-    # VM: 10 - 3 = 7 GB; Windows: 6 - 2.56 = 3.44 GB → 3 sessions of 1000 MB.
-    assert body["room"] == 3 and body["free_mb"] == 3523
+    # VM: 10 - 3 = 7 GB; Windows: 5.5 - 2 = 3.5 GB → 3 sessions of 1000 MB.
+    assert body["room"] == 3 and body["free_mb"] == 3584
     assert body["available_mb"] == 10240 and body["reserve_mb"] == 3072
     assert body["why"].startswith(
-        "room for 3 more sessions: Windows has 6.0 GB available over its own "
-        "reserve of 2.6 GB"
+        "room for 3 more sessions: Windows has 5.5 GB available over its own "
+        "reserve of 2.0 GB"
     )
     assert body["hint"].startswith("room for 3 more sessions now")
 

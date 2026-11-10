@@ -794,7 +794,6 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
 | `MINDFLOCK_HOST_MEMORY` | on (WSL only) | `0` stops reading Windows' own memory from inside WSL ([session-engine.md](session-engine.md#memory-guard)); the memory guard then sees only the WSL VM |
 | `MINDFLOCK_SHED_IDLE` | unset | `0` stops the memory shield putting idle agents to sleep when memory stays critical (`general.agent_memory.shed_idle`) |
-| `MINDFLOCK_VOICELAB_UNIT` | `voicelab-backend.service` | The systemd user unit the memory shield stops when memory turns critical (Voice Lab's backend); `0` = never stop one |
 | `MINDFLOCK_AGENT_SCOPE` | unset | `0` launches agents without their memory-limited systemd scope (`general.agent_memory`) |
 | `MINDFLOCK_GITNEXUS_GATE` | unset | `0` leaves the `gitnexus` shim off agents' `PATH` (and makes an existing shim pass `analyze` straight through) |
 | `MINDFLOCK_SERVER_OOM_PROTECT` | unset | `0` stops the server lowering its own `oom_score_adj` at boot |
@@ -1172,14 +1171,19 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `general.memory_sleep_minutes`; JSON / `PUT /api/settings`): when this
   machine counts as short of memory — the share of RAM the kernel reports
   available at or below which the [memory guard](session-engine.md#memory-guard)
-  reads low (unset = 15) / critical (unset = 7; never above low; `0` drops
-  the share signal, the 2 GB / 1 GB floors and PSI still count) — and how many
-  idle minutes an agent gets while it does before it is put to sleep (unset =
-  5; `0` = never sleep for memory). The memory sleep applies even with
-  `sleep_idle_minutes` 0, and each pass that sleeps any sends one notice.
-  Per device, never synced; re-read within 30 s. Inside WSL these lines are
-  the VM's only: Windows' own lines (low at 8 % / 2.5 GB, critical at 4 % /
-  1.25 GB, `MINDFLOCK_HOST_MEMORY`) are fixed and not affected by them.
+  reads low (unset = 8) / critical (unset = 4; never above low; `0` drops
+  the share, the 1.5 GB / 1 GB floors still count) — and how many idle
+  minutes an agent gets while it does before it is put to sleep (unset = 5;
+  `0` = never sleep for memory). The share is a floor, one distress signal
+  among several: PSI stalls, the swap-in rate and OOM kills raise the level
+  whatever it says, each only once it has held 30 s. Until 2026-11-10 the
+  defaults were 15 / 7, which read a 26 GB box with 3.9 GB available as low.
+  The memory sleep applies even with `sleep_idle_minutes` 0, and each pass
+  that sleeps any sends one notice. Per device, never synced; re-read within
+  30 s. Inside WSL these lines are the VM's only: Windows' own signals
+  (commit charge low at 85 % / critical at 90 %, sustained hard paging,
+  a 2 GB / 1 GB headroom floor, 256 MB of its own available;
+  `MINDFLOCK_HOST_MEMORY`) are fixed and not affected by them.
 - **Launch gate** (`general.max_live_agents`, `general.agent_warmup_mb`; JSON /
   `PUT /api/settings`): the most live agents that automatic starts bring this
   machine to (unset = one per 1.2 GB of RAM, 16 on 20 GB; `0` = no cap), and
@@ -1189,9 +1193,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   [session-engine.md](session-engine.md#memory-admission-by-measured-cost).
   A person's own starts are never capped. `MINDFLOCK_MAX_LIVE_AGENTS` /
   `MINDFLOCK_AGENT_WARMUP_MB` win over them. Per device, never synced;
-  re-read within 30 s. The reserve the budget keeps is the low line
-  (`max(2 GB, general.memory_low_pct)`); `GET /api/memory/capacity` shows
-  the room it gives.
+  re-read within 30 s. The reserve the budget keeps is the low floor
+  (`max(2 GB, general.memory_low_pct)`); swap in use counts against the
+  room only while it is being swapped back in. `GET /api/memory/capacity`
+  shows the room it gives.
 - **Agent MCP** (`general.agent_mcp`, `general.agent_mcp_scope`; Settings →
   Agent orchestration → **Give agents the MindFlock MCP** and **Agent MCP
   scope**): whether
