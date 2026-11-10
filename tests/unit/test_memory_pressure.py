@@ -109,6 +109,7 @@ def test_parsers_read_real_proc_text(tmp_path):
     assert m == {
         "total": 24611032 * 1024,
         "available": 3111648 * 1024,
+        "free": 100 * 1024,
         "swap_total": 16777216 * 1024,
         "swap_free": 2532324 * 1024,
     }

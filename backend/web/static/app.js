@@ -57243,6 +57243,7 @@ function windowsIsShort(m) {
 function windowsDetail(m) {
 	const h = m.host || {};
 	const bits = ["Windows: " + gb(h.available) + " free of " + gb(h.total) + " (" + Math.round(h.available_pct || 0) + "%)"];
+	if ((h.guest_reusable || 0) >= .1 * GB) bits.push("WSL can reuse " + gb(h.guest_reusable) + " it already holds");
 	if (m.total) bits.push(gb(m.available) + " of WSL's " + gb(m.total) + " is unused inside WSL, but Windows can't take it back while WSL holds it");
 	return bits.join(" · ");
 }

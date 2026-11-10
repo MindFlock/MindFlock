@@ -715,11 +715,21 @@ low at ≤ 8 % or ≤ 2.5 GB, critical at ≤ 4 % or ≤ 1.25 GB, leaving low at
 and 3.5 GB, critical at 6 % and 2 GB — and the level is the **worse** of the
 guest's and the host's, so everything below (spawns waiting, the launch gate's
 budget, the [memory shield](#memory-shedding-before-it-bricks) shedding idle agents) acts on a
-short Windows too. The shield frees the bigger of the two shortfalls (memory
-an agent gives back in the guest returns to Windows by free page reporting);
-the launch budget is capped by Windows' headroom over its own low line. The
-snapshot carries `host` and `guest_level`; refusals say *Windows memory is
-low* when Windows is the cause. A reading older than 45 s is ignored (never a
+short Windows too. The host's lines are read against its **headroom**
+(`memory_pressure.host_headroom`), not Windows' available alone: Windows'
+available plus what the guest can reuse out of memory the VM already holds
+(MemAvailable − MemFree: its page cache). Windows counts those pages as used,
+but a new agent that reuses them costs Windows nothing — on 2026-11-10
+Windows read 0.8 GB free of 31.4 GB with ~11 GB of WSL page cache, and every
+start and the accurate voice pass were held back with nothing short. Freeing
+that cache does not hand it back to Windows soon (a 3 GB `memory.reclaim`
+moved Windows' available by nothing in 30 s). Only when Windows' own
+available is at or under 256 MB does the host read critical whatever the
+guest holds. The shield frees the bigger of the two shortfalls, the host's
+measured on its headroom; the launch budget is capped by that headroom over
+Windows' low line. The snapshot carries `host` (with `guest_reusable`,
+`headroom`, `headroom_pct`) and `guest_level`; refusals say *Windows memory
+is low* when Windows is the cause, and how much WSL could reuse. A reading older than 45 s is ignored (never a
 gate); the loop exits when its pipe breaks and restarts with a backoff that
 doubles from 15 s to at most 300 s. If no `powershell.exe` is found the reader
 stops for the life of the process. `MINDFLOCK_HOST_MEMORY=0` turns it off; the

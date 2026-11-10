@@ -481,11 +481,13 @@ def budget(
     free = avail - res - swap_pen - psi_pen - to_come
     # Inside WSL: Windows has to hold the new agent too (the VM grows into
     # host memory), so the host's headroom over its own low line caps it.
+    # The headroom counts the guest memory the VM already holds and can
+    # reuse (memory_pressure.host_headroom): that costs Windows nothing.
     host = snap.get("host") or {}
     host_free: Optional[float] = None
     if host.get("total"):
         host_free = (
-            float(host.get("available") or 0)
+            memory_pressure.host_headroom(host)
             - memory_pressure.host_low_line(float(host["total"]))
             - to_come
         )
@@ -519,7 +521,7 @@ def budget(
     sums = " − ".join(parts)
     if host_free is not None and free == host_free:
         sums = "Windows has %s available over its own reserve of %s" % (
-            _gb(float(host.get("available") or 0)),
+            _gb(memory_pressure.host_headroom(host)),
             _gb(memory_pressure.host_low_line(float(host["total"]))),
         )
     if lvl in ("low", "critical"):

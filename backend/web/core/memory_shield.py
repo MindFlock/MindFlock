@@ -183,8 +183,10 @@ def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
     """MB to free to bring available memory back over the ``low`` line
     (``max(low share of RAM, absolute floor)``), 0 when already over. Inside
     WSL with a host reading, also the host's shortfall under its own low
-    line — memory an agent frees in the guest goes back to Windows (free page
-    reporting), so the bigger of the two is what to free."""
+    line, measured on its headroom (Windows' available plus what the guest
+    can reuse, :func:`memory_pressure.host_headroom`): while the guest holds
+    reusable memory, putting agents to sleep frees nothing Windows gets back
+    soon, so only a shortfall past that is worth freeing."""
     total = float(snap.get("total") or 0)
     avail = float(snap.get("available") or 0)
     if low_line_bytes is None:
@@ -197,7 +199,7 @@ def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
     host = snap.get("host") or {}
     if host.get("total"):
         host_line = memory_pressure.host_low_line(float(host["total"]))
-        need = max(need, host_line - float(host.get("available") or 0))
+        need = max(need, host_line - memory_pressure.host_headroom(host))
     return max(0, int(round(need / _MiB)))
 
 

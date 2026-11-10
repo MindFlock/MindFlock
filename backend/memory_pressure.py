@@ -42,6 +42,21 @@ it), the host's available physical memory is classified on its own lines
 (:func:`host_thresholds`, fixed) and the level is the WORSE of the two; the
 snapshot carries the host reading under ``"host"``.
 
+What the host's lines are checked against is NOT Windows' "available" alone
+but :func:`host_headroom`: Windows' available PLUS the guest memory the VM
+already holds and the guest can hand to a new process without asking Windows
+for more — MemAvailable minus MemFree, i.e. the guest's page cache and other
+reclaimable memory. Those pages are already backed by Windows (they are part
+of the VM's footprint), so a new agent that reuses them costs Windows
+nothing. Windows reads them as used, so on 2026-11-10 Windows read "0.8 GB
+free of 31.4 GB" while WSL held ~11 GB of cache, and every start and the
+accurate voice pass were held back while nothing was short. Freeing that
+cache does not hand it back to Windows soon either (a 3 GB
+``memory.reclaim`` raised Windows' available by nothing in 30 s), so it is
+headroom for the guest, not for Windows' own apps. A raw Windows floor
+(:data:`HOST_RAW_CRITICAL_BYTES`) still reads critical whatever the guest
+holds: below it Windows is paging its own apps out.
+
 Stdlib only at import: the ticket pipeline (a separate process) imports it
 too, and reads the settings through the same lazy, never-raising path.
 ``MINDFLOCK_MEMORY_GUARD=0`` turns the guard off (level reads ``"unknown"``).
@@ -63,6 +78,9 @@ __all__ = [
     "thresholds",
     "host_thresholds",
     "host_low_line",
+    "host_headroom",
+    "guest_reusable",
+    "HOST_RAW_CRITICAL_BYTES",
 ]
 
 LEVELS = ("ok", "low", "critical")
@@ -94,6 +112,9 @@ _HOST_LOW = (0.08, int(2.5 * _GiB))
 _HOST_CRITICAL = (0.04, int(1.25 * _GiB))
 _HOST_RECOVER_FROM_LOW = (0.11, int(3.5 * _GiB))
 _HOST_RECOVER_FROM_CRITICAL = (0.06, 2 * _GiB)
+#: Windows' own available at or below which the host reads critical even
+#: when the guest holds plenty it could reuse (Windows is paging its apps).
+HOST_RAW_CRITICAL_BYTES = 256 * 1024**2
 
 _RANK = {"ok": 0, "low": 1, "critical": 2}
 
@@ -115,7 +136,8 @@ def _enabled() -> bool:
 
 
 def _read_meminfo(path: str = _MEMINFO) -> Optional[Dict[str, int]]:
-    """``{"total", "available", "swap_total", "swap_free"}`` in bytes, or None.
+    """``{"total", "available", "free", "swap_total", "swap_free"}`` in
+    bytes, or None (``free`` is MemFree; absent from psutil's reading).
 
     Native Windows has no ``/proc``: the same numbers come from psutil
     (``GlobalMemoryStatusEx``'s available physical memory; the page file as
@@ -126,6 +148,7 @@ def _read_meminfo(path: str = _MEMINFO) -> Optional[Dict[str, int]]:
     want = {
         "MemTotal": "total",
         "MemAvailable": "available",
+        "MemFree": "free",
         "SwapTotal": "swap_total",
         "SwapFree": "swap_free",
     }
@@ -305,9 +328,31 @@ def _classify_host(prev: str, share: float, avail: int) -> str:
     return "ok"
 
 
-def _host() -> Optional[dict]:
+def guest_reusable(mem: Optional[dict]) -> int:
+    """Bytes the guest can give a new process out of memory the VM already
+    holds: MemAvailable minus MemFree (page cache and other reclaimable
+    memory), 0 when MemFree was not read."""
+    if not mem or mem.get("free") is None:
+        return 0
+    return max(0, int(mem.get("available") or 0) - int(mem.get("free") or 0))
+
+
+def host_headroom(host: Optional[dict]) -> float:
+    """What a new agent can really get from Windows, in bytes: the host
+    reading's ``headroom`` (Windows' available plus what the guest can reuse,
+    :func:`_host`), else its raw ``available`` (an older snapshot)."""
+    host = host or {}
+    val = host.get("headroom")
+    if val is None:
+        val = host.get("available")
+    return float(val or 0)
+
+
+def _host(mem: Optional[dict] = None) -> Optional[dict]:
     """The host reading with its level, or None (not WSL / not running /
-    stale). Updates the host's hysteresis state. Call under ``_LOCK``."""
+    stale). ``mem`` is the guest's own reading: what it can reuse counts as
+    headroom (:func:`guest_reusable`). Updates the host's hysteresis state.
+    Call under ``_LOCK``."""
     try:
         from backend import host_memory
 
@@ -318,13 +363,20 @@ def _host() -> Optional[dict]:
         _STATE["host_level"] = "ok"
         return None
     total, avail = float(r["total"]), float(r["available"])
-    share = avail / total
-    lvl = _classify_host(str(_STATE.get("host_level") or "ok"), share, int(avail))
+    reuse = float(guest_reusable(mem))
+    room = min(total, avail + reuse)
+    share = room / total
+    lvl = _classify_host(str(_STATE.get("host_level") or "ok"), share, int(room))
+    if avail <= HOST_RAW_CRITICAL_BYTES:
+        lvl = "critical"
     _STATE["host_level"] = lvl
     return {
         "available": int(avail),
         "total": int(total),
-        "available_pct": round(share * 100.0, 1),
+        "available_pct": round(avail / total * 100.0, 1),
+        "guest_reusable": int(reuse),
+        "headroom": int(room),
+        "headroom_pct": round(share * 100.0, 1),
         "level": lvl,
         "at": r.get("at"),
     }
@@ -341,11 +393,13 @@ def snapshot(*, fresh: bool = False) -> dict:
          "available": bytes, "total": bytes, "available_pct": 0-100,
          "swap_total": bytes, "swap_free": bytes,
          "psi": {"some_avg10", "some_avg60", "full_avg10", "full_avg60"} | None,
-         "host": {"available", "total", "available_pct", "level", "at"} | None,
+         "host": {"available", "total", "available_pct", "guest_reusable",
+                  "headroom", "headroom_pct", "level", "at"} | None,
          "guest_level": the guest's own level, "at": epoch}
 
     ``level`` is the worse of the guest's and the host's (WSL only; ``host``
-    is None elsewhere).
+    is None elsewhere); the host's level reads its ``headroom``
+    (:func:`host_headroom`), not Windows' available alone.
 
     Cached for :data:`_CACHE_SECONDS` (``fresh`` skips the cache). Never
     raises; ``"unknown"`` (with no numbers) where nothing can be read."""
@@ -369,7 +423,7 @@ def snapshot(*, fresh: bool = False) -> dict:
                 share = mem["available"] / float(mem["total"])
                 guest = _classify(str(_STATE["level"]), share, mem["available"], psi)
                 _STATE["level"] = guest
-                host = _host()
+                host = _host(mem)
                 lvl = _worst(guest, host["level"]) if host else guest
                 snap = {
                     "level": lvl,
@@ -407,12 +461,16 @@ def describe(snap: Optional[dict] = None) -> str:
         return ""
     host = snap.get("host") or {}
     if host.get("level") == lvl and snap.get("guest_level", lvl) != lvl:
-        return "Windows memory is %s: %.1f GB free of %.1f GB (%d%%)" % (
+        line = "Windows memory is %s: %.1f GB free of %.1f GB (%d%%)" % (
             "critically low" if lvl == "critical" else "low",
             float(host.get("available") or 0) / _GiB,
             float(host.get("total") or 0) / _GiB,
             int(round(float(host.get("available_pct") or 0))),
         )
+        reuse = float(host.get("guest_reusable") or 0)
+        if reuse >= 0.1 * _GiB:
+            line += ", and WSL can reuse %.1f GB it already holds" % (reuse / _GiB)
+        return line
     line = "memory is %s: %.1f GB free of %.1f GB (%d%%)" % (
         "critically low" if lvl == "critical" else "low",
         float(snap.get("available") or 0) / _GiB,

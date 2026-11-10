@@ -2352,7 +2352,17 @@ export interface MemoryReading {
   message?: string;
   /** WSL only: the Windows host's own reading (memory_pressure._host). The
    * overall `level` is the worse of the guest's (`guest_level`) and this. */
-  host?: { available?: number; total?: number; available_pct?: number; level?: string } | null;
+  host?: {
+    available?: number;
+    total?: number;
+    available_pct?: number;
+    /** Guest memory the VM already holds that a new agent can reuse (MemAvailable − MemFree). */
+    guest_reusable?: number;
+    /** available + guest_reusable: what the host's level is read against. */
+    headroom?: number;
+    headroom_pct?: number;
+    level?: string;
+  } | null;
   guest_level?: "ok" | "low" | "critical" | "unknown";
   /** The launch gate: what waits for memory (absent on an older server). */
   gate?: LaunchGateStatus;

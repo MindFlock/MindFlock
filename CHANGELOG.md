@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **WSL no longer reads "Windows memory is critically low" while it holds
+  gigabytes it can reuse.** Windows counts WSL's page cache as used, so
+  Windows could read 0.8 GB free of 31.4 GB while WSL had ~11 GB of cache
+  that any new agent would simply reuse. That held every automatic start in
+  the launch queue, put idle agents to sleep, and held back the accurate voice
+  pass, with nothing actually short. The Windows check now counts what WSL
+  can reuse; only a Windows down to its last 256 MB reads critical whatever
+  WSL holds. The memory notice says how much WSL can reuse.
+
 ## [0.14.2] - 2026-11-09
 
 ### Changed

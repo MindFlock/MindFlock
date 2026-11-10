@@ -427,7 +427,16 @@ def test_a_stale_reading_drops_out_of_the_snapshot(box):
 def test_the_snapshot_carries_the_host_reading(box):
     box(10, 2.0)
     host = mp.snapshot()["host"]
-    assert set(host) == {"available", "total", "available_pct", "level", "at"}
+    assert set(host) == {
+        "available",
+        "total",
+        "available_pct",
+        "guest_reusable",
+        "headroom",
+        "headroom_pct",
+        "level",
+        "at",
+    }
     assert host["available"] == 2 * GiB and host["total"] == HOST_TOTAL
     assert host["available_pct"] == 6.2 and host["level"] == "low"
 
@@ -442,3 +451,100 @@ def test_the_refusal_line_keeps_the_guest_wording_when_both_are_short(box):
     assert (
         mp.describe() == "Windows memory is critically low: 1.0 GB free of 32.0 GB (3%)"
     )
+
+
+# --------------------------------------------------------------------------- #
+# headroom: guest memory the VM already holds counts for Windows
+# --------------------------------------------------------------------------- #
+def _wsl(monkeypatch, *, guest_avail, guest_free, host_avail, host_total=HOST_TOTAL):
+    """A 25 GB WSL guest whose MemAvailable is mostly page cache."""
+    monkeypatch.setenv("MINDFLOCK_MEMORY_GUARD", "1")
+    mp._reset_for_tests()
+    hm._reset_for_tests()
+    monkeypatch.setattr(
+        mp,
+        "_read_meminfo",
+        lambda: {
+            "total": 25 * GiB,
+            "available": int(guest_avail * GiB),
+            "free": int(guest_free * GiB),
+            "swap_total": 0,
+            "swap_free": 0,
+        },
+    )
+    monkeypatch.setattr(mp, "_read_psi", lambda: None)
+    hm._set_reading({"available": int(host_avail * GiB), "total": host_total})
+    return mp.snapshot(fresh=True)
+
+
+def test_guest_cache_the_vm_already_holds_is_windows_headroom(monkeypatch):
+    """2026-11-10: Windows read 0.8 GB free of 31.4 GB while WSL held ~11 GB
+    of page cache; every start queued though a new agent would only have
+    reused that cache. The cache counts: the level reads ok."""
+    snap = _wsl(monkeypatch, guest_avail=11.7, guest_free=0.7, host_avail=0.8)
+    host = snap["host"]
+    assert host["available"] == int(0.8 * GiB)
+    assert host["guest_reusable"] == int(11.7 * GiB) - int(0.7 * GiB)
+    assert host["headroom"] == host["available"] + host["guest_reusable"]
+    assert host["level"] == "ok" and snap["level"] == "ok"
+    assert mp.describe(snap) == ""
+    hm._reset_for_tests()
+    mp._reset_for_tests()
+
+
+def test_free_guest_memory_is_not_headroom(monkeypatch):
+    """MemFree may already be handed back to Windows: reusing it grows the
+    VM, so only available-minus-free counts."""
+    snap = _wsl(monkeypatch, guest_avail=12, guest_free=11.5, host_avail=0.8)
+    assert snap["host"]["guest_reusable"] == int(0.5 * GiB)
+    # 0.8 + 0.5 = 1.3 GB: past the 2.5 GB low line, clear of critical.
+    assert snap["host"]["level"] == "low" and snap["level"] == "low"
+    assert "WSL can reuse 0.5 GB" in mp.describe(snap)
+    hm._reset_for_tests()
+    mp._reset_for_tests()
+
+
+def test_a_windows_paging_its_apps_reads_critical_whatever_the_guest_holds(
+    monkeypatch,
+):
+    snap = _wsl(monkeypatch, guest_avail=12, guest_free=0.5, host_avail=0.2)
+    assert snap["host"]["level"] == "critical" and snap["level"] == "critical"
+    hm._reset_for_tests()
+    mp._reset_for_tests()
+
+
+def test_no_memfree_reading_counts_nothing_extra():
+    assert mp.guest_reusable({"available": 10 * GiB}) == 0
+    assert mp.guest_reusable(None) == 0
+    assert mp.guest_reusable({"available": GiB, "free": 2 * GiB}) == 0
+
+
+def test_host_headroom_falls_back_to_available_for_an_older_snapshot():
+    assert mp.host_headroom({"available": 3 * GiB}) == 3 * GiB
+    assert mp.host_headroom({"available": GiB, "headroom": 9 * GiB}) == 9 * GiB
+    assert mp.host_headroom(None) == 0
+
+
+def test_the_gate_and_the_shield_read_the_headroom():
+    from backend.web.core import launch_gate as gate
+    from backend.web.core import memory_shield as shield
+
+    host = {
+        "available": int(0.8 * GiB),
+        "headroom": 12 * GiB,
+        "total": HOST_TOTAL,
+        "level": "ok",
+    }
+    snap = {
+        "level": "ok",
+        "available": 12 * GiB,
+        "total": 25 * GiB,
+        "swap_total": 0,
+        "swap_free": 0,
+        "host": host,
+    }
+    assert shield.shed_need_mb(snap, low_line_bytes=2 * GiB) == 0
+    cost = {"session_mb": 1024, "peak_mb": 1024, "source": "measured", "samples": 3}
+    b = gate.budget(snap, cost, reserve=2 * GiB)
+    # guest: (12 - 2) GiB → 10; Windows headroom: 12 - 2.56 → 9
+    assert b["room"] == 9
