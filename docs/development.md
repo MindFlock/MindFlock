@@ -550,6 +550,18 @@ cd frontend && npm test           # 83 files, 1615 tests (2026-10-10)
   strings in the engine or web server — extend a provider (or add a TOML config).
 - **Secrets stay out of git**: `config.toml`, `state.json`, `logs/`,
   `workspaces/` are gitignored.
+- **Read paths never write the person's git index.** A session can run in
+  place in someone's own checkout, and the server polls it every few seconds.
+  Never run `git add -N .` there to make untracked files show up in a diff:
+  it turns their new files from `??` into ` A` and stages deleted tracked
+  files as `D ` (with a pathspec, `add -N` records removals too). Run the
+  diff inside `scratch_index_env(wt)` (`backend/session/git/diff.py`)
+  instead: it intent-to-adds into a throwaway copy of the index
+  (`GIT_INDEX_FILE`) and gives the same output (`scratch_index_env_or_none`
+  when a failed setup should mean "plain diff" rather than an error — the
+  Diff tab, Code Map and commit drafting use it). A polled `git status` takes
+  `--no-optional-locks`, so it does not refresh their index either.
+  `tests/unit/test_intent_to_add.py` checks the index bytes stay identical.
 
 ## Known issues
 

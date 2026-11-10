@@ -24,6 +24,7 @@ from typing import Dict, Optional
 from backend import config, providers, session
 from backend.session import provisioned as provisioning
 from backend.session import tmux
+from backend.session.git.diff import scratch_index_env
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import ownership as _ownership
 from backend.web.core import person_sessions as _person_sessions
@@ -156,7 +157,16 @@ def _worktree_fingerprint(wt: str, base_ref: str) -> Optional[str]:
         if head.returncode != 0:
             return None
         st = subprocess.run(
-            ["git", "-C", wt, "status", "--porcelain", "-z", "--untracked-files=all"],
+            [
+                "git",
+                "--no-optional-locks",  # a probe must not refresh their index
+                "-C",
+                wt,
+                "status",
+                "--porcelain",
+                "-z",
+                "--untracked-files=all",
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=60,
@@ -250,9 +260,10 @@ def _session_diff_stat(inst) -> Optional[dict]:
     The single most useful number for triage: the TOTAL change the session has
     produced — committed-beyond-base PLUS working-tree changes — i.e. one
     ``git diff --shortstat <fork-point>`` (see :func:`_session_fork_point`).
-    Untracked files count too: they're staged as intent-to-add first (the same
-    ``git add -N .`` the Diff tab has always run, so this adds no new kind of
-    index mutation). ``uncommitted`` carries the not-yet-committed slice
+    Untracked files count too: both diffs run against a scratch intent-to-add
+    index (:func:`scratch_index_env`), never the worktree's own — a session can
+    run in place in a person's checkout, and this probe runs every few
+    seconds. ``uncommitted`` carries the not-yet-committed slice
     (``git diff --shortstat HEAD``) so the UI can show both totals.
 
     ``None`` when unavailable: paused / loading / no worktree / git failure.
@@ -276,28 +287,25 @@ def _session_diff_stat(inst) -> Optional[dict]:
             # TTL and skip the expensive shortstat pair.
             _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, cached[1], fp)
             return cached[1]
-        subprocess.run(
-            ["git", "-C", wt, "add", "-N", "."],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
-        cp = subprocess.run(
-            ["git", "-C", wt, "diff", "--shortstat", base_ref],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
-        if cp.returncode != 0:
-            _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, None, None)
-            return None
-        result = _parse_shortstat(cp.stdout.decode("utf-8", "replace").strip())
-        cp = subprocess.run(
-            ["git", "-C", wt, "diff", "--shortstat", "HEAD"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=60,
-        )
+        with scratch_index_env(wt) as env:
+            cp = subprocess.run(
+                ["git", "-C", wt, "diff", "--shortstat", base_ref],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                timeout=60,
+            )
+            if cp.returncode != 0:
+                _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, None, None)
+                return None
+            result = _parse_shortstat(cp.stdout.decode("utf-8", "replace").strip())
+            cp = subprocess.run(
+                ["git", "-C", wt, "diff", "--shortstat", "HEAD"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                timeout=60,
+            )
         un = (
             _parse_shortstat(cp.stdout.decode("utf-8", "replace").strip())
             if cp.returncode == 0
@@ -308,13 +316,10 @@ def _session_diff_stat(inst) -> Optional[dict]:
             "additions": un["additions"],
             "deletions": un["deletions"],
         }
-        # Fingerprint AFTER `add -N`: intent-to-add entries change the status
-        # output, so the stored state must match what the next probe sees.
-        _DIFF_STAT_CACHE[wt] = (
-            now + _DIFF_STAT_TTL,
-            result,
-            _worktree_fingerprint(wt, base_ref),
-        )
+        # The fingerprint taken BEFORE the diffs: the probe no longer changes
+        # the status output (no intent-to-add in the real index), and an edit
+        # made while the diffs ran then reads as a change on the next probe.
+        _DIFF_STAT_CACHE[wt] = (now + _DIFF_STAT_TTL, result, fp)
         return result
     except Exception:  # noqa: BLE001
         return None
