@@ -282,7 +282,7 @@ def test_a_stale_host_reading_starts_the_hosts_sustain_over(box):
             {
                 "available": 4 * GiB,
                 "total": 32 * GiB,
-                "committed": int(0.93 * 60 * GiB),
+                "committed": int(0.98 * 60 * GiB),
                 "commit_limit": 60 * GiB,
                 "pages_in": 0,
             }
@@ -306,7 +306,7 @@ def test_a_stale_host_reading_starts_the_hosts_sustain_over(box):
 
 
 def test_the_host_sustains_on_its_own(box):
-    """Windows' commit at 93% for one reading is pending; held 30 s it is
+    """Windows' commit at 98% for one reading is pending; held 30 s it is
     critical, and the snapshot names Windows."""
 
     def host(commit):
@@ -320,16 +320,16 @@ def test_the_host_sustains_on_its_own(box):
             }
         )
 
-    host(0.93)
+    host(0.98)
     snap = box.read()
     assert snap["level"] == "ok" and snap["pending"] == "critical"
     assert snap["host"]["pending"] == "critical"
-    host(0.93)
+    host(0.98)
     snap = box.read(dt=30)
     assert snap["level"] == "critical" and snap["guest_level"] == "ok"
     assert mp.describe(snap) == (
-        "memory is critical: Windows commit charge is at 93% of its limit "
-        "(55.8 GB of 60.0 GB)"
+        "memory is critical: Windows commit charge is at 98% of its limit "
+        "(58.8 GB of 60.0 GB)"
     )
 
 
@@ -458,13 +458,13 @@ def test_replay_reads_the_new_fields_when_the_history_has_them():
         swap_in_mb_s=0.0,
         oom_kills=0,
         host_headroom_mb=14000,
-        host_commit_pct=93.0,
+        host_commit_pct=98.0,
         host_pages_in_median=10.0,
     )
     out = mp.replay([row, dict(row, at=1030.0)])
     assert [r["host_level"] for r in out] == ["ok", "critical"]
     assert out[1]["why"] == [
-        "Windows commit charge is at 93% of its limit (0.0 GB of 0.0 GB)"
+        "Windows commit charge is at 98% of its limit (0.0 GB of 0.0 GB)"
     ]
 
 

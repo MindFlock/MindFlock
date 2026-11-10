@@ -726,7 +726,7 @@ pages/s to leave `critical`), so a box hovering at a line doesn't flap.
 plain words, and `describe()` (every refusal, the banner's message, the
 shield's log) joins them: *memory is critical: processes stalled on memory
 34% of the last minute*, *memory is low: swapping 1.6 MB/s back in from
-disk*, *memory is critical: Windows commit charge is at 93% of its limit
+disk*, *memory is critical: Windows commit charge is at 98% of its limit
 (55.8 GB of 60.0 GB)*. A reading is cached for 2 s, and the level is per
 process: the ticket pipeline keeps its own, so it and the server can briefly
 disagree near a line.
@@ -765,7 +765,7 @@ minutes on 2026-11-10 with nothing short. The host's signals:
 
 | Signal | low at | critical at | leaves low / critical |
 |---|---|---|---|
-| Commit charge / commit limit (at the limit an allocation fails) | ≥ 85 % | ≥ 90 % | ≤ 80 % / ≤ 87 % |
+| Commit charge / commit limit (at the limit an allocation fails) | never — a WSL VM commits its whole `memory=` size, so 75-85 % is normal | ≥ 97 % | — / ≤ 94 % |
 | Hard paging (`PagesInputPersec`, the median of the last 6 readings) | reported only (`pages_in_median`) — never a level by itself: it counts file-backed reads too, and read 30-100 MB/s on 2026-11-10 with WSL barely stalled | — | — |
 | Headroom (below) | ≤ 2 GB | ≤ 1 GB | ≥ 3 GB / ≥ 1.5 GB |
 | Windows' own available | — | ≤ 256 MB | > 512 MB |

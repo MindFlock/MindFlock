@@ -445,14 +445,14 @@ def _h(avail=16 * GiB, *, headroom=None, commit=None, paging=None, samples=6):
 @pytest.mark.parametrize(
     "prev, reading, want",
     [
-        ("ok", _h(commit=84.9), "ok"),
-        ("ok", _h(commit=85.0), "low"),
-        ("ok", _h(commit=89.9), "low"),
-        ("ok", _h(commit=90.0), "critical"),
-        ("critical", _h(commit=87.1), "critical"),
-        ("critical", _h(commit=87.0), "low"),
-        ("low", _h(commit=80.1), "low"),
-        ("low", _h(commit=80.0), "ok"),
+        # commit charge: never low (a WSL VM commits its whole size);
+        # critical at 97 %, held until 94 %
+        ("ok", _h(commit=85.0), "ok"),
+        ("ok", _h(commit=96.9), "ok"),
+        ("ok", _h(commit=97.0), "critical"),
+        ("critical", _h(commit=94.1), "critical"),
+        ("critical", _h(commit=94.0), "ok"),
+        ("low", _h(commit=96.0), "ok"),
         ("ok", _h(commit=None), "ok"),  # the short line: no commit signal
         # the headroom floor: 2 GB / 1 GB, recovering past 3 GB / 1.5 GB
         ("ok", _h(headroom=2 * GiB), "low"),
