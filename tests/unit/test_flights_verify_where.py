@@ -503,7 +503,11 @@ def test_without_post_to_pr_nothing_is_posted(srv, envs, pr, monkeypatch):
         (None, "", "Verify on this branch · agent, then you · right away"),
         ("junk", "", "Verify on this branch · agent, then you · right away"),
         ({"who": "robot"}, "", "Verify on this branch · agent, then you · right away"),
-        ({"who": "you"}, "", "Verify on this branch · only you · right away"),
+        (
+            {"who": "you"},
+            "",
+            "Verify on this branch · agent, then your sign-off · right away",
+        ),
         (
             {"where": "sandbox", "ready": "now", "who": "agent"},
             "",
@@ -570,7 +574,7 @@ def test_step_phrase_says_post_to_pr_and_reads_legacy_configs():
         "Verify on live · agent, then you · once on the live branch"
     )
     assert C.step_phrase(vstep(wait_live=False, who="you")).startswith(
-        "Verify on this branch · only you · right away"
+        "Verify on this branch · agent, then your sign-off · right away"
     )
 
 
