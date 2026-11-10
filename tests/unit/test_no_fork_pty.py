@@ -4,8 +4,8 @@ CPython forks while holding the GIL, so a slow ``fork()`` of a big server
 stalls every thread, the event loop included. ``mux.spawn_pty`` starts PTY
 children with ``posix_spawn``; these tests pin that every PTY spawn site goes
 through it — the provider/``gh`` login terminals (``core.pty_run``), the
-ticket log stream (``core.terminal.spawn_tail``) — that ``spawn_pty(cwd=…)``
-lands the child in that
+ticket log stream (``core.terminal.spawn_tail``) and the engine's own PTY
+(``session/tmux/pty.py``) — that ``spawn_pty(cwd=…)`` lands the child in that
 directory with the env it was given, and that ``pump_pty`` keeps blocking
 PTY writes and the teardown off the loop.
 
@@ -25,6 +25,7 @@ import pytest
 
 from backend import cmd as cmd_pkg
 from backend.session import mux
+from backend.session.tmux import pty as tmux_pty
 from backend.web.core import pty_run, terminal, terminal_ws
 
 needs_posix_spawn = pytest.mark.skipif(
@@ -155,6 +156,27 @@ def test_ticket_log_stream_spawns_through_spawn_pty(spawned, tmp_path):
     ]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX PTY path")
+@pytest.mark.parametrize("cwd", [None, "/some/dir"])
+def test_engine_pty_spawns_through_spawn_pty(spawned, cwd):
+    handle, err = tmux_pty.Pty().start(
+        cmd_pkg.Cmd(["tmux", "new-session", "-d"], dir=cwd)
+    )
+    assert err is None and handle is not None
+    assert spawned == [(["tmux", "new-session", "-d"], {"cwd": cwd})]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX PTY path")
+def test_engine_pty_returns_a_spawn_failure_as_its_error(monkeypatch):
+    boom = FileNotFoundError("nope")
+
+    def _spawn(argv, **kw):
+        raise boom
+
+    monkeypatch.setattr(mux, "spawn_pty", _spawn)
+    assert tmux_pty.Pty().start(cmd_pkg.Cmd(["x"])) == (None, boom)
+
+
 # --------------------------------------------------------------------------- #
 # The real thing: no fork, the cwd, the env                                    #
 # --------------------------------------------------------------------------- #
@@ -278,6 +300,19 @@ def test_a_real_log_stream_never_forks(tmp_path, no_fork):
     finally:
         proc.terminate(force=True)
         proc.close(force=True)
+
+
+@needs_posix_spawn
+def test_a_real_engine_pty_never_forks(tmp_path, no_fork):
+    handle, err = tmux_pty.Pty().start(
+        cmd_pkg.Cmd([sys.executable, "-c", _PROBE], dir=str(tmp_path))
+    )
+    assert err is None, err
+    try:
+        out = _read_all(handle.fileno()).decode()
+    finally:
+        handle.close()
+    assert "CWD %s" % tmp_path in out, out
 
 
 # --------------------------------------------------------------------------- #

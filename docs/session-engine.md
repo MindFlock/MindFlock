@@ -316,15 +316,33 @@ SIGWINCH the client and closing the master still hangs it up. It returns the
 same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. Tests that
 must not start a real client stub `mux.spawn_pty`.
 
-The PTYs the web server starts go through it: the terminal clients
-(`mux.attach`), the provider and `gh` login terminals (`core.pty_run`'s
-command PTY) and the ticket log stream (`core.terminal.spawn_tail`).
-`tests/unit/test_no_fork_pty.py` pins each site, and runs them for real with
-`os.fork`/`pty.fork` made to fail. The engine's own PTY
-(`session/tmux/pty.py`'s `Pty.start`, the short `tmux new-session -d` /
-`attach-session` at create and restore) still uses ptyprocess: moving it
-failed the bare-container quickstart (`mindflock new` → "failed to start")
-for a reason not yet found.
+Every PTY the server starts goes through it — nothing forks on Linux: the
+terminal clients (`mux.attach`), the provider and `gh` login terminals
+(`core.pty_run`'s command PTY), the ticket log stream
+(`core.terminal.spawn_tail`) and the engine's own PTY (`session/tmux/pty.py`'s
+`Pty.start`: the short `tmux new-session -d` at create, the `attach-session`
+kept as `ptmx` at restore). `tests/unit/test_no_fork_pty.py` pins each site,
+and runs them for real with `os.fork`/`pty.fork` made to fail.
+
+**A CPython without `setsid=`.** `os.posix_spawn(setsid=True)` exists only if
+the CPython was COMPILED against a libc whose headers define
+`POSIX_SPAWN_SETSID` (glibc ≥ 2.26). python-build-standalone — the CPython uv
+installs when the system has no 3.12, e.g. Debian bookworm (3.11), since
+`install.sh` pins 3.12 — is built against an older glibc, so there it raises
+`NotImplementedError: posix_spawn: setsid unavailable on this platform`
+(before anything is spawned), even though the glibc it runs on has the flag.
+That is why the first move of the engine's PTY here (PR #348) failed the
+bare-container quickstart: every `tmux new-session` raised, and
+`mindflock new` reported "failed to start" (found on PR #350; the
+quickstart's failure diagnostic re-runs this spawn with the installed tool's
+interpreter). On `NotImplementedError` `spawn_pty` calls libc's own
+`posix_spawn` through ctypes with `POSIX_SPAWN_SETSID` (0x80) and the same
+file actions: the same `clone`, the GIL released, no Python in the child. A
+libc older than the flag refuses it with `OSError`.
+`tests/unit/test_engine_pty_spawn.py` stands that interpreter in (an
+`os.posix_spawn` that refuses `setsid=`) and checks the child is still a
+session leader on its PTY, in the foreground, at the given size, and that
+the engine's real tmux create and restore work, without a fork.
 
 `spawn_pty(argv, *, dimensions=(24, 80), env=None, cwd=None)` contract: it
 returns a `ptyprocess.PtyProcess`; a missing command raises
