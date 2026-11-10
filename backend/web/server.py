@@ -113,6 +113,8 @@ modules under
     test_plans_driver Verify: the push trigger, the due loop (liveness,
                      running plans, landings, orphan sweep), run-route helpers
     terminal         PTY/tmux attach plumbing shared by the websockets
+    terminal_ws      the terminal websockets' PTY client off the event loop:
+                     attach (timeout + concurrency cap), writes, detach
     uploads          pasted/dropped file storage + retention
     usage_api        per-provider usage descriptors for /api/usage
     window_refresh   window-refresh keepalive config + scheduling
@@ -192,6 +194,7 @@ from backend.web.core import (
 from backend.web.core import guests as _guests
 from backend.web.core import move_session as _move_session
 from backend.web.core import guest_terminal as _guest_terminal
+from backend.web.core import terminal_ws as _terminal_ws
 from backend.web.core import guest_tunnel as _guest_tunnel
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
@@ -469,7 +472,6 @@ from backend.web.core.terminal import (
     apply_scroll_speed,
     is_terminal_reply,
     load_scroll_speed,
-    pty_write,
     pump_pty,
     save_scroll_speed,
     spawn_tail,
@@ -13058,6 +13060,35 @@ app.include_router(_chat_routes.router)
 app.include_router(_guest_routes.router)
 
 
+async def _attach_pty(ws: WebSocket, name: str, guest: bool):
+    """A tmux client on ``name`` for a terminal websocket (a guest's
+    READ-ONLY, see terminal_ws), or None once the socket is closed with why.
+
+    Never on the event loop (incident 2026-11-10: a spawn that forked a
+    1.7 GB server on the loop never returned and froze every request):
+    core.terminal_ws.attach_off_loop spawns on a thread, two at a time
+    server-wide, and gives up after ATTACH_TIMEOUT_S — the socket closes
+    with 1013 and the reason, and the server keeps answering."""
+
+    def spawn():
+        if guest:
+            return _guest_terminal.spawn_readonly_attach(name, 24, 80)
+        return mux.attach(name, dimensions=(24, 80))
+
+    try:
+        return await _terminal_ws.attach_off_loop(spawn)
+    except _terminal_ws.AttachTimeout as err:
+        frame, code = {"type": "error", "message": str(err)}, _terminal_ws.TIMEOUT_CLOSE
+    except Exception as err:  # noqa: BLE001
+        frame, code = {"type": "error", "message": str(err)}, 4500
+    try:
+        await ws.send_text(json.dumps(frame))
+        await ws.close(code=code)
+    except Exception:  # noqa: BLE001 — the browser already left
+        pass
+    return None
+
+
 @app.websocket("/api/instances/{title}/shell")
 async def shell_ws(ws: WebSocket, title: str) -> None:
     """Interactive shell in the session's workspace dir (a separate tmux session
@@ -13089,15 +13120,11 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
     # key would hand them tmux itself): read-only attach for output, their
     # keystrokes by send-keys into the pane (core.guest_terminal).
     guest = _guests.scope_guest(ws) is not None
-    try:
-        if guest:
-            proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
-        else:
-            proc = mux.attach(name, dimensions=(24, 80))
-    except Exception as err:  # noqa: BLE001
-        await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
-        await ws.close(code=4500)
+    proc = await _attach_pty(ws, name, guest)
+    if proc is None:
         return
+    # pump_pty detaches it with proc.terminate(): off the loop (core.terminal_ws).
+    proc = _terminal_ws.detaching(proc)
     typist = (
         _guest_terminal.Typist(name, _guest_terminal.send_keys).start()
         if guest
@@ -14018,15 +14045,12 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # would hand them tmux itself — a new window with a plain shell, another
     # session, run-shell. The owner's own browsers keep the writable attach.
     guest = _guests.scope_guest(ws) is not None
-    try:
-        if guest:
-            proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
-        else:
-            proc = mux.attach(name, dimensions=(24, 80))
-    except Exception as err:  # noqa: BLE001
-        await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
-        await ws.close(code=4500)
+    proc = await _attach_pty(ws, name, guest)
+    if proc is None:
         return
+    # Keystrokes reach the client on their own thread: a blocking PTY write
+    # never holds the loop (core.terminal_ws).
+    writer = _terminal_ws.PtyWriter(proc)
     typist = (
         _guest_terminal.Typist(name, _guest_terminal.send_keys).start()
         if guest
@@ -14039,7 +14063,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
         that settles a dialog stamps the session's last answer first."""
         _note_pane_input(inst, title, data)
         if typist is None or is_terminal_reply(data):
-            pty_write(proc, data)
+            writer.write(data)
         else:
             typist.type(data)
 
@@ -14158,11 +14182,9 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
         out_q.put_nowait(None)
         sender.cancel()
         # Detach this client only (terminate the attach process); the tmux
-        # session itself keeps running so the agent isn't interrupted.
-        try:
-            proc.terminate(force=True)
-        except Exception:  # noqa: BLE001
-            pass
+        # session itself keeps running so the agent isn't interrupted. Off
+        # the loop: ptyprocess's terminate/close sleep (core.terminal_ws).
+        _terminal_ws.reap(proc, writer)
 
 
 # --------------------------------------------------------------------------- #

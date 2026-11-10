@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ones ("stop listening", "mic off", "pause listening") still end any phrase.
   The desktop, the phone page and the server read it the same way.
 
+- **Opening a terminal can no longer freeze the server.** A session's terminal
+  websocket spawned its `tmux attach` client (a `fork()` of the whole server)
+  on the event loop; on 2026-11-10 that fork never returned and every request
+  hung until the server was killed. The spawn now runs on a worker thread, two
+  at a time server-wide, and gives up after 15 s: the pane shows *terminal
+  attach timed out* and the socket closes with 1013 (new on the terminal
+  websockets; a client should treat it as transient) while the server keeps
+  answering. Keystrokes to the client and the detach (which slept up to
+  0.4 s per pane on the loop) are off the loop too. And the client no longer
+  forks the server at all: `mux.attach` starts it with `posix_spawn`
+  (`mux.spawn_pty`), which copies no page tables and runs no Python in the
+  child — a fork holds the GIL, so even on a thread it stalled every request.
+
 ## [0.14.3] - 2026-11-10
 
 ### Changed

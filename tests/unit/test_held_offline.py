@@ -29,11 +29,11 @@ import threading
 import time
 from types import SimpleNamespace
 
-import ptyprocess
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from backend.session import mux
 from backend.config import settings as S
 from backend.session.storage import Status
 from backend.web import server
@@ -381,9 +381,7 @@ def test_once_released_the_helper_launches_again(h, monkeypatch):
 def test_the_terminal_socket_closes_4424_and_launches_nothing(h, monkeypatch):
     _no_provider(monkeypatch)  # the REAL helper runs: it must not get this far
     spawned = []
-    monkeypatch.setattr(
-        ptyprocess.PtyProcess, "spawn", lambda *a, **k: spawned.append(a)
-    )
+    monkeypatch.setattr(mux, "spawn_pty", lambda *a, **k: spawned.append(a))
     c = TestClient(server.app)
     with c.websocket_connect("/api/instances/h/terminal") as ws:
         frame = json.loads(ws.receive_text())
