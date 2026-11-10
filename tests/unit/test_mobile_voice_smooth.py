@@ -660,10 +660,11 @@ def test_over_asks_the_router_while_end_makes_the_final():
     )
     assert "if (!fresh) L.early = null;" in route
     assert "return early.answer;" in route
-    # voiceHeard still routes the phrase the one way.
-    assert 'voiceRoute(p.text, "", false, p.spokeAt).then(function (res) {' in _whole(
-        js, "voiceHeard"
+    # voiceHeard still routes the phrase the one way (voiceRouteThen).
+    assert 'voiceRoute(text, "", false, spokeAt).then(function (res) {' in _whole(
+        js, "voiceRouteThen"
     )
+    assert "voiceRouteThen(p.text, p.spokeAt, typed," in _whole(js, "voiceHeard")
 
 
 # --------------------------------------------------------------------------- #
