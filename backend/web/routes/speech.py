@@ -49,7 +49,7 @@ Status codes, in the order they are checked:
   voice (``core.speech_kokoro``) in ``voice.assistant_voice`` — or the
   body's ``voice`` when that names a Kokoro voice (Settings' ▶ samples) —
   from a cache of its own (:data:`ASSISTANT_CACHE`), ``X-Voice-Assistant:
-  kokoro``; while Kokoro is not ready (not installed, memory low, a failed
+  kokoro``; while Kokoro is not ready (not installed, a failed
   load) the line goes through the normal chain above instead,
   ``X-Voice-Assistant: fallback``. Any other ``as`` is a 400.
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
@@ -529,7 +529,8 @@ class Prewarm:
         engine: Optional[_speech.Backend] = primary
         held = chain.memory_yield(primary)
         if held:
-            # Memory is short: a local host is not woken for a prewarm.
+            # The host is held back (never, now: voice is exempt from
+            # memory gating): a local host is not woken for a prewarm.
             engine = chain.fallback_for(primary, held=True)
         elif chain.down_reason(primary) or chain.too_slow(primary):
             engine = chain.fallback_for(primary)
@@ -1458,8 +1459,8 @@ def voice_voices(engine: str = "kokoro") -> JSONResponse:
     """The voices an engine offers: ``?engine=kokoro`` (the only one, and
     the default) → ``{"engine": "kokoro", "voices": [{"id", "label",
     "lang"}], "ready": bool, "reason": str, "voice": the assistant's}``.
-    ``ready`` is whether Kokoro can speak now (installed, model on disk, not
-    held back by memory), ``reason`` why not; the list is the same either
+    ``ready`` is whether Kokoro can speak now (installed, model on disk;
+    never held back by memory), ``reason`` why not; the list is the same either
     way (Settings shows the picker with its install prompt). 400 another
     engine. Readable by any signed-in client."""
     if str(engine or "").strip().lower() != _kokoro.KokoroTTS.id:

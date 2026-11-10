@@ -33,18 +33,12 @@ when there is no room. This module handles what is already running:
   on) turns it off; :data:`SHED_COOLDOWN_SECONDS` separates two sheds so
   the next one acts on readings taken after the memory came back.
 
-* **Voice Lab yields** (:func:`voice_lab_yield`, asked by
-  :mod:`backend.web.core.speech` before any request to a local voice host).
-  While the level reads ``low`` or ``critical``, MindFlock never wakes or
-  calls a voice host on this machine or network (Voice Lab, or any other
-  local model server): lines are said by the local fallback (piper, else the
-  OS voice), and a client with neither uses its own. The log says why once
-  per episode. When the level turns ``critical`` and Voice Lab's backend is
-  running, it is stopped (:func:`stop_voice_lab`: ``systemctl --user stop
-  voicelab-backend.service`` where that unit exists). It is
-  socket-activated, so the next voice request would start it again, and
-  that request only reaches it once memory allows. Everything works without
-  Voice Lab installed: no unit, nothing to stop.
+* **Voice is left alone.** The owner's rule (2026-11-10: "I don't want
+  voice models off when memory gets low"): the shield never stops Voice Lab
+  (or any local voice host), and nothing here holds voice back — local
+  recognition, local TTS and voice-host calls run whatever the level reads
+  (:func:`backend.web.core.speech.host_held_back`). Room is made by
+  shedding idle agents instead.
 
 Stdlib only at import (plus :mod:`backend.memory_pressure`); everything
 else is imported lazily inside the calls.
@@ -53,7 +47,6 @@ else is imported lazily inside the calls.
 from __future__ import annotations
 
 import os
-import subprocess
 import threading
 import time
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
@@ -69,9 +62,6 @@ __all__ = [
     "choose_shed",
     "shed_notice_text",
     "tick",
-    "voice_lab_blocked",
-    "voice_lab_yield",
-    "stop_voice_lab",
     "status",
 ]
 
@@ -96,18 +86,12 @@ IDLE_SCORE_CAP_SECONDS = 3600.0
 #: Rows whose ``activity`` is one of these are never shed (also vetoed).
 _BUSY = frozenset({"working", "clarify", "limit", "asking", "dialog"})
 
-#: The Voice Lab backend unit (``MINDFLOCK_VOICELAB_UNIT``; ``0``/``off`` = never stop it).
-VOICELAB_UNIT = "voicelab-backend.service"
-
 _LOCK = threading.Lock()
 _STATE: Dict[str, object] = {
     "critical_since": None,
     "last_shed_at": 0.0,
     "last_shed": [],
     "last_decision": "",
-    "voice_yield": "",
-    "voicelab_stopped_at": 0.0,
-    "voicelab_last": "",
 }
 
 
@@ -411,22 +395,16 @@ def tick(
     now: Optional[float] = None,
     *,
     sleeper: Optional[Callable] = None,
-    runner: Optional[Callable] = None,
 ) -> dict:
     """One look (the server's memory watch, every 10 s; blocking: off the
-    loop) → ``{"shed": [titles], "why", "voicelab": str}``. Stops Voice
-    Lab's backend at ``critical`` (:func:`stop_voice_lab`) and sheds idle
-    agents when :func:`shed_due` says so. Under pytest nothing real is
-    touched unless the test passes ``srv`` + ``sleeper`` / ``runner``.
-    Never raises."""
+    loop) → ``{"shed": [titles], "why"}``. Sheds idle agents when
+    :func:`shed_due` says so; never touches voice (Voice Lab keeps running
+    at ``critical``). Under pytest nothing real is touched unless the test
+    passes ``srv`` + ``sleeper``. Never raises."""
     now = time.time() if now is None else now
-    out: dict = {"shed": [], "why": "", "voicelab": ""}
+    out: dict = {"shed": [], "why": ""}
     try:
         snap = memory_pressure.snapshot() if snap is None else snap
-        lvl = snap.get("level")
-        _note_voice_level(snap)
-        if lvl == "critical":
-            out["voicelab"] = stop_voice_lab(runner) or ""
         with _LOCK:
             due, why = shed_due(_STATE, snap, now)
         out["why"] = why
@@ -457,115 +435,9 @@ def tick(
     return out
 
 
-# --------------------------------------------------------------------------- #
-# Voice Lab
-# --------------------------------------------------------------------------- #
-def voice_lab_blocked(snap: dict) -> str:
-    """Why a local voice host must not be woken or called now ("" = it may):
-    the level reads ``low`` or ``critical`` (pure)."""
-    if snap.get("level") not in ("low", "critical"):
-        return ""
-    return memory_pressure.describe(snap) or "memory is %s" % snap.get("level")
-
-
-def _note_voice_level(snap: dict) -> str:
-    """Log once per episode that voice hosts are held back (and once when
-    they may be used again). → the current reason."""
-    why = voice_lab_blocked(snap)
-    with _LOCK:
-        prev = str(_STATE.get("voice_yield") or "")
-        _STATE["voice_yield"] = why
-    if why and not prev:
-        _info(
-            "voice: Voice Lab (a local voice host) is not woken or called while "
-            "%s; lines are said by the local voice instead",
-            why,
-        )
-    elif prev and not why:
-        _info("voice: memory recovered; Voice Lab may be used again")
-    return why
-
-
-def voice_lab_yield() -> str:
-    """The live question :mod:`backend.web.core.speech` asks before a request
-    to a local voice host: why not ("" = go). Never raises."""
-    try:
-        return _note_voice_level(memory_pressure.snapshot())
-    except Exception:  # noqa: BLE001 — the guard never breaks a request
-        return ""
-
-
-def _unit() -> str:
-    raw = os.environ.get("MINDFLOCK_VOICELAB_UNIT")
-    if raw is None:
-        return VOICELAB_UNIT
-    raw = raw.strip()
-    return "" if raw.lower() in ("", "0", "off", "none", "false") else raw
-
-
-def stop_voice_lab(runner: Optional[Callable] = None) -> str:
-    """Stop Voice Lab's backend when its unit exists and runs → what was
-    done (``"stopped voicelab-backend.service"``), or "" (no systemd, no
-    such unit, not running, or turned off).
-    ``runner`` is ``subprocess.run``'s shape (tests inject a fake; under
-    pytest the real one is never used). Never raises."""
-    unit = _unit()
-    if not unit:
-        return ""
-    if runner is None:
-        if _under_pytest():
-            return ""
-        runner = subprocess.run
-    import shutil
-
-    systemctl = shutil.which("systemctl") if runner is subprocess.run else "systemctl"
-    if not systemctl:
-        return ""
-    try:
-        shown = runner(
-            [systemctl, "--user", "show", "-p", "LoadState", "-p", "ActiveState", unit],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        props = dict(
-            line.split("=", 1)
-            for line in (getattr(shown, "stdout", "") or "").splitlines()
-            if "=" in line
-        )
-        if getattr(shown, "returncode", 1) != 0 or props.get("LoadState") != "loaded":
-            return ""
-        if props.get("ActiveState") not in ("active", "activating", "reloading"):
-            return ""
-        done = runner(
-            [systemctl, "--user", "stop", unit],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        ok = getattr(done, "returncode", 1) == 0
-    except Exception as err:  # noqa: BLE001
-        _info("voice: could not stop %s: %s", unit, err)
-        return ""
-    msg = ("stopped %s" if ok else "could not stop %s") % unit
-    with _LOCK:
-        _STATE["voicelab_last"] = msg
-        if ok:
-            _STATE["voicelab_stopped_at"] = time.time()
-    _info(
-        "voice: memory is critical: %s (socket-activated: the next voice use "
-        "starts it again, once memory allows)",
-        msg,
-    )
-    return msg
-
-
 def status() -> dict:
     """For ``GET /api/memory/capacity`` → ``shield``: ``{"shed_idle",
-    "critical_since", "last_shed_at", "last_shed", "last_decision",
-    "voice_yield", "voicelab_last"}``."""
+    "critical_since", "last_shed_at", "last_shed", "last_decision"}``."""
     with _LOCK:
         st = dict(_STATE)
     return {
@@ -574,8 +446,6 @@ def status() -> dict:
         "last_shed_at": st.get("last_shed_at") or None,
         "last_shed": list(st.get("last_shed") or []),
         "last_decision": st.get("last_decision") or "",
-        "voice_yield": st.get("voice_yield") or "",
-        "voicelab_last": st.get("voicelab_last") or "",
     }
 
 
@@ -587,8 +457,5 @@ def _reset_for_tests() -> None:
                 "last_shed_at": 0.0,
                 "last_shed": [],
                 "last_decision": "",
-                "voice_yield": "",
-                "voicelab_stopped_at": 0.0,
-                "voicelab_last": "",
             }
         )

@@ -12,14 +12,12 @@ stopped or launched):
   over the low line), which (largest-and-longest-idle first, never a
   working / asking / viewed / driven / background session), the one
   notice, and the ``agent_memory.shed_idle`` switch;
-* Voice Lab yields — no local voice host is woken or called while memory
-  reads low (the fallback speaks), and its backend unit is stopped at
-  critical through a fake systemctl.
+* voice is left alone — test_voice_stays_on.py pins that the shield never
+  stops Voice Lab and nothing holds voice back for memory.
 """
 
 from __future__ import annotations
 
-import subprocess
 import time
 from types import SimpleNamespace
 
@@ -43,7 +41,6 @@ def _clean(monkeypatch):
         "MINDFLOCK_MAX_LIVE_AGENTS",
         "MINDFLOCK_AUTO_LAUNCH_SPACING",
         "MINDFLOCK_SHED_IDLE",
-        "MINDFLOCK_VOICELAB_UNIT",
     ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "0")
@@ -539,164 +536,6 @@ def test_under_pytest_nothing_real_is_slept(fake_pass):
     assert shield.tick(None, snap, 1061.0)["shed"] == []
     assert shield.tick(SimpleNamespace(), snap, 1200.0)["shed"] == []
     assert fake_pass.slept == []
-
-
-# --------------------------------------------------------------------------- #
-# Voice Lab
-# --------------------------------------------------------------------------- #
-def test_voice_lab_is_held_back_only_while_memory_is_short():
-    assert shield.voice_lab_blocked(_snap()) == ""
-    assert shield.voice_lab_blocked({"level": "unknown"}) == ""
-    assert shield.voice_lab_blocked(_snap("low", int(2.5 * GiB))).startswith(
-        "memory is low: 2.5 GB free"
-    )
-    assert "critically low" in shield.voice_lab_blocked(_snap("critical", GiB))
-
-
-def test_the_yield_is_logged_once_per_episode(monkeypatch):
-    lines = []
-    monkeypatch.setattr(shield, "_info", lambda fmt, *a: lines.append(fmt % a))
-    snap = {"v": _snap("low", 2 * GiB)}
-    monkeypatch.setattr(memory_pressure, "snapshot", lambda fresh=False: snap["v"])
-    assert shield.voice_lab_yield() and shield.voice_lab_yield()
-    snap["v"] = _snap()
-    assert shield.voice_lab_yield() == ""
-    assert len(lines) == 2
-    assert "is not woken or called while memory is low" in lines[0]
-    assert "may be used again" in lines[1]
-
-
-class _Systemctl:
-    def __init__(self, show="LoadState=loaded\nActiveState=active\n", rc=0):
-        self.show, self.rc, self.calls = show, rc, []
-
-    def __call__(self, argv, **kw):
-        self.calls.append(argv)
-        out = self.show if "show" in argv else ""
-        return subprocess.CompletedProcess(argv, self.rc, out, "")
-
-
-def test_critical_stops_a_running_voice_lab_backend():
-    ctl = _Systemctl()
-    assert shield.stop_voice_lab(ctl) == "stopped voicelab-backend.service"
-    assert ctl.calls[-1] == ["systemctl", "--user", "stop", "voicelab-backend.service"]
-
-
-@pytest.mark.parametrize(
-    "show",
-    [
-        "LoadState=loaded\nActiveState=inactive\n",  # idle already
-        "LoadState=not-found\nActiveState=inactive\n",  # no Voice Lab here
-    ],
-)
-def test_nothing_to_stop_leaves_it_alone(show):
-    ctl = _Systemctl(show)
-    assert shield.stop_voice_lab(ctl) == ""
-    assert not any("stop" in c for c in ctl.calls)
-
-
-def test_no_systemd_or_unit_off_is_a_no_op(monkeypatch):
-    ctl = _Systemctl(rc=1)  # no user manager
-    assert shield.stop_voice_lab(ctl) == ""
-    monkeypatch.setenv("MINDFLOCK_VOICELAB_UNIT", "0")
-    ctl = _Systemctl()
-    assert shield.stop_voice_lab(ctl) == "" and ctl.calls == []
-    # Under pytest the real systemctl is never used.
-    monkeypatch.delenv("MINDFLOCK_VOICELAB_UNIT")
-    assert shield.stop_voice_lab(None) == ""
-
-
-def test_the_tick_stops_voice_lab_only_at_critical(monkeypatch):
-    ctl = _Systemctl()
-    shield.tick(SimpleNamespace(), _snap("low", 2 * GiB), 1000.0, runner=ctl)
-    assert ctl.calls == []
-    out = shield.tick(SimpleNamespace(), _snap("critical", GiB), 1010.0, runner=ctl)
-    assert out["voicelab"] == "stopped voicelab-backend.service"
-
-
-# --------------------------------------------------------------------------- #
-# Voice Lab: the speech side (no request reaches a local host while short)
-# --------------------------------------------------------------------------- #
-@pytest.fixture
-def voice(isolate_settings_store, monkeypatch):
-    from backend.config import settings as S
-    from backend.web.core import speech
-
-    class _Fallback(speech.Backend):
-        kind = "tts"
-
-        def __init__(self, id, ok=True):
-            self.id, self.label, self.ok, self.spoken = id, id, ok, []
-
-        def ready(self):
-            return self.ok, "%s ready" % self.id
-
-        def speak(self, text, voice=""):
-            self.spoken.append(text)
-            return b"RIFF" + self.id.encode(), "audio/wav"
-
-    host = speech.OpenAITTS()
-    piper = _Fallback("local", ok=False)  # piper is held back too while low
-    system = _Fallback("system")
-    monkeypatch.setattr(speech, "BACKENDS", {"stt": [], "tts": [host, piper, system]})
-    S.update_settings(
-        voice={"tts_backend": "openai", "tts_url": "http://127.0.0.1:8770/v1"}
-    )
-    S.invalidate()
-    calls = []
-    monkeypatch.setattr(
-        speech, "_http", lambda *a, **kw: calls.append(a) or (200, "audio/mpeg", b"x")
-    )
-    level = {"v": "low"}
-    monkeypatch.setattr(
-        memory_pressure,
-        "snapshot",
-        lambda fresh=False: _snap(
-            level["v"], 2 * GiB if level["v"] != "ok" else 9 * GiB
-        ),
-    )
-    speech.TTS_CHAIN.reset()
-    yield SimpleNamespace(
-        speech=speech, host=host, piper=piper, system=system, calls=calls, level=level
-    )
-    speech.TTS_CHAIN.reset()
-
-
-def test_a_short_machine_never_calls_the_local_voice_host(voice):
-    sp = voice.speech
-    engine, fell_back, why = sp.TTS_CHAIN.pick(voice.host)
-    assert engine is voice.system and fell_back
-    assert why.startswith("voice host held back: memory is low")
-    audio, _mime, used, fb = sp.TTS_CHAIN.speak(voice.host, "All done.")
-    assert used is voice.system and fb and audio == b"RIFFsystem"
-    # A warm and a direct call are refused too: nothing reaches the host.
-    assert voice.host.warm().startswith("skipped: voice host held back")
-    with pytest.raises(sp.SpeechError):
-        voice.host.speak("hi")
-    assert voice.calls == []
-    st = sp.TTS_CHAIN.status(voice.host, probe=False)
-    assert st["held"] and st["engine"] is voice.system and st["cold"] is False
-
-
-def test_with_no_local_voice_the_client_speaks_for_itself(voice):
-    voice.system.ok = False
-    with pytest.raises(voice.speech.SpeechError) as err:
-        voice.speech.TTS_CHAIN.speak(voice.host, "All done.")
-    assert "held back" in str(err.value) and not err.value.down
-    assert voice.calls == []
-
-
-def test_once_memory_recovers_the_host_speaks_again(voice):
-    voice.level["v"] = "ok"
-    voice.speech.TTS_CHAIN.reset()
-    engine, fell_back, _why = voice.speech.TTS_CHAIN.pick(voice.host)
-    assert engine is voice.host and not fell_back
-
-
-def test_a_remote_voice_api_is_never_held():
-    from backend.web.core import speech
-
-    assert speech.host_held_back("https://api.openai.com/v1") == ""
 
 
 # --------------------------------------------------------------------------- #

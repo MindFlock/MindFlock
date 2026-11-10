@@ -1,7 +1,7 @@
 """``core.speech`` (the optional server speech backends): the OpenAI-compatible
 backend against a fake HTTP layer, the registry's ``select`` / ``choose`` /
-``describe``, the local backend's refusals (not installed, memory low) and
-the idle unload of a cached model.
+``describe``, the local backend's refusals (not installed — never memory:
+voice is exempt from memory gating) and the idle unload of a cached model.
 
 Nothing here reaches the network or loads a real model: ``_http`` is
 replaced, the lazy runtimes come from fake modules through ``_import``, and
@@ -260,30 +260,15 @@ class TestLocalRefusals:
             speech.LocalTTS().speak("Hi", "")
         assert speech.loaded() == []
 
-    def test_low_memory_holds_both_back(self, monkeypatch):
+    def test_low_memory_holds_neither_back(self, monkeypatch):
+        """Voice is exempt from memory gating (owner, 2026-11-10)."""
         monkeypatch.setattr(speech, "_installed", lambda name: True)
-        monkeypatch.setattr(
-            speech, "_import", lambda name: pytest.fail("must not import " + name)
-        )
         monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
-        monkeypatch.setattr(
-            memory_pressure,
-            "describe",
-            lambda snap=None: "memory is low: 1.2 GB free of 8.0 GB (15%)",
-        )
+        monkeypatch.setattr(memory_pressure, "level", lambda **kw: "critical")
         ok, detail = speech.LocalSTT().ready()
-        assert ok is False
-        assert (
-            detail
-            == "local recognition held back: memory is low: 1.2 GB free of 8.0 GB (15%)"
-        )
+        assert ok is True and "held back" not in detail
         ok, detail = speech.LocalTTS().ready()
-        assert ok is False and detail.startswith("local voice held back: memory is low")
-        with pytest.raises(speech.SpeechError, match="held back"):
-            speech.LocalSTT().transcribe(b"x", "audio/wav", "")
-        with pytest.raises(speech.SpeechError, match="held back"):
-            speech.LocalTTS().speak("Hi", "")
-        assert speech.loaded() == []
+        assert ok is True and "held back" not in detail
 
     def test_ready_mentions_ffmpeg_and_the_model(self, monkeypatch):
         monkeypatch.setattr(speech, "_installed", lambda name: True)
@@ -627,14 +612,13 @@ class TestLocalStream:
         assert model["names"] == ["base.en", "medium"]
         assert speech.loaded() == ["whisper:base.en", "whisper:medium"]
 
-    def test_refusals_are_speech_errors(self, model, monkeypatch):
+    def test_low_memory_never_refuses_a_stream(self, model, monkeypatch):
         from array import array
 
         run = speech.LocalSTT().stream_transcriber("")
         monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
-        with pytest.raises(speech.SpeechError, match="held back"):
-            run(array("f", [0.0]), "")
-        assert model["calls"] == []
+        run(array("f", [0.0]), "")
+        assert len(model["calls"]) == 1
 
     def test_other_backends_do_not_stream(self):
         assert speech.OpenAISTT().streams is False
@@ -1472,13 +1456,10 @@ class TestWarm:
         assert speech.warm("stt").startswith("skipped:")
         assert speech.loaded() == [] and whisper.loads == []
 
-    def test_warm_skips_when_not_installed_or_memory_is_low(self, monkeypatch):
+    def test_warm_skips_when_not_installed(self, monkeypatch):
         _set(stt_backend="local")
         monkeypatch.setattr(speech, "_installed", lambda name: False)
         assert speech.warm("stt").startswith("skipped:")
-        monkeypatch.setattr(speech, "_installed", lambda name: True)
-        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
-        assert "memory is low" in speech.warm("stt")
         assert speech.loaded() == []
 
     def test_warm_in_background_runs_once_and_is_a_no_op_when_resident(self, local):
@@ -1715,33 +1696,26 @@ class TestResident:
         speech.warm("stt")
         assert speech.stt_loaded() is True
 
-    def test_the_memory_guard_still_refuses_a_load(self, both, monkeypatch):
+    def test_low_memory_never_refuses_a_load(self, both, monkeypatch):
+        """Voice is exempt from memory gating: a warm and a fresh model load
+        go ahead while memory reads low (the accurate pass failed on every
+        phrase while loads were refused)."""
         _set(stt_backend="local")
-        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
-        assert "memory is low" in speech.warm("stt")
-        assert speech.loaded() == []
-        assert speech.LocalSTT().ready()[0] is False
-
-    def test_the_memory_guard_never_refuses_a_loaded_model(self, both, monkeypatch):
-        """Under pressure every fast pass raised, so the client dropped to
-        clip mode — whose clips were refused the same way — though nothing
-        needed loading."""
-        _set(stt_backend="local")
-        speech.warm("stt")
-        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
+        monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: True)
+        assert speech.warm("stt") == "loaded"
+        assert speech.loaded() == ["whisper:base.en", "whisper:small.en"]
         stt = speech.LocalSTT()
         assert stt.ready()[0] is True
-        assert stt._model("base.en") is not None
-        with pytest.raises(speech.SpeechError, match="memory is low"):
-            stt._model("medium")  # not loaded: the guard holds
+        assert stt._model("medium") is not None  # not loaded yet: loads now
+        assert "whisper:medium" in speech.loaded()
 
-    def test_shedding_keeps_the_stream_model(self, both, clock):
+    def test_the_memory_watch_sheds_no_voice_model(self, both, clock):
         speech._LISTENING.clear()
         _set(stt_backend="local")
         speech.warm("stt")
         clock[0] += 500
-        assert speech.shed_for_memory() == ["whisper:small.en"]
-        assert speech.loaded() == ["whisper:base.en"]
+        assert speech.shed_for_memory() == []
+        assert speech.loaded() == ["whisper:base.en", "whisper:small.en"]
 
 
 class TestWarmVoice:
