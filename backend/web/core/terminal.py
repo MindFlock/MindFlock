@@ -2,9 +2,10 @@
 
 Every websocket terminal — the per-instance agent/shell terminals, and addon
 panes like the MindFlock log tail and the Assistant chat — bridges a spawned
-``ptyprocess`` to a websocket the same way. This module owns that single
-implementation so nobody re-implements the ~70-line bridge (and its resize /
-read-only / teardown semantics) again.
+``ptyprocess.PtyProcess`` (:func:`backend.session.mux.spawn_pty`) to a
+websocket the same way. This module owns that single implementation so
+nobody re-implements the ~70-line bridge (and its resize / read-only /
+teardown semantics) again.
 
 Note: the websocket *route* layer still owns connection validation and the
 close-code protocol (4404 instance-gone / 4409 workspace-gone / 4500 spawn
@@ -26,11 +27,6 @@ from typing import Callable, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 
 from backend.session import mux
-
-if not mux.IS_WINDOWS:
-    import ptyprocess
-else:  # pragma: no cover - native Windows: no POSIX PTYs (docs/windows.md)
-    ptyprocess = None
 
 # --------------------------------------------------------------------------- #
 # Terminal scroll speed (UI setting)
@@ -320,12 +316,14 @@ def spawn_tmux_attach(session_name: str, dimensions=(24, 80)):
 
 
 def spawn_tail(path, lines: int = 500, dimensions=(24, 80)):
-    """Spawn a PTY following a log file (read-only consumers). Native Windows
-    has no ``tail`` and no POSIX PTY: a :class:`FileFollower` does the same
-    (``fd`` is ``None``, so :func:`pump_pty` reads it from a thread)."""
+    """Spawn a PTY following a log file (read-only consumers) — by
+    :func:`backend.session.mux.spawn_pty` (``posix_spawn`` on Linux, never a
+    fork of the server). Native Windows has no ``tail`` and no POSIX PTY: a
+    :class:`FileFollower` does the same (``fd`` is ``None``, so
+    :func:`pump_pty` reads it from a thread)."""
     if mux.IS_WINDOWS:
         return FileFollower(path, lines=lines)
-    return ptyprocess.PtyProcess.spawn(
+    return mux.spawn_pty(
         ["tail", "-F", "-n", str(lines), str(path)],
         dimensions=dimensions,
         env={**os.environ, "TERM": "xterm-256color"},
@@ -526,10 +524,21 @@ async def pump_pty(
     as a ``{"type": "readonly", "message": …}`` text frame — the session
     terminals' driver lock (core.ownership). ``out_q`` lets the caller push
     its own frames (``str`` = a text frame, ``bytes`` = output) into the
-    socket from any thread via ``loop.call_soon_threadsafe``."""
+    socket from any thread via ``loop.call_soon_threadsafe``.
+
+    Nothing that can block on the client runs on the loop: input goes out
+    through a :class:`backend.web.core.terminal_ws.PtyWriter` (in order, on
+    one thread — a PTY write blocks while its client is not reading), and the
+    teardown (:func:`_detach`: ptyprocess's ``terminate`` sleeps 0.1 s per
+    signal, ``close`` another 0.1 s) runs on a thread the pump awaits, so the
+    client is gone, its input flushed or dropped, by the time it returns.
+    Reads stay on the loop (``add_reader`` fires only on a readable fd)."""
+    from backend.web.core.terminal_ws import PtyWriter
+
     loop = asyncio.get_running_loop()
     if out_q is None:
         out_q = asyncio.Queue()
+    writer = PtyWriter(proc)
 
     def _admit(data) -> bool:
         if gate is None or is_terminal_reply(data):
@@ -579,7 +588,7 @@ async def pump_pty(
                             on_input()
                         except Exception:  # noqa: BLE001
                             pass
-                    pty_write(proc, b)
+                    writer.write(b)
                 continue
             t = msg.get("text")
             if t is not None:
@@ -598,7 +607,7 @@ async def pump_pty(
                             on_input()
                         except Exception:  # noqa: BLE001
                             pass
-                    pty_write(proc, t.encode("utf-8"))
+                    writer.write(t.encode("utf-8"))
     except WebSocketDisconnect:
         pass
     finally:
@@ -608,7 +617,66 @@ async def pump_pty(
             pass
         out_q.put_nowait(None)
         sender.cancel()
+        await _off_loop(_detach, proc, writer, name="pty-detach")
+
+
+#: How long a teardown waits for the PTY writer once the client is gone.
+_WRITER_JOIN_S = 2.0
+
+
+def _detach(proc, writer) -> None:
+    """:func:`pump_pty`'s teardown (blocking — run off the loop): terminate
+    the client, let ``writer`` finish (a write blocked on a client that is
+    gone ends with it), then close the PTY so ``PtyProcess.__del__`` has no
+    sleeping ``close`` left to run on whichever thread drops the last
+    reference (often the loop). The fd is closed only once the writer is
+    done with it — a closed fd number is reused, and a late write would land
+    in someone else's file. A :class:`backend.web.core.terminal_ws.detaching`
+    client is one whose owner reaps it on a thread of its own: it goes to
+    :func:`~backend.web.core.terminal_ws.reap` (the same steps) together with
+    this pump's writer, so that fd too closes only after the writer."""
+    from backend.web.core import terminal_ws
+
+    if isinstance(proc, terminal_ws.detaching):
+        terminal_ws.reap(proc._proc, writer)
+        return
+    try:
+        proc.terminate(force=True)
+    except Exception:  # noqa: BLE001
+        pass
+    writer.close()
+    if not writer.join(_WRITER_JOIN_S):
+        return
+    close = getattr(proc, "close", None)
+    if close is not None:
         try:
-            proc.terminate(force=True)
+            close(force=True)
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _off_loop(fn, *args, name: str) -> None:
+    """``fn(*args)`` on its own daemon thread, awaited without holding the
+    loop (and without a slot in the loop's default executor, which a wedged
+    call would keep). Exceptions are swallowed: this is teardown. Cancelling
+    the await leaves ``fn`` running to completion."""
+    loop = asyncio.get_running_loop()
+    done: "asyncio.Future[None]" = loop.create_future()
+
+    def _settle() -> None:
+        if not done.done():
+            done.set_result(None)
+
+    def _run() -> None:
+        try:
+            fn(*args)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            try:
+                loop.call_soon_threadsafe(_settle)
+            except RuntimeError:  # the loop closed under us
+                pass
+
+    threading.Thread(target=_run, name=name, daemon=True).start()
+    await done

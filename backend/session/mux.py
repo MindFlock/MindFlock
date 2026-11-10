@@ -41,6 +41,7 @@ other session's argv goes to tmux exactly as given.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import subprocess
@@ -274,6 +275,10 @@ def attach(
 #: Linux: a PTY client starts by ``posix_spawn`` (:func:`spawn_pty`). Elsewhere
 #: (macOS: opening a tty does not make it the controlling one) ptyprocess.
 _POSIX_SPAWN_PTY = sys.platform.startswith("linux") and hasattr(os, "posix_spawn")
+#: :func:`spawn_pty`'s ``cwd=``: the shell that changes directory and then
+#: ``exec``\ s the command (``$1`` = the directory, the rest = the argv).
+_SH = "/bin/sh"
+_CD_EXEC = 'cd "$1" && shift && exec "$@"'
 
 
 def spawn_pty(
@@ -281,8 +286,9 @@ def spawn_pty(
     *,
     dimensions: Tuple[int, int] = (24, 80),
     env: Optional[dict] = None,
+    cwd: Optional[str] = None,
 ) -> Any:
-    """``ptyprocess.PtyProcess.spawn(argv, dimensions=…, env=…)`` without
+    """``ptyprocess.PtyProcess.spawn(argv, dimensions=…, env=…, cwd=…)`` without
     ``fork()``: the same :class:`ptyprocess.PtyProcess` (same ``fd``,
     ``setwinsize``, ``terminate``, ``close``), its child started by
     ``os.posix_spawn``.
@@ -301,12 +307,27 @@ def spawn_pty(
     spawn, so the client starts at ``dimensions``. Fds: the server's are
     close-on-exec (Python's default), so the client inherits only 0/1/2.
 
+    ``cwd``: ``os.posix_spawn`` has no chdir action (glibc's
+    ``posix_spawn_file_actions_addchdir_np`` is not exposed), and changing
+    the server's own cwd around the spawn would move every thread. So the
+    child is ``/bin/sh -c 'cd "$1" && shift && exec "$@"'`` with the
+    absolute ``cwd`` and the resolved command as arguments — never pasted
+    into the script, so nothing is quoted or interpreted — and ``exec``
+    replaces the shell: same pid, same PTY, the command's own argv. As with
+    ptyprocess, ``argv[0]`` is then the resolved path. The shell's ``cd``
+    sets ``PWD`` to ``cwd`` (ptyprocess left the server's stale one); the
+    rest of ``env`` passes through untouched. A missing ``cwd`` raises
+    ``FileNotFoundError`` here, before anything is spawned.
+
     Off Linux this is ``ptyprocess.PtyProcess.spawn`` itself."""
     import ptyprocess
 
     argv = list(argv)
     if not _POSIX_SPAWN_PTY:
-        return ptyprocess.PtyProcess.spawn(argv, dimensions=dimensions, env=env)
+        kwargs = {} if cwd is None else {"cwd": cwd}
+        return ptyprocess.PtyProcess.spawn(
+            argv, dimensions=dimensions, env=env, **kwargs
+        )
     import fcntl
     import struct
     import termios
@@ -316,13 +337,22 @@ def spawn_pty(
         raise FileNotFoundError(
             "The command was not found or was not executable: %s." % argv[0]
         )
+    exe, child_argv = path, argv
+    if cwd is not None:
+        cwd = os.path.abspath(os.fspath(cwd))
+        if not os.path.isdir(cwd):
+            raise FileNotFoundError(
+                errno.ENOENT, "No such working directory for %s" % argv[0], cwd
+            )
+        exe = _SH
+        child_argv = [_SH, "-c", _CD_EXEC, "sh", cwd, path] + argv[1:]
     master, slave = os.openpty()  # both close-on-exec; slave opened O_NOCTTY
     try:
         rows, cols = dimensions
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         pid = os.posix_spawn(
-            path,
-            argv,
+            exe,
+            child_argv,
             dict(os.environ if env is None else env),
             setsid=True,
             file_actions=[
@@ -337,9 +367,11 @@ def spawn_pty(
     finally:
         os.close(slave)
     proc = ptyprocess.PtyProcess(pid, master)
-    proc.argv = argv
+    proc.argv = argv if cwd is None else [path] + argv[1:]
     if env is not None:
         proc.env = env
+    if cwd is not None:
+        proc.launch_dir = cwd
     return proc
 
 

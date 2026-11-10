@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The login terminals and the ticket log stream no longer fork the
+  server.** 0.14.4 moved the terminal clients to `posix_spawn`; the provider
+  and `gh` login terminals and the ticket log stream still forked the whole
+  server through ptyprocess (a fork holds the GIL, so a slow one under
+  memory pressure froze every request). They now start through
+  `mux.spawn_pty`, which gained `cwd=`. (The engine's own short-lived PTY at
+  session create/restore still uses ptyprocess for now.) The terminal pump's keystrokes and
+  teardown (up to 0.6 s of ptyprocess sleeps per pane) and the no-tmux login
+  terminal's input and kill are off the event loop too.
+
 ## [0.14.4] - 2026-11-10
 
 ### Changed

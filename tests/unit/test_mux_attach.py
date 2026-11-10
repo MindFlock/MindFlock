@@ -305,14 +305,22 @@ def test_concurrent_spawns_never_leak_one_childs_pty_into_another():
         for p in procs:
             # The fds after exec: 0/1/2 on its own slave, plus whatever the
             # runner handed this process inheritable — never another's PTY.
+            # Right after the exec the child's dynamic loader may still hold
+            # a library or ld.so.cache open (fd 3+) for a moment; what must
+            # never be there is ANOTHER child's PTY. An fd that closes while
+            # we look is gone, not leaked.
             fds = {int(n) for n in os.listdir("/proc/%d/fd" % p.pid)}
-            assert fds - inherited <= {0, 1, 2}, (p.pid, fds)
             mine = os.readlink("/proc/%d/fd/0" % p.pid)
-            for fd in fds - {0, 1, 2}:
-                target = os.readlink("/proc/%d/fd/%d" % (p.pid, fd))
-                assert "ptmx" not in target and not target.startswith(
-                    "/dev/pts/"
-                ), target
+            for fd in fds - {0, 1, 2} - inherited:
+                try:
+                    target = os.readlink("/proc/%d/fd/%d" % (p.pid, fd))
+                except FileNotFoundError:
+                    continue
+                assert "ptmx" not in target and not target.startswith("/dev/pts/"), (
+                    p.pid,
+                    fd,
+                    target,
+                )
             assert os.readlink("/proc/%d/fd/1" % p.pid) == mine
             assert os.readlink("/proc/%d/fd/2" % p.pid) == mine
         ttys = [os.readlink("/proc/%d/fd/0" % p.pid) for p in procs]
