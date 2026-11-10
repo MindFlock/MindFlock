@@ -13,11 +13,16 @@ The launch gate (:mod:`backend.web.core.launch_gate`) keeps new agents out
 when there is no room. This module handles what is already running:
 
 * **Shed idle agents** (:func:`tick`, from the server's memory watch every
-  10 s). When the level stays ``critical`` for :data:`SHED_AFTER_SECONDS`, or
+  10 s). Only on SUSTAINED critical distress: the level itself steps up to
+  ``critical`` only once a distress signal (PSI stalls, swap-in, OOM kills,
+  a tiny available floor, Windows' commit charge or hard paging — see
+  :mod:`backend.memory_pressure`) has held for its
+  :data:`~backend.memory_pressure.SUSTAIN_SECONDS`; it must then stay
+  ``critical`` for :data:`SHED_AFTER_SECONDS` more — or, already critical,
   PSI ``full`` avg10 reaches :data:`FULL_AVG10_SHED` (every runnable task on
   the machine stalled on memory for a quarter of the last 10 s: a thrash
-  already under way, where waiting out the minute would cost 15 s of total
-  stall), idle agent sessions are put to sleep through
+  under way, where waiting out the minute would cost 15 s of total stall).
+  Then idle agent sessions are put to sleep through
   :mod:`backend.web.core.sleep` (the same machinery as the memory dialog's
   "Put idle agents to sleep first"; Wake brings them back, resuming their
   conversation). The candidates are what :func:`sleep.veto` allows with a
@@ -28,8 +33,9 @@ when there is no room. This module handles what is already running:
   (:func:`choose_shed`: measured size times idle time, capped at an hour),
   and only as many as it takes, at the learned per-session cost
   (:func:`launch_gate.learned_cost`) where a session is unmeasured, to bring
-  available memory back over the ``low`` line. ONE notification per shed,
-  and each decision is logged. ``general.agent_memory.shed_idle`` (default
+  available memory back over the ``low`` floor (at least one: a stall or a
+  swap-in storm has no byte target). ONE notification per shed, and each
+  decision is logged with the signal that made the shield act. ``general.agent_memory.shed_idle`` (default
   on) turns it off; :data:`SHED_COOLDOWN_SECONDS` separates two sheds so
   the next one acts on readings taken after the memory came back.
 
@@ -67,9 +73,11 @@ __all__ = [
 
 _MiB = 1024**2
 
-#: How long ``critical`` must hold before idle agents are shed.
+#: How long ``critical`` must hold before idle agents are shed (on top of the
+#: gauge's own sustain before it reads critical at all).
 SHED_AFTER_SECONDS = 60.0
-#: PSI ``full`` avg10 (%) at or past which they are shed at once.
+#: PSI ``full`` avg10 (%) at or past which, while critical, they are shed at
+#: once.
 FULL_AVG10_SHED = 25.0
 #: Between two sheds: the freed memory shows in MemAvailable within seconds,
 #: PSI avg10 decays over ~20 s. The next shed acts on readings taken after.
@@ -137,9 +145,10 @@ def shed_enabled() -> bool:
 def shed_due(state: dict, snap: dict, now: float) -> Tuple[bool, str]:
     """Whether to shed now → ``(due, why)``; updates ``state``'s
     ``critical_since`` (pure apart from that). Due when the level has read
-    ``critical`` for :data:`SHED_AFTER_SECONDS`, or PSI ``full`` avg10 is at
-    :data:`FULL_AVG10_SHED` or past it; never within
-    :data:`SHED_COOLDOWN_SECONDS` of the last shed."""
+    ``critical`` for :data:`SHED_AFTER_SECONDS`, or reads ``critical`` with
+    PSI ``full`` avg10 at :data:`FULL_AVG10_SHED` or past it; never within
+    :data:`SHED_COOLDOWN_SECONDS` of the last shed. ``why`` names the signal
+    (the snapshot's ``why``, see :func:`memory_pressure.describe`)."""
     lvl = snap.get("level")
     psi = snap.get("psi") or {}
     try:
@@ -153,24 +162,33 @@ def shed_due(state: dict, snap: dict, now: float) -> Tuple[bool, str]:
         state["critical_since"] = None
     if now - float(state.get("last_shed_at") or 0.0) < SHED_COOLDOWN_SECONDS:
         return False, ""
-    if full10 >= FULL_AVG10_SHED and lvl in ("ok", "low", "critical"):
-        return True, "every task stalled on memory %d%% of the last 10 s" % int(
-            round(full10)
+    signals = "; ".join(w for w in (snap.get("why") or []) if w)
+    if full10 >= FULL_AVG10_SHED and lvl == "critical":
+        return True, "every task stalled on memory %d%% of the last 10 s%s" % (
+            int(round(full10)),
+            " (critical: %s)" % signals if signals else "",
         )
     since = state.get("critical_since")
     if since is not None and now - float(since) >= SHED_AFTER_SECONDS:  # type: ignore[arg-type]
-        return True, "memory has been critical for %ds" % int(now - float(since))  # type: ignore[arg-type]
+        return True, "memory has been critical for %ds%s" % (
+            int(now - float(since)),  # type: ignore[arg-type]
+            " (%s)" % signals if signals else "",
+        )
     return False, ""
 
 
 def shed_need_mb(snap: dict, low_line_bytes: Optional[float] = None) -> int:
-    """MB to free to bring available memory back over the ``low`` line
-    (``max(low share of RAM, absolute floor)``), 0 when already over. Inside
-    WSL with a host reading, also the host's shortfall under its own low
-    line, measured on its headroom (Windows' available plus what the guest
-    can reuse, :func:`memory_pressure.host_headroom`): while the guest holds
-    reusable memory, putting agents to sleep frees nothing Windows gets back
-    soon, so only a shortfall past that is worth freeing."""
+    """MB to free to bring available memory back over the ``low`` floor
+    (``max(low share of RAM, absolute floor)``), 0 when already over — the
+    shed then takes one session at a time (critical came from a stall,
+    swap-in or Windows' commit charge, which have no byte target; the
+    cooldown lets the next pass see the effect). Inside WSL with a host
+    reading, also the host's shortfall under its headroom floor
+    (:func:`memory_pressure.host_low_line`), measured on its headroom
+    (Windows' available plus what the guest can reuse,
+    :func:`memory_pressure.host_headroom`): while the guest holds reusable
+    memory, putting agents to sleep frees nothing Windows gets back soon, so
+    only a shortfall past that is worth freeing."""
     total = float(snap.get("total") or 0)
     avail = float(snap.get("available") or 0)
     if low_line_bytes is None:
@@ -316,10 +334,16 @@ def _shed(srv, snap: dict, why: str, now: float, sleeper=None) -> List[str]:
     picks = choose_shed(cands, max(need, 1), int(cost["session_mb"]))
     skipped = ", ".join("%s ×%d" % (k, n) for k, n in sorted(vetoed.items()))
     _info(
-        "%s (%s): need ~%d MB to get back over the low line; %d idle "
+        "acting on %s%s: need ~%d MB to get back over the low line; %d idle "
         "candidate(s), chose %s%s",
         why,
-        memory_pressure.describe(snap) or "memory critical",
+        # The signals are in ``why`` already (shed_due); an older snapshot's
+        # numbers are not.
+        (
+            ""
+            if snap.get("why")
+            else " (%s)" % (memory_pressure.describe(snap) or "memory critical")
+        ),
         need,
         len(cands),
         ", ".join(

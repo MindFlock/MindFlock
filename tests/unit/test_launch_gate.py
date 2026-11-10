@@ -283,15 +283,15 @@ _COST = {"session_mb": 1024, "peak_mb": 1024, "source": "measured", "samples": 3
 
 
 def test_budget_is_capped_by_windows_headroom_and_says_so():
-    # VM: 10 - 2 reserve = 8 GB; Windows: 6 - 2.56 (8% of 32) = 3.44 GB.
+    # VM: 10 - 2 reserve = 8 GB; Windows: 6 - 2 (its headroom floor) = 4 GB.
     snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
-    snap["host"] = _host(6 * GiB)
+    snap["host"] = _host(5.5 * GiB)
     b = gate.budget(snap, _COST, reserve=2 * GiB)
-    assert b["room"] == 3 and b["free_mb"] == 3523  # 6144 - 2621.4
+    assert b["room"] == 3 and b["free_mb"] == 3584  # 5632 - 2048
     assert b["available_mb"] == 10240  # the guest's own number still reported
     assert b["why"] == (
-        "room for 3 more sessions: Windows has 6.0 GB available over its own "
-        "reserve of 2.6 GB, each ~1.0 GB (measured over 3 sessions)"
+        "room for 3 more sessions: Windows has 5.5 GB available over its own "
+        "reserve of 2.0 GB, each ~1.0 GB (measured over 3 sessions)"
     )
 
 
@@ -305,17 +305,17 @@ def test_budget_keeps_the_guest_sum_when_the_guest_binds():
 
 
 def test_windows_with_no_headroom_leaves_no_room_while_still_ok():
-    # Windows at 3 GB is ok (it came down from above), the low line 2.56 GB;
+    # Windows at 2.5 GB is ok (it came down from above), its floor 2 GB;
     # an agent warming with 1 GB still to come eats past it.
     snap = {"level": "ok", "available": 10 * GiB, "total": 20 * GiB}
-    snap["host"] = _host(3 * GiB)
+    snap["host"] = _host(int(2.5 * GiB))
     b = gate.budget(snap, _COST, [None], reserve=2 * GiB)
     assert b["room"] == 0 and b["to_come_mb"] == 1024
-    host_free = 3 * GiB - 0.08 * 32 * GiB - 1 * GiB
+    host_free = 2.5 * GiB - 2 * GiB - 1 * GiB
     assert b["free_mb"] == round(host_free / 1024**2)
     assert b["short_mb"] == 1024  # all of one session: nothing is free
     assert b["why"].startswith("one more session needs ~1.0 GB; only 0.0 GB")
-    assert "Windows has 3.0 GB available over its own reserve" in b["why"]
+    assert "Windows has 2.5 GB available over its own reserve" in b["why"]
 
 
 @pytest.mark.parametrize("host", [None, {}, {"available": GiB, "total": 0}])
@@ -399,3 +399,55 @@ def test_decide_names_what_holds_it(monkeypatch):
     monkeypatch.setenv("MINDFLOCK_MAX_LIVE_AGENTS", "1")
     gate.note_start("x")
     assert gate.decide("auto", fresh=True)["why"] == "cap"
+
+
+@pytest.mark.parametrize(
+    "swap_in, penalised",
+    [
+        (0.0, False),
+        (0.99, False),
+        (1.0, True),  # SWAP_PENALTY_FROM_MB_S: at the line it counts
+        (5.0, True),
+        ("n/a", True),  # unreadable: the old rule
+        ({"x": 1}, True),
+        (None, True),  # absent (an older snapshot, or no rate yet)
+    ],
+)
+def test_swap_in_use_costs_room_only_while_it_is_read_back(swap_in, penalised):
+    snap = {
+        "level": "ok",
+        "available": 10 * GiB,
+        "total": 20 * GiB,
+        "swap_total": 8 * GiB,
+        "swap_free": 6 * GiB,  # 2 GB in swap, at the 10%-of-RAM cap
+    }
+    if swap_in is not None:
+        snap["swap_in_mb_s"] = swap_in
+    swap_pen, psi_pen = gate._penalties(snap)
+    assert swap_pen == (2 * GiB if penalised else 0) and psi_pen == 0
+
+
+def test_the_reserve_is_8_percent_of_ram_and_windows_keeps_2_gb():
+    memory_pressure._reset_for_tests()  # the default share settings
+    assert gate.reserve_bytes(64 * GiB) == int(0.08 * (64 * GiB))  # 5.12 GB
+    assert gate.reserve_bytes(16 * GiB) == 2 * GiB  # the floor
+    for host_total in (16 * GiB, 128 * GiB):
+        snap = {"level": "ok", "available": 40 * GiB, "total": 64 * GiB}
+        snap["host"] = _host(6 * GiB, total=host_total)
+        b = gate.budget(snap, _COST)
+        assert b["reserve_mb"] == round(0.08 * 64 * 1024)
+        assert b["free_mb"] == 4096  # Windows binds: 6 - its 2 GB floor
+        assert "over its own reserve of 2.0 GB" in b["why"]
+    memory_pressure._reset_for_tests()
+
+
+def test_a_pending_step_up_starts_but_a_sustained_low_waits(monkeypatch):
+    """``pending`` is the gauge still waiting out its sustain: the level is
+    ok, so an automatic start goes. Once low lands it waits, room or not."""
+    snap = _memory(monkeypatch, available=16 * GiB)
+    snap.update(pending="critical", why=["swapping 9.5 MB/s back in from disk"])
+    assert gate.decide("auto")["decision"] == "go"
+    snap.update(level="low", pending=None)
+    v = gate.decide("auto")
+    assert v["decision"] == "wait" and v["why"] == "memory"
+    assert "swapping 9.5 MB/s back in from disk" in v["reason"]

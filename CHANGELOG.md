@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The memory gauge reads real distress, not a share of "available".** It
+  read critical with 9.7 of 24 GB in use, holding every automatic start and
+  putting idle agents to sleep while nothing was short. Now `low` and
+  `critical` rest on readings that mean the machine is in trouble: processes
+  stalled on memory (PSI, `full` the strongest), swap being read back in at a
+  rate (swap merely in use no longer counts, in the level or the launch
+  budget), OOM kills, and an available floor that is genuinely small (the
+  `general.memory_low_pct` / `memory_critical_pct` defaults drop from 15 / 7
+  to 8 / 4, with 1.5 GB / 1 GB floors). Inside WSL, Windows reads on its
+  commit charge (low at 85 %, critical at 90 % of its limit) and on sustained
+  hard paging; its raw "available" no longer counts except under 256 MB, and
+  its headroom is only a floor. A step up must hold 30 s before it counts, so
+  one bad sample moves nothing, and the memory shield acts only on that
+  sustained critical. Every memory message now names the signal: *memory is
+  critical: processes stalled on memory 34% of the last minute*. Replayed
+  over the last two days of memory history, today's 140 low/critical samples
+  drop to 4 low (a real stall).
+
 ### Fixed
 
 - **WSL no longer reads "Windows memory is critically low" while it holds

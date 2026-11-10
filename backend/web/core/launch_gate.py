@@ -28,8 +28,11 @@ The gate answers **go / wait / refuse** from three things:
   admission **budget** (:func:`budget`) is ``room = (available - reserve -
   penalties - growth still to come of the warming agents) / session cost``:
   the reserve is the low line (``max(2 GB, general.memory_low_pct`` of RAM,
-  15% by default)), the penalties are swap in use and a rising PSI stall.
-  An automatic start waits while the room is 0; a person's start asks.
+  8% by default)), the penalties are swap in use while it is being swapped
+  back in, and a rising PSI stall. An automatic start waits while the room
+  is 0, and while memory reads ``low`` or ``critical``
+  (:mod:`backend.memory_pressure`: real distress, sustained); a person's
+  start asks.
 * **How many agents are live**, against a machine-wide cap
   (``MINDFLOCK_MAX_LIVE_AGENTS``; by default one agent per
   :data:`GB_PER_AGENT` GB of RAM, so 16 on 20 GB; ``0`` turns the cap off).
@@ -223,8 +226,12 @@ PEAK_CAP_RATIO = 2.5
 RESERVE_FLOOR_BYTES = 2 * _GiB
 #: Swap in use counts against the room (pages the running agents will fault
 #: back in; on WSL a disk-backed swap that drags the whole Windows host
-#: down), up to this share of RAM.
+#: down), up to this share of RAM — but only while they ARE being faulted
+#: back (the snapshot's ``swap_in_mb_s`` at :data:`SWAP_PENALTY_FROM_MB_S` or
+#: more). Cold pages parked in swap cost nothing; a snapshot without the
+#: rate (not measured yet, or an older shape) keeps the penalty.
 SWAP_PENALTY_SHARE = 0.10
+SWAP_PENALTY_FROM_MB_S = 1.0
 #: A RISING PSI stall (``some`` avg10 above avg60, and at least
 #: :data:`PSI_PENALTY_FROM` %) counts ``avg10 / PSI_PENALTY_DIVISOR`` of RAM
 #: against the room, up to :data:`PSI_PENALTY_MAX` (20% stalled → 10% of RAM).
@@ -396,6 +403,13 @@ def _penalties(snap: dict) -> Tuple[int, int]:
         0.0, float(snap.get("swap_total") or 0) - float(snap.get("swap_free") or 0)
     )
     swap_pen = min(swap_used, SWAP_PENALTY_SHARE * total)
+    swap_in = snap.get("swap_in_mb_s")
+    if swap_in is not None:
+        try:
+            if float(swap_in) < SWAP_PENALTY_FROM_MB_S:
+                swap_pen = 0.0
+        except (TypeError, ValueError):
+            pass
     psi = snap.get("psi") or {}
     try:
         a10 = float(psi.get("some_avg10") or 0.0)

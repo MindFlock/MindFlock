@@ -1295,8 +1295,11 @@ class GeneralSettings:
 
     ``memory_low_pct`` / ``memory_critical_pct``: the share of RAM the kernel
     reports available (MemAvailable) at or below which memory reads low /
-    critical. ``None`` = 15 / 7; ``0`` drops that signal (the absolute floors
-    and the PSI stall readings still count).
+    critical — a FLOOR, one distress signal among several
+    (:mod:`backend.memory_pressure`: PSI stalls, swap-in rate, OOM kills).
+    ``None`` = 8 / 4 (was 15 / 7: MemAvailable at 15% of a 26 GB box is
+    still 3.9 GB a new agent can have); ``0`` drops that signal (the absolute
+    floors and the other signals still count).
 
     ``max_live_agents`` / ``agent_warmup_mb``: the launch gate
     (:mod:`backend.web.core.launch_gate`). The first is the most live agents
@@ -1380,8 +1383,8 @@ class GeneralSettings:
     revive_on_start: Optional[bool] = None  # None = OFF (see docstring)
     sleep_idle_minutes: Optional[int] = None  # None = 45; 0 = off (see docstring)
     memory_sleep_minutes: Optional[int] = None  # None = 5; 0 = off (see docstring)
-    memory_low_pct: Optional[int] = None  # None = 15 (see docstring)
-    memory_critical_pct: Optional[int] = None  # None = 7 (see docstring)
+    memory_low_pct: Optional[int] = None  # None = 8 (see docstring)
+    memory_critical_pct: Optional[int] = None  # None = 4 (see docstring)
     max_live_agents: Optional[int] = None  # None = RAM / 1.2 GB; 0 = no cap
     agent_warmup_mb: Optional[int] = None  # None = 700 (see docstring)
     agent_mcp: Optional[bool] = None  # None = on (see docstring)
