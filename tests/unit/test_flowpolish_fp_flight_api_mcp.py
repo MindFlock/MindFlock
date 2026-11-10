@@ -95,13 +95,13 @@ class TestDryRun:
     def test_lists_the_normalised_stops_where_it_starts_and_why_it_skips(self):
         box, api, clock = _box()
         steps = [
-            {"kind": "agent", "config": {"prompt": "go"}},
+            {"kind": "agent"},
             {"kind": "checks", "config": {"timeout_minutes": 20}},
         ]
         out = box.start_flight({"steps": steps, "dry_run": True}, _ctx(clock))
         assert out["ok"] is True and "problems" not in out
         assert out["lines"][0].startswith('skipped · s1 agent "Agent works"')
-        assert "its prompt is not sent" in out["lines"][0]
+        assert "it has no prompt to send" in out["lines"][0]
         assert out["lines"][1].startswith('▶ s2 checks "CI checks"')
         assert out["start"] == 's2 "CI checks"'
         assert "at='s1'" in out["first_stop"]
@@ -125,9 +125,9 @@ class TestDryRun:
             in p
             for p in out["problems"]
         )
-        # The line is what the server would store: its default, not timeout=120.
-        assert "timeout=120" not in out["lines"][0]
-        assert "timeout_minutes=60" in out["lines"][0]
+        # Never echoed as if accepted: the server refuses the plan outright,
+        # so there are no "as it will fly" lines to show for it.
+        assert not any("timeout=120" in line for line in out.get("lines") or [])
 
     def test_a_strict_refusal_lists_the_allowed_values(self):
         box, api, clock = _box()
@@ -145,7 +145,8 @@ class TestDryRun:
         assert out["ok"] is False
         (p,) = out["problems"]
         assert p.startswith("steps[1].config.who: who is agent, you or both")
-        assert "who is one of: both (Agent, then me) | agent (Agent only) | you (" in p
+        assert "who is one of: both (Agent, then me) | agent (Agent only" in p
+        assert "| you (Agent, then my sign-off)" in p
         # …and the real start refuses it the same way, with the values.
         with pytest.raises(ToolError) as err:
             box.start_flight(
@@ -476,7 +477,8 @@ def test_describe_lists_every_kinds_options_with_defaults_and_values():
     for line in out["stops"]:
         assert " · options: " in line
     v = by["verify"]
-    assert "who=both (both = Agent, then me | agent = Agent only | you = " in v
+    assert "who=both (both = Agent, then me | agent = Agent only" in v
+    assert "| you = Agent, then my sign-off" in v
     assert "must give evidence" in v and "your sign-off" in v
     assert "ready=now (now = Right away" in v and "where=branch" in v
     assert by["ship"].startswith(

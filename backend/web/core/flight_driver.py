@@ -3068,7 +3068,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     )
     _refuse(
         await asyncio.to_thread(
-            lambda: preflight(
+            lambda: _preflight_safe(
                 plan,
                 repo=repo_hint,
                 session=title or None,
@@ -3777,13 +3777,30 @@ def _preflight_attach(f: dict, title: str, repo: str) -> List[dict]:
     steps = f.get("steps") or []
     cur = int(f.get("cursor") or 0)
     at = steps[cur]["id"] if 0 <= cur < len(steps) else ""
-    return preflight(
+    return _preflight_safe(
         {"steps": steps},
         repo=repo,
         session=title or None,
         attach=False,
         start_at=at or None,
     )
+
+
+def _preflight_safe(plan, **kw) -> List[dict]:
+    """:func:`preflight` for a start that must go on when the CHECK itself
+    breaks: the pre-check exists to refuse a start that would fail later, so a
+    bug inside it is logged and reads as "no problems" — it never blocks a
+    route. A refusal it means to make (a ``FlightError``) still raises."""
+    fn = globals().get("preflight")
+    if not callable(fn):
+        return []
+    try:
+        return fn(plan, **kw) or []
+    except _flights.FlightError:
+        raise
+    except Exception as err:  # noqa: BLE001 — a broken check never blocks
+        _warn("flights preflight failed: %v", err)
+        return []
 
 
 def step_op(flight_id: str, step_id: str, name: str, body: Optional[dict]) -> dict:

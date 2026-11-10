@@ -61,14 +61,15 @@ def test_check_normalises_strictly_and_creates_nothing():
     out = _check(
         title="sess",
         steps=[
-            {"kind": "agent", "id": "build", "config": {"prompt": "go"}},
+            {"kind": "agent", "id": "build"},
             {"kind": "checks", "config": {"timeout_minutes": 20}},
         ],
     )
     assert out["ok"] is True and out["problems"] == []
     assert [s["id"] for s in out["steps"]] == ["s1", "s2"]
     assert out["steps"][1]["config"] == {"timeout_minutes": 20}
-    # On an existing session the leading agent stop is the work so far.
+    # On an existing session a leading Agent stop with NO prompt is the work
+    # so far; one with a prompt is sent (see the test below).
     assert out["start"] == {
         "index": 1,
         "id": "s2",
@@ -76,9 +77,17 @@ def test_check_normalises_strictly_and_creates_nothing():
         "title": "CI checks",
     }
     (skip,) = out["skipped"]
-    assert skip["id"] == "s1" and "its prompt is not sent" in skip["reason"]
+    assert skip["id"] == "s1" and "it has no prompt to send" in skip["reason"]
     assert out["in_flight"] is None
     assert F.list_flights() == []
+
+
+def test_check_sends_a_leading_agent_stop_that_has_a_prompt():
+    out = _check(
+        title="sess",
+        steps=[{"kind": "agent", "config": {"prompt": "go"}}, {"kind": "notify"}],
+    )
+    assert out["ok"] and out["start"]["id"] == "s1" and out["skipped"] == []
 
 
 def test_check_with_start_at_skips_nothing_or_names_why():

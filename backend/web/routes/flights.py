@@ -392,7 +392,8 @@ def _skip_reason(step: dict, start_at: str) -> str:
     if step.get("kind") == "agent":
         return (
             "on an existing session the work so far counts as this Agent stop: "
-            "its prompt is not sent (start at %s to send it)" % step.get("id")
+            "it has no prompt to send (give it one, or start at %s, to run it)"
+            % step.get("id")
         )
     return "before where the route starts"
 

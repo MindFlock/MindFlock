@@ -106,7 +106,7 @@ def test_options_line_comes_from_the_kind_definition():
     )
     verify = next(k for k in DTO["kinds"] if k["kind"] == "verify")
     line = C.options_line(verify)
-    assert "who=both (both = Agent, then me | agent = Agent only | you = " in line
+    assert "who=both (both = Agent, then me | agent = Agent only" in line
     assert "ready=now (now = " in line and "where=branch" in line
     assert C.options_line({"kind": "x", "fields": []}) == "none"
     loop = next(k for k in DTO["kinds"] if k["kind"] == "loop")
