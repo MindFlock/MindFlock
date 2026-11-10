@@ -160,18 +160,16 @@ def test_verify_receipt_is_answered_of_all():
         "state": "done",
         "steps": ["a", "b", "c", "d"],
         "answered": 3,
-        "settled": True,
-        "open_agent": [],
-        "open_human": [],
+        "outcome": "passed",
+        "latest_run_at": NOW,
     }
     f, _ = started(step("verify", who="both"), detail={"plan": "tp1"})
     assert receipt(judge(f, {"verify": v, "session": sess()}, NOW)) == "3 of 4"
     # An older observation without the count: what is not open is answered.
-    old = dict(v, settled=False, open_agent=["x"], open_human=[])
+    old = dict(v, open_agent=["x"], open_human=[])
     old.pop("answered")
     g, _ = started(step("verify", who="agent"), detail={"plan": "tp1"})
     g["step_states"]["s1"]["detail"]["run_started"] = True
-    old["settled"] = True
     assert receipt(judge(g, {"verify": old, "session": sess()}, NOW)) == "3 of 4"
 
 
