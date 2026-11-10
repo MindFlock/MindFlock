@@ -92,6 +92,7 @@ import concurrent.futures
 import contextlib
 import copy
 import hashlib
+import json
 import logging
 import os
 import re
@@ -789,6 +790,21 @@ def voice_get(
     if str(assistant).strip().lower() in ("1", "true", "yes", "on"):
         _kokoro.warm_in_background()
     return JSONResponse(body)
+
+
+@router.post("/api/voice/trace")
+def voice_trace(payload: Optional[dict] = None) -> JSONResponse:
+    """One line from a page's dictation (``lib/voiceDesktop.ts``
+    ``voiceTrace``): what it heard, what it decided, how a send came back,
+    logged as ``voice trace: {...}`` so a word that did not act can be read
+    off the server log. The body is cut to 2000 characters. → ``{"ok": true}``."""
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        line = json.dumps(body, ensure_ascii=False, default=str)[:2000]
+    except Exception:  # noqa: BLE001 - a trace never fails the page
+        line = repr(body)[:2000]
+    _logger.warning("voice trace: %s", line)
+    return JSONResponse({"ok": True})
 
 
 @router.post("/api/voice/listen")

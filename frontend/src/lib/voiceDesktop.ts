@@ -74,6 +74,21 @@ import {
 import { applyVoiceView, normPhrase, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
 import { pronounce, setPronounce, shapeForSpeech } from "./spokenText";
 
+/** A voice trace line in the server's log (POST /api/voice/trace): what a
+ * dictation heard, what it decided, and how a send came back — so "over did
+ * not send" can be read off the log instead of guessed. Fire and forget. */
+export function voiceTrace(event: string, data: Record<string, unknown> = {}): void {
+  try {
+    void fetch("/api/voice/trace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event, ...data }),
+    }).catch(() => {});
+  } catch {
+    /* no fetch (tests) */
+  }
+}
+
 // --- the radio words -------------------------------------------------------- //
 
 export type RadioKind = "over" | "out" | "disregard" | "undo" | "";
@@ -1220,6 +1235,7 @@ export class Dictation {
    * corrected to it, or taken back for a control word). `radio` false: its
    * radio words are plain words (an "over" the voice went on after). */
   heard(phrase: string, radio = true): DictOutcome {
+    voiceTrace("heard", { phrase, radio, listening: this.listening, continuous: this.continuous, typed: this.typed.length });
     if (!this.listening) return { kind: "stopped" };
     const ctl = this.control(phrase, true);
     if (ctl) return ctl;
@@ -1733,12 +1749,14 @@ export const SUBMIT_SETTLE_MS = 250;
 export async function submitDraft(title: string, name: string, say: boolean): Promise<{ ok: boolean; line: string }> {
   try {
     const r = await instApi<{ queued?: boolean }>(title, "/send", { json: { enter: true, say } });
+    voiceTrace("submit", { title, ok: true, queued: !!r?.queued });
     return { ok: true, line: r?.queued ? "Queued for " + name + "." : "Sent to " + name + "." };
   } catch (err) {
     const body = (err instanceof ApiError ? err.body : null) as
       | { in_dialog?: boolean; waking?: boolean; paused?: boolean; held?: boolean }
       | null;
     let line = "Couldn't submit: " + ((err as Error)?.message || "error") + " — the words are still in the field";
+    voiceTrace("submit", { title, ok: false, status: err instanceof ApiError ? err.status : 0, body });
     if (err instanceof ApiError && err.status === 409) {
       if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
       else if (body?.waking) line = name + " is waking up — say over again in a moment";
@@ -2223,6 +2241,7 @@ export class LiveDictation {
   }
 
   private end(line: string | null, sticky = false, how?: DictEnd): void {
+    voiceTrace("end", { line, how: how || "", done: this.done });
     if (this.done) return;
     this.done = true;
     this.unsent = "";
@@ -2240,6 +2259,12 @@ export class LiveDictation {
 
   private async apply(out: DictOutcome): Promise<void> {
     const t = this.target;
+    voiceTrace("apply", {
+      out,
+      target: t ? { kind: t.kind, name: t.name, submit: !!(t as { submit?: unknown }).submit } : null,
+      typed: this.dict.typed.length,
+      sentOne: this.sentOne,
+    });
     switch (out.kind) {
       case "continue":
         this.show();

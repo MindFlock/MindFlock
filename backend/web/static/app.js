@@ -48611,6 +48611,18 @@ function shapeForSpeech(text, overrides) {
 }
 //#endregion
 //#region src/lib/voiceDesktop.ts
+function voiceTrace(event, data = {}) {
+	try {
+		fetch("/api/voice/trace", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				event,
+				...data
+			})
+		}).catch(() => {});
+	} catch {}
+}
 function parseRadio(text) {
 	const t = String(text || "").trim();
 	const M = matchers();
@@ -49330,6 +49342,13 @@ var Dictation = class {
 		return over;
 	}
 	heard(phrase, radio = true) {
+		voiceTrace("heard", {
+			phrase,
+			radio,
+			listening: this.listening,
+			continuous: this.continuous,
+			typed: this.typed.length
+		});
 		if (!this.listening) return { kind: "stopped" };
 		const ctl = this.control(phrase, true);
 		if (ctl) return ctl;
@@ -49671,16 +49690,28 @@ var CONFIRM_LINES = {
 var SUBMIT_SETTLE_MS = 250;
 async function submitDraft(title, name, say) {
 	try {
+		const r = await instApi(title, "/send", { json: {
+			enter: true,
+			say
+		} });
+		voiceTrace("submit", {
+			title,
+			ok: true,
+			queued: !!r?.queued
+		});
 		return {
 			ok: true,
-			line: (await instApi(title, "/send", { json: {
-				enter: true,
-				say
-			} }))?.queued ? "Queued for " + name + "." : "Sent to " + name + "."
+			line: r?.queued ? "Queued for " + name + "." : "Sent to " + name + "."
 		};
 	} catch (err) {
 		const body = err instanceof ApiError ? err.body : null;
 		let line = "Couldn't submit: " + (err?.message || "error") + " — the words are still in the field";
+		voiceTrace("submit", {
+			title,
+			ok: false,
+			status: err instanceof ApiError ? err.status : 0,
+			body
+		});
 		if (err instanceof ApiError && err.status === 409) {
 			if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
 			else if (body?.waking) line = name + " is waking up — say over again in a moment";
@@ -49994,6 +50025,11 @@ var LiveDictation = class {
 		return this.chain;
 	}
 	end(line, sticky = false, how) {
+		voiceTrace("end", {
+			line,
+			how: how || "",
+			done: this.done
+		});
 		if (this.done) return;
 		this.done = true;
 		this.unsent = "";
@@ -50010,6 +50046,16 @@ var LiveDictation = class {
 	}
 	async apply(out) {
 		const t = this.target;
+		voiceTrace("apply", {
+			out,
+			target: t ? {
+				kind: t.kind,
+				name: t.name,
+				submit: !!t.submit
+			} : null,
+			typed: this.dict.typed.length,
+			sentOne: this.sentOne
+		});
 		switch (out.kind) {
 			case "continue":
 				this.show();
