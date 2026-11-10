@@ -569,6 +569,22 @@ def _row_order(title: str, parent: str):
         return None
 
 
+def _row_verify(title: str):
+    """The row's ``verify`` — the Verify pill: {"state":
+    verifying|needs_you|passed|failed|blocked, "plan", "steps": {"total",
+    "agent_done", "human"}, "human_steps", "failed_steps", "detail", "at"},
+    or None when no verify is open or recent (a settled one shows for 10
+    minutes). ``test_plans.verify_for_session``, never raising into the row.
+    Set by the server's snapshot builders (beside ``flight``), and None on a
+    pending row."""
+    try:
+        from backend.web.core import test_plans
+
+        return test_plans.verify_for_session(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
 def _last_report(title: str):
     """``thread.last_report(title)``, never raising into the row build."""
     try:

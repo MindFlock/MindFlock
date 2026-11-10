@@ -6,8 +6,9 @@ written, it puts them on its own todo list, and the person talks to it
 there — instead of a separate ``verify-<plan>-<sha7>`` checker (which the
 memory gate could refuse, and which needed its own checkout).
 
-These pin: the in-session walk prompt; the run route handing it to the
-owning session (sent when idle, queued when busy, queued + relaunched by the
+Since the same day's follow-up the prompt is SELF-VERIFY — the agent writes
+and walks its own steps (pinned in tests/unit/test_verify_self.py). These
+pin: the run route handing it to the owning session (sent when idle, queued when busy, queued + relaunched by the
 drain when the agent is not running, refused when paused) and recording the
 run with ``session`` = that session and ``in_session``; the fallback to a
 checker when the session is gone or on another branch; the results coming
@@ -87,42 +88,8 @@ def _inst(wt, branch="feature/sc-1", path="/repo", status=None):
 
 
 # --------------------------------------------------------------------------- #
-# The walk prompt
+# The checker's prompt (the fallback when the session is gone)
 # --------------------------------------------------------------------------- #
-def test_in_session_prompt_is_a_walk_for_the_sessions_own_agent():
-    p = T.build_run_prompt(_plan(), None, live=False, where="branch", in_session=True)
-    assert p.startswith(T.WALK_MARK)
-    # The person sees the steps as the agent's tasks, and may talk to it.
-    assert "TODO LIST" in p and "<step id>: <what to do>" in p
-    assert "talk to you while you walk" in p
-    # Its own branch, as it stands: never a checkout.
-    assert "git checkout --detach" not in p
-    assert "do NOT check out, switch, pull or stash" in p
-    assert "git merge-base --is-ancestor %s HEAD" % ("b" * 40) in p
-    # Same steps, same rules, same answers file.
-    assert "s1 [YOURS] Call the API" in p and "Needs: s1" in p
-    assert "s3 [human] Look at the page" in p
-    assert T.RESULT_FILE in p and '"finished": true' in p
-    assert "fresh checkout" not in p
-
-
-def test_in_session_prompt_against_an_environment_reads_code_only():
-    p = T.build_run_prompt(
-        _plan(),
-        None,
-        where="sandbox",
-        target="https://sb.example.com",
-        checkout_branch="sandbox",
-        in_session=True,
-        prepared=True,  # ignored in-session
-    )
-    assert p.startswith(T.WALK_MARK)
-    assert "ONLY TO READ CODE" in p and "the sandbox environment" in p
-    assert "https://sb.example.com" in p
-    assert "already at origin/sandbox" not in p
-    assert "git checkout --detach" not in p
-
-
 def test_checker_prompt_is_unchanged_by_default():
     p = T.build_run_prompt(_plan(), None, live=False, where="branch", prepared=True)
     assert not p.startswith(T.WALK_MARK)
