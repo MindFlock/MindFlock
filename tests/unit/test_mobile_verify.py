@@ -463,3 +463,73 @@ instances.forEach(function (i) { actFor = i.title; renderActSheet(); res[i.title
     assert out["posted"] == [["failed", "verify", {}]]
     assert out["selected"] == ["failed"] and out["tabs"] == ["agent"]
     assert out["flashed"][0].startswith("Verifying failed — its agent writes its steps")
+
+
+# --------------------------------------------------------------------------- #
+# What the phone's voice says about a Verify
+# --------------------------------------------------------------------------- #
+def _voice_fns(js: str, *names: str) -> str:
+    return "".join(
+        _between(js, "  function %s(" % n, "\n  }\n") + "\n  }\n" for n in names
+    )
+
+
+@needs_node
+def test_voice_says_a_verify_as_a_sentence():
+    """ "What needs me" and status read a Verify state as a sentence, not its
+    pill ("X is confirm verified" was what the phone said, 0.14.6)."""
+    js = _js()
+    rows = [
+        {"title": "conf", "activity": "idle", "verify": _verify("needs_you")},
+        {"title": "fail", "activity": "idle", "verify": _verify("failed")},
+        {"title": "block", "activity": "idle", "verify": _verify("blocked")},
+        {"title": "run", "activity": "working", "verify": _verify("verifying")},
+        {"title": "ok", "activity": "idle", "verify": _verify("passed")},
+        {"title": "plain", "activity": "idle"},
+    ]
+    voice = _voice_fns(
+        js,
+        "endSentence",
+        "voiceStateWord",
+        "voiceStateLine",
+        "voiceNeedsMe",
+        "voiceStatus",
+    )
+    out = _run(
+        "var instances = %s;\n" % json.dumps(rows)
+        + """
+var said = [];
+var voice = { session: "" };
+function nameOf(t) { return t; }
+function instByTitle(t) { return instances.filter(function (i) { return i.title === t; })[0]; }
+function stripMarkdown(t) { return String(t || ""); }
+function speakLine(t) { said.push(t); return Promise.resolve(false); }
+function voiceIdle() {}
+"""
+        + voice
+        + """
+var res = { lines: {}, status: {} };
+instances.forEach(function (i) {
+  res.lines[i.title] = endSentence(voiceStateLine(i.title, sessionState(i)));
+  voice.session = i.title; said = []; voiceStatus(); res.status[i.title] = said[0];
+});
+said = []; voiceNeedsMe(); res.needs = said[0];
+console.log(JSON.stringify(res));
+"""
+    )
+    assert out["lines"] == {
+        "conf": "conf needs you to confirm it's verified.",
+        "fail": "fail failed its verify.",
+        "block": "block's verify is blocked.",
+        "run": "run is verifying its work.",
+        "ok": "ok is verified.",
+        "plain": "plain is idle.",
+    }
+    assert out["status"] == out["lines"]
+    assert out["needs"] == (
+        "conf needs you to confirm it's verified. fail failed its verify. "
+        "block's verify is blocked."
+    )
+    for line in [out["needs"], *out["status"].values()]:
+        assert "confirm verified" not in line.lower()
+        assert not re.search(r"\bis verify (failed|blocked)\b", line.lower())
