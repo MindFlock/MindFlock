@@ -288,7 +288,7 @@ export function runChip(f: Pick<Flight, "state" | "reason" | "steps" | "cursor" 
     const why = perchWhy(f);
     return { label: "Needs you", tone: "attention", title: (why || "Waiting on you") + (step ? " — at “" + step.title + "”" : "") };
   }
-  if (f.state === "paused") return { label: "Paused", tone: "muted", title: "Paused — ⋯ Carry on, or Carry on on its stop, to go on" };
+  if (f.state === "paused") return { label: "Paused", tone: "muted", title: "A person paused it: Carry on (in ⋯, or on its stop) to go on" };
   if (f.state === "running") return { label: "Running", tone: "working", title: "Running" + (step ? " “" + step.title + "”" : "") };
   return { label: f.state === "ready" ? "Ready" : f.state === "done" ? "Done" : f.state === "cancelled" ? "Stopped" : "Not started", tone: "muted", title: "" };
 }
