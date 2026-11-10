@@ -1187,7 +1187,19 @@ def _verify_session_usable(title: str) -> bool:
         wt = inst.GetWorktreePath()
     except Exception:  # noqa: BLE001
         return False
-    return bool(wt) and os.path.isdir(wt)
+    if not (bool(wt) and os.path.isdir(wt)):
+        return False
+    # A CHECKER SITTING IN A CLONE'S OWN CHECKOUT IS A HUSK TOO. That is the
+    # shape the in-place fallback produced (sc-25811 / sc-25863, 2026-11-09:
+    # the base clone's shared config said core.bare=true, so it read as "not a
+    # work tree" and the session was started in-place IN the base clone). Its
+    # `.git` is a directory where a linked worktree's is a file. Reusing it
+    # would hand the next run the same dead checkout — and a checker has no
+    # business moving HEAD in the user's clone anyway — so the route closes it
+    # and prepares a real one (:func:`_prepare_verify_checkout`).
+    if str(title).startswith("verify-") and os.path.isdir(os.path.join(wt, ".git")):
+        return False
+    return True
 
 
 def _test_plan_row(plan: dict, live_branch: Optional[str] = None) -> dict:
@@ -1250,6 +1262,322 @@ def _is_verify_repo_usable(repo_root: str) -> bool:
         )
     except Exception:  # noqa: BLE001
         return False
+
+
+#: The run route's refusal ``reason`` when the server could not put the checker
+#: in a checkout at the expected commit (beside ``repo_gone``, ``no_steps``,
+#: ``memory``, ``launch_failed``, ``busy``). A route's Verify stop fails with the
+#: sentence in ``error``.
+CHECKOUT_FAILED = "checkout_failed"
+
+#: Suffix of the directory a prepared checker checkout lives in:
+#: ``<worktrees dir>/<branch prefix>verify-<plan>-<sha7>_checkout``. It starts
+#: with the same ``<title>_`` leaf an engine worktree for that title would, so
+#: :func:`_free_stale_verify_worktree` reclaims a leftover one like any other.
+_CHECKOUT_SUFFIX = "_checkout"
+
+
+def _verify_checkout_ref(plan: dict, live: bool, checkout: str = "") -> str:
+    """The ref a run's checker must start on — the tree ``build_run_prompt``'s
+    step one names, decided the same way.
+
+    A route's ``checkout`` (the plan's commit, or ``origin/<env branch>``)
+    wins; otherwise a live run checks ``origin/<live branch>`` and a pre-live
+    one the branch's newest pushed commit (``tip_sha``, else ``sha``).
+    """
+    plan = plan or {}
+    checkout = str(checkout or "").strip()
+    if checkout:
+        return checkout
+    sha = str(plan.get("tip_sha") or plan.get("sha") or "").strip()
+    live_branch = str(plan.get("live_branch") or "").strip() or "main"
+    if live or not sha:
+        return "origin/%s" % live_branch
+    return sha
+
+
+def _verify_checkout_path(title: str) -> str:
+    """Where the server prepares ``title``'s checkout (see
+    :data:`_CHECKOUT_SUFFIX`). Tests patch this to a temp dir."""
+    from backend.config import config as _config
+    from backend.session.git.worktree import (
+        get_worktree_directory,
+        sanitize_branch_name,
+    )
+
+    name = sanitize_branch_name(
+        "{}{}".format(_config.LoadConfig().branch_prefix, title)
+    )
+    return os.path.join(get_worktree_directory(), name + _CHECKOUT_SUFFIX)
+
+
+def _git_out(res) -> str:
+    out = res.stdout if isinstance(res.stdout, str) else ""
+    return out.strip()
+
+
+def _git_err(res) -> str:
+    """The last meaningful line(s) of a git failure, for a refusal sentence."""
+    err = res.stderr if isinstance(res.stderr, str) else ""
+    err = (err or (res.stdout if isinstance(res.stdout, str) else "")).strip()
+    lines = [ln for ln in err.splitlines() if ln.strip()]
+    return " ".join(lines[-2:])[:300] or ("git exited %s" % res.returncode)
+
+
+def _checkout_git(args: list, cwd: str, unbare: bool, timeout: float = 60, **kw):
+    """``git -C cwd <args>``, with ``-c core.bare=false`` when the repo's shared
+    config wrongly says bare. The override is for THIS command only: the user's
+    config is never rewritten from here (see :func:`_prepare_verify_checkout`)."""
+    pre = ["-c", "core.bare=false"] if unbare else []
+    return gitutil.git(
+        pre + list(args), cwd, timeout=timeout, stdin=subprocess.DEVNULL, **kw
+    )
+
+
+def _shared_config_bare(repo: str) -> bool:
+    """Whether ``repo``'s shared ``.git/config`` claims ``core.bare=true``."""
+    res = gitutil.git(
+        ["config", "--bool", "core.bare"],
+        repo,
+        timeout=15,
+        stdin=subprocess.DEVNULL,
+    )
+    return res.returncode == 0 and _git_out(res) == "true"
+
+
+def _resolve_checkout_sha(repo: str, ref: str, unbare: bool) -> Tuple[str, str]:
+    """``(sha, "")`` for ``ref`` in ``repo``, fetching as needed; ``("", why)``
+    when it cannot be resolved.
+
+    ``origin/<branch>`` is ALWAYS fetched first: a remote-tracking ref is only
+    as fresh as the last fetch, and a checker sent to a stale one tests a tree
+    nobody deployed. A failed fetch is therefore a refusal, not a fallback. A
+    commit is looked up locally first and fetched only when it is missing.
+    """
+
+    def rev() -> str:
+        res = _checkout_git(
+            ["rev-parse", "--verify", "-q", ref + "^{commit}"], repo, unbare, 30
+        )
+        return _git_out(res) if res.returncode == 0 else ""
+
+    if ref.startswith("origin/"):
+        branch = ref[len("origin/") :]
+        res = _checkout_git(
+            [
+                "fetch",
+                "--quiet",
+                "origin",
+                "+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch),
+            ],
+            repo,
+            unbare,
+            120,
+            new_session=True,
+        )
+        if res.returncode != 0:
+            return "", "could not fetch %s from origin: %s" % (branch, _git_err(res))
+        sha = rev()
+        return (sha, "") if sha else ("", "%s does not exist after fetching" % ref)
+    sha = rev()
+    if sha:
+        return sha, ""
+    last = ""
+    for args in (["fetch", "--quiet", "origin"], ["fetch", "--quiet", "origin", ref]):
+        res = _checkout_git(args, repo, unbare, 120, new_session=True)
+        if res.returncode != 0:
+            last = _git_err(res)
+        sha = rev()
+        if sha:
+            return sha, ""
+    return "", "commit %s is not in %s%s" % (
+        ref,
+        repo,
+        (" (fetching origin: %s)" % last) if last else ", even after fetching origin",
+    )
+
+
+def _is_linked_worktree_of(path: str, repo: str, unbare: bool) -> bool:
+    """Whether ``path`` is a LINKED worktree (a ``.git`` file, not the clone's
+    own checkout) sharing ``repo``'s object store."""
+    if not path or not os.path.isfile(os.path.join(path, ".git")):
+        return False
+
+    def common(where: str, extra: list) -> str:
+        res = _checkout_git(
+            extra + ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            where,
+            False,
+            15,
+        )
+        return os.path.realpath(_git_out(res)) if res.returncode == 0 else ""
+
+    mine = common(path, [])
+    return bool(mine) and mine == common(
+        repo, ["-c", "core.bare=false"] if unbare else []
+    )
+
+
+def _prepare_verify_checkout(repo_root: str, title: str, ref: str) -> dict:
+    """Put the checker ``title`` in a checkout of ``ref`` BEFORE its agent starts.
+
+    THE SERVER DOES THIS, NOT THE AGENT, because the agent doing it is how
+    sc-25811 / sc-25863 (2026-11-09) recorded six "blocked" answers about a
+    tree nobody chose. The chain, read off state.json:
+
+    1. A pytest run inside a git hook flipped ``core.bare=true`` in the base
+       clone's SHARED ``.git/config`` (a known local trap).
+    2. ``_is_verify_repo_usable`` asked ``rev-parse --git-dir`` — true for a
+       bare repo — and let the run through.
+    3. ``create_instance`` → ``_prepare_plain_repo`` asked
+       ``--is-inside-work-tree`` — false for a bare repo — so it judged the
+       base clone "not git" and fell back to an IN-PLACE session in the base
+       clone itself (``in_place: true``, ``worktree_path == repo_path``).
+    4. The prompt's ``git checkout --detach <sha>`` then died with "this
+       operation must be run in a work tree", and ``_verify_run_trees`` read
+       the base clone's HEAD (local ``staging``, 1d2a96ad from 12:54 to 16:34)
+       as the tested tree. It matched another session's HEAD only because that
+       worktree had been cut from the same ``staging``.
+
+    A linked worktree is immune to the first step — git ignores the shared
+    ``core.bare`` / ``core.worktree`` for it, and ``worktree add`` works from a
+    clone that claims to be bare — so the checker gets one, DETACHED at the
+    resolved commit, and the session starts in-place inside it.
+
+    Returns ``{"ok": True, "path", "sha", "reused", "warning"}``, or
+    ``{"ok": False, "reason": CHECKOUT_FAILED, "error": <sentence>}`` — the
+    route refuses the run with it rather than start a checker in the wrong
+    tree. ``reused`` is True when ``title`` is already open in a linked
+    worktree of ``repo_root`` (a re-check of the same commit): that tree is
+    re-detached at the commit instead of replaced. Never raises.
+
+    The shared config is NEVER rewritten: a bare claim is worked around with
+    ``-c core.bare=false`` on this function's own commands and reported in
+    ``warning`` (and the warning log), because flipping a user's config back
+    silently could be wrong for a repo that really is bare.
+    """
+
+    def fail(msg: str) -> dict:
+        if log.WarningLog is not None:
+            log.WarningLog.Printf("verify: checkout for %s failed: %s", title, msg)
+        return {
+            "ok": False,
+            "reason": CHECKOUT_FAILED,
+            "error": "could not prepare the checker's checkout: %s" % msg,
+            "path": "",
+            "sha": "",
+        }
+
+    try:
+        repo = os.path.realpath(str(repo_root or "")) if repo_root else ""
+        ref = str(ref or "").strip()
+        if not repo or not os.path.isdir(repo):
+            return fail("the repo %s is gone" % (repo_root or "(none recorded)"))
+        if not ref:
+            return fail("this plan names no commit to check out")
+        warning = ""
+        unbare = _shared_config_bare(repo)
+        if unbare:
+            warning = (
+                "%s's shared git config says core.bare=true (often a test run "
+                "inside a git hook); worked around for this checkout, config "
+                "left as it is — `git -C %s config core.bare false` repairs it "
+                "if the clone is not meant to be bare" % (repo, repo)
+            )
+            if log.WarningLog is not None:
+                log.WarningLog.Printf("verify: %s", warning)
+        sha, why = _resolve_checkout_sha(repo, ref, unbare)
+        if not sha:
+            return fail(why)
+
+        live: Dict[str, str] = {}
+        for name, inst in list(_server().ENGINE.instances.items()):
+            try:
+                p = inst.GetWorktreePath()
+            except Exception:  # noqa: BLE001
+                p = ""
+            if p:
+                live[os.path.realpath(p)] = name
+
+        inst = _server().ENGINE.instances.get(title)
+        reused = False
+        if inst is not None:
+            try:
+                path = os.path.realpath(inst.GetWorktreePath() or "")
+            except Exception:  # noqa: BLE001
+                path = ""
+            if not _is_linked_worktree_of(path, repo, unbare):
+                return fail(
+                    "the open session %s is not in a checkout of its own (%s) — "
+                    "end it and run again" % (title, path or "no folder")
+                )
+            res = _checkout_git(["checkout", "--quiet", "--detach", sha], path, False)
+            if res.returncode != 0:
+                return fail(
+                    "%s could not move to %s: %s" % (path, sha[:12], _git_err(res))
+                )
+            reused = True
+        else:
+            path = os.path.realpath(_verify_checkout_path(title))
+            owner = live.get(path)
+            if owner:
+                return fail("%s is in use by session %s" % (path, owner))
+            if os.path.lexists(path):
+                # Only this function makes a "<title>_checkout" directory, and no
+                # live session is in it (above): a dead run's leftover.
+                _checkout_git(["worktree", "remove", "--force", path], repo, unbare)
+                if os.path.lexists(path) and path.endswith(_CHECKOUT_SUFFIX):
+                    import shutil
+
+                    shutil.rmtree(path, ignore_errors=True)
+            _checkout_git(["worktree", "prune"], repo, unbare)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            res = _checkout_git(
+                ["worktree", "add", "--detach", path, sha], repo, unbare, 300
+            )
+            if res.returncode != 0:
+                return fail(
+                    "git worktree add %s failed: %s" % (sha[:12], _git_err(res))
+                )
+
+        # VERIFIED WITH PLAIN GIT — what the agent itself will run there, with
+        # no override: the claim is about the tree the agent gets.
+        inside = _checkout_git(["rev-parse", "--is-inside-work-tree"], path, False, 15)
+        if inside.returncode != 0 or _git_out(inside) != "true":
+            return fail(
+                "%s is not a work tree (git says: %s)"
+                % (path, _git_out(inside) or _git_err(inside))
+            )
+        head = _checkout_git(["rev-parse", "HEAD"], path, False, 15)
+        got = _git_out(head) if head.returncode == 0 else ""
+        if got != sha:
+            return fail("%s is at %s, not %s" % (path, got[:12] or "nothing", sha[:12]))
+        if not reused:
+            # What a plain worktree session gets in create_instance (the
+            # `.mindflock.toml` copy_untracked + setup_commands), which an
+            # in-place session skips. Best effort: the checkout is already right.
+            try:
+                _wt_setup.start_setup(title, repo, path)
+            except Exception as err:  # noqa: BLE001
+                if log.WarningLog is not None:
+                    log.WarningLog.Printf("verify: setup for %s: %s", title, err)
+        if log.InfoLog is not None:
+            log.InfoLog.Printf(
+                "verify: %s checkout %s at %s (%s)",
+                title,
+                "re-detached" if reused else "prepared",
+                sha[:12],
+                path,
+            )
+        return {
+            "ok": True,
+            "path": path,
+            "sha": sha,
+            "reused": reused,
+            "warning": warning,
+        }
+    except Exception as err:  # noqa: BLE001 — a refusal, never a 500
+        return fail("unexpected error: %s" % err)
 
 
 def _clear_verify_results(session_title: str) -> None:
