@@ -316,12 +316,15 @@ SIGWINCH the client and closing the master still hangs it up. It returns the
 same `ptyprocess.PtyProcess`. Off Linux it is ptyprocess's spawn. Tests that
 must not start a real client stub `mux.spawn_pty`.
 
-Every PTY the server starts goes through it — nothing forks on Linux: the
-terminal clients (`mux.attach`), the provider and `gh` login terminals
-(`core.pty_run`'s command PTY), the ticket log stream
-(`core.terminal.spawn_tail`) and the engine's own PTY (`session/tmux/pty.py`'s
-`Pty.start`). `tests/unit/test_no_fork_pty.py` pins each site, and runs them
-for real with `os.fork`/`pty.fork` made to fail.
+The PTYs the web server starts go through it: the terminal clients
+(`mux.attach`), the provider and `gh` login terminals (`core.pty_run`'s
+command PTY) and the ticket log stream (`core.terminal.spawn_tail`).
+`tests/unit/test_no_fork_pty.py` pins each site, and runs them for real with
+`os.fork`/`pty.fork` made to fail. The engine's own PTY
+(`session/tmux/pty.py`'s `Pty.start`, the short `tmux new-session -d` /
+`attach-session` at create and restore) still uses ptyprocess: moving it
+failed the bare-container quickstart (`mindflock new` → "failed to start")
+for a reason not yet found.
 
 `spawn_pty(argv, *, dimensions=(24, 80), env=None, cwd=None)` contract: it
 returns a `ptyprocess.PtyProcess`; a missing command raises
