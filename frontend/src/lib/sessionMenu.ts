@@ -234,8 +234,8 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     !!inst.branch &&
       !peer && {
         key: "checklist",
-        label: "Behaviors…",
-        title: "The behaviors Verify checks for " + inst.branch + " — what it should do, before or after it merges",
+        label: "Verify steps…",
+        title: "The steps Verify checked for " + inst.branch + ", with the evidence for each",
         run: () => openChecklist(inst.branch),
       },
     inst.check &&

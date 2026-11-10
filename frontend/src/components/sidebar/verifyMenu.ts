@@ -57,6 +57,9 @@ export function withVerifyItem(model: SessionMenuModel, inst: Partial<Instance>)
     ...model,
     groups: model.groups.map((g, i) => {
       if (i !== at) return g;
+      // The Ship group already has its one "Verify" entry (lib/stage
+      // withVerifyVerdict, once a verify exists): never two.
+      if (g.items.some((it) => it.key === "verify")) return g;
       const before = g.items.findIndex((it) => it.key === "checklist");
       const items = [...g.items];
       items.splice(before >= 0 ? before : items.length, 0, item);

@@ -227,7 +227,7 @@ describe("the Verify card", () => {
     expect(visible(html)).toContain("Every step passed — confirm it works.");
     expect(html).toContain('<div class="bh-signoff">Sign off</div>');
     expect(visible(html)).not.toMatch(/need a person|needs a person/);
-    expect(html).toMatch(/class="btn-primary vc-yes"[^>]*>Confirm verified</);
+    expect(html).toMatch(/class="btn-primary vc-yes"[^>]*>Sign off</);
   });
 
   it("no verify: Verify is its one action (the session's own agent)", () => {
