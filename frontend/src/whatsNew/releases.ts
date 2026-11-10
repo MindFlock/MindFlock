@@ -37,6 +37,29 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.2",
+    date: "2026-11-09",
+    big: false,
+    headline: "Verify you can hand to an agent, start to finish.",
+    features: [
+      {
+        title: "Checks an agent can walk",
+        body:
+          "Each behavior now says what to do and what to expect, in order, so the checker triggers things itself instead of waiting for someone to have used the feature.",
+      },
+      {
+        title: "Agent only means the agent does it all",
+        body:
+          "Choose Agent only on a Verify stop, or \"Let the agent walk every behavior\" on a Behaviors card, and the agent tries your steps too. It needs evidence to pass one, and it still asks you for what it can't do.",
+      },
+      {
+        title: "Checks start on the right commit",
+        body:
+          "MindFlock now checks out the code under test before the checker starts, so a check no longer fails on its first step.",
+      },
+    ],
+  },
+  {
     version: "0.14.1",
     date: "2026-11-09",
     big: false,
