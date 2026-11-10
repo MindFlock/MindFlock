@@ -14,6 +14,9 @@
 
 export type VerifyWhere = string; // "branch" or an environment's name
 export type VerifyReady = "now" | "on_branch" | "after_prev";
+/** "agent" (Agent only) starts the stop's run with walk "all": the agent walks
+ * every behavior, a person's too, and only what it truly can't do comes back
+ * to you. "both" walks the agent's ones, then you; "you" is every one yours. */
 export type VerifyWho = "both" | "agent" | "you";
 
 export interface VerifyConfig {
@@ -114,7 +117,7 @@ export const READY_MINUTES_HINT = "0 = the environment's deploy time";
 /** Who checks, in the stop editor's words, with its one-line explanation. */
 export const WHO_CHOICES: ReadonlyArray<{ value: VerifyWho; label: string; explain: string }> = [
   { value: "both", label: "Agent, then me", explain: "The agent checks what it can; the ones only a person can check park the route here for you." },
-  { value: "agent", label: "Agent only", explain: "Person-only checks stay open on the checklist but don't hold the route." },
+  { value: "agent", label: "Agent only", explain: "The agent walks every behavior, yours too — it asks you only for what it can't do." },
   { value: "you", label: "Only me", explain: "Every check waits for you." },
 ];
 

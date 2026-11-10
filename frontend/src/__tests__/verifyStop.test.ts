@@ -219,7 +219,7 @@ describe("the Verify stop's editor", () => {
     expect(html).toContain("behaviors are written from the branch&#x27;s changes");
     expect(html).toContain("the agent checks its ones on sandbox");
     expect(html).toContain("yours park the route here (a perch)");
-    expect(verifySteps({ where: "branch", who: "agent" })).toEqual(["behaviors are written from the branch's changes", "the agent checks its ones on this branch's code", "yours stay open on the checklist — the route goes on"]);
+    expect(verifySteps({ where: "branch", who: "agent" })).toEqual(["behaviors are written from the branch's changes", "the agent walks every one on this branch's code, yours too", "it asks you only for what it can't do — the route goes on"]);
     expect(verifySteps({ where: "live", who: "you" })[1]).toBe("you check every one on live");
   });
 
@@ -227,7 +227,7 @@ describe("the Verify stop's editor", () => {
     const html = form({});
     expect(html).toMatch(/role="radio" aria-checked="true" class="vf-who-opt on" data-value="both"><strong>Agent, then me<\/strong>/);
     expect(html).toContain("The agent checks what it can; the ones only a person can check park the route here for you.");
-    expect(html).toContain("<strong>Agent only</strong><span class=\"muted\">Person-only checks stay open on the checklist but don&#x27;t hold the route.</span>");
+    expect(html).toContain("<strong>Agent only</strong><span class=\"muted\">The agent walks every behavior, yours too — it asks you only for what it can&#x27;t do.</span>");
     expect(html).toContain("<strong>Only me</strong><span class=\"muted\">Every check waits for you.</span>");
   });
 
@@ -258,7 +258,7 @@ describe("the Verify stop's editor", () => {
 
   it("a legacy wait_live config opens on live, when it reaches the branch", () => {
     const html = form({ who: "agent", wait_live: true });
-    expect(html).toContain("the agent checks its ones on live");
+    expect(html).toContain("the agent walks every one on live, yours too");
     expect(html).toMatch(/class="on" aria-pressed="true">When it reaches the environment&#x27;s branch/);
   });
 });

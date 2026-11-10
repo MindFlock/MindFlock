@@ -47,8 +47,8 @@ const OTHER = "\u0000other";
 /** The explainer's three lines, in words for `where` and `who`. */
 export function verifySteps(v: Pick<VerifyConfig, "where" | "who">): [string, string, string] {
   const on = v.where === WHERE_BRANCH ? "this branch's code" : v.where;
-  const second = v.who === "you" ? "you check every one on " + on : "the agent checks its ones on " + on;
-  const third = v.who === "agent" ? "yours stay open on the checklist — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)";
+  const second = v.who === "you" ? "you check every one on " + on : v.who === "agent" ? "the agent walks every one on " + on + ", yours too" : "the agent checks its ones on " + on;
+  const third = v.who === "agent" ? "it asks you only for what it can't do — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)";
   return ["behaviors are written from the branch's changes", second, third];
 }
 
