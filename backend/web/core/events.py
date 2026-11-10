@@ -272,6 +272,11 @@ EVENT_NAMES = (
     # A flight landed, halted or was cancelled, once (data: as
     # flight.changed).
     "flight.finished",
+    # A Notify stop ran (flight_driver._run_notify), once per stop: the bell
+    # lists it, so "shown in the bell" is true even with phone notifications
+    # off (data: as flight.changed plus "text", "title", "phone": whether the
+    # phone got it, "why": why not).
+    "flight.notified",
     # A timed todo came due, or its snooze ran out (addons/assistant.py; the
     # reminder dialog and the "A todo comes due" push). data: {id, text, due,
     # detail}.

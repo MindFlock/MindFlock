@@ -284,6 +284,13 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
     }
     // Agent-to-agent traffic (MindFlock MCP): only a worker's REPORT is news
     // (done / blocked / failed, filed under the parent it reported to). Plain
+    // A route's Notify stop: the text its author wrote. The stop's receipt
+    // promises "shown in the bell", so this row is what keeps that true.
+    case "flight.notified": {
+      const text = String((d as { text?: string }).text || "").trim();
+      if (!text) return null;
+      return { text, cls: "n-info", dedupe: "flight-notified:" + String((d as { id?: string }).id || "") + ":" + text };
+    }
     // messages between agents are toasted but stay out of the feed — the bell
     // has no dedupe, and an orchestrator's chatter would bury every row here.
     case "session.message":
