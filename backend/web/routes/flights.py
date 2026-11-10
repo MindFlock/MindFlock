@@ -416,6 +416,22 @@ def _stop_ref(steps: List[dict], i: int) -> Optional[dict]:
     return {"index": i, "id": s["id"], "kind": s["kind"], "title": s["title"]}
 
 
+def _strict_refusal(raw, i: int, taken=None):
+    """``(PlanError, incomplete)`` when ``raw`` (one stop) fails the strict
+    check, else None. ``incomplete``: the refusal is about a required option
+    left empty — what a block on the ground may wait to fill in."""
+    try:
+        _flights.normalize_step(
+            copy.deepcopy(raw), i, strict=True, taken=set(taken or ())
+        )
+    except _flights.PlanError as err:
+        m = re.match(r"^steps\[\d+\]\.config\.(\w+)$", str(err.field or ""))
+        cfg = raw.get("config") if isinstance(raw, dict) else None
+        cfg = cfg if isinstance(cfg, dict) else {}
+        return err, bool(m) and cfg.get(m.group(1)) in (None, "", [], {})
+    return None
+
+
 def _check_grounded(body: dict, out: dict) -> dict:
     """A grounded start's check: the stops ``flights.ground`` would store
     (``s1..sN``; a block may still be incomplete there — what must be filled
@@ -433,12 +449,26 @@ def _check_grounded(body: dict, out: dict) -> dict:
     if body.get("steps") is not None:
         stripped = [dict(s, id="") if isinstance(s, dict) else s for s in body["steps"]]
         try:
-            steps += _flights.normalize_steps(
-                stripped, strict=True, config_strict=False
-            )
+            given = _flights.normalize_steps(stripped, strict=True, config_strict=False)
         except _flights.PlanError as err:
             out["problems"].append(_plan_problem(err))
             return out
+        # On the ground a block may wait to be filled in, but a bad VALUE
+        # would be turned into its default without a word: a problem.
+        for i, raw in enumerate(stripped):
+            refusal = _strict_refusal(raw, i)
+            if refusal is None:
+                continue
+            err, incomplete = refusal
+            if incomplete:
+                out["warnings"].append(
+                    _problem(
+                        err.field, "before it can fly: " + err.message, "incomplete"
+                    )
+                )
+            else:
+                out["problems"].append(_plan_problem(err))
+        steps += given
     if not steps:
         out["problems"].append(
             _problem("steps", "a route needs at least one stop", "needs_steps")
@@ -446,12 +476,6 @@ def _check_grounded(body: dict, out: dict) -> dict:
         return out
     for k, s in enumerate(steps):
         s["id"] = "s%d" % (k + 1)
-    try:
-        _flights.normalize_steps(copy.deepcopy(steps), strict=True)
-    except _flights.PlanError as err:
-        out["warnings"].append(
-            _problem(err.field, "before it can fly: " + err.message, "incomplete")
-        )
     out["steps"] = steps
     out["start"] = _stop_ref(steps, 0)
     return out
@@ -888,21 +912,17 @@ def _grounded_patch_refusal(
             raw[key] = patch[key]
     if "when" in patch and not str(patch["when"] or "").strip():
         raw.pop("when", None)
-    try:
-        _flights.normalize_step(raw, i, strict=True, taken=set(ids) - {step_id})
-    except _flights.PlanError as err:
-        m = re.match(r"^steps\[\d+\]\.config\.(\w+)$", str(err.field or ""))
-        cfg = raw.get("config") if isinstance(raw.get("config"), dict) else {}
-        if m and cfg.get(m.group(1)) in (None, "", [], {}):
-            return None  # still to be filled in: take-off checks it
-        return _bad_step(
-            _flights.PlanError(
-                err.message,
-                re.sub(r"^steps\[\d+\]", "step", str(err.field or "")),
-                getattr(err, "code", "") or "bad_step",
-            )
+    refusal = _strict_refusal(raw, i, set(ids) - {step_id})
+    if refusal is None or refusal[1]:
+        return None  # fine, or still to be filled in: take-off checks it
+    err = refusal[0]
+    return _bad_step(
+        _flights.PlanError(
+            err.message,
+            re.sub(r"^steps\[\d+\]", "step", str(err.field or "")),
+            getattr(err, "code", "") or "bad_step",
         )
-    return None
+    )
 
 
 @router.delete("/api/flights/{flight_id}/steps/{step_id}")

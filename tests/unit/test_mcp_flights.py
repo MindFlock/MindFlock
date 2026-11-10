@@ -625,7 +625,7 @@ class TestEdit:
 
     def test_needs_something_to_do(self):
         box, _, clock = _box(flights=[_flight()])
-        with pytest.raises(ToolError, match="needs add, remove or rename"):
+        with pytest.raises(ToolError, match="needs add, remove, edit or rename"):
             box.edit_flight({"id": "f_1"}, _ctx(clock))
 
     def test_refuses_another_sessions_flight(self):
@@ -785,7 +785,10 @@ class TestCookbookAndDryRun:
         )
         assert out["needs_confirm_merge"] == ["ship"]
         assert "read the sentence back" in out["next"]
-        assert not [c for c in api.calls if c[0] == "POST"]
+        # Only the server's check (nothing created), never a start.
+        assert not [
+            c for c in api.calls if c[0] == "POST" and c[1] != "/api/flights/check"
+        ]
 
     def test_dry_run_says_a_leading_agent_stop_is_not_sent(self):
         """On an existing session the read-back listed "Agent: next pass" as
@@ -814,7 +817,7 @@ class TestCookbookAndDryRun:
             _ctx(clock),
         )
         assert out["problems"] and "add a split stop" in out["problems"][0]
-        assert out["next"] == "fix the problems first"
+        assert out["next"].startswith("fix the problems first")
 
     @pytest.mark.parametrize(
         "steps, fix",
@@ -916,7 +919,9 @@ class TestCookbookAndDryRun:
                 },
                 _ctx(clock),
             )
-        assert not [c for c in api.calls if c[0] == "POST"]
+        assert not [
+            c for c in api.calls if c[0] == "POST" and c[1] != "/api/flights/check"
+        ]
 
     def test_a_pr_saved_route_does_not_warn_about_its_pr(self):
         box, api, clock = _real_box()
