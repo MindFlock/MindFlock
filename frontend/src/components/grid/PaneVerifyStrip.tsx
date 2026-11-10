@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 import type { Instance, SessionVerify } from "../../api/types";
 import { openBehaviors } from "../../lib/behaviorsFocus";
-import { verifyLine, verifyOf } from "../../lib/sessionState";
+import { verifyGlyph, verifyLine, verifyOf } from "../../lib/sessionState";
 import { dismissVerify, fixInSession, openWalkingSession, stopVerifying } from "../../lib/verifyActions";
 import { FailedSteps, VerifyConfirm } from "../behaviors/VerifyConfirm";
 import { closeVerifyForm, markVerifyRowMounted, openVerifyForm, useVerifyForm, VerifyStartForm } from "../behaviors/VerifyStartForm";
@@ -35,7 +35,8 @@ export interface StripAction {
 }
 
 export interface StripView {
-  /** ✓ passed, ✗ failed, ! blocked / needs you, … verifying. */
+  /** lib/sessionState verifyGlyph: ✓ passed, ✗ failed, ! blocked, ? needs
+   * you, … verifying. */
   glyph: string;
   line: string;
   /** The results file couldn't be read — one sentence, or "". */
@@ -89,25 +90,25 @@ export function verifyStripView(v: SessionVerify, session: string, nowS: number 
   const detail = String(v.detail || "").trim();
   switch (v.state) {
     case "verifying":
-      return { glyph: "…", line: verifyingLine(v, session, nowS), fileError, actions: [act("steps"), act("agent"), act("stop")] };
+      return { glyph: verifyGlyph(v.state), line: verifyingLine(v, session, nowS), fileError, actions: [act("steps"), act("agent"), act("stop")] };
     case "needs_you": {
       const n = (v.human_steps || []).length || Number(v.steps?.human) || 0;
       const line = n
         ? "Needs you — the agent did its steps; do " + (n === 1 ? "yours" : "your " + n) + ", then confirm"
         : "Needs you — sign off on what the agent verified";
-      return { glyph: "!", line, fileError, actions: [act("steps"), act("agent")] };
+      return { glyph: verifyGlyph(v.state), line, fileError, actions: [act("steps"), act("agent")] };
     }
     case "failed":
-      return { glyph: "✗", line: verifyLine(v), fileError, actions: [act("fix", true), act("again"), act("steps"), act("dismiss")] };
+      return { glyph: verifyGlyph(v.state), line: verifyLine(v), fileError, actions: [act("fix", true), act("again"), act("steps"), act("dismiss")] };
     case "blocked":
-      return { glyph: "!", line: verifyLine(v), fileError, actions: [act("again", true), act("steps"), act("agent"), act("dismiss")] };
+      return { glyph: verifyGlyph(v.state), line: verifyLine(v), fileError, actions: [act("again", true), act("steps"), act("agent"), act("dismiss")] };
     case "passed": {
       const total = Number(v.steps?.total) || 0;
       const line = total ? "All " + total + (total === 1 ? " step" : " steps") + " passed" : "Verified" + (detail ? " — " + detail : "");
-      return { glyph: "✓", line, fileError, actions: [act("steps")] };
+      return { glyph: verifyGlyph(v.state), line, fileError, actions: [act("steps")] };
     }
   }
-  return { glyph: "", line: "", fileError, actions: [] };
+  return { glyph: verifyGlyph(v.state), line: "", fileError, actions: [] };
 }
 
 export function PaneVerifyStrip({ inst }: { inst: Pick<Instance, "title" | "verify"> & Partial<Pick<Instance, "repo">> }): JSX.Element | null {

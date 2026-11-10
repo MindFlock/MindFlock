@@ -51,3 +51,18 @@ describe("the halt point's ⏸ on the canvas", () => {
     expect(html).not.toContain('aria-pressed="true"');
   });
 });
+
+describe("the pane's Verify strip", () => {
+  it("is drawn without an inst.verify guard (it returns null itself), so Verify on a never-verified session opens the form", async () => {
+    const src = (await import("../components/grid/Pane.tsx?raw")).default;
+    expect(src).toContain("<PaneVerifyStrip inst={inst} />");
+    expect(src).not.toMatch(/inst\.verify\s*&&\s*<PaneVerifyStrip/);
+  });
+
+  it("takes its glyphs from lib/sessionState verifyGlyph", async () => {
+    const { verifyStripView } = await import("../components/grid/PaneVerifyStrip");
+    const { verifyGlyph } = await import("../lib/sessionState");
+    for (const state of ["verifying", "needs_you", "passed", "failed", "blocked"] as const)
+      expect(verifyStripView({ state, plan: "p" } as never, "s", 0).glyph).toBe(verifyGlyph(state));
+  });
+});
