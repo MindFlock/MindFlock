@@ -40,16 +40,19 @@ mf_python() {
   sed -n '1s/^#![[:space:]]*//p' "$(command -v mindflock)" | cut -d' ' -f1
 }
 
-# On failure: the server log, then the engine's PTY spawn
+# On failure: the server logs, then the engine's PTY spawn
 # (mux.spawn_pty, what `tmux new-session -d` goes through at session create)
 # re-run by hand on a private tmux socket — argv, env keys, the exception or
 # the child's exit status, and everything it printed (tmux's stderr).
 diagnose() {
-  if [ -f "$WORK/server.log" ]; then
-    printf '%s\n' '----- server.log (last 200 lines) -----'
-    tail -n 200 "$WORK/server.log" || true
-    printf '%s\n' '----- end server.log -----'
-  fi
+  # The server's stdout/stderr, then the engine's own log (where a session
+  # that "failed to start" says why).
+  for f in "$WORK/server.log" "$HOME/.mindflock/mindflock.log"; do
+    [ -f "$f" ] || continue
+    printf -- '----- %s (last 200 lines) -----\n' "$f"
+    tail -n 200 "$f" || true
+    printf -- '----- end %s -----\n' "$f"
+  done
   PY="$(mf_python)"
   [ -x "$PY" ] || { echo "spawn diagnostic: no interpreter found for mindflock ($PY)"; return 0; }
   printf '%s\n' '----- engine PTY spawn diagnostic -----'

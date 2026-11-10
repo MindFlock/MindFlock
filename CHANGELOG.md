@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Terminals and sessions work again on an install whose Python came from
+  uv** (Debian bookworm, any system without Python 3.12). That CPython's
+  `os.posix_spawn` has no `setsid=`, so since 0.14.4 every web terminal and
+  login terminal there failed to open with `NotImplementedError: posix_spawn:
+  setsid unavailable on this platform`; `mux.spawn_pty` now calls libc's
+  `posix_spawn` with `POSIX_SPAWN_SETSID` itself in that case. With that, the
+  engine's own PTY (`tmux new-session` at create, `attach-session` at
+  restore) moves to `mux.spawn_pty` too, so nothing the server starts forks
+  it. The bare-container quickstart now prints the server logs and a re-run
+  of that spawn when it fails.
+
 ## [0.14.5] - 2026-11-10
 
 ### Fixed
