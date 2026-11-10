@@ -323,11 +323,11 @@ describe("“Opening Settings.”: opening something says so", () => {
     expect(b.chimes()).toBe(1);
   });
 
-  it("only with spoken replies or spoken confirmations on", () => {
+  it("by default; silent only with sounds off and no spoken replies or confirmations", () => {
     const p = (o: Partial<VoicePrefs>): VoicePrefs => ({ ptt: "toggle", replies: "off", wake: false, confirm: false, sounds: true, ...o });
-    expect(announcesActions(p({}))).toBe(false);
-    expect(announcesActions(p({ wake: true }))).toBe(false);
-    expect(announcesActions(p({ confirm: true }))).toBe(true);
+    expect(announcesActions(p({}))).toBe(true);
+    expect(announcesActions(p({ sounds: false }))).toBe(false);
+    expect(announcesActions(p({ sounds: false, confirm: true }))).toBe(true);
     expect(announcesActions(p({ replies: "mine" }))).toBe(true);
     expect(announcesActions(p({ replies: "all" }))).toBe(true);
   });

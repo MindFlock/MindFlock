@@ -530,7 +530,10 @@ export function voiceInUse(p: VoicePrefs): boolean {
 /** Whether a voice command that opens something says so out loud
  * ("Opening Settings."): spoken replies or spoken confirmations are on. */
 export function announcesActions(p: VoicePrefs): boolean {
-  return p.replies !== "off" || p.confirm === true;
+  // On by default: the owner asked to hear what a voice command does ("no
+  // voice that says the action", 2026-11-10). Silent only with the voice's
+  // sounds off and neither spoken replies nor spoken confirmations on.
+  return p.sounds !== false || p.replies !== "off" || p.confirm === true;
 }
 
 /** Whether something said on this desktop goes to the SERVER's voice: replies
