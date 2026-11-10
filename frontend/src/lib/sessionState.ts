@@ -57,7 +57,7 @@
 import type { Instance, SessionVerify } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
-import { perchLabel } from "./flights";
+import { haltedWhy, perchLabel } from "./flights";
 import { heldHint, isHeldOffline } from "./heldOffline";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
@@ -261,19 +261,9 @@ export function flightYouLabel(stepTitle: string | null | undefined): string {
   return perchLabel(stepTitle);
 }
 
-/** Why a route halted, without the stop's own name in front — the words
- * the Sky's halted stop shows under its name (flights/SkyChain `stopWhy`):
- * "CI checks failed: 2 of 14 red" at "CI checks" says "Failed: 2 of 14 red".
- * The rail chip's tooltip and the Sky's Needs you card read it too. */
-export function haltedWhy(stopTitle: string | null | undefined, reason: string | null | undefined): string {
-  const r = String(reason || "").trim();
-  const t = String(stopTitle || "").trim();
-  if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
-    const rest = r.slice(t.length).trim();
-    return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
-  }
-  return r;
-}
+/** Why a route halted, without the stop's own name in front (lib/flights,
+ * where the pane strip's line reads it too). */
+export { haltedWhy };
 
 /** The tooltip of a halted route's chip: "Halted at CI checks — Failed: 2
  * of 14 checks red", then which route waits and where to act. */
@@ -352,6 +342,49 @@ export function verifyStepLines(steps: ReadonlyArray<{ text: string; expect?: st
     .join("\n");
 }
 
+/** The one word of each verify state — the row's pill, and the Sky's Verify
+ * tile (flights/SkyChain `behaviorsMarkOf`): Verifying, Confirm verified,
+ * Verify failed, Verify blocked, Verified; "" for a state it doesn't know. */
+export function verifyWord(state: string): string {
+  switch (state) {
+    case "verifying":
+      return VERIFYING_LABEL;
+    case "needs_you":
+      return REASON_LABEL.verify_confirm;
+    case "failed":
+      return REASON_LABEL.verify_failed;
+    case "blocked":
+      return REASON_LABEL.verify_blocked;
+    case "passed":
+      return VERIFIED_LABEL;
+  }
+  return "";
+}
+
+/** The glyph in front of each verify state's line (the pane's verify row):
+ * ✓ only once it is verified. */
+export function verifyGlyph(state: string): string {
+  switch (state) {
+    case "verifying":
+      return "…";
+    case "needs_you":
+      return "?";
+    case "failed":
+      return "✗";
+    case "blocked":
+      return "!";
+    case "passed":
+      return "✓";
+  }
+  return "";
+}
+
+/** A sign-off with no step left for a person: the agent did them all and
+ * the person only confirms (Who: "Agent, then my sign-off"). */
+function signOffOnly(v: Pick<SessionVerify, "steps" | "human_steps">): boolean {
+  return !(v.human_steps || []).length && !(Number(v.steps?.human) || 0);
+}
+
 /** The tooltip (and the bell's line) of each verify state. */
 export function verifyHint(v: SessionVerify): string {
   const human = Number(v.steps?.human) || 0;
@@ -362,6 +395,10 @@ export function verifyHint(v: SessionVerify): string {
         (human ? " · " + human + (human === 1 ? " step needs" : " steps need") + " a person after" : "")
       );
     case "needs_you": {
+      if (signOffOnly(v)) {
+        const said = String(v.detail || "").trim();
+        return "The agent did its steps" + (said ? " — " + said : "") + ". Press Confirm verified once you're sure it works (or Not verified…)";
+      }
       const list = verifyStepLines(v.human_steps || []);
       const n = (v.human_steps || []).length || human;
       return (
@@ -390,6 +427,7 @@ export function verifyLine(v: SessionVerify): string {
     case "verifying":
       return VERIFYING_LABEL + " — " + verifyProgress(v);
     case "needs_you":
+      if (signOffOnly(v)) return REASON_LABEL.verify_confirm + " — " + (detail || "the agent did its steps; confirm it works");
       return REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm";
     case "failed": {
       const n = (v.failed_steps || []).length;
@@ -542,7 +580,11 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       tone: "neutral",
       inBell: false,
       restartable: false,
-      hint: "Route “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current stop") + " — Resume it from its strip's ⋯",
+      hint:
+        "Route “" + inst.flight.plan_name + "” " +
+        ((inst.flight as { reason?: string }).reason === "halt point" ? "reached its halt point at " : "is paused at ") +
+        (inst.flight.step?.title || "its current stop") +
+        " — Carry on from its strip or its stop on the Sky",
     };
   // Verified, calm, for the ten minutes the server keeps saying so.
   if (verify?.state === "passed")

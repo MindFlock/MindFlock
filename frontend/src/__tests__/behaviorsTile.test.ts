@@ -356,14 +356,14 @@ describe("the Verify stop parked on you (docs/behaviors.md §5)", () => {
   it("the pane's one-line strip: a way to the card, and Skip", () => {
     const html = withClient(createElement(YouStepActions, { flight: parked, compact: true }), [plan()]);
     expect(html).toContain('class="btn-primary fl-btn fl-behaviors"');
-    expect(html).toContain(">Behaviors</button>");
+    expect(html).toContain(">Verify</button>");
     expect(html).toContain(">Skip</button>");
     expect(html).not.toContain("fl-done");
   });
 
   it("before they are written: what it waits for, and Skip", () => {
     const html = withClient(createElement(YouStepActions, { flight: parked }), []);
-    expect(html).toContain("Writing the behaviors…");
+    expect(html).toContain("Its agent is writing its verify steps…");
     expect(html).toContain(">Skip</button>");
     expect(html).not.toContain("fl-done");
   });

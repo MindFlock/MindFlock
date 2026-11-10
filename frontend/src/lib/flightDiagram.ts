@@ -146,8 +146,12 @@ export interface DiagramNode {
   /** A pending stop of a live flight (or any stop being drawn): the inspector
    * edits it in place. Done / current boxes are read-only. */
   editable?: boolean;
-  /** Why it stopped (a halted stop or rung). */
+  /** Why it stopped (a halted stop or rung), or why a stop whose failure was
+   * handed to you waits (`detail.failed_reason`). */
   reason?: string;
+  /** A current stop whose `sub` says what it is doing right now (the
+   * server's live note): its config summary, for the tooltip. */
+  summary?: string;
   /** A branch box: the stop it fans out of, the box it joins at, its state
    * and its own line in brief ("2/4 stops · Push"). */
   branch?: { from: string; to: string; state: BranchState; inner: string; live?: "working" | "you" };
@@ -841,19 +845,27 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     const next = f.steps[i + 1];
     const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
     const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
+    const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
+    // A stop at work says what it is doing right now (the server's note: "the
+    // agent is working", "3 new review comments for the agent"), not its
+    // settings — those stay in its tooltip (`summary`).
+    const note = live && state === "current" && !looping && !fix?.active ? liveNote(rec?.note) : "";
+    // A failure handed to you (`on_fail: you`) waits amber: why, on the tile.
+    const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
     return {
       id: stopId(s, i),
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
-      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s)),
+      sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : note || summary,
+      ...(note && summary && note !== summary ? { summary } : {}),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",
       step: s,
       index: i,
       editable: grounded || (live && state === "pending" && i >= open),
-      reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
+      reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : handed,
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
@@ -863,6 +875,13 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       ...parallelMark(f.steps, i),
     };
   });
+}
+
+/** What a stop at work is doing right now, in one line for its tile: the
+ * server's `note` on its record, clipped ("the agent is verifying its work ·
+ * 3 of 7 answered · quiet 6 min"); "" when it wrote none. */
+export function liveNote(note: unknown): string {
+  return clip(String(note ?? ""), 60);
 }
 
 /** Round 15 looks on a stop node: its risk stripe's tags and its `when`
