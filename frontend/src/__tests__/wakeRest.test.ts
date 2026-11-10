@@ -186,7 +186,7 @@ describe("standby hears while a reply is synthesised (silence), not while the ap
     const MIC = code("components/TopBarMic.tsx");
     expect(MIC).toMatch(/new WakeStandby\(\{[\s\S]*?speaking: \(\) => queue\.audibleNow,/);
     expect(MIC).not.toMatch(/speaking: \(\) => queue\.busy/);
-    expect(MIC).toContain("onWake: (soundEnd, rest) => latestWake.current(soundEnd, rest),");
+    expect(MIC).toContain("onWake: (soundEnd: number, rest?: string) => latestWake.current(soundEnd, rest),");
     expect(MIC).toContain("useRef<(soundEnd: number, rest?: string) => void>(woken)");
   });
 

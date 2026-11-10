@@ -5226,7 +5226,7 @@ export interface Recognizer {
   /** `skipMs`: the first audio to drop — the app's own voice was cut just
    * before (barge-in, {@link BARGE_SKIP_MS}); the server's recognizer
    * honours it, Web Speech can't. */
-  start(h: RecognizerHandlers, opts?: { skipMs?: number }): boolean;
+  start(h: RecognizerHandlers, opts?: { skipMs?: number; chimeMs?: number }): boolean;
   /** End listening but deliver what was said (a final, or the clip's words)
    * before onEnd. */
   finish(): void;
