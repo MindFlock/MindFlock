@@ -33,6 +33,15 @@
  *                                              "Offline · Start"; one rail
  *                                              notice instead of the bell
  *
+ * Verify (the row's `verify` — the session's own agent checking its work, in
+ * its own terminal; docs/web-ui.md "Verify"):
+ *
+ *   working    verifying  the agent  no        Verifying ("3 of 5 steps done")
+ *   needs_you  attention  you        yes       Confirm verified (its steps done;
+ *                                              the hint lists yours)
+ *   needs_you  broken     you        yes       Verify failed · Verify blocked
+ *   idle       verified   nobody     no        Verified (for ten minutes)
+ *
  * Three rows outside the table — a paused session, one whose folder is gone,
  * and one whose agent is asleep — keep their own words ("Paused", "Missing",
  * "Sleeping"): none is a state of a running AGENT, and none waits on anyone in
@@ -45,7 +54,7 @@
  * because it is the input every state reads; stage.ts re-exports it so the
  * guided ship ladder keeps its import. */
 
-import type { Instance } from "../api/types";
+import type { Instance, SessionVerify } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
 import { perchLabel } from "./flights";
@@ -105,8 +114,18 @@ export function effectiveActivity(inst: Partial<Instance>): string {
 // --- The state ----------------------------------------------------------------
 
 export type SessionStateKey = "starting" | "working" | "needs_you" | "idle" | "limit" | "offline";
-export type SessionReason = "question" | "flight_you" | "flight_halted" | "precommit_failed" | "checks_failing" | "setup_failed" | "stuck";
-export type SessionTone = "muted" | "working" | "attention" | "neutral" | "waiting" | "broken";
+export type SessionReason =
+  | "question"
+  | "flight_you"
+  | "flight_halted"
+  | "precommit_failed"
+  | "checks_failing"
+  | "setup_failed"
+  | "stuck"
+  | "verify_confirm"
+  | "verify_failed"
+  | "verify_blocked";
+export type SessionTone = "muted" | "working" | "attention" | "neutral" | "waiting" | "broken" | "verifying" | "verified";
 
 export interface SessionState {
   state: SessionStateKey;
@@ -161,7 +180,15 @@ export const REASON_LABEL: Record<SessionReason, string> = {
   checks_failing: "Checks failing",
   setup_failed: "Setup failed",
   stuck: "Idle",
+  // The agent did its own verify steps; a person did theirs and says so.
+  verify_confirm: "Confirm verified",
+  verify_failed: "Verify failed",
+  verify_blocked: "Verify blocked",
 };
+
+/** The calm words of a verify that is under way, and one that passed. */
+export const VERIFYING_LABEL = "Verifying";
+export const VERIFIED_LABEL = "Verified";
 
 /** The Settings → Notifications switch that gates a state's toast and badge
  * (the bell shows it regardless — the bell is the source of truth). A rule
@@ -176,6 +203,9 @@ export const NOTIFY_RULE: Record<SessionReason | "offline", string> = {
   setup_failed: "setup_failed",
   checks_failing: "checks_failing",
   stuck: "",
+  verify_confirm: "verify_needs_you",
+  verify_failed: "verify_failed",
+  verify_blocked: "verify_failed",
   offline: "session_offline",
 };
 
@@ -190,7 +220,7 @@ export function notifyRuleFor(ss: SessionState): string {
 export function attentionPriority(ss: SessionState): number {
   if (ss.reason === "question") return 0;
   if (ss.reason === "checks_failing") return 2;
-  return 1; // pre-commit / setup failed, offline, stuck
+  return 1; // pre-commit / setup failed, offline, stuck, verify
 }
 
 /** "HH:MM" local time for an epoch in seconds. */
@@ -290,6 +320,93 @@ function sleepingState(info: NonNullable<Instance["sleeping"]>, now: number): Se
   return { state: "idle", label: SLEEPING_LABEL, tone: "muted", inBell: false, restartable: false, hint };
 }
 
+// --- Verify ------------------------------------------------------------------
+
+/** The row's verify, or null — an older server sends no `verify` at all. */
+export function verifyOf(inst: Partial<Instance>): SessionVerify | null {
+  const v = (inst as { verify?: SessionVerify | null }).verify;
+  return v && typeof v === "object" && typeof v.state === "string" ? v : null;
+}
+
+/** "3 of 5 steps done" — the agent's own steps (a person's are not its to do). */
+export function verifyProgress(v: Pick<SessionVerify, "steps">): string {
+  const total = Number(v.steps?.total) || 0;
+  const human = Number(v.steps?.human) || 0;
+  const done = Number(v.steps?.agent_done) || 0;
+  const mine = Math.max(0, total - human);
+  if (!total) return "writing its steps";
+  if (!mine) return "every step needs a person";
+  return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
+}
+
+/** One bulleted line per step: "• Open the app — the banner shows". */
+export function verifyStepLines(steps: ReadonlyArray<{ text: string; expect?: string; note?: string }>): string {
+  return steps
+    .map((s) => {
+      const tail = String(s.expect || s.note || "").trim();
+      return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+    })
+    .join("\n");
+}
+
+/** The tooltip (and the bell's line) of each verify state. */
+export function verifyHint(v: SessionVerify): string {
+  const human = Number(v.steps?.human) || 0;
+  switch (v.state) {
+    case "verifying":
+      return (
+        "Checking its work: " + verifyProgress(v) +
+        (human ? " · " + human + (human === 1 ? " step needs" : " steps need") + " a person after" : "")
+      );
+    case "needs_you": {
+      const list = verifyStepLines(v.human_steps || []);
+      const n = (v.human_steps || []).length || human;
+      return (
+        "The agent checked what it can. Do " + (n === 1 ? "this step" : "these steps") +
+        ", then press Confirm verified (or Not verified…):" + (list ? "\n" + list : "")
+      );
+    }
+    case "failed": {
+      const list = verifyStepLines(v.failed_steps || []);
+      return "Verify failed" + (list ? ":\n" + list : v.detail ? " — " + v.detail : "");
+    }
+    case "blocked":
+      return "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") + ". Open the session to see why";
+    case "passed":
+      return "Verified" + (v.detail ? " — " + v.detail : "");
+  }
+  return "";
+}
+
+/** The pane's verify row in one line: "Verifying — 3 of 5 steps done",
+ * "Confirm verified — the agent did its steps; do yours, then confirm",
+ * "Verify failed — 2 steps", "Verify blocked — <why>", "Verified". */
+export function verifyLine(v: SessionVerify): string {
+  const detail = String(v.detail || "").trim();
+  switch (v.state) {
+    case "verifying":
+      return VERIFYING_LABEL + " — " + verifyProgress(v);
+    case "needs_you":
+      return REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm";
+    case "failed": {
+      const n = (v.failed_steps || []).length;
+      return REASON_LABEL.verify_failed + (n ? " — " + n + (n === 1 ? " step" : " steps") : detail ? " — " + detail : "");
+    }
+    case "blocked":
+      return REASON_LABEL.verify_blocked + (detail ? " — " + detail : "");
+    case "passed":
+      return VERIFIED_LABEL + (detail ? " — " + detail : "");
+  }
+  return "";
+}
+
+function verifyNeedsYou(v: SessionVerify): SessionState | null {
+  if (v.state === "needs_you") return needsYou("verify_confirm", verifyHint(v));
+  if (v.state === "failed") return { ...needsYou("verify_failed", verifyHint(v)), tone: "broken" };
+  if (v.state === "blocked") return { ...needsYou("verify_blocked", verifyHint(v)), tone: "broken" };
+  return null;
+}
+
 /** The one session state. Pure: reads the row and the debounced activity. */
 export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStateExtras): SessionState {
   const now = extras?.now ?? Date.now();
@@ -350,6 +467,11 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   // question in plain words too, so the session keeps its answer row.
   if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
   const bgHint = backgroundHint(inst);
+  const verify = verifyOf(inst);
+  // The agent checking its own work: its own pill, whether it is mid-turn or
+  // between steps — a usage limit and a dead terminal still say so below.
+  if (verify?.state === "verifying" && act !== "limit" && act !== "offline")
+    return { state: "working", label: VERIFYING_LABEL, tone: "verifying", inBell: false, restartable: false, hint: verifyHint(verify) };
   if (act === "working")
     return { state: "working", label: STATE_LABEL.working, tone: "working", inBell: false, restartable: false, hint: bgHint || "Agent is working" };
   if (act === "limit") {
@@ -378,6 +500,11 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)",
     };
   }
+  // Verify waits on a person (Confirm verified), or failed: once the agent's
+  // turn is over — ahead of the Question its reply may end with, since the
+  // reply IS the human steps and the confirm is what answers it.
+  const verifyYou = verify && verifyNeedsYou(verify);
+  if (verifyYou) return verifyYou;
   // The agent's reply ended with a question in plain words and nobody has
   // typed to it since (the row's `asking`, lib/ask.ts): the same Question as
   // a dialog — the chip, the toast and the bell all read this one state.
@@ -399,6 +526,9 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       restartable: false,
       hint: "Route “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current stop") + " — Resume it from its strip's ⋯",
     };
+  // Verified, calm, for the ten minutes the server keeps saying so.
+  if (verify?.state === "passed")
+    return { state: "idle", label: VERIFIED_LABEL, tone: "verified", inBell: false, restartable: false, hint: verifyHint(verify) };
   // Idle. In the bell only once it has sat on uncommitted work for a while:
   // an agent that stopped in the middle of something with nobody typing. A
   // committed branch is not unfinished work — git considers it done.
@@ -424,7 +554,7 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
  * there), a failed pre-commit hook the session's Terminal, a failed setup
  * re-runs it, failing checks open the PR (its checks) or, with no PR yet, the
  * Terminal. Null for every other state. `aria` says it for a screen reader. */
-export type NeedsYouAct = "bell" | "terminal" | "setup" | "pr";
+export type NeedsYouAct = "bell" | "terminal" | "setup" | "pr" | "verify";
 export function needsYouAction(
   ss: SessionState,
   prUrl?: string | null
@@ -441,6 +571,12 @@ export function needsYouAction(
       return { act: "terminal", aria: "Pre-commit failed — open its Terminal" };
     case "setup_failed":
       return { act: "setup", aria: "Setup failed — re-run worktree setup" };
+    case "verify_confirm":
+      return { act: "verify", aria: "Confirm verified — open the session to confirm" };
+    case "verify_failed":
+      return { act: "verify", aria: "Verify failed — open the session to see what failed" };
+    case "verify_blocked":
+      return { act: "verify", aria: "Verify blocked — open the session to see why" };
     case "checks_failing":
       return prUrl
         ? { act: "pr", aria: "Checks failing — open the PR" }

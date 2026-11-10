@@ -46,6 +46,8 @@ import { useMe } from "../../lib/presence";
 import { FastTrackMenu } from "./FastTrackMenu";
 import { PaneMoreMenu } from "./PaneMoreMenu";
 import { SessionMenu } from "../sidebar/SessionMenu";
+import { withVerifyItem } from "../sidebar/verifyMenu";
+import { PaneVerifyStrip } from "./PaneVerifyStrip";
 import { MidName } from "../sidebar/MidName";
 import { hasUncommitted, sessionMenu } from "../../lib/sessionMenu";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
@@ -892,14 +894,18 @@ export function Pane({
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
   // SHIP carries Verify's verdict beside Open PR, and asks first on a
   // failed checklist (lib/stage.ts withVerifyVerdict).
+  // Verify (the session's own agent checking its work) sits beside it.
   const menu = () =>
-    withVerifyVerdict(
-      sessionMenu(inst, menuCtx, {
-        visibleTabs,
-        onHistory: shows("history") ? undefined : openHistory,
-        onCopyHistory: termTab ? copyHistory : undefined,
-        onNextStep: shows("next") ? undefined : shownStep ?? undefined,
-      }),
+    withVerifyItem(
+      withVerifyVerdict(
+        sessionMenu(inst, menuCtx, {
+          visibleTabs,
+          onHistory: shows("history") ? undefined : openHistory,
+          onCopyHistory: termTab ? copyHistory : undefined,
+          onNextStep: shows("next") ? undefined : shownStep ?? undefined,
+        }),
+        inst,
+      ),
       inst,
     );
   // The read-outs the header leaves out (the cost chip, the diff-stat), at
@@ -1393,6 +1399,9 @@ export function Pane({
           bird · chain · ●●●○○ · stop (elapsed), with Done / Skip on a Wait
           for me stop; the line itself opens the Chain tab. */}
       {inst.flight && <PaneFlightStrip inst={inst} />}
+      {/* Verify: the agent checking its own work, and — when a person's
+          steps are left — those steps with Confirm verified. */}
+      {inst.verify && <PaneVerifyStrip inst={inst} />}
       {strip && (
         <div
           className={"peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here")}

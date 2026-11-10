@@ -224,81 +224,24 @@
   align-items: center;
   gap: 4px 6px;
 }
-.bh-answers {
-  display: inline-flex;
-  gap: 4px;
-}
-.bh-answer {
-  padding: 1px 8px;
-  font-size: calc(11.5px * var(--bh-s));
-}
-.bh-answer-pass[data-on] {
-  border-color: var(--green);
-  box-shadow: inset 0 0 0 1px var(--green);
-}
-.bh-answer-fail[data-on] {
-  border-color: var(--red);
-  box-shadow: inset 0 0 0 1px var(--red);
-}
-.bh-answer-blocked[data-on] {
-  border-color: var(--gold);
-  box-shadow: inset 0 0 0 1px var(--gold);
-}
-
-/* Who checks it: a toggle, both lanes labelled. */
+/* Who does it: a read-only mark (the steps are the agent's own). */
 .bh-who {
+  flex: none;
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
+  color: var(--muted);
   font-size: calc(11px * var(--bh-s));
-  cursor: pointer;
   white-space: nowrap;
 }
 .bh-who.is-you {
   border-color: var(--accent);
+  color: var(--text);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-}
-.bh-who:disabled {
-  cursor: default;
-  opacity: 0.75;
-}
-.bh-who:hover:not(:disabled),
-.bh-who:focus-visible {
-  border-color: var(--accent);
-  outline: none;
 }
 
 .bh-quiet {
   font-size: calc(11.5px * var(--bh-s));
-}
-.bh-confirm {
-  font-size: calc(11.5px * var(--bh-s));
-}
-.bh-danger {
-  border-color: var(--red);
-}
-
-.bh-note-row,
-.bh-edit,
-.bh-addform,
-.bh-rewrite {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.bh-edit,
-.bh-addform,
-.bh-rewrite {
-  flex-direction: column;
-  align-items: stretch;
-}
-.bh-note-row .bh-note {
-  flex: 1 1 160px;
-  min-width: 0;
 }
 .bh-edit-actions {
   display: flex;
@@ -306,25 +249,8 @@
   gap: 6px;
   align-items: center;
 }
-.bh-rewrite {
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.bh-rewrite-title {
-  font-weight: 600;
-}
 .bh-card :is(.fl-input, input, textarea) {
   font-size: calc(12px * var(--bh-s));
-}
-
-/* --- foot ------------------------------------------------------------------ */
-.bh-foot {
-  display: flex;
-  flex-direction: column;
-}
-.bh-add {
-  align-self: flex-start;
 }
 
 /* A behavior row collapses to one short line (BehaviorRow): its text is a
@@ -376,48 +302,44 @@
   padding: 1px 7px;
 }
 
-/* Walkthrough: an agent answered a person's behavior (walk "all"), what a
- * behavior relies on ("after #2"), and the picker for it. */
-.bh-walked {
-  align-self: flex-start;
-  padding: 0 6px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: calc(10.5px * var(--bh-s));
-  white-space: nowrap;
+/* --- Confirm verified (VerifyConfirm) ---------------------------------------
+   The steps only a person can do, then Confirm verified / Not verified… — on
+   the card, the pane's verify row and a Verify stop. Sized in plain px: the
+   pane row has no --bh-s. */
+.vc-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
-.bh-evidence.is-walked {
-  border-left: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
-  padding-left: 6px;
-}
-.bh-needs,
-.bh-needs-pick {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
+.vc-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
   gap: 4px;
 }
-.bh-need-chip,
-.bh-need {
-  padding: 0 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
+.vc-step {
+  overflow-wrap: anywhere;
+}
+.vc-step-text {
+  display: block;
+}
+.vc-step-expect {
+  display: block;
   color: var(--muted);
-  font: inherit;
-  font-size: calc(10.5px * var(--bh-s));
-  white-space: nowrap;
+  font-size: 0.92em;
 }
-.bh-need {
-  cursor: pointer;
+.vc-failed .vc-step::marker {
+  color: var(--tone-broken);
 }
-.bh-need.is-on {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  color: var(--text);
+.vc-acts,
+.vc-note-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
-.bh-need:disabled {
-  cursor: default;
-  opacity: 0.75;
+.vc-note-row .vc-note {
+  flex: 1 1 180px;
+  min-width: 0;
 }

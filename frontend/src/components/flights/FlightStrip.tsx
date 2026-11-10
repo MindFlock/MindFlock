@@ -16,6 +16,8 @@ import { useFlightKinds, useFlights, useInstances, useTestPlans } from "../../st
 import { planForSession } from "../../lib/behaviors";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { BehaviorsCard } from "../behaviors/BehaviorsCard";
+import { VerifyConfirm } from "../behaviors/VerifyConfirm";
+import { verifyOf } from "../../lib/sessionState";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { useNow } from "../../lib/useNow";
@@ -70,11 +72,13 @@ export function flightHeadline(f: Flight): string {
   return f.session || f.plan_name;
 }
 
-/** A Verify stop parked on you (docs/behaviors.md §5): its behaviors, each
- * answered on its own in the Behaviors card — no blanket Done. The stop moves
- * on once the last one is answered (the server settles it), or the card's
- * Skip. `compact` (the pane's one-line strip): a way to the card in the Sky,
- * and Skip. Before the behaviors are written: what it waits for, and Skip. */
+/** A Verify stop parked on you (docs/behaviors.md §5). When the session's
+ * own agent did its verify steps and left a person's (`verify.state`
+ * "needs_you"), those steps and Confirm verified / Not verified… — the one
+ * answer a person gives; the stop moves on once it is given, or on Skip.
+ * Otherwise the Behaviors card. `compact` (the pane's one-line strip): Skip,
+ * and a way to the card — the pane's own verify row carries the confirm.
+ * Before the behaviors are written: what it waits for, and Skip. */
 export function VerifyStopActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
   const step = flight.steps[flight.cursor];
   const plans = useTestPlans().data?.plans;
@@ -102,7 +106,10 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
   // its checker (docs/flights.md "When the check can't go on"): say what, and
   // Done means "I did it" — the server turns it into a retry that checks again.
   const ss = flight.step_states?.[step.id];
-  const ask = String(ss?.detail?.ask || "");
+  const verify = verifyOf(row);
+  const confirming = verify?.state === "needs_you";
+  // A person confirming answers it — never "I did it — check again" too.
+  const ask = confirming ? "" : String(ss?.detail?.ask || "");
   if (ask === "needs_you" || ask === "memory") {
     const items = Array.isArray(ss?.detail?.items) ? (ss?.detail?.items as unknown[]).map(String) : [];
     return (
@@ -133,13 +140,21 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
       </div>
     );
   }
+  if (confirming && !compact && !plan)
+    return (
+      <div className="fl-you fl-you-verify fl-you-needs" onClick={stop} data-no-drag>
+        <p className="fl-you-text">The agent did its steps — do yours, then confirm.</p>
+        <VerifyConfirm verify={verify} />
+        <div className="fl-you-acts">{skip}</div>
+      </div>
+    );
   if (compact || !plan)
     return (
       <div className={"fl-you fl-you-verify" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
-        {!compact && <p className="fl-you-text">Writing the behaviors… they show here to answer once they are written.</p>}
+        {!compact && <p className="fl-you-text">Writing the behaviors… they show here once they are written.</p>}
         <div className="fl-you-acts">
           {plan && (
-            <button type="button" className="btn-primary fl-btn fl-behaviors" title="Answer the behaviors that wait on you, on the session's frame in the Sky" onClick={() => openBehaviors({ planId: plan.id })}>
+            <button type="button" className="btn-primary fl-btn fl-behaviors" title="The behaviors and their results, on the session's frame in the Sky" onClick={() => openBehaviors({ planId: plan.id })}>
               Behaviors
             </button>
           )}
