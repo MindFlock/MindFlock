@@ -311,7 +311,9 @@ def test_a_broken_results_file_is_noted_and_the_agent_told_once(monkeypatch, tmp
     TPD._RESULTS_FILE_BAD.clear()
     plan = T.get("sc-1")
     assert TPD._read_verify_results(plan) is None
-    assert told == [] and noted == []  # one read mid-write is not proof
+    # Noted at once (the store writes only on change); the agent is not told
+    # yet — one read mid-write is not proof.
+    assert told == [] and len(noted) == 1 and noted[0][0] == "sc-1"
     clock[0] += TPD._RESULTS_FILE_GRACE_S + 1
     assert TPD._read_verify_results(plan) is None
     assert len(told) == 1 and told[0][0] == "sc-1"
@@ -324,8 +326,10 @@ def test_a_broken_results_file_is_noted_and_the_agent_told_once(monkeypatch, tmp
     (tmp_path / T.RESULT_FILE).write_text(
         json.dumps({"plan": "sc-1", "finished": False}), encoding="utf-8"
     )
+    count = len(noted)
     assert TPD._read_verify_results(plan) is not None
-    assert noted[-1] == ("sc-1", "")  # cleared
+    # A good read never calls it (the store clears file_error itself).
+    assert len(noted) == count and "sc-1" not in TPD._RESULTS_FILE_BAD
     TPD._RESULTS_FILE_BAD.clear()
 
 
@@ -535,6 +539,19 @@ def test_confirm_passes_per_step_answers_when_given(client, monkeypatch):
         "/api/test-plans/sc-1/confirm", json={"verified": True, "steps": {"s2": "x"}}
     )
     assert bad.status_code == 400
+
+
+def test_confirm_answers_a_refused_step_map_with_400(client, monkeypatch):
+    def _confirm(pid, verified, note="", steps=None):
+        raise ValueError("no such step: s9")
+
+    monkeypatch.setattr(T, "confirm_verify", _confirm)
+    T.upsert(_needs_you_plan())
+    r = client.post(
+        "/api/test-plans/sc-1/confirm",
+        json={"verified": True, "steps": {"s9": "pass"}},
+    )
+    assert r.status_code == 400 and "s9" in r.json()["error"]
 
 
 # --------------------------------------------------------------------------- #

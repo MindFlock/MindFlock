@@ -12147,6 +12147,8 @@ async def confirm_test_plan(
             )
     except _test_plans.NotNeedsYou as err:
         return JSONResponse({"error": str(err)}, status_code=409)
+    except ValueError as err:  # a step map the store refused
+        return JSONResponse({"error": str(err)}, status_code=400)
     if plan is None:
         return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
     delivered = False

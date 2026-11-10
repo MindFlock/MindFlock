@@ -1044,7 +1044,10 @@ def _read_verify_results(plan: dict) -> Optional[dict]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as err:
+        _results_file_broken(plan, inst, path, "it can't be opened (%s)" % err)
         return None
     except ValueError as err:
         _results_file_broken(plan, inst, path, "it isn't valid JSON (%s)" % err)
@@ -1079,6 +1082,15 @@ def _results_file_broken(plan: dict, inst, path: str, why: str) -> None:
     ONCE, through the normal message path, so it rewrites the file instead of
     the check reading "Verifying" until a timer closes it. Never raises."""
     pid = str(plan.get("id") or "")
+    message = "The results file %s can't be read: %s." % (_test_plans.RESULT_FILE, why)
+    note = getattr(_test_plans, "note_file_error", None)
+    if note is not None:
+        # Every bad read: the store writes only on change, and the next good
+        # read clears it by itself.
+        try:
+            note(pid, message)
+        except Exception:  # noqa: BLE001
+            pass
     try:
         mtime = os.stat(path).st_mtime
     except OSError:
@@ -1091,13 +1103,6 @@ def _results_file_broken(plan: dict, inst, path: str, why: str) -> None:
     if seen[2] or now - seen[1] < _RESULTS_FILE_GRACE_S:
         return
     _RESULTS_FILE_BAD[pid] = (mtime, seen[1], True)
-    message = "The results file %s can't be read: %s." % (_test_plans.RESULT_FILE, why)
-    note = getattr(_test_plans, "note_file_error", None)
-    if note is not None:
-        try:
-            note(pid, message)
-        except Exception:  # noqa: BLE001 — the message below still goes
-            pass
     title = str(plan.get("run_session") or "")
     text = (
         "MindFlock: your Verify results file %s can't be read — %s. Rewrite it "
@@ -1111,17 +1116,18 @@ def _results_file_broken(plan: dict, inst, path: str, why: str) -> None:
 
 
 def _results_file_ok(plan: dict) -> None:
-    """The results file parses again: forget the broken copy, and clear the
-    plan's note of it if one was made."""
-    seen = _RESULTS_FILE_BAD.pop(str(plan.get("id") or ""), None)
-    if not seen or not seen[2]:
-        return
-    note = getattr(_test_plans, "note_file_error", None)
-    if note is not None:
-        try:
-            note(str(plan.get("id") or ""), "")
-        except Exception:  # noqa: BLE001
-            pass
+    """The results file parses again: forget the broken copy (the store
+    clears its own ``file_error`` on the next good read)."""
+    _RESULTS_FILE_BAD.pop(str(plan.get("id") or ""), None)
+
+
+def _report_finished(data) -> bool:
+    """``test_plans.report_finished`` when the store has it: finished only
+    for a JSON ``true``."""
+    fn = getattr(_test_plans, "report_finished", None)
+    if fn is not None:
+        return bool(fn(data))
+    return isinstance(data, dict) and data.get("finished") is True
 
 
 def _free_stale_verify_worktree(repo_root: str, title: str) -> str:
@@ -2366,7 +2372,7 @@ def _poll_running_test_plans(plans: list) -> None:
                 # SELF-VERIFY: the agent writes its own steps into the file,
                 # and they become the plan's before any answer lands on them.
                 _test_plans.adopt_reported_steps(pid, data.get("steps"))
-            if data and data.get("finished") is not True:
+            if data and not _report_finished(data):
                 # PROGRESS, not an end: the checker rewrites its file after
                 # every step it settles ("finished": false), so whoever waits
                 # on the run sees the answers so far and can tell a slow
@@ -2374,7 +2380,7 @@ def _poll_running_test_plans(plans: list) -> None:
                 partial = _test_plans.reported_results(data)
                 if partial:
                     _test_plans.record_progress(pid, partial)
-            if data and data.get("finished") is True:
+            if data and _report_finished(data):
                 results = _test_plans.reported_results(data)
                 tested, expected = _verify_run_trees(plan)
                 done = _test_plans.finish_run(
