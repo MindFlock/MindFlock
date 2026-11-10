@@ -820,6 +820,12 @@
   padding: 0 0 8px;
 }
 
+/* "Save as a route…": the name field, a name's width (not the bar's). */
+.skl-save-route input {
+  width: 16em;
+  max-width: 100%;
+}
+
 /* The line takes the focus (a press on its bar) so Delete lands on it; the
    pointer's focus draws no ring, the keyboard's does. Round 17: only the
    colour, at the lowest weight, so a selected or hovered line pressed on
@@ -1268,6 +1274,11 @@
 }
 .skl-frame[data-frame="working"] > .skl-frame-box {
   border: calc(1.5px / var(--sky-z, 1)) solid color-mix(in srgb, var(--accent) 75%, transparent);
+}
+/* Paused (a person paused it): a calm dashed neutral frame — no red, no
+   amber, no breathing — so it never reads as one still running. */
+.skl-frame[data-frame="paused"] > .skl-frame-box {
+  border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--muted) 70%, transparent);
 }
 /* The working cue: a ring that breathes (opacity only: no repaint). */
 .skl-frame[data-frame="working"] > .skl-frame-box::after {

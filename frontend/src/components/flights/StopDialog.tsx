@@ -224,7 +224,7 @@ export const SAVE_LOST = "The route reached this stop — your changes can't be 
 function Problem({ problem, def }: { problem: FieldProblem; def: StepKindDef | undefined }) {
   const label = fieldLabelOf(problem.field, def);
   return (
-    <p className="fl-note stop-dialog-error" role="alert" data-field={fieldNameOf(problem.field) || undefined} style={{ color: "var(--red)" }}>
+    <p className="fl-note stop-dialog-error" role="alert" data-field={fieldNameOf(problem.field) || undefined}>
       {label && <strong>{label}: </strong>}
       {problem.detail}
     </p>

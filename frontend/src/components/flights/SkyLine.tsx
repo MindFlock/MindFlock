@@ -218,12 +218,6 @@ export function frameState(s: { flight?: FlightState | null; landed?: boolean; t
   return "idle";
 }
 
-/** The frame box's own paint for a state the line's stylesheet doesn't draw:
- * `paused` is a dashed neutral border (SkyLine.css has no rule for it). */
-export function frameBoxStyle(frame: FrameState): React.CSSProperties | undefined {
-  return frame === "paused" ? { borderStyle: "dashed" } : undefined;
-}
-
 /** An open card's pane, in plane px: its default and its floor. */
 export const PANE_W = 720;
 export const PANE_H = 460;
@@ -772,7 +766,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           a tile dragged left of / above the origin) — and its title bar: the
           handle (drag), the name (double-click renames), the branch, the
           session's state, where the flight is, the ⋯. */}
-      <div className="skl-frame-box" aria-hidden="true" style={{ left: frameX, top: frameY, ...frameBoxStyle(frame) }} />
+      <div className="skl-frame-box" aria-hidden="true" style={{ left: frameX, top: frameY }} />
       <div
         className="skl-bar skl-label skl-frame-bar"
         data-tour="sky-line-bar"
