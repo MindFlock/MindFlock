@@ -225,9 +225,11 @@ only · right away", "Verify on live · agent, then you · once on release".
   which is when its deploy has landed. Use `on_branch` when the branch takes
   the commits themselves (a fast-forward or merge-commit release branch).
 - **Who checks** (`who`) — `both` "Agent, then me" (default: the agent checks
-  its behaviors, then yours park the route on you), `agent` "Agent only"
-  (your behaviors stay open on the checklist but do not hold the route),
-  `you` "Only me".
+  its behaviors — a run with `walk: "agent"` — then yours park the route on
+  you), `agent` "Agent only" (the agent walks **everything**, your behaviors
+  too — a run with `walk: "all"`, see [The walkthrough](#the-walkthrough-walk-expect-needs)
+  — and only what it truly cannot do parks on you; the stop is done once
+  every behavior is settled, agent-walked ones included), `you` "Only me".
 - **Notes** (`notes`) — text for this check only, on top of the repo's
   standing notes; handed to the checklist and to the agent's run.
 - **Post the results to the PR** (`post_to_pr`) — when the stop finishes
@@ -249,6 +251,36 @@ stored plans and flights lose the key the next time they are normalised.
 Plan JSON sent through the MCP tools, the CLI or the API should use
 `where` / `ready`.
 
+
+#### The walkthrough (`walk`, `expect`, `needs`)
+
+The checklist is a **walkthrough**: ordered steps the checker (the *walker*)
+performs itself. Each step is `{id, text, actor, expect?, needs?}` —
+`text` is what to **do** (the walker triggers the behaviour itself: an API
+call, a Slack slash command via the API, an HTTP request, a CLI against the
+deployment, a DB query, browser automation — never "after someone has done
+X"), `expect` what it must **observe** for a pass, and `needs` the ids of
+earlier steps whose action this one relies on. The run prompt prints each step
+as its text, then `Expect: …` and `Needs: sN`; the walker goes in order, and a
+step whose needs failed or were blocked is answered `blocked` "needs sN".
+
+A run has a **walk** mode (`POST /api/test-plans/{id}/run` body
+`{"walk": "agent" | "all"}`, default `agent`, anything else a 400; stored as
+`run.walk`):
+
+- `agent` — today's run: only `actor: "agent"` steps are the walker's; any
+  answer it gives a person's step is stored `blocked`.
+- `all` — the walker also attempts the person's steps with its tools. It may
+  settle one **only with evidence**: `pass`/`fail` with a non-empty note
+  saying what it observed and how. Such an answer is stored
+  `{"result", "note", "at", "by": "agent", "walked": true}`. Without evidence
+  it is refused (`blocked`, still yours); a step it cannot do it answers
+  `blocked` with `needs you: <why>`, which parks on you exactly as below. A
+  plan of person's steps alone is not refused (`human_only`) in this mode,
+  and `steps: [...]` may name a person's step.
+
+A Verify stop with `who: "agent"` starts its run with `walk: "all"`; `both`
+keeps `agent`, then you.
 
 #### When the check can't go on (never silently)
 
