@@ -1025,7 +1025,9 @@
   function verifyNeedsYou(v) {
     if (v.state === "needs_you") {
       var list = verifyLines(v.human_steps, "expect");
-      return needsYou("verify_confirm", "The agent checked what it can. Do these steps, then confirm verified on the desktop:" + (list ? "\n" + list : ""));
+      var n = (v.human_steps || []).length || Number(v.steps && v.steps.human) || 0;
+      return needsYou("verify_confirm", "The agent checked what it can. Do " + (n === 1 ? "this step" : "these steps") +
+                                        ", then press Confirm verified (or Not verified…) under ⋯:" + (list ? "\n" + list : ""));
     }
     if (v.state === "failed") {
       var failed = verifyLines(v.failed_steps, "note");
@@ -1034,7 +1036,7 @@
     }
     if (v.state === "blocked")
       return st("needs_you", { reason: "verify_blocked", label: REASON_LABEL.verify_blocked, tone: "broken", inBell: true,
-                               hint: "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") });
+                               hint: "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") + ". Verify again is under ⋯" });
     return null;
   }
   // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
@@ -1112,7 +1114,7 @@
       var why = haltedWhy(at, hfl.reason);
       return st("needs_you", { reason: "flight_halted", label: REASON_LABEL.flight_halted, tone: "broken", inBell: true,
                                hint: "Halted" + (at ? " at " + at : "") + (why ? " — " + why : "") +
-                                     " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip" });
+                                     " — route “" + (hfl.plan_name || "") + "” waits for Retry or Skip under ⋯" });
     }
     // The agent checking its own work: its own pill, mid-turn or between
     // steps — a usage limit and a dead terminal still say so below.
@@ -1144,7 +1146,8 @@
     // A paused flight: calm and out of the bell (sessionState.ts).
     if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused route",
-                          hint: "Route “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
+                          hint: "Route “" + (inst.flight.plan_name || "") + "” is paused at " +
+                                (inst.flight.step && inst.flight.step.title || "its current stop") + " — Carry on is under ⋯" });
     if (verify && verify.state === "passed")
       return st("idle", { label: "Verified", hint: "Verified" + (verify.detail ? " — " + verify.detail : "") });
     if (idleFor > STUCK_IDLE_S && dirty)
@@ -1199,6 +1202,118 @@
     var fl = rowFlight(inst);
     var at = fl && fl.step ? String(fl.step.title || "") : "";
     return "Halted" + (at ? " at " + at : "");
+  }
+
+  // --- what a session's Verify and route wait on, and the taps that answer
+  // them (the session sheet, renderActSheet). Pure: rows in, words and action
+  // keys out — tests/unit/test_flowpolish_phone.py runs them under node.
+  // Each answers null when there is nothing to show, else
+  // {waits, head, detail, steps: [{text, expect, why}], stepsLabel, acts: [{key, label, hint}]}
+  // (`waits`: a Verify under way or waiting on someone — drawn first).
+  //
+  // Verify (lib/verifyActions.ts, components/behaviors/VerifyConfirm.tsx,
+  // grid/PaneVerifyStrip.tsx): Needs you → Confirm verified / Not verified…
+  // (the note typed in the ask sheet); Verifying → Stop verifying; Verify
+  // failed → Verify again / Let its agent fix it; Verify blocked → Verify
+  // again; nothing running (or Verified) → Verify.
+  function verifyModel(inst) {
+    var v = verifyOf(inst);
+    var plan = v ? String(v.plan || "") : "";
+    var detail = v ? String(v.detail || "").trim() : "";
+    var VERIFY = { key: "verify_start", label: "Verify",
+                   hint: "its agent works out steps to check its work and does them" };
+    var AGAIN = { key: "verify_start", label: "Verify again", hint: "its agent checks its work again" };
+    if (!v) return { waits: false, head: "", detail: "", steps: [], stepsLabel: "", acts: [VERIFY] };
+    var steps = function (list, key) {
+      return (list || []).map(function (s) {
+        return { text: String(s.text || "").trim(), expect: String(s[key] || "").trim(),
+                 why: String(s.why || "").trim() };
+      }).filter(function (s) { return s.text; });
+    };
+    if (v.state === "needs_you") {
+      var mine = steps(v.human_steps, "expect");
+      return {
+        waits: true,
+        head: REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm",
+        detail: detail, steps: mine,
+        stepsLabel: mine.length === 1 ? "Your step" : mine.length ? "Your steps" : "",
+        acts: plan ? [
+          { key: "verify_yes", label: "Confirm verified",
+            hint: "you did the steps and they behaved as expected" },
+          { key: "verify_no", label: "Not verified…",
+            hint: "say what you saw — its agent gets your note" },
+        ] : [],
+      };
+    }
+    if (v.state === "verifying")
+      return {
+        waits: true,
+        head: "Verifying — " + verifyProgress(v), detail: detail, steps: [], stepsLabel: "",
+        acts: plan ? [{ key: "verify_stop", label: "Stop verifying",
+                        hint: "its agent stops checking; what it found so far is kept" }] : [],
+      };
+    if (v.state === "failed") {
+      var bad = steps(v.failed_steps, "note");
+      var fa = [AGAIN];
+      if (plan) fa.push({ key: "verify_fix", label: "Let its agent fix it",
+                          hint: "what failed goes to this session's agent" });
+      return {
+        waits: true,
+        head: REASON_LABEL.verify_failed + (bad.length ? " — " + bad.length + (bad.length === 1 ? " step" : " steps") : ""),
+        detail: detail, steps: bad, stepsLabel: bad.length ? "What failed" : "", acts: fa,
+      };
+    }
+    if (v.state === "blocked")
+      return { waits: true, head: REASON_LABEL.verify_blocked, detail: detail, steps: [], stepsLabel: "", acts: [AGAIN] };
+    // Verified: it can be verified again.
+    return { waits: false, head: "Verified", detail: detail, steps: [], stepsLabel: "", acts: [AGAIN] };
+  }
+
+  // The words the server wrote for the stop the route waits at: the stop's
+  // own note when the row carries it, else the flight's reason.
+  function routeWhy(fl) {
+    var s = fl.step || {};
+    return String(s.note || s.failed_reason || fl.note || fl.reason || "").trim();
+  }
+  // The route (lib/flightsApi.ts stepRetry / stepSkip / stepDone /
+  // controlFlight): Halted → Retry / Skip; Paused → Carry on; Wait for me →
+  // Done (Skip). A Verify stop waiting on you is answered by its Verify (Done
+  // there is refused until it is), so it offers Skip only.
+  function routeModel(inst) {
+    var fl = rowFlight(inst);
+    if (!fl) return null;
+    var at = fl.step ? String(fl.step.title || "").trim() : "";
+    var route = "Route “" + (fl.plan_name || "") + "”";
+    var why = routeWhy(fl);
+    var SKIP = { key: "route_skip", label: "Skip", hint: "leaves this stop and the route goes on" };
+    if (fl.state === "halted")
+      return {
+        head: route + " · " + haltedWords(inst), detail: haltedWhy(at, why) || "The stop failed.",
+        steps: [], stepsLabel: "",
+        acts: fl.step ? [{ key: "route_retry", label: "Retry", hint: "runs " + (at || "this stop") + " again" }, SKIP] : [],
+      };
+    if (fl.state === "paused") {
+      var point = fl.reason === "halt point";
+      return {
+        head: route + " · Paused" + (at ? (point ? " before " : " at ") + at : ""),
+        detail: point ? "It reached a halt point." : why && why !== "paused" ? why : "Paused by hand.",
+        steps: [], stepsLabel: "",
+        acts: [{ key: "route_resume", label: "Carry on",
+                 hint: point ? (at || "the next stop") + " runs, and the route goes on" : "the route picks up where it stopped" }],
+      };
+    }
+    if (fl.state === "waiting_you" && fl.step) {
+      var verifyStop = fl.step.kind === "verify";
+      return {
+        head: route + " · " + (verifyStop ? REASON_LABEL.flight_you + ": " + (at || "Verify") : youStepLabel(at)),
+        detail: why || (verifyStop ? "Answer its Verify above, then the route goes on."
+                                   : "Do this stop yourself, then press Done."),
+        steps: [], stepsLabel: "",
+        acts: verifyStop ? [SKIP]
+                         : [{ key: "route_done", label: "Done", hint: "you did it — the route goes on" }, SKIP],
+      };
+    }
+    return null;
   }
 
   // O1: attention rank (lower = more urgent), by the session's Needs-you
@@ -2512,6 +2627,7 @@
   var askDetailEl = document.getElementById("ask-detail");
   var askOkBtn = document.getElementById("ask-ok");
   var askCancelBtn = document.getElementById("ask-cancel");
+  var askFieldEl = document.getElementById("ask-field");
 
   function openSheet(el) { el.classList.remove("hidden"); }
   function closeSheet(el) { el.classList.add("hidden"); }
@@ -2525,7 +2641,9 @@
 
   // --- the ask sheet: one question, or one gate explained ---
   var askRun = null;
-  function askSheet(title, detail, okLabel, onOk) {
+  // `field` ({placeholder, label}) adds one line of text to the question —
+  // Not verified…'s note: onOk then gets what was typed.
+  function askSheet(title, detail, okLabel, onOk, field) {
     askTitleEl.textContent = title;
     askDetailEl.textContent = detail || "";
     askRun = okLabel ? onOk : null;
@@ -2533,10 +2651,16 @@
     askOkBtn.classList.toggle("hidden", !okLabel);
     // With nothing to do but read it, the one button is an acknowledgement.
     askCancelBtn.textContent = okLabel ? "Cancel" : "OK";
+    askFieldEl.value = "";
+    askFieldEl.placeholder = (field && field.placeholder) || "";
+    askFieldEl.setAttribute("aria-label", (field && field.label) || "");
+    askFieldEl.classList.toggle("hidden", !field);
     openSheet(askSheetEl);
     // Focus lands on Cancel, as on the desktop's Delete strip: a second tap of
-    // whatever opened this never answers it.
-    askCancelBtn.focus();
+    // whatever opened this never answers it. A question with a field is
+    // opened to be typed in, so the field takes it.
+    if (field) askFieldEl.focus();
+    else askCancelBtn.focus();
   }
   function closeAsk() {
     askRun = null;
@@ -2623,12 +2747,26 @@
       chip.className = "state-chip tone-" + ss.tone;
       chip.textContent = ss.label;
       actStateEl.appendChild(chip);
-      if (ss.hint) {
+      var peer = isPeerRow(inst);
+      var vm = peer ? null : verifyModel(inst);
+      var rm = peer ? null : routeModel(inst);
+      // The Verify / route block below says the same thing, step by step.
+      var told = (vm && vm.head && /^verify_/.test(ss.reason || "")) ||
+                 (vm && vm.head && (ss.label === "Verifying" || ss.label === "Verified")) ||
+                 (rm && (ss.reason === "flight_you" || ss.reason === "flight_halted" || ss.label === "Paused route"));
+      if (ss.hint && !told) {
         var h = document.createElement("span");
         h.className = "act-hint";
         h.textContent = "  " + ss.hint;
         actStateEl.appendChild(h);
       }
+      // What the route and Verify wait on, and the taps that answer them —
+      // first, so the one thing to do is one tap away. A Verify that waits on
+      // nothing (Verify, or Verify again once verified) comes after Restart /
+      // Wake / Resume, and not at all while the agent is gone or starting.
+      if (vm && (inst.status === "paused" || inst.workspace_missing)) vm = null;
+      if (rm) actListEl.appendChild(waitBlock(title, rm, "act-route"));
+      if (vm && vm.waits) actListEl.appendChild(waitBlock(title, vm, "act-verify"));
       if (isPeerRow(inst)) {
         // Theirs: say whose it is; Restart, Close, Delete… are the sharer's.
         actListEl.appendChild(folderNote(peerWho(inst) + "'s session · " + peerModeWords(inst) +
@@ -2645,6 +2783,8 @@
         if (inst.status === "paused")
           actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
             function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
+        if (vm && !vm.waits && ss.state !== "offline" && ss.state !== "starting")
+          actListEl.appendChild(waitBlock(title, vm, "act-verify"));
         actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
           function () { closeSession(title); }));
         // A peer (sandboxed shared-folder) session is unshared, never deleted —
@@ -2657,6 +2797,147 @@
     }
     actListEl.appendChild(actRow("Recently closed", "reopen a session you closed",
       function () { closeActSheet(); openRecentSheet(); }));
+  }
+
+  // One Verify or route block (verifyModel / routeModel): what it waits on in
+  // the server's words, the person's steps, then its buttons.
+  function waitBlock(title, m, cls) {
+    var box = document.createElement("div");
+    box.className = "act-wait " + cls;
+    if (m.head) {
+      var head = document.createElement("div");
+      head.className = "act-wait-head";
+      head.textContent = m.head;
+      box.appendChild(head);
+    }
+    if (m.detail) {
+      var d = document.createElement("div");
+      d.className = "act-wait-detail";
+      d.textContent = m.detail;
+      box.appendChild(d);
+    }
+    if (m.steps.length) {
+      if (m.stepsLabel) {
+        var lab = document.createElement("div");
+        lab.className = "act-wait-label";
+        lab.textContent = m.stepsLabel;
+        box.appendChild(lab);
+      }
+      var ol = document.createElement("ol");
+      ol.className = "act-wait-steps";
+      m.steps.forEach(function (s) {
+        var li = document.createElement("li");
+        var t = document.createElement("span");
+        t.className = "act-step-text";
+        t.textContent = s.text;
+        li.appendChild(t);
+        // Your steps say what to look for; failed ones what the agent saw.
+        var lines = cls === "act-verify" && m.stepsLabel !== "What failed"
+          ? [s.expect ? "Look for: " + s.expect : "", s.why ? "Why it's yours: " + s.why : ""]
+          : [s.expect];
+        lines.forEach(function (x) {
+          if (!x) return;
+          var e = document.createElement("span");
+          e.className = "act-step-expect";
+          e.textContent = x;
+          li.appendChild(e);
+        });
+        ol.appendChild(li);
+      });
+      box.appendChild(ol);
+    }
+    m.acts.forEach(function (a, i) {
+      box.appendChild(actRow(a.label, a.hint, function () { waitAct(title, a.key); },
+                             i === 0 ? "act-primary" : ""));
+    });
+    return box;
+  }
+
+  // A Verify or route tap. Read off the row as it is NOW (the sheet may have
+  // been open a while): a stop that moved on is not the one to answer.
+  function waitAct(title, key) {
+    var inst = instByTitle(title);
+    var v = inst && verifyOf(inst);
+    var plan = v ? String(v.plan || "") : "";
+    var fl = inst && rowFlight(inst);
+    var name = nameOf(title);
+    if (key === "verify_start") {
+      actPost("/api/instances/" + encodeURIComponent(title) + "/verify", {}, "Verify failed to start", function (j) {
+        return "Verifying " + name + " — its agent writes its steps and works them in its terminal" +
+               (j && j.queued ? ", once its current turn ends" : "");
+      });
+    } else if (key === "verify_yes" && plan) {
+      actPost(planApi(plan, "confirm"), { verified: true }, "Couldn't confirm verified", function () {
+        return "Confirmed verified";
+      });
+    } else if (key === "verify_no" && plan) {
+      askSheet("Not verified — what did you see?",
+        "Say what didn't behave. " + name + "'s agent gets your note, and the verify reads failed.",
+        "Not verified",
+        function (note) {
+          var body = note ? { verified: false, note: note } : { verified: false };
+          actPost(planApi(plan, "confirm"), body, "Couldn't mark it not verified", function (j) {
+            return "Marked not verified — " +
+                   (j && j.delivered === false ? "your note is saved; the agent hasn't got it yet" : "the agent gets your note");
+          });
+        },
+        { placeholder: "What did you see? The agent gets this", label: "What wasn't verified" });
+    } else if (key === "verify_fix" && plan) {
+      actPost(planApi(plan, "fix"), { in_session: true }, "Fix didn't start", function (j) {
+        var to = j && j.session ? String(j.session) : "";
+        return !to || to === title ? "Handed what failed to " + name + "'s agent"
+                                   : "Opened " + nameOf(to) + " to fix what failed";
+      });
+    } else if (key === "verify_stop" && plan) {
+      actPost(planApi(plan, "cancel"), {}, "Couldn't stop verifying", function () {
+        return "Stopped verifying " + name + " — what it found so far is kept";
+      });
+    } else if (fl && fl.step && (key === "route_retry" || key === "route_skip" || key === "route_done")) {
+      var verb = key.slice(6);
+      actPost("/api/flights/" + encodeURIComponent(fl.id) + "/steps/" + encodeURIComponent(fl.step.id) + "/" + verb, {},
+        verb === "retry" ? "Retry failed" : verb === "skip" ? "Skip failed" : "Done failed", function () {
+          return verb === "retry" ? "Retrying " + (fl.step.title || "the stop")
+               : verb === "skip" ? "Skipped — the route carries on" : "Done — the route carries on";
+        });
+    } else if (fl && key === "route_resume") {
+      actPost("/api/flights/" + encodeURIComponent(fl.id) + "/resume", {}, "Carry on failed", function () {
+        return "Route carrying on";
+      });
+    } else {
+      actError("That has moved on — close this and look again.");
+    }
+  }
+  function planApi(plan, verb) {
+    return "/api/test-plans/" + encodeURIComponent(plan) + "/" + verb;
+  }
+  // One POST from the sheet: it closes on success with `said(json)`, and stays
+  // open with the server's own sentence on a refusal (`detail` — the fix
+  // route's plain sentence — else `error`).
+  function actPost(path, body, failWord, said) {
+    actBusy = true;
+    actError("");
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (!r.ok) throw new Error((j && (j.detail || j.error)) || "request failed (" + r.status + ")");
+          return j;
+        });
+      })
+      .then(function (j) {
+        actBusy = false;
+        closeActSheet();
+        flashStatus(said(j));
+        setTimeout(poll, 600);
+      })
+      .catch(function (err) {
+        actBusy = false;
+        if (actFor) actError(failWord + ": " + err.message);
+        else flashStatus(failWord + ": " + err.message);
+      });
   }
 
   // Resume / Restart / Wake: one POST each, the sheet closes on success and
@@ -2879,8 +3160,9 @@
   document.getElementById("recent-done").addEventListener("click", function () { closeSheet(recentSheet); });
   askOkBtn.addEventListener("click", function () {
     var run = askRun;
+    var typed = askFieldEl.classList.contains("hidden") ? "" : askFieldEl.value.trim();
     closeAsk();
-    if (run) run();
+    if (run) run(typed);
   });
   askCancelBtn.addEventListener("click", closeAsk);
   // Tap the dimmed backdrop to dismiss, like the commit and new sheets.
