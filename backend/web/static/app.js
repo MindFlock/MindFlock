@@ -42499,6 +42499,14 @@ function stripVisible(v) {
 }
 var LISTENING_LINE = "Talking to MindFlock";
 var THINKING_LINE = "Thinking…";
+function openingLine(a, r) {
+	if (a.do !== "open" || !r.ok) return "";
+	const m = /^Opened\s+(.+)$/.exec(String(r.text || "").trim());
+	if (!m) return "";
+	const screen = /^Settings\s*→\s*(.+)$/.exec(m[1]);
+	const what = (screen ? screen[1] + " settings" : m[1]).replace(/\s*\(.*\)$/, "").trim();
+	return what ? "Opening " + what + "." : "";
+}
 var CONFIRM_TTL_MS = 6e4;
 var AssistantSession = class {
 	deps;
@@ -42640,7 +42648,8 @@ var AssistantSession = class {
 						session: r.session,
 						open: r.open
 					});
-					chime();
+					const line = openingLine(e.action, r);
+					if (!(line && this.deps.confirm?.(line))) chime();
 				} else {
 					this.view.set({
 						caption: r.text,
@@ -44102,6 +44111,80 @@ function soundTail(text, phrases, tails = [], lead = false) {
 		}
 	}
 	return null;
+}
+var WAKE_LEADS = [
+	"hey",
+	"ok",
+	"okay",
+	"please",
+	"ask"
+];
+var WAKE_PLAIN = [
+	"mindflock",
+	"mind flock",
+	"mine flock",
+	"minflock",
+	"min flock",
+	"mindlock",
+	"mind lock",
+	"mindflog",
+	"mind flog",
+	"minh flock"
+];
+var PAUSE_AFTER = /[,.:;!?—–-]$/;
+var wordsOf$1 = (t) => String(t || "").toLowerCase().replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+var tokensOf = (text) => String(text || "").trim().split(/\s+/).filter(Boolean);
+function wakeForms(w) {
+	const own = normPhrase(w.wake || "") || BUILTIN_VOICE_WORDS.wake;
+	return {
+		names: own === BUILTIN_VOICE_WORDS.wake ? [own] : [own, BUILTIN_VOICE_WORDS.wake],
+		plain: new Set([...WAKE_PLAIN, own].map(letters)),
+		heard: new Set(heardOf(w, "wake").map(letters))
+	};
+}
+function wakeAt(text, w = current$1) {
+	const toks = tokensOf(text);
+	const f = wakeForms(w);
+	let start = 0;
+	if (toks.length > 1 && WAKE_LEADS.includes(wordsOf$1(toks[0]).join(" "))) start = 1;
+	for (const k of [1, 2]) {
+		const span = toks.slice(start, start + k);
+		if (span.length < k || /['’]/.test(span.join(""))) continue;
+		const said = span.map((t) => wordsOf$1(t).join("")).join("");
+		if (!said) continue;
+		if (f.plain.has(said)) return start + k;
+		if (PAUSE_AFTER.test(span[span.length - 1]) && (f.heard.has(said) || f.names.some((n) => soundsLike(said, n)))) return start + k;
+	}
+	return null;
+}
+function wakeRest(text, w = current$1) {
+	const at = wakeAt(text, w);
+	if (at === null) return null;
+	return tokensOf(text).slice(at).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+}
+function isWakePhrase(text, w = current$1) {
+	return !!wakeRest(text, w);
+}
+function mayBeWake(text, w = current$1) {
+	if (wakeAt(text, w) !== null) return true;
+	const toks = tokensOf(text).filter((t) => wordsOf$1(t).length);
+	if (!toks.length) return false;
+	const f = wakeForms(w);
+	const forms = [
+		...WAKE_PLAIN,
+		...f.names,
+		...heardOf(w, "wake")
+	].map(wordsOf$1);
+	let s = 0;
+	if (WAKE_LEADS.includes(wordsOf$1(toks[0]).join(" "))) s = 1;
+	const rest = toks.slice(s).map((t) => wordsOf$1(t).join(""));
+	if (!rest.length) return false;
+	if (/['’]/.test(toks.slice(s, s + 2).join(""))) return false;
+	const one = rest[0];
+	if (forms.some((p) => p.join("") === one) || f.names.some((n) => soundsLike(one, n))) return true;
+	if (rest.length < 2) return forms.some((p) => p[0] === one);
+	const two = one + rest[1];
+	return forms.some((p) => p.join("") === two) || f.names.some((n) => soundsLike(two, n));
 }
 //#endregion
 //#region src/lib/tours/voice.ts
@@ -49004,6 +49087,9 @@ var VOICE_PREFS_KEY = "cs_voice_desktop";
 function voiceInUse(p) {
 	return p.replies !== "off" || !!p.wake;
 }
+function announcesActions(p) {
+	return p.sounds !== false || p.replies !== "off" || p.confirm === true;
+}
 function speaksOnServer(p, cfg, electron = isElectron()) {
 	if (ttsEngine(cfg, electron) !== "server") return false;
 	return voiceInUse(p) || p.confirm !== false || cfg.say_all === true;
@@ -49315,6 +49401,7 @@ var Dictation = class {
 		}
 		const words = holdBack(r.text).type;
 		if (this.routes && !this.before.trim() && isSwitchCommand(words)) return base.trim();
+		if (this.routes && isWakePhrase(words)) return base.trim();
 		return joinWords(base, words);
 	}
 	hearing(t) {
@@ -49464,7 +49551,7 @@ var Dictation = class {
 	guess() {
 		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
 		const hb = holdBack(joinWords(this.held, this.partial));
-		const want = this.routes && !this.before && mayBeCommand(hb.type) ? "" : hb.type;
+		const want = this.mayRoute(hb.type) ? "" : hb.type;
 		const fix = retype(this.guessed, want);
 		if (!fix.erase && !fix.type) return { kind: "continue" };
 		return withErase({
@@ -49476,7 +49563,7 @@ var Dictation = class {
 	}
 	settle(text) {
 		const guessed = this.guessed;
-		const whole = this.routes && !this.before && mayBeCommand(text);
+		const whole = this.mayRoute(text);
 		if (text.trim()) this.marks.push(this.phraseAt < 0 ? this.typed.length : this.phraseAt);
 		this.phraseAt = -1;
 		this.held = "";
@@ -49486,6 +49573,9 @@ var Dictation = class {
 			type: text
 		} : retype(guessed, text);
 		return withErase({ text: fix.type }, fix.erase);
+	}
+	mayRoute(text) {
+		return this.routes && (!this.before && mayBeCommand(text) || mayBeWake(text));
 	}
 	control(all, whole) {
 		if (whole && isHushPhrase(all)) return withErase({ kind: "hush" }, this.settle("").erase || "");
@@ -50229,6 +50319,11 @@ var LiveDictation = class {
 			}
 			return this.keys(t, erase, text);
 		}
+		if (route && t?.kind !== "field" && this.dict.routes && this.dict.typed.length > erase.length && isWakePhrase(text)) {
+			const wake = await this.wakeCommand(t, text, erase);
+			if (wake !== null) return wake;
+			erase = "";
+		}
 		if (t && (this.dict.typed || this.unsent) && this.dialogBlocks(t)) return this.heldBack(t, text);
 		if (this.dict.typed.length === erase.length && t?.kind !== "field") {
 			if (erase && t && !this.keys(t, erase, "")) return false;
@@ -50262,6 +50357,28 @@ var LiveDictation = class {
 			return false;
 		}
 		return this.keys(t, erase, text);
+	}
+	async wakeCommand(t, text, erase) {
+		if (erase && t && !this.keys(t, erase, "")) return false;
+		const words = text.trim();
+		this.hooks.caption(this.dict.shown, true, words);
+		const routed = await this.hooks.route(words, this.stepSpoke);
+		voiceTrace("wake", {
+			phrase: words,
+			routed,
+			typed: this.dict.typed.length
+		});
+		if (routed === "hush") {
+			this.hushed();
+			return false;
+		}
+		if (routed) {
+			this.acted = true;
+			if (routed === "end") this.end(null);
+			else this.show();
+			return false;
+		}
+		return this.done ? false : null;
 	}
 	dialogBlocks(t) {
 		if (t.kind !== "session") return false;
@@ -51321,9 +51438,9 @@ var Confirmer = class {
 	constructor(deps) {
 		this.deps = deps;
 	}
-	say(kind) {
+	say(kind, opts = {}) {
 		const x = this.deps;
-		if (!x.on()) return Promise.resolve();
+		if (!opts.force && !x.on()) return Promise.resolve();
 		const line = typeof kind === "string" ? CONFIRM_LINES[kind] : kind.line;
 		const mic = x.mic();
 		let muted = false;
@@ -53923,6 +54040,7 @@ var assistant = new AssistantSession({
 		voice: ttsEngine(cfgNow) === "server" ? assistantSp : void 0
 	}),
 	chime: () => assistantHooks.chime?.(),
+	confirm: (line) => assistantHooks.confirm?.(line) ?? false,
 	focus: (title) => void refreshInstances().then(() => selectSession(title, {
 		noKeyboard: true,
 		voice: true
@@ -54861,6 +54979,11 @@ function TopBarMic() {
 	};
 	(0, import_react.useEffect)(() => {
 		assistantHooks.chime = () => latestAssist.current.sound("start");
+		assistantHooks.confirm = (line) => {
+			if (!announcesActions(prefsRef.current)) return false;
+			confirmer.current?.say({ line }, { force: true });
+			return true;
+		};
 		assistantHooks.asked = () => {
 			queue.drained().then(() => {
 				if (live.current || !assistant.wantsNext()) return;
@@ -54875,6 +54998,7 @@ function TopBarMic() {
 		return () => {
 			assistantHooks.chime = void 0;
 			assistantHooks.asked = void 0;
+			assistantHooks.confirm = void 0;
 		};
 	}, []);
 	const toggleRef = (0, import_react.useRef)(toggleAssistant);

@@ -47,6 +47,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"MindFlock, open settings" works mid-message, and says what it does.**
+  A phrase that starts with the wake word is a command wherever it falls in
+  a dictation (it used to count only as a message's first phrase, so with
+  words already in the box it was typed). "My flock," / "Mine flock,"
+  followed by a pause count as the wake word, and the app says the action
+  out loud ("Opening Settings.").
+
 - **Saying "over" presses Enter again.** An Enter-only send (the voice
   "over", `/send {"enter": true}`) ran a bare `tmux` for its empty text,
   which failed, so nothing was pressed and the mic stopped with "Couldn't
