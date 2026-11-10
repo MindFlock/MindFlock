@@ -1046,7 +1046,12 @@ _VERIFY_RULES = {
 }
 
 #: Round 4: the moments that are bad news or "your turn" ring by default.
-_VERIFY_ON_BY_DEFAULT = {"verify_plan_failed", "verify_plan_due", "verify_run_failed"}
+_VERIFY_ON_BY_DEFAULT = {
+    "verify_plan_failed",
+    "verify_plan_due",
+    "verify_run_failed",
+    "verify_needs_you",
+}
 
 
 def test_every_rule_names_a_real_event():
@@ -1117,7 +1122,7 @@ def test_the_two_ends_of_a_plan_are_separately_switchable(pushes):
     addon._on_event(_verify_env("session.test_plan_checked", data={"failed": 0}))
     assert pushes == []
     addon._on_event(_verify_env("session.test_plan_ready", data={"steps": 6}))
-    assert len(pushes) == 1 and "behaviors written" in pushes[0]["title"]
+    assert len(pushes) == 1 and "Verify steps written" in pushes[0]["title"]
 
 
 def test_a_failed_generation_rings_by_default_and_can_be_muted(pushes):
@@ -1145,7 +1150,7 @@ def test_a_failed_check_rings_but_a_clean_one_does_not(pushes):
     bad = _verify_env("session.test_plan_checked", data={"failed": 2})
     bad["new"] = "failed"
     addon._on_event(bad)
-    assert len(pushes) == 1 and pushes[0]["title"] == "alpha: a behavior failed"
+    assert len(pushes) == 1 and pushes[0]["title"] == "alpha: Verify failed"
     assert pushes[0]["priority"] == 4
 
 
