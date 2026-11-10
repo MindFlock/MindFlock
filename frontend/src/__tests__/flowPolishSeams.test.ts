@@ -206,3 +206,31 @@ describe("a tile's tooltip names its options", () => {
     expect(html.match(/title="Push[^"]*"/)?.[0]).toContain("Push — The route pauses here first (a halt point)");
   });
 });
+
+describe("a Verify stop waiting on a plain sign-off (FlightStrip)", () => {
+  it("says the agent's own word once — never 'do yours' when nothing is yours", async () => {
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const { VerifyStopActions } = await import("../components/flights/FlightStrip");
+    const verify = (over: Record<string, unknown>) => ({ state: "needs_you", plan: "p1", steps: { total: 3, agent_done: 3, human: 0 }, human_steps: [], failed_steps: [], detail: "every step passed with evidence", at: 0, ...over });
+    const flight = {
+      id: "f1",
+      plan_name: "Ship it",
+      session: "lead",
+      state: "waiting_you",
+      cursor: 0,
+      steps: [{ id: "v1", kind: "verify", title: "Verify", config: {}, on_fail: "halt" }],
+      step_states: { v1: { state: "waiting_you", since: 0, note: "", detail: { ask: "confirm" }, rounds: 0 } },
+    };
+    const render = (v: Record<string, unknown>) => {
+      const c = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
+      c.setQueryData(["instances"], [{ title: "lead", branch: "b", repo: "r", verify: v }]);
+      return renderToStaticMarkup(createElement(QueryClientProvider, { client: c }, createElement(VerifyStopActions, { flight } as never)));
+    };
+    const signOff = render(verify({}));
+    expect(signOff.match(/every step passed with evidence/g)).toHaveLength(1);
+    expect(signOff).not.toContain("do yours");
+    const mine = render(verify({ steps: { total: 3, agent_done: 2, human: 1 }, human_steps: [{ id: "h", text: "Open it", expect: "it opens" }] }));
+    expect(mine).toContain("do yours, then confirm");
+    expect(mine).toContain("Open it");
+  });
+});
