@@ -1229,7 +1229,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page4.click("#voice-done");
     // A 409 on the open: the phrase is a clip, and the page stops asking.
     state.streamOpenStatus = 409;
-    state.transcribeReply = { text: "check the logs, that's all", backend: "whisper", ms: 80 };
+    state.transcribeReply = { text: "check the logs, stop listening", backend: "whisper", ms: 80 };
     await page4.evaluate(() => { document.getElementById("compose").value = ""; });
     await page4.click("#voice-btn");
     await waitFor(page4, () => window.mfVoice.state === "listening", 3000, "listening for the clip");
@@ -1254,7 +1254,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const sidF = "s" + (state.streamOpens.length + 1);
     state.streamScript[sidF] = [{ committed: "check the", partial: "build" }];
     state.streamFailChunk[sidF] = 2;
-    state.transcribeReply = { text: "logs that's all", backend: "whisper", ms: 70 };
+    state.transcribeReply = { text: "logs stop listening", backend: "whisper", ms: 70 };
     const deletesF = state.streamDeletes.length;
     await page4.evaluate(() => { document.getElementById("compose").value = ""; window.mfVoice.cfg.server_ready.stt_stream = true; });
     await page4.click("#voice-btn");
@@ -1287,16 +1287,16 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       await waitFor(page4, done || (() => window.mfVoice.state === "idle"), 4000, "final kept");
       return { box: await page4.evaluate(() => document.getElementById("compose").value), boxes: await page4.evaluate(() => window.__boxes.slice()) };
     };
-    const fx = await finalRun({ committed: "that's all", final: "fix the bug that's all", final_ms: 1200, same: false });
-    check("final: a different final replaces the whole typed phrase (the words before it stay), then the stop phrase keeps it", fx.box === "keep this fix the bug" && fx.boxes.includes("keep this fix the bag") && fx.boxes.every((b) => b.indexOf("keep this") === 0 && !/that's/.test(b)), JSON.stringify(fx));
+    const fx = await finalRun({ committed: "stop listening", final: "fix the bug stop listening", final_ms: 1200, same: false });
+    check("final: a different final replaces the whole typed phrase (the words before it stay), then the stop phrase keeps it", fx.box === "keep this fix the bug" && fx.boxes.includes("keep this fix the bag") && fx.boxes.every((b) => b.indexOf("keep this") === 0 && !/stop|listening/.test(b)), JSON.stringify(fx));
     await page4.click("#voice-gear");
     await sleep(200);
     const diagF = await page4.evaluate(() => document.getElementById("voice-diag").textContent);
     check("final: …Diagnostics says 'final 1.2 s (corrected)' once", (diagF.match(/final 1\.2 s \(corrected\)/g) || []).length === 1, diagF.replace(/\n/g, " | "));
     await page4.click("#voice-done");
-    const fs = await finalRun({ committed: "that's all", final: "fix the bug that's all", final_ms: 900, same: true });
+    const fs = await finalRun({ committed: "stop listening", final: "fix the bug stop listening", final_ms: 900, same: true });
     check("final: `same` → no retype, the fast words stand", fs.box === "keep this fix the bag", JSON.stringify(fs));
-    const fa = await finalRun({ committed: "that's all" });
+    const fa = await finalRun({ committed: "stop listening" });
     check("final: no `final` (an older server) → the fast words stand", fa.box === "keep this fix the bag", JSON.stringify(fa));
     const fd = await finalRun({ committed: "", final: "fix the bug over and out", final_ms: 800, same: false }, () => ["sending", "working"].includes(window.mfVoice.state));
     const sentF = posts("/send").slice(-1)[0];
@@ -1399,6 +1399,15 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page5.evaluate(() => window.__hear("That's all."));
     await idle5("that's all");
     check("'that's all' alone stops too, the box untouched", (await page5.evaluate(() => document.getElementById("compose").value)) === "fix the flaky test and the docs");
+    // ...but at the END of a sentence it is words (the owner, 2026-11-10:
+    // "…so make sure that that's all." stopped listening mid-message).
+    await listen5("listening for a sentence ending in that's all");
+    await page5.evaluate(() => window.__hear("so make sure that that's all."));
+    await waitFor(page5, () => /make sure that that's all/.test(document.getElementById("compose").value), 3000, "typed that's all");
+    await sleep(200);
+    check("'… make sure that that's all.' is typed and listening goes on", ["listening", "awaiting"].includes(await vstate(page5)) && posts5("/send").length === sends5, await page5.evaluate(() => document.getElementById("compose").value));
+    await page5.evaluate(() => window.__hear("stop listening"));
+    await idle5("stopped after the sentence");
     await page5.evaluate(() => { const c = document.getElementById("compose"); c.value = ""; c.dispatchEvent(new Event("input")); });
 
     // "yes" with a pending dialog (the router names it) → POST /answer.
@@ -2147,7 +2156,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await turn9("api-docs", "Deployed again.");
     await sleep(500);
     check("queue: a listen that is not continuous holds it", !(await said(page9, "In API docs: Deployed again.")) && (await page9.evaluate(() => window.mfVoice.speech.q.length)) === 1);
-    await page9.evaluate(() => window.__hear("hello, that's all"));
+    await page9.evaluate(() => window.__hear("hello, stop listening"));
     await waitFor(page9, () => window.__spokenHas("In API docs: Deployed again."), 3000, "said after listening");
     check("queue: …and says it once listening stops", await said(page9, "In API docs: Deployed again."));
     await page9.evaluate(() => { document.getElementById("compose").value = ""; });
