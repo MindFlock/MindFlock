@@ -45472,6 +45472,26 @@ function popupTurn(q) {
 //#region src/whatsNew/releases.ts
 var RELEASES = [
 	{
+		version: "0.14.3",
+		date: "2026-11-10",
+		big: false,
+		headline: "Memory warnings you can trust, and voice that sends.",
+		features: [
+			{
+				title: "Memory reads real trouble",
+				body: "Low and critical now mean processes are stalling on memory, swap is being read back, or Windows is near its commit limit, held for 30 seconds, and each warning names the signal. Starts no longer wait while WSL has gigabytes it can reuse."
+			},
+			{
+				title: "Over sends again",
+				body: "Saying \"over\" presses Enter again, and \"over and out\" sends what is already in the box. Voice also stays on when memory gets low."
+			},
+			{
+				title: "Verify talks to you in the session",
+				body: "Check now hands the behaviors to the session that wrote the work: they show up on its todo list, and you can talk to it while it walks them."
+			}
+		]
+	},
+	{
 		version: "0.14.2",
 		date: "2026-11-09",
 		big: false,
