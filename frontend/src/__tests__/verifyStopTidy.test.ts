@@ -75,7 +75,7 @@ describe("Done on a Verify stop the server refuses", () => {
     expect(await stepDone("f1", "s1")).toBe(false);
     expect(errorPop).not.toHaveBeenCalled();
     expect(openBehaviors).toHaveBeenCalledWith({ title: "fix-login", branch: "fix-login" });
-    expect(String(toast.mock.calls.at(-1)?.[0])).toContain("Answer its behaviors");
+    expect(String(toast.mock.calls.at(-1)?.[0])).toContain("Answer it on its Verify card");
   });
 
   it("any other refusal is still the error card", async () => {

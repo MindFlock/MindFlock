@@ -66,3 +66,33 @@ describe("the pane's Verify strip", () => {
       expect(verifyStripView({ state, plan: "p" } as never, "s", 0).glyph).toBe(verifyGlyph(state));
   });
 });
+
+describe("the bell's row for a route paused at a halt point", () => {
+  it("a calm chip, Carry on and Skip — not a red row with only Open", async () => {
+    const { WaitingRow } = await import("../components/outbox/WaitingRow");
+    const { withFlightRows } = await import("../lib/needsYou");
+    const flight = {
+      id: "f_1",
+      plan_name: "Ticket to merge",
+      state: "paused",
+      reason: "halt point",
+      session: "",
+      cursor: 0,
+      steps: [{ id: "s1", kind: "ship", title: "Push", config: {}, on_fail: "halt" }],
+    };
+    const [w] = withFlightRows([], [], [flight] as never);
+    expect(w.kind).toBe("flight_paused");
+    const html = renderToStaticMarkup(createElement(WaitingRow, { w, shown: (t: string) => t } as never));
+    expect(html).toContain("ob-flight_paused");
+    expect(html).toContain('<span class="pr-open-chip" title="Paused at Push — Carry on">Paused at Push</span>');
+    expect(html).toMatch(/<button[^>]*>Carry on<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Skip<\/button>/);
+    expect(html).not.toContain("pr-open-chip bad");
+  });
+
+  it("a Verify stop parked on you says Verify, not Behaviors", async () => {
+    const src = (await import("../components/outbox/WaitingRow.tsx?raw")).default;
+    expect(src).not.toMatch(/>\s*Behaviors\s*</);
+    expect(src).toMatch(/>\s*Verify\s*<\/button>/);
+  });
+});
