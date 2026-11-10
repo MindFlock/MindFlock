@@ -10,7 +10,10 @@ before ``/api/flights/{flight_id}`` so they are never read as an id.
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+import copy
+import logging
+import re
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
@@ -25,11 +28,48 @@ from backend.web.core import flight_when as _when
 from backend.web.core import flights as _flights
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
-def _err(err: _flights.FlightError) -> JSONResponse:
+#: The body field a refusal is about, by its machine word, so the editor
+#: (and an agent) can point at it. A ``FlightError`` that carries its own
+#: ``field`` wins.
+_ERROR_FIELD = {
+    "unknown_plan": "plan_id",
+    "unknown_session": "title",
+    "in_flight": "title",
+    "needs_title": "title",
+    "no_repo": "repo_path",
+    "unknown_step": "step",
+    "in_progress": "step",
+    "behind": "step",
+    "not_waiting": "step",
+    "bad_at": "at",
+    "too_many_steps": "steps",
+    "needs_steps": "steps",
+    "bad_start_on": "start_on",
+    "bad_group": "group",
+    "unknown_group": "group",
+    "bad_layout": "positions",
+    "bad_edits_default": "edits_default",
+    "bad_subject": "subject",
+    "bad_name": "plan_name",
+    "bad_parallel": "parallel",
+}
+
+
+def _err(err: _flights.FlightError, fields: Optional[dict] = None) -> JSONResponse:
+    """``{error, detail, field}`` (``field`` is ``""`` when the refusal is
+    about the route as a whole, not one of the body's fields; ``fields``
+    overrides the word → field map for one route)."""
+    field = str(
+        getattr(err, "field", "")
+        or (fields or {}).get(err.error)
+        or _ERROR_FIELD.get(err.error, "")
+    )
     return JSONResponse(
-        {"error": err.error, "detail": err.detail}, status_code=err.status
+        {"error": err.error, "detail": err.detail, "field": field},
+        status_code=err.status,
     )
 
 
@@ -76,7 +116,12 @@ def flights_plan_save(payload: Optional[dict] = None) -> JSONResponse:
     try:
         plan = _flights.save_plan(payload or {})
     except _flights.PlanError as err:
-        return JSONResponse({"error": err.message, "field": err.field}, status_code=400)
+        # ``error`` stays the sentence (the shelf reads it); ``detail`` is
+        # the same sentence in the shape every other flights refusal has.
+        return JSONResponse(
+            {"error": err.message, "detail": err.message, "field": err.field},
+            status_code=400,
+        )
     except _flights.FlightError as err:
         return _err(err)
     return JSONResponse({"plan": plan})
@@ -244,6 +289,401 @@ async def _start_grounded(body: dict) -> JSONResponse:
     return JSONResponse({"flight": flight}, status_code=202)
 
 
+# --- The pre-flight check (``POST /api/flights/check``): what a start with
+# the same body would fly, from the same strict path, without creating
+# anything — so a dry run that says "ok" means the start will be accepted.
+
+
+def _problem(field: str, detail: str, error: str = "", session: str = "") -> dict:
+    out = {"field": str(field or ""), "detail": str(detail or "")}
+    if error:
+        out["error"] = str(error)
+    if session:
+        out["session"] = str(session)
+    return out
+
+
+def _plan_problem(err: _flights.PlanError) -> dict:
+    return _problem(err.field, err.message, getattr(err, "code", "") or "bad_step")
+
+
+def _flight_problem(err: _flights.FlightError) -> dict:
+    field = str(getattr(err, "field", "") or _ERROR_FIELD.get(err.error, ""))
+    return _problem(field, err.detail, err.error)
+
+
+def _start_plan(body: dict) -> Tuple[dict, str, str, str]:
+    """``(plan, title, start_at, start_on)`` for a start ``body``, built the
+    way :func:`flight_driver.start` builds it (strict: an ad-hoc ``steps``
+    list goes through :func:`flights.adhoc_plan`). Raises what a start
+    raises for the same body (:class:`flights.PlanError` /
+    :class:`flights.FlightError`)."""
+    start_on = _flights.normalize_start_on(body.get("start_on"))
+    plan_id = str(body.get("plan_id") or "")
+    title = str(body.get("title") or "").strip()
+    start_at = str(body.get("start_at") or "").strip()
+    adhoc = body.get("steps") is not None
+    plan = _flights.get_plan(plan_id) if plan_id or not adhoc else None
+    if plan is None and (plan_id or not adhoc):
+        raise _flights.FlightError("unknown_plan", 404, "no such saved route")
+    if adhoc:
+        if plan is None and not title and not str(body.get("repo_path") or "").strip():
+            raise _flights.FlightError(
+                "needs_title", 400, "an ad-hoc route needs a session (or a folder)"
+            )
+        plan = _flights.adhoc_plan(
+            body.get("steps"), plan, "Route on %s" % title if title else ""
+        )
+    return plan, title, start_at, start_on
+
+
+def _repo_for(body: dict, plan: dict, title: str) -> str:
+    """The repo a start flies in: the session's, else the body's folder,
+    else the saved route's."""
+    if title:
+        try:
+            root = _driver._repo_root(title)
+        except Exception:  # noqa: BLE001 — unknown repo: the checks that need it skip
+            root = ""
+        if root:
+            return root
+    return str(
+        body.get("repo_path") or (plan.get("session") or {}).get("repo_path") or ""
+    ).strip()
+
+
+def _preflight(
+    plan: dict, *, repo: str, session: str, attach: bool, start_at: str
+) -> List[dict]:
+    """The driver's pre-check of a route before take-off
+    (``flight_driver.preflight``) as ``[{field, detail, session?, error?}]``;
+    no such function (an older driver) or a check that broke = no problems."""
+    fn = getattr(_driver, "preflight", None)
+    if not callable(fn):
+        return []
+    try:
+        found = fn(
+            plan,
+            repo=repo,
+            session=session or None,
+            attach=attach,
+            start_at=start_at or None,
+        )
+    except Exception as err:  # noqa: BLE001 — a broken check never blocks a start
+        _log.warning("flights preflight failed: %s", err)
+        return []
+    out = []
+    for p in found or []:
+        if isinstance(p, dict) and p.get("detail"):
+            out.append(
+                _problem(
+                    str(p.get("field") or ""),
+                    str(p["detail"]),
+                    str(p.get("error") or ""),
+                    str(p.get("session") or ""),
+                )
+            )
+    return out
+
+
+def _skip_reason(step: dict, start_at: str) -> str:
+    if start_at:
+        return "before the stop it starts at (%s)" % start_at
+    if step.get("kind") == "agent":
+        return (
+            "on an existing session the work so far counts as this Agent stop: "
+            "its prompt is not sent (start at %s to send it)" % step.get("id")
+        )
+    return "before where the route starts"
+
+
+def _environments(repo: str, steps: List[dict]) -> Optional[List[str]]:
+    """The repo's Verify environment names, when a Verify stop needs one."""
+    if not repo or not any(s.get("kind") == "verify" for s in steps):
+        return None
+    try:
+        from backend.web.core import test_plans as _tp
+
+        return [str(e.get("name")) for e in _tp.environments(repo) if e.get("name")]
+    except Exception:  # noqa: BLE001 — unreadable: say nothing
+        return None
+
+
+def _stop_ref(steps: List[dict], i: int) -> Optional[dict]:
+    if not 0 <= i < len(steps):
+        return None
+    s = steps[i]
+    return {"index": i, "id": s["id"], "kind": s["kind"], "title": s["title"]}
+
+
+def _strict_refusal(raw, i: int, taken=None):
+    """``(PlanError, incomplete)`` when ``raw`` (one stop) fails the strict
+    check, else None. ``incomplete``: the refusal is about a required option
+    left empty — what a block on the ground may wait to fill in."""
+    try:
+        _flights.normalize_step(
+            copy.deepcopy(raw), i, strict=True, taken=set(taken or ())
+        )
+    except _flights.PlanError as err:
+        m = re.match(r"^steps\[\d+\]\.config\.(\w+)$", str(err.field or ""))
+        cfg = raw.get("config") if isinstance(raw, dict) else None
+        cfg = cfg if isinstance(cfg, dict) else {}
+        return err, bool(m) and cfg.get(m.group(1)) in (None, "", [], {})
+    return None
+
+
+def _check_grounded(body: dict, out: dict) -> dict:
+    """A grounded start's check: the stops ``flights.ground`` would store
+    (``s1..sN``; a block may still be incomplete there — what must be filled
+    in before it can fly is a warning)."""
+    plan = None
+    plan_id = str(body.get("plan_id") or "")
+    if plan_id:
+        plan = _flights.get_plan(plan_id)
+        if plan is None:
+            out["problems"].append(
+                _problem("plan_id", "no such saved route", "unknown_plan")
+            )
+            return out
+    steps: List[dict] = copy.deepcopy(plan["steps"]) if plan else []
+    if body.get("steps") is not None:
+        stripped = [dict(s, id="") if isinstance(s, dict) else s for s in body["steps"]]
+        try:
+            given = _flights.normalize_steps(stripped, strict=True, config_strict=False)
+        except _flights.PlanError as err:
+            out["problems"].append(_plan_problem(err))
+            return out
+        # On the ground a block may wait to be filled in, but a bad VALUE
+        # would be turned into its default without a word: a problem.
+        for i, raw in enumerate(stripped):
+            refusal = _strict_refusal(raw, i)
+            if refusal is None:
+                continue
+            err, incomplete = refusal
+            if incomplete:
+                out["warnings"].append(
+                    _problem(
+                        err.field, "before it can fly: " + err.message, "incomplete"
+                    )
+                )
+            else:
+                out["problems"].append(_plan_problem(err))
+        steps += given
+    if not steps:
+        out["problems"].append(
+            _problem("steps", "a route needs at least one stop", "needs_steps")
+        )
+        return out
+    for k, s in enumerate(steps):
+        s["id"] = "s%d" % (k + 1)
+    out["steps"] = steps
+    out["start"] = _stop_ref(steps, 0)
+    return out
+
+
+def check_start(body: dict) -> dict:
+    """``POST /api/flights/check`` (blocking): ``{ok, steps, start, skipped,
+    in_flight, problems, warnings, start_on, environments?, absorbed?}`` for
+    a start with this body. ``steps`` are the strictly normalised stops (the
+    ids the server gives them), ``start`` the stop it takes off at,
+    ``skipped`` the stops before it with why, ``in_flight`` the session's
+    current route, ``problems`` every refusal the start would answer (its
+    first one at least) and the driver's pre-check — each ``{field, detail,
+    error?, session?}``. ``ok`` = no problems: the real start is accepted."""
+    out: dict = {
+        "ok": False,
+        "steps": [],
+        "start": None,
+        "skipped": [],
+        "in_flight": None,
+        "problems": [],
+        "warnings": [],
+        "start_on": "now",
+    }
+    problems: List[dict] = out["problems"]
+    if "steps" in body and not isinstance(body["steps"], list):
+        problems.append(_problem("steps", "steps is a list", "bad_step"))
+        return out
+    subject = body.get("subject")
+    if (
+        isinstance(subject, dict)
+        and str(subject.get("kind") or "").strip().lower() in _INTAKE_SUBJECTS
+    ):
+        plan = _flights.get_plan(str(body.get("plan_id") or ""))
+        if plan is None:
+            problems.append(_problem("plan_id", "no such saved route", "unknown_plan"))
+        else:
+            out["steps"] = plan["steps"]
+            out["start"] = _stop_ref(plan["steps"], 0)
+        out["ok"] = not problems
+        return out
+    if body.get("grounded"):
+        _check_grounded(body, out)
+        out["ok"] = not problems
+        return out
+    try:
+        plan, title, start_at, start_on = _start_plan(body)
+    except _flights.PlanError as err:
+        problems.append(_plan_problem(err))
+        return out
+    except _flights.FlightError as err:
+        problems.append(_flight_problem(err))
+        return out
+    from backend.web import server as srv
+
+    out["start_on"] = start_on
+    ready = start_on != "now"
+    live = bool(title) and title in srv.ENGINE.instances
+    if title and not live:
+        problems.append(
+            _problem("title", "no session %s" % title, "unknown_session", title)
+        )
+    take = body.get("absorb_fasttrack")
+    if live and (take is None or bool(take)):
+        try:
+            rec = _driver._fasttrack_to_absorb(title)
+            if rec is not None:
+                lead = _flights.absorb_steps(rec, _driver._stage_of(title))
+                plan, start_at = _flights.with_lead(
+                    plan, lead, "" if ready else start_at, attach=not ready
+                )
+                out["absorbed"] = [s["config"]["lane"] for s in lead]
+        except (_flights.PlanError, _flights.FlightError):
+            pass  # the start_cursor check below names it
+        except Exception as err:  # noqa: BLE001 — read-only peek
+            _log.info("flights check: fast-track peek failed: %s", err)
+    steps = plan["steps"]
+    out["steps"] = steps
+    cursor = 0
+    if not ready:
+        try:
+            cursor = _flights.start_cursor(plan, start_at, attach=bool(title))
+        except _flights.FlightError as err:
+            problems.append(_problem("start_at", err.detail, err.error))
+        if (
+            live
+            and not start_at
+            and "absorbed" not in out
+            and steps
+            and steps[0]["kind"] == "agent"
+        ):
+            try:
+                busy = _driver._session_busy(title)
+            except Exception:  # noqa: BLE001
+                busy = ""
+            if busy:
+                cursor = 0
+                out["warnings"].append(
+                    _problem(
+                        "start_at",
+                        "%s is busy (%s): its work in progress is the first Agent "
+                        "stop — nothing is sent, the stop ends with that turn"
+                        % (title, busy),
+                        "in_progress",
+                    )
+                )
+    out["start"] = _stop_ref(steps, cursor)
+    out["skipped"] = [
+        dict(_stop_ref(steps, i), reason=_skip_reason(steps[i], start_at))
+        for i in range(min(cursor, len(steps)))
+    ]
+    if steps and cursor >= len(steps):
+        out["warnings"].append(
+            _problem(
+                "start_at",
+                "every stop is before where it starts: the route ends at once",
+                "nothing_to_fly",
+            )
+        )
+    if live:
+        held = _flights.for_session(title)
+        if held is not None and held.get("state") in _flights.HOLDING:
+            out["in_flight"] = {
+                "id": held["id"],
+                "name": held.get("plan_name") or "",
+                "state": held["state"],
+            }
+            problems.append(
+                _problem(
+                    "title",
+                    "%s is already on a route (%s, %s) — cancel it, or edit that "
+                    "route instead" % (title, held.get("plan_name"), held["state"]),
+                    "in_flight",
+                    title,
+                )
+            )
+        elif held is not None and held.get("state") == "halted":
+            out["warnings"].append(
+                _problem(
+                    "title",
+                    "replaces %s's halted route %s (%s)"
+                    % (title, held["id"], held.get("plan_name")),
+                    "replaces",
+                    title,
+                )
+            )
+    repo = _repo_for(body, plan, title)
+    if not title and not repo:
+        problems.append(
+            _problem("repo_path", "pick a folder for the new session", "no_repo")
+        )
+    if not title or live:
+        problems.extend(
+            _preflight(
+                plan, repo=repo, session=title, attach=bool(title), start_at=start_at
+            )
+        )
+    envs = _environments(repo, steps)
+    if envs is not None:
+        out["environments"] = envs
+    out["ok"] = not problems
+    return out
+
+
+@router.post("/api/flights/check")
+async def flights_check(payload: Optional[dict] = None) -> JSONResponse:
+    """The body of a ``POST /api/flights/start`` → 200 :func:`check_start`
+    (``ok`` false with ``problems`` when the start would be refused) — no
+    session, no route, nothing written."""
+    return JSONResponse(await asyncio.to_thread(check_start, payload or {}))
+
+
+def _preflight_refusal(body: dict) -> Optional[JSONResponse]:
+    """The driver's pre-check before a real start: its first problem as 409
+    (it names a session) or 400 ``{error, detail, field, session?,
+    problems}``; None to go ahead. A body the start itself refuses is left
+    to the start (same answer as before)."""
+    if not callable(getattr(_driver, "preflight", None)):
+        return None
+    try:
+        plan, title, start_at, _start_on = _start_plan(body)
+    except (_flights.PlanError, _flights.FlightError):
+        return None
+    from backend.web import server as srv
+
+    if title and title not in srv.ENGINE.instances:
+        return None
+    found = _preflight(
+        plan,
+        repo=_repo_for(body, plan, title),
+        session=title,
+        attach=bool(title),
+        start_at=start_at,
+    )
+    if not found:
+        return None
+    first = found[0]
+    out = {
+        "error": first.get("error") or "preflight",
+        "detail": first["detail"],
+        "field": first["field"],
+        "problems": found,
+    }
+    if first.get("session"):
+        out["session"] = first["session"]
+    return JSONResponse(out, status_code=409 if first.get("session") else 400)
+
+
 @router.post("/api/flights/start")
 async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     """Take off → 202 ``{"flight", "absorbed"}``. ``title`` attaches to an
@@ -254,7 +694,10 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     ``subject`` (``{kind, source, id}``) starts through Intake.
     ``start_on`` (round 19; absent = ``"now"``): ``"prompt"`` / ``"run"``
     store the flight ``ready`` instead of starting it (400
-    ``bad_start_on``)."""
+    ``bad_start_on``). Before anything is created the driver's pre-check
+    (``flight_driver.preflight``) runs: its first problem is a 400 / 409
+    ``{error, detail, field, session?, problems}``. ``POST
+    /api/flights/check`` answers the same questions without starting."""
     body = payload or {}
     if body.get("grounded"):
         return await _start_grounded(body)
@@ -266,13 +709,16 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
         return await _start_intake(body, subject)
     if "steps" in body and not isinstance(body["steps"], list):
         return _bad_step(_flights.PlanError("steps is a list", "steps"))
+    refused = await asyncio.to_thread(_preflight_refusal, body)
+    if refused is not None:
+        return refused
     absorbed: list = []
     try:
         flight = await _driver.start(body, absorbed)
     except _flights.PlanError as err:
         return _bad_step(err)
     except _flights.FlightError as err:
-        return _err(err)
+        return _err(err, {"unknown_step": "start_at"})
     return JSONResponse({"flight": flight, "absorbed": absorbed}, status_code=202)
 
 
@@ -430,8 +876,53 @@ def flights_step_edit(
     ``{pos: {x, y} | null}`` is layout only: allowed on ANY step.
     ``{parallel: null}`` takes the step out of its parallel group (it flies
     right after it); ``{parallel_with: sid}`` moves it into ``sid``'s group
-    (making one) — round 20, steps still ahead only."""
+    (making one) — round 20, steps still ahead only.
+
+    Every option is checked as strictly as a plan's when it is saved, a
+    grounded route's too (400 ``bad_step`` with ``field`` = ``step.config.…``):
+    on the ground only an option still to be filled in (an empty prompt or
+    command) may wait until take-off."""
+    refused = _grounded_patch_refusal(flight_id, step_id, payload)
+    if refused is not None:
+        return refused
     return _change(flight_id, "edit", step_id, raw=payload or {})
+
+
+def _grounded_patch_refusal(
+    flight_id: str, step_id: str, patch
+) -> Optional[JSONResponse]:
+    """A grounded route checks a stop's config leniently (a block may be
+    incomplete until take-off), which silently turned a bad option into its
+    default. Refuse a bad VALUE now, with its field; only a required option
+    left empty may wait for take-off."""
+    if not isinstance(patch, dict) or not (
+        set(patch) & {"title", "config", "on_fail", "when", "halt"}
+    ):
+        return None
+    f = _flights.get(flight_id)
+    if f is None or f.get("state") != _flights.GROUNDED:
+        return None
+    ids = [s["id"] for s in f["steps"]]
+    if step_id not in ids:
+        return None
+    i = ids.index(step_id)
+    raw = copy.deepcopy(f["steps"][i])
+    for key in ("title", "config", "on_fail", "halt", "when"):
+        if key in patch:
+            raw[key] = patch[key]
+    if "when" in patch and not str(patch["when"] or "").strip():
+        raw.pop("when", None)
+    refusal = _strict_refusal(raw, i, set(ids) - {step_id})
+    if refusal is None or refusal[1]:
+        return None  # fine, or still to be filled in: take-off checks it
+    err = refusal[0]
+    return _bad_step(
+        _flights.PlanError(
+            err.message,
+            re.sub(r"^steps\[\d+\]", "step", str(err.field or "")),
+            getattr(err, "code", "") or "bad_step",
+        )
+    )
 
 
 @router.delete("/api/flights/{flight_id}/steps/{step_id}")
@@ -530,8 +1021,13 @@ def flights_step_move(
 def flights_step_done(
     flight_id: str, step_id: str, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """Done on a step waiting on you (a verify step's open human items are
-    recorded as passed)."""
+    """Done on a step waiting on you → ``{"flight"}``. A Wait for me stop is
+    ticked off (``note`` goes to its history); a Verify stop waiting for your
+    confirm is "Confirm verified"; a Verify stop parked because you had to do
+    something runs again ("I did it"). Done never passes a Verify stop's open
+    steps: one still waiting on its steps is 409 (answer them, or Skip it);
+    a Verify stop whose failure was handed to you takes Done. 409
+    ``not_waiting`` on a stop that does not need you now."""
     return _op(flight_id, "done", step_id, str((payload or {}).get("note") or ""))
 
 
