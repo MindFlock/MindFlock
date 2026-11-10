@@ -44,6 +44,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from collections import OrderedDict
 from typing import Any, List, Optional, Protocol, Sequence, Tuple
@@ -59,6 +60,7 @@ __all__ = [
     "leave_copy_mode",
     "popen",
     "run",
+    "spawn_pty",
 ]
 
 IS_WINDOWS = os.name == "nt"
@@ -268,6 +270,78 @@ def attach(
     return client.attach(
         session, readonly=readonly, dimensions=dimensions
     )  # pragma: no cover
+
+
+#: Linux: a PTY client starts by ``posix_spawn`` (:func:`spawn_pty`). Elsewhere
+#: (macOS: opening a tty does not make it the controlling one) ptyprocess.
+_POSIX_SPAWN_PTY = sys.platform.startswith("linux") and hasattr(os, "posix_spawn")
+
+
+def spawn_pty(
+    argv: Sequence[str],
+    *,
+    dimensions: Tuple[int, int] = (24, 80),
+    env: Optional[dict] = None,
+) -> Any:
+    """``ptyprocess.PtyProcess.spawn(argv, dimensions=…, env=…)`` without
+    ``fork()``: the same :class:`ptyprocess.PtyProcess` (same ``fd``,
+    ``setwinsize``, ``terminate``, ``close``), its child started by
+    ``os.posix_spawn``.
+
+    Why: CPython forks while HOLDING the GIL, and a fork copies the page
+    tables of the whole server — in a worker thread it still stalls every
+    thread for as long as it takes (≈13 ms at 600 MB resident; on the
+    2026-11-10 incident, 1.7 GB under WSL memory pressure, it never
+    returned and the server froze). ``posix_spawn`` is ``clone(CLONE_VM |
+    CLONE_VFORK)`` in glibc: nothing is copied and no Python runs in the
+    child. The child becomes a session leader (``setsid``) and opens the PTY
+    slave by path as fd 0 — on Linux that makes it the controlling tty with
+    the child's group in the foreground, exactly what ``forkpty`` sets up,
+    so a resize (``TIOCSWINSZ`` on the master) still SIGWINCHes the client
+    and closing the master still SIGHUPs it. Window size is set before the
+    spawn, so the client starts at ``dimensions``. Fds: the server's are
+    close-on-exec (Python's default), so the client inherits only 0/1/2.
+
+    Off Linux this is ``ptyprocess.PtyProcess.spawn`` itself."""
+    import ptyprocess
+
+    argv = list(argv)
+    if not _POSIX_SPAWN_PTY:
+        return ptyprocess.PtyProcess.spawn(argv, dimensions=dimensions, env=env)
+    import fcntl
+    import struct
+    import termios
+
+    path = shutil.which(argv[0])
+    if path is None:  # ptyprocess's error, word for word
+        raise FileNotFoundError(
+            "The command was not found or was not executable: %s." % argv[0]
+        )
+    master, slave = os.openpty()  # both close-on-exec; slave opened O_NOCTTY
+    try:
+        rows, cols = dimensions
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        pid = os.posix_spawn(
+            path,
+            argv,
+            dict(os.environ if env is None else env),
+            setsid=True,
+            file_actions=[
+                (os.POSIX_SPAWN_OPEN, 0, os.ttyname(slave), os.O_RDWR, 0),
+                (os.POSIX_SPAWN_DUP2, 0, 1),
+                (os.POSIX_SPAWN_DUP2, 0, 2),
+            ],
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    proc = ptyprocess.PtyProcess(pid, master)
+    proc.argv = argv
+    if env is not None:
+        proc.env = env
+    return proc
 
 
 def exec_attach(session: str) -> None:
