@@ -138,6 +138,49 @@ describe("continuous dictation: “over” sends and listening goes on", () => {
     expect(k.ends).toEqual(["stopped"]);
   });
 
+  it("“over and out” as a listen's first words sends what is in the box (owner report 2026-11-10)", async () => {
+    // The box holds words this listen did not type: an earlier listen left
+    // them (it expired, or was stopped), or the person typed or pasted them.
+    const t = session();
+    const k = hooks();
+    const d = new LiveDictation(t, k.h, { continuous: true });
+    await d.heard("over and out");
+    expect(t.keys).toEqual([]); // nothing typed: the box's own words go
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+    expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/send", { json: { enter: true, say: false } });
+    expect(d.active).toBe(false);
+    expect(k.said).toEqual(["out"]); // "Over and out.", the send's own line
+    expect(k.halts()).toBe(1);
+  });
+
+  it("“over and out” after a send and a disregard only stops; after more words it sends them", async () => {
+    const k = hooks();
+    const d = new LiveDictation(session(), k.h, { continuous: true });
+    await d.heard("ship it over");
+    await d.heard("oops disregard");
+    await d.heard("over and out");
+    expect(mocks.instApi).toHaveBeenCalledTimes(1); // no Enter on an empty prompt
+    expect(k.said.at(-1)).toBe("bye");
+    const k2 = hooks();
+    const d2 = new LiveDictation(session(), k2.h, { continuous: true });
+    await d2.heard("ship it over");
+    await d2.heard("and the docs");
+    await d2.heard("over and out");
+    expect(mocks.instApi).toHaveBeenCalledTimes(3);
+    expect(k2.said).toEqual(["sent", "out"]);
+  });
+
+  it("“over and out” first into a plain text box (no Enter there): just stops", async () => {
+    const keys: string[] = [];
+    const box: DictTarget = { kind: "field", title: "", name: "the box", type: (x) => keys.push(x) > 0, erase: () => true };
+    const k = hooks();
+    const d = new LiveDictation(box, k.h, { continuous: true });
+    await d.heard("over and out");
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(d.active).toBe(false);
+    expect(k.said).toEqual(["bye"]);
+  });
+
   it("“over and out, that's all” sends — the stop phrase does not swallow it", async () => {
     const k = hooks();
     const d = new LiveDictation(session(), k.h, { continuous: true });
@@ -766,8 +809,9 @@ describe("a stop's own confirmation plays whole: nothing cuts it, the chime come
    * LiveDictation, start() and halt() as TopBarMic's (the barge-in's hold,
    * the start chime, the gate; halt: the gate off, the stop chime queued by
    * sound(), the release). The engine logs each line's start and whether it
-   * finished on its own (`end`) or was cancelled mid-line (`cut`). */
-  function rig() {
+   * finished on its own (`end`) or was cancelled mid-line (`cut`).
+   * `t`: the target (default: a session). */
+  function rig<T extends DictTarget = ReturnType<typeof session>>(t: T = session() as unknown as T) {
     const events: string[] = [];
     let current = "";
     let finish: () => void = () => {};
@@ -812,7 +856,6 @@ describe("a stop's own confirmation plays whole: nothing cuts it, the chime come
       },
       quietMs: () => 0,
     });
-    const t = session();
     q.hold();
     const d = new LiveDictation(t, k.h, { continuous: true });
     sound("start");
@@ -862,11 +905,15 @@ describe("a stop's own confirmation plays whole: nothing cuts it, the chime come
   });
 
   it("“over and out”: “Over and out.” / “Sent. Over and out.” play whole, the chime after", async () => {
-    for (const [words, line] of [
-      ["over and out", CONFIRM_LINES.bye],
-      ["ship it over and out", CONFIRM_LINES.out],
+    // A lone "over and out" says "Over and out." where nothing is sent (a
+    // plain text box: no Enter there); into a session it sends the box.
+    const box = (): DictTarget => ({ kind: "field", title: "", name: "the box", type: () => true, erase: () => true });
+    for (const [words, line, target] of [
+      ["over and out", CONFIRM_LINES.bye, box],
+      ["over and out", CONFIRM_LINES.out, session],
+      ["ship it over and out", CONFIRM_LINES.out, session],
     ] as const) {
-      const r = rig();
+      const r = rig(target());
       await vi.advanceTimersByTimeAsync(CHIME_MS);
       await settle(r.d.heard(words));
       expect(r.d.active).toBe(false);
