@@ -1,6 +1,9 @@
 /* The pane's verify row (PaneVerifyStrip): the route strip's shape
    (flights/Flights.css .fl-strip), in the verify tone while the agent checks,
-   the needs-you tint when a person's steps are left, red when it failed. */
+   the needs-you tint when it waits on a person, red when it failed or is
+   blocked, green for its ten minutes once passed. The first line (.pv-row)
+   keeps ONE height in every state — buttons never wrap, the text ellipsizes —
+   so the terminal under it doesn't jump when the state changes. */
 .pv-strip {
   display: flex;
   flex-direction: column;
@@ -22,26 +25,57 @@
   background: color-mix(in srgb, var(--tone-broken) 12%, var(--panel-2));
 }
 
+.pv-strip.is-passed {
+  background: color-mix(in srgb, var(--tone-working) 10%, var(--panel-2));
+}
+
+.pv-strip.is-form {
+  padding: 6px 10px;
+}
+
 .pv-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  height: 24px;
 }
 
-.pv-shield {
+.pv-glyph {
   flex: none;
+  width: 1.2em;
+  text-align: center;
   color: var(--tone-verifying, #8b6cf0);
   font-weight: 700;
 }
 
-.pv-strip.is-needs_you .pv-shield {
+.pv-glyph.is-live {
+  animation: pv-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pv-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-glyph.is-live {
+    animation: none;
+  }
+}
+
+.pv-strip.is-needs_you .pv-glyph {
   color: var(--text);
 }
 
-.pv-strip.is-failed .pv-shield,
-.pv-strip.is-blocked .pv-shield {
+.pv-strip.is-failed .pv-glyph,
+.pv-strip.is-blocked .pv-glyph {
   color: var(--tone-broken);
+}
+
+.pv-strip.is-passed .pv-glyph {
+  color: var(--tone-working);
 }
 
 .pv-text {
@@ -52,8 +86,86 @@
   white-space: nowrap;
 }
 
-.pv-open,
-.pv-again {
+.pv-btn {
   flex: none;
   font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.pv-btn[aria-busy="true"] {
+  cursor: progress;
+}
+
+.pv-file-error {
+  margin: 0 0 0 calc(1.2em + 8px);
+  color: var(--tone-broken);
+}
+
+/* The start form (VerifyStartForm), in place under the row. */
+.pv-form {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pv-form-notes {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  resize: vertical;
+  font: inherit;
+}
+
+.pv-form-where {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.pv-form-start,
+.pv-form-cancel {
+  flex: none;
+  font-size: 11.5px;
+}
+
+/* VerifyConfirm's additions (its base styles are BehaviorsCard.css): the
+   sign-off heading, why the agent couldn't do a step, and the ✓ / ✗ per step.
+   Global like every bundled sheet, so the bell and the card get them too. */
+.vc-heading {
+  margin: 0 0 4px;
+}
+
+.vc-step-why {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92em;
+  font-style: italic;
+}
+
+.vc-step-mark {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.vc-step-mark .test-btn {
+  min-width: 26px;
+  padding: 0 6px;
+}
+
+.vc-mark-pass[aria-pressed="true"] {
+  color: var(--tone-working);
+  border-color: var(--tone-working);
+}
+
+.vc-mark-fail[aria-pressed="true"] {
+  color: var(--tone-broken);
+  border-color: var(--tone-broken);
+}
+
+.vc-step.is-fail .vc-step-text {
+  color: var(--tone-broken);
 }

@@ -108,22 +108,18 @@ describe("no 'Let the agent walk every behavior'", () => {
 });
 
 describe("the run body", () => {
-  it("the ordinary run is unchanged ({} / {steps}); walk all posts {walk: 'all'}", async () => {
+  it("the run body is {} / {steps} — no caller asks for a walk any more (flow polish)", async () => {
     api.mockResolvedValue({ session: "verify-p1" });
     await requestPlanRun("p1");
     expect(api).toHaveBeenLastCalledWith("/api/test-plans/p1/run", { method: "POST", json: {} });
     await requestPlanRun("p1", ["s2"]);
     expect(api).toHaveBeenLastCalledWith("/api/test-plans/p1/run", { method: "POST", json: { steps: ["s2"] } });
-    await requestPlanRun("p1", undefined, "agent");
-    expect(api).toHaveBeenLastCalledWith("/api/test-plans/p1/run", { method: "POST", json: {} });
-    await requestPlanRun("p1", ["s3"], "all");
-    expect(api).toHaveBeenLastCalledWith("/api/test-plans/p1/run", { method: "POST", json: { steps: ["s3"], walk: "all" } });
   });
 
-  it("startChecklistRun (the card's Verify when the session is gone) still posts walk 'all' when asked", async () => {
+  it("startChecklistRun (the card's Verify when the session is gone) posts the plain run", async () => {
     api.mockResolvedValue({ session: "verify-p1" });
-    await startChecklistRun(WALK, { walk: "all" });
-    expect(api).toHaveBeenCalledWith("/api/test-plans/p1/run", { method: "POST", json: { walk: "all" } });
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining("it walks every behavior, yours too"));
+    await startChecklistRun(WALK);
+    expect(api).toHaveBeenCalledWith("/api/test-plans/p1/run", { method: "POST", json: {} });
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining("Starting an agent on"));
   });
 });

@@ -54,9 +54,9 @@ describe("runStartedMessage", () => {
   });
 
   it("says when the walk waits for the agent's current turn", () => {
-    const m = runStartedMessage(plan(), { session: "sc-1", in_session: true, queued: true }, "all");
+    const m = runStartedMessage(plan(), { session: "sc-1", in_session: true, queued: true });
     expect(m).toContain("once its current turn ends");
-    expect(m).toContain("It walks every behavior, yours too");
+    expect(m).not.toContain("behavior");
   });
 
   it("keeps the checker sentence when the plan's session is gone", () => {

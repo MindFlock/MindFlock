@@ -1695,8 +1695,9 @@ export interface TestRun {
 
 export type TestRunWalk = "agent" | "all";
 
-/** Where a session's verify stands (`Instance.verify.state`). passed and
- * failed linger on the row for ten minutes, then the field goes null. */
+/** Where a session's verify stands (`Instance.verify.state`). passed
+ * lingers on the row for ten minutes, then the field goes null; failed and
+ * blocked stay until a person dismisses them (`POST /api/test-plans/{id}/dismiss`). */
 export type SessionVerifyState = "verifying" | "needs_you" | "passed" | "failed" | "blocked";
 
 /** A step the agent wrote that only a person can do. */
@@ -1704,6 +1705,10 @@ export interface SessionVerifyHumanStep {
   id: string;
   text: string;
   expect: string;
+  /** Why the AGENT couldn't do it (a step it tried and handed back).
+   * Absent on a step that was a person's from the start, and on an older
+   * server. */
+  why?: string;
 }
 
 /** A step that failed, with the agent's note on what it saw. */
@@ -1725,12 +1730,46 @@ export interface SessionVerify {
   detail: string;
   /** Epoch seconds of the last change. */
   at: number;
+  /** Epoch seconds the agent last moved a step on (while verifying) — how
+   * long it has been quiet. Absent on an older server. */
+  progress_at?: number;
+  /** The step the agent is on now (while verifying). */
+  current?: { id: string; text: string } | null;
+  /** Verifying, but the prompt waits for the session's current turn to end. */
+  queued?: boolean;
+  /** One sentence: the agent's results file couldn't be read (and why). */
+  file_error?: string;
 }
 
-/** `POST /api/instances/{title}/verify` → 202. */
+/** `POST /api/instances/{title}/verify` → 202. `queued`: the session's
+ * agent was mid-turn, so Verify starts when that turn ends; `session` is the
+ * session it runs in. Both absent on an older server. */
 export interface SessionVerifyStarted {
   started: boolean;
   plan: string;
+  session?: string;
+  queued?: boolean;
+}
+
+/** A person's answer to one of the steps a verify waits on them for. */
+export type SessionVerifyStepAnswer = "pass" | "fail";
+
+/** `POST /api/test-plans/{id}/confirm` → 200. `delivered`: the person's note
+ * reached the session's agent (absent on an older server = not delivered). */
+export interface SessionVerifyConfirmed {
+  ok: boolean;
+  plan?: TestPlan;
+  delivered?: boolean;
+}
+
+/** `POST /api/test-plans/{id}/fix` → 202. With `{in_session: true}` a newer
+ * server hands what failed to the session's OWN agent (`in_session`, `queued`
+ * while it is mid-turn); an older one ignores it and opens a new session. */
+export interface SessionVerifyFixStarted {
+  session?: string;
+  in_session?: boolean;
+  queued?: boolean;
+  reclaimed?: boolean;
 }
 
 /** `POST /api/test-plans/{id}/run` → 202. `in_session`: the steps were
