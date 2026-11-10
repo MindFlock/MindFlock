@@ -17,8 +17,12 @@
  *    a yes / no to a confirm as `confirm: {id, yes}` ({@link yesNo});
  *  - `done`: always last.
  *
- * The owner's rule: no spoken echoes of their own actions — navigation and
- * `did` results are a chime and a caption, never words (unless "chatty").
+ * The owner's rule: no spoken echoes of their own actions — `did` results
+ * are a chime and a caption, never words (unless "chatty"). Opening
+ * something ("MindFlock, open settings") is the exception (owner report
+ * 2026-11-10): "Opening Settings." is said ({@link openingLine}) when the
+ * page lets it ({@link AssistantDeps.confirm}: spoken replies or spoken
+ * confirmations on), else a chime.
  *
  * Everything here is pure or takes its effects as deps, so vitest covers it
  * in node: the stream reader ({@link NdjsonSplitter}), the conversation
@@ -494,6 +498,10 @@ export interface AssistantDeps {
   speak(text: string): void;
   /** The chime for a silent action. */
   chime(): void;
+  /** Say `line` (an {@link openingLine}) as a spoken confirmation: true
+   * when it will be said (then no chime), false when the page keeps quiet
+   * (Settings → Voice: spoken replies and confirmations both off). */
+  confirm?(line: string): boolean;
   /** Focus a session the server started. */
   focus(title: string): void;
   talk(): TalkLevel;
@@ -503,6 +511,18 @@ export interface AssistantDeps {
   now?(): number;
   view?: ViewStore;
   conversation?: Conversation;
+}
+
+/** What opening something says out loud — "Opening Settings.", "Opening
+ * Voice settings.", "Opening Intake." — from the executor's chip ("Opened
+ * Settings → Voice"); "" for any other action (said as a chime). */
+export function openingLine(a: UiAction, r: ExecResult): string {
+  if (a.do !== "open" || !r.ok) return "";
+  const m = /^Opened\s+(.+)$/.exec(String(r.text || "").trim());
+  if (!m) return "";
+  const screen = /^Settings\s*→\s*(.+)$/.exec(m[1]);
+  const what = (screen ? screen[1] + " settings" : m[1]).replace(/\s*\(.*\)$/, "").trim();
+  return what ? "Opening " + what + "." : "";
 }
 
 /** How long a pending confirm is good for (the server holds it this long). */
@@ -642,12 +662,14 @@ export class AssistantSession {
         } catch (err) {
           r = { ok: false, text: "Couldn't do that: " + ((err as Error)?.message || "error") };
         }
-        // Your own action: a chime and the chip, never words — a failure is
-        // said (the screen doesn't show why), once, as the caption (no chip
-        // repeating it).
+        // Your own action: a chime and the chip — opening something says
+        // so ("Opening Settings.") when the page speaks confirmations. A
+        // failure is said (the screen doesn't show why), once, as the
+        // caption (no chip repeating it).
         if (r.ok) {
           this.chip({ text: r.text, ok: r.ok, session: r.session, open: r.open });
-          chime();
+          const line = openingLine(e.action, r);
+          if (!(line && this.deps.confirm?.(line))) chime();
         } else {
           this.view.set({ caption: r.text, error: true, phase: "replying" });
           this.deps.speak(r.text);

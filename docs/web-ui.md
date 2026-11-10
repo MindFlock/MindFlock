@@ -522,6 +522,22 @@ a session first*).
   a single one needs another press. Everything else — and everything when the router can't be
   reached, or answers with a kind this page doesn't know — is typed into the
   focused session.
+- **Said to MindFlock, mid-message too.** A phrase that STARTS with the wake
+  word — as the recogniser writes it: “MindFlock, …”, “Mine flock, …”, “My
+  flock, …” — goes to the router wherever it falls in a dictation, not only
+  as the first phrase (`lib/voiceWords` `wakeAt` / `mayBeWake`, the server's
+  `core.voice_words.wake_at`; owner report 2026-11-10). Its streamed guess
+  waits whole, so none of it is typed; the words already typed stay in the
+  box, and listening goes on with the same message (“over” sends it whole)
+  unless the command ends it. The router hands the rest to the assistant
+  (“open settings”, “open intake”, “open schedule”…); a phrase the router
+  calls a prompt after all is typed as words. An ordinary-word form (“my
+  flock”, “mind block”) counts only with the pause the recogniser writes
+  after a name said to it: “my flock open settings” is dictation. Opening
+  something by voice says so — *Opening Settings.*, *Opening Voice
+  settings.* (`lib/voiceAssistant` `openingLine`) — when spoken replies or
+  spoken confirmations are on (`announcesActions`), through the
+  confirmations' path (the mic muted for it); otherwise the chime, as before.
 - **Numbered sessions.** Sessions are numbered as the rail's badges number
   them (`railOrder`, the same rows Alt+N reads — window rows count): “focus
   three” / “session 3” selects row 3 (*There is no session 7* past the end;

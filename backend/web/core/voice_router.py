@@ -1045,16 +1045,14 @@ _HELP_NOT = re.compile(
 
 # --- the assistant: a phrase addressed to MindFlock itself -------------------
 # "MindFlock, open intake", "Hey MindFlock what needs me", "Flock, turn on
-# the bell": the name FIRST (the lead "hey"/"ok"/"please" is already gone —
-# :class:`_Words`), then the request. The wake word's common mishearings
-# ("mind flock", "mine flock", "mindlock") count; "my flock" / "mind block"
-# do not (ordinary words). "flock" alone, a name mid-sentence, "flock mode
-# …" (the feature, said to the agent) or "MindFlock's …" (about it, not to
-# it) never address it.
-_ASSIST_RE = re.compile(
-    r"^(?:ask )?(?:mind ?flock|mine ?flock|min ?flock|mind ?lock|mind ?flog"
-    r"|minh flock|flock(?! mode\b)) (?P<rest>.+)$"
-)
+# the bell": the name FIRST, then the request. The wake word as the
+# recogniser writes it counts (core.voice_words.wake_at: "mind flock", "mine
+# flock", "mindlock" as they come; "My flock, …", "Mind block, …" — ordinary
+# words — only with the pause the recogniser writes after a name said to
+# it). "flock" alone, a name mid-sentence, "flock mode …" (the feature, said
+# to the agent), "my flock open settings" (no pause) or "MindFlock's …"
+# (about it, not to it) never address it.
+_ASSIST_FLOCK_RE = re.compile(r"^(?:ask )?flock(?! mode\b) (?P<rest>.+)$")
 #: An addressed phrase whose rest is one of these commands is that command
 #: (the client's own words and the pane actions the assistant can't do):
 #: "MindFlock, stop listening" stops the mic.
@@ -1065,13 +1063,18 @@ _ASSIST_DIRECT = frozenset(LOCAL_KINDS) | frozenset(
 
 def _assistant_command(w: "_Words", words: Optional[dict]) -> Optional[dict]:
     """``{"kind": "assistant", "text"}`` — the request as said, the name
-    dropped — for a phrase addressed to MindFlock (:data:`_ASSIST_RE`), or
-    the deterministic command its rest is when that is one of
-    :data:`_ASSIST_DIRECT`; None when not addressed."""
-    m = _ASSIST_RE.match(w.text)
-    if m is None:
-        return None
-    start = w.at(m.start("rest"))
+    dropped — for a phrase addressed to MindFlock (``core.voice_words.wake_at``,
+    or "flock …"), or the deterministic command its rest is when that is one
+    of :data:`_ASSIST_DIRECT`; None when not addressed."""
+    at = _voice_words.wake_at(" ".join(w.toks), words)
+    if at is not None:
+        # The first word from the token after the wake word on.
+        start = next((i for i, o in enumerate(w.owner) if o >= at), len(w.words))
+    else:
+        m = _ASSIST_FLOCK_RE.match(w.text)
+        if m is None:
+            return None
+        start = w.at(m.start("rest"))
     rest = w.original(start)
     if not norm(rest):
         return None

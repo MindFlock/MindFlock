@@ -57,6 +57,8 @@ __all__ = [
     "sound_key",
     "sound_tail",
     "sounds_like",
+    "wake_at",
+    "wake_rest",
 ]
 
 #: The phrase kinds, in Settings order (``wake`` is a single word, not a list).
@@ -607,3 +609,73 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     if hit is not None and not hit[0] and _letters(text)[:1] == _letters(hit[1])[:1]:
         return "undo"
     return None
+
+
+# --- a phrase said TO MindFlock: it starts with the wake word ------------------------
+#: Said before the wake word and still addressing it ("hey MindFlock, …",
+#: "ask MindFlock …").
+WAKE_LEADS = ("hey", "ok", "okay", "please", "ask")
+#: The default wake word's forms that address MindFlock with no pause after
+#: them: none is an ordinary phrase ("mine flock open intake"). Every other
+#: form the recogniser writes for it (:data:`HEARD`: "my flock", "mind
+#: block" — ordinary words) or one that only sounds like it addresses it
+#: only with a pause mark right after it, as the recogniser writes a name
+#: said to it ("My flock, open settings.") — "my flock open settings" is
+#: dictation. The person's own wake word, said as it is, needs no pause.
+WAKE_PLAIN = (
+    "mindflock",
+    "mind flock",
+    "mine flock",
+    "minflock",
+    "min flock",
+    "mindlock",
+    "mind lock",
+    "mindflog",
+    "mind flog",
+    "minh flock",
+)
+_PAUSE_AFTER = re.compile(r"[,.:;!?\u2014\u2013-]$")
+
+
+def wake_at(text: Any, words: Optional[dict] = None) -> Optional[int]:
+    """The index of the whitespace token of ``text`` where the words after a
+    LEADING wake word start, or None when ``text`` does not start with it.
+    One lead word (:data:`WAKE_LEADS`) may come first. The wake word is the
+    person's (``words["wake"]``, default ``"mindflock"``) and, always, the
+    default's, each as written, as the recogniser writes it (:data:`HEARD`)
+    or one or two words that :func:`sounds_like` it — a form other than the
+    wake word itself or :data:`WAKE_PLAIN` only with a pause mark after it.
+    A possessive ("MindFlock's …") or the name mid-sentence never counts.
+    ``clients``: lib/voiceWords ``wakeAt`` is the same rule."""
+    toks = str(text or "").split()
+    own = _clean((words or {}).get("wake")) or DEFAULTS["wake"]
+    names = [own] if own == DEFAULTS["wake"] else [own, DEFAULTS["wake"]]
+    plain = {_letters(f) for f in WAKE_PLAIN} | {_letters(own)}
+    heard_forms = {_letters(f) for f in heard_of(names)}
+    start = 0
+    if len(toks) > 1 and _words(toks[0]) and " ".join(_words(toks[0])) in WAKE_LEADS:
+        start = 1
+    for k in (1, 2):
+        span = toks[start : start + k]
+        if len(span) < k or "'" in "".join(span).replace("\u2019", "'"):
+            continue
+        said = "".join("".join(_words(t)) for t in span)
+        if not said:
+            continue
+        if said in plain:
+            return start + k
+        paused = _PAUSE_AFTER.search(span[-1]) is not None
+        if paused and (said in heard_forms or any(sounds_like(said, n) for n in names)):
+            return start + k
+    return None
+
+
+def wake_rest(text: Any, words: Optional[dict] = None) -> Optional[str]:
+    """The words of ``text`` after its leading wake word (:func:`wake_at`),
+    stray leading punctuation dropped — ``""`` when nothing follows it — or
+    None when ``text`` does not start with it."""
+    at = wake_at(text, words)
+    if at is None:
+        return None
+    rest = " ".join(str(text or "").split()[at:])
+    return rest.strip().lstrip(":;,.!?\u2014\u2013-").strip()

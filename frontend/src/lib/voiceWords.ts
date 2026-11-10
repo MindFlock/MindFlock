@@ -383,3 +383,98 @@ export function soundTail(
     }
   return null;
 }
+
+// --- a phrase said TO MindFlock: it starts with the wake word (the server's
+// voice_words.wake_at, kept identical) --------------------------------------- //
+
+/** Said before the wake word and still addressing it ("hey MindFlock, …"). */
+export const WAKE_LEADS: readonly string[] = ["hey", "ok", "okay", "please", "ask"];
+/** The default wake word's forms that address MindFlock with no pause after
+ * them (none is an ordinary phrase); every other form the recogniser writes
+ * ("my flock", "mind block") only with a pause mark right after it ("My
+ * flock, open settings."). The server's `WAKE_PLAIN`. */
+export const WAKE_PLAIN: readonly string[] = [
+  "mindflock", "mind flock", "mine flock", "minflock", "min flock",
+  "mindlock", "mind lock", "mindflog", "mind flog", "minh flock",
+];
+const PAUSE_AFTER = /[,.:;!?—–-]$/;
+/** A token's matcher words: lower case, apostrophes dropped, anything else
+ * but letters and digits a break (the server's `_words`). */
+const wordsOf = (t: string) =>
+  String(t || "")
+    .toLowerCase()
+    .replace(/['’]/g, "")
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+const tokensOf = (text: string) => String(text || "").trim().split(/\s+/).filter(Boolean);
+
+/** The wake word's names and forms: the person's and, always, the default's. */
+function wakeForms(w: VoiceWords): { names: string[]; plain: Set<string>; heard: Set<string> } {
+  const own = normPhrase(w.wake || "") || BUILTIN_VOICE_WORDS.wake;
+  const names = own === BUILTIN_VOICE_WORDS.wake ? [own] : [own, BUILTIN_VOICE_WORDS.wake];
+  const plain = new Set([...WAKE_PLAIN, own].map(letters));
+  const heard = new Set(heardOf(w, "wake").map(letters));
+  return { names, plain, heard };
+}
+
+/** The index of the whitespace token of `text` where the words after a
+ * LEADING wake word start, else null: one lead word ({@link WAKE_LEADS})
+ * may come first; the wake word as written, as the recogniser writes it
+ * (`words.heard.wake`) or one or two words that {@link soundsLike} it — a
+ * form other than the wake word itself or {@link WAKE_PLAIN} only with a
+ * pause mark after it. A possessive ("MindFlock's …") or the name
+ * mid-sentence never counts. The server's `voice_words.wake_at`. */
+export function wakeAt(text: string, w: VoiceWords = current): number | null {
+  const toks = tokensOf(text);
+  const f = wakeForms(w);
+  let start = 0;
+  if (toks.length > 1 && WAKE_LEADS.includes(wordsOf(toks[0]).join(" "))) start = 1;
+  for (const k of [1, 2]) {
+    const span = toks.slice(start, start + k);
+    if (span.length < k || /['’]/.test(span.join(""))) continue;
+    const said = span.map((t) => wordsOf(t).join("")).join("");
+    if (!said) continue;
+    if (f.plain.has(said)) return start + k;
+    const paused = PAUSE_AFTER.test(span[span.length - 1]);
+    if (paused && (f.heard.has(said) || f.names.some((n) => soundsLike(said, n)))) return start + k;
+  }
+  return null;
+}
+
+/** The words of `text` after its leading wake word ({@link wakeAt}), stray
+ * leading punctuation dropped ("" when nothing follows), else null. */
+export function wakeRest(text: string, w: VoiceWords = current): string | null {
+  const at = wakeAt(text, w);
+  if (at === null) return null;
+  return tokensOf(text).slice(at).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+}
+
+/** A phrase said to MindFlock: it starts with the wake word and says more. */
+export function isWakePhrase(text: string, w: VoiceWords = current): boolean {
+  return !!wakeRest(text, w);
+}
+
+/** Could the phrase that starts with `text` (a streamed guess, its pause
+ * marks not written yet) be said to MindFlock? It starts with a wake form,
+ * pause or not, or is still the start of one ("my", "hey mind"): its
+ * guess waits whole, so a command is never typed only to be taken back. */
+export function mayBeWake(text: string, w: VoiceWords = current): boolean {
+  if (wakeAt(text, w) !== null) return true;
+  const toks = tokensOf(text).filter((t) => wordsOf(t).length);
+  if (!toks.length) return false;
+  const f = wakeForms(w);
+  const forms = [...WAKE_PLAIN, ...f.names, ...heardOf(w, "wake")].map(wordsOf);
+  let s = 0;
+  if (WAKE_LEADS.includes(wordsOf(toks[0]).join(" "))) s = 1;
+  const rest = toks.slice(s).map((t) => wordsOf(t).join(""));
+  // Only "hey" / "please" so far: typed (a prompt starts so as often).
+  if (!rest.length) return false;
+  if (/['’]/.test(toks.slice(s, s + 2).join(""))) return false;
+  const one = rest[0];
+  // A whole form in one word ("mindflock"), or one that sounds like it.
+  if (forms.some((p) => p.join("") === one) || f.names.some((n) => soundsLike(one, n))) return true;
+  // Alone so far, the first word of a form ("my", "mind"): the next decides.
+  if (rest.length < 2) return forms.some((p) => p[0] === one);
+  const two = one + rest[1];
+  return forms.some((p) => p.join("") === two) || f.names.some((n) => soundsLike(two, n));
+}
