@@ -378,8 +378,8 @@ _EXAMPLE_TEXTS = frozenset(
         'post /api/orders/42/discount with {"code":"save10"} on an order '
         "totalling 42.00",
         'post /api/orders/42/discount with {"code":"expired2023"}',
-        "on a deployment where save10 was applied to order 42 within the last "
-        'hour, search the log explorer for "discount.applied"',
+        'search the deployment\'s log explorer for "discount.applied" on order '
+        "42 over the last 15 minutes",
         "on an order that already has save10 applied, open its checkout page "
         "in a browser and look at the discount row (visual: whether the "
         "struck-through total reads clearly is not settleable from a shell)",
@@ -418,13 +418,24 @@ def _vet_generated(steps: List[dict]) -> List[dict]:
       length preventing (see :data:`_DANGEROUS_STEP_RE` and
       :func:`finish_run`'s coercions). A person looking at it can still use
       their eyes, so the step survives as theirs rather than being thrown away.
+
+    ``needs`` follows the steps it names: a reference to a dropped duplicate is
+    redirected to the copy that was kept (it is the same action), and a
+    reference to a dropped placeholder simply goes — there was nothing to do.
     """
     out: List[dict] = []
-    seen: set = set()
+    seen: Dict[tuple, str] = {}
+    redirect: Dict[str, str] = {}
     for step in steps or []:
         text = str(step.get("text") or "")
         if _PLACEHOLDER_STEP_RE.match(text):
             continue
+        needs: List[str] = []
+        for ref in step.get("needs") or []:
+            ref = redirect.get(ref, ref)
+            if ref not in needs:
+                needs.append(ref)
+        step = _set_needs(dict(step), needs)
         if step.get("actor") == "agent" and not str(step.get("expect") or "").strip():
             step = dict(step, actor="human")
         # EXACT duplicates only — text AND expect. Deduping on the text alone
@@ -436,10 +447,11 @@ def _vet_generated(steps: List[dict]) -> List[dict]:
             " ".join(str(step.get("expect") or "").lower().split()),
         )
         if key in seen:
+            redirect[str(step.get("id") or "")] = seen[key]
             continue
-        seen.add(key)
+        seen[key] = str(step.get("id") or "")
         out.append(step)
-    return out
+    return _prune_needs(out)
 
 
 def _norm_example(text) -> str:
@@ -740,8 +752,29 @@ _DANGEROUS_STEP_RE = re.compile(
 )
 
 
+def _needs_list(value) -> List[str]:
+    """A step's raw ``needs`` coerced to a de-duplicated list of id strings.
+
+    Only the SHAPE is settled here; which of those ids may actually be named —
+    earlier steps of the same plan, and nothing else — needs the whole list, so
+    :func:`_normalize_steps` decides it.
+    """
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, (str, int)):
+            continue
+        ref = str(item).strip()[:40]
+        if ref and ref not in out:
+            out.append(ref)
+        if len(out) >= MAX_STEPS:
+            break
+    return out
+
+
 def _normalize_step(raw, index: int) -> Optional[dict]:
-    """One stored/parsed step coerced to ``{id, text, expect, actor}``.
+    """One stored/parsed step coerced to ``{id, text, expect, actor, needs}``.
 
     ``None`` for a step with no instruction in it — a step whose text is empty
     is not a step, and keeping it would show the user a blank checkbox they can
@@ -763,7 +796,7 @@ def _normalize_step(raw, index: int) -> Optional[dict]:
     # all pass through this one function, and none of them can route around it.
     if actor == "agent" and _DANGEROUS_STEP_RE.search(text + " " + expect):
         actor = "human"
-    return {
+    step = {
         # Ids are positional (``s1``…``sN``) and stable for the life of a step
         # list, because run results key off them. A stored id is kept verbatim
         # so results recorded against it keep matching.
@@ -780,9 +813,36 @@ def _normalize_step(raw, index: int) -> Optional[dict]:
         # and a parallel list is exactly the thing that goes stale when it does.
         "manual": bool(raw.get("manual")),
     }
+    # ``needs``: the ids of EARLIER steps whose action this one relies on — the
+    # walker performs them first, and answers this one blocked if one of them
+    # did not pass. Filtered to earlier steps by :func:`_normalize_steps`, the
+    # only place that can see every id. PRESENT ONLY WHEN NON-EMPTY, so a plan
+    # written before walkthroughs existed reads back byte for byte as it always
+    # did; every reader asks ``step.get("needs") or []``.
+    return _set_needs(step, _needs_list(raw.get("needs")))
+
+
+def _set_needs(step: dict, refs: List[str]) -> dict:
+    """Store ``refs`` as the step's ``needs`` — or remove the key when there are
+    none (see :func:`_normalize_step`). Returns ``step``."""
+    if refs:
+        step["needs"] = list(refs)
+    else:
+        step.pop("needs", None)
+    return step
 
 
 def _normalize_steps(raw) -> List[dict]:
+    """A stored/parsed step list, each step normalized and every ``needs``
+    narrowed to steps that come BEFORE it.
+
+    Earlier only, and that is the whole rule: the walker performs a step's needs
+    before the step, so a forward reference is an order it cannot follow, a
+    self-reference is a step that waits on itself, and an id that names nothing
+    (a removed step, a model's typo) is a wait that can never end. All three are
+    dropped rather than refused — on LOAD as well as on parse, so a step removed
+    later cannot leave a dangling reference behind it.
+    """
     if not isinstance(raw, list):
         return []
     steps: List[dict] = []
@@ -792,7 +852,79 @@ def _normalize_steps(raw) -> List[dict]:
             steps.append(step)
         if len(steps) >= MAX_STEPS:
             break
+    _prune_needs(steps)
     return steps
+
+
+def _prune_needs(steps: List[dict]) -> List[dict]:
+    """Narrow every step's ``needs`` (in place) to ids of steps EARLIER in
+    ``steps``. Returns ``steps`` for chaining."""
+    earlier: set = set()
+    for step in steps:
+        _set_needs(step, [ref for ref in step.get("needs") or [] if ref in earlier])
+        earlier.add(str(step.get("id") or ""))
+    return steps
+
+
+def _steps_from_model(raw: list) -> List[dict]:
+    """A MODEL's step array → normalized steps with positional ids ``s1..sN``.
+
+    The model is asked to number its steps ``s1``, ``s2``… and to name earlier
+    ones in ``needs``. Its ids are not trusted as ids — two steps sharing one,
+    or one reading "step-a", would break every result keyed on them, and
+    :func:`_generate_inner`'s merge relies on a fresh answer living in ``s*``
+    — so each surviving step is renumbered by its position among the survivors,
+    and every ``needs`` entry is translated through what the model called that
+    step: its own ``id``, else ``sK`` for its place in the array, and the bare
+    number ``K`` for a model that wrote ``"needs": [1]``. A reference to a step
+    the parse dropped (no text) translates to nothing and goes. Translation runs
+    in order, so a forward or self reference finds nothing either.
+    """
+    steps: List[dict] = []
+    alias: Dict[str, str] = {}
+    for pos, entry in enumerate(raw):
+        if len(steps) >= MAX_STEPS:
+            break
+        step = _normalize_step(entry, len(steps))
+        if step is None:
+            continue
+        new_id = "s%d" % (len(steps) + 1)
+        needs: List[str] = []
+        for ref in step.get("needs") or []:
+            target = alias.get(ref)
+            if target and target not in needs:
+                needs.append(target)
+        _set_needs(step, needs)
+        own = str(entry.get("id") or "").strip()[:40]
+        for name in (own or "s%d" % (pos + 1), str(pos + 1)):
+            alias.setdefault(name, new_id)
+        step["id"] = new_id
+        steps.append(step)
+    return _prune_needs(steps)
+
+
+def _checked_needs(needs, earlier: List[str]) -> List[str]:
+    """A PERSON's ``needs`` for a step, checked against the ids of the steps
+    before it. ``ValueError`` for anything else — this comes from a UI that can
+    be told it named a step that does not exist (or one that comes after), and
+    silently dropping the reference would store a step that skips the setup its
+    author asked for."""
+    if needs is None:
+        return []
+    if not isinstance(needs, list):
+        raise ValueError("needs must be a list of step ids")
+    if any(
+        isinstance(n, bool) or not isinstance(n, (str, int)) or not str(n).strip()
+        for n in needs
+    ):
+        raise ValueError("needs must be a list of step ids")
+    refs = _needs_list(needs)
+    bad = [ref for ref in refs if ref not in earlier]
+    if bad:
+        raise ValueError(
+            "needs may only name earlier steps of this plan (not: %s)" % ", ".join(bad)
+        )
+    return refs
 
 
 def _normalize_result(raw) -> dict:
@@ -2134,7 +2266,11 @@ def finish_run(
 
 
 def add_step(
-    plan_id: str, text: str, expect: str = "", actor: str = "human"
+    plan_id: str,
+    text: str,
+    expect: str = "",
+    actor: str = "human",
+    needs: Optional[list] = None,
 ) -> Optional[dict]:
     """Append a step a PERSON wrote to the end of a plan.
 
@@ -2151,6 +2287,10 @@ def add_step(
 
     Marked ``manual`` so :func:`generate` can carry it across a regeneration;
     see the merge there for why that matters more than it looks.
+
+    ``needs`` names steps already on the plan whose action this one relies on
+    (every existing step is earlier — this one is appended); an id that is not
+    on the plan is a ``ValueError``.
     """
     body = _text(text)
     if not body:
@@ -2158,12 +2298,19 @@ def add_step(
     who = str(actor or "").strip().lower()
     if who not in ACTORS:
         raise ValueError("actor must be one of: %s" % ", ".join(ACTORS))
-    outcome: dict = {"full": False}
+    if needs is not None and not isinstance(needs, list):
+        raise ValueError("needs must be a list of step ids")
+    outcome: dict = {"full": False, "bad": ""}
 
     def apply(plan: dict) -> None:
         steps = plan["steps"]
         if len(steps) >= MAX_STEPS:
             outcome["full"] = True
+            return
+        try:
+            refs = _checked_needs(needs, [str(st.get("id") or "") for st in steps])
+        except ValueError as err:
+            outcome["bad"] = str(err)
             return
         # Ids are positional and must not collide with one already carrying a
         # recorded result, so this counts past the highest sN in use rather than
@@ -2182,6 +2329,7 @@ def add_step(
                 "manual": True,
             }
         )
+        _set_needs(steps[-1], refs)
         # A finished checklist that just gained an unanswered step is not
         # finished any more. Every other mutator re-asks this (``record_result``,
         # ``cancel_run``, ``mark_due``, ``prune``); without it the store said
@@ -2206,6 +2354,8 @@ def add_step(
         raise ValueError(
             "this plan already has the most steps a plan can hold (%d)" % MAX_STEPS
         )
+    if outcome["bad"]:
+        raise ValueError(outcome["bad"])
     return plan
 
 
@@ -2239,6 +2389,10 @@ def remove_step(plan_id: str, step_id: str) -> Optional[dict]:
             outcome["generated"] = True
             return
         plan["steps"] = [st for st in plan["steps"] if st.get("id") != step_id]
+        # A step that relied on this one now relies on nothing — the load would
+        # drop the dangling id anyway, but the response should not carry it.
+        for st in plan["steps"]:
+            _set_needs(st, [n for n in st.get("needs") or [] if n != step_id])
         for run in plan["runs"]:
             run["results"].pop(step_id, None)
             run["verdict"] = _verdict(plan["steps"], run["results"])
@@ -2259,6 +2413,7 @@ def edit_step(
     text: Optional[str] = None,
     expect: Optional[str] = None,
     actor: Optional[str] = None,
+    needs: Optional[list] = None,
 ) -> Optional[dict]:
     """Fix one step in place, rather than throwing the checklist away to fix it.
 
@@ -2291,7 +2446,12 @@ def edit_step(
     :func:`remove_step` follows. Changing only ``actor`` changes WHO answers, not
     what is being asked, so the answers stand: flipping a step from human to
     agent is the cheapest quality win on this surface and must not cost history.
+    ``needs`` is the same kind of change as ``actor``: it says what the walker
+    does FIRST, not what is being asked, so the answers stand. It may name only
+    steps before this one (``ValueError`` otherwise); ``[]`` clears it.
     """
+    if needs is not None and not isinstance(needs, list):
+        raise ValueError("needs must be a list of step ids")
     if actor is not None and actor not in ACTORS:
         raise ValueError("actor must be one of %s" % ", ".join(ACTORS))
     # AN EMPTY EDIT IS A DELETE, and it was a delete through the wrong door.
@@ -2307,7 +2467,7 @@ def edit_step(
     # against the raw value — leaving the same silent delete this exists to stop.
     if text is not None and not _text(text):
         raise ValueError("a step needs some text — remove it instead")
-    outcome: dict = {"missing": False, "running": False, "cleared": False}
+    outcome: dict = {"missing": False, "running": False, "cleared": False, "bad": ""}
 
     def apply(plan: dict) -> None:
         if plan["state"] == "running":
@@ -2320,6 +2480,15 @@ def edit_step(
         if step is None:
             outcome["missing"] = True
             return
+        if needs is not None:
+            at = plan["steps"].index(step)
+            earlier = [str(st.get("id") or "") for st in plan["steps"][:at]]
+            try:
+                refs = _checked_needs(needs, earlier)
+            except ValueError as err:
+                outcome["bad"] = str(err)
+                return
+            _set_needs(step, refs)
         changed_question = False
         if text is not None and _text(text) != step["text"]:
             step["text"] = _text(text)
@@ -2346,6 +2515,8 @@ def edit_step(
         raise ValueError(
             "an agent is checking these behaviors right now — cancel the run first"
         )
+    if outcome["bad"]:
+        raise ValueError(outcome["bad"])
     if plan is None or outcome["missing"]:
         return None
     return plan
@@ -3697,6 +3868,30 @@ def build_generation_prompt(
     evidence exists. That reason does double duty: a step that cannot state one
     is a step that should have been the agent's, so writing it is the test.
 
+    THE FOURTH FAILURE CLASS is what "check the evidence the last real run
+    left" turns into when a model reads it as permission to wait: STEPS THAT
+    WAIT ON SOMEBODY ELSE'S ACTION. Real sandbox plans came back reading "On
+    the sandbox deployment, after someone has run ``/sbx-ask`` in the last
+    hour, search Loki for …" — an agent step whose input is a stranger's
+    behaviour, so the checker sat waiting for a person who was never coming —
+    and, beside it, "type the slash command ``/sbx-ask`` … in the sandbox Slack
+    channel" marked ``human``, when posting it is one Slack API call. The plan
+    is therefore now a WALKTHROUGH that an agent performs in order: ``text`` is
+    what the walker DOES to trigger the behaviour itself (the API call, the
+    message or slash command posted through the Slack API, the HTTP request,
+    the CLI run against the deployment, the database query, the browser
+    automation), ``expect`` is the evidence that must be observed for a pass,
+    and ``needs`` names the EARLIER steps whose action a step builds on — the
+    log search ``needs`` the request that writes the log line, and the walker
+    performs that request first instead of hoping somebody did. A trigger only
+    a person can perform is still the (rationed) human step, and the
+    observation that follows it is an agent step that ``needs`` it. "On demand"
+    still allows reading the last real run's evidence for something that
+    genuinely only fires on a schedule — but on demand, read now, never
+    "after someone has". And a step a tool can do is never a person's: typing
+    a slash command is posting it through the API; human is for what no tool
+    can settle.
+
     WHY THE DIFF IS NO LONGER THE ONLY AUTHORITY. This prompt used to carry a
     rule reading "the diff is the only statement of what SHIPPED… never write a
     step for behaviour you cannot point at in the diff", with the ticket placed
@@ -3742,6 +3937,13 @@ def build_generation_prompt(
     explicit permission to repeat a payload, which is the cost the rules are
     worth paying.
 
+    ``needs`` does not repeal any of that. It is the walker's ORDER — perform
+    s1 before s3 — stated as data the walker reads, which is exactly why it
+    must not also be stated as prose: "the response from the previous step" is
+    still forbidden, and a step that needs another still names the endpoint,
+    the payload and the text to look for, so a person landing on it alone can
+    still read what it checks.
+
     THE THREE USER-AUTHORED INPUTS, and why each is fenced differently.
     ``repo_notes`` is the repo's standing instructions
     (``repository.verify_repo_settings["owner/name"]["prompt"]``) — the things
@@ -3777,6 +3979,9 @@ def build_generation_prompt(
         "Someone who did not write this change will follow the plan, end to end, "
         "to decide whether what it was ASKED to do is actually true for a person "
         "using the running product — not whether the code is present.",
+        "The plan is a WALKTHROUGH: an agent (the walker) performs the steps in "
+        "order, by itself, with its own tools — each step is something it DOES "
+        "and then something it must SEE.",
         "",
         "Rules:",
         "- Answer with exactly one <testplan> block and nothing else — no "
@@ -3786,8 +3991,8 @@ def build_generation_prompt(
         "can now do that they could not do before — or what has stopped "
         'happening. Never file names, never "various improvements", never the '
         "branch name.",
-        '- "steps" is an array of objects with the keys "text", "expect" and '
-        '"actor".',
+        '- "steps" is an array of objects with the keys "id", "text", "expect", '
+        '"actor" and "needs". "id" is "s1", "s2", … in order.',
         '- WHAT THIS CHANGE IS FOR is stated below under "What this change was '
         'asked to do". Write the plan for THAT: the steps decide whether the '
         "thing that was asked for works for somebody using the product.",
@@ -3822,6 +4027,21 @@ def build_generation_prompt(
         "checked by that run's own evidence on the deployment (its logs, its "
         "tables, its output), never by rehearsing it locally. Do not describe "
         "reading the diff or restate the implementation.",
+        '- THE WALKER TRIGGERS IT ITSELF. "text" is the action the walker '
+        "performs, right now, to make the behaviour happen: call the endpoint, "
+        "post the message or the slash command through the Slack API (or invoke "
+        "the command's endpoint), send the HTTP request, run the CLI against the "
+        "deployment, query the database, drive the page with browser "
+        "automation. NEVER write a step that waits on someone else's action or "
+        'on a schedule — "after someone has run /deploy-check in the last hour", '
+        '"once a customer has ordered", "when the nightly job has run": the '
+        "walker cannot make that happen, so it waits for ever. Trigger it in an "
+        'earlier step and name that step in "needs".',
+        '- "needs" lists the ids of EARLIER steps whose action this step builds '
+        "on — the log search needs the request that writes the log line, the "
+        "page check needs the call that created the record. The walker performs "
+        "them first; if one of them did not pass, this step cannot. [] when the "
+        "step stands alone. Never a later step, never the step itself.",
         '- EVERY STEP IS AN INPUT AND AN OUTPUT. "text" names the exact input '
         "that goes in: the request and its body, the values typed into the "
         "fields, the message sent, the file dropped in, the argument passed. "
@@ -3844,7 +4064,9 @@ def build_generation_prompt(
         "When a step needs the system in a particular state, say that state as a "
         'CONDITION in the step\'s own words — "with the queue empty", "on an '
         'order that already has SAVE10 applied", "against a database that has '
-        'rows but no schema_version table" — never as a command to run first. '
+        'rows but no schema_version table" — never as a command to run first; '
+        "when an earlier step of this plan is what creates that state, also "
+        'name it in "needs". '
         "A command belongs in a step only when running it IS the thing this "
         "change altered — and never when that command is the repo testing "
         "itself.",
@@ -3896,6 +4118,14 @@ def build_generation_prompt(
         "device, or a third-party product the agent has no tool or credentials "
         "for. Being fiddly, long or multi-part is NOT a reason to hand a step "
         "to a person — that is what the agent is for.",
+        "- A STEP A TOOL CAN DO IS NEVER A PERSON'S. Typing a slash command in "
+        "Slack is the walker posting it through the Slack API or invoking the "
+        "command's endpoint; pressing a button is a request to the endpoint "
+        "behind it, or browser automation; reading a channel is the API's "
+        "history call. When the TRIGGER itself is one only a person can perform "
+        "(a real phone, a signed-in third-party product with no API), that "
+        "trigger is the human step — and the observation that follows it is an "
+        'agent step whose "needs" names it.',
         "- WRITE THE PLAN SO THE AGENT CAN RUN IT. Before writing a step for a "
         "person, ask what the product WROTE DOWN when that behaviour ran — the "
         "request it sent, the row it changed, the line it logged, the metric it "
@@ -3916,19 +4146,23 @@ def build_generation_prompt(
         "right now through the product's own surfaces over one that waits on "
         "something outside their control — a real customer, tomorrow's "
         "scheduled run, a colleague, a state production only reaches by chance. "
-        "When the behaviour genuinely only happens on a schedule or on a real "
-        "user's action, do not ask for it to be staged: check the evidence the "
-        "last real run already left — its log lines, the rows it wrote, the "
-        "metric it moved. That is an observation available now, and it is an "
+        "When the behaviour genuinely only happens on a schedule or on an action "
+        "no tool can perform, do not ask for it to be staged: check the evidence "
+        "the last real run already left — its log lines, the rows it wrote, the "
+        'metric it moved — read on demand, NOW, and never phrased as "after '
+        'someone has…". That is an observation available now, and it is an '
         "agent step.",
         "- At most 12 steps. Fewer, sharper steps beat a checklist nobody " "finishes.",
         "",
         "Shape — this is the FORMAT, and the flavour of a good step: an input "
         "you could paste, an output you could compare against, and no step spent "
-        "getting the product running. Note the third step reads the "
-        "deployment's own log search rather than a file a step created, and it "
-        "and the last step state the state they need as a CONDITION rather "
-        "than as a command. Note too that three of the four are the AGENT's, "
+        'getting the product running. Each step is a walk: "text" is what the '
+        'walker DOES, "expect" is what it must SEE. Note the third step does not '
+        "wait for somebody to have applied a code: the walker applied it in s1, "
+        'so the step names s1 in "needs" and reads the deployment\'s own log '
+        "search rather than a file a step created. The last step states the "
+        "state it needs as a CONDITION rather than as a command, and names the "
+        "step that creates it. Note too that three of the four are the AGENT's, "
         "and the one human step is a person's only because it is a judgement "
         "about how something looks — and it says so in the step. It is about a "
         "DIFFERENT product from the one below: never reuse its nouns.",
@@ -3937,25 +4171,26 @@ def build_generation_prompt(
         '  "summary": "A discount code can be applied at checkout and the order '
         'total drops by the discount.",',
         '  "steps": [',
-        '    {"text": "POST /api/orders/42/discount with '
+        '    {"id": "s1", "text": "POST /api/orders/42/discount with '
         '{\\"code\\":\\"SAVE10\\"} on an order totalling 42.00", "expect": '
         '"200, and the response body\'s \\"total\\" is 37.80 with a line item '
-        'reading \\"SAVE10 -4.20\\"", "actor": "agent"},',
-        '    {"text": "POST /api/orders/42/discount with '
+        'reading \\"SAVE10 -4.20\\"", "actor": "agent", "needs": []},',
+        '    {"id": "s2", "text": "POST /api/orders/42/discount with '
         '{\\"code\\":\\"EXPIRED2023\\"}", "expect": "400 with '
         '{\\"error\\":\\"that code has expired\\"} — not a 500, and not a '
-        'silent 200", "actor": "agent"},',
-        '    {"text": "On a deployment where SAVE10 was applied to order 42 '
-        "within the last hour, search the log explorer for "
-        '\\"discount.applied\\"", "expect": "One line \\"discount.applied '
-        'code=SAVE10 order=42 amount=-4.20\\", and no \\"discount.failed\\" '
-        'line for order 42", "actor": "agent"},',
-        '    {"text": "On an order that already has SAVE10 applied, open its '
-        "checkout page in a browser and look at the discount row (visual: "
-        "whether the struck-through total reads clearly is not settleable from "
-        'a shell)", "expect": "The row reads \\"SAVE10 -4.20\\" directly under '
-        "the subtotal, and the old 42.00 is struck through rather than "
-        'overlapping the new 37.80", "actor": "human"}',
+        'silent 200", "actor": "agent", "needs": []},',
+        '    {"id": "s3", "text": "Search the deployment\'s log explorer for '
+        '\\"discount.applied\\" on order 42 over the last 15 minutes", '
+        '"expect": "One line \\"discount.applied code=SAVE10 order=42 '
+        'amount=-4.20\\", and no \\"discount.failed\\" line for order 42", '
+        '"actor": "agent", "needs": ["s1"]},',
+        '    {"id": "s4", "text": "On an order that already has SAVE10 applied, '
+        "open its checkout page in a browser and look at the discount row "
+        "(visual: whether the struck-through total reads clearly is not "
+        'settleable from a shell)", "expect": "The row reads \\"SAVE10 '
+        '-4.20\\" directly under the subtotal, and the old 42.00 is struck '
+        'through rather than overlapping the new 37.80", "actor": "human", '
+        '"needs": ["s1"]}',
         "  ]",
         "}",
         "</testplan>",
@@ -4211,7 +4446,7 @@ def _steps_from_block(block: str) -> tuple:
             parsed = parsed.get("steps") or parsed.get("plan")
         if not isinstance(parsed, list):
             continue
-        steps = _normalize_steps(parsed)
+        steps = _steps_from_model(parsed)
         if steps:
             return summary, steps
     return "", []
@@ -5125,8 +5360,9 @@ def _generate_inner(
         # the fresh ones, which is the order they were added in.
         #
         # THE ID COLLISION THIS FIXES, WHICH WAS SILENT DATA LOSS. Ids are
-        # POSITIONAL: a fresh answer is always ``s1..sN`` (``_normalize_step``
-        # assigns them, and the prompt never asks the model for an id). A kept
+        # POSITIONAL: a fresh answer is always ``s1..sN`` (the model numbers its
+        # steps so ``needs`` can name them, but :func:`_steps_from_model`
+        # renumbers whatever it wrote, minus the vetting's gaps). A kept
         # manual step also holds an ``sK``. The old merge resolved that clash by
         # dropping the FRESH step with the same id — so every step a person had
         # added or edited quietly deleted one newly generated step, and because
@@ -5142,6 +5378,12 @@ def _generate_inner(
         # and their recorded answers move with them. ``m*`` is stable for the life
         # of the step, so no later rewrite has to remap anything again.
         kept = [st for st in p["steps"] if st.get("manual")]
+        # A kept step's ``needs`` may name only OTHER kept steps from here on:
+        # a generated step it relied on has just been re-written from the diff,
+        # and whatever now holds that id is a different question.
+        kept_ids = {st["id"] for st in kept}
+        for st in kept:
+            _set_needs(st, [n for n in st.get("needs") or [] if n in kept_ids])
         taken = {st["id"] for st in steps}
         remap: dict = {}
         n = 0
@@ -5157,6 +5399,8 @@ def _generate_inner(
             remap[st["id"]] = new_id
             st["id"] = new_id
         if remap:
+            for st in kept:
+                _set_needs(st, [remap.get(n, n) for n in st.get("needs") or []])
             # The answers follow their question. Same bookkeeping ``remove_step``
             # and ``edit_step`` already do when a step's results move or go.
             for run in p["runs"]:
@@ -5868,4 +6112,11 @@ def results_markdown(plan: dict) -> str:
         if note:
             line += " — %s" % note
         lines.append(line)
+        # What counted as a pass, so a reader can weigh the ✅ — a walkthrough
+        # step's text is only the action; the evidence is in ``expect``. A
+        # nested line, so the behavior's own line reads the same with or
+        # without one.
+        expect = _one_line(step.get("expect"), 300)
+        if expect:
+            lines.append("  - expect: %s" % expect)
     return "\n".join(lines) + "\n"

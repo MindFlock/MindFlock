@@ -8145,12 +8145,17 @@ def test_the_example_models_the_shape_the_rules_ask_for(store):
         for setup in ("start the", "build the", "install ", "run the test", "docker "):
             assert setup not in low, "example models a setup step: %r" % step["text"]
 
-    # The last two state the state they need as a CONDITION, not a command —
-    # and the third reads telemetry from the deployment's own log search, not
-    # from a scratch file an earlier step tee'd a process into.
-    assert steps[2]["text"].lower().startswith("on a deployment where")
+    # The third reads telemetry from the deployment's own log search, not from a
+    # scratch file an earlier step tee'd a process into — and it no longer waits
+    # for somebody to have applied the code "within the last hour" (the fourth
+    # failure class): the walker applied it in s1, so the step NEEDS s1.
     assert "log explorer" in steps[2]["text"].lower()
+    assert "within the last hour" not in steps[2]["text"].lower()
+    assert steps[2]["needs"] == ["s1"]
+    # The last states the state it needs as a CONDITION, not a command, and
+    # names the step that creates it.
     assert steps[3]["text"].lower().startswith("on an order that already has")
+    assert steps[3]["needs"] == ["s1"]
 
 
 # --------------------------------------------------------------------------- #
