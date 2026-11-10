@@ -264,6 +264,9 @@ function haltedState(fl: NonNullable<Instance["flight"]>): SessionState {
  * not a needs-you one — whoever paused it resumes it. */
 export const PAUSED_FLIGHT_LABEL = "Paused route";
 
+/** The rail's word for a held worker whose agent starts on its turn. */
+export const HELD_WORKER_LABEL = "Waiting";
+
 /** The rail's word for a session whose start waits for memory. */
 export const WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
 
@@ -365,6 +368,21 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
       hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets",
     };
   }
+  // A held worker (core.worker_order): created, its agent not started until
+  // the workers before it finish — waiting, not down. Not restartable, so
+  // "Start all" leaves it alone (its own Start still boots it early).
+  if (act === "offline" && inst.order?.state === "held")
+    return {
+      state: "starting",
+      label: HELD_WORKER_LABEL,
+      tone: "muted",
+      inBell: false,
+      restartable: false,
+      hint:
+        "Waiting its turn" +
+        (inst.order.detail ? " — " + inst.order.detail : "") +
+        ". Its agent starts when the workers before it finish; Start starts it early.",
+    };
   if (act === "offline") {
     // Killed for memory and coming back by itself: nothing to wait on you for
     // (out of the bell), and the hint says why it is down.

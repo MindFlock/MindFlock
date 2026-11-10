@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Start to run it early; its task waits for its turn either way. The create
   answers `order.agent_deferred: true`.
 
+### Fixed
+
+- **"That's all" at the end of a sentence no longer stops dictation.**
+  Conversational stop phrases ("that's all", "done talking") stop listening
+  only when said on their own; "make sure that that's all" is typed. Clear
+  ones ("stop listening", "mic off", "pause listening") still end any phrase.
+  The desktop, the phone page and the server read it the same way.
+
 ## [0.14.3] - 2026-11-10
 
 ### Changed

@@ -25381,6 +25381,7 @@ function haltedState(fl) {
 	};
 }
 var PAUSED_FLIGHT_LABEL = "Paused route";
+var HELD_WORKER_LABEL = "Waiting";
 var WAITING_FOR_MEMORY_LABEL = "Waiting for memory";
 function waitingState(w) {
 	return {
@@ -25495,6 +25496,14 @@ function deriveSessionState(inst, extras) {
 			hint: "Usage limit reached — the queue waits out the window and auto-resumes when it resets"
 		};
 	}
+	if (act === "offline" && inst.order?.state === "held") return {
+		state: "starting",
+		label: HELD_WORKER_LABEL,
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint: "Waiting its turn" + (inst.order.detail ? " — " + inst.order.detail : "") + ". Its agent starts when the workers before it finish; Start starts it early."
+	};
 	if (act === "offline") {
 		const revive = inst.auto_revive;
 		return {
@@ -43936,6 +43945,40 @@ var PHRASE_KIN = {
 		]
 	}
 };
+var STOP_ALONE = [
+	"stop",
+	"that's all",
+	"that is all",
+	"that's al",
+	"that's hall",
+	"done talking",
+	"i'm done talking",
+	"i am done talking",
+	"done talkin",
+	"dun talking",
+	"done torking",
+	"then talking"
+];
+var STOP_FILLERS = [
+	"ok",
+	"okay",
+	"um",
+	"umm",
+	"uh",
+	"uhm",
+	"er",
+	"erm",
+	"ah",
+	"hmm",
+	"oh",
+	"so",
+	"well",
+	"alright"
+];
+function stopAlone(phrase) {
+	const ws = phraseWords(phrase).map(wordKey);
+	return ws.length === 1 || STOP_ALONE.some((p) => phraseWords(p).map(wordKey).join(" ") === ws.join(" "));
+}
 function withKin(w, k) {
 	return [...new Set(w[k].flatMap((p) => [p, ...PHRASE_KIN[k]?.[p] || []]))];
 }
@@ -48977,8 +49020,11 @@ function buildMatchers(w, v = -1) {
 	const stops = [.../* @__PURE__ */ new Set([...withKin(w, "stop"), ...heardOf(w, "stop")])];
 	const hushes = [.../* @__PURE__ */ new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
 	const stopAll = [...stops].sort(longestFirst).map(keysOf);
-	const stop = stopAll.filter((p) => p.length > 1);
-	const stopSaid = stops.filter((p) => phraseWords(p).length > 1);
+	const stopMulti = stopAll.filter((p) => p.length > 1);
+	const stop = stopMulti.filter((p) => !stopAlone(p.join(" ")));
+	const stopAlonePs = stopMulti.filter((p) => stopAlone(p.join(" ")));
+	const stopSaid = stops.filter((p) => phraseWords(p).length > 1 && !stopAlone(p));
+	const stopAloneSaid = stops.filter((p) => phraseWords(p).length > 1 && stopAlone(p));
 	const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
 	const hushSounded = (keys) => {
 		let ws = keys.split(" ").filter(Boolean);
@@ -48995,7 +49041,7 @@ function buildMatchers(w, v = -1) {
 		...radioPhrases(clears),
 		...undos.map(keysOf),
 		...ends.map(keysOf),
-		...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s]))
+		...ends.map(keysOf).flatMap((e) => stopMulti.map((s) => [...e, ...s]))
 	].filter((p) => p.length);
 	const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
 	return {
@@ -49004,6 +49050,8 @@ function buildMatchers(w, v = -1) {
 		radioKinds,
 		stop,
 		stopSaid,
+		stopAlone: stopAlonePs,
+		stopAloneSaid,
 		hush,
 		control,
 		maxWords: Math.max(1, ...control.map((p) => p.length)),
@@ -49035,7 +49083,11 @@ function holdBack(text) {
 		held: ws.slice(n).join(" ")
 	};
 }
-function stopTail(text) {
+function aloneBefore(before) {
+	if (phraseWords(before).every((w) => STOP_FILLERS.includes(wordKey(w)))) return "";
+	return parseRadio(before).kind === "out" ? before : null;
+}
+function stopTail(text, whole = true) {
 	const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
 	const idx = wordIndexes(ws);
 	const M = matchers();
@@ -49051,7 +49103,24 @@ function stopTail(text) {
 		if (soundsLikeAny(tail.map((i) => ws[i]).join(" "), [p])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:.!?]+$/, "");
 	}
 	const hit = soundTail(text, M.stopSaid);
-	return hit ? hit.before.replace(/[\s,;:]+$/, "") : null;
+	if (hit) return hit.before.replace(/[\s,;:]+$/, "");
+	if (!whole) return null;
+	for (const p of M.stopAlone) {
+		if (idx.length < p.length) continue;
+		const tail = idx.slice(-p.length);
+		if (!tail.every((i, j) => wordKey(bareWord(ws[i])) === p[j])) continue;
+		const before = aloneBefore(ws.slice(0, tail[0]).join(" "));
+		if (before !== null) return before.replace(/[\s,;:]+$/, "");
+	}
+	for (const p of M.stopAloneSaid) {
+		const n = phraseWords(p).length;
+		if (idx.length < n) continue;
+		const tail = idx.slice(-n);
+		if (!soundsLikeAny(tail.map((i) => ws[i]).join(" "), [p])) continue;
+		const before = aloneBefore(ws.slice(0, tail[0]).join(" "));
+		if (before !== null) return before.replace(/[\s,;:.!?]+$/, "");
+	}
+	return null;
 }
 var ANSWER_RE = new RegExp("^(?:(?:um|uh|er|so) )?(?:" + [
 	"yes|yeah|yep|yup|sure|ok|okay|allow|allow it|approve|go ahead|do it",
@@ -49579,7 +49648,7 @@ var Dictation = class {
 	}
 	control(all, whole) {
 		if (whole && isHushPhrase(all)) return withErase({ kind: "hush" }, this.settle("").erase || "");
-		const before = stopTail(all);
+		const before = stopTail(all, whole);
 		if (before !== null) {
 			this.listening = false;
 			const out = parseRadio(before);
