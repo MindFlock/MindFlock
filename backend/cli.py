@@ -33,6 +33,7 @@ Installed via ``[project.scripts]``::
     mindflock flight plans        # the saved routes (scheduled ones say when next)
     mindflock flight start ROUTE [--repo PATH] [--title SESSION]  # run one (id or name)
     mindflock flight done ROUTE   # tick off the stop it waits on you at (skip / cancel too)
+    mindflock flight retry ROUTE  # run a halted stop again (resume = carry on, pause, jump ROUTE STOP)
 
     mindflock peer status         # peer links: pair-code with another MindFlock user
     mindflock peer invite         # …make a one-time invite link + code (you listen)
@@ -525,7 +526,7 @@ def _build_parser() -> argparse.ArgumentParser:
     flight = sub.add_parser(
         "flight",
         parents=[server_opts],
-        help="run a saved route, or tick off / skip / stop a route's stop",
+        help="run a saved route, or steer one: done / skip / retry / resume / pause / jump / cancel",
         description=(
             "A route is the row of stops one session's work goes through; a "
             "saved route is one kept to reuse, and a Wait for me stop waits "
@@ -566,6 +567,10 @@ def _build_parser() -> argparse.ArgumentParser:
     for verb, text in (
         ("done", "tick off the Wait for me stop the route waits on you at"),
         ("skip", "skip the route's current stop"),
+        ("retry", "run the route's failed (halted) stop again"),
+        ("resume", "Carry on: a paused route where it was, a halted one again"),
+        ("pause", "Pause the route where it is"),
+        ("jump", "Jump here: move the route to one of its stops"),
         ("cancel", "Stop the route (its session stays)"),
     ):
         p_verb = fl_sub.add_parser(verb, parents=[server_opts_nested], help=text)
@@ -574,6 +579,12 @@ def _build_parser() -> argparse.ArgumentParser:
         )
         if verb == "done":
             p_verb.add_argument("--note", default="", help="a note for the history")
+        if verb == "jump":
+            p_verb.add_argument(
+                "step",
+                metavar="STOP",
+                help="the stop to jump to: its id (s3), its number (3) or its title",
+            )
 
     peer = sub.add_parser(
         "peer",
@@ -2015,6 +2026,51 @@ def _flight_step(f: dict) -> dict:
     return steps[cur] if 0 <= cur < len(steps) else {}
 
 
+def _flight_needs(f: dict) -> Optional[Tuple[str, List[str]]]:
+    """``(why, actions)`` for a route that waits on the person — a stop
+    waiting on you, a halted or paused route — else None. ``why`` is the
+    stop's own note (else the route's reason); ``actions`` are the
+    ``mindflock flight`` commands that work from there."""
+    state = str(f.get("state") or "")
+    step = _flight_step(f)
+    ss = ((f.get("step_states") or {}).get(step.get("id")) or {}) if step else {}
+    detail = ss.get("detail") if isinstance(ss.get("detail"), dict) else {}
+    why = str(ss.get("note") or f.get("reason") or "").strip()
+    if state == "halted":
+        return why or "a stop failed", ["retry", "skip", "resume", "cancel"]
+    if state == "paused":
+        return why or "paused by you", ["resume", "cancel"]
+    if ss.get("state") != "waiting_you" and state != "waiting_you":
+        return None
+    if step.get("kind") == "verify" and not detail.get("failed_reason"):
+        ask = str(detail.get("ask") or "")
+        if ask == "confirm":
+            return (
+                why or "Verify needs you: confirm what the agent checked",
+                ["done (Confirm verified)", "skip", "cancel"],
+            )
+        if ask in ("needs_you", "memory"):
+            return why or "Verify needs you to do something", [
+                "done (I did it: check again)",
+                "skip",
+                "cancel",
+            ]
+        return (
+            why or "Verify needs you: answer its steps in the app",
+            ["answer its steps in the app", "skip", "cancel"],
+        )
+    return why or "waiting for you", ["done", "skip", "cancel"]
+
+
+def _flight_action(action: str, fid: str) -> str:
+    """``"done (Confirm verified)"`` → ``mindflock flight done f_1 (Confirm
+    verified)``; an action done in the app stays words."""
+    if " in the app" in action:
+        return action
+    verb, _, words = action.partition(" ")
+    return "mindflock flight %s %s%s" % (verb, fid, " " + words if words else "")
+
+
 def _cmd_flights(args: argparse.Namespace) -> int:
     """GET /api/flights — what is in the air (``--all``: landed too)."""
     base = client.discover(args.host, args.port)
@@ -2068,6 +2124,27 @@ def _cmd_flights(args: argparse.Namespace) -> int:
             rows, ["ID", "SAVED ROUTE", "SUBJECT", "SESSION", "STATE", "STOP"]
         )
     )
+    for f in items:
+        needs = _flight_needs(f)
+        if needs is None:
+            continue
+        why, actions = needs
+        fid = str(f.get("id") or "")
+        step = _flight_step(f)
+        print(
+            "\n%s %s%s: %s"
+            % (
+                fid,
+                (
+                    "is %s" % f.get("state")
+                    if f.get("state") in ("halted", "paused")
+                    else "needs you"
+                ),
+                " at %s" % (step.get("title") or step.get("id")) if step else "",
+                why,
+            )
+        )
+        print("  do: " + " · ".join(_flight_action(a, fid) for a in actions))
     return 0
 
 
@@ -2210,6 +2287,43 @@ def _cmd_flight(args: argparse.Namespace) -> int:
             % (fid, f.get("session") or "its session")
         )
         return 0
+    if cmd in ("pause", "resume"):
+        after = _flight_api(
+            lambda: client.post(
+                base, "/api/flights/%s/%s" % (_quote_title(fid), cmd), {}
+            )
+        )
+        g = (after or {}).get("flight") or {}
+        nxt = _flight_step(g)
+        print(
+            "%s %s — %s, at %s"
+            % (
+                "paused" if cmd == "pause" else "carrying on with",
+                fid,
+                g.get("state") or "?",
+                nxt.get("title") or "the end",
+            )
+        )
+        return 0
+    if cmd == "jump":
+        target = _flight_stop(f, args.step)
+        after = _flight_api(
+            lambda: client.post(
+                base,
+                "/api/flights/%s/jump" % _quote_title(fid),
+                {"step": str(target.get("id"))},
+            )
+        )
+        nxt = _flight_step((after or {}).get("flight") or {})
+        print(
+            "jumped %s to %s — now at %s"
+            % (
+                fid,
+                target.get("title") or target.get("id"),
+                nxt.get("title") or "the end",
+            )
+        )
+        return 0
     step = _flight_step(f)
     if not step:
         raise client.ClientError(
@@ -2228,13 +2342,39 @@ def _cmd_flight(args: argparse.Namespace) -> int:
     print(
         "%s %s on %s — now at %s"
         % (
-            "done:" if cmd == "done" else "skipped",
+            {"done": "done:", "retry": "running again:"}.get(cmd, "skipped"),
             step.get("title") or step.get("kind"),
             fid,
             nxt.get("title") or "the end",
         )
     )
     return 0
+
+
+def _flight_stop(f: dict, needle: str) -> dict:
+    """One of a route's stops by id (``s3``), number (``3``) or title (any
+    case, a unique prefix ok). Raises ``client.ClientError`` naming them."""
+    steps = [s for s in f.get("steps") or [] if isinstance(s, dict)]
+    want = str(needle or "").strip()
+    for s in steps:
+        if s.get("id") == want:
+            return s
+    if want.isdigit() and 1 <= int(want) <= len(steps):
+        return steps[int(want) - 1]
+    low = want.lower()
+    hits = [s for s in steps if str(s.get("title") or "").lower() == low] or [
+        s for s in steps if str(s.get("title") or "").lower().startswith(low)
+    ]
+    if len(hits) == 1:
+        return hits[0]
+    raise client.ClientError(
+        "%s has no stop %r — its stops: %s"
+        % (
+            f.get("id"),
+            needle,
+            ", ".join("%s %s" % (s.get("id"), s.get("title")) for s in steps),
+        )
+    )
 
 
 def _cmd_inbox(args: argparse.Namespace) -> int:
