@@ -277,7 +277,9 @@ def test_unknown_environment_fails_the_stop():
     f = started(fly(vstep(where="nowhere")))
     a = judge(f, {"env_missing": "nowhere"}, NOW)
     assert a["action"] == "fail"
-    assert a["reason"] == "no environment named nowhere in this repo"
+    assert a["reason"] == (
+        "no environment named nowhere in this repo — edit this stop's Where, or Skip"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -771,13 +773,17 @@ def test_env_missing_beats_the_write_deadline_and_the_failures():
     late = NOW + F.VERIFY_WRITE_DEADLINE_S + 60
     a = judge(f, {"env_missing": "nowhere"}, late)
     assert a["action"] == "fail"
-    assert a["reason"] == "no environment named nowhere in this repo"
+    assert a["reason"] == (
+        "no environment named nowhere in this repo — edit this stop's Where, or Skip"
+    )
     a = judge(
         f,
         facts(env_missing="nowhere", failed=["login works"], failed_at=NOW * 2),
         NOW,
     )
-    assert a["reason"] == "no environment named nowhere in this repo"
+    assert a["reason"] == (
+        "no environment named nowhere in this repo — edit this stop's Where, or Skip"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -808,8 +814,9 @@ def test_kinds_dto_passes_option_labels_through_for_verify_only():
     }
     assert by["who"]["option_labels"] == {
         "both": "Agent, then me",
-        "agent": "Agent only",
-        "you": "Only me",
+        "agent": "Agent only — it attempts every step itself and shows its "
+        "evidence; the route waits on you only if something ends blocked or failed",
+        "you": "Agent, then my sign-off",
     }
     with_labels = [
         (k["kind"], fld["name"])

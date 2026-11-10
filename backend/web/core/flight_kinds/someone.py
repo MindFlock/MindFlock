@@ -40,8 +40,14 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         raise _flights.PlanError(
             "the webhook starts with http:// or https://", where + ".webhook"
         )
+    who = _flights._text(raw.get("who"), 64)
+    if strict and not who and not webhook:
+        raise _flights.PlanError(
+            "an Ask someone stop needs who to ask (a peer's name) or a webhook",
+            where + ".who",
+        )
     return {
-        "who": _flights._text(raw.get("who"), 64),
+        "who": who,
         "text": _flights._text(raw.get("text"), 1000),
         "items": _flights._items(raw.get("items")),
         "webhook": webhook,
@@ -119,7 +125,9 @@ async def _run(flight, step, action, now) -> dict:
     who = str(cfg.get("who") or "")
     webhook = str(cfg.get("webhook") or "")
     if not who and not webhook:
-        raise StepFailed("nobody to ask")
+        raise StepFailed(
+            "nobody to ask — edit this stop to name a peer or a webhook, or Skip it"
+        )
     out = _ask(flight, step)
     items = out["detail"]["items"]
     token = _hooks.mint(flight["id"], step["id"], "someone", now)

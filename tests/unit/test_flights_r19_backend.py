@@ -148,7 +148,8 @@ def test_take_off_ready_on_a_session_starts_nothing(start_on):
 
 def test_now_is_the_default_and_flies_at_once():
     f = F.take_off(plan_of(AGENT, CMD), session="s", attach=True, now=NOW)
-    assert f["state"] == "running" and f["cursor"] == 1
+    # The Agent stop has a prompt: attached, it is sent (cursor on it).
+    assert f["state"] == "running" and f["cursor"] == 0
     assert (f["start_on"], f["ready_since"]) == ("now", 0.0)
     old = F._normalize_flight("f_old", {"id": "f_old", "steps": [CMD]})
     assert (old["start_on"], old["ready_since"]) == ("now", 0.0)

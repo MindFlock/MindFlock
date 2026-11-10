@@ -2,14 +2,15 @@
 
 ``method`` GET | POST | PUT to ``url`` with ``headers`` ("K: V" lines) and
 ``body`` (``fill_prompt`` placeholders plus ``{receipt}``: the previous flown
-stop's receipt); done when the response status starts with ``expect``
-(default "2"). The request runs on a thread (urllib, no new dependency) into
+stop's receipt); done when the response status meets ``expect`` (default
+"2": a digit prefix, ``2xx`` or a range ``200-299``). The request runs on a thread (urllib, no new dependency) into
 :data:`_JOBS`, which ``observe`` reads. Headers often carry a secret: the
 plan stores them as given (it is local) but nothing here ever logs them.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -52,9 +53,54 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         "url": url,
         "headers": _flights._text(raw.get("headers"), 4000),
         "body": _flights._text(raw.get("body")),
-        "expect": _flights._text(raw.get("expect"), 3) or "2",
+        "expect": _expect(raw.get("expect"), strict, where + ".expect"),
         "timeout_minutes": _flights._int(raw.get("timeout_minutes"), 5, 1, 60),
     }
+
+
+_EXPECT_PREFIX_RE = re.compile(r"^[1-5][0-9]{0,2}$")
+_EXPECT_XX_RE = re.compile(r"^([1-5][0-9]?)(x{1,2})$")
+_EXPECT_RANGE_RE = re.compile(r"^([1-5][0-9]{2})\s*-\s*([1-5][0-9]{2})$")
+
+
+def _expect(value, strict: bool, where: str) -> str:
+    """``expect`` in its stored spelling: a digit prefix ("2", "20", "201"),
+    ``Nxx`` ("2xx", "20x") or a range ("200-299"). Strict refuses anything
+    else; a stored unreadable one reads as "2" (any 2xx)."""
+    text = _flights._text(value, 20).lower().replace(" ", "")
+    if not text:
+        return "2"
+    m = _EXPECT_XX_RE.match(text)
+    if (
+        _EXPECT_PREFIX_RE.match(text)
+        or (m and len(m.group(1)) + len(m.group(2)) == 3)
+        or _expect_range(text)
+    ):
+        return text
+    if strict:
+        raise _flights.PlanError(
+            "expect on a Call stop is a status like 2, 2xx, 201 or 200-299 "
+            "(got %r)" % _flights._text(value, 20),
+            where,
+        )
+    return "2"
+
+
+def _expect_range(text: str) -> Optional[Tuple[int, int]]:
+    m = _EXPECT_RANGE_RE.match(text)
+    if not m:
+        return None
+    lo, hi = int(m.group(1)), int(m.group(2))
+    return (lo, hi) if lo <= hi else None
+
+
+def expect_matches(expect: str, status: int) -> bool:
+    """Does HTTP ``status`` meet ``expect`` (:func:`_expect`'s spellings)?"""
+    text = str(expect or "2").lower().replace(" ", "")
+    span = _expect_range(text)
+    if span is not None:
+        return span[0] <= status <= span[1]
+    return str(status).startswith(text.rstrip("x") or "2")
 
 
 def _host(url: str) -> str:
@@ -193,7 +239,7 @@ def _judge(flight, step, ss, obs, now) -> dict:
     status = int(job.get("status") or 0)
     tail = str(job.get("body") or "")
     detail = {"status": status, "body": tail}
-    if str(status).startswith(str(step["config"].get("expect") or "2")):
+    if expect_matches(str(step["config"].get("expect") or "2"), status):
         return {
             "action": "done",
             "note": "HTTP %d" % status,
@@ -233,7 +279,12 @@ register(
                     "Body ({branch}, {pr}, {ticket}, {subject}, {receipt})",
                     default="",
                 ),
-                _f("expect", "text", "Done when the status starts with", default="2"),
+                _f(
+                    "expect",
+                    "text",
+                    "Done when the status is (2, 2xx, 201 or 200-299)",
+                    default="2",
+                ),
                 _f("timeout_minutes", "int", "Give up after (minutes)", default=5),
             ],
         },
