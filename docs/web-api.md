@@ -546,8 +546,10 @@ prompt. A multi-line prompt is pasted as one bracketed paste, so it arrives
 as one turn.
 
 The 202 body is the usual session object, plus `prompt_delivery` (`seeded`:
-the CLI gets it at launch; `queued`: held in the prompt queue; `none`: no
-prompt), plus a `note` when the chosen account has no verified route for the
+the CLI gets it at launch; `queued`: held in the prompt queue; `held`: held
+until its turn in its orchestrator's order, with `order` — see [Worker
+order and fences](#worker-order-and-fences); `none`: no prompt), plus a `note`
+when the chosen account has no verified route for the
 chosen agent — the session will run on the CLI's
 own login, and the web UI warns about that at selection time while API and CLI
 callers would otherwise never hear it.
@@ -2524,9 +2526,19 @@ what each may change, and in what order they run. MindFlock enforces both.
 `POST /api/instances` takes `after: [title]` (hold the task until those are
 done; needs `parent`), `fence: {only, keep_out, reason}` and `overlap:
 "wait"|"parallel"`. An ordered create answers `prompt_delivery: "held"` and
-`order: {held, after, why, fence}`: the session is created, its task waits in
-its prompt queue (switched off and marked `held`, so a queued message never
-switches it on) until its turn. `run_member: true` (set by team runs on their
+`order: {held, after, why, fence, agent_deferred?}`: the session is created,
+its task waits in its prompt queue (switched off and marked `held`, so a
+queued message never switches it on) until its turn. A worker's (`parent`)
+**agent waits too** (`agent_deferred: true`): its worktree, branch and fence
+are made, the session reads `running` once they are, but no agent CLI runs —
+no tmux, no memory — and its `activity` reads `offline` (it is not a crash:
+nothing revives or holds it, and it is not counted as a warming agent). On
+its turn MindFlock starts the agent through the launch gate as an automatic
+start (kind `worker turn`: while memory is short it waits in the gate's
+queue and the row carries `waiting_for_memory`), then switches the queue on
+so the task is typed in once the agent is idle. A person's Start (`POST
+/revive`) runs it early, as a fresh conversation; its task still waits for
+its turn. `run_member: true` (set by team runs on their
 own members) opts out. Each row carries `order: {state, word, detail, after,
 fence}` for an ordered worker, else `null`; `code-map/live` adds the session's
 own fence to `zones` (scope `session`, `locked`, `by`) and lists its workers'

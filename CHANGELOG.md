@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A held worker starts its agent only when its turn comes.** An
+  orchestrator's serial chain (`spawn_session` with `after=[…]`, overlapping
+  fences, one or N at a time) used to start every worker's agent CLI at once,
+  each then sitting at an empty prompt (~230 MB) until its turn. Now a held
+  worker's session is made at once — worktree, branch, fence, queued task —
+  but no agent runs (no tmux, no memory) until the order releases it. On
+  release MindFlock fast-forwards its branch, starts its agent through the
+  launch gate as an automatic start (it waits in the gate's queue while
+  memory is short), and the queue types the task in once the agent is idle.
+  Its row still reads *waiting · after …*; nothing revives it or holds it
+  "offline after a crash", since it never ran. A person can still press
+  Start to run it early; its task waits for its turn either way. The create
+  answers `order.agent_deferred: true`.
+
 ## [0.14.3] - 2026-11-10
 
 ### Changed

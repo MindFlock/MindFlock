@@ -4,8 +4,10 @@ An orchestrator agent (any session that spawns workers through the MindFlock
 MCP) can say *in what order* its workers run, and MindFlock enforces it — the
 agent never has to remember to wait:
 
-* **after** — a worker is created at once (its worktree, its fence, its agent)
-  but its task is **held** until every session it runs after has finished.
+* **after** — a worker is created at once (its worktree, its branch, its
+  fence) but its task is **held** until every session it runs after has
+  finished, and its agent CLI starts only then: a held worker runs no agent
+  and uses no memory while it waits.
 * **one at a time / N at a time** — the orchestrator's ``mode``: ``serial``
   runs its workers one at a time, each after the one spawned before it;
   ``parallel`` runs them together, at most ``max_parallel`` at a time when
@@ -19,9 +21,11 @@ agent never has to remember to wait:
 
 A held worker's task waits in its own prompt queue with the queue switched
 off, so it is visible (and the user can start it by hand from the Queue tab);
-release switches the queue on and the ordinary drain types it in once the
-agent is idle. That is the whole delivery mechanism — nothing new types into
-a terminal.
+release starts the worker's agent (through the launch gate, as an automatic
+start), switches the queue on, and the ordinary drain types the task in once
+the agent is idle. That is the whole delivery mechanism — nothing new types
+into a terminal. A person can Start a held worker's agent early; its task
+still waits for its turn.
 
 What "finished" means, per worker:
 
