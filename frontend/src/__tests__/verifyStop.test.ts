@@ -49,7 +49,7 @@ describe("the stop's face: Verify on <where> · <who> · <ready>", () => {
   it("every who", () => {
     expect(face({ who: "both" })).toBe("Verify on this branch · agent, then you · right away");
     expect(face({ who: "agent" })).toBe("Verify on this branch · agent only · right away");
-    expect(face({ who: "you" })).toBe("Verify on this branch · you · right away");
+    expect(face({ who: "you" })).toBe("Verify on this branch · agent, then your sign-off · right away");
     expect(face({ who: "nonsense" })).toBe("Verify on this branch · agent, then you · right away");
   });
 
@@ -78,11 +78,11 @@ describe("the stop's face: Verify on <where> · <who> · <ready>", () => {
   it("the diagram's subtitle is the face, reading the environments the query remembered", () => {
     V.rememberEnvironments(ENVS);
     try {
-      expect(stopSummary({ kind: "verify", config: { where: "live", ready: "on_branch", who: "you" } })).toBe("Verify on live · you · once on release");
+      expect(stopSummary({ kind: "verify", config: { where: "live", ready: "on_branch", who: "you" } })).toBe("Verify on live · agent, then your sign-off · once on release");
     } finally {
       V.rememberEnvironments(null);
     }
-    expect(stopSummary({ kind: "verify", config: { where: "live", ready: "on_branch", who: "you" } })).toBe("Verify on live · you · once on live");
+    expect(stopSummary({ kind: "verify", config: { where: "live", ready: "on_branch", who: "you" } })).toBe("Verify on live · agent, then your sign-off · once on live");
   });
 });
 
@@ -213,29 +213,40 @@ describe("the Verify stop's editor", () => {
     expect(isVerifyEditor("ship", VERIFY)).toBe(false);
   });
 
-  it("an explainer of three numbered lines, naming where", () => {
+  it("an explainer of three numbered lines: its agent's own steps, where and when, what waits on you", () => {
     const html = form({ where: "sandbox" });
     expect(html).toContain('class="vf-explain fl-fld-wide"');
-    expect(html).toContain("behaviors are written from the branch&#x27;s changes");
-    expect(html).toContain("the agent checks its ones on sandbox");
-    expect(html).toContain("yours park the route here (a perch)");
-    expect(verifySteps({ where: "branch", who: "agent" })).toEqual(["behaviors are written from the branch's changes", "the agent walks every one on this branch's code, yours too", "it asks you only for what it can't do — the route goes on"]);
-    expect(verifySteps({ where: "live", who: "you" })[1]).toBe("you check every one on live");
+    expect(html).toContain("Its agent comes up with its own steps from what it built, runs them, and shows evidence for each.");
+    expect(html).toContain("It runs against sandbox — the deployed environment of that name in this repo&#x27;s Verify settings — as soon as the route gets here.");
+    expect(html).toContain("The route waits on you for the steps only a person can do; when every step passes it goes on.");
+    expect(verifySteps({ where: "branch", who: "agent" })).toEqual([
+      "Its agent comes up with its own steps from what it built, runs them, and shows evidence for each.",
+      "It runs on this branch's code — a fresh checkout, nothing deployed — as soon as the route gets here.",
+      "The route goes on by itself when every step passes; it waits on you only if something ends blocked or failed.",
+    ]);
+    expect(verifySteps({ where: "live", who: "you" })[2]).toBe("The route always waits for you to confirm, even when every step passes.");
+    expect(verifySteps({ where: "live", who: "both", ready: "on_branch", ready_minutes: 0 }, ENVS)[1]).toContain("once the work reaches release and live's deploy time has passed");
+    // The old design's words are gone.
+    expect(html).not.toMatch(/behavior|checklist|checker/i);
   });
 
   it("who checks: three choices, each with its one line, Agent, then me by default", () => {
     const html = form({});
     expect(html).toMatch(/role="radio" aria-checked="true" class="vf-who-opt on" data-value="both"><strong>Agent, then me<\/strong>/);
-    expect(html).toContain("The agent checks what it can; the ones only a person can check park the route here for you.");
-    expect(html).toContain("<strong>Agent only</strong><span class=\"muted\">The agent walks every behavior, yours too — it asks you only for what it can&#x27;t do.</span>");
-    expect(html).toContain("<strong>Only me</strong><span class=\"muted\">Every check waits for you.</span>");
+    expect(html).toContain("<strong>Agent, then me</strong><span class=\"muted\">The agent does its steps; the route waits on you for the ones only a person can do.</span>");
+    expect(html).toContain("<strong>Agent only</strong><span class=\"muted\">The agent attempts every step itself and shows its evidence; the route waits on you only if something ends blocked or failed.</span>");
+    expect(html).toContain("<strong>Agent, then my sign-off</strong><span class=\"muted\">The agent verifies, then the route always waits for you to confirm.</span>");
+    // The ids stay.
+    expect(V.WHO_CHOICES.map((c) => c.value)).toEqual(["both", "agent", "you"]);
   });
 
-  it("where: this branch's code, the environments, Other…; ready without on_branch on this branch; Minutes hidden for now", () => {
+  it("where: this branch's code and the environments, no free text; ready without on_branch on this branch; Minutes hidden for now", () => {
     queryClient.setQueryData(["test-plan-environments"], ENVS);
     try {
       const html = form({ where: "branch" });
-      for (const label of ["This branch&#x27;s code", ">live<", ">sandbox<", ">staging<", "Other…"]) expect(html).toContain(label);
+      for (const label of ["This branch&#x27;s code", ">live<", ">sandbox<", ">staging<"]) expect(html).toContain(label);
+      expect(html).not.toContain("Other…");
+      expect(html).not.toContain('placeholder="an environment&#x27;s name"');
       expect(html).not.toContain("When it reaches the environment&#x27;s branch");
       expect(html).not.toContain('aria-label="Minutes (min)"');
       const env = form({ where: "staging", ready: "on_branch" });
@@ -258,7 +269,8 @@ describe("the Verify stop's editor", () => {
 
   it("a legacy wait_live config opens on live, when it reaches the branch", () => {
     const html = form({ who: "agent", wait_live: true });
-    expect(html).toContain("the agent walks every one on live, yours too");
+    expect(html).toContain("It runs against live");
+    expect(html).toContain("The route goes on by itself when every step passes");
     expect(html).toMatch(/class="on" aria-pressed="true">When it reaches the environment&#x27;s branch/);
   });
 });
@@ -310,7 +322,7 @@ describe("the server's option_labels", () => {
     expect(optionLabel(undefined, "x", "fallback")).toBe("fallback");
   });
 
-  it("the Verify editor's Ready and Who choices wear them", () => {
+  it("the Verify editor's Ready choices wear them; Who keeps the UI's own words (an older server still says “Only me”)", () => {
     const def: StepKindDef = {
       ...VERIFY,
       fields: VERIFY.fields.map((f) =>
@@ -319,7 +331,8 @@ describe("the server's option_labels", () => {
     };
     const html = form({}, def);
     expect(html).toContain(">Straight away<");
-    expect(html).toContain("<strong>Just me</strong>");
+    expect(html).not.toContain("Just me");
+    expect(html).toContain("<strong>Agent, then my sign-off</strong>");
     expect(html).toContain("<strong>Agent, then me</strong>");
   });
 });
