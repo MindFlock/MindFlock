@@ -24342,7 +24342,7 @@ function isParallelSafe(kind, kinds) {
 function isLive(f) {
 	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
 }
-function isShown(f) {
+function isShown$1(f) {
 	return isLive(f) || f.state === "ready";
 }
 function flightDrives(f) {
@@ -24394,10 +24394,43 @@ function stripDots(f) {
 	for (let i = 0; i < total; i++) out += i <= f.cursor ? i === f.cursor && f.step?.state === "failed" ? "✗" : "●" : "○";
 	return out;
 }
+function haltedWhy(stopTitle, reason) {
+	const r = String(reason || "").trim();
+	const t = String(stopTitle || "").trim();
+	if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
+		const rest = r.slice(t.length).trim();
+		return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
+	}
+	return r;
+}
+var short = (s, n = 48) => {
+	const t = s.replace(/\s+/g, " ").trim();
+	return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+};
+function waitsFor(f, title) {
+	let what = "";
+	if ("steps" in f) {
+		const cur = f.steps[f.cursor];
+		const ss = cur ? f.step_states?.[cur.id] : void 0;
+		const failed = String(ss?.detail?.failed_reason ?? "").trim();
+		what = failed ? "Failed: " + failed : youText(f);
+	} else what = String(f.reason ?? "");
+	what = short(haltedWhy(title, what));
+	return what.toLowerCase() === title.trim().toLowerCase() ? "" : what;
+}
 function stripLabel(f, now = Date.now()) {
 	const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
 	const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-	const tail = f.state === "done" ? "Finished" : f.state === "cancelled" ? "Cancelled" : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
+	let lead = "";
+	if (f.state === "paused") lead = "Paused · ";
+	else if (f.state === "halted") {
+		const why = short(haltedWhy(title, String(f.reason ?? "")));
+		lead = "Halted · " + (why ? why + " · " : "");
+	} else if (f.state === "waiting_you") {
+		const what = waitsFor(f, title);
+		lead = "Needs you · " + (what ? what + " · " : "");
+	}
+	const tail = f.state === "done" ? "Finished" : f.state === "cancelled" ? "Cancelled" : lead + title + (elapsed ? " (" + elapsed + ")" : "");
 	return [
 		f.plan_name,
 		stripDots(f),
@@ -25305,8 +25338,13 @@ var REASON_LABEL = {
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
 	setup_failed: "Setup failed",
-	stuck: "Idle"
+	stuck: "Idle",
+	verify_confirm: "Confirm verified",
+	verify_failed: "Verify failed",
+	verify_blocked: "Verify blocked"
 };
+var VERIFYING_LABEL = "Verifying";
+var VERIFIED_LABEL = "Verified";
 var NOTIFY_RULE = {
 	question: "needs_input",
 	flight_you: "flight_needs_you",
@@ -25315,6 +25353,9 @@ var NOTIFY_RULE = {
 	setup_failed: "setup_failed",
 	checks_failing: "checks_failing",
 	stuck: "",
+	verify_confirm: "verify_needs_you",
+	verify_failed: "verify_failed",
+	verify_blocked: "verify_failed",
 	offline: "session_offline"
 };
 function notifyRuleFor(ss) {
@@ -25360,15 +25401,6 @@ function needsYou(reason, hint) {
 function flightYouLabel(stepTitle) {
 	return perchLabel(stepTitle);
 }
-function haltedWhy(stopTitle, reason) {
-	const r = String(reason || "").trim();
-	const t = String(stopTitle || "").trim();
-	if (t && r.toLowerCase().startsWith(t.toLowerCase() + " ")) {
-		const rest = r.slice(t.length).trim();
-		return rest ? rest[0].toUpperCase() + rest.slice(1) : r;
-	}
-	return r;
-}
 function haltedHint(fl) {
 	const at = String(fl.step?.title || "").trim();
 	const why = haltedWhy(at, fl.reason);
@@ -25411,6 +25443,97 @@ function sleepingState(info, now) {
 		restartable: false,
 		hint
 	};
+}
+function verifyOf(inst) {
+	const v = inst.verify;
+	return v && typeof v === "object" && typeof v.state === "string" ? v : null;
+}
+function verifyProgress(v) {
+	const total = Number(v.steps?.total) || 0;
+	const human = Number(v.steps?.human) || 0;
+	const done = Number(v.steps?.agent_done) || 0;
+	const mine = Math.max(0, total - human);
+	if (!total) return "writing its steps";
+	if (!mine) return "every step needs a person";
+	return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
+}
+function verifyStepLines(steps) {
+	return steps.map((s) => {
+		const tail = String(s.expect || s.note || "").trim();
+		return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+	}).join("\n");
+}
+function verifyWord(state) {
+	switch (state) {
+		case "verifying": return VERIFYING_LABEL;
+		case "needs_you": return REASON_LABEL.verify_confirm;
+		case "failed": return REASON_LABEL.verify_failed;
+		case "blocked": return REASON_LABEL.verify_blocked;
+		case "passed": return VERIFIED_LABEL;
+	}
+	return "";
+}
+function verifyGlyph(state) {
+	switch (state) {
+		case "verifying": return "…";
+		case "needs_you": return "?";
+		case "failed": return "✗";
+		case "blocked": return "!";
+		case "passed": return "✓";
+	}
+	return "";
+}
+function signOffOnly(v) {
+	return !(v.human_steps || []).length && !(Number(v.steps?.human) || 0);
+}
+function verifyHint(v) {
+	const human = Number(v.steps?.human) || 0;
+	switch (v.state) {
+		case "verifying": return "Checking its work: " + verifyProgress(v) + (human ? " · " + human + (human === 1 ? " step needs" : " steps need") + " a person after" : "");
+		case "needs_you": {
+			if (signOffOnly(v)) {
+				const said = String(v.detail || "").trim();
+				return "The agent did its steps" + (said ? " — " + said : "") + ". Press Confirm verified once you're sure it works (or Not verified…)";
+			}
+			const list = verifyStepLines(v.human_steps || []);
+			return "The agent checked what it can. Do " + (((v.human_steps || []).length || human) === 1 ? "this step" : "these steps") + ", then press Confirm verified (or Not verified…):" + (list ? "\n" + list : "");
+		}
+		case "failed": {
+			const list = verifyStepLines(v.failed_steps || []);
+			return "Verify failed" + (list ? ":\n" + list : v.detail ? " — " + v.detail : "");
+		}
+		case "blocked": return "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") + ". Open the session to see why";
+		case "passed": return "Verified" + (v.detail ? " — " + v.detail : "");
+	}
+	return "";
+}
+function verifyLine(v) {
+	const detail = String(v.detail || "").trim();
+	switch (v.state) {
+		case "verifying": return "Verifying — " + verifyProgress(v);
+		case "needs_you":
+			if (signOffOnly(v)) return REASON_LABEL.verify_confirm + " — " + (detail || "the agent did its steps; confirm it works");
+			return REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm";
+		case "failed": {
+			const n = (v.failed_steps || []).length;
+			return REASON_LABEL.verify_failed + (n ? " — " + n + (n === 1 ? " step" : " steps") : detail ? " — " + detail : "");
+		}
+		case "blocked": return REASON_LABEL.verify_blocked + (detail ? " — " + detail : "");
+		case "passed": return VERIFIED_LABEL + (detail ? " — " + detail : "");
+	}
+	return "";
+}
+function verifyNeedsYou(v) {
+	if (v.state === "needs_you") return needsYou("verify_confirm", verifyHint(v));
+	if (v.state === "failed") return {
+		...needsYou("verify_failed", verifyHint(v)),
+		tone: "broken"
+	};
+	if (v.state === "blocked") return {
+		...needsYou("verify_blocked", verifyHint(v)),
+		tone: "broken"
+	};
+	return null;
 }
 function deriveSessionState(inst, extras) {
 	const now = extras?.now ?? Date.now();
@@ -25475,6 +25598,15 @@ function deriveSessionState(inst, extras) {
 	};
 	if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
 	const bgHint = backgroundHint(inst);
+	const verify = verifyOf(inst);
+	if (verify?.state === "verifying" && act !== "limit" && act !== "offline") return {
+		state: "working",
+		label: VERIFYING_LABEL,
+		tone: "verifying",
+		inBell: false,
+		restartable: false,
+		hint: verifyHint(verify)
+	};
 	if (act === "working") return {
 		state: "working",
 		label: STATE_LABEL.working,
@@ -25515,6 +25647,8 @@ function deriveSessionState(inst, extras) {
 			hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
 		};
 	}
+	const verifyYou = verify && verifyNeedsYou(verify);
+	if (verifyYou) return verifyYou;
 	if (askedInWords(inst)) return needsYou("question", "The agent asked you a question in its reply — answer it from the pop-up, the bell or its pane");
 	if (inst.stage === "interrupt") {
 		const step = (inst.failed_step || "").trim();
@@ -25527,7 +25661,15 @@ function deriveSessionState(inst, extras) {
 		tone: "neutral",
 		inBell: false,
 		restartable: false,
-		hint: "Route “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current stop") + " — Resume it from its strip's ⋯"
+		hint: "Route “" + inst.flight.plan_name + "” " + (inst.flight.reason === "halt point" ? "reached its halt point at " : "is paused at ") + (inst.flight.step?.title || "its current stop") + " — Carry on from its strip or its stop on the Sky"
+	};
+	if (verify?.state === "passed") return {
+		state: "idle",
+		label: VERIFIED_LABEL,
+		tone: "verified",
+		inBell: false,
+		restartable: false,
+		hint: verifyHint(verify)
 	};
 	const since = Number(inst.activity_since) || 0;
 	const idleFor = since > 0 ? now / 1e3 - since : 0;
@@ -25571,6 +25713,18 @@ function needsYouAction(ss, prUrl) {
 		case "setup_failed": return {
 			act: "setup",
 			aria: "Setup failed — re-run worktree setup"
+		};
+		case "verify_confirm": return {
+			act: "verify",
+			aria: "Confirm verified — open the session to confirm"
+		};
+		case "verify_failed": return {
+			act: "verify",
+			aria: "Verify failed — open the session to see what failed"
+		};
+		case "verify_blocked": return {
+			act: "verify",
+			aria: "Verify blocked — open the session to see why"
 		};
 		case "checks_failing": return prUrl ? {
 			act: "pr",
@@ -26230,6 +26384,13 @@ function askedQuestion(inst) {
 	if (!a || a.kind !== "question" || effectiveActivity(inst) === "clarify") return void 0;
 	return String(a.text || "");
 }
+function verifySnippet(inst) {
+	const v = verifyOf(inst);
+	if (!v) return void 0;
+	if (v.state === "needs_you") return (v.human_steps || []).map((s) => s.text).join(" · ") || void 0;
+	if (v.state === "failed") return (v.failed_steps || []).map((s) => s.text).join(" · ") || v.detail || void 0;
+	if (v.state === "blocked") return v.detail || void 0;
+}
 function attentionItems(instances) {
 	const items = [];
 	for (const inst of instances || []) {
@@ -26241,7 +26402,7 @@ function attentionItems(instances) {
 				p: attentionPriority(ss),
 				title: inst.title,
 				reason: attentionReason(ss) + (step ? " at " + step : ""),
-				snippet: ss.reason === "question" || ss.reason === "stuck" ? askedQuestion(inst) ?? (inst.last_turn || "") : void 0,
+				snippet: ss.reason === "question" || ss.reason === "stuck" ? askedQuestion(inst) ?? (inst.last_turn || "") : verifySnippet(inst),
 				question: ss.reason === "question" ? askedQuestion(inst) : void 0
 			});
 		} else if (ss.state === "idle" && inst.stage === "pushed") {
@@ -28044,24 +28205,58 @@ var WHO_CHOICES = [
 	{
 		value: "both",
 		label: "Agent, then me",
-		explain: "The agent checks what it can; the ones only a person can check park the route here for you."
+		explain: "The agent does its steps; the route waits on you for the ones only a person can do."
 	},
 	{
 		value: "agent",
 		label: "Agent only",
-		explain: "The agent walks every behavior, yours too — it asks you only for what it can't do."
+		explain: "The agent attempts every step itself and shows its evidence; the route waits on you only if something ends blocked or failed."
 	},
 	{
 		value: "you",
-		label: "Only me",
-		explain: "Every check waits for you."
+		label: "Agent, then my sign-off",
+		explain: "The agent verifies, then the route always waits for you to confirm."
 	}
 ];
 var VERIFY_FACE_WHO = {
 	both: "agent, then you",
 	agent: "agent only",
-	you: "you"
+	you: "agent, then your sign-off"
 };
+var FIX_ROUNDS = 2;
+function verifyWhenWords(v, envs = known$1) {
+	const onBranch = v.where === WHERE_BRANCH;
+	const mins = Math.max(0, v.ready_minutes || 0);
+	if (v.ready === "on_branch" && !onBranch) {
+		const b = envBranch(v.where, envs);
+		return "once the work reaches " + (b ? b : v.where + "'s branch") + (mins > 0 ? " and " + durationWords(mins) + " more" : " and " + v.where + "'s deploy time has passed");
+	}
+	if (v.ready === "after_prev") {
+		if (mins > 0) return durationWords(mins) + " after the stop before";
+		return onBranch ? "as soon as the route gets here" : v.where + "'s deploy time after the stop before";
+	}
+	return "as soon as the route gets here";
+}
+function durationWords(minutes) {
+	const m = Math.max(0, Math.trunc(minutes));
+	if (m < 60) return m + " min";
+	const h = Math.floor(m / 60);
+	const r = m % 60;
+	return h + " h" + (r ? " " + r + " min" : "");
+}
+var VERIFY_ON_FAIL = {
+	halt: "the route halts here, red, with the failed steps — you Retry, Skip or Let the agent fix it",
+	agent: "the failed steps and their evidence go back to the session's agent, then it verifies again (up to 2 rounds, then the route halts)",
+	skip: "the route goes on as if this stop was not there",
+	you: "the route waits on you, amber, showing the failed steps"
+};
+function verifySentence(c, onFail = "halt", envs = known$1) {
+	const v = verifyConfig(c);
+	const where = v.where === WHERE_BRANCH ? "this branch" : v.where;
+	const who = v.who === "agent" ? "it does every step itself, a person's too, and goes on without you when they pass" : v.who === "you" ? "then the route waits for your sign-off, even when every step passes" : "you confirm the steps only a person can do";
+	const fail = onFail === "agent" ? "a failure goes back to the agent, up to 2 rounds" : onFail === "skip" ? "a failure is ignored and the route goes on" : onFail === "you" ? "a failure waits on you" : "a failure halts the route";
+	return "Its agent verifies on " + where + " " + verifyWhenWords(v, envs) + "; " + who + "; " + fail + (v.post_to_pr ? "; the results go on the PR" : "") + ".";
+}
 var known$1 = null;
 function rememberEnvironments(r) {
 	known$1 = r && typeof r === "object" ? {
@@ -28116,7 +28311,7 @@ function envTitle(name, envs) {
 		const e = (list || []).find((x) => x.name === name);
 		if (!e) continue;
 		const bits = [
-			e.reach?.trim() ? clip$8(e.reach.trim(), 60) : "",
+			e.reach?.trim() ? clip$7(e.reach.trim(), 60) : "",
 			e.branch ? "deploys from " + e.branch : "",
 			e.deploy_minutes ? e.deploy_minutes + " min to deploy" : ""
 		].filter(Boolean);
@@ -28124,7 +28319,7 @@ function envTitle(name, envs) {
 	}
 	return lines.join("\n");
 }
-var clip$8 = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var clip$7 = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 var ENV_NAME_RE = /^[a-z0-9_-]+$/;
 function envNameError(name, others = []) {
 	const n = name.trim();
@@ -28767,7 +28962,7 @@ function bridgeTestPlanEvents() {
 		if (!isVerifySession(session) && !session.startsWith("fix-")) return;
 		refreshTestPlans();
 		const data = env?.data || {};
-		errorPop(isVerifySession(session) ? "The verify session couldn't start" : "The session to fix it couldn't start", String(data.error || "no reason recorded"));
+		errorPop(isVerifySession(session) ? "Verify couldn't start." : "The session to fix it couldn't start", String(data.error || "no reason recorded"));
 	});
 	ev.subscribe("session.test_plan_gave_up", (env) => say(env, (d) => "Gave up on the verify run for " + String(d.title || d.plan || "these behaviors") + " — " + String(d.run_session || "the session") + " never wrote its answers. Press Check now to try again."));
 	ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
@@ -29199,6 +29394,78 @@ function controlNotice(frame) {
 	if (j.type === "driver") return { notice: null };
 	return null;
 }
+function repaintTerm(term, fit) {
+	if (!term) return false;
+	try {
+		fit?.();
+	} catch {}
+	try {
+		const rows = term.rows;
+		if (!(rows > 0)) return false;
+		term.refresh(0, rows - 1);
+		return true;
+	} catch {
+		return false;
+	}
+}
+function isShown(el) {
+	return !!el && el.clientWidth > 0 && el.clientHeight > 0 && el.offsetParent !== null;
+}
+var tracked = /* @__PURE__ */ new Set();
+function trackRepaint(r) {
+	tracked.add(r);
+	return () => {
+		tracked.delete(r);
+	};
+}
+function repaintShown(items = tracked) {
+	let n = 0;
+	for (const r of items) try {
+		if (!r.shown()) continue;
+		r.repaint();
+		n++;
+	} catch {}
+	return n;
+}
+var REPAINT_EVENT = "mindflock:repaint";
+var REPAINT_SETTLE_MS = 300;
+function installRepaintTriggers(win, doc, run = () => {
+	repaintShown();
+}, schedule = {
+	frame: (fn) => requestAnimationFrame(() => fn()),
+	later: (fn, ms) => setTimeout(fn, ms),
+	cancel: (t) => clearTimeout(t)
+}) {
+	let queued = false;
+	let settle;
+	const trigger = () => {
+		if (doc.hidden) return;
+		if (!queued) {
+			queued = true;
+			schedule.frame(() => {
+				queued = false;
+				run();
+			});
+		}
+		if (settle !== void 0) schedule.cancel(settle);
+		settle = schedule.later(() => {
+			settle = void 0;
+			run();
+		}, REPAINT_SETTLE_MS);
+	};
+	const winEvents = [
+		"focus",
+		"pageshow",
+		REPAINT_EVENT
+	];
+	for (const e of winEvents) win.addEventListener(e, trigger);
+	doc.addEventListener("visibilitychange", trigger);
+	return () => {
+		for (const e of winEvents) win.removeEventListener(e, trigger);
+		doc.removeEventListener("visibilitychange", trigger);
+		if (settle !== void 0) schedule.cancel(settle);
+	};
+}
 function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 	const [state, setState] = (0, import_react.useState)("connecting");
 	(0, import_react.useEffect)(() => {
@@ -29285,12 +29552,20 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 		if (interactive) term.onData((d) => {
 			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
 		});
-		const obs = new ResizeObserver(() => doFit(true));
+		const obs = new ResizeObserver(() => {
+			doFit(true);
+			repaintTerm(term);
+		});
 		obs.observe(host);
 		const t = setTimeout(() => doFit(true), 50);
+		const untrack = trackRepaint({
+			shown: () => isShown(host),
+			repaint: () => repaintTerm(term, () => doFit(true))
+		});
 		connect();
 		return () => {
 			dead = true;
+			untrack();
 			clearTimeout(t);
 			if (timer) clearTimeout(timer);
 			obs.disconnect();
@@ -31485,85 +31760,34 @@ function cantCheckCount(plan) {
 }
 function isWaitingOnYou(plan) {
 	if (plan.state === "running" || plan.state === "generating") return false;
-	if (isEmptyByChoice(plan)) return true;
 	if (isConfigBlocked(plan)) return true;
 	return plan.state === "due" || needsConfirmation(plan);
 }
 function isConfigBlocked(plan) {
 	return !!plan.live_problem && plan.state === "generated" && !plan.live_at && !plan.merged_at && (plan.steps || []).length > 0 && !latestRun(plan);
 }
+function isSelfRun(run) {
+	return !!run?.self;
+}
+function isSelfBlocked(plan) {
+	if (plan.state === "running" || plan.state === "generating") return false;
+	return !(plan.steps || []).length && isSelfRun(latestRun(plan));
+}
 function isEmptyByChoice(plan) {
-	return plan.origin === "manual" && !(plan.steps || []).length && plan.state !== "generating" && plan.state !== "failed";
+	return plan.origin === "manual" && !(plan.steps || []).length && plan.state !== "generating" && plan.state !== "failed" && !isSelfBlocked(plan) && !(plan.state === "running" && isSelfRun(latestRun(plan)));
 }
 function isFailing(plan) {
 	if (plan.state === "running" || plan.state === "generating") return false;
 	if (!(plan.steps || []).length) return false;
 	return verdictOf$1(plan) === "fail";
 }
-function isUnwritten(plan) {
-	if (plan.state === "running") return false;
-	if (plan.state === "generating") return isGenerationStalled(plan);
-	return !(plan.steps || []).length && !isEmptyByChoice(plan);
-}
 function isNoCommits(plan) {
 	const text = String(plan?.error || "").toLowerCase();
 	return text.includes("this branch has no commits") || text.includes("this branch changed nothing");
 }
-function coverageKey(repo, branch) {
-	const r = (repo || "").trim();
-	const b = (branch || "").trim();
-	return r && b ? r + "\0" + b : "";
-}
 function repoName$1(repoRoot) {
 	const parts = (repoRoot || "").replace(/[/\\]+$/, "").split(/[/\\]/);
 	return parts[parts.length - 1] || "";
-}
-function checklistTargets(instances, plans, closed = [], liveBranch = "") {
-	const byTitle = new Map((plans || []).map((p) => [p.id, p]));
-	const byBranch = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) {
-		const key = coverageKey(repoName$1(plan.repo_root), plan.branch);
-		if (key && !byBranch.has(key)) byBranch.set(key, plan);
-	}
-	const plansByBranchOnly = /* @__PURE__ */ new Map();
-	for (const plan of plans || []) if (plan.branch && !plansByBranchOnly.has(plan.branch)) plansByBranchOnly.set(plan.branch, plan);
-	const shipsFrom = new Set([
-		liveBranch,
-		"main",
-		"master"
-	].map((b) => (b || "").trim()).filter(Boolean));
-	const out = [];
-	const seen = /* @__PURE__ */ new Set();
-	const take = (title, branch, repo, isClosed, empty = false) => {
-		const b = (branch || "").trim();
-		if (!title || !b || seen.has(title)) return;
-		seen.add(title);
-		const covering = byTitle.get(title) || (repo ? byBranch.get(coverageKey(repo, b)) : plansByBranchOnly.get(b));
-		const onLive = shipsFrom.has(b);
-		const noCommits = !covering && !onLive && empty;
-		const reason = covering ? "has behaviors" : onLive ? "on " + b + " — nothing to compare" : noCommits ? "no commits yet" : "";
-		out.push({
-			title,
-			branch: b,
-			closed: isClosed,
-			reason,
-			planId: covering?.id || "",
-			noCommits
-		});
-	};
-	const live = new Set((instances || []).map((i) => i.title));
-	for (const inst of instances || []) take(inst.title, inst.branch, inst.repo, false, !!inst.diff_stat && inst.diff_stat.files === 0);
-	for (const entry of closed || []) take(entry.title, entry.branch, "", !live.has(entry.title));
-	return [...out.filter((t) => !t.reason), ...out.filter((t) => !!t.reason)];
-}
-function planGroup(plan) {
-	if (isFailing(plan)) return "fail";
-	if (isWaitingOnYou(plan)) return "due";
-	if (isUnwritten(plan)) return "failed";
-	if (plan.state === "running" || plan.state === "generating") return "generated";
-	if (verdictOf$1(plan) === "pass") return "done";
-	if (latestRun(plan)) return "partial";
-	return "generated";
 }
 var GENERATION_STALE_S = 300;
 function isGenerationStalled(plan, now = Date.now() / 1e3) {
@@ -31574,13 +31798,6 @@ var GENERATION_SLOW_S = 180;
 function isGenerationSlow(plan, now = Date.now() / 1e3) {
 	if (!plan || plan.state !== "generating" || !plan.gen_started) return false;
 	return now - plan.gen_started >= GENERATION_SLOW_S;
-}
-function runElapsed(run, now = Date.now() / 1e3) {
-	const at = Number(run?.at || 0);
-	if (!at) return "";
-	const mins = Math.round((now - at) / 60);
-	if (mins < 1 || mins > 1440) return "";
-	return " (" + agoText(at, now).replace(" ago", "") + " so far)";
 }
 function agoText(epochSeconds, now = Date.now() / 1e3) {
 	const mins = Math.max(0, Math.round((now - (epochSeconds || 0)) / 60));
@@ -31603,87 +31820,6 @@ function errorHeadline(plan) {
 	const cased = first.charAt(0).toUpperCase() + first.slice(1);
 	return /[.!?…]$/.test(cased) ? cased : cased + ".";
 }
-function planStatus(plan, liveBranch = "") {
-	const status = planStatusOf(plan, liveBranch);
-	const headline = errorHeadline(plan);
-	if (!headline || plan.state === "failed" || plan.state === "generating" || !(plan.steps || []).length) return status;
-	return {
-		...status,
-		line: status.line + " " + headline
-	};
-}
-function planStatusOf(plan, liveBranch = "") {
-	const group = planGroup(plan);
-	const steps = plan.steps || [];
-	const run = latestRun(plan);
-	const agentCan = steps.filter((s) => s.actor !== "human").length;
-	const again = () => agentCan ? ["rerun", "Check now"] : ["answer", "Show steps"];
-	const at = (tone, line, action, actionLabel = "") => ({
-		group,
-		tone,
-		line,
-		action,
-		actionLabel
-	});
-	if (plan.state === "generating") {
-		if (isGenerationStalled(plan)) return at("wait", "Not written yet — writing stopped part-way, nothing for five minutes.", "rewrite", "Rewrite the behaviors");
-		return at("wait", isGenerationSlow(plan) ? "Writing the behaviors — taking longer than usual…" : "Writing the behaviors from the diff — up to three minutes.", "none");
-	}
-	if (plan.state === "failed" && !steps.length) {
-		if (isNoCommits(plan)) return at("wait", "Not written yet — this branch has no commits. Comes back automatically when the session commits.", "none");
-		const why = errorHeadline(plan);
-		return at("wait", why ? "Not written yet — " + why.charAt(0).toLowerCase() + why.slice(1) : "Not written yet — the agent couldn't write behaviors for this.", "rewrite", "Rewrite the behaviors");
-	}
-	if (plan.state === "failed") return at("warn", "Rewriting this didn't work — the behaviors below are unchanged.", "rewrite", "Try rewriting again");
-	if (isEmptyByChoice(plan)) return at("you", "Empty — add the behaviors to check.", "answer", "Add a behavior");
-	if (!steps.length) return at("wait", "Not written yet — it came back with no behaviors.", "rewrite", "Rewrite the behaviors");
-	if (plan.state === "running") {
-		const mine = openHumanSteps(plan).length;
-		if (!plan.run_session) return at("warn", "The agent that was checking this is gone — nothing is running now.", ...again());
-		const been = runElapsed(run);
-		return at("busy", mine ? "An agent is checking the rest" + been + " — " + mine + (mine === 1 ? " step needs" : " steps need") + " your eyes." : "An agent is checking the steps it can" + been + ".", "watch", "Watch");
-	}
-	const unshipped = !plan.live_at && plan.state === "generated";
-	const checkNow = () => agentCan ? ["early", "Check now"] : ["answer", "Show steps"];
-	if (!run) {
-		if (plan.live_at || plan.state === "due") {
-			if (!agentCan) return at("you", steps.length === 1 ? "Shipped — its one step is yours to check." : "Shipped — all " + steps.length + " steps are yours to check.", "answer", "Answer " + steps.length + (steps.length === 1 ? " step" : " steps"));
-			return at("you", "Shipped — nobody has checked it yet. " + (agentCan === steps.length ? "An agent can check all " + steps.length + (steps.length === 1 ? " step." : " steps.") : "An agent can check " + agentCan + " of " + steps.length + "; the rest are yours."), "run", "Check now");
-		}
-		if (plan.merged_at) return at("wait", "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.", "none");
-		if (plan.live_problem) return at("warn", plan.live_problem, ...checkNow());
-		return at("wait", "Not merged yet — check the branch now, or it comes back here after it reaches " + (plan.live_branch || liveBranch || "the live branch") + ".", ...checkNow());
-	}
-	const open = openHumanSteps(plan);
-	const failed = failCount(plan);
-	if (failed) {
-		const first = steps.findIndex((s) => run.results?.[s.id]?.result === "fail");
-		const text = first >= 0 ? clip$7(steps[first].text, 80) : "";
-		return at("bad", (first >= 0 ? "Failed: step " + (first + 1) + (text ? " — " + text : "") : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open.length ? " " + open.length + (open.length === 1 ? " step still needs" : " steps still need") + " you." : ""), "answer", "See what failed");
-	}
-	if (open.length) return at("you", open.length === 1 ? "1 step needs your eyes — an agent can't judge it." : open.length + " steps need your eyes — an agent can't judge them.", "answer", "Answer " + open.length + (open.length === 1 ? " step" : " steps"));
-	const missing = unansweredCount(plan);
-	const cant = cantCheckCount(plan);
-	if (missing && missing === cant) {
-		const seen = (plan.steps || []).length - cant;
-		return at("warn", (seen ? seen + " passed · " : "") + "Couldn't check " + cant + (cant === 1 ? " step" : " steps") + " — not verified.", "answer", "Show steps");
-	}
-	const ranByAgent = !!(run.session || run.by === "agent");
-	if (missing) {
-		const blank = missing - cant;
-		const gaps = [blank ? blank + (blank === 1 ? " step" : " steps") + " with no answer" : "", cant ? cant + " you couldn't check" : ""].filter(Boolean).join(" · ");
-		return at("warn", (plan.state === "done" ? "Not verified — " : ranByAgent ? "The check stopped early — " : "Part-answered — ") + gaps + ".", ...again());
-	}
-	if (unshipped) return at("ok", "Every step passed on the branch — it comes back to be checked again after merge.", "answer", "See the answers");
-	return at("ok", "Every step passed.", "answer", "See the answers");
-}
-function clip$7(text, max) {
-	const t = String(text || "").trim().replace(/\s+/g, " ");
-	if (t.length <= max) return t.replace(/[.]$/, "");
-	const cut = t.slice(0, max);
-	const space = cut.lastIndexOf(" ");
-	return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
-}
 function passedBy(plan) {
 	const results = latestRun(plan)?.results || {};
 	let you = false;
@@ -31705,20 +31841,20 @@ function planVerdict(plan) {
 		glyph
 	});
 	const steps = plan.steps || [];
-	if (plan.state === "generating" && !isGenerationStalled(plan)) return v("writing", "Being written", "busy", "…", "Writing…");
-	if (plan.state === "running") return v("checking", "Agent checking", "busy", "…", "Checking…");
-	if (isEmptyByChoice(plan)) return v("empty", "Empty — add a step", "you", "+", "Empty");
-	if (!steps.length || isGenerationStalled(plan)) return v("unwritten", "Not written yet", "wait", "○", "Not written");
+	if (plan.state === "generating" && !isGenerationStalled(plan)) return v("writing", VERIFYING_LABEL, "busy", "…");
+	if (plan.state === "running") return v("checking", VERIFYING_LABEL, "busy", "…");
+	if (isSelfBlocked(plan)) return v("blocked", REASON_LABEL.verify_blocked + " — its agent wrote no steps", "bad", "!", REASON_LABEL.verify_blocked);
+	if (!steps.length || isGenerationStalled(plan)) return v("unwritten", "No steps yet", "wait", "○");
 	const verdict = verdictOf$1(plan);
-	if (verdict === "fail") return v("failed", "Failed", "bad", "✗");
+	if (verdict === "fail") return v("failed", REASON_LABEL.verify_failed, "bad", "✗");
 	if (verdict === "pass") {
 		const by = passedBy(plan);
 		const who = by ? " · by " + by : "";
-		return plan.live_at ? v("live", "Verified live" + who, "ok", "✓", "Verified live") : v("branch", "Verified on branch" + who, "ok", "✓", "Verified");
+		return plan.live_at ? v("live", VERIFIED_LABEL + " live" + who, "ok", "✓", VERIFIED_LABEL + " live") : v("branch", VERIFIED_LABEL + who, "ok", "✓", VERIFIED_LABEL);
 	}
 	if (!latestRun(plan) && plan.merged_at && !plan.live_at) return v("shipping", "Waiting to ship", "wait", "◷");
 	const t = checkTally(plan);
-	return v("partial", t.passed + " of " + t.total + " checked", isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait", "◐", t.passed + "/" + t.total + " checked");
+	return v("partial", t.passed + " of " + t.total + (t.total === 1 ? " step" : " steps") + " done", isWaitingOnYou(plan) ? "you" : latestRun(plan) ? "warn" : "wait", "◐", t.passed + "/" + t.total);
 }
 function planForSession$1(plans, inst) {
 	const list = plans || [];
@@ -31771,53 +31907,287 @@ var CHECK_MARK = {
 	yours: "●",
 	pending: "○"
 };
-function stepKeyAction(key) {
-	switch (key) {
-		case "1":
-		case "p":
-		case "P": return "pass";
-		case "2":
-		case "f":
-		case "F": return "fail";
-		case "3":
-		case "b":
-		case "B": return "blocked";
-		case "u":
-		case "U": return "";
-		case "n":
-		case "N": return "note";
-		default: return "";
+//#endregion
+//#region src/lib/behaviors.ts
+function verifyStateLabel(state) {
+	switch (state) {
+		case "verifying": return VERIFYING_LABEL;
+		case "needs_you": return REASON_LABEL.verify_confirm;
+		case "passed": return VERIFIED_LABEL;
+		case "failed": return REASON_LABEL.verify_failed;
+		case "blocked": return REASON_LABEL.verify_blocked;
 	}
+	return VERIFYING_LABEL;
 }
-function noteDraftAfter(result, noteOpen, note) {
-	if (result === "") return {
-		open: false,
-		text: ""
-	};
-	if ((result === "fail" || result === "blocked") && !noteOpen) return {
-		open: true,
-		text: ""
-	};
-	if (noteOpen && note.trim()) return {
-		open: false,
-		text: ""
-	};
+var VERIFY_GLYPH = {
+	verifying: "…",
+	needs_you: "●",
+	passed: "✓",
+	failed: "✗",
+	blocked: "!"
+};
+function verifyWords(v) {
+	const tone = v.state === "verifying" ? "busy" : v.state === "needs_you" ? "you" : v.state === "passed" ? "ok" : "bad";
 	return {
-		open: noteOpen,
-		text: note
+		label: verifyStateLabel(v.state),
+		glyph: VERIFY_GLYPH[v.state] || "",
+		tone,
+		line: verifyLine(v)
 	};
 }
-function stepKeyIsUndo(key) {
-	return key === "u" || key === "U";
+function planProgress$1(plan) {
+	const steps = plan.steps || [];
+	const run = latestRun(plan);
+	const human = steps.filter((s) => stepIsYours(plan, s)).length;
+	const done = steps.filter((s) => !stepIsYours(plan, s) && !!run?.results?.[s.id]?.result).length;
+	return verifyProgress({ steps: {
+		total: steps.length,
+		human,
+		agent_done: done
+	} });
 }
-function rewriteWarning(plan) {
-	if (!latestRun(plan)) return "";
-	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
+function tallyLine(plan) {
+	const t = checkTally(plan);
+	return [
+		t.passed ? t.passed + " passed" : "",
+		t.failed ? t.failed + " failed" : "",
+		t.cant ? t.cant + " blocked" : "",
+		t.yours ? t.yours + (t.yours === 1 ? " needs" : " need") + " you" : "",
+		t.pending ? t.pending + " not done" : ""
+	].filter(Boolean).join(" · ");
 }
-function rewriteBlockedReason(plan) {
-	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
-	if (plan.state === "generating") return "It is already being written.";
+var CHECK = {
+	key: "check",
+	label: "Verify"
+};
+var RERUN = {
+	key: "rerun",
+	label: "Verify again"
+};
+var FAILED = {
+	key: "failed",
+	label: "See what failed"
+};
+var WRITE = {
+	key: "write",
+	label: "Verify again"
+};
+var ANSWER = {
+	key: "answer",
+	label: "Confirm verified"
+};
+function stepsCount(n) {
+	return n + (n === 1 ? " step" : " steps");
+}
+function clip$6(text, max = 70) {
+	const t = String(text || "").trim().replace(/\s+/g, " ").replace(/[.]$/, "");
+	if (t.length <= max) return t;
+	const cut = t.slice(0, max);
+	const space = cut.lastIndexOf(" ");
+	return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
+}
+function timingLine(plan) {
+	const run = latestRun(plan);
+	if (run && isBeforeMerge(run) && !plan.live_at) return "Checked before merge · checks again once live";
+	if (!run && plan.live_at) {
+		const earlier = beforeMergeRun(plan);
+		if (earlier) return "Checked before merge (" + beforeMergeSummary(plan, earlier) + ") · checks again once live";
+	}
 	return "";
+}
+function runAction(plan) {
+	if (!(plan.steps || []).some((s) => s.actor !== "human")) return null;
+	const run = latestRun(plan);
+	return run && (run.session || run.by === "agent") ? RERUN : CHECK;
+}
+function said(plan) {
+	const steps = plan.steps || [];
+	const agentCan = steps.filter((s) => s.actor !== "human").length;
+	if (plan.state === "generating") {
+		if (isGenerationStalled(plan)) return {
+			tone: "quiet",
+			sentence: "Writing its steps stopped part-way — nothing for five minutes.",
+			action: WRITE
+		};
+		return {
+			tone: "busy",
+			sentence: isGenerationSlow(plan) ? "Writing the steps — taking longer than usual…" : "Writing the steps from the diff — up to three minutes.",
+			action: null
+		};
+	}
+	if (plan.state === "failed" && !steps.length) {
+		if (isNoCommits(plan)) return {
+			tone: "quiet",
+			sentence: "No steps yet — this branch has no commits. They're written once the session commits.",
+			action: null
+		};
+		const why = errorHeadline(plan);
+		return {
+			tone: "quiet",
+			sentence: why ? "The agent couldn't write steps — " + why.charAt(0).toLowerCase() + why.slice(1) : "The agent couldn't write steps for this.",
+			action: WRITE
+		};
+	}
+	if (isSelfBlocked(plan)) return {
+		tone: "bad",
+		status: REASON_LABEL.verify_blocked,
+		sentence: "Its agent wrote no steps. Verify again to have it look once more.",
+		action: RERUN
+	};
+	if (isEmptyByChoice(plan)) return {
+		tone: "quiet",
+		sentence: "No steps yet — Verify has its agent write them and work them.",
+		action: CHECK
+	};
+	if (!steps.length && plan.state !== "running") return {
+		tone: "quiet",
+		sentence: "The agent came back with no steps.",
+		action: WRITE
+	};
+	const kept = plan.state === "failed" ? "Rewriting didn't work — these steps are unchanged. " : "";
+	if (plan.state === "running") {
+		if (plan.run_session) {
+			const mine = openHumanSteps(plan).length;
+			return {
+				tone: "busy",
+				sentence: "Its agent is checking its work: " + planProgress$1(plan) + (mine ? " — " + stepsCount(mine) + (mine === 1 ? " needs" : " need") + " you after." : "."),
+				action: null
+			};
+		}
+		return {
+			tone: "quiet",
+			sentence: "The agent that was verifying this is gone — nothing is running now.",
+			action: runAction(plan)
+		};
+	}
+	const run = latestRun(plan);
+	if (isFailing(plan) && run) {
+		const failed = failCount(plan);
+		const first = steps.find((s) => run.results?.[s.id]?.result === "fail");
+		const open = openHumanSteps(plan).length;
+		return {
+			tone: "bad",
+			sentence: kept + (first ? "Failed: “" + clip$6(first.text) + "”" : "A step failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open ? " " + stepsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
+			action: FAILED
+		};
+	}
+	if (!run) {
+		if (isConfigBlocked(plan)) return {
+			tone: "you",
+			sentence: kept + plan.live_problem,
+			action: runAction(plan)
+		};
+		if (plan.live_at || plan.state === "due") {
+			if (!agentCan) return {
+				tone: "you",
+				sentence: kept + (steps.length === 1 ? "Live — its one step is yours to do." : "Live — all " + steps.length + " steps are yours to do."),
+				action: ANSWER
+			};
+			return {
+				tone: "you",
+				sentence: kept + "Live — nobody has verified it yet. " + (agentCan === steps.length ? "The agent can do " + (steps.length === 1 ? "its step." : "all " + steps.length + " steps.") : "The agent can do " + agentCan + " of " + steps.length + " steps; the rest are yours."),
+				action: CHECK
+			};
+		}
+		if (plan.merged_at) return {
+			tone: "quiet",
+			sentence: kept + "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.",
+			action: null
+		};
+		if (plan.live_problem) return {
+			tone: "quiet",
+			sentence: kept + plan.live_problem,
+			action: agentCan ? CHECK : null
+		};
+		return {
+			tone: "quiet",
+			sentence: kept + "Not merged yet — verify the branch now, or it's verified once it reaches " + (plan.live_branch || "the live branch") + ".",
+			action: agentCan ? CHECK : null
+		};
+	}
+	const open = openHumanSteps(plan).length;
+	if (!open && isWaitingOnYou(plan)) return {
+		tone: "you",
+		sentence: kept + "Live — not verified since it shipped.",
+		action: runAction(plan) || ANSWER
+	};
+	if (open) return {
+		tone: "you",
+		sentence: kept + (open === 1 ? "1 step needs you — an agent can't judge it." : stepsCount(open) + " need you — an agent can't judge them."),
+		action: ANSWER
+	};
+	const missing = unansweredCount(plan);
+	const cant = cantCheckCount(plan);
+	if (missing) {
+		const passed = steps.length - missing - failCount(plan);
+		const blank = missing - cant;
+		const line = [
+			passed ? passed + " of " + steps.length + " steps passed" : "",
+			cant ? cant + " blocked" : "",
+			blank ? (run.session || run.by === "agent" ? "verifying stopped early — " : "") + blank + " with no answer" : ""
+		].filter(Boolean).join(" · ");
+		return {
+			tone: "quiet",
+			sentence: kept + line.charAt(0).toUpperCase() + line.slice(1) + ".",
+			action: runAction(plan)
+		};
+	}
+	const by = passedBy(plan);
+	return {
+		tone: "ok",
+		sentence: kept + "Every step passed" + (by ? " — checked by " + by : "") + ".",
+		action: null
+	};
+}
+function behaviorSummary(plan) {
+	const t = checkTally(plan);
+	const s = said(plan);
+	const status = s.status || (s.tone === "bad" ? REASON_LABEL.verify_failed : s.tone === "you" ? "Needs you" : s.tone === "ok" ? VERIFIED_LABEL + (plan.live_at ? " live" : "") : s.tone === "busy" ? VERIFYING_LABEL : "Not verified");
+	const total = (plan.steps || []).length;
+	const short = s.tone === "bad" ? t.failed ? REASON_LABEL.verify_failed + " · " + t.failed : status : s.tone === "you" ? t.yours ? "Needs you · " + t.yours : "Needs you" : s.tone === "busy" || s.tone === "ok" ? status : !total ? "No steps yet" : t.passed ? t.passed + " of " + total + (total === 1 ? " step" : " steps") + " done" : status;
+	const timing = timingLine(plan);
+	const headline = plan.state !== "failed" && plan.state !== "generating" && total ? errorHeadline(plan) : "";
+	const sentence = [
+		s.sentence,
+		headline,
+		timing ? timing + "." : ""
+	].filter(Boolean).join(" ");
+	return {
+		tone: s.tone,
+		status,
+		short,
+		sentence,
+		action: s.action,
+		total,
+		verified: t.passed,
+		failed: t.failed,
+		yours: t.yours
+	};
+}
+function planForSession(plans, row) {
+	if (!row || isVerifySession(row)) return null;
+	return planForSession$1([...plans || []], row);
+}
+function behaviorsOnARoute(plans, rows, titles) {
+	if (!plans?.length) return false;
+	const shown = new Set(titles);
+	return rows.some((r) => shown.has(r.title) && !!planForSession(plans, r));
+}
+function orphanPlans(plans, rows) {
+	const list = plans || [];
+	const owned = /* @__PURE__ */ new Set();
+	for (const r of rows || []) {
+		const p = planForSession(list, r);
+		if (p) owned.add(p.id);
+	}
+	return list.filter((p) => !owned.has(p.id));
+}
+function nextNeedingYou(plans) {
+	const list = plans || [];
+	return list.find((p) => isWaitingOnYou(p) && !isFailing(p)) || list.find((p) => isFailing(p)) || null;
+}
+function verifyStopFace(short, stopState) {
+	return stopState === "halted" ? short + " — halted" : short;
 }
 //#endregion
 //#region src/lib/stage.ts
@@ -32206,14 +32576,17 @@ function nextStep$1(inst) {
 		default: return null;
 	}
 }
-function verdictNote(plan) {
+function verdictNote(plan, verify = null) {
+	if (verify) {
+		const w = verifyWords(verify);
+		return "Verify " + w.glyph + " " + w.label;
+	}
 	if (!plan) return "";
 	const v = planVerdict(plan);
-	return "Behaviors " + v.glyph + " " + v.short;
+	return "Verify " + v.glyph + " " + v.short;
 }
-function prVerdictConfirm(plan) {
-	if (!plan || planVerdict(plan).key !== "failed") return "";
-	return "A behavior failed — open the PR anyway?";
+function prVerdictConfirm(plan, verify = null) {
+	return (verify ? verify.state === "failed" : !!plan && planVerdict(plan).key === "failed") ? REASON_LABEL.verify_failed + " — open the PR anyway?" : "";
 }
 function cachedPlanFor(inst) {
 	const data = queryClient.getQueryData(["test-plans"]);
@@ -32225,40 +32598,41 @@ function cachedPlanFor(inst) {
 	});
 }
 function withVerifyVerdict(menu, inst, plan = cachedPlanFor(inst)) {
-	const note = verdictNote(plan);
-	const confirm = prVerdictConfirm(plan);
+	const verify = verifyOf(inst);
+	const note = verdictNote(plan, verify);
+	const confirm = prVerdictConfirm(plan, verify);
+	const show = () => openBehaviors({
+		planId: verify?.plan || plan?.id,
+		title: inst.title,
+		branch: plan?.branch || inst.branch || ""
+	});
+	const exists = !!plan || !!verify;
 	return {
 		...menu,
 		groups: menu.groups.map((g) => g.id !== "ship" ? g : {
 			...g,
-			items: g.items.map((item) => {
-				if (item.key === "checklist") return {
+			items: g.items.flatMap((item) => {
+				if (item.key === "checklist") return exists ? [{
 					...item,
-					label: "Behaviors",
-					title: "What this work should do in real use — on its route in the Sky",
-					run: () => openBehaviors({
-						planId: plan?.id,
-						title: inst.title,
-						branch: plan?.branch || inst.branch || ""
-					})
-				};
-				if ((item.key === "pr" || item.key === "merge") && !item.disabled && note) return {
+					key: "verify",
+					label: "Verify",
+					note: note.replace(/^Verify /, ""),
+					title: "See the steps its agent checked, and where they stand — on its route in the Sky",
+					run: show
+				}] : [];
+				if ((item.key === "pr" || item.key === "merge") && !item.disabled && note) return [{
 					...item,
 					note: item.note ? item.note + " · " + note : note,
-					run: confirm ? () => confirmPop(confirm, "A behavior on this branch failed — see which, or go ahead.", [{
-						label: "Show the behaviors",
-						run: () => openBehaviors({
-							planId: plan?.id,
-							title: inst.title,
-							branch: plan?.branch || inst.branch || ""
-						})
+					run: confirm ? () => confirmPop(confirm, "A step on this branch failed — see which, or go ahead.", [{
+						label: "Show the steps",
+						run: show
 					}, {
 						label: item.label.replace(/…$/, "") + " anyway",
 						primary: true,
 						run: () => void item.run()
 					}]) : item.run
-				};
-				return item;
+				}];
+				return [item];
 			})
 		})
 	};
@@ -34070,6 +34444,3006 @@ function withPlanReady(rows, instances) {
 	return added ? out.sort((a, b) => a.rank - b.rank) : out;
 }
 //#endregion
+//#region src/lib/stopRisk.ts
+var RISK_TAGS = [
+	"remote",
+	"irreversible",
+	"spends"
+];
+var RISK_WORD = {
+	remote: "Touches the shared remote",
+	irreversible: "Can't be undone",
+	spends: "Spends money"
+};
+var FALLBACK = {
+	ship: ["remote"],
+	ticket: ["remote"]
+};
+var isTag = (v) => v === "remote" || v === "irreversible" || v === "spends";
+function riskOf(step, kinds) {
+	if (!step) return [];
+	const def = kinds?.find((k) => k.kind === step.kind);
+	const raw = def ? Array.isArray(def.risk) ? def.risk : [] : FALLBACK[step.kind] || [];
+	const tags = new Set(raw.filter(isTag));
+	if (step.kind === "ship") {
+		const lane = String((step.config || {}).lane || "");
+		if (lane === "commit") tags.clear();
+		else if (lane === "merge") tags.add("irreversible");
+	}
+	return RISK_TAGS.filter((t) => tags.has(t));
+}
+function riskTitle(tags) {
+	return tags.map((t) => RISK_WORD[t]).join(" · ");
+}
+//#endregion
+//#region src/lib/skyLayout.ts
+var SKY_GAP = 64;
+var SKY_MARGIN = 40;
+var INTAKE_W = 240;
+var LINES_LEFT = 328;
+var INTAKE_KEY = "intake";
+var INTAKE_OPEN_W = 420;
+var INTAKE_MIN_W = 200;
+var INTAKE_MIN_H = 160;
+var INTAKE_MAX_W = 1200;
+var INTAKE_MAX_H = 1600;
+function objectFrame(stored, min, max) {
+	if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
+	return {
+		w: Math.min(max.w, Math.max(min.w, Math.round(stored.w))),
+		h: Math.min(max.h, Math.max(min.h, Math.round(stored.h)))
+	};
+}
+function intakeFrame(stored) {
+	return objectFrame(stored, {
+		w: INTAKE_MIN_W,
+		h: INTAKE_MIN_H
+	}, {
+		w: INTAKE_MAX_W,
+		h: INTAKE_MAX_H
+	});
+}
+var PALETTE_W$1 = 360;
+var PALETTE_H$1 = 300;
+var PALETTE_MIN = {
+	w: 220,
+	h: 140
+};
+var PALETTE_MAX = {
+	w: 1400,
+	h: 1200
+};
+var paletteFrame$1 = (stored) => objectFrame(stored, PALETTE_MIN, PALETTE_MAX);
+var PLACE_GAP = 24;
+function catalogFrame(view, screen, z, size, pad = 16) {
+	const k = z > 0 ? z : 1;
+	const m = pad / k;
+	const fit = (want, room, lo, hi) => Math.round(Math.min(hi, Math.max(lo, Math.min(want, room))));
+	const w = size ? size.w : fit(screen.w * .6 / k, view.w - 2 * m, PALETTE_MIN.w, PALETTE_MAX.w);
+	const h = size ? size.h : fit(screen.h * .7 / k, view.h - 2 * m, PALETTE_MIN.h, PALETTE_MAX.h);
+	const x = Math.max(view.x + m, Math.min(view.x + view.w / 2 + PLACE_GAP, view.x + view.w - m - w));
+	const y = Math.max(view.y + m, view.y + (view.h - h) / 2);
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		w,
+		h
+	};
+}
+var LANDING_KEY = "landing";
+var LANDING_W = 300;
+var LANDING_H = 240;
+var LANDING_MIN = {
+	w: 220,
+	h: 120
+};
+var LANDING_MAX = {
+	w: 1200,
+	h: 1600
+};
+var NOTE_W = 200;
+var NOTE_H = 120;
+var NOTE_MIN = {
+	w: 120,
+	h: 70
+};
+var NOTE_MAX = {
+	w: 800,
+	h: 800
+};
+var BLOCK_W = 200;
+var BLOCK_H = 64;
+function rightColumn(placed, items, top = SKY_MARGIN, gap = SKY_GAP) {
+	const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
+	const x = placed.length ? right + gap : LINES_LEFT;
+	const out = {};
+	let y = top;
+	for (const it of items) {
+		out[it.id] = {
+			x,
+			y
+		};
+		y += it.h + gap / 2;
+	}
+	return out;
+}
+function clearRightColumn(column, lines, gap = SKY_GAP) {
+	if (!column.length || !lines.length) return {};
+	if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
+	const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
+	return Object.fromEntries(column.map((c) => [c.id, {
+		x,
+		y: c.y
+	}]));
+}
+function spotNear(want, taken, size, within) {
+	const step = PLACE_GAP;
+	const free = (x, y) => !taken.some((t) => hits({
+		x,
+		y,
+		w: size.w,
+		h: size.h
+	}, t, 23));
+	const inside = (x, y) => !within || x >= within.x && y >= within.y && x + size.w <= within.x + within.w && y + size.h <= within.y + within.h;
+	const search = (bounded) => {
+		for (let r = 0; r <= 80; r++) {
+			let best = null;
+			let bestD = Infinity;
+			for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
+				if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
+				const x = Math.round(want.x + i * step);
+				const y = Math.round(want.y + j * step);
+				if (bounded && !inside(x, y)) continue;
+				const d = Math.hypot(i, j);
+				if (d < bestD && free(x, y)) {
+					best = {
+						x,
+						y
+					};
+					bestD = d;
+				}
+			}
+			if (best) return best;
+		}
+		return null;
+	};
+	return within && search(true) || search(false) || {
+		x: Math.round(want.x),
+		y: Math.round(want.y)
+	};
+}
+function grownOver(was, now, movable) {
+	if (!was || !now || was.x !== now.x || was.y !== now.y || now.w <= was.w && now.h <= was.h) return [];
+	return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
+}
+function intakeSize(stored, measured) {
+	const frame = intakeFrame(stored);
+	if (frame) return frame;
+	if (measured && measured.w > 0 && measured.h > 0) return measured;
+	return stored?.open ? {
+		w: INTAKE_OPEN_W,
+		h: 520
+	} : {
+		w: INTAKE_W,
+		h: 320
+	};
+}
+var ZOOM_MIN = .1;
+var ZOOM_MAX = 3;
+var FIT_PAD = 56;
+var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+function placeLines(lines, saved, area) {
+	const out = {};
+	const taken = [];
+	for (const l of lines) {
+		const s = saved[l.id];
+		if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+			out[l.id] = {
+				x: s.x,
+				y: s.y
+			};
+			taken.push({
+				x: s.x,
+				y: s.y,
+				w: l.w,
+				h: l.h
+			});
+		}
+	}
+	const x0 = area.left ?? SKY_MARGIN;
+	const y0 = area.top ?? SKY_MARGIN;
+	const right = Math.max(area.width, x0 + 1);
+	let cx = x0;
+	let cy = y0;
+	let rowH = 0;
+	for (const l of lines) {
+		if (out[l.id]) continue;
+		for (let guard = 0; guard < 1e4; guard++) {
+			if (cx > x0 && cx + l.w > right) {
+				cx = x0;
+				cy += (rowH || 0) + SKY_GAP;
+				rowH = 0;
+			}
+			const at = {
+				x: cx,
+				y: cy,
+				w: l.w,
+				h: l.h
+			};
+			const hit = taken.find((t) => hits(at, t, 63));
+			if (hit) {
+				cx = hit.x + hit.w + SKY_GAP;
+				continue;
+			}
+			out[l.id] = {
+				x: cx,
+				y: cy
+			};
+			taken.push(at);
+			cx += l.w + SKY_GAP;
+			rowH = Math.max(rowH, l.h);
+			break;
+		}
+	}
+	return out;
+}
+function assignSpots(existing, newcomers, area) {
+	const saved = {};
+	for (const e of existing) saved[e.id] = {
+		x: e.x,
+		y: e.y
+	};
+	const fresh = newcomers.filter((n) => !saved[n.id]);
+	if (!fresh.length) return {};
+	const all = placeLines([...existing, ...fresh], saved, area);
+	return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
+}
+var FILL_GAIN = 1.1;
+function fillWidth(existing, newcomers, area, vw, vh, opts = {}) {
+	const min = area.width;
+	const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
+	if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
+	const maxZ = opts.maxZ ?? 1;
+	const flat = new Set(opts.flat || []);
+	const aside = new Set((opts.right || []).map((r) => r.id));
+	const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
+	const x0 = area.left ?? SKY_MARGIN;
+	const stops = [];
+	let run = x0;
+	for (const n of fresh) {
+		run += n.w;
+		stops.push(run);
+		run += SKY_GAP;
+	}
+	const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
+	const steps = 24;
+	const k = max > min ? (max / Math.max(1, min)) ** (1 / 23) : 1;
+	const widths = /* @__PURE__ */ new Set([min]);
+	if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
+	for (const s of stops) if (s > min && s <= max) widths.add(s);
+	const counted = existing.filter((e) => !aside.has(e.id));
+	let best = min;
+	let bestZ = -Infinity;
+	let minZ = -Infinity;
+	for (const width of [...widths].sort((a, b) => a - b)) {
+		const spots = assignSpots(existing, fresh, {
+			...area,
+			width
+		});
+		const b = boundsOf([...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({
+			id: n.id,
+			...spots[n.id],
+			w: n.w,
+			h: n.h
+		}))].map((r) => ({
+			x: r.x,
+			y: r.y,
+			w: r.w,
+			h: flat.has(r.id) ? 1 : r.h
+		})));
+		if (!b) continue;
+		const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
+		const z = Math.min(maxZ, (vw - 112) / w, (vh - 112) / Math.max(1, b.h));
+		if (width === min) minZ = z;
+		if (z > bestZ + .001) {
+			bestZ = z;
+			best = width;
+		}
+	}
+	return bestZ >= minZ * FILL_GAIN ? best : min;
+}
+function boundsOf(rects) {
+	if (!rects.length) return null;
+	const x = Math.min(...rects.map((r) => r.x));
+	const y = Math.min(...rects.map((r) => r.y));
+	return {
+		x,
+		y,
+		w: Math.max(...rects.map((r) => r.x + r.w)) - x,
+		h: Math.max(...rects.map((r) => r.y + r.h)) - y
+	};
+}
+var clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1));
+function zoomAt(c, z, px, py) {
+	const nz = clampZoom(z);
+	const k = nz / c.z;
+	return {
+		z: nz,
+		x: px - (px - c.x) * k,
+		y: py - (py - c.y) * k
+	};
+}
+function toPlane(c, px, py) {
+	return {
+		x: (px - c.x) / c.z,
+		y: (py - c.y) / c.z
+	};
+}
+function fitCamera(b, vw, vh, maxZ = 1.25, pad = FIT_PAD) {
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
+	return {
+		x: b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
+		y: b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
+		z
+	};
+}
+function firstFit(b, vw, vh, maxZ = 1, pad = FIT_PAD) {
+	const all = fitCamera(b, vw, vh, maxZ, pad);
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0 || all.z >= LOD_MID) return all;
+	const z = clampZoom(Math.min(maxZ, Math.max(LOD_MID, (vw - 2 * pad) / b.w)));
+	return {
+		z,
+		x: pad - b.x * z,
+		y: pad - b.y * z
+	};
+}
+var ROUTE_FIT_PAD = 48;
+var ROUTE_FIT_MIN = .6;
+var ROUTE_FIT_MAX = 1.5;
+function fitRoute(b, vw, vh) {
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	const pad = ROUTE_FIT_PAD;
+	const want = Math.min((vw - 96) / b.w, (vh - 96) / b.h);
+	const z = Math.min(ROUTE_FIT_MAX, Math.max(ROUTE_FIT_MIN, Number.isFinite(want) ? want : 1));
+	return {
+		x: b.w * z + 96 <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
+		y: b.h * z + 96 <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
+		z
+	};
+}
+function screenBoxCovers(box, rects, c) {
+	return rects.some((r) => {
+		const sx = c.x + r.x * c.z;
+		const sy = c.y + r.y * c.z;
+		return sx < box.x + box.w && sx + r.w * c.z > box.x && sy < box.y + box.h && sy + r.h * c.z > box.y;
+	});
+}
+function centerOn(r, vw, vh, z) {
+	const nz = clampZoom(z);
+	return {
+		z: nz,
+		x: vw / 2 - (r.x + r.w / 2) * nz,
+		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
+	};
+}
+function fitSelection(rects, vw, vh, maxZ = 1.25) {
+	const b = boundsOf(rects);
+	return b ? fitCamera(b, vw, vh, maxZ) : null;
+}
+var CAM_EASE_MS = 220;
+var easeOut = (t) => {
+	return 1 - (1 - Math.min(1, Math.max(0, t))) ** 3;
+};
+function lerpCamera(from, to, t) {
+	if (t >= 1) return {
+		x: to.x,
+		y: to.y,
+		z: to.z
+	};
+	if (t <= 0) return {
+		x: from.x,
+		y: from.y,
+		z: from.z
+	};
+	const z = from.z > 0 && to.z > 0 ? Math.exp(Math.log(from.z) + (Math.log(to.z) - Math.log(from.z)) * t) : from.z + (to.z - from.z) * t;
+	return {
+		x: from.x + (to.x - from.x) * t,
+		y: from.y + (to.y - from.y) * t,
+		z
+	};
+}
+var sameCamera = (a, b) => Math.abs(a.x - b.x) < .01 && Math.abs(a.y - b.y) < .01 && Math.abs(a.z - b.z) < 1e-4;
+var LOD_MID = .62;
+var LOD_NEAR = 1.15;
+var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
+var FULL_DETAIL_LODS = [{
+	lod: "mid",
+	z: LOD_MID
+}, {
+	lod: "near",
+	z: 1
+}];
+var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
+var SKY_DRAWER_KEY = "mf_sky_drawer";
+var skyDrawerOpen = (pref) => pref === "1";
+var FLYWAY_MIME = "application/x-mindflock-flyway";
+var NEW_SESSION_MIME = "application/x-mindflock-new-session";
+var SKY_SIZES = [
+	"compact",
+	"normal",
+	"wide"
+];
+var BOX_W_MIN = 140;
+var BOX_W_MAX = 420;
+var BOX_H_MIN = 60;
+var BOX_H_MAX = 220;
+var BOX_PRESETS = {
+	compact: {
+		w: 150,
+		h: 64
+	},
+	normal: {
+		w: 236,
+		h: 100
+	},
+	wide: {
+		w: 330,
+		h: 120
+	}
+};
+var clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
+var clampBox = (w, h) => ({
+	w: clampTo(w, BOX_W_MIN, BOX_W_MAX),
+	h: clampTo(h, BOX_H_MIN, BOX_H_MAX)
+});
+function lineBox(l) {
+	const p = BOX_PRESETS[l?.size || "normal"] || BOX_PRESETS.normal;
+	return clampBox(Number.isFinite(l?.boxW) ? l.boxW : p.w, Number.isFinite(l?.boxH) ? l.boxH : p.h);
+}
+var SKY_LAYOUT_KEY = "mf_sky_layout";
+var SKY_POS_KEY = "mf_sky_pos";
+var LAYOUT_CAP = 400;
+var PANE_W$1 = 720;
+var PANE_H$1 = 420;
+var local = () => {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+};
+var parseObj = (raw) => {
+	if (!raw) return null;
+	try {
+		const doc = JSON.parse(raw);
+		return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : null;
+	} catch {
+		return null;
+	}
+};
+function readSkyPos(raw) {
+	const out = {};
+	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
+		const p = v;
+		if (k && p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y)) out[k] = {
+			x: Math.round(p.x),
+			y: Math.round(p.y)
+		};
+	}
+	return out;
+}
+function cleanLine(v) {
+	if (!v || typeof v !== "object") return null;
+	const p = v;
+	const out = {};
+	if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
+		out.x = Math.round(p.x);
+		out.y = Math.round(p.y);
+		if (p.pinned === true) out.pinned = true;
+	}
+	if (SKY_SIZES.includes(p.size) && p.size !== "normal") out.size = p.size;
+	if (p.open === true) out.open = true;
+	for (const k of [
+		"paneW",
+		"paneH",
+		"w",
+		"h"
+	]) if (Number.isFinite(p[k]) && p[k] > 0) out[k] = Math.round(p[k]);
+	if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {
+		const b = lineBox({
+			size: out.size,
+			boxW: p.boxW,
+			boxH: p.boxH
+		});
+		const preset = BOX_PRESETS[out.size || "normal"];
+		if (b.w !== preset.w || b.h !== preset.h) {
+			out.boxW = b.w;
+			out.boxH = b.h;
+		}
+	}
+	return Object.keys(out).length ? out : null;
+}
+function readSkyLayout(raw) {
+	const out = {};
+	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
+		const line = k ? cleanLine(v) : null;
+		if (line) out[k] = line;
+	}
+	return out;
+}
+function loadSkyLayout(store = local()) {
+	try {
+		const raw = store?.getItem(SKY_LAYOUT_KEY);
+		if (raw != null) return readSkyLayout(raw);
+		const old = readSkyPos(store?.getItem(SKY_POS_KEY));
+		const out = {};
+		for (const [k, p] of Object.entries(old)) out[k] = {
+			x: p.x,
+			y: p.y,
+			pinned: true
+		};
+		if (Object.keys(out).length) saveSkyLayout(out, store);
+		return out;
+	} catch {
+		return {};
+	}
+}
+function saveSkyLayout(all, store = local()) {
+	const next = { ...all };
+	const keys = Object.keys(next);
+	for (const k of keys.slice(0, Math.max(0, keys.length - LAYOUT_CAP))) delete next[k];
+	try {
+		store?.setItem(SKY_LAYOUT_KEY, JSON.stringify(next));
+	} catch {}
+	return next;
+}
+function renameSkyLine(all, from, to) {
+	if (!from || !to || from === to || !(from in all)) return all;
+	const next = {};
+	for (const [k, v] of Object.entries(all)) {
+		if (k === to) continue;
+		next[k === from ? to : k] = v;
+	}
+	return next;
+}
+function patchSkyLine(all, title, patch, store = local()) {
+	const next = { ...all };
+	const merged = cleanLine({
+		...next[title],
+		...patch
+	});
+	delete next[title];
+	if (merged) next[title] = merged;
+	return saveSkyLayout(next, store);
+}
+function tidySkyLayout(all, title, store = local()) {
+	const next = {};
+	for (const [k, v] of Object.entries(all)) {
+		if (title !== void 0 && k !== title) {
+			next[k] = v;
+			continue;
+		}
+		const { x: _x, y: _y, pinned: _p, ...rest } = v;
+		if (Object.keys(rest).length) next[k] = rest;
+	}
+	return saveSkyLayout(next, store);
+}
+function closeSkyWindows(all, titles, store = local()) {
+	const next = {};
+	let changed = false;
+	for (const [k, v] of Object.entries(all)) {
+		if (!v.open || k === INTAKE_KEY || titles && !titles.includes(k)) {
+			next[k] = v;
+			continue;
+		}
+		changed = true;
+		const { open: _o, ...rest } = v;
+		if (Object.keys(rest).length) next[k] = rest;
+	}
+	return changed ? saveSkyLayout(next, store) : all;
+}
+function pinnedPositions(all) {
+	const out = {};
+	for (const [k, v] of Object.entries(all)) if (v.pinned && Number.isFinite(v.x) && Number.isFinite(v.y)) out[k] = {
+		x: v.x,
+		y: v.y
+	};
+	return out;
+}
+function lineLayout(stored, at) {
+	return {
+		x: at.x,
+		y: at.y,
+		size: stored?.size || "normal",
+		open: !!stored?.open,
+		paneW: stored?.paneW,
+		paneH: stored?.paneH,
+		pinned: !!stored?.pinned,
+		boxW: stored?.boxW,
+		boxH: stored?.boxH
+	};
+}
+var LINE_BAR_H = 42;
+function estimateLine(base, stored) {
+	let w;
+	let h;
+	if (Number.isFinite(stored?.boxW) || Number.isFinite(stored?.boxH)) {
+		const b = lineBox(stored);
+		const n = BOX_PRESETS.normal;
+		w = Math.round(base.w * (b.w / n.w));
+		h = Math.round(Math.min(base.h, LINE_BAR_H) + Math.max(0, base.h - LINE_BAR_H) * (b.h / n.h));
+	} else {
+		const k = stored?.size === "compact" ? .75 : stored?.size === "wide" ? 1.4 : 1;
+		w = Math.round(base.w * k);
+		h = Math.round(base.h * (stored?.size === "compact" ? .85 : 1));
+	}
+	if (stored?.open) {
+		w = Math.max(w, (stored.paneW || PANE_W$1) + 24);
+		h += (stored.paneH || PANE_H$1) + 12;
+	}
+	return {
+		w,
+		h
+	};
+}
+var SKY_MODES = [
+	{
+		id: "one",
+		label: "This session",
+		title: "The session you're on: its route, filling the sky"
+	},
+	{
+		id: "all",
+		label: "All",
+		title: "Every session — a worker inside its lead's route"
+	},
+	{
+		id: "mine",
+		label: "Mine",
+		title: "Your top-level sessions, their workers folded into their route"
+	},
+	{
+		id: "perched",
+		label: "Needs you",
+		title: "Only the routes that need you"
+	}
+];
+function groundedLanding(mode, noSessions) {
+	if (mode === "all" || mode === "mine") return "shown";
+	return mode === "one" && noSessions ? "switch" : "say";
+}
+var GROUNDED_HIDDEN_LINE = "Your routes with no session yet show under All.";
+var inSky = (r) => !r.hidden_by;
+function linePerched(r) {
+	const fl = r.flight;
+	if (rowWaitsOnYou(fl) || fl?.state === "halted") return true;
+	return deriveSessionState(r).state === "needs_you";
+}
+function skyLineTitles(rows, mode, opts = {}) {
+	const shown = rows.filter(inSky);
+	if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus] : [];
+	let pick = mode === "perched" ? shown.filter(linePerched) : shown;
+	const q = String(opts.query || "").trim().toLowerCase();
+	if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
+	const byTitle = new Map(pick.map((r) => [r.title, r]));
+	const isLine = /* @__PURE__ */ new Map();
+	const lineOf = (r, seen) => {
+		const known = isLine.get(r.title);
+		if (known !== void 0) return known;
+		const up = r.parent && r.parent !== r.title ? byTitle.get(r.parent) : void 0;
+		const out = !up || seen.has(up.title) || !lineOf(up, new Set(seen).add(r.title));
+		isLine.set(r.title, out);
+		return out;
+	};
+	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
+}
+function pickThisSession(rows, o = {}) {
+	const shown = rows.filter(inSky);
+	if (!shown.length) return "";
+	const has = new Set(shown.map((r) => r.title));
+	const firstOf = (ts) => (ts || []).find((t) => has.has(t)) || "";
+	const needs = firstOf(o.needsYou) || shown.find(linePerched)?.title;
+	if (needs) return needs;
+	const mru = o.mru || [];
+	const recency = (r) => {
+		const at = mru.indexOf(r.title);
+		return at < 0 ? mru.length : at;
+	};
+	const working = shown.filter((r) => deriveSessionState(r).state === "working").sort((a, b) => recency(a) - recency(b) || (Number(b.activity_since) || 0) - (Number(a.activity_since) || 0));
+	if (working.length) return working[0].title;
+	return firstOf(mru) || firstOf(o.railOrder) || shown[shown.length - 1].title;
+}
+function withLiveFlights(rows, flights, kinds) {
+	if (!flights?.length) return rows;
+	const newest = /* @__PURE__ */ new Map();
+	for (const f of flights) {
+		if (!f.session || f.free || !isShown$1(f)) continue;
+		const had = newest.get(f.session);
+		if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
+	}
+	if (!newest.size) return rows;
+	let out = null;
+	rows.forEach((r, i) => {
+		const f = newest.get(r.title);
+		if (!f || r.flight?.id) return;
+		const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
+		const row = {
+			...r.flight,
+			id: f.id,
+			plan_name: f.plan_name,
+			cursor: f.cursor,
+			total: f.steps.length,
+			state: f.state,
+			step: step ? {
+				id: step.id,
+				kind: step.kind,
+				title: step.title,
+				state: f.step_states?.[step.id]?.state || "pending",
+				actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot")
+			} : null
+		};
+		(out ??= rows.slice())[i] = {
+			...r,
+			flight: row
+		};
+	});
+	return out ?? rows;
+}
+//#endregion
+//#region src/lib/stopEditing.ts
+function insertGaps(boxes, insertFrom, vertical) {
+	const main = boxes.filter((b) => b.node.row === "main");
+	const fanned = new Set(boxes.filter((b) => b.node.kind === "branch").map((b) => b.node.branch?.from));
+	const hung = /* @__PURE__ */ new Map();
+	for (const c of boxes) if (c.node.kind === "child" && c.node.branch) hung.set(c.node.branch.from, Math.min(hung.get(c.node.branch.from) ?? Infinity, vertical ? c.y : c.x));
+	const gaps = [];
+	for (let j = 1; j < main.length; j++) {
+		const b = main[j];
+		const a = main[j - 1];
+		if (b.node.kind !== "stop" && b.node.kind !== "group" || b.node.index === void 0 || b.node.index < insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
+		const col = hung.get(a.node.id);
+		const end = col ?? (vertical ? b.y : b.x);
+		gaps.push(vertical ? {
+			at: b.node.index,
+			x: b.x + b.w / 2,
+			y: (a.y + a.h + end) / 2
+		} : {
+			at: b.node.index,
+			x: (a.x + a.w + end) / 2,
+			y: (col === void 0 ? b.y : a.y) + Math.min(b.h, a.h) / 2
+		});
+	}
+	return gaps;
+}
+function dropGapFor(boxes, point, insertFrom, vertical) {
+	const along = (p) => vertical ? p.y : p.x;
+	const gaps = insertGaps(boxes, insertFrom, vertical);
+	if (!gaps.length) return null;
+	const main = boxes.filter((b) => b.node.row === "main");
+	const add = main.find((b) => b.node.kind === "add");
+	const last = main.filter((b) => b.node.kind !== "add").pop();
+	const end = add ? along({
+		x: add.x + add.w / 2,
+		y: add.y + add.h / 2
+	}) : last ? along({
+		x: last.x + last.w,
+		y: last.y + last.h
+	}) : Infinity;
+	const at = along(point);
+	let best = null;
+	for (const g of gaps) if (!best || Math.abs(along(g) - at) < Math.abs(along(best) - at)) best = g;
+	return best && Math.abs(along(best) - at) < Math.abs(end - at) ? best.at : null;
+}
+function isStopDrag(types) {
+	if (!types) return false;
+	const list = Array.from(types);
+	return list.includes(STOP_MIME) || list.includes(FLYWAY_MIME);
+}
+function stopDropOf(dt) {
+	if (!dt) return null;
+	const kind = dt.getData(STOP_MIME);
+	if (kind) return { kind };
+	const planId = dt.getData(FLYWAY_MIME);
+	return planId ? { planId } : null;
+}
+function canShift(stops, i, dir, insertFrom) {
+	const to = i + dir;
+	return !!stops[i]?.editable && stops[i].kind !== "group" && to >= insertFrom && to >= 0 && to < stops.length && !!stops[to].editable;
+}
+function undoPayload(step, index, flight) {
+	return !!flight && index > flight.cursor && index < flight.steps.length ? {
+		step,
+		at: index
+	} : { step };
+}
+var flownState = (s) => s === "done" || s === "skipped" || s === "failed";
+function groupHaltStep(n) {
+	if (n.kind !== "group") return null;
+	return n.group?.nodes.find((s) => !flownState(s.state) && !!s.step) || null;
+}
+function canHalt(n, here = false) {
+	if (n.kind === "group") {
+		const s = groupHaltStep(n);
+		return !!s && (!!s.editable || FLIGHT_HERE.has(s.state));
+	}
+	return n.kind === "stop" && !!n.step && (!!n.editable || here) && !flownState(n.state);
+}
+var FLIGHT_HERE = /* @__PURE__ */ new Set([
+	"current",
+	"perched",
+	"paused",
+	"halted"
+]);
+function haltToggle(n) {
+	if (n.kind === "group") n = groupHaltStep(n) || n;
+	return n.step?.halt ? {
+		key: "halt",
+		label: "Remove halt point",
+		title: "Take the halt point off this stop — the route goes on through it",
+		pressed: true
+	} : {
+		key: "halt",
+		label: "Add halt point",
+		title: "Make this stop a halt point — the route pauses when it gets here, before doing it"
+	};
+}
+function flightHold(n) {
+	if (n.state === "paused") return {
+		key: "resume",
+		label: "Carry on",
+		title: "Go on from this stop"
+	};
+	if (n.state === "halted") return null;
+	return {
+		key: "pause",
+		label: "Pause",
+		title: "Pause the route where it is — Carry on picks it up again"
+	};
+}
+function haltMark(n) {
+	if (n.kind === "group") {
+		const s = groupHaltStep(n);
+		return s?.step?.halt ? haltMark(s) : null;
+	}
+	if (n.kind !== "stop" || !n.step?.halt) return null;
+	return n.state === "paused" ? {
+		glyph: "⏸",
+		title: "Halt point — the route paused here. Carry on to go on"
+	} : {
+		glyph: "⏸",
+		title: "Halt point — the route pauses here before doing this stop"
+	};
+}
+var note = (label) => ({
+	key: "note",
+	label,
+	title: label,
+	note: true
+});
+function removeTool(n, here = false) {
+	if (n.kind === "group") {
+		const k = n.group?.total || 0;
+		return {
+			key: "remove",
+			label: "Remove",
+			title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the route",
+			danger: true
+		};
+	}
+	if (here) return {
+		key: "remove",
+		label: "Remove — the route pauses here",
+		title: "Remove this stop — the route pauses right before the stop that followed it",
+		danger: true
+	};
+	if (flownState(n.state)) return {
+		key: "remove",
+		label: "Remove from the route",
+		title: "Take this finished stop off the route",
+		danger: true
+	};
+	return {
+		key: "remove",
+		label: "Remove",
+		title: "Take this stop off the route (Delete)",
+		danger: true
+	};
+}
+function groupItems(n, ctx) {
+	const { can } = ctx;
+	const items = [];
+	const hold = ctx.here && ctx.live && FLIGHT_HERE.has(n.state) ? flightHold(n) : null;
+	if (hold) items.push(hold);
+	if (can.edit) items.push({
+		key: "edit",
+		label: n.editable ? "Edit" : "Details",
+		title: "Open this group and its stops (Enter)"
+	});
+	if (can.group) items.push(ctx.expanded ? {
+		key: "expand",
+		label: "Fold its stops",
+		title: "Draw it as one stop again"
+	} : {
+		key: "expand",
+		label: "Show its stops",
+		title: "Draw each of its stops on the route"
+	});
+	if (can.halt && canHalt(n)) items.push(haltToggle(n));
+	if (can.remove) items.push(removeTool(n));
+	if (!n.editable && n.state !== "done" && n.state !== "skipped") items.push(note("The route is in this group — only what is still ahead can change"));
+	return items;
+}
+function menuItemsFor(n, ctx) {
+	const items = boxItems(n, ctx);
+	if (!ctx.jump || n.kind !== "stop" && n.kind !== "group") return items;
+	const at = items.findIndex((i) => i.danger || i.note);
+	items.splice(at < 0 ? items.length : at, 0, JUMP_ITEM);
+	return items;
+}
+var JUMP_ITEM = {
+	key: "jump",
+	label: "Jump here",
+	title: "Move the route to this stop — the halt points after it are armed again"
+};
+function boxItems(n, ctx) {
+	const { can } = ctx;
+	if (n.kind === "add") return can.open ? [{
+		key: "tackon",
+		label: "Add a stop",
+		title: "Pick a stop to add at the end of the route"
+	}] : [];
+	if (n.kind === "rung") return [note("Goes as far as — this stop moves as the session ships")];
+	if (n.kind === "group") return groupItems(n, ctx);
+	if (n.kind !== "stop") return can.open ? [{
+		key: "open",
+		label: "Open",
+		title: n.session ? "Go to " + n.session : "Open it"
+	}] : [];
+	if (n.editable) {
+		const items = [];
+		if (can.edit) items.push({
+			key: "edit",
+			label: "Edit",
+			title: "Open this stop in the inspector (Enter)"
+		});
+		if (can.move) {
+			items.push({
+				key: "earlier",
+				label: "Earlier",
+				title: "Move this stop one place earlier on the route (←)",
+				disabled: !ctx.earlier
+			});
+			items.push({
+				key: "later",
+				label: "Later",
+				title: "Move this stop one place later on the route (→)",
+				disabled: !ctx.later
+			});
+		}
+		if (can.duplicate) items.push({
+			key: "duplicate",
+			label: "Duplicate",
+			title: "The same stop again, right after this one"
+		});
+		if (can.halt && canHalt(n)) items.push(haltToggle(n));
+		if (can.remove) items.push(removeTool(n));
+		return items;
+	}
+	if (flownState(n.state)) {
+		const items = [];
+		if (can.edit) items.push({
+			key: "edit",
+			label: "Details",
+			title: "Open this stop (it has run: read-only)"
+		});
+		if (can.remove && ctx.live) items.push(removeTool(n));
+		items.push(note("This stop has run"));
+		return items;
+	}
+	if (!ctx.here && (n.state === "pending" || n.state === "edit")) return [note("Still to come — it can't change here")];
+	const items = [];
+	const hold = ctx.here && ctx.live ? flightHold(n) : null;
+	if (hold) items.push(hold);
+	if (ctx.live) {
+		const verify = n.step?.kind === "verify";
+		if (n.state === "perched") items.push(verify ? {
+			key: "behaviors",
+			label: "Open Verify",
+			title: "Check the steps only you can do, then Confirm verified or Not verified… — the route goes on once you answer"
+		} : {
+			key: "done",
+			label: "Done",
+			title: "Mark this stop done — the bird flies on"
+		});
+		if (n.state === "halted") items.push({
+			key: "retry",
+			label: "Retry",
+			title: "Run this stop again"
+		});
+		if (n.state === "halted") items.push({
+			key: "fix",
+			label: "Let the agent fix it",
+			title: verify ? "Hand the failed steps and their evidence to the agent — it verifies again after its fix" : "Hand the failure to the agent — this stop runs again after its fix"
+		});
+		items.push({
+			key: "skip",
+			label: "Skip",
+			title: "Skip this stop — the bird flies on to the next"
+		});
+	}
+	if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
+	if (can.edit) items.push({
+		key: "edit",
+		label: "Details",
+		title: "Open this stop (the route is here: read-only)"
+	});
+	if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
+	items.push(note("The route is here — it can't change now"));
+	return items;
+}
+function birdAction(tone, onFlight) {
+	if (!onFlight) return null;
+	if (tone === "paused") return {
+		key: "resume",
+		label: "Carry on",
+		title: "Carry on — the route goes on from this stop"
+	};
+	if (tone === "halted") return {
+		key: "retry",
+		label: "Retry",
+		title: "Retry — run this stop again"
+	};
+	return {
+		key: "pause",
+		label: "Pause",
+		title: "Pause the route here — Carry on picks it up again"
+	};
+}
+function jumpStepOf(n) {
+	if (n.kind === "group") return n.group?.nodes[0]?.step || n.group?.steps[0] || null;
+	return n.kind === "stop" ? n.step || null : null;
+}
+function jumpFlightOf(d) {
+	if (!d.flightId) return null;
+	for (const n of d.nodes) {
+		if (n.kind === "group" && n.group?.current?.step) return {
+			id: d.flightId,
+			at: n.group.current.step.id
+		};
+		if (n.kind === "stop" && n.step && FLIGHT_HERE.has(n.state)) return {
+			id: d.flightId,
+			at: n.step.id
+		};
+	}
+	return {
+		id: d.flightId,
+		at: null
+	};
+}
+function canJumpTo(flight, n) {
+	if (!flight?.id || n.row !== "main") return false;
+	const step = jumpStepOf(n);
+	return !!step && step.id !== flight.at;
+}
+function jumpTargets(d, flight = jumpFlightOf(d)) {
+	return flight ? d.nodes.filter((n) => canJumpTo(flight, n)) : [];
+}
+var FIELD_HINT = {
+	"agent.prompt": "Typed to the session's agent when the route gets here; the stop is done once its turn has settled. {ticket} {pr} {branch} {subject} are filled in.",
+	"agent.fresh": "Off: this session's agent does it. On: a new session in this repo takes the prompt, with the CLI and model below.",
+	"agent.join": "On: the stop also waits until every worker the agent started has finished. Default on.",
+	"agent.program": "The new session's CLI (claude, codex…). Empty: the same as this session.",
+	"agent.model": "The new session's model. Empty: the same as this session.",
+	"split.prompts": "One worker per line, all started at once. {index} and {n} are filled in.",
+	"split.count": "With a single prompt: how many workers get it. 1 to 20, default 1.",
+	"split.model": "The workers' model. Empty: their CLI's default.",
+	"split.fence_only": "Each worker may change only these paths (comma-separated). Empty: anything.",
+	"split.report_back": "On: each worker reports its result back to this session when it is done. Default on.",
+	"join.of": "All workers = every worker this session has; Its Split's workers = only the ones a Split before it started.",
+	"join.on_failed": "Fail this stop = a failed worker fails it (then “If it fails” decides); Go on = it carries on with the others.",
+	"ship.lane": "How far the work goes: commit only, push, open the PR, or merge it once CI is green.",
+	"ship.ask_first": "On: the route waits on you before anything leaves this machine. Default off.",
+	"ship.message": "A hint for the commit message. Empty: it is written from the changes.",
+	"you.text": "What the route shows you. It waits (under Needs you) until you press Done.",
+	"you.items": "One item per line — each becomes a tick box.",
+	"you.notify": "On: your phone and the bell are told when the route gets here. Default on.",
+	"wait.seconds": "1 second to 14 days, default 10 min.",
+	"wait.until": "A time of day, 24-hour (18:00): today, or tomorrow once it has passed. A time wins over How long.",
+	"reviews.quiet_minutes": "Done once no new review comment has come for this long. 1 to 1440 min, default 10.",
+	"reviews.max_rounds": "Each round sends the new comments to the agent and pushes; more comments after this many rounds fail the stop. 1 to 50, default 5.",
+	"reviews.include_bots": "Off: comments from bot reviewers are left out. Default on.",
+	"checks.timeout_minutes": "The stop fails if CI hasn't finished by then; a failing check fails it at once. 1 to 1440 min, default 60.",
+	"command.command": "Runs in the session's folder; a non-zero exit fails the stop.",
+	"command.timeout_minutes": "Still running then: it is stopped and the stop fails. 1 to 1440 min, default 30.",
+	"ticket.state": "Its exact name or id in your tracker. Empty: comment only. Skipped when the route has no ticket.",
+	"ticket.comment": "Posted on the route's ticket. Empty: no comment.",
+	"notify.text": "Goes to your phone and the bell; the route never waits for it.",
+	"loop.back_to": "The route goes back to this stop for each new run.",
+	"loop.times": "Runs in all, counting the first. 0 = until stopped (or until “Stop looping when”). 0 to 1000, default 3.",
+	"loop.every_seconds": "Runs start at least this far apart; 0 = straight away. Up to 7 days.",
+	"loop.wait_limits": "On: while the agent is at a usage limit the loop waits instead of going round. Default on.",
+	"loop.fresh": "On: the agent's context is cleared before each run (when its CLI can).",
+	"loop.until": "Checked before each run; once true the loop ends. Empty: only the count stops it. ⓘ lists the conditions.",
+	"loop.prompt": "Typed to the agent at each run. Empty: the session's last prompt again.",
+	"budget.max_usd": "The session's estimated spend. Empty: no dollar limit.",
+	"budget.max_minutes": "How long the route has been running. 0 = no limit; up to 10080 min (7 days).",
+	"budget.max_tokens": "Fresh tokens (in, out, cache writes). 0 = no limit.",
+	"budget.scope": "Whole route = it keeps watching every later stop and fails the one running when a limit is passed; Here only = it checks once, at this stop.",
+	"call.method": "GET sends no body.",
+	"call.url": "http(s)://…; {branch} {pr} {ticket} {subject} are filled in.",
+	"call.headers": "One “Name: value” per line.",
+	"call.body": "Sent unless the method is GET; {receipt} = the last finished stop's result.",
+	"call.expect": "The stop is done when the HTTP status starts with this (2 = any 2xx); any other status fails it.",
+	"call.timeout_minutes": "No answer by then fails the stop. 1 to 60 min, default 5.",
+	"checkpoint.note": "Only names it. The stop records the commit and any uncommitted work, so you can rewind to it later.",
+	"handoff.wait": "Off: this stop is done as soon as the other route takes off. On: it waits for that route to finish, and fails if it halts or is cancelled.",
+	"judge.question": "Asked about the work; the answer is recorded on the stop.",
+	"judge.options": "Comma-separated, up to 12. An answer outside them fails the stop. Default: yes, no.",
+	"judge.by": "model = a one-off model reads the diff and answers; agent = the session's agent answers after its turn.",
+	"land.delete_branch": "Deletes the local branch once merged (never the default branch). Default on.",
+	"land.remote_branch": "Deletes it on origin too. Default on.",
+	"land.close": "delete = removes the session and its folder (it closes instead when there is uncommitted work); close = keeps the folder.",
+	"listen.match": "Empty: anything that arrives counts.",
+	"listen.timeout_minutes": "Nothing by then fails the stop. 0 = wait for ever; up to 10080 min (7 days).",
+	"preview.command": "Runs in the session's folder; the URL it prints last becomes {preview}.",
+	"preview.timeout_minutes": "1 to 1440 min, default 20.",
+	"preview.stop_command": "Runs when the route ends or is cancelled. Empty: the preview is left up.",
+	"review.program": "The reviewer's CLI. Empty: the same as this session.",
+	"review.model": "The reviewer's model. Empty: its CLI's default.",
+	"review.focus": "Added to what the reviewer is asked to look at.",
+	"review.block": "On: any finding fails the stop (then “If it fails” decides). Off: findings are only recorded. Default on.",
+	"review.keep": "Off: the reviewer session is closed when it has answered.",
+	"screenshot.urls": "{preview} = the Preview stop's URL; lines that aren't http(s) are skipped.",
+	"screenshot.widths": "Comma-separated, each 200 to 4000 px. Default 1280, 390.",
+	"screenshot.timeout_minutes": "1 to 1440 min, default 10.",
+	"screenshot.comment_pr": "Needs a PR and a GitHub token; without them the stop says why it didn't post.",
+	"someone.who": "A peer link's name. Empty: the webhook below is used.",
+	"someone.text": "Empty: the stop's title is asked. The route waits until they press Done.",
+	"someone.items": "One per line, shown as a list in the ask.",
+	"someone.webhook": "A Slack incoming webhook or any URL that takes a JSON POST.",
+	"sync.with": "Empty: the default branch (main).",
+	"sync.how": "rebase replays this branch on top of it; merge adds a merge commit. A conflict fails the stop, listing the files.",
+	"sync.fetch": "On: it is fetched from origin first. Default on.",
+	"test.command": "Empty: the project's tests are found (pytest, npm test, go test, cargo test).",
+	"test.expect": "pass = done when every test passes; fail = done when something fails (to show a bug is real).",
+	"test.rerun_failures": "1 to 3 failures get one more run, and that run decides. Default on.",
+	"test.timeout_minutes": "1 to 1440 min, default 30."
+};
+var FIELD_RANGE = {
+	"split.count": [1, 20],
+	"wait.seconds": [1, 1209600],
+	"reviews.quiet_minutes": [1, 1440],
+	"reviews.max_rounds": [1, 50],
+	"checks.timeout_minutes": [1, 1440],
+	"command.timeout_minutes": [1, 1440],
+	"loop.times": [0, 1e3],
+	"loop.every_seconds": [0, 604800],
+	"budget.max_minutes": [0, 10080],
+	"budget.max_tokens": [0, 0xe8d4a51000],
+	"call.timeout_minutes": [1, 60],
+	"listen.timeout_minutes": [0, 10080],
+	"preview.timeout_minutes": [1, 1440],
+	"screenshot.timeout_minutes": [1, 1440],
+	"test.timeout_minutes": [1, 1440]
+};
+var fieldHint = (kind, field) => FIELD_HINT[kind + "." + field] || "";
+function clampField(kind, field, v) {
+	const r = FIELD_RANGE[kind + "." + field];
+	if (v === "" || !r) return v;
+	return Math.min(r[1], Math.max(r[0], v));
+}
+function onFailHint(k, kind = "") {
+	if (kind === "verify") return capital(VERIFY_ON_FAIL[k]) + ".";
+	switch (k) {
+		case "agent": return "The failure goes to the agent; the stop runs again when its turn ends (up to " + FIX_ROUNDS + " rounds, then the route halts).";
+		case "skip": return "The route goes on as if this stop was not there.";
+		case "you": return "The route waits on you, amber, showing the failure.";
+		default: return "The route stops here, red; you Retry or Skip.";
+	}
+}
+var capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+function stopSentence(step, fallback = "halt", body = "") {
+	const out = [];
+	if (step.halt) out.push("The route pauses here first (a halt point) — Carry on to run it.");
+	const when = (step.when || "").trim();
+	if (when) out.push("It runs only when " + when + " — otherwise it is skipped.");
+	if (body) {
+		out.push(body);
+		return out.join(" ");
+	}
+	const k = step.on_fail || fallback;
+	out.push("If it fails, " + (k === "agent" ? "the agent gets the failure and the stop runs again, up to " + FIX_ROUNDS + " rounds" : k === "skip" ? "the route goes on without it" : k === "you" ? "the route waits on you" : "the route halts, red") + ".");
+	return out.join(" ");
+}
+//#endregion
+//#region src/lib/flightDiagram.ts
+var clip$5 = (s, n = 34) => {
+	const t = s.replace(/\s+/g, " ").trim();
+	return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
+};
+var num$7 = (v, d) => {
+	const n = Number(v);
+	return Number.isFinite(n) && v !== "" && v !== null && v !== void 0 ? n : d;
+};
+var YOU_WAITS = "waits for your Done";
+function youFlownSub(step, state) {
+	if (step.kind !== "you" || state !== "done" && state !== "skipped") return "";
+	return stopSummary(step) === YOU_WAITS ? state : "";
+}
+function stopSummary(step) {
+	const c = step.config || {};
+	switch (step.kind) {
+		case "agent": {
+			const p = String(c.prompt ?? "").trim();
+			return (p ? "“" + clip$5(p, 28) + "”" : "works its turn") + (c.fresh ? " · new session" : "");
+		}
+		case "ship": {
+			const lane = normalizeLane(String(c.lane ?? "push")) || "push";
+			return (lane === "leave" ? "off" : LANE_LABEL[lane].toLowerCase()) + (c.ask_first ? " · asks first" : "");
+		}
+		case "verify": return verifyFace(c);
+		case "land": return "once merged: " + (String(c.close || "delete") === "close" ? "closes" : "deletes") + " the session" + (c.delete_branch === false ? " · keeps the branch" : "");
+		case "you": {
+			const items = youItems(step);
+			if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
+			const t = String(c.text ?? "").trim();
+			return t ? clip$5(t) : YOU_WAITS;
+		}
+		case "wait": {
+			const until = String(c.until ?? "").trim();
+			const secs = num$7(c.seconds, 0) > 0 ? num$7(c.seconds, 0) : num$7(c.minutes, 10) * 60;
+			return until ? "until " + until : durationWord(secs);
+		}
+		case "reviews": return num$7(c.quiet_minutes, 10) + " min quiet";
+		case "checks": return "up to " + num$7(c.timeout_minutes, 60) + " min";
+		case "command": {
+			const cmd = String(c.command ?? "").trim();
+			return cmd ? clip$5(cmd, 30) : "no command yet";
+		}
+		case "ticket": {
+			const st = String(c.state ?? "").trim();
+			return st ? "move to " + st : "comment";
+		}
+		case "notify": {
+			const t = String(c.text ?? "").trim();
+			return t ? clip$5(t) : "a ping";
+		}
+		case "split": {
+			const lines = (Array.isArray(c.prompts) ? c.prompts.map(String) : String(c.prompts ?? "").split("\n")).filter((l) => l.trim()).length;
+			const n = lines > 1 ? lines : Math.max(1, num$7(c.count, 1));
+			return n + (n === 1 ? " worker" : " workers") + " in parallel";
+		}
+		case "loop": {
+			const times = Math.max(0, num$7(c.times, 3));
+			const until = String(c.until ?? "").trim();
+			const every = num$7(c.every_seconds, 0) > 0 ? num$7(c.every_seconds, 0) : Math.max(0, num$7(c.every_minutes, 0)) * 60;
+			const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
+			if (until) parts.push("until " + clip$5(until, 22));
+			if (every) parts.push("every " + durationWord(every));
+			if (c.fresh) parts.push("fresh context");
+			return parts.filter(Boolean).join(" · ");
+		}
+		case "join": return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
+		default: return "";
+	}
+}
+function stopSub(title, sub) {
+	const norm = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+	return sub && norm(sub) !== norm(title) ? sub : "";
+}
+function durationWord(seconds) {
+	const n = Math.round(Math.max(0, seconds));
+	if (n < 60) return n + " s";
+	if (n % 3600 === 0) return n / 3600 + " h";
+	if (n < 3600) return n % 60 === 0 ? n / 60 + " min" : Math.floor(n / 60) + " min " + n % 60 + " s";
+	return Math.floor(n / 3600) + " h " + Math.floor(n % 3600 / 60) + " min";
+}
+function loopMark(step, rec) {
+	const times = Math.max(0, Math.floor(num$7(step.config?.times, 3)));
+	const runs = Math.max(0, Math.floor(num$7(rec?.detail?.runs, 0)));
+	const st = rec?.state;
+	return {
+		runs,
+		times,
+		state: st === "done" || st === "skipped" ? "done" : st === "running" || st === "waiting_you" || runs > 0 ? "running" : "pending"
+	};
+}
+function loopPill(m) {
+	if (m.state === "pending" && m.runs === 0) return "";
+	return Math.max(1, m.runs + 1) + " / " + (m.times > 0 ? m.times : "∞");
+}
+function loopPillTitle(m) {
+	const run = Math.max(1, m.runs + 1);
+	return (m.state === "done" ? "Looped: run " : "Run ") + run + (m.times > 0 ? " of " + m.times : " — it loops until stopped");
+}
+function loopLine(step, rec) {
+	const m = loopMark(step, rec);
+	const run = Math.max(1, m.runs + 1);
+	const until = String(step.config?.until ?? "").trim();
+	const counter = m.times > 0 ? "run " + run + " of " + m.times : "run " + run + (until ? " — until " + clip$5(until, 22) : "");
+	const note = String(rec?.note ?? "").replace(/\s+/g, " ").trim();
+	if (!note) return counter;
+	if (/usage limit|the limit/i.test(note)) return "waiting on the limit";
+	const next = /^next run in\s+(.+)$/i.exec(note);
+	if (next) return counter + " · next in " + next[1];
+	if (/^run \d/i.test(note)) return clip$5(note, 40);
+	return counter + " · " + clip$5(note, 28);
+}
+function loopEdges(line, head) {
+	const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
+	const out = [];
+	stops.forEach((n, i) => {
+		const s = n.step;
+		if (s.kind !== "loop") return;
+		const before = stops.slice(0, i).filter((b) => b.step.kind !== "loop");
+		const back = String(s.config?.back_to ?? "").trim();
+		if (back === LOOP_AGENT) {
+			if (!head) return;
+			const last = before[before.length - 1];
+			out.push({
+				from: last ? last.id : head,
+				to: head,
+				kind: "loop",
+				loop: n.loop || loopMark(s),
+				via: n
+			});
+			return;
+		}
+		const gid = s.group?.id;
+		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
+		const end = before[before.length - 1];
+		if (!before.length && !back && head) {
+			out.push({
+				from: head,
+				to: head,
+				kind: "loop",
+				loop: n.loop || loopMark(s),
+				via: n
+			});
+			return;
+		}
+		if (!target || !end) return;
+		out.push({
+			from: end.id,
+			to: target.id,
+			kind: "loop",
+			loop: n.loop || loopMark(s),
+			via: n
+		});
+	});
+	return out;
+}
+function liftLoops(line, head) {
+	const loops = loopEdges(line, head);
+	const lifted = new Set(loops.map((e) => e.via.id));
+	return {
+		line: line.filter((n) => !lifted.has(n.id)),
+		loops
+	};
+}
+function loopAtWork(d) {
+	return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
+}
+function firstStepOf(n) {
+	return n.step || n.group?.steps[0];
+}
+function loopSlotAfter(n) {
+	if (n.index === void 0) return void 0;
+	return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
+}
+var LOOP_AGENT = "agent";
+var loopsToAgent = (step) => !!step && step.kind === "loop" && String(step.config?.back_to ?? "").trim() === LOOP_AGENT;
+function loopStepTo(def, taken, target) {
+	const step = newStep(def, taken);
+	return {
+		...step,
+		config: {
+			...step.config,
+			back_to: target === LOOP_AGENT ? LOOP_AGENT : target.id
+		}
+	};
+}
+function loopBackTo(to) {
+	if (to.kind === "session") return LOOP_AGENT;
+	return firstStepOf(to)?.id || "";
+}
+function loopChoices(n, nodes, opts = {}) {
+	const canRepeat = (m) => (m.kind === "stop" ? !!m.step && m.step.kind !== "loop" : m.kind === "group") && m.index !== void 0 && m.row === "main";
+	if (!canRepeat(n)) return [];
+	const from = loopFromOf(n, nodes);
+	const slot = loopSlotAfter(from);
+	if (slot === void 0 || slot < (opts.insertFrom ?? 0)) return [];
+	const out = [];
+	if (opts.session) out.push({
+		key: "loop-to-agent",
+		label: "The agent (run it again)",
+		title: "After this stop the agent is prompted again, then the route runs again",
+		agent: true,
+		from,
+		to: opts.session
+	});
+	for (const m of nodes) {
+		if (!canRepeat(m) || m.index > n.index) continue;
+		out.push({
+			key: "loop-to:" + m.id,
+			label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”",
+			title: "After this stop the route goes back to “" + m.title + "”",
+			agent: false,
+			from,
+			to: m
+		});
+	}
+	return out;
+}
+function loopFromOf(n, nodes) {
+	const pid = n.parallel?.id;
+	if (!pid) return n;
+	let last = n;
+	for (const m of nodes) if (m.parallel?.id === pid && m.index !== void 0 && last.index !== void 0 && m.index > last.index) last = m;
+	return last;
+}
+function findNode(d, id) {
+	if (!id) return null;
+	for (const n of d.nodes) {
+		if (n.id === id) return n;
+		const sub = n.group?.nodes.find((x) => x.id === id);
+		if (sub) return sub;
+	}
+	return d.edges.find((e) => e.via?.id === id)?.via || null;
+}
+function loopIdlePill(m, via) {
+	const pace = loopPace(via);
+	if (m.times > 0) return "↻ repeat ×" + m.times + pace;
+	const until = String(via?.step?.config?.until ?? "").trim();
+	return (until ? "↻ until " + clip$5(until, 18) : "↻ until stopped") + pace;
+}
+function loopPace(via) {
+	const c = via?.step?.config || {};
+	let secs = Math.floor(num$7(c.every_seconds, 0));
+	if (secs <= 0) secs = Math.floor(num$7(c.every_minutes, 0)) * 60;
+	return secs > 0 ? " · every " + durationWord(secs) : "";
+}
+function loopCaption(m, via) {
+	if (m.state === "pending" && m.runs === 0) return "";
+	const until = String(via?.step?.config?.until ?? "").trim();
+	const pace = loopPace(via);
+	if (until) return "until " + clip$5(until, 18) + pace;
+	return pace ? pace.slice(3) : m.times > 0 ? "" : "until stopped";
+}
+function fixOf(detail) {
+	const f = detail?.fix;
+	if (!f || typeof f !== "object") return void 0;
+	const round = Math.max(1, Math.floor(num$7(f.round, 1)));
+	const of = f.of === null || f.of === void 0 ? null : Math.max(0, Math.floor(num$7(f.of, 0))) || null;
+	return {
+		active: !!f.active,
+		round,
+		rounds: Math.max(round, Math.floor(num$7(f.rounds, round))),
+		of,
+		reason: String(f.reason ?? ""),
+		since: num$7(f.since, 0),
+		to: String(f.to ?? "") || LOOP_AGENT,
+		...f.kind ? { kind: String(f.kind) } : {},
+		...f.outcome === "fixed" || f.outcome === "halted" ? { outcome: f.outcome } : {}
+	};
+}
+function returnMark(ret, fix, stopState, passedNext) {
+	if (!ret && !fix) return void 0;
+	const shown = fix?.active ? "fixing" : fix?.outcome === "fixed" && !passedNext ? "fixed" : fix?.outcome === "halted" && (stopState === "halted" || stopState === "failed") ? "halted" : "case";
+	return {
+		to: ret?.to || fix?.to || LOOP_AGENT,
+		case: ret?.case || "if it fails",
+		of: ret ? ret.of : fix?.of ?? null,
+		...fix ? { fix } : {},
+		shown
+	};
+}
+function fixingWord(m, fix) {
+	return "fixing " + (m.of ? fix.round + "/" + m.of : "round " + fix.round);
+}
+function returnLabel(m) {
+	const f = m.fix;
+	if (m.shown === "fixing" && f) return (f.reason ? clip$5(f.reason, 40) + " · " : "") + fixingWord(m, f);
+	if (m.shown === "fixed" && f) return "fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
+	if (m.shown === "halted" && f) return "halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
+	return m.case;
+}
+function returnTitle(m, to = "the agent") {
+	const f = m.fix;
+	const cap = m.of ? " (at most " + m.of + (m.of === 1 ? " round)" : " rounds)") : "";
+	const base = "If it fails: Let the agent fix it — " + m.case + ", back to " + to + cap;
+	if (m.shown === "fixing" && f) return (f.reason || "It failed") + " — the agent is fixing it (round " + f.round + (m.of ? " of " + m.of : "") + ")";
+	if (m.shown === "fixed" && f) return "Fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
+	if (m.shown === "halted" && f) return "Halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
+	return base;
+}
+function fixFace(fix) {
+	return "Agent fixing · round " + fix.round;
+}
+function returnEdges(line, head) {
+	const stops = line.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group"));
+	const out = [];
+	stops.forEach((n, i) => {
+		const m = n.ret;
+		if (!m) return;
+		const target = m.to === LOOP_AGENT ? void 0 : stops.slice(0, i).find((b) => b.step?.id === m.to || b.group?.steps.some((s) => s.id === m.to));
+		const to = target ? target.id : head;
+		if (!to) return;
+		out.push({
+			from: n.id,
+			to,
+			kind: "fix",
+			ret: m
+		});
+	});
+	return out;
+}
+function stopTitle(step, kinds) {
+	return stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title;
+}
+var stopId = (s, i) => "stop:" + (s.id || "i" + i);
+function parallelMark(steps, i) {
+	const [lo, hi] = parallelSpan(steps, i);
+	if (hi - lo < 2) return {};
+	return { parallel: {
+		id: steps[i].parallel.id,
+		index: i - lo,
+		size: hi - lo
+	} };
+}
+function lineRuns(line) {
+	const out = [];
+	for (const n of line) {
+		const last = out[out.length - 1];
+		const pid = n.parallel?.id;
+		if (pid && last && last[0].parallel?.id === pid) last.push(n);
+		else out.push([n]);
+	}
+	return out;
+}
+var FLOWN_STATES = /* @__PURE__ */ new Set([
+	"done",
+	"skipped",
+	"failed"
+]);
+function lineEdges(line) {
+	const runs = lineRuns(line);
+	const edges = [];
+	for (let k = 1; k < runs.length; k++) {
+		const a = runs[k - 1];
+		const b = runs[k];
+		if (b.length === 1 && b[0].kind === "add") {
+			edges.push({
+				from: a[a.length - 1].id,
+				to: b[0].id,
+				kind: "add"
+			});
+			continue;
+		}
+		for (const x of a) for (const y of b) if (a.length > 1) edges.push(FLOWN_STATES.has(x.state) ? {
+			from: x.id,
+			to: y.id,
+			kind: "join",
+			done: true
+		} : {
+			from: x.id,
+			to: y.id,
+			kind: "join"
+		});
+		else edges.push({
+			from: x.id,
+			to: y.id,
+			kind: b.length > 1 ? "fan" : "line"
+		});
+	}
+	return edges;
+}
+function chain(nodes, edges, line) {
+	edges.push(...lineEdges(line));
+	nodes.push(...line);
+}
+function insertFromOf$1(f) {
+	if (f.state === "ready" || f.state === "grounded") return 0;
+	return Math.max(f.cursor + 1, parallelSpan(f.steps, f.cursor)[1]);
+}
+function stopOptionsLine(s, kinds) {
+	const fallback = defaultOnFail(kinds?.find((k) => k.kind === s.kind));
+	const failSet = !!s.on_fail && s.on_fail !== fallback;
+	if (!s.halt && !(s.when || "").trim() && !failSet) return "";
+	return stopSentence(s, fallback);
+}
+function addNode(title) {
+	return {
+		id: "add",
+		kind: "add",
+		row: "main",
+		title,
+		sub: "",
+		state: "pending",
+		icon: "add"
+	};
+}
+function flywayDiagram(steps, kinds) {
+	const { line, loops } = liftLoops(steps.map((s, i) => ({
+		id: stopId(s, i),
+		kind: "stop",
+		row: "main",
+		title: stopTitle(s, kinds),
+		sub: stopSub(stopTitle(s, kinds), stopSummary(s)),
+		...stopOptionsLine(s, kinds) ? { summary: stopOptionsLine(s, kinds) } : {},
+		state: "edit",
+		icon: s.kind,
+		perch: stepActor(s, kinds) === "you",
+		step: s,
+		index: i,
+		editable: true,
+		...looksOf(s, kinds),
+		...s.kind === "loop" ? { loop: loopMark(s) } : {},
+		...parallelMark(steps, i)
+	})));
+	line.push(addNode("Add a stop"));
+	const nodes = [];
+	const edges = [];
+	chain(nodes, edges, line);
+	edges.push(...loops);
+	return {
+		nodes,
+		edges,
+		flightId: "",
+		mode: "none",
+		insertFrom: 0
+	};
+}
+function flightStops(f, kinds) {
+	const live = isLive(f);
+	const grounded = f.state === "grounded" || f.state === "ready";
+	const [glo, ghi] = parallelSpan(f.steps, f.cursor);
+	const open = Math.max(f.cursor + 1, ghi);
+	return f.steps.map((s, i) => {
+		const st = stepStateOf(f, s, i);
+		const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
+		const atCursor = live && (i === f.cursor || inGroup);
+		let state = st === "done" ? "done" : st === "skipped" ? "skipped" : st === "failed" ? "failed" : st === "waiting_you" ? "perched" : st === "running" ? "current" : "pending";
+		if (inGroup && state === "done") {} else if (inGroup && f.state === "halted") {
+			if (st === "failed") state = "halted";
+		} else if (inGroup && f.state === "paused") {
+			if (state === "current" || state === "pending") state = "paused";
+		} else if (atCursor && f.state === "halted") state = "halted";
+		else if (atCursor && f.state === "paused") state = "paused";
+		const rec = f.step_states?.[s.id];
+		const loop = s.kind === "loop" ? loopMark(s, rec) : void 0;
+		if (loop && state === "current" && live && i > f.cursor) state = "pending";
+		const flown = state === "done" || state === "skipped" || state === "failed";
+		const looping = !!loop && !flown && (loop.runs > 0 || atCursor && state !== "pending");
+		const fix = fixOf(rec?.detail);
+		const next = f.steps[i + 1];
+		const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
+		const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
+		const summary = stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s));
+		const note = live && state === "current" && !looping && !fix?.active ? liveNote(rec?.note) : "";
+		const handed = state === "perched" ? String(rec?.detail?.failed_reason ?? "").trim() : "";
+		const tip = [note && summary && note !== summary ? summary : "", stopOptionsLine(s, kinds)].filter(Boolean).join(" · ");
+		return {
+			id: stopId(s, i),
+			kind: "stop",
+			row: "main",
+			title: stopTitle(s, kinds),
+			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : note || summary,
+			...tip ? { summary: tip } : {},
+			state,
+			icon: s.kind,
+			perch: stepActor(s, kinds) === "you",
+			step: s,
+			index: i,
+			editable: grounded || live && state === "pending" && i >= open,
+			reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : handed,
+			...looksOf(s, kinds),
+			...flown ? { receipt: receiptOf(rec?.detail) } : {},
+			...loop ? { loop } : {},
+			...ret ? { ret } : {},
+			...state === "done" && rec?.detail?.by === "agent" ? { by: "agent" } : {},
+			...!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {},
+			...parallelMark(f.steps, i)
+		};
+	});
+}
+function liveNote(note) {
+	return clip$5(String(note ?? ""), 60);
+}
+function looksOf(s, kinds) {
+	const out = {};
+	const risk = riskOf(s, kinds);
+	if (risk.length) out.risk = risk;
+	const when = String(s.when ?? "").trim();
+	if (when) out.when = when;
+	return out;
+}
+function untilOf(detail) {
+	const v = Number(detail?.until ?? detail?.next_at ?? 0);
+	return Number.isFinite(v) && v > 0 ? v : 0;
+}
+function leftWord(secs) {
+	if (secs <= 0) return "due";
+	const s = Math.ceil(secs);
+	const h = Math.floor(s / 3600);
+	const m = Math.floor(s % 3600 / 60);
+	const ss = String(s % 60).padStart(2, "0");
+	return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + ss + " left";
+}
+function receiptOf(detail) {
+	const r = detail?.receipt;
+	if (typeof r !== "string" && typeof r !== "number") return "";
+	return clip$5(String(r).replace(/\s+/g, " ").trim(), 80);
+}
+function flightDiagram(f, kinds) {
+	const { line, loops } = liftLoops(flightStops(f, kinds));
+	const rets = returnEdges(line);
+	if (isShown$1(f) || f.state === "grounded") line.push(addNode("Add a stop"));
+	const nodes = [];
+	const edges = [];
+	chain(nodes, edges, line);
+	edges.push(...loops, ...rets);
+	return {
+		nodes,
+		edges,
+		flightId: f.id,
+		mode: "flight",
+		insertFrom: f.state === "grounded" || f.state === "ready" ? f.cursor + 1 : insertFromOf$1(f)
+	};
+}
+var RUNGS = [
+	"commit",
+	"push",
+	"pr",
+	"merge"
+];
+var STAGE_RANK = {
+	committed: 1,
+	pushed: 2,
+	pr: 3,
+	merged: 4
+};
+function ladderRungs(row) {
+	const run = row.autopilot;
+	const depth = normalizeLane(run?.depth);
+	if (!run || !depth || depth === "leave") return [];
+	if (run.state !== "running" && run.state !== "halted" && run.state !== "done") return [];
+	const reached = STAGE_RANK[String(row.stage)] || 0;
+	const upTo = RUNGS.indexOf(depth) + 1;
+	let current = false;
+	return RUNGS.slice(0, upTo).map((lane, i) => {
+		if (run.state === "done" || i < reached) return {
+			lane,
+			state: "done"
+		};
+		if (!current) {
+			current = true;
+			return {
+				lane,
+				state: run.state === "halted" ? "halted" : "current"
+			};
+		}
+		return {
+			lane,
+			state: "pending"
+		};
+	});
+}
+function miniDots(row) {
+	const fl = row.flight;
+	if (fl && isShown$1(fl)) return stripDots(fl);
+	return ladderRungs(row).map((r) => r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○").join("");
+}
+function sessionBox(row, kind, rowAt) {
+	const ss = deriveSessionState(row);
+	return {
+		id: kind + ":" + row.title,
+		kind,
+		row: rowAt,
+		title: windowName(row.title),
+		sub: String(row.task_headline || row.task || "").split("\n")[0].trim(),
+		state: "session",
+		icon: "session",
+		session: row.title,
+		chip: {
+			label: ss.label,
+			tone: ss.tone
+		},
+		dots: kind === "child" ? miniDots(row) : void 0
+	};
+}
+function landedFlightOf(title, flights) {
+	let best = null;
+	for (const f of flights || []) {
+		if (f.session !== title || f.state !== "done") continue;
+		if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
+	}
+	return best;
+}
+function sessionDiagram(rows, title, opts = {}) {
+	const row = rows.find((r) => r.title === title);
+	const empty = {
+		nodes: [],
+		edges: [],
+		flightId: "",
+		mode: "none",
+		insertFrom: 0
+	};
+	if (!row) return empty;
+	const family = opts.family !== false;
+	const nodes = [];
+	const edges = [];
+	const me = sessionBox(row, "session", "main");
+	if (family && row.parent) {
+		const up = rows.find((r) => r.title === row.parent);
+		if (up) {
+			const p = sessionBox(up, "parent", "above");
+			nodes.push(p);
+			edges.push({
+				from: p.id,
+				to: me.id,
+				kind: "up"
+			});
+		}
+	}
+	const kids = rows.filter((r) => r.parent === title && r.title !== title);
+	if (!family && kids.length) me.sub = [me.sub, kids.length + (kids.length === 1 ? " worker" : " workers")].filter(Boolean).join(" · ");
+	const line = [me];
+	let mode = "none";
+	let flightId = "";
+	let insertFrom = 0;
+	let loops = [];
+	const fl = row.flight;
+	if (fl && isShown$1(fl)) {
+		mode = "flight";
+		flightId = fl.id;
+		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
+		const full = opts.flights?.find((f) => f.id === fl.id);
+		if (full) {
+			if (fl.state !== "ready") insertFrom = Math.max(insertFrom, insertFromOf$1(full));
+			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
+			line.push(...lifted.line);
+			loops = [...lifted.loops, ...returnEdges(line, me.id)];
+		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
+			const cur = i === fl.cursor;
+			const perch = cur && fl.step?.actor === "you";
+			line.push({
+				id: "stop:i" + i,
+				kind: "stop",
+				row: "main",
+				title: cur ? perch ? perchLabel(fl.step.title) : fl.step.title : "Stop " + (i + 1),
+				sub: "",
+				state: i < fl.cursor ? "done" : cur ? fl.state === "halted" ? "halted" : fl.state === "paused" ? "paused" : perch && fl.state === "waiting_you" ? "perched" : "current" : "pending",
+				icon: cur ? fl.step.kind : "stop",
+				perch,
+				index: i,
+				reason: cur && fl.state === "halted" ? fl.reason || "" : ""
+			});
+		}
+	} else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
+		const done = landedFlightOf(title, opts.flights);
+		mode = "flight";
+		flightId = done.id;
+		insertFrom = done.steps.length;
+		const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
+		line.push(...lifted.line);
+		loops = [...lifted.loops, ...returnEdges(line, me.id)];
+	} else {
+		const rungs = ladderRungs(row);
+		if (rungs.length) {
+			mode = "ladder";
+			const reason = row.autopilot?.state === "halted" ? row.autopilot.reason || "" : "";
+			for (const r of rungs) line.push({
+				id: "rung:" + r.lane,
+				kind: "rung",
+				row: "main",
+				title: LANE_LABEL[r.lane],
+				sub: "goes as far as" + (r.state === "current" && row.autopilot?.note ? " · " + clip$5(row.autopilot.note, 24) : ""),
+				state: r.state,
+				icon: "ship",
+				reason: r.state === "halted" ? reason : ""
+			});
+		}
+	}
+	line.push(addNode("Add a stop"));
+	const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
+	if (fans) {
+		nodes.push(...line);
+		const plain = lineEdges(line);
+		for (let i = 1; i < line.length; i++) {
+			const a = line[i - 1];
+			const b = line[i];
+			if (!fans.out.has(a.id)) edges.push(...plain.filter((e) => e.from === a.id));
+			for (const c of fans.out.get(a.id) || []) {
+				nodes.push(c);
+				edges.push({
+					from: a.id,
+					to: c.id,
+					kind: "fan"
+				});
+				const done = c.branch.state === "done" || fans.letGo.has(b.id);
+				edges.push(done ? {
+					from: c.id,
+					to: b.id,
+					kind: "join",
+					done
+				} : {
+					from: c.id,
+					to: b.id,
+					kind: "join"
+				});
+			}
+		}
+	} else chain(nodes, edges, line);
+	if (family) {
+		const hang = hangPoint(line);
+		const next = line[line.indexOf(hang) + 1];
+		const hung = (fans ? fans.below : kids).map((k) => {
+			const state = childState(k);
+			const c = sessionBox(k, "child", "below");
+			c.branch = {
+				from: hang.id,
+				to: next.id,
+				state,
+				inner: innerSummary(k),
+				...liveOf(k)
+			};
+			return c;
+		});
+		if (hung.length) {
+			const direct = edges.findIndex((e) => e.from === hang.id && e.to === next.id && (e.kind === "line" || e.kind === "add"));
+			if (direct >= 0) edges.splice(direct, 1);
+		}
+		for (const c of hung) {
+			nodes.push(c);
+			edges.push({
+				from: hang.id,
+				to: c.id,
+				kind: "branch"
+			});
+			edges.push(c.branch.state === "done" ? {
+				from: c.id,
+				to: next.id,
+				kind: "join",
+				done: true
+			} : {
+				from: c.id,
+				to: next.id,
+				kind: "join"
+			});
+		}
+	}
+	edges.push(...loops);
+	const d = {
+		nodes,
+		edges,
+		flightId,
+		mode,
+		insertFrom
+	};
+	if (mode !== "flight") return d;
+	const grouped = collapseGroups(d, opts.expandedGroups);
+	return opts.foldFlown === true || opts.expandFlown === false ? collapseFlown(grouped) : grouped;
+}
+function hangPoint(line) {
+	return line.find((n, i) => i < line.length - 1 && (n.kind === "stop" || n.kind === "rung") && HERE_STATES.has(n.state)) || line[0];
+}
+var HERE_STATES = /* @__PURE__ */ new Set([
+	"current",
+	"perched",
+	"paused",
+	"halted"
+]);
+function liveOf(k) {
+	const ss = deriveSessionState(k);
+	return ss.state === "working" ? { live: "working" } : ss.state === "needs_you" ? { live: "you" } : {};
+}
+function childState(k) {
+	const ss = deriveSessionState(k);
+	if (ss.state === "working") return "working";
+	if (ss.state === "needs_you") return "asking";
+	if (String(k.last_report?.status || "") === "failed" || ss.tone === "broken") return "failed";
+	return "done";
+}
+function foldRun(d, run, into) {
+	const main = d.nodes.filter((n) => n.row === "main");
+	const folded = new Set(run.map((n) => n.id));
+	const first = run[0];
+	const after = main[main.indexOf(run[run.length - 1]) + 1];
+	const to = (id) => folded.has(id) ? into.id : id;
+	const inner = /* @__PURE__ */ new Set();
+	const nodes = [];
+	for (const n of d.nodes) {
+		if (n.id === first.id) nodes.push(into);
+		if (folded.has(n.id)) continue;
+		if (n.branch && folded.has(n.branch.from)) {
+			inner.add(n.id);
+			nodes.push({
+				...n,
+				branch: {
+					...n.branch,
+					from: into.id,
+					to: after && folded.has(n.branch.to) ? after.id : n.branch.to
+				}
+			});
+		} else if (n.branch && folded.has(n.branch.to)) nodes.push({
+			...n,
+			branch: {
+				...n.branch,
+				to: into.id
+			}
+		});
+		else nodes.push(n);
+	}
+	const fanned = inner.size > 0;
+	const members = new Set(run.filter((n) => n.parallel).map((n) => n.id));
+	const edges = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const e0 of d.edges) {
+		const e = e0.kind === "fan" && members.has(e0.to) || e0.kind === "join" && members.has(e0.from) ? {
+			from: e0.from,
+			to: e0.to,
+			kind: d.nodes.find((n) => n.id === e0.to)?.kind === "add" ? "add" : "line"
+		} : e0;
+		const from = to(e.from);
+		let dest = to(e.to);
+		if (e.kind === "join" && dest === into.id && inner.has(e.from) && after) dest = after.id;
+		if (from === dest && e.kind !== "loop") continue;
+		if (fanned && from === into.id && (e.kind === "line" || e.kind === "add")) continue;
+		const key = from + ">" + dest + ">" + e.kind;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		edges.push({
+			...e,
+			from,
+			to: dest
+		});
+	}
+	return {
+		...d,
+		nodes,
+		edges
+	};
+}
+var FLOWN_MIN = 2;
+var FLOWN_ID = "flown";
+function collapseFlown(d) {
+	const main = d.nodes.filter((n) => n.row === "main");
+	const run = [];
+	for (const n of main) {
+		if (n.kind === "session") continue;
+		if (n.kind !== "stop" || n.inGroup || n.state !== "done" && n.state !== "skipped") break;
+		run.push(n);
+	}
+	if (run.length < FLOWN_MIN) return d;
+	const after = main[main.indexOf(run[run.length - 1]) + 1];
+	const pid = run[run.length - 1].parallel?.id;
+	if (pid && after?.parallel?.id === pid) while (run.length && run[run.length - 1].parallel?.id === pid) run.pop();
+	if (run.length < FLOWN_MIN) return d;
+	const first = run[0];
+	const last = run[run.length - 1];
+	return foldRun(d, run, {
+		id: FLOWN_ID,
+		kind: "flown",
+		row: "main",
+		title: run.length + " done",
+		sub: first.title + " … " + last.title,
+		state: "done",
+		icon: "flown",
+		count: run.length,
+		flown: run.map((n) => n.title)
+	});
+}
+var FLYING = /* @__PURE__ */ new Set([
+	"current",
+	"perched",
+	"halted",
+	"paused"
+]);
+function groupNode(id, g, run) {
+	const total = run.length;
+	const done = run.filter((n) => n.state === "done" || n.state === "skipped").length;
+	const flying = run.find((n) => FLYING.has(n.state));
+	const failed = run.find((n) => n.state === "failed");
+	const state = done === total ? "done" : flying ? flying.state : failed ? "failed" : run.every((n) => n.state === "edit") ? "edit" : "pending";
+	const titles = run.map((n) => n.title).join(" → ");
+	const node = {
+		id,
+		kind: "group",
+		row: "main",
+		title: g.name,
+		sub: flying ? flying.title : total + (total === 1 ? " stop: " : " stops: ") + clip$5(titles, 40),
+		state,
+		icon: "group",
+		perch: flying?.perch,
+		index: run[0].index,
+		editable: run.every((n) => !!n.editable),
+		reason: (flying || failed)?.reason || "",
+		group: {
+			id: g.id,
+			name: g.name,
+			plan_id: g.plan_id || "",
+			steps: run.map((n) => n.step),
+			nodes: run.slice(),
+			done,
+			total,
+			...flying ? { current: flying } : {}
+		}
+	};
+	const join = run.find((n) => n.join)?.join;
+	if (join) node.join = join;
+	const tags = new Set(run.flatMap((n) => n.risk || []));
+	if (tags.size) node.risk = [
+		"remote",
+		"irreversible",
+		"spends"
+	].filter((t) => tags.has(t));
+	return node;
+}
+function collapseGroups(d, expanded) {
+	const runs = [];
+	let cur = [];
+	let curId = "";
+	for (const n of d.nodes) {
+		if (n.row !== "main") continue;
+		const gid = n.kind === "stop" ? n.step?.group?.id || "" : "";
+		if (gid && gid === curId) cur.push(n);
+		else {
+			if (cur.length) runs.push(cur);
+			cur = gid ? [n] : [];
+			curId = gid;
+		}
+	}
+	if (cur.length) runs.push(cur);
+	if (!runs.length) return d;
+	let out = d;
+	const seen = /* @__PURE__ */ new Set();
+	for (const run of runs) {
+		if (run.length < 2) continue;
+		const g = run[0].step.group;
+		const id = "group:" + g.id + (seen.has(g.id) ? "@" + run[0].index : "");
+		seen.add(g.id);
+		if (expanded?.has(g.id)) {
+			const marks = new Map(run.map((n, i) => [n.id, {
+				id: g.id,
+				name: g.name,
+				first: i === 0,
+				last: i === run.length - 1
+			}]));
+			out = {
+				...out,
+				nodes: out.nodes.map((n) => marks.has(n.id) ? {
+					...n,
+					inGroup: marks.get(n.id)
+				} : n)
+			};
+			continue;
+		}
+		out = foldRun(out, run, groupNode(id, g, run));
+	}
+	return out;
+}
+var HALT_POINT_REASON = "halt point";
+function atHaltPoint(flight) {
+	if (!flight) return false;
+	const step = flight.steps[flight.cursor];
+	if (!step) return false;
+	if (flight.state === "paused") return flight.reason === HALT_POINT_REASON;
+	if (flight.state !== "halted" || !step.halt) return false;
+	const ss = flight.step_states?.[step.id];
+	return ss?.state !== "failed" && !ss?.detail?.failed_reason;
+}
+function nodeAtIndex(d, index) {
+	return d.nodes.find((n) => n.row === "main" && n.index !== void 0 && (n.kind === "stop" ? n.index === index : n.kind === "group" && index >= n.index && index < n.index + (n.group?.total || 1)));
+}
+function lineUnits(d) {
+	return d.nodes.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group") && n.index !== void 0).map((n) => ({
+		node: n,
+		first: n.index,
+		size: n.kind === "group" ? n.group?.total || 1 : 1
+	}));
+}
+function flightIndexAt(d, p) {
+	const u = lineUnits(d);
+	if (!u.length) return p;
+	if (p < u.length) return u[Math.max(0, p)].first;
+	const last = u[u.length - 1];
+	return last.first + last.size + (p - u.length);
+}
+function flightMove(d, from, to) {
+	const u = lineUnits(d);
+	if (!u[from] || !u[to]) return {
+		from,
+		to
+	};
+	const f = u[from].first;
+	if (to === from) return {
+		from: f,
+		to: f
+	};
+	return {
+		from: f,
+		to: to > from ? u[to].first + u[to].size - u[from].size : u[to].first
+	};
+}
+function drawnIndexes(d) {
+	const u = lineUnits(d);
+	let from = u.findIndex((x) => x.first >= d.insertFrom);
+	if (from < 0) from = u.length;
+	if (from === d.insertFrom && u.every((x, p) => x.first === p)) return d;
+	const at = new Map(u.map((x, p) => [x.node.id, p]));
+	return {
+		...d,
+		insertFrom: from,
+		nodes: d.nodes.map((n) => at.has(n.id) ? {
+			...n,
+			index: at.get(n.id)
+		} : n)
+	};
+}
+function drawnCanvas(d, canvas) {
+	const drawn = drawnIndexes(d);
+	if (drawn === d) return {
+		diagram: d,
+		canvas
+	};
+	const byId = new Map(d.nodes.map((n) => [n.id, n]));
+	const orig = (n) => byId.get(n.id) || n;
+	const c = canvas;
+	const node = (f) => f && ((n, ...rest) => f(orig(n), ...rest));
+	return {
+		diagram: drawn,
+		canvas: {
+			...c,
+			onSelect: node(c.onSelect),
+			onEdit: node(c.onEdit),
+			onOpen: node(c.onOpen),
+			onRemove: node(c.onRemove),
+			onDuplicate: node(c.onDuplicate),
+			onToggleHalt: node(c.onToggleHalt),
+			renderInBox: node(c.renderInBox),
+			sizeOf: c.sizeOf && ((n, b) => c.sizeOf(orig(n), b)),
+			onInsert: c.onInsert && ((at) => c.onInsert(flightIndexAt(d, at))),
+			onMove: c.onMove && ((from, to) => {
+				const m = flightMove(d, from, to);
+				c.onMove(m.from, m.to);
+			}),
+			onDropStop: c.onDropStop && ((drop, at) => c.onDropStop(drop, at === null ? null : flightIndexAt(d, at))),
+			onLoopFrom: c.onLoopFrom && ((from, to) => c.onLoopFrom(orig(from), orig(to))),
+			onLoopTo: c.onLoopTo && ((loop, to) => c.onLoopTo(orig(loop), orig(to)))
+		}
+	};
+}
+function lineWhere(d) {
+	let b = birdPerch(d);
+	const lp = loopAtWork(d);
+	let n = b ? lp && lp.from === b.nodeId && !d.nodes.some((x) => x.id === b.nodeId && STOP_TONE[x.state]) ? lp.via : d.nodes.find((x) => x.id === b.nodeId) : void 0;
+	if (!n || n.kind === "session") {
+		const isParked = (x) => x.state === "halted" || x.state === "paused";
+		const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && isParked(x)) || (lp?.via && isParked(lp.via) ? lp.via : void 0);
+		if (!parked) return "";
+		n = parked;
+		b = {
+			nodeId: parked.id,
+			tone: STOP_TONE[parked.state]
+		};
+	}
+	if (!b) return "";
+	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+	const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
+	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
+}
+function flownCount(d) {
+	return d.nodes.find((n) => n.kind === "flown")?.count || 0;
+}
+function branchOf(row) {
+	const b = row.flight_branch ?? row.flight?.branch;
+	return b && typeof b.step === "string" && b.step ? b : null;
+}
+function joinOf(row) {
+	const j = row.flight?.join;
+	return j && Number.isFinite(Number(j.total)) ? {
+		waiting: Math.max(0, Number(j.waiting) || 0),
+		total: Number(j.total) || 0
+	} : null;
+}
+function joinLabel(j) {
+	return "waiting for " + j.waiting + " of " + j.total;
+}
+var REPORT_STATE = {
+	done: "done",
+	failed: "failed",
+	blocked: "asking"
+};
+function branchState(child, listed) {
+	const ss = deriveSessionState(child);
+	if (ss.state === "working") return "working";
+	if (ss.state === "needs_you") return "asking";
+	const rep = REPORT_STATE[String(child.last_report?.status || "")];
+	if (rep) return rep;
+	if (listed?.state) return listed.state;
+	if (ss.tone === "broken") return "failed";
+	return "working";
+}
+var BRANCH_CHIP = {
+	working: {
+		label: "Working",
+		tone: "working"
+	},
+	asking: {
+		label: "Asking",
+		tone: "attention"
+	},
+	done: {
+		label: "Done",
+		tone: "neutral"
+	},
+	failed: {
+		label: "Failed",
+		tone: "broken"
+	},
+	gone: {
+		label: "Gone",
+		tone: "muted"
+	}
+};
+var BRANCH_NODE_STATE = {
+	working: "current",
+	asking: "perched",
+	done: "done",
+	failed: "failed",
+	gone: "skipped"
+};
+function innerSummary(row) {
+	const fl = row.flight;
+	if (fl && isShown$1(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+	const rungs = ladderRungs(row);
+	if (!rungs.length) return "";
+	const done = rungs.filter((r) => r.state === "done").length;
+	const cur = rungs.find((r) => r.state !== "done");
+	return done + "/" + rungs.length + " stops" + (cur ? " · " + LANE_LABEL[cur.lane] : "");
+}
+function joinChildren(full) {
+	const out = /* @__PURE__ */ new Map();
+	if (!full) return out;
+	for (const rec of Object.values(full.step_states || {})) {
+		const list = (rec?.detail)?.children;
+		if (!Array.isArray(list)) continue;
+		for (const c of list) if (c && typeof c.title === "string") out.set(c.title, c);
+	}
+	return out;
+}
+function branchesOf(title, kids, line, fl, full) {
+	const out = /* @__PURE__ */ new Map();
+	const below = [];
+	const letGo = /* @__PURE__ */ new Set();
+	const listed = joinChildren(full);
+	const at = (step) => line.findIndex((n) => n.kind === "stop" && (n.step ? n.step.id === step : n.index === fl.cursor && fl.step?.id === step));
+	for (const k of kids) {
+		const b = branchOf(k);
+		const i = b && (!b.parent || b.parent === title) ? at(b.step) : -1;
+		if (i < 0 || i + 1 >= line.length) {
+			below.push(k);
+			continue;
+		}
+		const entry = listed.get(k.title);
+		if (entry?.state === "gone") continue;
+		const state = branchState(k, entry);
+		const from = line[i];
+		const to = line[i + 1];
+		const inner = innerSummary(k);
+		const c = {
+			id: "branch:" + k.title,
+			kind: "branch",
+			row: "branch",
+			title: windowName(k.title),
+			sub: inner || (entry?.report ? clip$5(String(entry.report)) : k.last_report?.summary ? clip$5(k.last_report.summary) : ""),
+			state: BRANCH_NODE_STATE[state],
+			icon: "session",
+			session: k.title,
+			chip: BRANCH_CHIP[state],
+			branch: {
+				from: from.id,
+				to: to.id,
+				state,
+				inner,
+				...liveOf(k)
+			}
+		};
+		out.set(from.id, [...out.get(from.id) || [], c]);
+	}
+	const join = joinOf({ flight: fl });
+	const ci = line.findIndex((n) => n.kind === "stop" && n.index === fl.cursor);
+	if (join && ci >= 0) {
+		const point = fl.step?.kind === "join" ? line[ci] : line[ci + 1];
+		if (point) {
+			point.join = join;
+			if (join.waiting === 0) letGo.add(point.id);
+		}
+	}
+	for (const n of line) if (n.state === "done" || n.state === "skipped") letGo.add(n.id);
+	return {
+		out,
+		below,
+		letGo
+	};
+}
+function hasSessionDiagram(rows, title) {
+	const row = rows.find((r) => r.title === title);
+	if (!row) return false;
+	const fl = row.flight;
+	return !!(fl && isShown$1(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+}
+var STOP_TONE = {
+	current: "working",
+	perched: "you",
+	halted: "halted",
+	paused: "paused"
+};
+function birdPerch(d) {
+	const main = d.nodes.filter((n) => n.row === "main");
+	const lp = loopAtWork(d);
+	const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]) || (lp ? {
+		id: lp.from,
+		state: lp.via.state
+	} : void 0);
+	const me = main.find((n) => n.kind === "session");
+	const fixing = d.edges.find((e) => e.kind === "fix" && e.ret?.shown === "fixing" && main.some((n) => n.id === e.from && n.state === "current"));
+	if (fixing) return {
+		nodeId: fixing.to,
+		tone: "working"
+	};
+	if (stop && (stop.state === "halted" || stop.state === "paused")) {
+		if (me?.chip?.tone === "working") return {
+			nodeId: me.id,
+			tone: "working"
+		};
+		return {
+			nodeId: stop.id,
+			tone: STOP_TONE[stop.state]
+		};
+	}
+	const point = main.find((n) => n.join && n.join.waiting > 0);
+	if (point) {
+		const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
+		return {
+			nodeId: point.id,
+			tone: asking ? "you" : "working"
+		};
+	}
+	if (stop) return {
+		nodeId: stop.id,
+		tone: STOP_TONE[stop.state]
+	};
+	const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
+	if (rung) return {
+		nodeId: rung.id,
+		tone: rung.state === "halted" ? "halted" : "working"
+	};
+	if (me?.chip?.tone === "working") return {
+		nodeId: me.id,
+		tone: "working"
+	};
+	if (me?.chip?.tone === "attention") return {
+		nodeId: me.id,
+		tone: "you"
+	};
+	return null;
+}
+function birdPerches(d) {
+	const main = birdPerch(d);
+	const out = main ? [main] : [];
+	for (const n of d.nodes) if (n.branch?.live && n.session) out.push({
+		nodeId: n.id,
+		tone: n.branch.live,
+		child: n.session
+	});
+	return out;
+}
+function birdFormation(perches) {
+	if (!(perches[0] && !perches[0].child ? perches[0] : null)) return perches.slice();
+	let k = 0;
+	return perches.map((b) => b.child ? {
+		...b,
+		formation: formationSlot(k++)
+	} : b);
+}
+function formationSlot(k) {
+	const row = Math.floor(k / 2) + 1;
+	return {
+		dx: -row,
+		dy: (k % 2 === 0 ? -1 : 1) * row
+	};
+}
+function boxMetrics(compact = false, roomy = false) {
+	if (roomy) return compact ? {
+		box: {
+			w: 160,
+			h: 64
+		},
+		add: {
+			w: 52,
+			h: 52
+		},
+		branch: {
+			w: 150,
+			h: 54
+		},
+		flown: {
+			w: 104,
+			h: 44
+		},
+		gap: 40,
+		vgap: 26,
+		bgap: 10,
+		indent: 26,
+		anchor: 32,
+		chipH: 22,
+		subH: 20,
+		dotsH: 16
+	} : {
+		box: {
+			w: 236,
+			h: 100
+		},
+		add: {
+			w: 180,
+			h: 48
+		},
+		branch: {
+			w: 200,
+			h: 64
+		},
+		flown: {
+			w: 148,
+			h: 56
+		},
+		gap: 56,
+		vgap: 36,
+		bgap: 12,
+		indent: 30,
+		anchor: 50,
+		chipH: 22,
+		subH: 20,
+		dotsH: 16
+	};
+	return compact ? {
+		box: {
+			w: 140,
+			h: 62
+		},
+		add: {
+			w: 44,
+			h: 44
+		},
+		branch: {
+			w: 124,
+			h: 46
+		},
+		flown: {
+			w: 96,
+			h: 40
+		},
+		gap: 34,
+		vgap: 22,
+		bgap: 8,
+		indent: 22,
+		anchor: 31,
+		chipH: 18,
+		subH: 16,
+		dotsH: 14
+	} : {
+		box: {
+			w: 178,
+			h: 76
+		},
+		add: {
+			w: 148,
+			h: 40
+		},
+		branch: {
+			w: 156,
+			h: 52
+		},
+		flown: {
+			w: 120,
+			h: 44
+		},
+		gap: 46,
+		vgap: 30,
+		bgap: 10,
+		indent: 26,
+		anchor: 38,
+		chipH: 18,
+		subH: 16,
+		dotsH: 14
+	};
+}
+function sizedBoxFor(size, n, base, detail = "", roomy = false) {
+	if (n.kind === "add" || n.kind === "flown" || size === "normal") return base;
+	if (roomy) {
+		if (n.kind === "branch") return size === "compact" ? {
+			w: 140,
+			h: 48
+		} : {
+			w: 270,
+			h: base.h + 20
+		};
+		if (size === "compact") return {
+			w: 150,
+			h: 64
+		};
+		return {
+			w: 330,
+			h: base.h + 22 + (n.sub ? 18 : 0) + (detail ? 40 : 0)
+		};
+	}
+	if (n.kind === "branch") return size === "compact" ? {
+		w: 110,
+		h: 40
+	} : {
+		w: 210,
+		h: base.h + 16
+	};
+	if (size === "compact") return {
+		w: 110,
+		h: 62
+	};
+	return {
+		w: 260,
+		h: base.h + 18 + (n.sub ? 15 : 0) + (detail ? 32 : 0)
+	};
+}
+function layoutDiagram(d, opts = {}) {
+	const m = boxMetrics(!!opts.compact || !!opts.vertical, !!opts.roomy);
+	if (opts.vertical) m.add = {
+		w: m.box.w,
+		h: opts.roomy ? 44 : 36
+	};
+	if (opts.vertical) m.branch = {
+		w: m.box.w - m.indent,
+		h: m.branch.h
+	};
+	const size = (n) => {
+		if (n.kind === "flown") return m.flown;
+		const base = n.kind === "add" ? m.add : n.kind === "branch" ? {
+			w: m.branch.w,
+			h: m.branch.h + (n.sub ? m.subH : 0)
+		} : {
+			w: m.box.w,
+			h: m.box.h + (n.chip ? m.chipH : 0) + (n.dots ? m.dotsH : 0)
+		};
+		return opts.sizeOf ? opts.sizeOf(n, base) : base;
+	};
+	const above = d.nodes.filter((n) => n.row === "above");
+	const main = d.nodes.filter((n) => n.row === "main");
+	const below = d.nodes.filter((n) => n.row === "below");
+	const fans = /* @__PURE__ */ new Map();
+	for (const n of d.nodes) if ((n.row === "branch" || n.row === "below") && n.branch) fans.set(n.branch.from, [...fans.get(n.branch.from) || [], n]);
+	const at = /* @__PURE__ */ new Map();
+	const boxes = [];
+	const put = (node, x, y) => {
+		const s = size(node);
+		const p = {
+			node,
+			x,
+			y,
+			w: s.w,
+			h: s.h
+		};
+		at.set(node.id, p);
+		boxes.push(p);
+		return p;
+	};
+	const session = main.find((n) => n.kind === "session");
+	if (!opts.vertical) {
+		const top = above.length ? m.box.h + m.vgap : 0;
+		let x = 0;
+		let fanBottom = 0;
+		let colX = 0;
+		let colY = 0;
+		let colW = 0;
+		for (let k = 0; k < main.length; k++) {
+			const n = main[k];
+			const s = size(n);
+			const pid = n.parallel?.id;
+			if (pid) {
+				if (main[k - 1]?.parallel?.id !== pid) {
+					colX = x;
+					colY = top;
+					colW = 0;
+				}
+				put(n, colX, colY);
+				colY += s.h + m.vgap;
+				colW = Math.max(colW, s.w);
+				if (!(main[k + 1]?.parallel?.id !== pid)) continue;
+				x = colX + colW + m.gap;
+				fanBottom = Math.max(fanBottom, colY - m.vgap);
+			} else {
+				put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
+				x += s.w + m.gap;
+			}
+			const col = pid ? main.filter((g) => g.parallel?.id === pid).flatMap((g) => fans.get(g.id) || []) : fans.get(n.id);
+			if (!col?.length) continue;
+			const sizes = col.map(size);
+			const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
+			let y = top + Math.max(0, m.anchor - colH / 2);
+			col.forEach((c, i) => {
+				put(c, x, y);
+				y += sizes[i].h + m.bgap;
+			});
+			fanBottom = Math.max(fanBottom, y - m.bgap);
+			x += Math.max(...sizes.map((c) => c.w)) + m.gap;
+		}
+		const sp = session ? at.get(session.id) : void 0;
+		for (const n of above) put(n, sp ? sp.x : 0, 0);
+		const lineH = Math.max(m.box.h, ...main.map((n) => size(n).h));
+		let y = Math.max(top + lineH, fanBottom) + m.vgap;
+		for (const n of below) {
+			if (at.has(n.id)) continue;
+			put(n, (sp ? sp.x : 0) + m.indent, y);
+			y += size(n).h + 12;
+		}
+	} else {
+		let y = 0;
+		for (const n of above) {
+			put(n, 0, y);
+			y += size(n).h + m.vgap;
+		}
+		for (const n of main) {
+			const s = size(n);
+			put(n, n.parallel ? m.indent : n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
+			y += s.h + (n.parallel && n.parallel.index < n.parallel.size - 1 ? m.bgap : m.vgap);
+			const col = fans.get(n.id);
+			if (!col?.length) continue;
+			for (const c of col) {
+				put(c, m.indent, y);
+				y += size(c).h + m.bgap;
+			}
+			y += m.vgap - m.bgap;
+		}
+		const sp = session ? at.get(session.id) : void 0;
+		let cy = sp ? sp.y : 0;
+		for (const n of below) {
+			if (at.has(n.id)) continue;
+			put(n, m.box.w + m.indent, cy);
+			cy += size(n).h + 12;
+		}
+	}
+	const rank = {
+		above: 0,
+		main: 1,
+		branch: 1,
+		below: 2
+	};
+	boxes.sort((p, q) => rank[p.node.row] - rank[q.node.row]);
+	const anchorOf = (p) => p.node.kind === "add" || p.node.kind === "flown" ? p.h / 2 : p.node.kind === "branch" ? Math.min(p.h, m.box.h) / 2 : m.anchor;
+	const wires = [];
+	for (const e of d.edges) {
+		const a = at.get(e.from);
+		const b = at.get(e.to);
+		if (!a || !b) continue;
+		const kind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
+		let path = "";
+		if (kind === "loop" || kind === "fix") {
+			const arc = loopArc(a, b, anchorOf, !!opts.vertical, boxes);
+			wires.push({
+				from: e.from,
+				to: e.to,
+				kind,
+				d: arc.d,
+				apex: arc.apex,
+				...e.loop ? { loop: e.loop } : {},
+				...e.via ? { via: e.via } : {}
+			});
+			continue;
+		}
+		if (opts.vertical && kind === "fan") path = `M ${a.x + m.indent / 2} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
+		else if (opts.vertical && kind === "join") {
+			const rx = Math.max(a.x + a.w, b.x + b.w) + 8;
+			const y2 = b.y + anchorOf(b);
+			path = `M ${a.x + a.w} ${a.y + anchorOf(a)} H ${rx} V ${y2} H ${b.x + b.w + 2}`;
+		} else if (kind === "up") path = `M ${a.x + Math.min(a.w, b.w) / 2} ${a.y + a.h} V ${b.y - 2}`;
+		else if (kind === "branch") {
+			if (!opts.vertical) {
+				const x = a.x + m.indent / 2;
+				const y = b.y + Math.min(b.h, m.box.h) / 2;
+				path = `M ${x} ${a.y + a.h} V ${y} H ${b.x - 2}`;
+			} else {
+				const y1 = a.y + m.anchor;
+				const y2 = b.y + Math.min(b.h, m.box.h) / 2;
+				const mx = a.x + a.w + m.indent / 2;
+				path = `M ${a.x + a.w} ${y1} H ${mx} V ${y2} H ${b.x - 2}`;
+			}
+		} else if (!opts.vertical) {
+			const y1 = a.y + anchorOf(a);
+			const y2 = b.y + anchorOf(b);
+			const x1 = a.x + a.w;
+			const x2 = b.x - (kind === "fan" ? 0 : 2);
+			const mx = (x1 + x2) / 2;
+			path = y1 === y2 ? `M ${x1} ${y1} H ${x2}` : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+		} else {
+			const x1 = a.x + a.w / 2;
+			const x2 = b.x + b.w / 2;
+			const y1 = a.y + a.h;
+			const y2 = b.y - 2;
+			const my = (y1 + y2) / 2;
+			path = x1 === x2 ? `M ${x1} ${y1} V ${y2}` : `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
+		}
+		wires.push(e.done ? {
+			from: e.from,
+			to: e.to,
+			kind: e.kind,
+			d: path,
+			done: true
+		} : {
+			from: e.from,
+			to: e.to,
+			kind: e.kind,
+			d: path
+		});
+	}
+	const arcs = wires.filter((w) => w.apex);
+	const width = Math.max(0, ...boxes.map((p) => p.x + p.w), ...arcs.map((w) => w.apex.x + LOOP_PILL_ROOM));
+	const height = Math.max(0, ...boxes.map((p) => p.y + p.h), ...arcs.map((w) => w.apex.y + LOOP_PILL_ROOM));
+	const rise = Math.max(0, ...arcs.map((w) => LOOP_PILL_ROOM - w.apex.y));
+	return {
+		boxes,
+		wires,
+		width,
+		height,
+		gap: m.gap,
+		rise: arcs.length ? rise : 0
+	};
+}
+var LOOP_PILL_ROOM = 14;
+var LOOP_FROM = .72;
+var LOOP_TO = .28;
+var LOOP_DROP = 22;
+function loopRise(span) {
+	return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * .16)));
+}
+function loopWirePath(a, b, boxes, vertical = false) {
+	return loopArc(a, b, (p) => p.h / 2, vertical, boxes).d;
+}
+function loopArc(a, b, anchorOf, vertical, boxes) {
+	if (!vertical) {
+		const x1 = a.x + a.w * LOOP_FROM;
+		const x2 = b.x + b.w * LOOP_TO;
+		const lo = Math.min(a.x, b.x);
+		const hi = Math.max(a.x + a.w, b.x + b.w);
+		const yb = Math.max(a.y + a.h, b.y + b.h, ...boxes.filter((p) => p.x < hi && p.x + p.w > lo).map((p) => p.y + p.h)) + LOOP_DROP;
+		const r = Math.max(0, Math.min(10, Math.abs(x1 - x2) / 2, LOOP_DROP / 2));
+		const y1 = a.y + a.h;
+		const y2 = b.y + b.h + 2;
+		const dir = x2 <= x1 ? -1 : 1;
+		return {
+			d: `M ${x1} ${y1} V ${yb - r} Q ${x1} ${yb} ${x1 + dir * r} ${yb} H ${x2 - dir * r} Q ${x2} ${yb} ${x2} ${yb - r} V ${y2}`,
+			apex: {
+				x: (x1 + x2) / 2,
+				y: yb
+			}
+		};
+	}
+	const x1 = a.x + a.w;
+	const x2 = b.x + b.w + 2;
+	const y1 = a.y + anchorOf(a);
+	const y2 = b.y + anchorOf(b);
+	const h = loopRise(y2 - y1);
+	const cx = Math.max(x1, x2) + h * 4 / 3;
+	return {
+		d: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`,
+		apex: {
+			x: .125 * x1 + .75 * cx + .125 * x2,
+			y: (y1 + y2) / 2
+		}
+	};
+}
+function dropIndex$1(otherCenters, at) {
+	return otherCenters.filter((c) => c < at).length;
+}
+function reorderDiagram(d, from, to) {
+	const main = d.nodes.filter((n) => n.row === "main");
+	const isPlace = (n) => n.kind === "stop" || n.kind === "group";
+	const stops = main.filter(isPlace);
+	if (from === to || !stops[from] || to < 0 || to >= stops.length) return d;
+	const moved = stops.slice();
+	const [it] = moved.splice(from, 1);
+	moved.splice(to, 0, it);
+	let k = 0;
+	const line = main.map((n) => isPlace(n) ? moved[k++] : n);
+	const lineIds = new Set(line.map((n) => n.id));
+	const next = new Map(line.slice(0, -1).map((n, i) => [n.id, line[i + 1].id]));
+	const joinDone = new Map(d.edges.filter((e) => e.kind === "join").map((e) => [e.from, !!e.done]));
+	const rejoin = (n) => n.branch && next.has(n.branch.from) ? {
+		...n,
+		branch: {
+			...n.branch,
+			to: next.get(n.branch.from)
+		}
+	} : n;
+	const branches = d.nodes.filter((n) => n.row === "branch").map(rejoin);
+	const rest = d.nodes.filter((n) => n.row !== "main" && n.row !== "branch").map(rejoin);
+	const hung = rest.filter((n) => !!n.branch);
+	const fanned = new Set([...branches, ...hung].map((n) => n.branch?.from));
+	const edges = d.edges.filter((e) => e.kind !== "join" && !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
+	for (let i = 1; i < line.length; i++) if (!fanned.has(line[i - 1].id)) edges.push({
+		from: line[i - 1].id,
+		to: line[i].id,
+		kind: line[i].kind === "add" ? "add" : "line"
+	});
+	for (const b of [...branches, ...hung]) if (b.branch) edges.push({
+		from: b.id,
+		to: b.branch.to,
+		kind: "join",
+		...joinDone.get(b.id) ? { done: true } : {}
+	});
+	return {
+		...d,
+		nodes: [
+			...rest,
+			...line,
+			...branches
+		],
+		edges
+	};
+}
+var BEHAVIORS_ID = "behaviors";
+function verifyStopOf(d) {
+	const main = d.nodes.filter((n) => n.row === "main" && n.kind === "stop" && n.step?.kind === "verify");
+	return main.length ? main[main.length - 1] : null;
+}
+function withBehaviors(d, mark) {
+	if (!mark) return d;
+	const verify = verifyStopOf(d);
+	if (verify) return {
+		...d,
+		nodes: d.nodes.map((n) => n.id === verify.id ? {
+			...n,
+			behaviors: {
+				...mark,
+				short: verifyStopFace(mark.short, n.state)
+			}
+		} : n)
+	};
+	const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "add" && n.kind !== "parent");
+	const session = main.find((n) => n.kind === "session");
+	const line = main.filter((n) => n.kind !== "session");
+	const last = line[line.length - 1] || session;
+	if (!last) return d;
+	const node = {
+		id: BEHAVIORS_ID,
+		kind: "behaviors",
+		row: "main",
+		title: "Verify",
+		sub: mark.short,
+		state: "pending",
+		icon: "behaviors",
+		behaviors: mark
+	};
+	const pid = last.parallel?.id;
+	const from = pid ? line.filter((n) => n.parallel?.id === pid) : [last];
+	const edges = [...d.edges, ...from.map((n) => ({
+		from: n.id,
+		to: BEHAVIORS_ID,
+		kind: from.length > 1 ? "join" : "line"
+	}))];
+	return {
+		...d,
+		nodes: [...d.nodes, node],
+		edges
+	};
+}
+//#endregion
 //#region src/lib/needsYou.ts
 var NEEDS_YOU_KINDS = [
 	"asking",
@@ -34102,6 +37476,26 @@ function withFlightYou(waiting, instances) {
 		});
 	}
 	return out;
+}
+var FLIGHT_PAUSED = "flight_paused";
+function pausedAtLine(stepTitle) {
+	return "Paused at " + (String(stepTitle || "").trim() || "its halt point") + " — Carry on";
+}
+function pausedRow(title, f) {
+	const stepTitle = f.step?.title || "";
+	return {
+		key: "flight:" + f.id,
+		title,
+		kind: FLIGHT_PAUSED,
+		reason: pausedAtLine(stepTitle),
+		text: f.plan_name,
+		actions: ["open"],
+		flight: {
+			id: f.id,
+			step_id: f.step?.id || "",
+			step_title: stepTitle
+		}
+	};
 }
 function flightRow(kind, title, f) {
 	const stepTitle = f.step?.title || "";
@@ -34151,18 +37545,26 @@ function withFlightRows(waiting, instances, flights) {
 			...fl,
 			reason: f?.reason
 		}));
+		else if (fl.state === "paused" && (f ? f.reason : fl.reason) === HALT_POINT_REASON) add(pausedRow(inst.title, fl));
 	}
 	for (const f of flights || []) {
-		if (f.state !== "waiting_you" && f.state !== "halted") continue;
+		const atHalt = f.state === "paused" && f.reason === HALT_POINT_REASON;
+		if (f.state !== "waiting_you" && f.state !== "halted" && !atHalt) continue;
 		const step = f.steps[f.cursor];
-		add(flightRow(f.state === "halted" ? "flight_halted" : "flight_you", f.session && live.has(f.session) ? f.session : "", {
+		const title = f.session && live.has(f.session) ? f.session : "";
+		const at = step ? {
+			id: step.id,
+			title: step.title
+		} : null;
+		add(atHalt ? pausedRow(title, {
+			id: f.id,
+			plan_name: f.plan_name,
+			step: at
+		}) : flightRow(f.state === "halted" ? "flight_halted" : "flight_you", title, {
 			id: f.id,
 			plan_name: f.plan_name,
 			reason: f.reason,
-			step: step ? {
-				id: step.id,
-				title: step.title
-			} : null
+			step: at
 		}));
 	}
 	return out;
@@ -34170,7 +37572,7 @@ function withFlightRows(waiting, instances, flights) {
 function kindOf$1(r, byTitle) {
 	if (r.plan) return "plan";
 	if (r.waiting) {
-		if (r.waiting.kind === "flight_you") return "wait_for_me";
+		if (r.waiting.kind === "flight_you" || r.waiting.kind === FLIGHT_PAUSED) return "wait_for_me";
 		if (r.waiting.kind === "flight_halted") return "halted";
 		return "approval";
 	}
@@ -34198,7 +37600,18 @@ function needsYouRows(src) {
 			kind
 		};
 	});
+	const spoken = /* @__PURE__ */ new Set();
+	for (const inst of instances) {
+		const v = inst.verify;
+		if (v && v.plan && v.state) spoken.add(v.plan);
+		const fl = inst.flight;
+		if (fl && fl.id && (fl.state === "waiting_you" || fl.state === "halted") && fl.step?.kind === "verify") {
+			const p = planForSession(src.testPlans, inst);
+			if (p) spoken.add(p.id);
+		}
+	}
 	for (const p of src.testPlans || []) {
+		if (spoken.has(p.id)) continue;
 		if (!isFailing(p) && !isWaitingOnYou(p)) continue;
 		rows.push({
 			key: "behaviors:" + p.id,
@@ -34725,7 +38138,7 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+V",
-			"Behaviors — the next that needs you"
+			"Verify — the next that needs you"
 		],
 		when: () => !isEditingTarget(document.activeElement),
 		run: () => openBehaviors({ next: true })
@@ -35863,7 +39276,7 @@ function peerEventNote(event, data) {
 		}
 		case "peer.message": {
 			const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
-			const preview = clip$6(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
+			const preview = clip$4(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
 			return {
 				text: preview ? text + ": " + preview : text,
 				cls: "n-info",
@@ -35883,7 +39296,7 @@ function peerEventNote(event, data) {
 			const text = name + " proposes a joint task — accept in People";
 			const brief = String(d.brief || "").trim();
 			return {
-				text: brief ? text + ": " + clip$6(brief, 80) : text,
+				text: brief ? text + ": " + clip$4(brief, 80) : text,
 				cls: "n-info",
 				toast: text
 			};
@@ -35943,7 +39356,7 @@ function peerEventNote(event, data) {
 		default: return null;
 	}
 }
-function clip$6(s, n) {
+function clip$4(s, n) {
 	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
 }
 function baseName$1(path) {
@@ -36286,729 +39699,6 @@ function redZoneChip(rz, seenAt) {
 		section: "zones"
 	};
 	return null;
-}
-//#endregion
-//#region src/lib/skyLayout.ts
-var SKY_GAP = 64;
-var SKY_MARGIN = 40;
-var INTAKE_W = 240;
-var LINES_LEFT = 328;
-var INTAKE_KEY = "intake";
-var INTAKE_OPEN_W = 420;
-var INTAKE_MIN_W = 200;
-var INTAKE_MIN_H = 160;
-var INTAKE_MAX_W = 1200;
-var INTAKE_MAX_H = 1600;
-function objectFrame(stored, min, max) {
-	if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
-	return {
-		w: Math.min(max.w, Math.max(min.w, Math.round(stored.w))),
-		h: Math.min(max.h, Math.max(min.h, Math.round(stored.h)))
-	};
-}
-function intakeFrame(stored) {
-	return objectFrame(stored, {
-		w: INTAKE_MIN_W,
-		h: INTAKE_MIN_H
-	}, {
-		w: INTAKE_MAX_W,
-		h: INTAKE_MAX_H
-	});
-}
-var PALETTE_W$1 = 360;
-var PALETTE_H$1 = 300;
-var PALETTE_MIN = {
-	w: 220,
-	h: 140
-};
-var PALETTE_MAX = {
-	w: 1400,
-	h: 1200
-};
-var paletteFrame$1 = (stored) => objectFrame(stored, PALETTE_MIN, PALETTE_MAX);
-var PLACE_GAP = 24;
-function catalogFrame(view, screen, z, size, pad = 16) {
-	const k = z > 0 ? z : 1;
-	const m = pad / k;
-	const fit = (want, room, lo, hi) => Math.round(Math.min(hi, Math.max(lo, Math.min(want, room))));
-	const w = size ? size.w : fit(screen.w * .6 / k, view.w - 2 * m, PALETTE_MIN.w, PALETTE_MAX.w);
-	const h = size ? size.h : fit(screen.h * .7 / k, view.h - 2 * m, PALETTE_MIN.h, PALETTE_MAX.h);
-	const x = Math.max(view.x + m, Math.min(view.x + view.w / 2 + PLACE_GAP, view.x + view.w - m - w));
-	const y = Math.max(view.y + m, view.y + (view.h - h) / 2);
-	return {
-		x: Math.round(x),
-		y: Math.round(y),
-		w,
-		h
-	};
-}
-var LANDING_KEY = "landing";
-var LANDING_W = 300;
-var LANDING_H = 240;
-var LANDING_MIN = {
-	w: 220,
-	h: 120
-};
-var LANDING_MAX = {
-	w: 1200,
-	h: 1600
-};
-var NOTE_W = 200;
-var NOTE_H = 120;
-var NOTE_MIN = {
-	w: 120,
-	h: 70
-};
-var NOTE_MAX = {
-	w: 800,
-	h: 800
-};
-var BLOCK_W = 200;
-var BLOCK_H = 64;
-function rightColumn(placed, items, top = SKY_MARGIN, gap = SKY_GAP) {
-	const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
-	const x = placed.length ? right + gap : LINES_LEFT;
-	const out = {};
-	let y = top;
-	for (const it of items) {
-		out[it.id] = {
-			x,
-			y
-		};
-		y += it.h + gap / 2;
-	}
-	return out;
-}
-function clearRightColumn(column, lines, gap = SKY_GAP) {
-	if (!column.length || !lines.length) return {};
-	if (!column.some((c) => lines.some((l) => hits(c, l, gap / 2 - 1)))) return {};
-	const x = lines.reduce((m, r) => Math.max(m, r.x + r.w), 0) + gap;
-	return Object.fromEntries(column.map((c) => [c.id, {
-		x,
-		y: c.y
-	}]));
-}
-function spotNear(want, taken, size, within) {
-	const step = PLACE_GAP;
-	const free = (x, y) => !taken.some((t) => hits({
-		x,
-		y,
-		w: size.w,
-		h: size.h
-	}, t, 23));
-	const inside = (x, y) => !within || x >= within.x && y >= within.y && x + size.w <= within.x + within.w && y + size.h <= within.y + within.h;
-	const search = (bounded) => {
-		for (let r = 0; r <= 80; r++) {
-			let best = null;
-			let bestD = Infinity;
-			for (let i = -r; i <= r; i++) for (let j = -r; j <= r; j++) {
-				if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
-				const x = Math.round(want.x + i * step);
-				const y = Math.round(want.y + j * step);
-				if (bounded && !inside(x, y)) continue;
-				const d = Math.hypot(i, j);
-				if (d < bestD && free(x, y)) {
-					best = {
-						x,
-						y
-					};
-					bestD = d;
-				}
-			}
-			if (best) return best;
-		}
-		return null;
-	};
-	return within && search(true) || search(false) || {
-		x: Math.round(want.x),
-		y: Math.round(want.y)
-	};
-}
-function grownOver(was, now, movable) {
-	if (!was || !now || was.x !== now.x || was.y !== now.y || now.w <= was.w && now.h <= was.h) return [];
-	return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
-}
-function intakeSize(stored, measured) {
-	const frame = intakeFrame(stored);
-	if (frame) return frame;
-	if (measured && measured.w > 0 && measured.h > 0) return measured;
-	return stored?.open ? {
-		w: INTAKE_OPEN_W,
-		h: 520
-	} : {
-		w: INTAKE_W,
-		h: 320
-	};
-}
-var ZOOM_MIN = .1;
-var ZOOM_MAX = 3;
-var FIT_PAD = 56;
-var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
-function placeLines(lines, saved, area) {
-	const out = {};
-	const taken = [];
-	for (const l of lines) {
-		const s = saved[l.id];
-		if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
-			out[l.id] = {
-				x: s.x,
-				y: s.y
-			};
-			taken.push({
-				x: s.x,
-				y: s.y,
-				w: l.w,
-				h: l.h
-			});
-		}
-	}
-	const x0 = area.left ?? SKY_MARGIN;
-	const y0 = area.top ?? SKY_MARGIN;
-	const right = Math.max(area.width, x0 + 1);
-	let cx = x0;
-	let cy = y0;
-	let rowH = 0;
-	for (const l of lines) {
-		if (out[l.id]) continue;
-		for (let guard = 0; guard < 1e4; guard++) {
-			if (cx > x0 && cx + l.w > right) {
-				cx = x0;
-				cy += (rowH || 0) + SKY_GAP;
-				rowH = 0;
-			}
-			const at = {
-				x: cx,
-				y: cy,
-				w: l.w,
-				h: l.h
-			};
-			const hit = taken.find((t) => hits(at, t, 63));
-			if (hit) {
-				cx = hit.x + hit.w + SKY_GAP;
-				continue;
-			}
-			out[l.id] = {
-				x: cx,
-				y: cy
-			};
-			taken.push(at);
-			cx += l.w + SKY_GAP;
-			rowH = Math.max(rowH, l.h);
-			break;
-		}
-	}
-	return out;
-}
-function assignSpots(existing, newcomers, area) {
-	const saved = {};
-	for (const e of existing) saved[e.id] = {
-		x: e.x,
-		y: e.y
-	};
-	const fresh = newcomers.filter((n) => !saved[n.id]);
-	if (!fresh.length) return {};
-	const all = placeLines([...existing, ...fresh], saved, area);
-	return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
-}
-var FILL_GAIN = 1.1;
-function fillWidth(existing, newcomers, area, vw, vh, opts = {}) {
-	const min = area.width;
-	const fresh = newcomers.filter((n) => !existing.some((e) => e.id === n.id));
-	if (!fresh.length || !(vw > 0) || !(vh > 0)) return min;
-	const maxZ = opts.maxZ ?? 1;
-	const flat = new Set(opts.flat || []);
-	const aside = new Set((opts.right || []).map((r) => r.id));
-	const rightW = (opts.right || []).reduce((m, r) => Math.max(m, r.w), 0);
-	const x0 = area.left ?? SKY_MARGIN;
-	const stops = [];
-	let run = x0;
-	for (const n of fresh) {
-		run += n.w;
-		stops.push(run);
-		run += SKY_GAP;
-	}
-	const max = Math.max(min, run - SKY_GAP, ...existing.map((e) => e.x + e.w));
-	const steps = 24;
-	const k = max > min ? (max / Math.max(1, min)) ** (1 / 23) : 1;
-	const widths = /* @__PURE__ */ new Set([min]);
-	if (max > min) for (let i = 1; i < steps; i++) widths.add(Math.min(max, Math.round(min * k ** i)));
-	for (const s of stops) if (s > min && s <= max) widths.add(s);
-	const counted = existing.filter((e) => !aside.has(e.id));
-	let best = min;
-	let bestZ = -Infinity;
-	let minZ = -Infinity;
-	for (const width of [...widths].sort((a, b) => a - b)) {
-		const spots = assignSpots(existing, fresh, {
-			...area,
-			width
-		});
-		const b = boundsOf([...counted, ...fresh.filter((n) => spots[n.id] && !aside.has(n.id)).map((n) => ({
-			id: n.id,
-			...spots[n.id],
-			w: n.w,
-			h: n.h
-		}))].map((r) => ({
-			x: r.x,
-			y: r.y,
-			w: r.w,
-			h: flat.has(r.id) ? 1 : r.h
-		})));
-		if (!b) continue;
-		const w = b.w + (rightW > 0 ? rightW + SKY_GAP : 0);
-		const z = Math.min(maxZ, (vw - 112) / w, (vh - 112) / Math.max(1, b.h));
-		if (width === min) minZ = z;
-		if (z > bestZ + .001) {
-			bestZ = z;
-			best = width;
-		}
-	}
-	return bestZ >= minZ * FILL_GAIN ? best : min;
-}
-function boundsOf(rects) {
-	if (!rects.length) return null;
-	const x = Math.min(...rects.map((r) => r.x));
-	const y = Math.min(...rects.map((r) => r.y));
-	return {
-		x,
-		y,
-		w: Math.max(...rects.map((r) => r.x + r.w)) - x,
-		h: Math.max(...rects.map((r) => r.y + r.h)) - y
-	};
-}
-var clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1));
-function zoomAt(c, z, px, py) {
-	const nz = clampZoom(z);
-	const k = nz / c.z;
-	return {
-		z: nz,
-		x: px - (px - c.x) * k,
-		y: py - (py - c.y) * k
-	};
-}
-function toPlane(c, px, py) {
-	return {
-		x: (px - c.x) / c.z,
-		y: (py - c.y) / c.z
-	};
-}
-function fitCamera(b, vw, vh, maxZ = 1.25, pad = FIT_PAD) {
-	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
-		x: 0,
-		y: 0,
-		z: 1
-	};
-	const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
-	return {
-		x: b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
-		y: b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
-		z
-	};
-}
-function firstFit(b, vw, vh, maxZ = 1, pad = FIT_PAD) {
-	const all = fitCamera(b, vw, vh, maxZ, pad);
-	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0 || all.z >= LOD_MID) return all;
-	const z = clampZoom(Math.min(maxZ, Math.max(LOD_MID, (vw - 2 * pad) / b.w)));
-	return {
-		z,
-		x: pad - b.x * z,
-		y: pad - b.y * z
-	};
-}
-var ROUTE_FIT_PAD = 48;
-var ROUTE_FIT_MIN = .6;
-var ROUTE_FIT_MAX = 1.5;
-function fitRoute(b, vw, vh) {
-	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
-		x: 0,
-		y: 0,
-		z: 1
-	};
-	const pad = ROUTE_FIT_PAD;
-	const want = Math.min((vw - 96) / b.w, (vh - 96) / b.h);
-	const z = Math.min(ROUTE_FIT_MAX, Math.max(ROUTE_FIT_MIN, Number.isFinite(want) ? want : 1));
-	return {
-		x: b.w * z + 96 <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
-		y: b.h * z + 96 <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
-		z
-	};
-}
-function screenBoxCovers(box, rects, c) {
-	return rects.some((r) => {
-		const sx = c.x + r.x * c.z;
-		const sy = c.y + r.y * c.z;
-		return sx < box.x + box.w && sx + r.w * c.z > box.x && sy < box.y + box.h && sy + r.h * c.z > box.y;
-	});
-}
-function centerOn(r, vw, vh, z) {
-	const nz = clampZoom(z);
-	return {
-		z: nz,
-		x: vw / 2 - (r.x + r.w / 2) * nz,
-		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
-	};
-}
-function fitSelection(rects, vw, vh, maxZ = 1.25) {
-	const b = boundsOf(rects);
-	return b ? fitCamera(b, vw, vh, maxZ) : null;
-}
-var CAM_EASE_MS = 220;
-var easeOut = (t) => {
-	return 1 - (1 - Math.min(1, Math.max(0, t))) ** 3;
-};
-function lerpCamera(from, to, t) {
-	if (t >= 1) return {
-		x: to.x,
-		y: to.y,
-		z: to.z
-	};
-	if (t <= 0) return {
-		x: from.x,
-		y: from.y,
-		z: from.z
-	};
-	const z = from.z > 0 && to.z > 0 ? Math.exp(Math.log(from.z) + (Math.log(to.z) - Math.log(from.z)) * t) : from.z + (to.z - from.z) * t;
-	return {
-		x: from.x + (to.x - from.x) * t,
-		y: from.y + (to.y - from.y) * t,
-		z
-	};
-}
-var sameCamera = (a, b) => Math.abs(a.x - b.x) < .01 && Math.abs(a.y - b.y) < .01 && Math.abs(a.z - b.z) < 1e-4;
-var LOD_MID = .62;
-var LOD_NEAR = 1.15;
-var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
-var FULL_DETAIL_LODS = [{
-	lod: "mid",
-	z: LOD_MID
-}, {
-	lod: "near",
-	z: 1
-}];
-var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
-var SKY_DRAWER_KEY = "mf_sky_drawer";
-var skyDrawerOpen = (pref) => pref === "1";
-var FLYWAY_MIME = "application/x-mindflock-flyway";
-var NEW_SESSION_MIME = "application/x-mindflock-new-session";
-var SKY_SIZES = [
-	"compact",
-	"normal",
-	"wide"
-];
-var BOX_W_MIN = 140;
-var BOX_W_MAX = 420;
-var BOX_H_MIN = 60;
-var BOX_H_MAX = 220;
-var BOX_PRESETS = {
-	compact: {
-		w: 150,
-		h: 64
-	},
-	normal: {
-		w: 236,
-		h: 100
-	},
-	wide: {
-		w: 330,
-		h: 120
-	}
-};
-var clampTo = (v, lo, hi) => Math.min(hi, Math.max(lo, Math.round(v)));
-var clampBox = (w, h) => ({
-	w: clampTo(w, BOX_W_MIN, BOX_W_MAX),
-	h: clampTo(h, BOX_H_MIN, BOX_H_MAX)
-});
-function lineBox(l) {
-	const p = BOX_PRESETS[l?.size || "normal"] || BOX_PRESETS.normal;
-	return clampBox(Number.isFinite(l?.boxW) ? l.boxW : p.w, Number.isFinite(l?.boxH) ? l.boxH : p.h);
-}
-var SKY_LAYOUT_KEY = "mf_sky_layout";
-var SKY_POS_KEY = "mf_sky_pos";
-var LAYOUT_CAP = 400;
-var PANE_W$1 = 720;
-var PANE_H$1 = 420;
-var local = () => {
-	try {
-		return typeof localStorage === "undefined" ? null : localStorage;
-	} catch {
-		return null;
-	}
-};
-var parseObj = (raw) => {
-	if (!raw) return null;
-	try {
-		const doc = JSON.parse(raw);
-		return doc && typeof doc === "object" && !Array.isArray(doc) ? doc : null;
-	} catch {
-		return null;
-	}
-};
-function readSkyPos(raw) {
-	const out = {};
-	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
-		const p = v;
-		if (k && p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y)) out[k] = {
-			x: Math.round(p.x),
-			y: Math.round(p.y)
-		};
-	}
-	return out;
-}
-function cleanLine(v) {
-	if (!v || typeof v !== "object") return null;
-	const p = v;
-	const out = {};
-	if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
-		out.x = Math.round(p.x);
-		out.y = Math.round(p.y);
-		if (p.pinned === true) out.pinned = true;
-	}
-	if (SKY_SIZES.includes(p.size) && p.size !== "normal") out.size = p.size;
-	if (p.open === true) out.open = true;
-	for (const k of [
-		"paneW",
-		"paneH",
-		"w",
-		"h"
-	]) if (Number.isFinite(p[k]) && p[k] > 0) out[k] = Math.round(p[k]);
-	if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {
-		const b = lineBox({
-			size: out.size,
-			boxW: p.boxW,
-			boxH: p.boxH
-		});
-		const preset = BOX_PRESETS[out.size || "normal"];
-		if (b.w !== preset.w || b.h !== preset.h) {
-			out.boxW = b.w;
-			out.boxH = b.h;
-		}
-	}
-	return Object.keys(out).length ? out : null;
-}
-function readSkyLayout(raw) {
-	const out = {};
-	for (const [k, v] of Object.entries(parseObj(raw) || {})) {
-		const line = k ? cleanLine(v) : null;
-		if (line) out[k] = line;
-	}
-	return out;
-}
-function loadSkyLayout(store = local()) {
-	try {
-		const raw = store?.getItem(SKY_LAYOUT_KEY);
-		if (raw != null) return readSkyLayout(raw);
-		const old = readSkyPos(store?.getItem(SKY_POS_KEY));
-		const out = {};
-		for (const [k, p] of Object.entries(old)) out[k] = {
-			x: p.x,
-			y: p.y,
-			pinned: true
-		};
-		if (Object.keys(out).length) saveSkyLayout(out, store);
-		return out;
-	} catch {
-		return {};
-	}
-}
-function saveSkyLayout(all, store = local()) {
-	const next = { ...all };
-	const keys = Object.keys(next);
-	for (const k of keys.slice(0, Math.max(0, keys.length - LAYOUT_CAP))) delete next[k];
-	try {
-		store?.setItem(SKY_LAYOUT_KEY, JSON.stringify(next));
-	} catch {}
-	return next;
-}
-function renameSkyLine(all, from, to) {
-	if (!from || !to || from === to || !(from in all)) return all;
-	const next = {};
-	for (const [k, v] of Object.entries(all)) {
-		if (k === to) continue;
-		next[k === from ? to : k] = v;
-	}
-	return next;
-}
-function patchSkyLine(all, title, patch, store = local()) {
-	const next = { ...all };
-	const merged = cleanLine({
-		...next[title],
-		...patch
-	});
-	delete next[title];
-	if (merged) next[title] = merged;
-	return saveSkyLayout(next, store);
-}
-function tidySkyLayout(all, title, store = local()) {
-	const next = {};
-	for (const [k, v] of Object.entries(all)) {
-		if (title !== void 0 && k !== title) {
-			next[k] = v;
-			continue;
-		}
-		const { x: _x, y: _y, pinned: _p, ...rest } = v;
-		if (Object.keys(rest).length) next[k] = rest;
-	}
-	return saveSkyLayout(next, store);
-}
-function closeSkyWindows(all, titles, store = local()) {
-	const next = {};
-	let changed = false;
-	for (const [k, v] of Object.entries(all)) {
-		if (!v.open || k === INTAKE_KEY || titles && !titles.includes(k)) {
-			next[k] = v;
-			continue;
-		}
-		changed = true;
-		const { open: _o, ...rest } = v;
-		if (Object.keys(rest).length) next[k] = rest;
-	}
-	return changed ? saveSkyLayout(next, store) : all;
-}
-function pinnedPositions(all) {
-	const out = {};
-	for (const [k, v] of Object.entries(all)) if (v.pinned && Number.isFinite(v.x) && Number.isFinite(v.y)) out[k] = {
-		x: v.x,
-		y: v.y
-	};
-	return out;
-}
-function lineLayout(stored, at) {
-	return {
-		x: at.x,
-		y: at.y,
-		size: stored?.size || "normal",
-		open: !!stored?.open,
-		paneW: stored?.paneW,
-		paneH: stored?.paneH,
-		pinned: !!stored?.pinned,
-		boxW: stored?.boxW,
-		boxH: stored?.boxH
-	};
-}
-var LINE_BAR_H = 42;
-function estimateLine(base, stored) {
-	let w;
-	let h;
-	if (Number.isFinite(stored?.boxW) || Number.isFinite(stored?.boxH)) {
-		const b = lineBox(stored);
-		const n = BOX_PRESETS.normal;
-		w = Math.round(base.w * (b.w / n.w));
-		h = Math.round(Math.min(base.h, LINE_BAR_H) + Math.max(0, base.h - LINE_BAR_H) * (b.h / n.h));
-	} else {
-		const k = stored?.size === "compact" ? .75 : stored?.size === "wide" ? 1.4 : 1;
-		w = Math.round(base.w * k);
-		h = Math.round(base.h * (stored?.size === "compact" ? .85 : 1));
-	}
-	if (stored?.open) {
-		w = Math.max(w, (stored.paneW || PANE_W$1) + 24);
-		h += (stored.paneH || PANE_H$1) + 12;
-	}
-	return {
-		w,
-		h
-	};
-}
-var SKY_MODES = [
-	{
-		id: "one",
-		label: "This session",
-		title: "The session you're on: its route, filling the sky"
-	},
-	{
-		id: "all",
-		label: "All",
-		title: "Every session — a worker inside its lead's route"
-	},
-	{
-		id: "mine",
-		label: "Mine",
-		title: "Your top-level sessions, their workers folded into their route"
-	},
-	{
-		id: "perched",
-		label: "Needs you",
-		title: "Only the routes that need you"
-	}
-];
-function groundedLanding(mode, noSessions) {
-	if (mode === "all" || mode === "mine") return "shown";
-	return mode === "one" && noSessions ? "switch" : "say";
-}
-var GROUNDED_HIDDEN_LINE = "Your routes with no session yet show under All.";
-var inSky = (r) => !r.hidden_by;
-function linePerched(r) {
-	const fl = r.flight;
-	if (rowWaitsOnYou(fl) || fl?.state === "halted") return true;
-	return deriveSessionState(r).state === "needs_you";
-}
-function skyLineTitles(rows, mode, opts = {}) {
-	const shown = rows.filter(inSky);
-	if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus] : [];
-	let pick = mode === "perched" ? shown.filter(linePerched) : shown;
-	const q = String(opts.query || "").trim().toLowerCase();
-	if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
-	const byTitle = new Map(pick.map((r) => [r.title, r]));
-	const isLine = /* @__PURE__ */ new Map();
-	const lineOf = (r, seen) => {
-		const known = isLine.get(r.title);
-		if (known !== void 0) return known;
-		const up = r.parent && r.parent !== r.title ? byTitle.get(r.parent) : void 0;
-		const out = !up || seen.has(up.title) || !lineOf(up, new Set(seen).add(r.title));
-		isLine.set(r.title, out);
-		return out;
-	};
-	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
-}
-function pickThisSession(rows, o = {}) {
-	const shown = rows.filter(inSky);
-	if (!shown.length) return "";
-	const has = new Set(shown.map((r) => r.title));
-	const firstOf = (ts) => (ts || []).find((t) => has.has(t)) || "";
-	const needs = firstOf(o.needsYou) || shown.find(linePerched)?.title;
-	if (needs) return needs;
-	const mru = o.mru || [];
-	const recency = (r) => {
-		const at = mru.indexOf(r.title);
-		return at < 0 ? mru.length : at;
-	};
-	const working = shown.filter((r) => deriveSessionState(r).state === "working").sort((a, b) => recency(a) - recency(b) || (Number(b.activity_since) || 0) - (Number(a.activity_since) || 0));
-	if (working.length) return working[0].title;
-	return firstOf(mru) || firstOf(o.railOrder) || shown[shown.length - 1].title;
-}
-function withLiveFlights(rows, flights, kinds) {
-	if (!flights?.length) return rows;
-	const newest = /* @__PURE__ */ new Map();
-	for (const f of flights) {
-		if (!f.session || f.free || !isShown(f)) continue;
-		const had = newest.get(f.session);
-		if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
-	}
-	if (!newest.size) return rows;
-	let out = null;
-	rows.forEach((r, i) => {
-		const f = newest.get(r.title);
-		if (!f || r.flight?.id) return;
-		const step = f.steps[Math.min(f.cursor, f.steps.length - 1)];
-		const row = {
-			...r.flight,
-			id: f.id,
-			plan_name: f.plan_name,
-			cursor: f.cursor,
-			total: f.steps.length,
-			state: f.state,
-			step: step ? {
-				id: step.id,
-				kind: step.kind,
-				title: step.title,
-				state: f.step_states?.[step.id]?.state || "pending",
-				actor: kinds?.find((k) => k.kind === step.kind)?.actor || (step.kind === "you" ? "you" : "robot")
-			} : null
-		};
-		(out ??= rows.slice())[i] = {
-			...r,
-			flight: row
-		};
-	});
-	return out ?? rows;
 }
 //#endregion
 //#region src/lib/skyNodePos.ts
@@ -38573,7 +41263,7 @@ function openThread(title, composeTo) {
 //#region src/lib/ask.ts
 var TYPED_RECENTLY_MS = 1e4;
 var EVENT_ASK_GRACE_MS = 8e3;
-var num$7 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
+var num$6 = (v) => typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
 var strOrNull$1 = (v) => typeof v === "string" && v.trim() ? v.trim() : null;
 function normAsking(v) {
 	if (!v || typeof v !== "object") return null;
@@ -38583,7 +41273,7 @@ function normAsking(v) {
 	return {
 		kind,
 		text: strOrNull$1(o.text),
-		ts: num$7(o.ts),
+		ts: num$6(o.ts),
 		dialog_id: strOrNull$1(o.dialog_id),
 		parsed: o.parsed === true,
 		source: strOrNull$1(o.source)
@@ -38597,7 +41287,7 @@ function askingOf(inst, activity = effectiveActivity(inst)) {
 		return {
 			kind: "dialog",
 			text: null,
-			ts: num$7(inst.activity_since),
+			ts: num$6(inst.activity_since),
 			dialog_id: null,
 			parsed: false,
 			source: null
@@ -38636,7 +41326,7 @@ function askQueue(instances, waiting, events, opts = {}) {
 	};
 	for (const w of waiting || []) {
 		if (w.kind !== "question" || !w.title || out.has(w.title) || movedOn(w.title)) continue;
-		const ts = num$7(w.since);
+		const ts = num$6(w.since);
 		out.set(w.title, {
 			title: w.title,
 			kind: "question",
@@ -39295,7 +41985,7 @@ function AskedInWordsView({ question, variant, onReply, onOpen, asking = "questi
 		})]
 	});
 }
-var mounted = /* @__PURE__ */ new Map();
+var mounted$1 = /* @__PURE__ */ new Map();
 function useAnswerStrip(title, waiting, opts = {}) {
 	const { activity = "", onRedirect, onAnswered } = opts;
 	const [state, dispatch] = (0, import_react.useReducer)(stripReducer, STRIP_INITIAL);
@@ -39435,12 +42125,12 @@ function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRe
 	pickNow.current = pick;
 	(0, import_react.useEffect)(() => {
 		const h = { answerKey: (k) => pickNow.current(k) };
-		let set = mounted.get(title);
-		if (!set) mounted.set(title, set = /* @__PURE__ */ new Set());
+		let set = mounted$1.get(title);
+		if (!set) mounted$1.set(title, set = /* @__PURE__ */ new Set());
 		set.add(h);
 		return () => {
 			set.delete(h);
-			if (!set.size && mounted.get(title) === set) mounted.delete(title);
+			if (!set.size && mounted$1.get(title) === set) mounted$1.delete(title);
 		};
 	}, [title]);
 	if (asksInWords) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskedInWordsView, {
@@ -39471,6 +42161,438 @@ function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRe
 		onPick: pick,
 		onOpen,
 		children
+	});
+}
+//#endregion
+//#region src/lib/verifyActions.ts
+function planPath$1(id) {
+	return "/api/test-plans/" + encodeURIComponent(id);
+}
+function patchPlan(id, apply) {
+	queryClient.cancelQueries({ queryKey: ["test-plans"] });
+	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+		...prev,
+		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
+	} : prev);
+}
+function requestPlanRun(planId, only) {
+	const json = only ? { steps: only } : {};
+	return api(planPath$1(planId) + "/run", {
+		method: "POST",
+		json
+	});
+}
+function runStartedMessage(plan, r) {
+	if (r?.in_session && r.session) return "Handed the steps to " + r.session + "'s agent" + (r.queued ? " — it takes them once its current turn ends" : "") + ". Talk to it there";
+	return "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session");
+}
+function openWalkingSession(title) {
+	if (!title) return;
+	const ui = useUi.getState();
+	ui.closeDialog();
+	selectSession(title, { noKeyboard: true });
+	ui.setLastTab(title, "agent");
+}
+var VERIFY_WHERE_BRANCH = "branch";
+function requestSessionVerify(title, notes = "", environment = "") {
+	const n = notes.trim();
+	const env = environment.trim();
+	const json = {};
+	if (n) json.notes = n;
+	if (env && env !== VERIFY_WHERE_BRANCH) json.environment = env;
+	return api("/api/instances/" + encodeURIComponent(title) + "/verify", {
+		method: "POST",
+		json
+	});
+}
+function verifyStartedMessage(title, r) {
+	const session = r?.session || title;
+	if (r?.queued) return "Verify starts when " + session + "'s current turn ends";
+	return "Verifying " + session + " — its agent writes its steps and works them in its terminal";
+}
+async function startSessionVerify(title, opts = {}) {
+	try {
+		toast(verifyStartedMessage(title, await requestSessionVerify(title, opts.notes || "", opts.environment || "")));
+		await refreshInstances();
+		refreshTestPlans();
+		if (opts.open !== false) openWalkingSession(title);
+		return true;
+	} catch (err) {
+		errorPop("Couldn't start verifying " + title, errMsg(err));
+		return false;
+	}
+}
+function requestVerifyConfirm(planId, verified, note = "", steps) {
+	const n = note.trim();
+	const json = { verified };
+	if (n) json.note = n;
+	if (steps && Object.keys(steps).length) json.steps = steps;
+	return api(planPath$1(planId) + "/confirm", {
+		method: "POST",
+		json
+	});
+}
+function confirmMessage(verified, r, session) {
+	if (verified) return "Confirmed verified";
+	return r?.delivered ? "Sent to " + session + "'s agent" : "Saved on the check";
+}
+async function confirmVerified(planId, verified, note = "", opts = {}) {
+	try {
+		toast(confirmMessage(verified, await requestVerifyConfirm(planId, verified, note, opts.steps), opts.session || planId));
+		await refreshInstances();
+		refreshTestPlans();
+		return true;
+	} catch (err) {
+		errorPop(verified ? "Couldn't confirm verified" : "Couldn't mark it not verified", errMsg(err));
+		refreshInstances();
+		return false;
+	}
+}
+function requestPlanDelete(planId) {
+	return api(planPath$1(planId), { method: "DELETE" });
+}
+async function startChecklistRun(plan, opts = {}) {
+	try {
+		const r = await requestPlanRun(plan.id, opts.only);
+		await refreshInstances();
+		const started = r?.plan;
+		patchPlan(plan.id, (p) => started || {
+			...p,
+			state: "running",
+			run_session: r?.session || ""
+		});
+		opts.onStarted?.();
+		await refreshTestPlans();
+		toast(runStartedMessage(plan, r));
+		if (r?.in_session && r.session) openWalkingSession(r.session);
+	} catch (err) {
+		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function cancelChecklistRun(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
+		await refreshInstances();
+		await refreshTestPlans();
+		toast(cancelMessage(plan.id, r));
+	} catch (err) {
+		errorPop("Couldn't stop verifying", errMsg(err));
+		refreshTestPlans();
+	}
+}
+function cancelMessage(planId, r) {
+	const session = r?.session || "";
+	if (r?.verify_stopped || !session || session === planId) return "Stopped verifying " + (session || planId) + " — the session keeps running";
+	return "Stopped verifying " + planId + " — closed " + session;
+}
+async function stopVerifying(planId, session = "") {
+	try {
+		const r = await api(planPath$1(planId) + "/cancel", { method: "POST" });
+		if (r?.plan) patchPlan(planId, () => r.plan);
+		toast(cancelMessage(planId, {
+			...r,
+			session: r?.session || session
+		}));
+		await refreshInstances();
+		refreshTestPlans();
+		return true;
+	} catch (err) {
+		errorPop("Couldn't stop verifying " + (session || planId), errMsg(err));
+		refreshInstances();
+		return false;
+	}
+}
+async function dismissVerify(planId, session = "") {
+	try {
+		await api(planPath$1(planId) + "/dismiss", { method: "POST" });
+		await refreshInstances();
+		return true;
+	} catch (err) {
+		errorPop("Couldn't dismiss the verify on " + (session || planId), errMsg(err));
+		return false;
+	}
+}
+function fixMessage(session, r) {
+	if (r?.in_session) return "Sent what failed to " + (r.session || session) + "'s agent" + (r.queued ? " — it starts once its current turn ends" : "") + "; Verify runs again after it fixes it";
+	return "Opened a new session, " + (r?.session || "a new session") + ", to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : "");
+}
+async function fixInSession(planId, session = "") {
+	try {
+		const r = await api(planPath$1(planId) + "/fix", {
+			method: "POST",
+			json: { in_session: true }
+		});
+		toast(fixMessage(session || planId, r));
+		await refreshInstances();
+		refreshTestPlans();
+		if (r?.in_session) openWalkingSession(r.session || session || planId);
+		return true;
+	} catch (err) {
+		errorPop("Fix didn't start", errMsg(err));
+		return false;
+	}
+}
+async function fixPlanFailures(plan, only) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/fix", {
+			method: "POST",
+			json: only ? { steps: only } : {}
+		});
+		await refreshInstances();
+		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
+	} catch (err) {
+		errorPop("Fix didn't start", errMsg(err));
+	}
+}
+async function markPlanDeployed(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(planName(plan) + " is ready to check");
+	} catch (err) {
+		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function removePlan(plan, opts = {}) {
+	try {
+		await requestPlanDelete(plan.id);
+		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
+		opts.onGone?.();
+		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+			...prev,
+			plans: prev.plans.filter((p) => p.id !== plan.id)
+		} : prev);
+		await refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't delete " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function fetchVerifyRepos() {
+	const r = await api("/api/test-plans/repos");
+	return Array.isArray(r?.repos) ? r.repos : [];
+}
+async function askBehaviorsForBranch(repo, branch, opts = {}) {
+	try {
+		const r = await api("/api/test-plans/branch", { json: opts.empty ? {
+			repo: repo.root,
+			branch,
+			empty: true
+		} : {
+			repo: repo.root,
+			branch
+		} });
+		toast(r.existing ? branch + " already has behaviors — they're on the Behaviors board" : opts.empty ? "Started empty behaviors for " + branch + " — add what it should do" : "Asked the agent to write behaviors for " + branch + " — up to three minutes");
+		refreshTestPlans();
+		return r.plan || "";
+	} catch (err) {
+		errorPop("Couldn't start behaviors for " + branch, errMsg(err));
+		return "";
+	}
+}
+//#endregion
+//#region src/components/behaviors/VerifyConfirm.tsx
+function HumanSteps({ steps, marks, onMark, disabled }) {
+	if (!steps.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "vc-steps",
+		"aria-label": "Steps for you",
+		children: steps.map((st) => {
+			const mark = marks?.[st.id] || "pass";
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+				className: "vc-step" + (onMark && mark === "fail" ? " is-fail" : ""),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "vc-step-text",
+						children: st.text
+					}),
+					st.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "vc-step-expect",
+						children: ["Expect: ", st.expect]
+					}) : null,
+					st.why ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "vc-step-why",
+						children: ["The agent couldn't do this: ", st.why]
+					}) : null,
+					onMark ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "vc-step-mark",
+						role: "group",
+						"aria-label": "Did it behave? " + st.text,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn vc-mark-pass",
+							"aria-pressed": mark === "pass",
+							title: "It behaved as expected",
+							disabled,
+							onClick: () => onMark(st.id, "pass"),
+							children: "✓"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn vc-mark-fail",
+							"aria-pressed": mark === "fail",
+							title: "It didn't behave — say what you saw below",
+							disabled,
+							onClick: () => onMark(st.id, "fail"),
+							children: "✗"
+						})]
+					}) : null
+				]
+			}, st.id);
+		})
+	});
+}
+function FailedSteps({ steps }) {
+	if (!steps.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "vc-steps vc-failed",
+		"aria-label": "What failed",
+		children: steps.map((st) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: "vc-step",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vc-step-text",
+				children: st.text
+			}), st.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vc-step-expect",
+				children: st.note
+			}) : null]
+		}, st.id))
+	});
+}
+function confirmView(verify, marks = {}, hideSteps = false) {
+	const steps = verify.human_steps || [];
+	const signOff = steps.length === 0;
+	const perStep = !hideSteps && steps.length > 1;
+	return {
+		signOff,
+		heading: signOff ? String(verify.detail || "").trim() || "The agent verified its work — sign off if it's what you wanted" : "",
+		yesLabel: signOff ? "Sign off" : "Confirm verified",
+		perStep,
+		anyFail: perStep && steps.some((s) => marks[s.id] === "fail")
+	};
+}
+function confirmSteps(steps, marks, perStep, verified) {
+	if (!perStep) return null;
+	const out = {};
+	for (const s of steps) out[s.id] = verified ? "pass" : marks[s.id] || "pass";
+	if (!verified && !Object.values(out).includes("fail")) return null;
+	return out;
+}
+function VerifyConfirm({ verify, session, hideSteps }) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [note, setNote] = (0, import_react.useState)("");
+	const [marks, setMarks] = (0, import_react.useState)({});
+	const steps = verify.human_steps || [];
+	const view = confirmView(verify, marks, hideSteps);
+	const noteOpen = asking || view.anyFail;
+	const noteMissing = view.anyFail && !note.trim();
+	const send = async (verified) => {
+		if (busy || !verified && noteMissing) return;
+		setBusy(verified ? "yes" : "no");
+		try {
+			if (await confirmVerified(verify.plan, verified, verified ? "" : note, {
+				steps: confirmSteps(steps, marks, view.perStep, verified),
+				session
+			})) {
+				setAsking(false);
+				setNote("");
+				setMarks({});
+			}
+		} finally {
+			setBusy("");
+		}
+	};
+	const closeNote = () => {
+		setAsking(false);
+		if (view.anyFail) setMarks({});
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vc-confirm",
+		role: "group",
+		"aria-label": view.signOff ? "Sign off" : "Confirm verified",
+		"data-no-drag": true,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [
+			view.heading ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "vc-heading",
+				children: view.heading
+			}) : null,
+			hideSteps ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HumanSteps, {
+				steps,
+				marks: view.perStep ? marks : void 0,
+				onMark: view.perStep ? (id, a) => setMarks((m) => ({
+					...m,
+					[id]: a
+				})) : void 0,
+				disabled: !!busy
+			}),
+			noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vc-note-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						className: "fl-input vc-note",
+						placeholder: view.anyFail ? "What did you see? (needed for a ✗)" : "What did you see?",
+						"aria-label": "What wasn't verified",
+						"aria-required": view.anyFail || void 0,
+						autoComplete: "off",
+						autoFocus: asking,
+						value: note,
+						disabled: !!busy,
+						onChange: (e) => setNote(e.target.value),
+						onKeyDown: (e) => {
+							e.stopPropagation();
+							if (e.key === "Enter") {
+								e.preventDefault();
+								send(false);
+							} else if (e.key === "Escape") {
+								e.preventDefault();
+								closeNote();
+							}
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary vc-send",
+						disabled: !!busy || noteMissing,
+						"aria-busy": busy === "no" || void 0,
+						title: noteMissing ? "Say what you saw first" : "Send what you saw to the session's agent",
+						onClick: () => void send(false),
+						children: "Not verified"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: !!busy,
+						onClick: closeNote,
+						children: "Cancel"
+					})
+				]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "vc-acts",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary vc-yes",
+					title: view.signOff ? "You're satisfied with what the agent verified — verification is complete" : "You did the steps above and they behaved as expected — verification is complete",
+					disabled: !!busy,
+					"aria-busy": busy === "yes" || void 0,
+					onClick: () => void send(true),
+					children: view.yesLabel
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn vc-no",
+					title: "Something didn't behave — say what you saw",
+					disabled: !!busy,
+					onClick: () => setAsking(true),
+					children: "Not verified…"
+				})]
+			})
+		]
 	});
 }
 //#endregion
@@ -39518,7 +42640,7 @@ async function stepDone(flightId, stepId, note = "") {
 		return true;
 	} catch (err) {
 		if (isAnswerBehaviors(err)) {
-			toast("Answer its behaviors (or Skip it) — the route goes on once each one has an answer");
+			toast("Answer it on its Verify card (or Skip it) — the route goes on once it has an answer");
 			answerBehaviors(flightId);
 		} else errorPop("Done failed", errMsg(err));
 		return false;
@@ -39540,8 +42662,8 @@ function jumpFlight(flightId, stepId, title = "") {
 	return flightAction("Jump", flightPath(flightId, "/jump"), { step: stepId }, title ? "Jumped to " + title : "");
 }
 function controlFlight(flightId, verb) {
-	const said = verb === "pause" ? "Route halted — Carry on picks it up again" : verb === "resume" ? "Route carrying on" : verb === "run" ? "Route started" : "Route stopped — its session is kept";
-	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the route", flightPath(flightId, "/" + verb), {}, said);
+	const said = verb === "pause" ? "Route paused — Carry on picks it up again" : verb === "resume" ? "Route carrying on" : verb === "run" ? "Route started" : "Route stopped — its session is kept";
+	return flightAction(verb === "pause" ? "Pause" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Stop the route", flightPath(flightId, "/" + verb), {}, said);
 }
 function runFlight(flightId) {
 	return controlFlight(flightId, "run");
@@ -39567,10 +42689,10 @@ async function setHalt(flightId, stepId, halt) {
 			method: "PATCH",
 			json: { halt }
 		});
-		toast(halt ? "Halt point set — the route stops before this stop" : "Halt point taken off");
+		toast(halt ? "Halt point set — the route pauses before this stop" : "Halt point taken off");
 		return true;
 	} catch (err) {
-		errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
+		errorPop(halt ? "Adding the halt point failed" : "Removing the halt point failed", errMsg(err));
 		return false;
 	} finally {
 		refreshFlights();
@@ -39588,7 +42710,7 @@ async function openWhenReady(title, tries = 8, waitMs = 750) {
 	}
 	return false;
 }
-async function takeOff(body) {
+async function takeOffResult(body) {
 	try {
 		const flight = (await api("/api/flights/start", { json: body }))?.flight || null;
 		refreshFlights();
@@ -39596,11 +42718,21 @@ async function takeOff(body) {
 			toast("Started: " + flight.plan_name);
 			openWhenReady(flight.session);
 		}
-		return flight;
+		return {
+			...SAVED,
+			flight
+		};
 	} catch (err) {
-		errorPop("Starting the route failed", errMsg(err));
-		return null;
+		return {
+			...refusalOf(err),
+			flight: null
+		};
 	}
+}
+async function takeOff(body) {
+	const r = await takeOffResult(body);
+	if (!r.ok) errorPop("Starting the route failed", r.detail);
+	return r.flight;
 }
 function startFlightOn(title, planId, startOn) {
 	return takeOff({
@@ -39693,7 +42825,7 @@ async function tackOnNew(title, steps, startOn) {
 			...startOn ? { start_on: startOn } : {}
 		} }))?.flight || null;
 	} catch (err) {
-		errorPop("Tack on failed", errMsg(err));
+		errorPop("Adding the stops failed", errMsg(err));
 		return null;
 	} finally {
 		refreshFlights();
@@ -39701,7 +42833,7 @@ async function tackOnNew(title, steps, startOn) {
 	}
 }
 function tackOn(flightId, step, at, opts = {}) {
-	return flightAction("Tack on", flightPath(flightId, "/steps"), {
+	return flightAction("Adding the stop", flightPath(flightId, "/steps"), {
 		step: wireStep(step),
 		...at === void 0 ? {} : { at },
 		...opts.parallel_with ? { parallel_with: opts.parallel_with } : {}
@@ -39729,6 +42861,38 @@ function leaveParallel(flightId, stepId) {
 }
 function joinParallel(flightId, stepId, withSid) {
 	return patchParallel(flightId, stepId, { parallel_with: withSid });
+}
+var SAVED = {
+	ok: true,
+	field: "",
+	detail: "",
+	error: ""
+};
+function refusalOf(err) {
+	const b = err instanceof ApiError && err.body && typeof err.body === "object" ? err.body : {};
+	const str = (v) => typeof v === "string" ? v : "";
+	return {
+		ok: false,
+		field: str(b.field),
+		detail: str(b.detail) || errMsg(err),
+		error: str(b.error)
+	};
+}
+function isSaveResult(v) {
+	return !!v && typeof v === "object" && typeof v.ok === "boolean" && "field" in v && "detail" in v;
+}
+async function saveStop(flightId, stepId, patch) {
+	try {
+		await api(flightPath(flightId, "/steps/" + enc$1(stepId)), {
+			method: "PATCH",
+			json: patch
+		});
+		return SAVED;
+	} catch (err) {
+		return refusalOf(err);
+	} finally {
+		await refreshFlights();
+	}
 }
 async function patchStop(flightId, stepId, patch) {
 	try {
@@ -39760,13 +42924,13 @@ function moveStop(flightId, stepId, at) {
 	return flightAction("Moving the stop", flightPath(flightId, "/steps/" + enc$1(stepId) + "/move"), { at });
 }
 function tackOnPlan(flightId, planId, at) {
-	return flightAction("Tack on", flightPath(flightId, "/steps"), {
+	return flightAction("Adding the stop", flightPath(flightId, "/steps"), {
 		plan_id: planId,
 		...at === void 0 ? {} : { at }
 	});
 }
 function tackOnSteps(flightId, steps, at, groupName) {
-	return flightAction("Tack on", flightPath(flightId, "/steps"), {
+	return flightAction("Adding the stop", flightPath(flightId, "/steps"), {
 		steps: steps.map((s) => ({
 			...wireStep(s),
 			id: s.id
@@ -39998,6 +43162,11 @@ function WaitingRow$1({ w, row, shown, group, runInfo }) {
 		shown
 	});
 	if (w.kind === "flight_halted") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightHaltedRow, {
+		w,
+		row,
+		shown
+	});
+	if (w.kind === FLIGHT_PAUSED) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightPausedRow, {
 		w,
 		row,
 		shown
@@ -40326,9 +43495,9 @@ function FlightYouRow({ w, row, shown }) {
 					children: [fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [fl.step.kind === "verify" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary pr-review-btn",
-						title: "Answer the behaviors of “" + fl.step.title + "” — the route goes on once each one has an answer",
+						title: "Open the Verify of “" + fl.step.title + "” — the route goes on once you confirm it",
 						onClick: () => openBehaviors({ title: w.title }),
-						children: "Behaviors"
+						children: "Verify"
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary pr-review-btn",
@@ -40407,6 +43576,66 @@ function FlightHaltedRow({ w, row, shown }) {
 						disabled: busy,
 						title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
 						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
+						children: "Skip"
+					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => openSession(w.title),
+						children: "Open ↗"
+					})]
+				})
+			})
+		]
+	});
+}
+function FlightPausedRow({ w, row, shown }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const fl = flightOf(w, row);
+	const run = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	const at = fl?.step?.title || "";
+	const chip = pausedAtLine(at).replace(/ — Carry on$/, "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-flight_paused",
+		"data-outbox-row": w.title || w.key,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: w.title || w.text || "",
+				text: w.title ? w.text : "",
+				shown: w.title ? shown : (t) => t,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-open-meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-chip",
+					title: w.reason || void 0,
+					children: chip
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ob-acts",
+					children: [fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary pr-review-btn",
+						disabled: busy,
+						title: "Carry on — “" + (at || "this stop") + "” runs and the route goes on",
+						onClick: () => void run(() => controlFlight(fl.id, "resume")),
+						children: "Carry on"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						title: "Skip “" + (at || "this stop") + "” — the route goes on without it",
+						onClick: () => void run(async () => await stepSkip(fl.id, fl.step.id) && controlFlight(fl.id, "resume")),
 						children: "Skip"
 					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -41371,6 +44600,10 @@ function planOf(env, d) {
 		name: String(d.title || "")
 	};
 }
+var VERIFY_NEEDS_YOU = "Verify needs you";
+function verifyNotifTitle(row, name) {
+	return (row.verifyTitle || "Verify") + " — " + name;
+}
 function notifFromEvent(env) {
 	const d = env.data || {};
 	switch (env.event) {
@@ -41466,7 +44699,8 @@ function notifFromEvent(env) {
 		case "session.test_plan_due": {
 			const p = planOf(env, d);
 			return {
-				text: "ready to check",
+				text: "it shipped — verify it now",
+				verifyTitle: VERIFY_NEEDS_YOU,
 				cls: "n-info",
 				rule: "verify_plan_due",
 				dedupe: "plan-due:" + p.verify,
@@ -41474,7 +44708,8 @@ function notifFromEvent(env) {
 			};
 		}
 		case "session.test_plan_failed": return {
-			text: "couldn't write the behaviors",
+			text: "its steps couldn't be written",
+			verifyTitle: REASON_LABEL.verify_blocked,
 			cls: "n-warn",
 			rule: "verify_plan_failed",
 			...planOf(env, d)
@@ -41483,7 +44718,8 @@ function notifFromEvent(env) {
 			if (env.new !== "failed") return null;
 			const n = Number(d.failed) || 0;
 			return {
-				text: "behaviors failed" + (n ? " — " + n + " behavior" + (n === 1 ? "" : "s") : ""),
+				text: n ? n + (n === 1 ? " step failed" : " steps failed") : "a step failed",
+				verifyTitle: REASON_LABEL.verify_failed,
 				cls: "n-warn",
 				rule: "verify_run_failed",
 				...planOf(env, d)
@@ -41493,10 +44729,20 @@ function notifFromEvent(env) {
 			const step = Number(d.step) || 0;
 			const text = String(d.text || "");
 			return {
-				text: "behavior failed" + (text ? " — " + (text.length > 60 ? text.slice(0, 59) + "…" : text) : step ? " — behavior " + step : ""),
+				text: text ? text.length > 60 ? text.slice(0, 59) + "…" : text : step ? "step " + step + " failed" : "a step failed",
+				verifyTitle: REASON_LABEL.verify_failed,
 				cls: "n-warn",
 				rule: "verify_run_failed",
 				...planOf(env, d)
+			};
+		}
+		case "flight.notified": {
+			const text = String(d.text || "").trim();
+			if (!text) return null;
+			return {
+				text,
+				cls: "n-info",
+				dedupe: "flight-notified:" + String(d.id || "") + ":" + text
 			};
 		}
 		case "session.message": return messageNotif(d, displayName);
@@ -41568,7 +44814,7 @@ function bellLabel(needs, unread) {
 	if (unread > 0) return "Notifications, " + unread + " new";
 	return "Notifications";
 }
-function rowKey$1(e) {
+function rowKey(e) {
 	if (e.target !== e.currentTarget || e.key !== "Enter" && e.key !== " ") return;
 	e.preventDefault();
 	e.currentTarget.click();
@@ -41776,20 +45022,23 @@ function NotificationsBell() {
 								"data-needs": it.key,
 								role: "button",
 								tabIndex: 0,
-								onKeyDown: rowKey$1,
+								onKeyDown: rowKey,
 								onClick: () => {
 									setOpen(false);
-									openBehaviors({ planId: plan.id });
+									openBehaviors({
+										planId: plan.id,
+										title: plan.id
+									});
 								},
 								children: [
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "attn-title",
-										children: ["Behaviors · ", plan.title || plan.id]
+										children: plan.title || plan.id
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "attn-reason",
-										children: failing ? "Failed" : "Needs you"
+										children: failing ? REASON_LABEL.verify_failed : VERIFY_NEEDS_YOU
 									})
 								]
 							}, it.key);
@@ -41824,14 +45073,51 @@ function NotificationsBell() {
 						}, "plan:" + it.key);
 						const a = it.attn;
 						const fam = a.p === 0 ? familyOf(it.title) : null;
+						const v = verifyOf(byTitle.get(it.title) || {});
+						const toSteps = (title) => {
+							setOpen(false);
+							openBehaviors({
+								planId: v?.plan || title,
+								title
+							});
+						};
+						if (v?.state === "needs_you") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "attn-item p" + a.p + (flashing ? " flash" : ""),
+							"data-attn": it.title,
+							"data-needs": it.key,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "attn-title linklike",
+									title: "See its Verify steps",
+									onClick: () => toSteps(it.title),
+									children: windowName(it.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-reason",
+									children: VERIFY_NEEDS_YOU
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "attn-verify",
+									style: {
+										flexBasis: "100%",
+										margin: "2px 0 2px 13px",
+										cursor: "default",
+										fontSize: 12
+									},
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, { verify: v })
+								})
+							]
+						}, it.key + a.reason);
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "attn-item p" + a.p + (flashing ? " flash" : ""),
 							"data-attn": it.title,
 							"data-needs": it.key,
 							role: a.p === 0 ? void 0 : "button",
 							tabIndex: a.p === 0 ? void 0 : 0,
-							onKeyDown: a.p === 0 ? void 0 : rowKey$1,
-							onClick: () => jump(it.title),
+							onKeyDown: a.p === 0 ? void 0 : rowKey,
+							onClick: () => v && (v.state === "failed" || v.state === "blocked") ? toSteps(it.title) : jump(it.title),
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -41890,7 +45176,7 @@ function NotificationsBell() {
 					"data-session": n.session,
 					role: "button",
 					tabIndex: 0,
-					onKeyDown: rowKey$1,
+					onKeyDown: rowKey,
 					onClick: () => {
 						if (n.lead) {
 							setOpen(false);
@@ -41915,7 +45201,10 @@ function NotificationsBell() {
 							openSettings(n.settings);
 						} else if (n.verify) {
 							setOpen(false);
-							openBehaviors({ planId: n.verify });
+							openBehaviors({
+								planId: n.verify,
+								title: n.session || n.verify
+							});
 						} else if (n.template && !n.session) {
 							setOpen(false);
 							useUi.getState().openDialogFor("schedule");
@@ -41927,7 +45216,7 @@ function NotificationsBell() {
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-sess",
-							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "People" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Schedule" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? "Behaviors · " + (n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
+							children: n.device && !n.session ? "Devices" : n.peer && !n.session ? "People" : n.settings && !n.session ? "Updates" : n.template && !n.session ? "Schedule" : n.run && !n.session ? runLookups.name(n.run) || "Team run" : n.verify ? verifyNotifTitle(n, n.name || windowName(n.session)) : (slotNumber(n.session) ? "[" + slotNumber(n.session) + "] " : "") + (n.session ? windowName(n.session) : "—")
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "notif-text",
@@ -43742,7 +47031,7 @@ var VERIFY_TOUR = {
 	steps: [
 		{
 			target: "[data-tour=\"behaviors-stop\"], .sky-node.sky-behaviors",
-			title: "Behaviors live on the route",
+			title: "Verify lives on the route",
 			body: "What the work should do in real use sits on its route as a Verify stop, and its face says how they stand."
 		},
 		{
@@ -44506,8 +47795,8 @@ var useSkyGuide = create((set) => ({
 var openSkyGuide = (section) => useSkyGuide.getState().open(section);
 var closeSkyGuide = () => useSkyGuide.getState().close();
 var SKY_GUIDE_KEYS = [
-	["V", "Drag tool: routes move by their bars, a drag on empty sky selects"],
-	["H", "Click tool: any drag pans the sky, a click selects"],
+	["V", "Select tool: routes move by their bars, a drag on empty sky selects"],
+	["H", "Pan tool: any drag pans the sky, a click selects"],
 	["Space (held)", "Pan with the mouse, in either tool"],
 	["0", "Fit every route, titles still readable"],
 	["1", "Fit the focused route to the window"],
@@ -44814,7 +48103,7 @@ var SKETCHES = {
 				className: "sg-text",
 				x: 20,
 				y: 100,
-				children: "click: halt / carry on · drag: jump"
+				children: "click: pause / carry on · drag: jump"
 			})
 		]
 	}),
@@ -44851,7 +48140,7 @@ var SKETCHES = {
 				className: "sg-text",
 				x: 20,
 				y: 96,
-				children: "⏹ halt now — here · ⏸ halt here — when it arrives"
+				children: "⏸ pause — here, now · halt point — when it arrives"
 			})
 		]
 	}),
@@ -44933,7 +48222,7 @@ var SKETCHES = {
 		]
 	}),
 	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "The tool toggle: Drag (V) and Click (H)",
+		label: "The tool toggle: Select (V) and Pan (H)",
 		h: 80,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
@@ -44956,13 +48245,13 @@ var SKETCHES = {
 				className: "sg-text sg-strong",
 				x: 84,
 				y: 42,
-				children: "✥ Drag · V"
+				children: "Select (V)"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
 				className: "sg-text",
 				x: 180,
 				y: 42,
-				children: "☝ Click · H"
+				children: "Pan (H)"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
 				className: "sg-text",
@@ -45242,13 +48531,28 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
 			" commits, pushes, opens or merges the PR, ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
-			" checks the session's behaviors, ",
+			" has the session's own agent check its work — it comes up with its steps, runs them and shows evidence for each, and the route waits on you for what only a person can confirm, ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
-			" waits some minutes or until a time, ",
+			" waits a while or until a time of day, ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Loop" }),
 			" sends the route back to an earlier stop, a number of times, every so often. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All stops…" }),
 			" on the shelf lists the rest, each with what it does."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Open a stop and its form reads back what the route will do there, in one sentence, as you change it; each option says what it does, its default and its range. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "If it fails" }),
+			" picks what a failure does: ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Halt" }),
+			" stops the route there, red, for you to Retry or Skip; ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Let the agent fix it" }),
+			" hands the failure to the agent and runs the stop again (up to ",
+			FIX_ROUNDS,
+			" rounds, then it halts); ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Skip" }),
+			" goes on as if the stop was not there; ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ask me" }),
+			" waits on you, showing the failure."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"A ",
@@ -45273,24 +48577,42 @@ var WORDS = {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Needs you" }),
 			")."
 		] }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to halt the route where it is; click it again on a halted route to carry on."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to pause the route where it is; click it again on a paused route to carry on. On a halted route — a stop failed, red — a click retries the stop."] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Drag" }), " the bird onto another stop of the same route to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on."] })
 	] }),
-	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏹ Halt now" }),
-		" (on the current stop, or a click on the bird) halts the route where it is. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏸ Halt here" }),
-		" on a stop ahead makes it a halt point: the route halts when it reaches that stop, before doing it, and the stop wears a pause badge. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Carry on" }),
-		" goes on."
-	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
-		" (🗑, the menu, or ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
-		") takes a stop off at once, with ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
-		" in the toast. Removing the stop the route is on stops its work and halts the route right before the next stop; Carry on goes into it."
-	] })] }),
+	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏸ Pause" }),
+			" (on the current stop, or a click on the bird) pauses the route where it is. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Add halt point" }),
+			" on a stop ahead makes it a halt point: the route pauses when it reaches that stop, before doing it, and the stop wears a pause badge; ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove halt point" }),
+			" takes it off. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Carry on" }),
+			" goes on from a pause."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "halted" }),
+			" route is different: a stop failed and its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "If it fails" }),
+			" said Halt. It turns red and waits for ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Retry" }),
+			", ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Skip" }),
+			" or ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Let the agent fix it" }),
+			"."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
+			" (🗑, the menu, or ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
+			") takes a stop off at once, with ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
+			" in the toast. Removing the stop the route is on stops its work and pauses the route right before the next stop; Carry on goes into it."
+		] })
+	] }),
 	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 			"Drop a stop or a saved route on empty sky and it waits there as a route of its own, with ",
@@ -45323,7 +48645,7 @@ var WORDS = {
 		] })
 	] }),
 	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Click tool, Shift+drag). ",
+		"Drag across empty sky to draw a marquee — everything it touches is selected, routes and stops both (in the Pan tool, Shift+drag). ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+A" }),
 		" selects every route; ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
@@ -45339,11 +48661,11 @@ var WORDS = {
 	] })] }),
 	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 		"The toolbar's toggle picks how a drag behaves. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✥ Drag" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Select" }),
 		" (",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "V" }),
 		"): routes move by their bars and a drag on empty sky selects. ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "☝ Click" }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Pan" }),
 		" (",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "H" }),
 		"): nothing moves by dragging — any drag pans, a click focuses a route or selects a stop. Hold ",
@@ -46180,7 +49502,7 @@ function buildPaletteActions({ config, host, extensions }) {
 		run: () => ui.openDialogFor("intake", "autostart")
 	});
 	acts.push({
-		label: "Behaviors — next that needs you",
+		label: "Verify — next that needs you",
 		hint: "Alt+V",
 		top: TOP.verify,
 		keywords: "verify behaviors check checklist test plan pushed changes work",
@@ -52909,7 +56231,7 @@ var select$1 = (key, label, options, get, set) => ({
 	value: get,
 	set
 });
-var num$6 = (key, label, min, max, get, set) => ({
+var num$5 = (key, label, min, max, get, set) => ({
 	key,
 	label,
 	type: "number",
@@ -52940,9 +56262,9 @@ function assistantPrefs() {
 		select$1("theme", "Light or dark", ["dark", "light"], () => isLightNow() ? "light" : "dark", (v) => setTheme(v === "light")),
 		bool("reduce_motion", "Reduce motion", () => ui().reduceMotion, (on) => ui().setReduceMotion(on)),
 		bool("break_reminder", "Take a break (reminders)", () => ui().breakReminder, (on) => ui().setBreakReminder(on)),
-		num$6("break_every", "Minutes between break reminders", 5, 240, () => ui().breakEveryMin, (n) => ui().setBreakEveryMin(n)),
+		num$5("break_every", "Minutes between break reminders", 5, 240, () => ui().breakEveryMin, (n) => ui().setBreakEveryMin(n)),
 		bool("idle_flock", "Idle flock", () => ui().idleFlock, (on) => ui().setIdleFlock(on)),
-		num$6("idle_after", "Minutes idle before the flock appears", 1, 120, () => ui().idleFlockAfterMin, (n) => ui().setIdleFlockAfterMin(n)),
+		num$5("idle_after", "Minutes idle before the flock appears", 1, 120, () => ui().idleFlockAfterMin, (n) => ui().setIdleFlockAfterMin(n)),
 		bool("hints", "Getting-started hints", () => ui().hintsEnabled, (on) => ui().setHintsEnabled(on)),
 		select$1("read_replies", "Read replies aloud (off, mine, all = everything)", [
 			"off",
@@ -55567,7 +58889,7 @@ function slotted(title) {
 	const n = slotNumber(title);
 	return (n ? "[" + n + "] " : "") + windowName(title);
 }
-function clip$5(text, max = 200) {
+function clip$3(text, max = 200) {
 	const t = text.replace(/\s+/g, " ").trim();
 	return t.length > max ? t.slice(0, max - 1).trimEnd() + "…" : t;
 }
@@ -55580,7 +58902,7 @@ function desktopNoteFor(event, data, env) {
 			const text = String(d.question || d.text || "").trim();
 			return {
 				title: slotted(title) + " needs you: Question",
-				body: text ? clip$5(text) : "It's waiting on a dialog — answer it in MindFlock",
+				body: text ? clip$3(text) : "It's waiting on a dialog — answer it in MindFlock",
 				target: SESSION_TARGET + title
 			};
 		}
@@ -55590,7 +58912,7 @@ function desktopNoteFor(event, data, env) {
 			const text = String(d.text || "").trim();
 			return {
 				title: slotted(title) + " needs you: Question",
-				body: text ? clip$5(text) : "It asked you a question in its reply",
+				body: text ? clip$3(text) : "It asked you a question in its reply",
 				target: SESSION_TARGET + title
 			};
 		}
@@ -55913,7 +59235,7 @@ function useTitleBadge() {
 //#endregion
 //#region src/lib/codemapApi.ts
 var arr = (v) => Array.isArray(v) ? v : [];
-var num$5 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
+var num$4 = (v, d = 0) => typeof v === "number" && isFinite(v) ? v : d;
 var str$2 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
 var obj$2 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var enc = encodeURIComponent;
@@ -55922,8 +59244,8 @@ function normSym(v) {
 	return {
 		name: str$2(o.name),
 		kind: str$2(o.kind, "function"),
-		line: num$5(o.line),
-		end: num$5(o.end),
+		line: num$4(o.line),
+		end: num$4(o.end),
 		public: o.public !== false,
 		sig: str$2(o.sig),
 		parent: o.parent == null ? null : str$2(o.parent),
@@ -55936,7 +59258,7 @@ function normEntry(v) {
 		kind: str$2(o.kind, "http"),
 		method: str$2(o.method, "ANY"),
 		route: str$2(o.route),
-		line: num$5(o.line),
+		line: num$4(o.line),
 		handler: str$2(o.handler),
 		path: o.path == null ? void 0 : str$2(o.path),
 		changed: o.changed === true ? true : void 0
@@ -55953,7 +59275,7 @@ function normFileView(v) {
 	return {
 		path: str$2(o.path),
 		lang: str$2(o.lang),
-		loc: num$5(o.loc),
+		loc: num$4(o.loc),
 		symbols: arr(o.symbols).map(normSym),
 		imports: {
 			internal: arr(imp.internal).map(normDep).filter((d) => d.path),
@@ -55961,7 +59283,7 @@ function normFileView(v) {
 		},
 		entry: arr(o.entry).map(normEntry),
 		used_by: arr(o.used_by).map(normDep).filter((d) => d.path),
-		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$5(h[0]), num$5(h[1])]),
+		changed_lines: arr(o.changed_lines).filter((h) => Array.isArray(h) && h.length >= 2).map((h) => [num$4(h[0]), num$4(h[1])]),
 		changed_symbols: arr(o.changed_symbols).map((x) => str$2(x)),
 		zones: {
 			red: !!z.red,
@@ -55981,8 +59303,8 @@ async function searchCode(title, q) {
 			path: str$2(o.path),
 			name: str$2(o.name),
 			kind: str$2(o.kind, "file"),
-			line: num$5(o.line),
-			score: num$5(o.score)
+			line: num$4(o.line),
+			score: num$4(o.score)
 		};
 	});
 }
@@ -60090,7 +63412,7 @@ function call(name, fn) {
 		refreshInstances();
 	}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
 }
-function sessionMenu(inst, ctx, opts = {}) {
+function sessionMenu$1(inst, ctx, opts = {}) {
 	const title = inst.title;
 	const name = displayName(title);
 	const peer = !!inst.peer_share;
@@ -60169,8 +63491,8 @@ function sessionMenu(inst, ctx, opts = {}) {
 		},
 		!!inst.branch && !peer && {
 			key: "checklist",
-			label: "Behaviors…",
-			title: "The behaviors Verify checks for " + inst.branch + " — what it should do, before or after it merges",
+			label: "Verify steps…",
+			title: "The steps Verify checked for " + inst.branch + ", with the evidence for each",
 			run: () => openChecklist(inst.branch)
 		},
 		inst.check && inst.check.state !== "running" && !peer && {
@@ -60370,6 +63692,206 @@ function workersModes(inst, ctx) {
 			run: () => void toggleFlock(title)
 		}
 	];
+}
+//#endregion
+//#region src/components/behaviors/VerifyStartForm.tsx
+var useVerifyForm = create(() => ({
+	open: "",
+	opener: null
+}));
+var mounted = /* @__PURE__ */ new Map();
+function markVerifyRowMounted(title) {
+	mounted.set(title, (mounted.get(title) || 0) + 1);
+	return () => {
+		const n = (mounted.get(title) || 1) - 1;
+		if (n > 0) mounted.set(title, n);
+		else mounted.delete(title);
+	};
+}
+function verifyRowMounted(title) {
+	return (mounted.get(title) || 0) > 0;
+}
+var MOUNT_WAIT_MS = 600;
+function openVerifyForm(title, opener) {
+	if (!title) return;
+	const from = opener ?? (typeof document !== "undefined" ? document.activeElement : null);
+	useVerifyForm.setState({
+		open: title,
+		opener: from
+	});
+	if (verifyRowMounted(title)) return;
+	openWalkingSession(title);
+	setTimeout(() => {
+		if (verifyRowMounted(title) || useVerifyForm.getState().open !== title) return;
+		useVerifyForm.setState({
+			open: "",
+			opener: null
+		});
+		startSessionVerify(title);
+	}, MOUNT_WAIT_MS);
+}
+function closeVerifyForm(fallback) {
+	const { opener } = useVerifyForm.getState();
+	useVerifyForm.setState({
+		open: "",
+		opener: null
+	});
+	const target = opener && opener.isConnected ? opener : fallback;
+	if (target && typeof target.focus === "function") target.focus();
+}
+function startFormWhere(envs, repo) {
+	const want = String(repo || "").trim().toLowerCase();
+	if (!want || !envs?.repos) return [];
+	const names = [];
+	for (const [slug, list] of Object.entries(envs.repos)) {
+		if ((slug.split("/").pop()?.trim().toLowerCase() || "") !== want && slug.trim().toLowerCase() !== want) continue;
+		for (const e of list || []) if (e?.name && e.name !== VERIFY_WHERE_BRANCH && !names.includes(e.name)) names.push(e.name);
+	}
+	if (!names.length) return [];
+	return [{
+		value: VERIFY_WHERE_BRANCH,
+		label: "This branch"
+	}, ...names.map((n) => ({
+		value: n,
+		label: n
+	}))];
+}
+function VerifyStartForm({ title, repo, onClose }) {
+	const [notes, setNotes] = (0, import_react.useState)("");
+	const [where, setWhere] = (0, import_react.useState)(VERIFY_WHERE_BRANCH);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const field = (0, import_react.useRef)(null);
+	const choices = startFormWhere(useVerifyEnvironments(!!repo).data, repo);
+	(0, import_react.useEffect)(() => {
+		field.current?.focus();
+	}, []);
+	const start = async () => {
+		if (busy) return;
+		setBusy(true);
+		try {
+			if (await startSessionVerify(title, {
+				notes,
+				environment: where,
+				open: false
+			})) onClose();
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+		className: "pv-form",
+		"aria-label": "Verify " + title,
+		"data-no-drag": true,
+		onMouseDown: (e) => e.stopPropagation(),
+		onSubmit: (e) => {
+			e.preventDefault();
+			start();
+		},
+		onKeyDown: (e) => {
+			e.stopPropagation();
+			if (e.key === "Escape") {
+				e.preventDefault();
+				onClose();
+			}
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref: field,
+				className: "fl-input pv-form-notes",
+				rows: 1,
+				placeholder: "What should it prove? (optional)",
+				"aria-label": "What should it prove? (optional)",
+				value: notes,
+				disabled: busy,
+				onChange: (e) => setNotes(e.target.value),
+				onKeyDown: (e) => {
+					if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+						e.preventDefault();
+						start();
+					}
+				}
+			}),
+			choices.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "pv-form-where",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Where" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					className: "fl-input",
+					value: where,
+					disabled: busy,
+					onChange: (e) => setWhere(e.target.value),
+					children: choices.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: c.value,
+						children: c.label
+					}, c.value))
+				})]
+			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "submit",
+				className: "btn-primary pv-form-start",
+				disabled: busy,
+				"aria-busy": busy || void 0,
+				children: "Start"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn pv-form-cancel",
+				disabled: busy,
+				onClick: onClose,
+				children: "Cancel"
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/sidebar/verifyMenu.ts
+function canStartVerify(inst) {
+	if (!inst.title || inst.workspace_missing || inst.peer_share || inst.device || inst.pending) return false;
+	if (inst.status === "paused") return false;
+	const v = verifyOf(inst);
+	return !v || v.state === "passed" || v.state === "failed" || v.state === "blocked";
+}
+function verifyMenuItem(inst) {
+	const v = verifyOf(inst);
+	if (v?.state === "verifying" && inst.title && !inst.peer_share && !inst.device) {
+		const title = inst.title;
+		return {
+			key: "verify-stop",
+			label: "Stop verifying",
+			note: "the session keeps running",
+			title: "Its agent stops working the steps — the session itself keeps running",
+			run: () => void stopVerifying(v.plan, title)
+		};
+	}
+	if (!canStartVerify(inst)) return null;
+	const title = inst.title;
+	return {
+		key: "verify",
+		label: v ? "Verify again" : "Verify",
+		note: "its agent checks its own work",
+		title: "Say what it should prove (optional), then its agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do",
+		run: () => openVerifyForm(title)
+	};
+}
+function withVerifyItem(model, inst) {
+	const item = verifyMenuItem(inst);
+	if (!item || !model.groups.length) return model;
+	const at = Math.max(0, model.groups.findIndex((g) => g.id === "ship"));
+	return {
+		...model,
+		groups: model.groups.map((g, i) => {
+			if (i !== at) return g;
+			if (g.items.some((it) => it.key === "verify")) return g;
+			const before = g.items.findIndex((it) => it.key === "checklist");
+			const items = [...g.items];
+			items.splice(before >= 0 ? before : items.length, 0, item);
+			return {
+				...g,
+				items
+			};
+		})
+	};
+}
+function sessionMenu(...args) {
+	return withVerifyItem(sessionMenu$1(...args), args[0]);
 }
 //#endregion
 //#region src/components/presence/Presence.tsx
@@ -60815,25 +64337,49 @@ function GuestPills({ title }) {
 }
 //#endregion
 //#region src/components/dialogs/VerdictChip.tsx
+function chipWords(verify, plan) {
+	if (verify) {
+		const w = verifyWords(verify);
+		return {
+			key: verify.state,
+			tone: w.tone,
+			glyph: w.glyph,
+			pane: w.label,
+			row: "",
+			title: "Verify: " + w.line + ". Click to see its steps."
+		};
+	}
+	if (!plan) return null;
+	const v = planVerdict(plan);
+	const sentence = behaviorSummary(plan).sentence;
+	return {
+		key: v.key,
+		tone: v.tone,
+		glyph: v.glyph,
+		pane: v.short,
+		row: v.key === "partial" ? v.short : "",
+		title: "Verify: " + v.label + (sentence ? " — " + sentence : "") + " Click to see its steps."
+	};
+}
 function VerdictChip({ inst, where }) {
 	const { data } = useTestPlans();
 	if (isVerifySession(inst)) return null;
 	const plan = planForSession$1(data?.plans || [], inst);
-	if (!plan) return null;
-	const v = planVerdict(plan);
-	const branch = plan.branch || inst.branch || "";
-	const label = "Behaviors: " + v.label + " — " + planStatus(plan).line + " Show them on the route in the Sky.";
+	const verify = verifyOf(inst);
+	const w = chipWords(verify, plan);
+	if (!w) return null;
+	const branch = plan?.branch || inst.branch || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "vchip vchip-" + where,
-		"data-verdict": v.key,
-		"data-tone": v.tone,
-		title: label,
-		"aria-label": label,
+		"data-verdict": w.key,
+		"data-tone": w.tone,
+		title: w.title,
+		"aria-label": w.title,
 		onClick: (e) => {
 			e.stopPropagation();
 			openBehaviors({
-				planId: plan.id,
+				planId: verify?.plan || plan?.id,
 				title: inst.title,
 				branch
 			});
@@ -60843,8 +64389,8 @@ function VerdictChip({ inst, where }) {
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "vchip-glyph",
 			"aria-hidden": "true",
-			children: v.glyph
-		}), where === "pane" ? v.short : v.key === "partial" ? v.short.replace(" checked", "") : null]
+			children: w.glyph
+		}), where === "pane" ? w.pane : w.row || null]
 	});
 }
 //#endregion
@@ -61000,7 +64546,7 @@ var RESULT_TEXT = {
 	blocked: "Can't check",
 	"": "Not yet"
 };
-var ANSWERS$1 = [
+var ANSWERS = [
 	["pass", "Pass"],
 	["fail", "Fail"],
 	["blocked", "Can't check"]
@@ -61058,7 +64604,7 @@ function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
 		const result = r?.result || "";
 		const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
 		const takeOver = !!linkId && s.side === "mine" && s.actor === "agent" && result === "blocked" && r?.by !== "human";
-		const answers = takeOver ? ANSWERS$1.filter(([v]) => v !== "blocked") : ANSWERS$1;
+		const answers = takeOver ? ANSWERS.filter(([v]) => v !== "blocked") : ANSWERS;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "peer-joint-step peer-joint-step-" + (result || "blank"),
 			"data-step": s.id,
@@ -61444,6 +64990,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 			if (url) window.open(url, "_blank");
 			return;
 		}
+		if (what === "verify") return openWalkingSession(title);
 		selectSession(title, { noKeyboard: true });
 		useUi.getState().setLastTab(title, "shell");
 	};
@@ -63458,7 +67005,7 @@ function memoryTip(m) {
 //#endregion
 //#region src/components/usage/memoryModel.ts
 var MIB = 1048576;
-var num$4 = (v) => {
+var num$3 = (v) => {
 	const n = typeof v === "number" ? v : NaN;
 	return Number.isFinite(n) ? n : null;
 };
@@ -63467,17 +67014,17 @@ function asLevel(v) {
 }
 function machineFromDetail(sys) {
 	const s = sys || {};
-	const total = num$4(s.total_mb);
-	const avail = num$4(s.available_mb);
+	const total = num$3(s.total_mb);
+	const avail = num$3(s.available_mb);
 	const out = {
 		totalMb: total && total > 0 ? total : null,
 		usedMb: total && total > 0 && avail != null ? Math.max(0, total - avail) : null,
-		swapTotalMb: num$4(s.swap_total_mb),
-		swapUsedMb: num$4(s.swap_used_mb),
+		swapTotalMb: num$3(s.swap_total_mb),
+		swapUsedMb: num$3(s.swap_used_mb),
 		level: asLevel(s.level)
 	};
-	const hTotal = num$4(s.host_total_mb);
-	const hAvail = num$4(s.host_available_mb);
+	const hTotal = num$3(s.host_total_mb);
+	const hAvail = num$3(s.host_available_mb);
 	if (hTotal && hTotal > 0 && hAvail != null) {
 		out.hostTotalMb = hTotal;
 		out.hostUsedMb = Math.max(0, hTotal - hAvail);
@@ -63494,10 +67041,10 @@ function machineFromReading(r) {
 		swapUsedMb: null,
 		level: "unknown"
 	};
-	const total = num$4(r.total);
-	const avail = num$4(r.available);
-	const swapTotal = num$4(r.swap_total);
-	const swapFree = num$4(r.swap_free);
+	const total = num$3(r.total);
+	const avail = num$3(r.available);
+	const swapTotal = num$3(r.swap_total);
+	const swapFree = num$3(r.swap_free);
 	const totalMb = total && total > 0 ? Math.floor(total / MIB) : null;
 	return {
 		totalMb,
@@ -68658,7 +72205,7 @@ function HeldBody({ title, reason, hidden, onStarted }) {
 function hoverSlot(rowIndex, offsetY, rowHeight) {
 	return offsetY < rowHeight / 2 ? rowIndex : rowIndex + 1;
 }
-function dropIndex$1(from, slot) {
+function dropIndex(from, slot) {
 	const to = from < slot ? slot - 1 : slot;
 	return to === from ? null : to;
 }
@@ -68902,7 +72449,7 @@ function QueueTab$1({ title, active }) {
 		if (!id || slot == null) return;
 		const from = items.findIndex((x) => x.id === id);
 		if (from < 0) return;
-		const to = dropIndex$1(from, slot);
+		const to = dropIndex(from, slot);
 		if (to == null) return;
 		const optimistic = {
 			...state,
@@ -69249,7 +72796,7 @@ function InsertComposer({ value, onChange, onSave, onCancel }) {
 var obj$1 = (v) => v && typeof v === "object" ? v : {};
 var str$1 = (v) => typeof v === "string" ? v : "";
 var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-var num$3 = (v) => typeof v === "number" && Number.isFinite(v) ? v : null;
+var num$2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : null;
 function normFence(v) {
 	if (!v || typeof v !== "object") return null;
 	const o = obj$1(v);
@@ -69277,8 +72824,8 @@ function normCard(v) {
 		after: strs(o.after),
 		why,
 		fence: normFence(o.fence),
-		released_at: num$3(o.released_at),
-		ended_at: num$3(o.ended_at),
+		released_at: num$2(o.released_at),
+		ended_at: num$2(o.ended_at),
 		planned: o.planned === true
 	};
 }
@@ -69289,15 +72836,15 @@ function normOrder(v) {
 		const so = obj$1(s);
 		const workers = (Array.isArray(so.workers) ? so.workers : []).map(normCard).filter((c) => !!c);
 		return {
-			n: num$3(so.n) ?? i + 1,
+			n: num$2(so.n) ?? i + 1,
 			workers
 		};
 	}).filter((s) => s.workers.length > 0);
 	if (!steps.length) return null;
 	return {
 		mode: str$1(o.mode) || "parallel",
-		max_parallel: num$3(o.max_parallel) ?? 0,
-		cap: num$3(o.cap) ?? 0,
+		max_parallel: num$2(o.max_parallel) ?? 0,
+		cap: num$2(o.cap) ?? 0,
 		steps
 	};
 }
@@ -69414,7 +72961,7 @@ function runStages(run) {
 //#region src/lib/thread.ts
 var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
-var num$2 = (v) => {
+var num$1 = (v) => {
 	const n = Number(v);
 	return Number.isFinite(n) ? n : 0;
 };
@@ -69429,7 +72976,7 @@ function normReport(v) {
 		id: str(o.id),
 		status: str(o.status),
 		summary: str(o.summary),
-		ts: num$2(o.ts)
+		ts: num$1(o.ts)
 	};
 }
 function normDiffStat(v) {
@@ -69445,10 +72992,10 @@ function normMember(v) {
 		role: str(o.role, "child"),
 		status: str(o.status),
 		activity: str(o.activity, "idle"),
-		activity_since: num$2(o.activity_since),
+		activity_since: num$1(o.activity_since),
 		branch: str(o.branch),
 		diff_stat: normDiffStat(o.diff_stat),
-		created_at: num$2(o.created_at),
+		created_at: num$1(o.created_at),
 		last_report: normReport(o.last_report),
 		base_sha: strOrNull(o.base_sha)
 	};
@@ -69460,8 +73007,8 @@ function normFinished(v) {
 	return {
 		title,
 		branch: str(o.branch),
-		created_at: num$2(o.created_at),
-		ended_at: num$2(o.ended_at),
+		created_at: num$1(o.created_at),
+		ended_at: num$1(o.ended_at),
 		how: str(o.how, "deleted"),
 		stage: str(o.stage),
 		pr_url: str(o.pr_url),
@@ -69477,7 +73024,7 @@ function normItem(v) {
 	return {
 		type,
 		id,
-		ts: num$2(o.ts),
+		ts: num$1(o.ts),
 		from: str(o.from),
 		to: str(o.to),
 		text: str(o.text),
@@ -75199,7 +78746,7 @@ function readVar(cs, name, dflt) {
 	const v = cs.getPropertyValue(name).trim();
 	return v ? resolveColor(v) : dflt;
 }
-function num$1(cs, name, dflt) {
+function num(cs, name, dflt) {
 	const v = parseFloat(readVar(cs, name, ""));
 	return Number.isFinite(v) ? v : dflt;
 }
@@ -75207,15 +78754,15 @@ function readPalette(el) {
 	const cs = el && typeof getComputedStyle !== "undefined" ? getComputedStyle(el) : null;
 	const light = typeof document !== "undefined" && document.documentElement.classList.contains("light");
 	const v = (n, d) => readVar(cs, n, d);
-	const A = num$1(cs, "--ct-fol-a", 0);
-	const L = num$1(cs, "--ct-fol-l", 1);
-	const Sat = num$1(cs, "--ct-fol-s", 1);
-	const LL = num$1(cs, "--ct-label-l", 72);
+	const A = num(cs, "--ct-fol-a", 0);
+	const L = num(cs, "--ct-fol-l", 1);
+	const Sat = num(cs, "--ct-fol-s", 1);
+	const LL = num(cs, "--ct-label-l", 72);
 	const cl = (x) => Math.max(4, Math.min(92, x));
 	const hsl = (h, s, l) => `hsl(${h},${Math.min(100, Math.round(s * Sat))}%,${cl(A + l * L).toFixed(1)}%)`;
 	const PAL = [];
 	const PALV = [];
-	const CS = num$1(cs, "--ct-calm-s", .2), CK = num$1(cs, "--ct-calm-k", .3), CM = num$1(cs, "--ct-calm-mid", 23);
+	const CS = num(cs, "--ct-calm-s", .2), CK = num(cs, "--ct-calm-k", .3), CM = num(cs, "--ct-calm-mid", 23);
 	const calm = (h, s, l) => hsl(h, s * CS, CM + (l - CM) * CK);
 	for (let i = 0; i < 40; i++) {
 		const h = HUES[i % HUES.length];
@@ -75270,8 +78817,8 @@ function readPalette(el) {
 		cvHi: hsl(12, 48, 46),
 		cvSh: hsl(10, 30, 13)
 	};
-	const RA = num$1(cs, "--ct-root-a", 0);
-	const RL = num$1(cs, "--ct-root-l", 1);
+	const RA = num(cs, "--ct-root-a", 0);
+	const RL = num(cs, "--ct-root-l", 1);
 	const rh = (h, s, l) => `hsl(${h},${s}%,${Math.max(4, Math.min(92, RA + l * RL)).toFixed(1)}%)`;
 	const ROOTPAL = {
 		blob: rh(28, 24, 10.5),
@@ -77285,7 +80832,7 @@ function tailPath(p) {
 	const last = segs[segs.length - 1];
 	return last.length <= 6 && segs.length > 1 ? segs[segs.length - 2] + "/" + last : last;
 }
-function clip$4(s, n = 22) {
+function clip$2(s, n = 22) {
 	return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 function trunkPath(M, T) {
@@ -78758,13 +82305,13 @@ function renderOverlay(v, now) {
 		}
 		g.globalAlpha = alpha;
 		drawBird(g, sx, sy, birdPx, A.ag.color, pose, now, !v.reducedMotion);
-		const tag0 = W < 700 && !(A.ag.parent && A.done) && A.file ? `${A.ag.glyph} ${pose.fly ? "→ " : pose.blocked ? "✕ " : ""}${A.file.name}` : `${A.ag.glyph} ${clip$4(A.ag.short || A.ag.name)}${A.ag.parent && A.done ? pose.fly ? " → home" : " · done" : doing}`;
+		const tag0 = W < 700 && !(A.ag.parent && A.done) && A.file ? `${A.ag.glyph} ${pose.fly ? "→ " : pose.blocked ? "✕ " : ""}${A.file.name}` : `${A.ag.glyph} ${clip$2(A.ag.short || A.ag.name)}${A.ag.parent && A.done ? pose.fly ? " → home" : " · done" : doing}`;
 		g.font = `600 10.5px ${P.font}`;
 		const th = 16;
 		let tag = tag0, tw = 0, bx = 0, by = 0, far = false, placedTag = false;
 		const zd = terrs.filter((T) => !(A.file && isUnder(A.file.node, T.n)));
 		const offZones = (x0, y0, x1, y1) => zd.every((T) => T.polys.every((poly) => rectPolyDist(x0, y0, x1, y1, poly) > 0));
-		const bare = A.ag.parent ? `${A.ag.glyph} ${clip$4(A.ag.short || A.ag.name, 14)}` : A.ag.glyph;
+		const bare = A.ag.parent ? `${A.ag.glyph} ${clip$2(A.ag.short || A.ag.name, 14)}` : A.ag.glyph;
 		const tries = tag0 === bare ? [
 			[
 				tag0,
@@ -80720,7 +84267,7 @@ function drawColumnRows(v, g, S, want, fits) {
 		g.restore();
 		const x0 = r.R[0] + LEAF_PAD;
 		g.font = `${changer ? 600 : 400} 10.5px ${P.font}`;
-		const txt = r.R[2] - r.R[0] < want[r.i].w ? clip$4(l.file.name, Math.max(6, Math.floor((r.R[2] - r.R[0]) / 6))) : l.file.name;
+		const txt = r.R[2] - r.R[0] < want[r.i].w ? clip$2(l.file.name, Math.max(6, Math.floor((r.R[2] - r.R[0]) / 6))) : l.file.name;
 		labelBack(g, P, x0, r.y - LEAF_H / 2, r.R[2] - r.R[0] - 2 * LEAF_PAD);
 		g.strokeStyle = P.halo;
 		g.lineWidth = 3;
@@ -81710,7 +85257,7 @@ function dispName(M, f) {
 	if ((M.nameCount.get(f.name) || 0) > 1 && f.path.includes("/")) return baseOf(dirOf(f.path)) + "/" + f.name;
 	return f.name;
 }
-var clip$3 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var clip$1 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 function BirdIcon({ color }) {
 	const ref = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
@@ -82036,7 +85583,7 @@ function ActivityCard(p) {
 						children: [r.A && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 							className: "who",
 							style: { color: r.A.ag.color },
-							children: [clip$3(r.A.ag.short || r.A.ag.name, 18), " "]
+							children: [clip$1(r.A.ag.short || r.A.ag.name, 18), " "]
 						}), r.text]
 					})
 				]
@@ -82121,7 +85668,7 @@ function FileCard(p) {
 					children: [
 						A.ag.glyph,
 						" ",
-						clip$3(A.ag.name)
+						clip$1(A.ag.name)
 					]
 				}),
 				" ",
@@ -82226,7 +85773,7 @@ function FileCard(p) {
 					type: "button",
 					className: "cm-btn",
 					onClick: p.onFolder,
-					children: ["Folder: ", clip$3(f.node.kind === "crown" ? baseOf(f.node.name) : f.node.label || f.node.name, 18)]
+					children: ["Folder: ", clip$1(f.node.kind === "crown" ? baseOf(f.node.name) : f.node.label || f.node.name, 18)]
 				}),
 				p.changed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -82296,7 +85843,7 @@ function NodeCard(p) {
 					children: [
 						A.ag.glyph,
 						" ",
-						clip$3(A.ag.name)
+						clip$1(A.ag.name)
 					]
 				}),
 				" ",
@@ -82371,7 +85918,7 @@ function NodeCard(p) {
 						children: [
 							A.ag.glyph,
 							" ",
-							clip$3(A.ag.name)
+							clip$1(A.ag.name)
 						]
 					}),
 					" ",
@@ -82517,7 +86064,7 @@ function BlastCard(p) {
 					children: [
 						bd.ag.glyph,
 						" ",
-						clip$3(bd.ag.name)
+						clip$1(bd.ag.name)
 					]
 				}),
 				" ",
@@ -82556,13 +86103,13 @@ function BlastCard(p) {
 					type: "button",
 					className: "cm-btn",
 					onClick: p.onFolder,
-					children: ["Folder: ", clip$3(where || "", 18)]
+					children: ["Folder: ", clip$1(where || "", 18)]
 				}),
 				srcs.length === 1 && srcs[0].leaf && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 					type: "button",
 					className: "cm-btn",
 					onClick: () => p.onFile(srcs[0]),
-					children: ["Go to ", clip$3(srcs[0].name, 18)]
+					children: ["Go to ", clip$1(srcs[0].name, 18)]
 				})
 			]
 		})
@@ -82596,7 +86143,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 					children: [
 						A.created.has(f.id) ? "created" : "edited",
 						" by ",
-						clip$3(A.ag.name)
+						clip$1(A.ag.name)
 					]
 				}),
 				" ",
@@ -82606,13 +86153,13 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 				style: { color: A.ag.color },
 				children: [
 					"bud: ",
-					clip$3(A.ag.name),
+					clip$1(A.ag.name),
 					" plans to touch it"
 				]
 			}, "p" + A.ag.id));
 			else if (A.reads.has(f.id)) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				style: { color: A.ag.color },
-				children: ["read by ", clip$3(A.ag.name)]
+				children: ["read by ", clip$1(A.ag.name)]
 			}, "r" + A.ag.id));
 			const dep = depOf(M, A, f.id);
 			if (dep) rows.push(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
@@ -82623,7 +86170,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 				" ",
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
 					"(",
-					clip$3(A.ag.name),
+					clip$1(A.ag.name),
 					"'s edit — could break)"
 				] })
 			] }, "g" + A.ag.id));
@@ -82739,7 +86286,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
 				style: { color: A.ag.color },
-				children: [clip$3(A.ag.name), "'s nest"]
+				children: [clip$1(A.ag.name), "'s nest"]
 			}),
 			" ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: A.nest === M.crown ? "trunk" : A.nest ? A.nest.path : "" }),
@@ -82763,7 +86310,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			files,
 			bd.ag ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
 				" (",
-				clip$3(bd.ag.name),
+				clip$1(bd.ag.name),
 				"'s edit",
 				bd.files.size > 1 ? "s" : "",
 				")"
@@ -82798,7 +86345,7 @@ var MapGuideContext = (0, import_react.createContext)({
 });
 //#endregion
 //#region src/components/grid/codemap/BirdIndex.tsx
-var clip$2 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
+var clip = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
 var plural$3 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var EXPANDED = /* @__PURE__ */ new Map();
 var RISK_DONE = /* @__PURE__ */ new Map();
@@ -83091,7 +86638,7 @@ function RailRow({ A, sub, following, n, onFollow }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "nm",
-				children: clip$2(A.ag.short || A.ag.name, n)
+				children: clip(A.ag.short || A.ag.name, n)
 			}),
 			A.edits.size > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "n",
@@ -83157,7 +86704,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 							children: [
 								A.ag.glyph,
 								" ",
-								clip$2(A.ag.name, 18)
+								clip(A.ag.name, 18)
 							]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -83218,7 +86765,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 						" ",
 						"· ",
-						area.slice(0, 2).map(([k, n]) => `${clip$2(k, 16)} ${n}`).join(", "),
+						area.slice(0, 2).map(([k, n]) => `${clip(k, 16)} ${n}`).join(", "),
 						area.length > 2 ? "…" : ""
 					] })
 				]
@@ -83242,7 +86789,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "nm",
-							children: clip$2(S.ag.short || S.ag.name, 20)
+							children: clip(S.ag.short || S.ag.name, 20)
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "st " + S.status,
@@ -83436,7 +86983,7 @@ function Changes({ p, sum, notes = [], riskOpen, onRisk, allFolders = false, onA
 				className: "ct-bix-sum",
 				children: sum.tops.map(([k, n], i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 					i ? " · " : "",
-					clip$2(k, 18),
+					clip(k, 18),
 					" ",
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: n })
 				] }, k))
@@ -88945,436 +92492,221 @@ function PaneMoreMenu({ children, btnRef }) {
 	}), document.body)] });
 }
 //#endregion
-//#region src/lib/behaviors.ts
-var CHECK = {
-	key: "check",
-	label: "Check now"
-};
-var RERUN = {
-	key: "rerun",
-	label: "Rerun"
-};
-var FAILED = {
-	key: "failed",
-	label: "See what failed"
-};
-var WRITE = {
-	key: "write",
-	label: "Write them"
-};
-var ANSWER = {
-	key: "answer",
-	label: "Answer"
-};
-function behaviorsCount(n) {
-	return n + (n === 1 ? " behavior" : " behaviors");
+//#region src/components/grid/PaneVerifyStrip.tsx
+var QUIET_AFTER_S = 120;
+function quietWord(seconds) {
+	const m = Math.max(0, Math.floor(seconds / 60));
+	if (m < 60) return m + " min";
+	return Math.floor(m / 60) + " h" + (m % 60 ? " " + m % 60 + " min" : "");
 }
-function clip$1(text, max = 70) {
-	const t = String(text || "").trim().replace(/\s+/g, " ").replace(/[.]$/, "");
-	if (t.length <= max) return t;
-	const cut = t.slice(0, max);
-	const space = cut.lastIndexOf(" ");
-	return (space > max / 2 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "") + "…";
-}
-function timingLine(plan) {
-	const run = latestRun(plan);
-	if (run && isBeforeMerge(run) && !plan.live_at) return "Checked before merge · checks again once live";
-	if (!run && plan.live_at) {
-		const earlier = beforeMergeRun(plan);
-		if (earlier) return "Checked before merge (" + beforeMergeSummary(plan, earlier).replace(/steps?/g, (m) => m === "step" ? "behavior" : "behaviors") + ") · checks again once live";
+var A = {
+	fix: {
+		label: "Let its agent fix it",
+		title: "Its agent gets the failed steps and what it saw, fixes them, then verifies again"
+	},
+	again: {
+		label: "Verify again",
+		title: "Its agent checks its work again — say what it should prove first, if you like"
+	},
+	stop: {
+		label: "Stop verifying",
+		title: "Its agent stops working the steps — the session keeps running"
+	},
+	dismiss: {
+		label: "Dismiss",
+		title: "Take this off the row — you've seen it"
+	},
+	steps: {
+		label: "Steps",
+		title: "The steps and their evidence"
+	},
+	agent: {
+		label: "Open its agent",
+		title: "The agent's terminal — where it works the steps and says what it did"
 	}
-	return "";
+};
+var act = (key, primary = false) => ({
+	key,
+	...A[key],
+	...primary ? { primary: true } : {}
+});
+function verifyingLine(v, session, nowS) {
+	if (v.queued) return "Waiting for " + session + "'s turn to end";
+	const total = Number(v.steps?.total) || 0;
+	const human = Number(v.steps?.human) || 0;
+	const mine = Math.max(0, total - human);
+	const done = Number(v.steps?.agent_done) || 0;
+	const text = String(v.current?.text || "").trim();
+	let line;
+	if (text && mine) line = "Step " + Math.min(done + 1, mine) + " of " + mine + ": " + text;
+	else if (text) line = "Verifying: " + text;
+	else line = verifyLine(v);
+	const at = Number(v.progress_at) || 0;
+	const quiet = at > 0 ? nowS - at : 0;
+	if (quiet >= QUIET_AFTER_S) line += " · quiet " + quietWord(quiet);
+	return line;
 }
-function runAction(plan) {
-	if (!(plan.steps || []).some((s) => s.actor !== "human")) return null;
-	const run = latestRun(plan);
-	return run && (run.session || run.by === "agent") ? RERUN : CHECK;
-}
-function said(plan) {
-	const steps = plan.steps || [];
-	const agentCan = steps.filter((s) => s.actor !== "human").length;
-	if (plan.state === "generating") {
-		if (isGenerationStalled(plan)) return {
-			tone: "quiet",
-			sentence: "Writing stopped part-way — nothing for five minutes.",
-			action: WRITE
+function verifyStripView(v, session, nowS = Date.now() / 1e3) {
+	const fileError = String(v.file_error || "").trim();
+	const detail = String(v.detail || "").trim();
+	switch (v.state) {
+		case "verifying": return {
+			glyph: verifyGlyph(v.state),
+			line: verifyingLine(v, session, nowS),
+			fileError,
+			actions: [
+				act("steps"),
+				act("agent"),
+				act("stop")
+			]
 		};
-		return {
-			tone: "busy",
-			status: "Writing…",
-			sentence: isGenerationSlow(plan) ? "Writing the behaviors — taking longer than usual…" : "Writing the behaviors from the diff — up to three minutes.",
-			action: null
-		};
-	}
-	if (plan.state === "failed" && !steps.length) {
-		if (isNoCommits(plan)) return {
-			tone: "quiet",
-			sentence: "No behaviors yet — this branch has no commits. They're written once the session commits.",
-			action: null
-		};
-		const why = errorHeadline(plan);
-		return {
-			tone: "quiet",
-			sentence: why ? "The agent couldn't write behaviors — " + why.charAt(0).toLowerCase() + why.slice(1) : "The agent couldn't write behaviors for this.",
-			action: WRITE
-		};
-	}
-	if (isEmptyByChoice(plan)) return {
-		tone: "you",
-		sentence: "No behaviors yet — add what this work should do.",
-		action: WRITE
-	};
-	if (!steps.length) return {
-		tone: "quiet",
-		sentence: "The agent came back with no behaviors.",
-		action: WRITE
-	};
-	const kept = plan.state === "failed" ? "Rewriting didn't work — these are unchanged. " : "";
-	if (plan.state === "running") {
-		if (plan.run_session) {
-			const mine = openHumanSteps(plan).length;
+		case "needs_you": {
+			const n = (v.human_steps || []).length || Number(v.steps?.human) || 0;
+			const line = n ? "Needs you — the agent did its steps; do " + (n === 1 ? "yours" : "your " + n) + ", then confirm" : "Needs you — sign off on what the agent verified";
 			return {
-				tone: "busy",
-				status: "Checking…",
-				sentence: "An agent is checking the behaviors it can" + runElapsed(latestRun(plan)) + (mine ? " — " + behaviorsCount(mine) + (mine === 1 ? " needs" : " need") + " you." : "."),
-				action: null
+				glyph: verifyGlyph(v.state),
+				line,
+				fileError,
+				actions: [act("steps"), act("agent")]
 			};
 		}
-		return {
-			tone: "quiet",
-			sentence: "The agent that was checking these is gone — nothing is running now.",
-			action: runAction(plan)
+		case "failed": return {
+			glyph: verifyGlyph(v.state),
+			line: verifyLine(v),
+			fileError,
+			actions: [
+				act("fix", true),
+				act("again"),
+				act("steps"),
+				act("dismiss")
+			]
 		};
-	}
-	const run = latestRun(plan);
-	if (isFailing(plan) && run) {
-		const failed = failCount(plan);
-		const first = steps.find((s) => run.results?.[s.id]?.result === "fail");
-		const open = openHumanSteps(plan).length;
-		return {
-			tone: "bad",
-			sentence: kept + (first ? "Failed: “" + clip$1(first.text) + "”" : "Failed") + (failed > 1 ? " (+" + (failed - 1) + " more)" : "") + "." + (open ? " " + behaviorsCount(open) + " still " + (open === 1 ? "needs" : "need") + " you." : ""),
-			action: FAILED
+		case "blocked": return {
+			glyph: verifyGlyph(v.state),
+			line: verifyLine(v),
+			fileError,
+			actions: [
+				act("again", true),
+				act("steps"),
+				act("agent"),
+				act("dismiss")
+			]
 		};
-	}
-	if (!run) {
-		if (isConfigBlocked(plan)) return {
-			tone: "you",
-			sentence: kept + plan.live_problem,
-			action: runAction(plan)
-		};
-		if (plan.live_at || plan.state === "due") {
-			if (!agentCan) return {
-				tone: "you",
-				sentence: kept + (steps.length === 1 ? "Live — its one behavior is yours to check." : "Live — all " + steps.length + " behaviors are yours to check."),
-				action: ANSWER
-			};
+		case "passed": {
+			const total = Number(v.steps?.total) || 0;
+			const line = total ? "All " + total + (total === 1 ? " step" : " steps") + " passed" : "Verified" + (detail ? " — " + detail : "");
 			return {
-				tone: "you",
-				sentence: kept + "Live — nobody has checked it yet. " + (agentCan === steps.length ? "The agent can check " + (steps.length === 1 ? "it." : "all " + steps.length + ".") : "The agent can check " + agentCan + " of " + steps.length + "; the rest are yours."),
-				action: CHECK
+				glyph: verifyGlyph(v.state),
+				line,
+				fileError,
+				actions: [act("steps")]
 			};
 		}
-		if (plan.merged_at) return {
-			tone: "quiet",
-			sentence: kept + "Merged " + agoText(plan.merged_at) + " — waiting for it to deploy.",
-			action: null
-		};
-		if (plan.live_problem) return {
-			tone: "quiet",
-			sentence: kept + plan.live_problem,
-			action: agentCan ? CHECK : null
-		};
-		return {
-			tone: "quiet",
-			sentence: kept + "Not merged yet — check the branch now, or they're checked once it reaches " + (plan.live_branch || "the live branch") + ".",
-			action: agentCan ? CHECK : null
-		};
 	}
-	const open = openHumanSteps(plan).length;
-	if (!open && isWaitingOnYou(plan)) return {
-		tone: "you",
-		sentence: kept + "Live — not checked since it shipped.",
-		action: runAction(plan) || ANSWER
-	};
-	if (open) return {
-		tone: "you",
-		sentence: kept + (open === 1 ? "1 behavior needs you — an agent can't judge it." : behaviorsCount(open) + " need you — an agent can't judge them."),
-		action: ANSWER
-	};
-	const missing = unansweredCount(plan);
-	const cant = cantCheckCount(plan);
-	if (missing) {
-		const passed = steps.length - missing - failCount(plan);
-		const blank = missing - cant;
-		const line = [
-			passed ? passed + " of " + steps.length + " verified" : "",
-			cant ? "you couldn't check " + cant : "",
-			blank ? (run.session || run.by === "agent" ? "the check stopped early — " : "") + blank + " with no answer" : ""
-		].filter(Boolean).join(" · ");
-		return {
-			tone: "quiet",
-			sentence: kept + line.charAt(0).toUpperCase() + line.slice(1) + ".",
-			action: runAction(plan)
-		};
-	}
-	const by = passedBy(plan);
 	return {
-		tone: "ok",
-		sentence: kept + "Every behavior passed" + (by ? " — checked by " + by : "") + ".",
-		action: null
+		glyph: verifyGlyph(v.state),
+		line: "",
+		fileError,
+		actions: []
 	};
 }
-function behaviorSummary(plan) {
-	const t = checkTally(plan);
-	const s = said(plan);
-	const status = s.status || (s.tone === "bad" ? "Failed" : s.tone === "you" ? "Needs you" : s.tone === "ok" ? plan.live_at ? "Verified live" : "Verified" : s.tone === "busy" ? "Checking…" : "Not checked");
-	const total = (plan.steps || []).length;
-	const short = s.tone === "bad" ? "Failed · " + Math.max(1, t.failed) : s.tone === "you" ? t.yours ? "Needs you · " + t.yours : "Needs you" : s.tone === "busy" || s.tone === "ok" ? status : !total ? "None yet" : t.passed ? t.passed + " of " + total + " verified" : status;
-	const timing = timingLine(plan);
-	const headline = plan.state !== "failed" && plan.state !== "generating" && total ? errorHeadline(plan) : "";
-	const sentence = [
-		s.sentence,
-		headline,
-		timing ? timing + "." : ""
-	].filter(Boolean).join(" ");
-	return {
-		tone: s.tone,
-		status,
-		short,
-		sentence,
-		action: s.action,
-		total,
-		verified: t.passed,
-		failed: t.failed,
-		yours: t.yours
-	};
-}
-function planForSession(plans, row) {
-	if (!row || isVerifySession(row)) return null;
-	return planForSession$1([...plans || []], row);
-}
-function behaviorsOnARoute(plans, rows, titles) {
-	if (!plans?.length) return false;
-	const shown = new Set(titles);
-	return rows.some((r) => shown.has(r.title) && !!planForSession(plans, r));
-}
-function orphanPlans(plans, rows) {
-	const list = plans || [];
-	const owned = /* @__PURE__ */ new Set();
-	for (const r of rows || []) {
-		const p = planForSession(list, r);
-		if (p) owned.add(p.id);
-	}
-	return list.filter((p) => !owned.has(p.id));
-}
-function nextNeedingYou(plans) {
-	const list = plans || [];
-	return list.find((p) => isWaitingOnYou(p) && !isFailing(p)) || list.find((p) => isFailing(p)) || null;
-}
-function verifyStopFace(short, stopState) {
-	return stopState === "halted" ? short + " — halted" : short;
-}
-//#endregion
-//#region src/lib/verifyActions.ts
-function planPath$1(id) {
-	return "/api/test-plans/" + encodeURIComponent(id);
-}
-function patchPlan(id, apply) {
-	queryClient.cancelQueries({ queryKey: ["test-plans"] });
-	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-		...prev,
-		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
-	} : prev);
-}
-function requestPlanRun(planId, only, walk) {
-	const json = only ? { steps: only } : {};
-	if (walk === "all") json.walk = walk;
-	return api(planPath$1(planId) + "/run", {
-		method: "POST",
-		json
+function PaneVerifyStrip({ inst }) {
+	const title = inst.title;
+	const v = verifyOf(inst);
+	const formOpen = useVerifyForm((s) => s.open === title);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const rowRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => markVerifyRowMounted(title), [title]);
+	const [, tick] = (0, import_react.useState)(0);
+	const verifying = v?.state === "verifying" && !!v.progress_at;
+	(0, import_react.useEffect)(() => {
+		if (!verifying) return;
+		const t = setInterval(() => tick((n) => n + 1), 3e4);
+		return () => clearInterval(t);
+	}, [verifying]);
+	if (!v && !formOpen) return null;
+	const firstButton = () => rowRef.current?.querySelector("button") || null;
+	const close = () => closeVerifyForm(firstButton());
+	if (!v) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "pv-strip is-form",
+		role: "group",
+		"aria-label": "Verify",
+		"data-no-drag": true,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStartForm, {
+			title,
+			repo: inst.repo,
+			onClose: close
+		})
 	});
-}
-function runStartedMessage(plan, r, walk) {
-	const all = walk === "all";
-	if (r?.in_session && r.session) return "Handed the steps to " + r.session + "'s agent" + (r.queued ? " — it takes them once its current turn ends" : "") + (all ? ". It walks every behavior, yours too" : "") + ". Talk to it there";
-	return "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") + (all ? " — it walks every behavior, yours too" : "");
-}
-function openWalkingSession(title) {
-	if (!title) return;
-	const ui = useUi.getState();
-	ui.closeDialog();
-	selectSession(title, { noKeyboard: true });
-	ui.setLastTab(title, "agent");
-}
-function requestPlanDelete(planId) {
-	return api(planPath$1(planId), { method: "DELETE" });
-}
-async function startChecklistRun(plan, opts = {}) {
-	try {
-		const r = await requestPlanRun(plan.id, opts.only, opts.walk);
-		await refreshInstances();
-		const started = r?.plan;
-		patchPlan(plan.id, (p) => started || {
-			...p,
-			state: "running",
-			run_session: r?.session || ""
+	const view = verifyStripView(v, title);
+	const run = (key, el) => {
+		if (busy) return;
+		const go = (p) => {
+			setBusy(key);
+			p.finally(() => setBusy(""));
+		};
+		if (key === "again") openVerifyForm(title, el);
+		else if (key === "steps") openBehaviors({
+			planId: v.plan,
+			title
 		});
-		opts.onStarted?.();
-		await refreshTestPlans();
-		toast(runStartedMessage(plan, r, opts.walk));
-		if (r?.in_session && r.session) openWalkingSession(r.session);
-	} catch (err) {
-		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function regeneratePlan(plan, focus = "") {
-	try {
-		await api(planPath$1(plan.id) + "/regenerate", {
-			method: "POST",
-			json: { focus: focus.trim() }
-		});
-		patchPlan(plan.id, (p) => ({
-			...p,
-			state: "generating",
-			error: "",
-			gen_started: Date.now() / 1e3
-		}));
-		toast("Rewriting the behaviors for " + planName(plan) + " — up to three minutes");
-		return true;
-	} catch (err) {
-		errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
-		refreshTestPlans();
-		return false;
-	}
-}
-async function cancelChecklistRun(plan) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
-		await refreshInstances();
-		await refreshTestPlans();
-		toast(r?.session ? "Stopped " + r.session : "Check cancelled");
-	} catch (err) {
-		errorPop("Couldn't cancel the check", errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function fixPlanFailures(plan, only) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/fix", {
-			method: "POST",
-			json: only ? { steps: only } : {}
-		});
-		await refreshInstances();
-		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
-	} catch (err) {
-		errorPop("Fix didn't start", errMsg(err));
-	}
-}
-async function markPlanDeployed(plan) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		await refreshTestPlans();
-		toast(planName(plan) + " is ready to check");
-	} catch (err) {
-		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function removePlan(plan, opts = {}) {
-	try {
-		await requestPlanDelete(plan.id);
-		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
-		opts.onGone?.();
-		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-			...prev,
-			plans: prev.plans.filter((p) => p.id !== plan.id)
-		} : prev);
-		await refreshTestPlans();
-	} catch (err) {
-		errorPop("Couldn't delete " + planName(plan), errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function recordStepAnswer(plan, step, result, note) {
-	const wasAsking = isWaitingOnYou(plan);
-	const next = (await api(planPath$1(plan.id) + "/result", { json: {
-		step_id: step.id,
-		result,
-		note
-	} }))?.plan;
-	if (next) patchPlan(plan.id, () => next);
-	if (next && wasAsking && !isWaitingOnYou(next)) toast("All yours are answered — " + planName(plan) + ": " + behaviorSummary(next).status);
-	refreshTestPlans();
-}
-async function editPlanStep(plan, step, fields) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), {
-			method: "PATCH",
-			json: fields
-		});
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		refreshTestPlans();
-		return true;
-	} catch (err) {
-		errorPop("Couldn't change that behavior", errMsg(err));
-		return false;
-	}
-}
-async function removePlanStep(plan, step) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		refreshTestPlans();
-	} catch (err) {
-		errorPop("Couldn't remove that behavior", errMsg(err));
-	}
-}
-async function addPlanStep(plan, fields) {
-	return (await api(planPath$1(plan.id) + "/steps", {
-		method: "POST",
-		json: fields
-	}))?.plan;
-}
-async function fetchVerifyRepos() {
-	const r = await api("/api/test-plans/repos");
-	return Array.isArray(r?.repos) ? r.repos : [];
-}
-async function askBehaviorsForBranch(repo, branch, opts = {}) {
-	try {
-		const r = await api("/api/test-plans/branch", { json: opts.empty ? {
-			repo: repo.root,
-			branch,
-			empty: true
-		} : {
-			repo: repo.root,
-			branch
-		} });
-		toast(r.existing ? branch + " already has behaviors — they're on the Behaviors board" : opts.empty ? "Started empty behaviors for " + branch + " — add what it should do" : "Asked the agent to write behaviors for " + branch + " — up to three minutes");
-		refreshTestPlans();
-		return r.plan || "";
-	} catch (err) {
-		errorPop("Couldn't start behaviors for " + branch, errMsg(err));
-		return "";
-	}
-}
-async function startEmptyBehaviors(session) {
-	try {
-		const r = await api("/api/instances/" + encodeURIComponent(session) + "/test-plan", {
-			method: "POST",
-			json: { empty: true }
-		});
-		await refreshTestPlans();
-		toast(r.existing ? session + " already has behaviors — add yours to them" : "Started empty behaviors for " + session + " — add what it should do");
-		return r.plan || "";
-	} catch (err) {
-		errorPop("Couldn't start behaviors for " + session, errMsg(err));
-		return "";
-	}
+		else if (key === "agent") openWalkingSession(title);
+		else if (key === "stop") go(stopVerifying(v.plan, title));
+		else if (key === "dismiss") go(dismissVerify(v.plan, title));
+		else if (key === "fix") go(fixInSession(v.plan, title));
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pv-strip is-" + v.state,
+		role: "group",
+		"aria-label": "Verify",
+		"data-no-drag": true,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pv-row",
+				ref: rowRef,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pv-glyph" + (v.state === "verifying" ? " is-live" : ""),
+						"aria-hidden": "true",
+						children: view.glyph
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pv-text",
+						title: view.line,
+						"aria-live": "polite",
+						children: view.line
+					}),
+					view.actions.map((a) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: (a.primary ? "btn-primary" : "test-btn") + " pv-btn pv-" + a.key,
+						title: a.title,
+						disabled: !!busy || a.key === "again" && formOpen,
+						"aria-busy": busy === a.key || void 0,
+						"aria-expanded": a.key === "again" ? formOpen : void 0,
+						onClick: (e) => run(a.key, e.currentTarget),
+						children: a.label
+					}, a.key))
+				]
+			}),
+			view.fileError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "pv-file-error",
+				role: "note",
+				children: view.fileError
+			}) : null,
+			formOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStartForm, {
+				title,
+				repo: inst.repo,
+				onClose: close
+			}) : null,
+			v.state === "needs_you" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, {
+				verify: v,
+				session: title
+			}) : null,
+			v.state === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailedSteps, { steps: v.failed_steps || [] }) : null
+		]
+	});
 }
 //#endregion
 //#region src/components/flights/StopMenu.tsx
@@ -89452,46 +92784,39 @@ function StopMenu(p) {
 function watchSessionOf(plan) {
 	return plan.run_session || latestRun(plan)?.session || "";
 }
+function canVerify(plan, verify) {
+	if (plan.state === "running" || plan.state === "generating") return false;
+	return !verify || verify.state === "passed" || verify.state === "failed" || verify.state === "blocked";
+}
 function cardMenuItems(plan, ctx) {
 	const items = [];
-	const steps = plan.steps || [];
 	const running = plan.state === "running";
 	const primary = ctx.summary.action?.key || "";
-	const agentCan = steps.some((s) => s.actor !== "human");
-	if (plan.state !== "generating" && primary !== "write") {
-		const blocked = rewriteBlockedReason(plan);
-		items.push({
-			key: "rewrite",
-			label: "Rewrite behaviors",
-			title: blocked || "Ask the agent to write them again — you can say what to focus on",
-			disabled: !!blocked
-		});
-	}
+	const verify = ctx.session?.verify || null;
+	if (primary !== "verify" && canVerify(plan, verify) && (ctx.session || (plan.steps || []).length)) items.push({
+		key: "verify",
+		label: "Verify again",
+		title: VERIFY_TITLE
+	});
 	if (plan.state === "generated" && plan.merged_at && !plan.live_at) items.push({
 		key: "deployed",
 		label: "It's deployed — check now",
 		title: "Don't wait out the deploy timer"
 	});
-	if (isFailing(plan)) items.push({
+	if (isFailing(plan) || verify?.state === "failed") items.push({
 		key: "fix",
 		label: "Fix in a new session",
-		title: "Starts a new session with what failed attached"
+		title: "Start a new session with what failed attached"
 	});
-	if (!running && steps.length && plan.state !== "generating" && agentCan && primary !== "check" && primary !== "rerun") items.push({
-		key: "run",
-		label: latestRun(plan) ? "Rerun" : "Check now",
-		title: "The session's own agent walks the behaviors it can — talk to it in its Agent tab"
-	});
-	if (offersWalkAll(plan) && !walkAllBesidePrimary(plan, primary)) items.push(WALK_ALL_ITEM);
 	const watch = watchSessionOf(plan);
-	if (watch) items.push({
+	if (watch && watch !== ctx.session?.title) items.push({
 		key: "watch",
-		label: "Open the checking run",
-		title: "Open " + watch + " as a pane — closing it doesn't stop the check"
+		label: "Open the agent verifying",
+		title: "Open " + watch + " as a pane — closing it doesn't stop Verify"
 	});
 	if (running) items.push({
 		key: "cancel",
-		label: "Cancel the check",
+		label: "Stop verifying",
 		title: "Stop the agent — what it found so far is kept"
 	});
 	if (ctx.session) {
@@ -89518,18 +92843,19 @@ function cardMenuItems(plan, ctx) {
 	}
 	items.push({
 		key: "delete",
-		label: "Delete these behaviors",
-		title: "Delete these behaviors and their answers",
+		label: "Delete these steps",
+		title: "Delete these steps and their results",
 		danger: true
 	});
 	return items;
 }
+var VERIFY_TITLE = "The session's own agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do";
 var CHIP_WORDS = {
 	pass: "Passed",
 	fail: "Failed",
-	cant: "Couldn't check",
+	cant: "Blocked",
 	yours: "Needs you",
-	pending: "Not checked"
+	pending: "Not done"
 };
 function rowChip(plan, stepId) {
 	const state = stepCheck(plan, stepId);
@@ -89546,30 +92872,100 @@ function whoOf(plan, step) {
 		you,
 		handed,
 		label: you ? "🙋 you" : "🤖 agent",
-		title: handed ? "The agent couldn't check this one — it's yours now" : you ? "Checked by you — press to let the agent check it" : "Checked by the agent — press to check it yourself"
+		title: handed ? "The agent couldn't do this one — it's a person's now" : you ? "Only a person can do this step — the agent says so in its reply" : "The agent does this step in its terminal"
 	};
 }
 function byWords(by) {
 	return by === "human" ? "you" : "the agent";
 }
-function showsAnswers(plan, step, entry = stepResult(plan, step.id)) {
-	return stepIsYours(plan, step) || entry?.by === "human";
-}
-function rowKey(key, opts) {
-	if (opts.mods || opts.repeat || opts.busy) return "";
-	if (stepKeyIsUndo(key)) return opts.answered ? "undo" : "";
-	const a = stepKeyAction(key);
-	return a === "" ? "" : a;
-}
-function rowAnswered(entry) {
-	return !!entry && isYourAnswer(entry.result, entry.by);
-}
-function primaryTarget(plan, key) {
-	const run = latestRun(plan);
-	const steps = plan.steps || [];
-	if (key === "failed") return steps.find((s) => run?.results?.[s.id]?.result === "fail")?.id || "";
-	if (key === "answer") return openHumanSteps(plan)[0]?.id || steps.find((s) => stepCheck(plan, s.id) === "yours")?.id || steps[0]?.id || "";
-	return "";
+var AGENT_FIX = {
+	key: "agentfix",
+	label: "Let its agent fix it",
+	title: "Send what failed, with the agent's evidence, to this session's own agent"
+};
+function verifyCardView(plan, summary, verify, session) {
+	const base = {
+		tone: summary.tone,
+		status: summary.status,
+		sentence: summary.sentence,
+		action: null,
+		failed: summary.failed,
+		failedSteps: [],
+		confirm: false,
+		signOff: false
+	};
+	const again = {
+		key: "verify",
+		label: "Verify again",
+		title: VERIFY_TITLE
+	};
+	const open = {
+		key: "open",
+		label: "Open its agent",
+		title: "Follow the agent's steps in its terminal, and talk to it there"
+	};
+	if (verify) {
+		const detail = String(verify.detail || "").trim();
+		switch (verify.state) {
+			case "verifying": return {
+				...base,
+				tone: "busy",
+				status: VERIFYING_LABEL,
+				sentence: "Its agent is checking its work in its terminal: " + verifyProgress(verify) + ".",
+				action: session ? open : null
+			};
+			case "needs_you": {
+				const n = (verify.human_steps || []).length || Number(verify.steps?.human) || 0;
+				const fallback = n ? "The agent did its steps. " + (n === 1 ? "One step needs you — do it" : n + " steps need you — do them") + ", then confirm." : "Every step passed — sign it off.";
+				return {
+					...base,
+					tone: "you",
+					status: REASON_LABEL.verify_confirm,
+					sentence: detail || fallback,
+					action: null,
+					confirm: true,
+					signOff: !n
+				};
+			}
+			case "failed": return {
+				...base,
+				tone: "bad",
+				status: REASON_LABEL.verify_failed,
+				sentence: detail || "Some of its steps failed.",
+				action: session ? AGENT_FIX : null,
+				failed: Math.max(base.failed, (verify.failed_steps || []).length),
+				failedSteps: verify.failed_steps || []
+			};
+			case "blocked": return {
+				...base,
+				tone: "bad",
+				status: REASON_LABEL.verify_blocked,
+				sentence: detail || "The agent couldn't finish verifying — open it to see why.",
+				action: session ? again : null
+			};
+			case "passed": return {
+				...base,
+				tone: "ok",
+				status: VERIFIED_LABEL,
+				sentence: detail || "The agent's steps passed" + (verify.steps?.human ? ", and a person confirmed theirs." : "."),
+				action: null
+			};
+		}
+	}
+	if (plan.state === "running" || plan.state === "generating") return base;
+	if (session && isFailing(plan)) return {
+		...base,
+		action: AGENT_FIX
+	};
+	const before = !!latestRun(plan) || !!verify;
+	return {
+		...base,
+		action: session || (plan.steps || []).length ? {
+			key: "verify",
+			label: before ? "Verify again" : "Verify",
+			title: VERIFY_TITLE
+		} : null
+	};
 }
 function verifyStopStand(flight, stepId) {
 	if (!flight) return "";
@@ -89584,204 +92980,41 @@ function verifyStopStand(flight, stepId) {
 function haltedLine(failed) {
 	return (failed > 0 ? "Failed · " + failed + " — halted" : "Halted") + ". The route waits here until you Retry, Skip or let the agent fix it.";
 }
-var WALK_ALL_ITEM = {
-	key: "walk",
-	label: "Let the agent walk every behavior",
-	title: "It tries yours too, with its tools — it answers one only with evidence, and asks you only for what it can't do"
-};
-function offersWalkAll(plan) {
-	if (plan.state === "running" || plan.state === "generating") return false;
-	return (plan.steps || []).some((s) => s.actor === "human");
-}
-function walkAllBesidePrimary(plan, primary) {
-	return offersWalkAll(plan) && (primary === "check" || primary === "rerun");
-}
-function walkedWords(entry) {
-	if (!entry?.walked || entry.by === "human" || !entry.result) return "";
-	return entry.result === "blocked" ? "the agent tried — needs you" : "walked by the agent";
-}
-function needsChips(plan, step) {
-	const steps = plan.steps || [];
-	const at = steps.findIndex((s) => s.id === step.id);
-	const out = [];
-	for (const id of step.needs || []) {
-		const i = steps.findIndex((s) => s.id === id);
-		if (i < 0 || at >= 0 && i >= at || out.some((c) => c.id === id)) continue;
-		out.push({
-			id,
-			label: "after #" + (i + 1),
-			title: "Relies on behavior " + (i + 1) + ": " + steps[i].text
-		});
-	}
-	return out;
-}
-function earlierSteps(plan, stepId) {
-	const steps = plan.steps || [];
-	const at = stepId ? steps.findIndex((s) => s.id === stepId) : -1;
-	const end = at >= 0 ? at : stepId ? 0 : steps.length;
-	return steps.slice(0, end).map((step, i) => ({
-		step,
-		n: i + 1
-	}));
-}
-//#endregion
-//#region src/components/behaviors/NeedsPicker.tsx
-function NeedsPicker({ earlier, value, disabled, onChange }) {
-	if (!earlier.length) return null;
-	const on = new Set(value);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "bh-needs-pick",
-		role: "group",
-		"aria-label": "Relies on (done first)",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "bh-hint",
-			children: "after"
-		}), earlier.map(({ step, n }) => {
-			const pressed = on.has(step.id);
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "bh-need" + (pressed ? " is-on" : ""),
-				"aria-pressed": pressed,
-				disabled,
-				title: "Relies on behavior " + n + ": " + step.text,
-				onClick: () => onChange(earlier.map((e) => e.step.id).filter((id) => id === step.id ? !pressed : on.has(id))),
-				children: ["#", n]
-			}, step.id);
-		})]
-	});
-}
 //#endregion
 //#region src/components/behaviors/BehaviorRow.tsx
-var NOTES$1 = /* @__PURE__ */ new Map();
-var noteKey$1 = (plan, step) => plan + "\0" + step;
-var ANSWERS = [
-	{
-		value: "pass",
-		label: "Pass",
-		key: "1"
-	},
-	{
-		value: "fail",
-		label: "Fail",
-		key: "2"
-	},
-	{
-		value: "blocked",
-		label: "Can't check",
-		key: "3"
-	}
-];
-function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce, allOpen }) {
-	const ref = (0, import_react.useRef)(null);
-	const key = noteKey$1(plan.id, step.id);
-	const draft = NOTES$1.get(key);
-	const [pending, setPending] = (0, import_react.useState)(null);
-	const [noteOpen, setNoteOpenRaw] = (0, import_react.useState)(!!draft?.open);
-	const [note, setNoteRaw] = (0, import_react.useState)(draft?.text || "");
-	const [editing, setEditing] = (0, import_react.useState)(false);
-	const [confirmRemove, setConfirmRemove] = (0, import_react.useState)(false);
-	const [busy, setBusy] = (0, import_react.useState)(false);
+function rowEvidence(entry) {
+	if (!entry || !entry.result) return {
+		by: "",
+		note: String(entry?.note || "").trim(),
+		agentNote: "",
+		why: ""
+	};
+	const note = String(entry.note || "").trim();
+	const agentNote = entry.by === "human" ? String(entry.agent_note || "").trim() : "";
+	return {
+		by: byWords(entry.by),
+		note,
+		agentNote,
+		why: entry.result === "blocked" ? note || "No reason was given." : ""
+	};
+}
+function BehaviorRow({ plan, step, index, onFix, allOpen }) {
 	const [open, setOpen] = (0, import_react.useState)(!!allOpen?.open);
 	(0, import_react.useEffect)(() => {
 		if (allOpen && allOpen.n) setOpen(allOpen.open);
 	}, [allOpen?.n]);
-	const setNoteOpen = (open, text = note) => {
-		setNoteOpenRaw(open);
-		if (open) NOTES$1.set(key, {
-			open,
-			text
-		});
-		else NOTES$1.delete(key);
-	};
-	const setNote = (text) => {
-		setNoteRaw(text);
-		NOTES$1.set(key, {
-			open: true,
-			text
-		});
-	};
-	(0, import_react.useEffect)(() => {
-		if (!focusNonce) return;
-		setOpen(true);
-		const el = ref.current;
-		el?.scrollIntoView?.({
-			block: "nearest",
-			behavior: "smooth"
-		});
-		el?.focus({ preventScroll: true });
-	}, [focusNonce]);
 	const entry = stepResult(plan, step.id);
 	const chip = rowChip(plan, step.id);
 	const who = whoOf(plan, step);
-	const answered = rowAnswered(entry);
-	const answers = showsAnswers(plan, step, entry);
-	const shown = pending ?? entry?.result ?? "";
-	const yourEntry = entry?.by === "human";
-	const walked = walkedWords(entry);
-	const needs = needsChips(plan, step);
-	const locked = pending !== null || busy;
-	const isOpen = open || editing || noteOpen || confirmRemove;
-	const record = async (result) => {
-		setPending(result);
-		try {
-			await onRecord(step, result, result === "" ? "" : note.trim());
-			const next = noteDraftAfter(result, noteOpen, note);
-			setNoteRaw(next.text);
-			setNoteOpen(next.open, next.text);
-		} catch (err) {
-			errorPop("Couldn't record that answer", errMsg(err));
-		} finally {
-			setPending(null);
-		}
-	};
-	const saveNote = async () => {
-		if (!answered || !yourEntry) return;
-		setBusy(true);
-		try {
-			await onRecord(step, entry.result, note.trim());
-			setNoteOpen(false);
-		} catch (err) {
-			errorPop("Couldn't save that note", errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const toggleWho = async () => {
-		if (!onEdit || busy) return;
-		setBusy(true);
-		try {
-			await onEdit(step, { actor: who.you ? "agent" : "human" });
-		} finally {
-			setBusy(false);
-		}
-	};
+	const ev = rowEvidence(entry);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		ref,
-		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : "") + (walked ? " is-walked" : ""),
+		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : ""),
 		"data-step-id": step.id,
-		"data-manual": step.manual ? "1" : void 0,
-		tabIndex: 0,
-		"aria-label": "Behavior " + (index + 1) + ": " + step.text + " — " + chip.label,
-		onKeyDown: (e) => {
-			const from = e.target;
-			if (from !== e.currentTarget && from.closest("input, textarea, select")) return;
-			const act = rowKey(e.key, {
-				answered,
-				mods: e.metaKey || e.ctrlKey || e.altKey,
-				repeat: e.repeat,
-				busy: locked
-			});
-			if (!act) return;
-			e.preventDefault();
-			e.stopPropagation();
-			if (act === "note") setNoteOpen(true);
-			else if (act === "undo") record("");
-			else record(act);
-		},
+		"aria-label": "Step " + (index + 1) + ": " + step.text + " — " + chip.label + (ev.by ? ", by " + ev.by : ""),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "bh-chip",
 			"data-check": chip.state,
-			title: chip.label,
+			title: chip.label + (ev.by ? " — by " + ev.by : ""),
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					"aria-hidden": "true",
@@ -89793,304 +93026,98 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "bh-row-body",
 			children: [
-				editing && onEdit ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorEditor, {
-					plan,
-					step,
-					onCancel: () => setEditing(false),
-					onSave: async (fields) => {
-						if (await onEdit(step, fields)) setEditing(false);
-					}
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bh-text-line",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "bh-text bh-text-toggle" + (isOpen ? "" : " is-clamped"),
-							"aria-expanded": isOpen,
-							title: isOpen ? "Show less" : "Show the whole behavior and its answers",
-							onClick: () => setOpen(!isOpen),
-							children: step.text
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "bh-caret",
-							"aria-label": isOpen ? "Collapse" : "Expand",
-							onClick: () => setOpen(!isOpen),
-							children: isOpen ? "▾" : "▸"
-						})]
-					}),
-					isOpen && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bh-expect",
-						children: ["Expect: ", step.expect]
-					}) : null,
-					isOpen && needs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "bh-needs",
-						"aria-label": "Relies on",
-						children: needs.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-need-chip",
-							title: c.title,
-							children: c.label
-						}, c.id))
-					}) : null
-				] }),
-				walked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "bh-walked",
-					title: "The agent answered this behavior of yours with its own tools — open it for its evidence; your own answer replaces it",
-					children: walked
-				}) : null,
-				!isOpen ? null : entry?.note && !yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-evidence" + (walked ? " is-walked" : ""),
-					title: walked ? "What the agent observed, and how" : "What the agent recorded",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-evidence-by",
-							children: walked ? "The agent walked it:" : "The agent:"
-						}),
-						" ",
-						entry.note
-					]
-				}) : entry?.note && yourEntry && !noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-evidence",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-evidence-by",
-							children: "Your note:"
-						}),
-						" ",
-						entry.note
-					]
-				}) : null,
-				isOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-row-actions",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-text-line",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "bh-text bh-text-toggle" + (open ? "" : " is-clamped"),
+							"aria-expanded": open,
+							title: open ? "Show less" : "Show the whole step and its result",
+							onClick: () => setOpen(!open),
+							children: step.text
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "bh-who" + (who.you ? " is-you" : ""),
 							title: who.title,
-							"aria-label": "Who checks behavior " + (index + 1) + ": " + (who.you ? "you" : "the agent"),
-							"aria-pressed": who.you,
-							disabled: !onEdit || busy,
-							onClick: () => void toggleWho(),
 							children: who.label
 						}),
-						answers ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-answers",
-							role: "group",
-							"aria-label": "Answer behavior " + (index + 1),
-							children: ANSWERS.map((a) => {
-								const on = shown === a.value && (answered || pending === a.value);
-								return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn bh-answer bh-answer-" + a.value,
-									"data-on": on ? "1" : void 0,
-									"aria-pressed": on,
-									disabled: locked,
-									title: on && yourEntry ? "Recorded — press again to take it back" : a.label + " (" + a.key + ")",
-									onClick: () => void record(on && yourEntry ? "" : a.value),
-									children: pending === a.value ? "…" : a.label
-								}, a.value);
-							})
-						}) : null,
-						entry?.result && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "bh-receipt",
-							children: [byWords(entry.by), entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""]
-						}) : null,
-						answered && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "tb-item bh-quiet",
-							disabled: locked,
-							title: "Take this answer back (u)",
-							onClick: () => void record(""),
-							children: "Undo"
-						}) : null,
-						(!entry || yourEntry || !answered) && !noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Add a note (n)",
-							onClick: () => {
-								setNote(yourEntry ? entry?.note || "" : "");
-								setNoteOpen(true);
-							},
-							children: "+ note"
-						}) : null,
-						shown === "fail" && onFix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Starts a new session with this failure attached",
-							onClick: () => onFix(step),
-							children: "Fix"
-						}) : null,
-						onEdit && !editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Change the wording — clears any answer on it",
-							onClick: () => setEditing(true),
-							children: "Edit"
-						}) : null,
-						step.manual && onRemove ? confirmRemove ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "bh-confirm",
-							role: "alertdialog",
-							"aria-label": "Remove this behavior?",
-							children: [
-								"Remove it?",
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn bh-danger",
-									disabled: busy,
-									onClick: async () => {
-										setBusy(true);
-										try {
-											await onRemove(step);
-										} finally {
-											setBusy(false);
-											setConfirmRemove(false);
-										}
-									},
-									children: "Remove"
-								}),
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn",
-									autoFocus: true,
-									onClick: () => setConfirmRemove(false),
-									children: "Keep it"
-								})
-							]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Delete this behavior you added",
-							onClick: () => setConfirmRemove(true),
-							children: "Remove"
-						}) : null
+							className: "bh-caret",
+							"aria-label": open ? "Collapse" : "Expand",
+							onClick: () => setOpen(!open),
+							children: open ? "▾" : "▸"
+						})
+					]
+				}),
+				ev.why && !open ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-evidence bh-why is-clamped",
+					title: ev.why,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-evidence-by",
+							children: "Why:"
+						}),
+						" ",
+						ev.why
 					]
 				}) : null,
-				noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-note-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						className: "fl-input bh-note",
-						placeholder: shown === "pass" ? "anything worth recording?" : "what happened?",
-						"aria-label": "Note for behavior " + (index + 1),
-						autoComplete: "off",
-						autoFocus: true,
-						value: note,
-						disabled: busy,
-						onChange: (e) => setNote(e.target.value),
-						onKeyDown: (e) => {
-							e.stopPropagation();
-							if (e.key === "Enter") {
-								e.preventDefault();
-								saveNote();
-							} else if (e.key === "Escape") {
-								e.preventDefault();
-								setNoteOpen(false);
-								ref.current?.focus();
-							}
-						}
-					}), answered && yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				open && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-expect",
+					children: ["Expect: ", step.expect]
+				}) : null,
+				open && (ev.why || ev.note) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-evidence",
+					title: entry?.by === "human" ? "What you recorded" : "What the agent recorded",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-evidence-by",
+							children: ev.why ? "Why it's blocked:" : entry?.by === "human" ? "Your note:" : "The agent:"
+						}),
+						" ",
+						ev.why || ev.note
+					]
+				}) : null,
+				open && ev.agentNote ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-evidence bh-agent-note",
+					title: "What the agent recorded before you answered",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-evidence-by",
+							children: "The agent had said:"
+						}),
+						" ",
+						ev.agentNote
+					]
+				}) : null,
+				open && (entry?.result || chip.state === "fail" && onFix) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-row-actions",
+					children: [entry?.result ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "bh-receipt",
+						children: [
+							chip.label,
+							" · by ",
+							ev.by,
+							entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""
+						]
+					}) : null, chip.state === "fail" && onFix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: () => void saveNote(),
-						children: busy ? "Saving…" : "Save"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bh-hint",
-						children: "Pick Pass, Fail or Can't check to save it"
-					})]
+						className: "tb-item bh-quiet",
+						title: AGENT_FIX.title,
+						onClick: () => onFix(step),
+						children: AGENT_FIX.label
+					}) : null]
 				}) : null
 			]
 		})]
 	});
 }
-function BehaviorEditor({ plan, step, onCancel, onSave }) {
-	const [text, setText] = (0, import_react.useState)(step.text);
-	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
-	const earlier = earlierSteps(plan, step.id);
-	const [needs, setNeeds] = (0, import_react.useState)(() => (step.needs || []).filter((id) => earlier.some((e) => e.step.id === id)));
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const save = async () => {
-		if (!text.trim()) return;
-		setBusy(true);
-		try {
-			const was = (step.needs || []).join("\0");
-			await onSave({
-				text: text.trim(),
-				expect: expect.trim(),
-				...needs.join("\0") !== was ? { needs } : {}
-			});
-		} finally {
-			setBusy(false);
-		}
-	};
-	const keys = (e) => {
-		e.stopPropagation();
-		if (e.key === "Escape") {
-			e.preventDefault();
-			onCancel();
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bh-edit",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				className: "fl-input",
-				rows: 2,
-				"aria-label": "What the work should do",
-				autoFocus: true,
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: keys
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "fl-input",
-				"aria-label": "What should happen",
-				placeholder: "what should happen",
-				autoComplete: "off",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: (e) => {
-					keys(e);
-					if (e.key === "Enter") {
-						e.preventDefault();
-						save();
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bh-edit-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsPicker, {
-						earlier,
-						value: needs,
-						disabled: busy,
-						onChange: setNeeds
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: busy || !text.trim(),
-						onClick: () => void save(),
-						children: busy ? "Saving…" : "Save"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: onCancel,
-						children: "Cancel"
-					})
-				]
-			})
-		]
-	});
-}
 //#endregion
 //#region src/components/behaviors/BehaviorsCard.tsx
+function defaultFixInSession(plan, _stepIds) {
+	return fixInSession(plan.id, plan.title || plan.id);
+}
 function ShieldIcon() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 		className: "bh-shield",
@@ -90115,24 +93142,20 @@ function ShieldIcon() {
 		})]
 	});
 }
-function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
-	const s = behaviorSummary(plan);
+function BehaviorsCard({ plan, onClose, compact, flightStep, expanded, onFixInSession = defaultFixInSession }) {
 	const { data: instances } = useInstances();
 	const session = (instances || []).find((i) => planForSession([plan], i) === plan) || null;
+	const verify = session ? verifyOf(session) : null;
+	const s = verifyCardView(plan, behaviorSummary(plan), verify, session?.title || "");
 	const steps = plan.steps || [];
+	const tally = tallyLine(plan);
 	const running = plan.state === "running";
 	const watch = watchSessionOf(plan);
 	const { data: flights } = useFlights(!!flightStep);
 	const flight = flightStep ? (flights || []).find((f) => f.id === flightStep.flightId) || null : null;
 	const stand = flightStep ? verifyStopStand(flight, flightStep.stepId) : "";
 	const [busy, setBusy] = (0, import_react.useState)("");
-	const [rewriting, setRewriting] = (0, import_react.useState)(false);
 	const [confirmDelete, setConfirmDelete] = (0, import_react.useState)(false);
-	const [adding, setAdding] = (0, import_react.useState)(false);
-	const [focus, setFocus] = (0, import_react.useState)({
-		id: "",
-		n: 0
-	});
 	const [menu, setMenu] = (0, import_react.useState)(null);
 	const [allOpen, setAllOpen] = (0, import_react.useState)({
 		open: !!expanded,
@@ -90147,37 +93170,25 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 			setBusy("");
 		}
 	};
-	const focusRow = (id) => id && setFocus((f) => ({
-		id,
-		n: f.n + 1
-	}));
+	const verifyNow = () => void withBusy("primary", () => session ? startSessionVerify(session.title) : startChecklistRun(plan));
 	const primary = () => {
 		const a = s.action;
 		if (!a) return;
-		if (a.key === "check" || a.key === "rerun") withBusy("primary", () => startChecklistRun(plan));
-		else if (a.key === "failed" || a.key === "answer") focusRow(primaryTarget(plan, a.key));
-		else if (a.key === "write") {
-			if (plan.origin === "manual") setAdding(true);
-			else withBusy("primary", () => regeneratePlan(plan));
-		}
+		if (a.key === "open" && session) openWalkingSession(session.title);
+		else if (a.key === "verify") verifyNow();
+		else if (a.key === "agentfix") withBusy("primary", () => onFixInSession(plan));
 	};
 	const pick = (key) => {
 		const ui = useUi.getState();
 		switch (key) {
-			case "rewrite":
-				setRewriting(true);
+			case "verify":
+				verifyNow();
 				break;
 			case "deployed":
 				withBusy("deployed", () => markPlanDeployed(plan));
 				break;
 			case "fix":
 				withBusy("fix", () => fixPlanFailures(plan));
-				break;
-			case "run":
-				withBusy("primary", () => startChecklistRun(plan));
-				break;
-			case "walk":
-				withBusy("walk", () => startChecklistRun(plan, { walk: "all" }));
 				break;
 			case "watch":
 				ui.openVerifyPane(watch);
@@ -90209,19 +93220,20 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 	};
 	const items = cardMenuItems(plan, {
 		summary: s,
-		session
+		session: session ? {
+			title: session.title,
+			pr_url: session.pr_url,
+			verify
+		} : null
 	});
-	const record = (step, result, note) => recordStepAnswer(plan, step, result, note);
-	const edit = running ? void 0 : (step, fields) => editPlanStep(plan, step, fields);
-	const remove = running ? void 0 : (step) => removePlanStep(plan, step);
-	const fixOne = running || busy ? void 0 : (step) => void withBusy("fix", () => fixPlanFailures(plan, [step.id]));
+	const fixOne = running || busy ? void 0 : (step) => void withBusy("fix", () => onFixInSession(plan, [step.id]));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "bh-card is-" + s.tone + (compact ? " is-compact" : ""),
 		"data-plan": plan.id,
 		"data-tone": s.tone,
 		"data-tour": "behaviors-card",
 		"data-no-drag": true,
-		"aria-label": "Behaviors — " + s.status,
+		"aria-label": "Verify — " + s.status,
 		onKeyDown: (e) => {
 			if (e.key !== "Escape" || !onClose || menu) return;
 			if (e.target.closest("input, textarea, select")) return;
@@ -90239,21 +93251,22 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShieldIcon, {}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "bh-title",
-								children: "Behaviors"
+								children: "Verify"
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "bh-status",
 								"data-tone": s.tone,
 								children: s.status
 							}),
-							s.total ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "bh-count",
-								children: behaviorsCount(s.total)
+							tally ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "bh-count bh-tally",
+								title: "Where its steps stand",
+								children: tally
 							}) : null,
 							steps.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "tb-item bh-quiet bh-expand-all",
-								title: allOpen.open ? "Collapse every behavior to one line" : "Show every behavior in full",
+								title: allOpen.open ? "Collapse every step to one line" : "Show every step in full",
 								onClick: () => setAllOpen((a) => ({
 									open: !a.open,
 									n: a.n + 1
@@ -90266,7 +93279,7 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 									ref: moreRef,
 									type: "button",
 									className: "fl-icon-btn bh-more",
-									"aria-label": "More for these behaviors",
+									"aria-label": "More for Verify",
 									"aria-haspopup": "menu",
 									"aria-expanded": !!menu,
 									onClick: (e) => {
@@ -90298,7 +93311,7 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "btn-primary bh-retry",
-								title: "Check these behaviors again",
+								title: "Verify again",
 								disabled: !!busy,
 								onClick: () => void withBusy("retry", () => stepRetry(flightStep.flightId, flightStep.stepId)),
 								children: busy === "retry" ? "…" : "Retry"
@@ -90306,7 +93319,7 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "test-btn bh-skip",
-								title: "The route moves on without these behaviors",
+								title: "The route moves on without this Verify",
 								disabled: !!busy,
 								onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
 								children: busy === "skip" ? "…" : "Skip"
@@ -90314,51 +93327,47 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "test-btn bh-fix-agent",
-								title: "Hand what failed to this session's agent; the behaviors are checked again once it is done",
+								title: "Hand what failed to this session's agent; it verifies again once the fix is done",
 								disabled: !!busy,
-								onClick: () => void withBusy("agentfix", () => flightAction("Let the agent fix it", flightPath(flightStep.flightId, "/steps/" + encodeURIComponent(flightStep.stepId) + "/op/fix"), {}, "Handed to the agent — the behaviors are checked again after its fix")),
+								onClick: () => void withBusy("agentfix", () => flightAction("Let the agent fix it", flightPath(flightStep.flightId, "/steps/" + encodeURIComponent(flightStep.stepId) + "/op/fix"), {}, "Handed to the agent — it verifies again after its fix")),
 								children: busy === "agentfix" ? "…" : "Let the agent fix it"
 							})
 						]
 					}) : s.action || flightStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "bh-head-actions",
-						children: [
-							s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "btn-primary bh-primary",
-								"data-action": s.action.key,
-								disabled: !!busy,
-								onClick: primary,
-								children: busy === "primary" ? "…" : s.action.label
-							}) : null,
-							walkAllBesidePrimary(plan, s.action?.key || "") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "test-btn bh-walk-all",
-								"data-action": "walk",
-								title: WALK_ALL_ITEM.title,
-								disabled: !!busy,
-								onClick: () => void withBusy("walk", () => startChecklistRun(plan, { walk: "all" })),
-								children: busy === "walk" ? "…" : WALK_ALL_ITEM.label
-							}) : null,
-							flightStep && stand !== "fixing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "test-btn bh-skip",
-								title: "The route moves on without these answers",
-								disabled: !!busy,
-								onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
-								children: busy === "skip" ? "…" : "Skip this stop"
-							}) : null
-						]
+						children: [s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary bh-primary",
+							"data-action": s.action.key,
+							title: s.action.title,
+							disabled: !!busy,
+							onClick: primary,
+							children: busy === "primary" ? "…" : s.action.label
+						}) : null, flightStep && stand !== "fixing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn bh-skip",
+							title: "The route moves on without this Verify",
+							disabled: !!busy,
+							onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
+							children: busy === "skip" ? "…" : "Skip this stop"
+						}) : null]
 					}) : null
 				]
 			}),
-			rewriting ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RewriteBehaviors, {
-				plan,
-				onDone: () => setRewriting(false)
+			s.confirm && verify ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "bh-confirm",
+				children: [s.signOff ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "bh-signoff",
+					children: "Sign off"
+				}) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, {
+					verify,
+					hideSteps: true
+				})]
 			}) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailedSteps, { steps: s.failedSteps }),
 			confirmDelete ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Delete these behaviors?",
-				body: "Their answers go too" + (running ? ", and the check running now stops." : "."),
+				title: "Delete these steps?",
+				body: "Their results go too" + (running ? ", and the Verify under way stops." : "."),
 				confirmLabel: "Delete",
 				cancelLabel: "Keep them",
 				busy: busy === "delete",
@@ -90375,27 +93384,10 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 					plan,
 					step: st,
 					index: i,
-					onRecord: record,
-					onEdit: edit,
-					onRemove: remove,
 					onFix: fixOne,
-					focusNonce: focus.id === st.id ? focus.n : 0,
 					allOpen
 				}, st.id))
 			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
-				className: "bh-foot",
-				children: adding ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddBehavior, {
-					plan,
-					onDone: () => setAdding(false)
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "tb-item bh-add",
-					disabled: plan.state === "generating",
-					onClick: () => setAdding(true),
-					children: "+ Add a behavior"
-				})
-			}),
 			menu && typeof document !== "undefined" ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "sky-chain-menu",
 				style: {
@@ -90410,7 +93402,7 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
 					x: menu.x,
 					y: menu.y,
-					label: "Behaviors — what you can do",
+					label: "Verify — what you can do",
 					items: items.map((it) => ({
 						...it,
 						key: it.key
@@ -90427,176 +93419,6 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 			}), document.body) : null
 		]
 	});
-}
-function RewriteBehaviors({ plan, onDone }) {
-	const [focus, setFocus] = (0, import_react.useState)(plan.focus || "");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const blocked = rewriteBlockedReason(plan);
-	const warning = blocked ? "" : rewriteWarning(plan).replace(/Steps/g, "Behaviors").replace(/steps/g, "behaviors");
-	const go = async () => {
-		setBusy(true);
-		try {
-			if (await regeneratePlan(plan, focus)) onDone();
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bh-rewrite",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-				className: "bh-rewrite-title",
-				htmlFor: "bh-rewrite-" + plan.id,
-				children: "Rewrite behaviors"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				id: "bh-rewrite-" + plan.id,
-				className: "fl-input",
-				rows: 2,
-				autoFocus: true,
-				placeholder: "What should they check instead? (optional) — e.g. “focus on the coupon flow at checkout”",
-				value: focus,
-				disabled: busy || !!blocked,
-				onChange: (e) => setFocus(e.target.value),
-				onKeyDown: (e) => {
-					e.stopPropagation();
-					if (e.key === "Escape") {
-						e.preventDefault();
-						onDone();
-					}
-				}
-			}),
-			blocked || warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "bh-hint",
-				children: blocked || warning
-			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bh-edit-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "btn-primary",
-					disabled: busy || !!blocked,
-					onClick: () => void go(),
-					children: busy ? "Asking…" : "Rewrite"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onDone,
-					children: "Cancel"
-				})]
-			})
-		]
-	});
-}
-function AddBehavior({ plan, onDone }) {
-	const [text, setText] = (0, import_react.useState)("");
-	const [expect, setExpect] = (0, import_react.useState)("");
-	const [actor, setActor] = (0, import_react.useState)("agent");
-	const [needs, setNeeds] = (0, import_react.useState)([]);
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const textRef = (0, import_react.useRef)(null);
-	const add = async () => {
-		const body = text.trim();
-		if (!body || busy) return;
-		setBusy(true);
-		try {
-			await addBehavior(plan, {
-				text: body,
-				expect: expect.trim(),
-				actor,
-				...needs.length ? { needs } : {}
-			});
-			setText("");
-			setExpect("");
-			setNeeds([]);
-			textRef.current?.focus();
-		} catch (err) {
-			errorPop("Couldn't add that behavior", errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const keys = (e) => {
-		e.stopPropagation();
-		if (e.key === "Enter") {
-			e.preventDefault();
-			add();
-		} else if (e.key === "Escape") {
-			e.preventDefault();
-			onDone();
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bh-addform",
-		role: "group",
-		"aria-label": "Add a behavior",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				ref: textRef,
-				type: "text",
-				className: "fl-input",
-				autoFocus: true,
-				autoComplete: "off",
-				placeholder: "what the work should do",
-				"aria-label": "New behavior",
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: keys
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "fl-input",
-				autoComplete: "off",
-				placeholder: "what should happen (optional)",
-				"aria-label": "What should happen",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: keys
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bh-edit-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "bh-who" + (actor === "human" ? " is-you" : ""),
-						"aria-pressed": actor === "human",
-						title: "Who checks it — press to switch",
-						disabled: busy,
-						onClick: () => setActor(actor === "human" ? "agent" : "human"),
-						children: actor === "human" ? "🙋 you" : "🤖 agent"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsPicker, {
-						earlier: earlierSteps(plan),
-						value: needs,
-						disabled: busy,
-						onChange: setNeeds
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: busy || !text.trim(),
-						onClick: () => void add(),
-						children: busy ? "Adding…" : "Add"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: onDone,
-						children: "Done adding"
-					})
-				]
-			})
-		]
-	});
-}
-async function addBehavior(plan, fields) {
-	const next = await addPlanStep(plan, fields);
-	if (next) patchPlan(plan.id, () => next);
-	refreshTestPlans();
 }
 //#endregion
 //#region src/components/OverflowMenu.tsx
@@ -90658,2140 +93480,6 @@ function OverflowMenu({ label, items, boundaryId }) {
 	});
 }
 //#endregion
-//#region src/lib/stopRisk.ts
-var RISK_TAGS = [
-	"remote",
-	"irreversible",
-	"spends"
-];
-var RISK_WORD = {
-	remote: "Touches the shared remote",
-	irreversible: "Can't be undone",
-	spends: "Spends money"
-};
-var FALLBACK = {
-	ship: ["remote"],
-	ticket: ["remote"]
-};
-var isTag = (v) => v === "remote" || v === "irreversible" || v === "spends";
-function riskOf(step, kinds) {
-	if (!step) return [];
-	const def = kinds?.find((k) => k.kind === step.kind);
-	const raw = def ? Array.isArray(def.risk) ? def.risk : [] : FALLBACK[step.kind] || [];
-	const tags = new Set(raw.filter(isTag));
-	if (step.kind === "ship") {
-		const lane = String((step.config || {}).lane || "");
-		if (lane === "commit") tags.clear();
-		else if (lane === "merge") tags.add("irreversible");
-	}
-	return RISK_TAGS.filter((t) => tags.has(t));
-}
-function riskTitle(tags) {
-	return tags.map((t) => RISK_WORD[t]).join(" · ");
-}
-//#endregion
-//#region src/lib/flightDiagram.ts
-var clip = (s, n = 34) => {
-	const t = s.replace(/\s+/g, " ").trim();
-	return t.length > n ? t.slice(0, n - 1).trimEnd() + "…" : t;
-};
-var num = (v, d) => {
-	const n = Number(v);
-	return Number.isFinite(n) && v !== "" && v !== null && v !== void 0 ? n : d;
-};
-var YOU_WAITS = "waits for your Done";
-function youFlownSub(step, state) {
-	if (step.kind !== "you" || state !== "done" && state !== "skipped") return "";
-	return stopSummary(step) === YOU_WAITS ? state : "";
-}
-function stopSummary(step) {
-	const c = step.config || {};
-	switch (step.kind) {
-		case "agent": {
-			const p = String(c.prompt ?? "").trim();
-			return (p ? "“" + clip(p, 28) + "”" : "works its turn") + (c.fresh ? " · new session" : "");
-		}
-		case "ship": {
-			const lane = normalizeLane(String(c.lane ?? "push")) || "push";
-			return (lane === "leave" ? "off" : LANE_LABEL[lane].toLowerCase()) + (c.ask_first ? " · asks first" : "");
-		}
-		case "verify": return verifyFace(c);
-		case "land": return "once merged: " + (String(c.close || "delete") === "close" ? "closes" : "deletes") + " the session" + (c.delete_branch === false ? " · keeps the branch" : "");
-		case "you": {
-			const items = youItems(step);
-			if (items.length) return items.length + (items.length === 1 ? " item" : " items") + " to tick";
-			const t = String(c.text ?? "").trim();
-			return t ? clip(t) : YOU_WAITS;
-		}
-		case "wait": {
-			const until = String(c.until ?? "").trim();
-			const secs = num(c.seconds, 0) > 0 ? num(c.seconds, 0) : num(c.minutes, 10) * 60;
-			return until ? "until " + until : durationWord(secs);
-		}
-		case "reviews": return num(c.quiet_minutes, 10) + " min quiet";
-		case "checks": return "up to " + num(c.timeout_minutes, 60) + " min";
-		case "command": {
-			const cmd = String(c.command ?? "").trim();
-			return cmd ? clip(cmd, 30) : "no command yet";
-		}
-		case "ticket": {
-			const st = String(c.state ?? "").trim();
-			return st ? "move to " + st : "comment";
-		}
-		case "notify": {
-			const t = String(c.text ?? "").trim();
-			return t ? clip(t) : "a ping";
-		}
-		case "split": {
-			const lines = (Array.isArray(c.prompts) ? c.prompts.map(String) : String(c.prompts ?? "").split("\n")).filter((l) => l.trim()).length;
-			const n = lines > 1 ? lines : Math.max(1, num(c.count, 1));
-			return n + (n === 1 ? " worker" : " workers") + " in parallel";
-		}
-		case "loop": {
-			const times = Math.max(0, num(c.times, 3));
-			const until = String(c.until ?? "").trim();
-			const every = num(c.every_seconds, 0) > 0 ? num(c.every_seconds, 0) : Math.max(0, num(c.every_minutes, 0)) * 60;
-			const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
-			if (until) parts.push("until " + clip(until, 22));
-			if (every) parts.push("every " + durationWord(every));
-			if (c.fresh) parts.push("fresh context");
-			return parts.filter(Boolean).join(" · ");
-		}
-		case "join": return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
-		default: return "";
-	}
-}
-function stopSub(title, sub) {
-	const norm = (t) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-	return sub && norm(sub) !== norm(title) ? sub : "";
-}
-function durationWord(seconds) {
-	const n = Math.round(Math.max(0, seconds));
-	if (n < 60) return n + " s";
-	if (n % 3600 === 0) return n / 3600 + " h";
-	if (n < 3600) return n % 60 === 0 ? n / 60 + " min" : Math.floor(n / 60) + " min " + n % 60 + " s";
-	return Math.floor(n / 3600) + " h " + Math.floor(n % 3600 / 60) + " min";
-}
-function loopMark(step, rec) {
-	const times = Math.max(0, Math.floor(num(step.config?.times, 3)));
-	const runs = Math.max(0, Math.floor(num(rec?.detail?.runs, 0)));
-	const st = rec?.state;
-	return {
-		runs,
-		times,
-		state: st === "done" || st === "skipped" ? "done" : st === "running" || st === "waiting_you" || runs > 0 ? "running" : "pending"
-	};
-}
-function loopPill(m) {
-	if (m.state === "pending" && m.runs === 0) return "";
-	return Math.max(1, m.runs + 1) + " / " + (m.times > 0 ? m.times : "∞");
-}
-function loopPillTitle(m) {
-	const run = Math.max(1, m.runs + 1);
-	return (m.state === "done" ? "Looped: run " : "Run ") + run + (m.times > 0 ? " of " + m.times : " — it loops until stopped");
-}
-function loopLine(step, rec) {
-	const m = loopMark(step, rec);
-	const run = Math.max(1, m.runs + 1);
-	const until = String(step.config?.until ?? "").trim();
-	const counter = m.times > 0 ? "run " + run + " of " + m.times : "run " + run + (until ? " — until " + clip(until, 22) : "");
-	const note = String(rec?.note ?? "").replace(/\s+/g, " ").trim();
-	if (!note) return counter;
-	if (/usage limit|the limit/i.test(note)) return "waiting on the limit";
-	const next = /^next run in\s+(.+)$/i.exec(note);
-	if (next) return counter + " · next in " + next[1];
-	if (/^run \d/i.test(note)) return clip(note, 40);
-	return counter + " · " + clip(note, 28);
-}
-function loopEdges(line, head) {
-	const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
-	const out = [];
-	stops.forEach((n, i) => {
-		const s = n.step;
-		if (s.kind !== "loop") return;
-		const before = stops.slice(0, i).filter((b) => b.step.kind !== "loop");
-		const back = String(s.config?.back_to ?? "").trim();
-		if (back === LOOP_AGENT) {
-			if (!head) return;
-			const last = before[before.length - 1];
-			out.push({
-				from: last ? last.id : head,
-				to: head,
-				kind: "loop",
-				loop: n.loop || loopMark(s),
-				via: n
-			});
-			return;
-		}
-		const gid = s.group?.id;
-		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
-		const end = before[before.length - 1];
-		if (!before.length && !back && head) {
-			out.push({
-				from: head,
-				to: head,
-				kind: "loop",
-				loop: n.loop || loopMark(s),
-				via: n
-			});
-			return;
-		}
-		if (!target || !end) return;
-		out.push({
-			from: end.id,
-			to: target.id,
-			kind: "loop",
-			loop: n.loop || loopMark(s),
-			via: n
-		});
-	});
-	return out;
-}
-function liftLoops(line, head) {
-	const loops = loopEdges(line, head);
-	const lifted = new Set(loops.map((e) => e.via.id));
-	return {
-		line: line.filter((n) => !lifted.has(n.id)),
-		loops
-	};
-}
-function loopAtWork(d) {
-	return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
-}
-function firstStepOf(n) {
-	return n.step || n.group?.steps[0];
-}
-function loopSlotAfter(n) {
-	if (n.index === void 0) return void 0;
-	return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
-}
-var LOOP_AGENT = "agent";
-var loopsToAgent = (step) => !!step && step.kind === "loop" && String(step.config?.back_to ?? "").trim() === LOOP_AGENT;
-function loopStepTo(def, taken, target) {
-	const step = newStep(def, taken);
-	return {
-		...step,
-		config: {
-			...step.config,
-			back_to: target === LOOP_AGENT ? LOOP_AGENT : target.id
-		}
-	};
-}
-function loopBackTo(to) {
-	if (to.kind === "session") return LOOP_AGENT;
-	return firstStepOf(to)?.id || "";
-}
-function loopChoices(n, nodes, opts = {}) {
-	const canRepeat = (m) => (m.kind === "stop" ? !!m.step && m.step.kind !== "loop" : m.kind === "group") && m.index !== void 0 && m.row === "main";
-	if (!canRepeat(n)) return [];
-	const from = loopFromOf(n, nodes);
-	const slot = loopSlotAfter(from);
-	if (slot === void 0 || slot < (opts.insertFrom ?? 0)) return [];
-	const out = [];
-	if (opts.session) out.push({
-		key: "loop-to-agent",
-		label: "The agent (run it again)",
-		title: "After this stop the agent is prompted again, then the route runs again",
-		agent: true,
-		from,
-		to: opts.session
-	});
-	for (const m of nodes) {
-		if (!canRepeat(m) || m.index > n.index) continue;
-		out.push({
-			key: "loop-to:" + m.id,
-			label: m.id === n.id ? "This stop (“" + m.title + "”)" : "“" + m.title + "”",
-			title: "After this stop the route goes back to “" + m.title + "”",
-			agent: false,
-			from,
-			to: m
-		});
-	}
-	return out;
-}
-function loopFromOf(n, nodes) {
-	const pid = n.parallel?.id;
-	if (!pid) return n;
-	let last = n;
-	for (const m of nodes) if (m.parallel?.id === pid && m.index !== void 0 && last.index !== void 0 && m.index > last.index) last = m;
-	return last;
-}
-function findNode(d, id) {
-	if (!id) return null;
-	for (const n of d.nodes) {
-		if (n.id === id) return n;
-		const sub = n.group?.nodes.find((x) => x.id === id);
-		if (sub) return sub;
-	}
-	return d.edges.find((e) => e.via?.id === id)?.via || null;
-}
-function loopIdlePill(m, via) {
-	const pace = loopPace(via);
-	if (m.times > 0) return "↻ repeat ×" + m.times + pace;
-	const until = String(via?.step?.config?.until ?? "").trim();
-	return (until ? "↻ until " + clip(until, 18) : "↻ until stopped") + pace;
-}
-function loopPace(via) {
-	const c = via?.step?.config || {};
-	let secs = Math.floor(num(c.every_seconds, 0));
-	if (secs <= 0) secs = Math.floor(num(c.every_minutes, 0)) * 60;
-	return secs > 0 ? " · every " + durationWord(secs) : "";
-}
-function loopCaption(m, via) {
-	if (m.state === "pending" && m.runs === 0) return "";
-	const until = String(via?.step?.config?.until ?? "").trim();
-	const pace = loopPace(via);
-	if (until) return "until " + clip(until, 18) + pace;
-	return pace ? pace.slice(3) : m.times > 0 ? "" : "until stopped";
-}
-function fixOf(detail) {
-	const f = detail?.fix;
-	if (!f || typeof f !== "object") return void 0;
-	const round = Math.max(1, Math.floor(num(f.round, 1)));
-	const of = f.of === null || f.of === void 0 ? null : Math.max(0, Math.floor(num(f.of, 0))) || null;
-	return {
-		active: !!f.active,
-		round,
-		rounds: Math.max(round, Math.floor(num(f.rounds, round))),
-		of,
-		reason: String(f.reason ?? ""),
-		since: num(f.since, 0),
-		to: String(f.to ?? "") || LOOP_AGENT,
-		...f.kind ? { kind: String(f.kind) } : {},
-		...f.outcome === "fixed" || f.outcome === "halted" ? { outcome: f.outcome } : {}
-	};
-}
-function returnMark(ret, fix, stopState, passedNext) {
-	if (!ret && !fix) return void 0;
-	const shown = fix?.active ? "fixing" : fix?.outcome === "fixed" && !passedNext ? "fixed" : fix?.outcome === "halted" && (stopState === "halted" || stopState === "failed") ? "halted" : "case";
-	return {
-		to: ret?.to || fix?.to || LOOP_AGENT,
-		case: ret?.case || "if it fails",
-		of: ret ? ret.of : fix?.of ?? null,
-		...fix ? { fix } : {},
-		shown
-	};
-}
-function fixingWord(m, fix) {
-	return "fixing " + (m.of ? fix.round + "/" + m.of : "round " + fix.round);
-}
-function returnLabel(m) {
-	const f = m.fix;
-	if (m.shown === "fixing" && f) return (f.reason ? clip(f.reason, 40) + " · " : "") + fixingWord(m, f);
-	if (m.shown === "fixed" && f) return "fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
-	if (m.shown === "halted" && f) return "halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds");
-	return m.case;
-}
-function returnTitle(m, to = "the agent") {
-	const f = m.fix;
-	const cap = m.of ? " (at most " + m.of + (m.of === 1 ? " round)" : " rounds)") : "";
-	const base = "If it fails: Let the agent fix it — " + m.case + ", back to " + to + cap;
-	if (m.shown === "fixing" && f) return (f.reason || "It failed") + " — the agent is fixing it (round " + f.round + (m.of ? " of " + m.of : "") + ")";
-	if (m.shown === "fixed" && f) return "Fixed after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
-	if (m.shown === "halted" && f) return "Halted after " + f.rounds + (f.rounds === 1 ? " round" : " rounds") + (f.reason ? ": " + f.reason : "");
-	return base;
-}
-function fixFace(fix) {
-	return "Agent fixing · round " + fix.round;
-}
-function returnEdges(line, head) {
-	const stops = line.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group"));
-	const out = [];
-	stops.forEach((n, i) => {
-		const m = n.ret;
-		if (!m) return;
-		const target = m.to === LOOP_AGENT ? void 0 : stops.slice(0, i).find((b) => b.step?.id === m.to || b.group?.steps.some((s) => s.id === m.to));
-		const to = target ? target.id : head;
-		if (!to) return;
-		out.push({
-			from: n.id,
-			to,
-			kind: "fix",
-			ret: m
-		});
-	});
-	return out;
-}
-function stopTitle(step, kinds) {
-	return stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title;
-}
-var stopId = (s, i) => "stop:" + (s.id || "i" + i);
-function parallelMark(steps, i) {
-	const [lo, hi] = parallelSpan(steps, i);
-	if (hi - lo < 2) return {};
-	return { parallel: {
-		id: steps[i].parallel.id,
-		index: i - lo,
-		size: hi - lo
-	} };
-}
-function lineRuns(line) {
-	const out = [];
-	for (const n of line) {
-		const last = out[out.length - 1];
-		const pid = n.parallel?.id;
-		if (pid && last && last[0].parallel?.id === pid) last.push(n);
-		else out.push([n]);
-	}
-	return out;
-}
-var FLOWN_STATES = /* @__PURE__ */ new Set([
-	"done",
-	"skipped",
-	"failed"
-]);
-function lineEdges(line) {
-	const runs = lineRuns(line);
-	const edges = [];
-	for (let k = 1; k < runs.length; k++) {
-		const a = runs[k - 1];
-		const b = runs[k];
-		if (b.length === 1 && b[0].kind === "add") {
-			edges.push({
-				from: a[a.length - 1].id,
-				to: b[0].id,
-				kind: "add"
-			});
-			continue;
-		}
-		for (const x of a) for (const y of b) if (a.length > 1) edges.push(FLOWN_STATES.has(x.state) ? {
-			from: x.id,
-			to: y.id,
-			kind: "join",
-			done: true
-		} : {
-			from: x.id,
-			to: y.id,
-			kind: "join"
-		});
-		else edges.push({
-			from: x.id,
-			to: y.id,
-			kind: b.length > 1 ? "fan" : "line"
-		});
-	}
-	return edges;
-}
-function chain(nodes, edges, line) {
-	edges.push(...lineEdges(line));
-	nodes.push(...line);
-}
-function insertFromOf$1(f) {
-	if (f.state === "ready" || f.state === "grounded") return 0;
-	return Math.max(f.cursor + 1, parallelSpan(f.steps, f.cursor)[1]);
-}
-function addNode(title) {
-	return {
-		id: "add",
-		kind: "add",
-		row: "main",
-		title,
-		sub: "",
-		state: "pending",
-		icon: "add"
-	};
-}
-function flywayDiagram(steps, kinds) {
-	const { line, loops } = liftLoops(steps.map((s, i) => ({
-		id: stopId(s, i),
-		kind: "stop",
-		row: "main",
-		title: stopTitle(s, kinds),
-		sub: stopSub(stopTitle(s, kinds), stopSummary(s)),
-		state: "edit",
-		icon: s.kind,
-		perch: stepActor(s, kinds) === "you",
-		step: s,
-		index: i,
-		editable: true,
-		...looksOf(s, kinds),
-		...s.kind === "loop" ? { loop: loopMark(s) } : {},
-		...parallelMark(steps, i)
-	})));
-	line.push(addNode("Add a stop"));
-	const nodes = [];
-	const edges = [];
-	chain(nodes, edges, line);
-	edges.push(...loops);
-	return {
-		nodes,
-		edges,
-		flightId: "",
-		mode: "none",
-		insertFrom: 0
-	};
-}
-function flightStops(f, kinds) {
-	const live = isLive(f);
-	const grounded = f.state === "grounded" || f.state === "ready";
-	const [glo, ghi] = parallelSpan(f.steps, f.cursor);
-	const open = Math.max(f.cursor + 1, ghi);
-	return f.steps.map((s, i) => {
-		const st = stepStateOf(f, s, i);
-		const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
-		const atCursor = live && (i === f.cursor || inGroup);
-		let state = st === "done" ? "done" : st === "skipped" ? "skipped" : st === "failed" ? "failed" : st === "waiting_you" ? "perched" : st === "running" ? "current" : "pending";
-		if (inGroup && state === "done") {} else if (inGroup && f.state === "halted") {
-			if (st === "failed") state = "halted";
-		} else if (inGroup && f.state === "paused") {
-			if (state === "current" || state === "pending") state = "paused";
-		} else if (atCursor && f.state === "halted") state = "halted";
-		else if (atCursor && f.state === "paused") state = "paused";
-		const rec = f.step_states?.[s.id];
-		const loop = s.kind === "loop" ? loopMark(s, rec) : void 0;
-		if (loop && state === "current" && live && i > f.cursor) state = "pending";
-		const flown = state === "done" || state === "skipped" || state === "failed";
-		const looping = !!loop && !flown && (loop.runs > 0 || atCursor && state !== "pending");
-		const fix = fixOf(rec?.detail);
-		const next = f.steps[i + 1];
-		const passedNext = !!next && ["done", "skipped"].includes(stepStateOf(f, next, i + 1));
-		const ret = returnMark(f.returns?.[s.id], fix, state, passedNext);
-		return {
-			id: stopId(s, i),
-			kind: "stop",
-			row: "main",
-			title: stopTitle(s, kinds),
-			sub: fix?.active && state === "current" ? fixFace(fix) : looping ? loopLine(s, rec) : stopSub(stopTitle(s, kinds), youFlownSub(s, state) || stopSummary(s)),
-			state,
-			icon: s.kind,
-			perch: stepActor(s, kinds) === "you",
-			step: s,
-			index: i,
-			editable: grounded || live && state === "pending" && i >= open,
-			reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
-			...looksOf(s, kinds),
-			...flown ? { receipt: receiptOf(rec?.detail) } : {},
-			...loop ? { loop } : {},
-			...ret ? { ret } : {},
-			...state === "done" && rec?.detail?.by === "agent" ? { by: "agent" } : {},
-			...!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {},
-			...parallelMark(f.steps, i)
-		};
-	});
-}
-function looksOf(s, kinds) {
-	const out = {};
-	const risk = riskOf(s, kinds);
-	if (risk.length) out.risk = risk;
-	const when = String(s.when ?? "").trim();
-	if (when) out.when = when;
-	return out;
-}
-function untilOf(detail) {
-	const v = Number(detail?.until ?? detail?.next_at ?? 0);
-	return Number.isFinite(v) && v > 0 ? v : 0;
-}
-function leftWord(secs) {
-	if (secs <= 0) return "due";
-	const s = Math.ceil(secs);
-	const h = Math.floor(s / 3600);
-	const m = Math.floor(s % 3600 / 60);
-	const ss = String(s % 60).padStart(2, "0");
-	return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + ss + " left";
-}
-function receiptOf(detail) {
-	const r = detail?.receipt;
-	if (typeof r !== "string" && typeof r !== "number") return "";
-	return clip(String(r).replace(/\s+/g, " ").trim(), 80);
-}
-function flightDiagram(f, kinds) {
-	const { line, loops } = liftLoops(flightStops(f, kinds));
-	const rets = returnEdges(line);
-	if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
-	const nodes = [];
-	const edges = [];
-	chain(nodes, edges, line);
-	edges.push(...loops, ...rets);
-	return {
-		nodes,
-		edges,
-		flightId: f.id,
-		mode: "flight",
-		insertFrom: f.state === "grounded" || f.state === "ready" ? f.cursor + 1 : insertFromOf$1(f)
-	};
-}
-var RUNGS = [
-	"commit",
-	"push",
-	"pr",
-	"merge"
-];
-var STAGE_RANK = {
-	committed: 1,
-	pushed: 2,
-	pr: 3,
-	merged: 4
-};
-function ladderRungs(row) {
-	const run = row.autopilot;
-	const depth = normalizeLane(run?.depth);
-	if (!run || !depth || depth === "leave") return [];
-	if (run.state !== "running" && run.state !== "halted" && run.state !== "done") return [];
-	const reached = STAGE_RANK[String(row.stage)] || 0;
-	const upTo = RUNGS.indexOf(depth) + 1;
-	let current = false;
-	return RUNGS.slice(0, upTo).map((lane, i) => {
-		if (run.state === "done" || i < reached) return {
-			lane,
-			state: "done"
-		};
-		if (!current) {
-			current = true;
-			return {
-				lane,
-				state: run.state === "halted" ? "halted" : "current"
-			};
-		}
-		return {
-			lane,
-			state: "pending"
-		};
-	});
-}
-function miniDots(row) {
-	const fl = row.flight;
-	if (fl && isShown(fl)) return stripDots(fl);
-	return ladderRungs(row).map((r) => r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○").join("");
-}
-function sessionBox(row, kind, rowAt) {
-	const ss = deriveSessionState(row);
-	return {
-		id: kind + ":" + row.title,
-		kind,
-		row: rowAt,
-		title: windowName(row.title),
-		sub: String(row.task_headline || row.task || "").split("\n")[0].trim(),
-		state: "session",
-		icon: "session",
-		session: row.title,
-		chip: {
-			label: ss.label,
-			tone: ss.tone
-		},
-		dots: kind === "child" ? miniDots(row) : void 0
-	};
-}
-function landedFlightOf(title, flights) {
-	let best = null;
-	for (const f of flights || []) {
-		if (f.session !== title || f.state !== "done") continue;
-		if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
-	}
-	return best;
-}
-function sessionDiagram(rows, title, opts = {}) {
-	const row = rows.find((r) => r.title === title);
-	const empty = {
-		nodes: [],
-		edges: [],
-		flightId: "",
-		mode: "none",
-		insertFrom: 0
-	};
-	if (!row) return empty;
-	const family = opts.family !== false;
-	const nodes = [];
-	const edges = [];
-	const me = sessionBox(row, "session", "main");
-	if (family && row.parent) {
-		const up = rows.find((r) => r.title === row.parent);
-		if (up) {
-			const p = sessionBox(up, "parent", "above");
-			nodes.push(p);
-			edges.push({
-				from: p.id,
-				to: me.id,
-				kind: "up"
-			});
-		}
-	}
-	const kids = rows.filter((r) => r.parent === title && r.title !== title);
-	if (!family && kids.length) me.sub = [me.sub, kids.length + (kids.length === 1 ? " worker" : " workers")].filter(Boolean).join(" · ");
-	const line = [me];
-	let mode = "none";
-	let flightId = "";
-	let insertFrom = 0;
-	let loops = [];
-	const fl = row.flight;
-	if (fl && isShown(fl)) {
-		mode = "flight";
-		flightId = fl.id;
-		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
-		const full = opts.flights?.find((f) => f.id === fl.id);
-		if (full) {
-			if (fl.state !== "ready") insertFrom = Math.max(insertFrom, insertFromOf$1(full));
-			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
-			line.push(...lifted.line);
-			loops = [...lifted.loops, ...returnEdges(line, me.id)];
-		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
-			const cur = i === fl.cursor;
-			const perch = cur && fl.step?.actor === "you";
-			line.push({
-				id: "stop:i" + i,
-				kind: "stop",
-				row: "main",
-				title: cur ? perch ? perchLabel(fl.step.title) : fl.step.title : "Stop " + (i + 1),
-				sub: "",
-				state: i < fl.cursor ? "done" : cur ? fl.state === "halted" ? "halted" : fl.state === "paused" ? "paused" : perch && fl.state === "waiting_you" ? "perched" : "current" : "pending",
-				icon: cur ? fl.step.kind : "stop",
-				perch,
-				index: i,
-				reason: cur && fl.state === "halted" ? fl.reason || "" : ""
-			});
-		}
-	} else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
-		const done = landedFlightOf(title, opts.flights);
-		mode = "flight";
-		flightId = done.id;
-		insertFrom = done.steps.length;
-		const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
-		line.push(...lifted.line);
-		loops = [...lifted.loops, ...returnEdges(line, me.id)];
-	} else {
-		const rungs = ladderRungs(row);
-		if (rungs.length) {
-			mode = "ladder";
-			const reason = row.autopilot?.state === "halted" ? row.autopilot.reason || "" : "";
-			for (const r of rungs) line.push({
-				id: "rung:" + r.lane,
-				kind: "rung",
-				row: "main",
-				title: LANE_LABEL[r.lane],
-				sub: "goes as far as" + (r.state === "current" && row.autopilot?.note ? " · " + clip(row.autopilot.note, 24) : ""),
-				state: r.state,
-				icon: "ship",
-				reason: r.state === "halted" ? reason : ""
-			});
-		}
-	}
-	line.push(addNode("Tack on a stop"));
-	const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
-	if (fans) {
-		nodes.push(...line);
-		const plain = lineEdges(line);
-		for (let i = 1; i < line.length; i++) {
-			const a = line[i - 1];
-			const b = line[i];
-			if (!fans.out.has(a.id)) edges.push(...plain.filter((e) => e.from === a.id));
-			for (const c of fans.out.get(a.id) || []) {
-				nodes.push(c);
-				edges.push({
-					from: a.id,
-					to: c.id,
-					kind: "fan"
-				});
-				const done = c.branch.state === "done" || fans.letGo.has(b.id);
-				edges.push(done ? {
-					from: c.id,
-					to: b.id,
-					kind: "join",
-					done
-				} : {
-					from: c.id,
-					to: b.id,
-					kind: "join"
-				});
-			}
-		}
-	} else chain(nodes, edges, line);
-	if (family) {
-		const hang = hangPoint(line);
-		const next = line[line.indexOf(hang) + 1];
-		const hung = (fans ? fans.below : kids).map((k) => {
-			const state = childState(k);
-			const c = sessionBox(k, "child", "below");
-			c.branch = {
-				from: hang.id,
-				to: next.id,
-				state,
-				inner: innerSummary(k),
-				...liveOf(k)
-			};
-			return c;
-		});
-		if (hung.length) {
-			const direct = edges.findIndex((e) => e.from === hang.id && e.to === next.id && (e.kind === "line" || e.kind === "add"));
-			if (direct >= 0) edges.splice(direct, 1);
-		}
-		for (const c of hung) {
-			nodes.push(c);
-			edges.push({
-				from: hang.id,
-				to: c.id,
-				kind: "branch"
-			});
-			edges.push(c.branch.state === "done" ? {
-				from: c.id,
-				to: next.id,
-				kind: "join",
-				done: true
-			} : {
-				from: c.id,
-				to: next.id,
-				kind: "join"
-			});
-		}
-	}
-	edges.push(...loops);
-	const d = {
-		nodes,
-		edges,
-		flightId,
-		mode,
-		insertFrom
-	};
-	if (mode !== "flight") return d;
-	const grouped = collapseGroups(d, opts.expandedGroups);
-	return opts.foldFlown === true || opts.expandFlown === false ? collapseFlown(grouped) : grouped;
-}
-function hangPoint(line) {
-	return line.find((n, i) => i < line.length - 1 && (n.kind === "stop" || n.kind === "rung") && HERE_STATES.has(n.state)) || line[0];
-}
-var HERE_STATES = /* @__PURE__ */ new Set([
-	"current",
-	"perched",
-	"paused",
-	"halted"
-]);
-function liveOf(k) {
-	const ss = deriveSessionState(k);
-	return ss.state === "working" ? { live: "working" } : ss.state === "needs_you" ? { live: "you" } : {};
-}
-function childState(k) {
-	const ss = deriveSessionState(k);
-	if (ss.state === "working") return "working";
-	if (ss.state === "needs_you") return "asking";
-	if (String(k.last_report?.status || "") === "failed" || ss.tone === "broken") return "failed";
-	return "done";
-}
-function foldRun(d, run, into) {
-	const main = d.nodes.filter((n) => n.row === "main");
-	const folded = new Set(run.map((n) => n.id));
-	const first = run[0];
-	const after = main[main.indexOf(run[run.length - 1]) + 1];
-	const to = (id) => folded.has(id) ? into.id : id;
-	const inner = /* @__PURE__ */ new Set();
-	const nodes = [];
-	for (const n of d.nodes) {
-		if (n.id === first.id) nodes.push(into);
-		if (folded.has(n.id)) continue;
-		if (n.branch && folded.has(n.branch.from)) {
-			inner.add(n.id);
-			nodes.push({
-				...n,
-				branch: {
-					...n.branch,
-					from: into.id,
-					to: after && folded.has(n.branch.to) ? after.id : n.branch.to
-				}
-			});
-		} else if (n.branch && folded.has(n.branch.to)) nodes.push({
-			...n,
-			branch: {
-				...n.branch,
-				to: into.id
-			}
-		});
-		else nodes.push(n);
-	}
-	const fanned = inner.size > 0;
-	const members = new Set(run.filter((n) => n.parallel).map((n) => n.id));
-	const edges = [];
-	const seen = /* @__PURE__ */ new Set();
-	for (const e0 of d.edges) {
-		const e = e0.kind === "fan" && members.has(e0.to) || e0.kind === "join" && members.has(e0.from) ? {
-			from: e0.from,
-			to: e0.to,
-			kind: d.nodes.find((n) => n.id === e0.to)?.kind === "add" ? "add" : "line"
-		} : e0;
-		const from = to(e.from);
-		let dest = to(e.to);
-		if (e.kind === "join" && dest === into.id && inner.has(e.from) && after) dest = after.id;
-		if (from === dest && e.kind !== "loop") continue;
-		if (fanned && from === into.id && (e.kind === "line" || e.kind === "add")) continue;
-		const key = from + ">" + dest + ">" + e.kind;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		edges.push({
-			...e,
-			from,
-			to: dest
-		});
-	}
-	return {
-		...d,
-		nodes,
-		edges
-	};
-}
-var FLOWN_MIN = 2;
-var FLOWN_ID = "flown";
-function collapseFlown(d) {
-	const main = d.nodes.filter((n) => n.row === "main");
-	const run = [];
-	for (const n of main) {
-		if (n.kind === "session") continue;
-		if (n.kind !== "stop" || n.inGroup || n.state !== "done" && n.state !== "skipped") break;
-		run.push(n);
-	}
-	if (run.length < FLOWN_MIN) return d;
-	const after = main[main.indexOf(run[run.length - 1]) + 1];
-	const pid = run[run.length - 1].parallel?.id;
-	if (pid && after?.parallel?.id === pid) while (run.length && run[run.length - 1].parallel?.id === pid) run.pop();
-	if (run.length < FLOWN_MIN) return d;
-	const first = run[0];
-	const last = run[run.length - 1];
-	return foldRun(d, run, {
-		id: FLOWN_ID,
-		kind: "flown",
-		row: "main",
-		title: run.length + " done",
-		sub: first.title + " … " + last.title,
-		state: "done",
-		icon: "flown",
-		count: run.length,
-		flown: run.map((n) => n.title)
-	});
-}
-var FLYING = /* @__PURE__ */ new Set([
-	"current",
-	"perched",
-	"halted",
-	"paused"
-]);
-function groupNode(id, g, run) {
-	const total = run.length;
-	const done = run.filter((n) => n.state === "done" || n.state === "skipped").length;
-	const flying = run.find((n) => FLYING.has(n.state));
-	const failed = run.find((n) => n.state === "failed");
-	const state = done === total ? "done" : flying ? flying.state : failed ? "failed" : run.every((n) => n.state === "edit") ? "edit" : "pending";
-	const titles = run.map((n) => n.title).join(" → ");
-	const node = {
-		id,
-		kind: "group",
-		row: "main",
-		title: g.name,
-		sub: flying ? flying.title : total + (total === 1 ? " stop: " : " stops: ") + clip(titles, 40),
-		state,
-		icon: "group",
-		perch: flying?.perch,
-		index: run[0].index,
-		editable: run.every((n) => !!n.editable),
-		reason: (flying || failed)?.reason || "",
-		group: {
-			id: g.id,
-			name: g.name,
-			plan_id: g.plan_id || "",
-			steps: run.map((n) => n.step),
-			nodes: run.slice(),
-			done,
-			total,
-			...flying ? { current: flying } : {}
-		}
-	};
-	const join = run.find((n) => n.join)?.join;
-	if (join) node.join = join;
-	const tags = new Set(run.flatMap((n) => n.risk || []));
-	if (tags.size) node.risk = [
-		"remote",
-		"irreversible",
-		"spends"
-	].filter((t) => tags.has(t));
-	return node;
-}
-function collapseGroups(d, expanded) {
-	const runs = [];
-	let cur = [];
-	let curId = "";
-	for (const n of d.nodes) {
-		if (n.row !== "main") continue;
-		const gid = n.kind === "stop" ? n.step?.group?.id || "" : "";
-		if (gid && gid === curId) cur.push(n);
-		else {
-			if (cur.length) runs.push(cur);
-			cur = gid ? [n] : [];
-			curId = gid;
-		}
-	}
-	if (cur.length) runs.push(cur);
-	if (!runs.length) return d;
-	let out = d;
-	const seen = /* @__PURE__ */ new Set();
-	for (const run of runs) {
-		if (run.length < 2) continue;
-		const g = run[0].step.group;
-		const id = "group:" + g.id + (seen.has(g.id) ? "@" + run[0].index : "");
-		seen.add(g.id);
-		if (expanded?.has(g.id)) {
-			const marks = new Map(run.map((n, i) => [n.id, {
-				id: g.id,
-				name: g.name,
-				first: i === 0,
-				last: i === run.length - 1
-			}]));
-			out = {
-				...out,
-				nodes: out.nodes.map((n) => marks.has(n.id) ? {
-					...n,
-					inGroup: marks.get(n.id)
-				} : n)
-			};
-			continue;
-		}
-		out = foldRun(out, run, groupNode(id, g, run));
-	}
-	return out;
-}
-var HALT_POINT_REASON = "halt point";
-function atHaltPoint(flight) {
-	if (!flight) return false;
-	const step = flight.steps[flight.cursor];
-	if (!step) return false;
-	if (flight.state === "paused") return flight.reason === HALT_POINT_REASON;
-	if (flight.state !== "halted" || !step.halt) return false;
-	const ss = flight.step_states?.[step.id];
-	return ss?.state !== "failed" && !ss?.detail?.failed_reason;
-}
-function nodeAtIndex(d, index) {
-	return d.nodes.find((n) => n.row === "main" && n.index !== void 0 && (n.kind === "stop" ? n.index === index : n.kind === "group" && index >= n.index && index < n.index + (n.group?.total || 1)));
-}
-function lineUnits(d) {
-	return d.nodes.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group") && n.index !== void 0).map((n) => ({
-		node: n,
-		first: n.index,
-		size: n.kind === "group" ? n.group?.total || 1 : 1
-	}));
-}
-function flightIndexAt(d, p) {
-	const u = lineUnits(d);
-	if (!u.length) return p;
-	if (p < u.length) return u[Math.max(0, p)].first;
-	const last = u[u.length - 1];
-	return last.first + last.size + (p - u.length);
-}
-function flightMove(d, from, to) {
-	const u = lineUnits(d);
-	if (!u[from] || !u[to]) return {
-		from,
-		to
-	};
-	const f = u[from].first;
-	if (to === from) return {
-		from: f,
-		to: f
-	};
-	return {
-		from: f,
-		to: to > from ? u[to].first + u[to].size - u[from].size : u[to].first
-	};
-}
-function drawnIndexes(d) {
-	const u = lineUnits(d);
-	let from = u.findIndex((x) => x.first >= d.insertFrom);
-	if (from < 0) from = u.length;
-	if (from === d.insertFrom && u.every((x, p) => x.first === p)) return d;
-	const at = new Map(u.map((x, p) => [x.node.id, p]));
-	return {
-		...d,
-		insertFrom: from,
-		nodes: d.nodes.map((n) => at.has(n.id) ? {
-			...n,
-			index: at.get(n.id)
-		} : n)
-	};
-}
-function drawnCanvas(d, canvas) {
-	const drawn = drawnIndexes(d);
-	if (drawn === d) return {
-		diagram: d,
-		canvas
-	};
-	const byId = new Map(d.nodes.map((n) => [n.id, n]));
-	const orig = (n) => byId.get(n.id) || n;
-	const c = canvas;
-	const node = (f) => f && ((n, ...rest) => f(orig(n), ...rest));
-	return {
-		diagram: drawn,
-		canvas: {
-			...c,
-			onSelect: node(c.onSelect),
-			onEdit: node(c.onEdit),
-			onOpen: node(c.onOpen),
-			onRemove: node(c.onRemove),
-			onDuplicate: node(c.onDuplicate),
-			onToggleHalt: node(c.onToggleHalt),
-			renderInBox: node(c.renderInBox),
-			sizeOf: c.sizeOf && ((n, b) => c.sizeOf(orig(n), b)),
-			onInsert: c.onInsert && ((at) => c.onInsert(flightIndexAt(d, at))),
-			onMove: c.onMove && ((from, to) => {
-				const m = flightMove(d, from, to);
-				c.onMove(m.from, m.to);
-			}),
-			onDropStop: c.onDropStop && ((drop, at) => c.onDropStop(drop, at === null ? null : flightIndexAt(d, at))),
-			onLoopFrom: c.onLoopFrom && ((from, to) => c.onLoopFrom(orig(from), orig(to))),
-			onLoopTo: c.onLoopTo && ((loop, to) => c.onLoopTo(orig(loop), orig(to)))
-		}
-	};
-}
-function lineWhere(d) {
-	let b = birdPerch(d);
-	const lp = loopAtWork(d);
-	let n = b ? lp && lp.from === b.nodeId && !d.nodes.some((x) => x.id === b.nodeId && STOP_TONE[x.state]) ? lp.via : d.nodes.find((x) => x.id === b.nodeId) : void 0;
-	if (!n || n.kind === "session") {
-		const isParked = (x) => x.state === "halted" || x.state === "paused";
-		const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && isParked(x)) || (lp?.via && isParked(lp.via) ? lp.via : void 0);
-		if (!parked) return "";
-		n = parked;
-		b = {
-			nodeId: parked.id,
-			tone: STOP_TONE[parked.state]
-		};
-	}
-	if (!b) return "";
-	const head = n.kind === "rung" ? "goes as far as " : b.tone === "you" ? "needs you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
-	const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
-	return head + (b.tone === "you" ? n.title.replace(/^wait for me:\s*/i, "") : n.title) + (tail ? " · " + tail : "");
-}
-function flownCount(d) {
-	return d.nodes.find((n) => n.kind === "flown")?.count || 0;
-}
-function branchOf(row) {
-	const b = row.flight_branch ?? row.flight?.branch;
-	return b && typeof b.step === "string" && b.step ? b : null;
-}
-function joinOf(row) {
-	const j = row.flight?.join;
-	return j && Number.isFinite(Number(j.total)) ? {
-		waiting: Math.max(0, Number(j.waiting) || 0),
-		total: Number(j.total) || 0
-	} : null;
-}
-function joinLabel(j) {
-	return "waiting for " + j.waiting + " of " + j.total;
-}
-var REPORT_STATE = {
-	done: "done",
-	failed: "failed",
-	blocked: "asking"
-};
-function branchState(child, listed) {
-	const ss = deriveSessionState(child);
-	if (ss.state === "working") return "working";
-	if (ss.state === "needs_you") return "asking";
-	const rep = REPORT_STATE[String(child.last_report?.status || "")];
-	if (rep) return rep;
-	if (listed?.state) return listed.state;
-	if (ss.tone === "broken") return "failed";
-	return "working";
-}
-var BRANCH_CHIP = {
-	working: {
-		label: "Working",
-		tone: "working"
-	},
-	asking: {
-		label: "Asking",
-		tone: "attention"
-	},
-	done: {
-		label: "Done",
-		tone: "neutral"
-	},
-	failed: {
-		label: "Failed",
-		tone: "broken"
-	},
-	gone: {
-		label: "Gone",
-		tone: "muted"
-	}
-};
-var BRANCH_NODE_STATE = {
-	working: "current",
-	asking: "perched",
-	done: "done",
-	failed: "failed",
-	gone: "skipped"
-};
-function innerSummary(row) {
-	const fl = row.flight;
-	if (fl && isShown(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
-	const rungs = ladderRungs(row);
-	if (!rungs.length) return "";
-	const done = rungs.filter((r) => r.state === "done").length;
-	const cur = rungs.find((r) => r.state !== "done");
-	return done + "/" + rungs.length + " stops" + (cur ? " · " + LANE_LABEL[cur.lane] : "");
-}
-function joinChildren(full) {
-	const out = /* @__PURE__ */ new Map();
-	if (!full) return out;
-	for (const rec of Object.values(full.step_states || {})) {
-		const list = (rec?.detail)?.children;
-		if (!Array.isArray(list)) continue;
-		for (const c of list) if (c && typeof c.title === "string") out.set(c.title, c);
-	}
-	return out;
-}
-function branchesOf(title, kids, line, fl, full) {
-	const out = /* @__PURE__ */ new Map();
-	const below = [];
-	const letGo = /* @__PURE__ */ new Set();
-	const listed = joinChildren(full);
-	const at = (step) => line.findIndex((n) => n.kind === "stop" && (n.step ? n.step.id === step : n.index === fl.cursor && fl.step?.id === step));
-	for (const k of kids) {
-		const b = branchOf(k);
-		const i = b && (!b.parent || b.parent === title) ? at(b.step) : -1;
-		if (i < 0 || i + 1 >= line.length) {
-			below.push(k);
-			continue;
-		}
-		const entry = listed.get(k.title);
-		if (entry?.state === "gone") continue;
-		const state = branchState(k, entry);
-		const from = line[i];
-		const to = line[i + 1];
-		const inner = innerSummary(k);
-		const c = {
-			id: "branch:" + k.title,
-			kind: "branch",
-			row: "branch",
-			title: windowName(k.title),
-			sub: inner || (entry?.report ? clip(String(entry.report)) : k.last_report?.summary ? clip(k.last_report.summary) : ""),
-			state: BRANCH_NODE_STATE[state],
-			icon: "session",
-			session: k.title,
-			chip: BRANCH_CHIP[state],
-			branch: {
-				from: from.id,
-				to: to.id,
-				state,
-				inner,
-				...liveOf(k)
-			}
-		};
-		out.set(from.id, [...out.get(from.id) || [], c]);
-	}
-	const join = joinOf({ flight: fl });
-	const ci = line.findIndex((n) => n.kind === "stop" && n.index === fl.cursor);
-	if (join && ci >= 0) {
-		const point = fl.step?.kind === "join" ? line[ci] : line[ci + 1];
-		if (point) {
-			point.join = join;
-			if (join.waiting === 0) letGo.add(point.id);
-		}
-	}
-	for (const n of line) if (n.state === "done" || n.state === "skipped") letGo.add(n.id);
-	return {
-		out,
-		below,
-		letGo
-	};
-}
-function hasSessionDiagram(rows, title) {
-	const row = rows.find((r) => r.title === title);
-	if (!row) return false;
-	const fl = row.flight;
-	return !!(fl && isShown(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
-}
-var STOP_TONE = {
-	current: "working",
-	perched: "you",
-	halted: "halted",
-	paused: "paused"
-};
-function birdPerch(d) {
-	const main = d.nodes.filter((n) => n.row === "main");
-	const lp = loopAtWork(d);
-	const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]) || (lp ? {
-		id: lp.from,
-		state: lp.via.state
-	} : void 0);
-	const me = main.find((n) => n.kind === "session");
-	const fixing = d.edges.find((e) => e.kind === "fix" && e.ret?.shown === "fixing" && main.some((n) => n.id === e.from && n.state === "current"));
-	if (fixing) return {
-		nodeId: fixing.to,
-		tone: "working"
-	};
-	if (stop && (stop.state === "halted" || stop.state === "paused")) {
-		if (me?.chip?.tone === "working") return {
-			nodeId: me.id,
-			tone: "working"
-		};
-		return {
-			nodeId: stop.id,
-			tone: STOP_TONE[stop.state]
-		};
-	}
-	const point = main.find((n) => n.join && n.join.waiting > 0);
-	if (point) {
-		const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
-		return {
-			nodeId: point.id,
-			tone: asking ? "you" : "working"
-		};
-	}
-	if (stop) return {
-		nodeId: stop.id,
-		tone: STOP_TONE[stop.state]
-	};
-	const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
-	if (rung) return {
-		nodeId: rung.id,
-		tone: rung.state === "halted" ? "halted" : "working"
-	};
-	if (me?.chip?.tone === "working") return {
-		nodeId: me.id,
-		tone: "working"
-	};
-	if (me?.chip?.tone === "attention") return {
-		nodeId: me.id,
-		tone: "you"
-	};
-	return null;
-}
-function birdPerches(d) {
-	const main = birdPerch(d);
-	const out = main ? [main] : [];
-	for (const n of d.nodes) if (n.branch?.live && n.session) out.push({
-		nodeId: n.id,
-		tone: n.branch.live,
-		child: n.session
-	});
-	return out;
-}
-function birdFormation(perches) {
-	if (!(perches[0] && !perches[0].child ? perches[0] : null)) return perches.slice();
-	let k = 0;
-	return perches.map((b) => b.child ? {
-		...b,
-		formation: formationSlot(k++)
-	} : b);
-}
-function formationSlot(k) {
-	const row = Math.floor(k / 2) + 1;
-	return {
-		dx: -row,
-		dy: (k % 2 === 0 ? -1 : 1) * row
-	};
-}
-function boxMetrics(compact = false, roomy = false) {
-	if (roomy) return compact ? {
-		box: {
-			w: 160,
-			h: 64
-		},
-		add: {
-			w: 52,
-			h: 52
-		},
-		branch: {
-			w: 150,
-			h: 54
-		},
-		flown: {
-			w: 104,
-			h: 44
-		},
-		gap: 40,
-		vgap: 26,
-		bgap: 10,
-		indent: 26,
-		anchor: 32,
-		chipH: 22,
-		subH: 20,
-		dotsH: 16
-	} : {
-		box: {
-			w: 236,
-			h: 100
-		},
-		add: {
-			w: 180,
-			h: 48
-		},
-		branch: {
-			w: 200,
-			h: 64
-		},
-		flown: {
-			w: 148,
-			h: 56
-		},
-		gap: 56,
-		vgap: 36,
-		bgap: 12,
-		indent: 30,
-		anchor: 50,
-		chipH: 22,
-		subH: 20,
-		dotsH: 16
-	};
-	return compact ? {
-		box: {
-			w: 140,
-			h: 62
-		},
-		add: {
-			w: 44,
-			h: 44
-		},
-		branch: {
-			w: 124,
-			h: 46
-		},
-		flown: {
-			w: 96,
-			h: 40
-		},
-		gap: 34,
-		vgap: 22,
-		bgap: 8,
-		indent: 22,
-		anchor: 31,
-		chipH: 18,
-		subH: 16,
-		dotsH: 14
-	} : {
-		box: {
-			w: 178,
-			h: 76
-		},
-		add: {
-			w: 148,
-			h: 40
-		},
-		branch: {
-			w: 156,
-			h: 52
-		},
-		flown: {
-			w: 120,
-			h: 44
-		},
-		gap: 46,
-		vgap: 30,
-		bgap: 10,
-		indent: 26,
-		anchor: 38,
-		chipH: 18,
-		subH: 16,
-		dotsH: 14
-	};
-}
-function sizedBoxFor(size, n, base, detail = "", roomy = false) {
-	if (n.kind === "add" || n.kind === "flown" || size === "normal") return base;
-	if (roomy) {
-		if (n.kind === "branch") return size === "compact" ? {
-			w: 140,
-			h: 48
-		} : {
-			w: 270,
-			h: base.h + 20
-		};
-		if (size === "compact") return {
-			w: 150,
-			h: 64
-		};
-		return {
-			w: 330,
-			h: base.h + 22 + (n.sub ? 18 : 0) + (detail ? 40 : 0)
-		};
-	}
-	if (n.kind === "branch") return size === "compact" ? {
-		w: 110,
-		h: 40
-	} : {
-		w: 210,
-		h: base.h + 16
-	};
-	if (size === "compact") return {
-		w: 110,
-		h: 62
-	};
-	return {
-		w: 260,
-		h: base.h + 18 + (n.sub ? 15 : 0) + (detail ? 32 : 0)
-	};
-}
-function layoutDiagram(d, opts = {}) {
-	const m = boxMetrics(!!opts.compact || !!opts.vertical, !!opts.roomy);
-	if (opts.vertical) m.add = {
-		w: m.box.w,
-		h: opts.roomy ? 44 : 36
-	};
-	if (opts.vertical) m.branch = {
-		w: m.box.w - m.indent,
-		h: m.branch.h
-	};
-	const size = (n) => {
-		if (n.kind === "flown") return m.flown;
-		const base = n.kind === "add" ? m.add : n.kind === "branch" ? {
-			w: m.branch.w,
-			h: m.branch.h + (n.sub ? m.subH : 0)
-		} : {
-			w: m.box.w,
-			h: m.box.h + (n.chip ? m.chipH : 0) + (n.dots ? m.dotsH : 0)
-		};
-		return opts.sizeOf ? opts.sizeOf(n, base) : base;
-	};
-	const above = d.nodes.filter((n) => n.row === "above");
-	const main = d.nodes.filter((n) => n.row === "main");
-	const below = d.nodes.filter((n) => n.row === "below");
-	const fans = /* @__PURE__ */ new Map();
-	for (const n of d.nodes) if ((n.row === "branch" || n.row === "below") && n.branch) fans.set(n.branch.from, [...fans.get(n.branch.from) || [], n]);
-	const at = /* @__PURE__ */ new Map();
-	const boxes = [];
-	const put = (node, x, y) => {
-		const s = size(node);
-		const p = {
-			node,
-			x,
-			y,
-			w: s.w,
-			h: s.h
-		};
-		at.set(node.id, p);
-		boxes.push(p);
-		return p;
-	};
-	const session = main.find((n) => n.kind === "session");
-	if (!opts.vertical) {
-		const top = above.length ? m.box.h + m.vgap : 0;
-		let x = 0;
-		let fanBottom = 0;
-		let colX = 0;
-		let colY = 0;
-		let colW = 0;
-		for (let k = 0; k < main.length; k++) {
-			const n = main[k];
-			const s = size(n);
-			const pid = n.parallel?.id;
-			if (pid) {
-				if (main[k - 1]?.parallel?.id !== pid) {
-					colX = x;
-					colY = top;
-					colW = 0;
-				}
-				put(n, colX, colY);
-				colY += s.h + m.vgap;
-				colW = Math.max(colW, s.w);
-				if (!(main[k + 1]?.parallel?.id !== pid)) continue;
-				x = colX + colW + m.gap;
-				fanBottom = Math.max(fanBottom, colY - m.vgap);
-			} else {
-				put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
-				x += s.w + m.gap;
-			}
-			const col = pid ? main.filter((g) => g.parallel?.id === pid).flatMap((g) => fans.get(g.id) || []) : fans.get(n.id);
-			if (!col?.length) continue;
-			const sizes = col.map(size);
-			const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
-			let y = top + Math.max(0, m.anchor - colH / 2);
-			col.forEach((c, i) => {
-				put(c, x, y);
-				y += sizes[i].h + m.bgap;
-			});
-			fanBottom = Math.max(fanBottom, y - m.bgap);
-			x += Math.max(...sizes.map((c) => c.w)) + m.gap;
-		}
-		const sp = session ? at.get(session.id) : void 0;
-		for (const n of above) put(n, sp ? sp.x : 0, 0);
-		const lineH = Math.max(m.box.h, ...main.map((n) => size(n).h));
-		let y = Math.max(top + lineH, fanBottom) + m.vgap;
-		for (const n of below) {
-			if (at.has(n.id)) continue;
-			put(n, (sp ? sp.x : 0) + m.indent, y);
-			y += size(n).h + 12;
-		}
-	} else {
-		let y = 0;
-		for (const n of above) {
-			put(n, 0, y);
-			y += size(n).h + m.vgap;
-		}
-		for (const n of main) {
-			const s = size(n);
-			put(n, n.parallel ? m.indent : n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
-			y += s.h + (n.parallel && n.parallel.index < n.parallel.size - 1 ? m.bgap : m.vgap);
-			const col = fans.get(n.id);
-			if (!col?.length) continue;
-			for (const c of col) {
-				put(c, m.indent, y);
-				y += size(c).h + m.bgap;
-			}
-			y += m.vgap - m.bgap;
-		}
-		const sp = session ? at.get(session.id) : void 0;
-		let cy = sp ? sp.y : 0;
-		for (const n of below) {
-			if (at.has(n.id)) continue;
-			put(n, m.box.w + m.indent, cy);
-			cy += size(n).h + 12;
-		}
-	}
-	const rank = {
-		above: 0,
-		main: 1,
-		branch: 1,
-		below: 2
-	};
-	boxes.sort((p, q) => rank[p.node.row] - rank[q.node.row]);
-	const anchorOf = (p) => p.node.kind === "add" || p.node.kind === "flown" ? p.h / 2 : p.node.kind === "branch" ? Math.min(p.h, m.box.h) / 2 : m.anchor;
-	const wires = [];
-	for (const e of d.edges) {
-		const a = at.get(e.from);
-		const b = at.get(e.to);
-		if (!a || !b) continue;
-		const kind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
-		let path = "";
-		if (kind === "loop" || kind === "fix") {
-			const arc = loopArc(a, b, anchorOf, !!opts.vertical, boxes);
-			wires.push({
-				from: e.from,
-				to: e.to,
-				kind,
-				d: arc.d,
-				apex: arc.apex,
-				...e.loop ? { loop: e.loop } : {},
-				...e.via ? { via: e.via } : {}
-			});
-			continue;
-		}
-		if (opts.vertical && kind === "fan") path = `M ${a.x + m.indent / 2} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
-		else if (opts.vertical && kind === "join") {
-			const rx = Math.max(a.x + a.w, b.x + b.w) + 8;
-			const y2 = b.y + anchorOf(b);
-			path = `M ${a.x + a.w} ${a.y + anchorOf(a)} H ${rx} V ${y2} H ${b.x + b.w + 2}`;
-		} else if (kind === "up") path = `M ${a.x + Math.min(a.w, b.w) / 2} ${a.y + a.h} V ${b.y - 2}`;
-		else if (kind === "branch") {
-			if (!opts.vertical) {
-				const x = a.x + m.indent / 2;
-				const y = b.y + Math.min(b.h, m.box.h) / 2;
-				path = `M ${x} ${a.y + a.h} V ${y} H ${b.x - 2}`;
-			} else {
-				const y1 = a.y + m.anchor;
-				const y2 = b.y + Math.min(b.h, m.box.h) / 2;
-				const mx = a.x + a.w + m.indent / 2;
-				path = `M ${a.x + a.w} ${y1} H ${mx} V ${y2} H ${b.x - 2}`;
-			}
-		} else if (!opts.vertical) {
-			const y1 = a.y + anchorOf(a);
-			const y2 = b.y + anchorOf(b);
-			const x1 = a.x + a.w;
-			const x2 = b.x - (kind === "fan" ? 0 : 2);
-			const mx = (x1 + x2) / 2;
-			path = y1 === y2 ? `M ${x1} ${y1} H ${x2}` : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
-		} else {
-			const x1 = a.x + a.w / 2;
-			const x2 = b.x + b.w / 2;
-			const y1 = a.y + a.h;
-			const y2 = b.y - 2;
-			const my = (y1 + y2) / 2;
-			path = x1 === x2 ? `M ${x1} ${y1} V ${y2}` : `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
-		}
-		wires.push(e.done ? {
-			from: e.from,
-			to: e.to,
-			kind: e.kind,
-			d: path,
-			done: true
-		} : {
-			from: e.from,
-			to: e.to,
-			kind: e.kind,
-			d: path
-		});
-	}
-	const arcs = wires.filter((w) => w.apex);
-	const width = Math.max(0, ...boxes.map((p) => p.x + p.w), ...arcs.map((w) => w.apex.x + LOOP_PILL_ROOM));
-	const height = Math.max(0, ...boxes.map((p) => p.y + p.h), ...arcs.map((w) => w.apex.y + LOOP_PILL_ROOM));
-	const rise = Math.max(0, ...arcs.map((w) => LOOP_PILL_ROOM - w.apex.y));
-	return {
-		boxes,
-		wires,
-		width,
-		height,
-		gap: m.gap,
-		rise: arcs.length ? rise : 0
-	};
-}
-var LOOP_PILL_ROOM = 14;
-var LOOP_FROM = .72;
-var LOOP_TO = .28;
-var LOOP_DROP = 22;
-function loopRise(span) {
-	return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * .16)));
-}
-function loopWirePath(a, b, boxes, vertical = false) {
-	return loopArc(a, b, (p) => p.h / 2, vertical, boxes).d;
-}
-function loopArc(a, b, anchorOf, vertical, boxes) {
-	if (!vertical) {
-		const x1 = a.x + a.w * LOOP_FROM;
-		const x2 = b.x + b.w * LOOP_TO;
-		const lo = Math.min(a.x, b.x);
-		const hi = Math.max(a.x + a.w, b.x + b.w);
-		const yb = Math.max(a.y + a.h, b.y + b.h, ...boxes.filter((p) => p.x < hi && p.x + p.w > lo).map((p) => p.y + p.h)) + LOOP_DROP;
-		const r = Math.max(0, Math.min(10, Math.abs(x1 - x2) / 2, LOOP_DROP / 2));
-		const y1 = a.y + a.h;
-		const y2 = b.y + b.h + 2;
-		const dir = x2 <= x1 ? -1 : 1;
-		return {
-			d: `M ${x1} ${y1} V ${yb - r} Q ${x1} ${yb} ${x1 + dir * r} ${yb} H ${x2 - dir * r} Q ${x2} ${yb} ${x2} ${yb - r} V ${y2}`,
-			apex: {
-				x: (x1 + x2) / 2,
-				y: yb
-			}
-		};
-	}
-	const x1 = a.x + a.w;
-	const x2 = b.x + b.w + 2;
-	const y1 = a.y + anchorOf(a);
-	const y2 = b.y + anchorOf(b);
-	const h = loopRise(y2 - y1);
-	const cx = Math.max(x1, x2) + h * 4 / 3;
-	return {
-		d: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`,
-		apex: {
-			x: .125 * x1 + .75 * cx + .125 * x2,
-			y: (y1 + y2) / 2
-		}
-	};
-}
-function dropIndex(otherCenters, at) {
-	return otherCenters.filter((c) => c < at).length;
-}
-function reorderDiagram(d, from, to) {
-	const main = d.nodes.filter((n) => n.row === "main");
-	const isPlace = (n) => n.kind === "stop" || n.kind === "group";
-	const stops = main.filter(isPlace);
-	if (from === to || !stops[from] || to < 0 || to >= stops.length) return d;
-	const moved = stops.slice();
-	const [it] = moved.splice(from, 1);
-	moved.splice(to, 0, it);
-	let k = 0;
-	const line = main.map((n) => isPlace(n) ? moved[k++] : n);
-	const lineIds = new Set(line.map((n) => n.id));
-	const next = new Map(line.slice(0, -1).map((n, i) => [n.id, line[i + 1].id]));
-	const joinDone = new Map(d.edges.filter((e) => e.kind === "join").map((e) => [e.from, !!e.done]));
-	const rejoin = (n) => n.branch && next.has(n.branch.from) ? {
-		...n,
-		branch: {
-			...n.branch,
-			to: next.get(n.branch.from)
-		}
-	} : n;
-	const branches = d.nodes.filter((n) => n.row === "branch").map(rejoin);
-	const rest = d.nodes.filter((n) => n.row !== "main" && n.row !== "branch").map(rejoin);
-	const hung = rest.filter((n) => !!n.branch);
-	const fanned = new Set([...branches, ...hung].map((n) => n.branch?.from));
-	const edges = d.edges.filter((e) => e.kind !== "join" && !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
-	for (let i = 1; i < line.length; i++) if (!fanned.has(line[i - 1].id)) edges.push({
-		from: line[i - 1].id,
-		to: line[i].id,
-		kind: line[i].kind === "add" ? "add" : "line"
-	});
-	for (const b of [...branches, ...hung]) if (b.branch) edges.push({
-		from: b.id,
-		to: b.branch.to,
-		kind: "join",
-		...joinDone.get(b.id) ? { done: true } : {}
-	});
-	return {
-		...d,
-		nodes: [
-			...rest,
-			...line,
-			...branches
-		],
-		edges
-	};
-}
-var BEHAVIORS_ID = "behaviors";
-function verifyStopOf(d) {
-	const main = d.nodes.filter((n) => n.row === "main" && n.kind === "stop" && n.step?.kind === "verify");
-	return main.length ? main[main.length - 1] : null;
-}
-function withBehaviors(d, mark) {
-	if (!mark) return d;
-	const verify = verifyStopOf(d);
-	if (verify) return {
-		...d,
-		nodes: d.nodes.map((n) => n.id === verify.id ? {
-			...n,
-			behaviors: {
-				...mark,
-				short: verifyStopFace(mark.short, n.state)
-			}
-		} : n)
-	};
-	const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "add" && n.kind !== "parent");
-	const session = main.find((n) => n.kind === "session");
-	const line = main.filter((n) => n.kind !== "session");
-	const last = line[line.length - 1] || session;
-	if (!last) return d;
-	const node = {
-		id: BEHAVIORS_ID,
-		kind: "behaviors",
-		row: "main",
-		title: "Behaviors",
-		sub: mark.short,
-		state: "pending",
-		icon: "behaviors",
-		behaviors: mark
-	};
-	const pid = last.parallel?.id;
-	const from = pid ? line.filter((n) => n.parallel?.id === pid) : [last];
-	const edges = [...d.edges, ...from.map((n) => ({
-		from: n.id,
-		to: BEHAVIORS_ID,
-		kind: from.length > 1 ? "join" : "line"
-	}))];
-	return {
-		...d,
-		nodes: [...d.nodes, node],
-		edges
-	};
-}
-//#endregion
-//#region src/lib/stopEditing.ts
-function insertGaps(boxes, insertFrom, vertical) {
-	const main = boxes.filter((b) => b.node.row === "main");
-	const fanned = new Set(boxes.filter((b) => b.node.kind === "branch").map((b) => b.node.branch?.from));
-	const hung = /* @__PURE__ */ new Map();
-	for (const c of boxes) if (c.node.kind === "child" && c.node.branch) hung.set(c.node.branch.from, Math.min(hung.get(c.node.branch.from) ?? Infinity, vertical ? c.y : c.x));
-	const gaps = [];
-	for (let j = 1; j < main.length; j++) {
-		const b = main[j];
-		const a = main[j - 1];
-		if (b.node.kind !== "stop" && b.node.kind !== "group" || b.node.index === void 0 || b.node.index < insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
-		const col = hung.get(a.node.id);
-		const end = col ?? (vertical ? b.y : b.x);
-		gaps.push(vertical ? {
-			at: b.node.index,
-			x: b.x + b.w / 2,
-			y: (a.y + a.h + end) / 2
-		} : {
-			at: b.node.index,
-			x: (a.x + a.w + end) / 2,
-			y: (col === void 0 ? b.y : a.y) + Math.min(b.h, a.h) / 2
-		});
-	}
-	return gaps;
-}
-function dropGapFor(boxes, point, insertFrom, vertical) {
-	const along = (p) => vertical ? p.y : p.x;
-	const gaps = insertGaps(boxes, insertFrom, vertical);
-	if (!gaps.length) return null;
-	const main = boxes.filter((b) => b.node.row === "main");
-	const add = main.find((b) => b.node.kind === "add");
-	const last = main.filter((b) => b.node.kind !== "add").pop();
-	const end = add ? along({
-		x: add.x + add.w / 2,
-		y: add.y + add.h / 2
-	}) : last ? along({
-		x: last.x + last.w,
-		y: last.y + last.h
-	}) : Infinity;
-	const at = along(point);
-	let best = null;
-	for (const g of gaps) if (!best || Math.abs(along(g) - at) < Math.abs(along(best) - at)) best = g;
-	return best && Math.abs(along(best) - at) < Math.abs(end - at) ? best.at : null;
-}
-function isStopDrag(types) {
-	if (!types) return false;
-	const list = Array.from(types);
-	return list.includes(STOP_MIME) || list.includes(FLYWAY_MIME);
-}
-function stopDropOf(dt) {
-	if (!dt) return null;
-	const kind = dt.getData(STOP_MIME);
-	if (kind) return { kind };
-	const planId = dt.getData(FLYWAY_MIME);
-	return planId ? { planId } : null;
-}
-function canShift(stops, i, dir, insertFrom) {
-	const to = i + dir;
-	return !!stops[i]?.editable && stops[i].kind !== "group" && to >= insertFrom && to >= 0 && to < stops.length && !!stops[to].editable;
-}
-function undoPayload(step, index, flight) {
-	return !!flight && index > flight.cursor && index < flight.steps.length ? {
-		step,
-		at: index
-	} : { step };
-}
-var flownState = (s) => s === "done" || s === "skipped" || s === "failed";
-function groupHaltStep(n) {
-	if (n.kind !== "group") return null;
-	return n.group?.nodes.find((s) => !flownState(s.state) && !!s.step) || null;
-}
-function canHalt(n, here = false) {
-	if (n.kind === "group") {
-		const s = groupHaltStep(n);
-		return !!s && (!!s.editable || FLIGHT_HERE.has(s.state));
-	}
-	return n.kind === "stop" && !!n.step && (!!n.editable || here) && !flownState(n.state);
-}
-var FLIGHT_HERE = /* @__PURE__ */ new Set([
-	"current",
-	"perched",
-	"paused",
-	"halted"
-]);
-function haltToggle(n) {
-	if (n.kind === "group") n = groupHaltStep(n) || n;
-	return n.step?.halt ? {
-		key: "halt",
-		label: "Carry on past here",
-		title: "Take the halt point off this stop — the route goes on through it"
-	} : {
-		key: "halt",
-		label: "Halt here",
-		title: "Make this stop a halt point — the route stops when it gets here, before doing it"
-	};
-}
-function flightHold(n) {
-	if (n.state === "paused") return {
-		key: "resume",
-		label: "Carry on",
-		title: "Go on from this stop"
-	};
-	if (n.state === "halted") return null;
-	return {
-		key: "pause",
-		label: "Halt now",
-		title: "Halt the route where it is — Carry on picks it up again"
-	};
-}
-function haltMark(n) {
-	if (n.kind === "group") {
-		const s = groupHaltStep(n);
-		return s?.step?.halt ? haltMark(s) : null;
-	}
-	if (n.kind !== "stop" || !n.step?.halt) return null;
-	return n.state === "paused" ? {
-		glyph: "⏸",
-		title: "Halt point — the route stopped here. Carry on to go on"
-	} : {
-		glyph: "⏸",
-		title: "Halt point — the route stops here before doing this stop"
-	};
-}
-var note = (label) => ({
-	key: "note",
-	label,
-	title: label,
-	note: true
-});
-function removeTool(n, here = false) {
-	if (n.kind === "group") {
-		const k = n.group?.total || 0;
-		return {
-			key: "remove",
-			label: "Remove",
-			title: "Remove this group and its " + k + (k === 1 ? " stop" : " stops") + " from the route",
-			danger: true
-		};
-	}
-	if (here) return {
-		key: "remove",
-		label: "Remove — the route halts here",
-		title: "Remove this stop — the route halts right before the stop that followed it",
-		danger: true
-	};
-	if (flownState(n.state)) return {
-		key: "remove",
-		label: "Remove from the route",
-		title: "Take this finished stop off the route",
-		danger: true
-	};
-	return {
-		key: "remove",
-		label: "Remove",
-		title: "Take this stop off the route (Delete)",
-		danger: true
-	};
-}
-function groupItems(n, ctx) {
-	const { can } = ctx;
-	const items = [];
-	const hold = ctx.here && ctx.live && FLIGHT_HERE.has(n.state) ? flightHold(n) : null;
-	if (hold) items.push(hold);
-	if (can.edit) items.push({
-		key: "edit",
-		label: n.editable ? "Edit" : "Details",
-		title: "Open this group and its stops (Enter)"
-	});
-	if (can.group) items.push(ctx.expanded ? {
-		key: "expand",
-		label: "Fold its stops",
-		title: "Draw it as one stop again"
-	} : {
-		key: "expand",
-		label: "Show its stops",
-		title: "Draw each of its stops on the route"
-	});
-	if (can.halt && canHalt(n)) items.push(haltToggle(n));
-	if (can.remove) items.push(removeTool(n));
-	if (!n.editable && n.state !== "done" && n.state !== "skipped") items.push(note("The route is in this group — only what is still ahead can change"));
-	return items;
-}
-function menuItemsFor(n, ctx) {
-	const items = boxItems(n, ctx);
-	if (!ctx.jump || n.kind !== "stop" && n.kind !== "group") return items;
-	const at = items.findIndex((i) => i.danger || i.note);
-	items.splice(at < 0 ? items.length : at, 0, JUMP_ITEM);
-	return items;
-}
-var JUMP_ITEM = {
-	key: "jump",
-	label: "Jump the bird here",
-	title: "Move the route to this stop — the halt points after it are armed again"
-};
-function boxItems(n, ctx) {
-	const { can } = ctx;
-	if (n.kind === "add") return can.open ? [{
-		key: "tackon",
-		label: "Tack on a stop",
-		title: "Pick a stop to tack onto the end of the route"
-	}] : [];
-	if (n.kind === "rung") return [note("Goes as far as — this stop moves as the session ships")];
-	if (n.kind === "group") return groupItems(n, ctx);
-	if (n.kind !== "stop") return can.open ? [{
-		key: "open",
-		label: "Open",
-		title: n.session ? "Go to " + n.session : "Open it"
-	}] : [];
-	if (n.editable) {
-		const items = [];
-		if (can.edit) items.push({
-			key: "edit",
-			label: "Edit",
-			title: "Open this stop in the inspector (Enter)"
-		});
-		if (can.move) {
-			items.push({
-				key: "earlier",
-				label: "Earlier",
-				title: "Move this stop one place earlier on the route (←)",
-				disabled: !ctx.earlier
-			});
-			items.push({
-				key: "later",
-				label: "Later",
-				title: "Move this stop one place later on the route (→)",
-				disabled: !ctx.later
-			});
-		}
-		if (can.duplicate) items.push({
-			key: "duplicate",
-			label: "Duplicate",
-			title: "The same stop again, right after this one"
-		});
-		if (can.halt && canHalt(n)) items.push(haltToggle(n));
-		if (can.remove) items.push(removeTool(n));
-		return items;
-	}
-	if (flownState(n.state)) {
-		const items = [];
-		if (can.edit) items.push({
-			key: "edit",
-			label: "Details",
-			title: "Open this stop (it has run: read-only)"
-		});
-		if (can.remove && ctx.live) items.push(removeTool(n));
-		items.push(note("This stop has run"));
-		return items;
-	}
-	if (!ctx.here && (n.state === "pending" || n.state === "edit")) return [note("Still to come — it can't change here")];
-	const items = [];
-	const hold = ctx.here && ctx.live ? flightHold(n) : null;
-	if (hold) items.push(hold);
-	if (ctx.live) {
-		const verify = n.step?.kind === "verify";
-		if (n.state === "perched") items.push(verify ? {
-			key: "behaviors",
-			label: "Behaviors",
-			title: "Answer its behaviors — the route goes on once each one has an answer"
-		} : {
-			key: "done",
-			label: "Done",
-			title: "Mark this stop done — the bird flies on"
-		});
-		if (n.state === "halted") items.push({
-			key: "retry",
-			label: "Retry",
-			title: "Run this stop again"
-		});
-		if (n.state === "halted") items.push({
-			key: "fix",
-			label: "Let the agent fix it",
-			title: verify ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — this stop runs again after its fix"
-		});
-		items.push({
-			key: "skip",
-			label: "Skip",
-			title: "Skip this stop — the bird flies on to the next"
-		});
-	}
-	if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
-	if (can.edit) items.push({
-		key: "edit",
-		label: "Details",
-		title: "Open this stop (the route is here: read-only)"
-	});
-	if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
-	items.push(note("The route is here — it can't change now"));
-	return items;
-}
-function birdAction(tone, onFlight) {
-	if (!onFlight) return null;
-	if (tone === "paused") return {
-		key: "resume",
-		label: "Carry on",
-		title: "Carry on — the route goes on from this stop"
-	};
-	if (tone === "halted") return {
-		key: "retry",
-		label: "Retry",
-		title: "Retry — run this stop again"
-	};
-	return {
-		key: "pause",
-		label: "Halt the route here",
-		title: "Halt the route here — Carry on picks it up again"
-	};
-}
-function jumpStepOf(n) {
-	if (n.kind === "group") return n.group?.nodes[0]?.step || n.group?.steps[0] || null;
-	return n.kind === "stop" ? n.step || null : null;
-}
-function jumpFlightOf(d) {
-	if (!d.flightId) return null;
-	for (const n of d.nodes) {
-		if (n.kind === "group" && n.group?.current?.step) return {
-			id: d.flightId,
-			at: n.group.current.step.id
-		};
-		if (n.kind === "stop" && n.step && FLIGHT_HERE.has(n.state)) return {
-			id: d.flightId,
-			at: n.step.id
-		};
-	}
-	return {
-		id: d.flightId,
-		at: null
-	};
-}
-function canJumpTo(flight, n) {
-	if (!flight?.id || n.row !== "main") return false;
-	const step = jumpStepOf(n);
-	return !!step && step.id !== flight.at;
-}
-function jumpTargets(d, flight = jumpFlightOf(d)) {
-	return flight ? d.nodes.filter((n) => canJumpTo(flight, n)) : [];
-}
-//#endregion
 //#region src/components/flights/FlywayCanvas.tsx
 var VERTICAL_BELOW_PX = 520;
 var firstOf = (v) => String(v ?? "").split("\n").map((l) => l.trim()).find(Boolean) || "";
@@ -92814,7 +93502,7 @@ function sizedBox(size, n, base, detail = "", roomy = false) {
 }
 function HaltTool({ n, onToggle }) {
 	const t = haltToggle(n);
-	const on = t.label !== "Halt here";
+	const on = !!t.pressed;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "fl-icon-btn fl-tool fl-tool-halt" + (on ? " fl-tool-on" : ""),
@@ -92939,7 +93627,7 @@ function FlywayCanvas(p) {
 	const [stopOver, setStopOver] = (0, import_react.useState)(null);
 	const stopLabel = stopOver?.label || p.dragStop || "";
 	const stopAt = stopOver ? stopOver.at : null;
-	const addLabel = p.dropLabel || (stopLabel && stopAt === null ? "Tack on " + stopLabel : null);
+	const addLabel = p.dropLabel || (stopLabel && stopAt === null ? "Add " + stopLabel : null);
 	const [menu, setMenu] = (0, import_react.useState)(null);
 	const [rewind, setRewind] = (0, import_react.useState)(null);
 	const opened = /* @__PURE__ */ new Map();
@@ -93051,7 +93739,7 @@ function FlywayCanvas(p) {
 			...drag,
 			delta,
 			moved,
-			to: Math.max(p.diagram.insertFrom, dropIndex(others, axis(self) + delta))
+			to: Math.max(p.diagram.insertFrom, dropIndex$1(others, axis(self) + delta))
 		});
 	};
 	const onBoxUp = (e) => {
@@ -93658,7 +94346,7 @@ function FlywayCanvas(p) {
 						"data-tour": n.kind === "session" ? "sky-session-box" : tools && i === stops.findIndex((s) => tooled(s)) ? "sky-stop" : void 0,
 						"aria-label": said,
 						"aria-current": p.selected === n.id ? "true" : void 0,
-						title: open ? void 0 : n.kind === "add" ? drop ? addLabel : n.title : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title,
+						title: open ? void 0 : n.kind === "add" ? drop ? addLabel : n.title : n.reason ? n.title + " — " + n.reason : n.sub || n.summary ? n.title + " — " + [n.sub, n.summary !== n.sub ? n.summary : ""].filter(Boolean).join(" · ") : n.title,
 						style: open ? { transform: `translate(${x}px, ${y}px)` } : {
 							transform: `translate(${x}px, ${y}px)`,
 							width: b.w,
@@ -93721,7 +94409,7 @@ function FlywayCanvas(p) {
 										"aria-label": hold.label + " — “" + n.title + "”",
 										title: hold.title,
 										onClick: () => void controlFlight(p.diagram.flightId, hold.key),
-										children: hold.key === "pause" ? "⏹" : "▶"
+										children: hold.key === "pause" ? "⏸" : "▶"
 									}),
 									(p.onEdit || p.onSelect) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 										type: "button",
@@ -93759,7 +94447,7 @@ function FlywayCanvas(p) {
 							tools && n.kind === "stop" && here && !n.editable && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "fl-tools",
 								role: "toolbar",
-								"aria-label": "Halt or carry on at “" + n.title + "”",
+								"aria-label": (hold && p.onToggleHalt ? "Pause or carry on at “" : haltable ? "Halt point on “" : "Remove “") + n.title + "”",
 								"data-no-drag": true,
 								onClick: (e) => e.stopPropagation(),
 								children: [
@@ -93769,7 +94457,7 @@ function FlywayCanvas(p) {
 										"aria-label": hold.label + " — “" + n.title + "”",
 										title: hold.title,
 										onClick: () => void controlFlight(p.diagram.flightId, hold.key),
-										children: hold.key === "pause" ? "⏹" : "▶"
+										children: hold.key === "pause" ? "⏸" : "▶"
 									}),
 									haltable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HaltTool, {
 										n,
@@ -94045,7 +94733,7 @@ function FlywayCanvas(p) {
 						"aria-hidden": "true",
 						children: ["+ ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-gap-label",
-							children: "Tack on here"
+							children: "Add here"
 						})]
 					}, "gap" + g.at);
 					return p.onInsert ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -94183,9 +94871,12 @@ function VerifyStopActions({ flight, compact = false }) {
 		children: "Skip"
 	});
 	const ss = flight.step_states?.[step.id];
-	const ask = String(ss?.detail?.ask || "");
-	if (ask === "needs_you" || ask === "memory") {
+	const verify = verifyOf(row);
+	const confirming = verify?.state === "needs_you";
+	const ask = confirming ? "" : String(ss?.detail?.ask || "");
+	if (ask === "blocked" || ask === "memory") {
 		const items = Array.isArray(ss?.detail?.items) ? (ss?.detail?.items).map(String) : [];
+		const why = verifyStopWhy(ss?.note, ask);
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "fl-you fl-you-verify fl-you-needs" + (compact ? " fl-you-compact" : ""),
 			onClick: stop,
@@ -94193,7 +94884,7 @@ function VerifyStopActions({ flight, compact = false }) {
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "fl-you-text",
-					children: ss?.note || "The check needs you"
+					children: why
 				}),
 				!compact && items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
 					className: "fl-you-needs-list",
@@ -94203,34 +94894,54 @@ function VerifyStopActions({ flight, compact = false }) {
 					className: "fl-you-acts",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "btn-primary fl-btn fl-done",
+						className: "btn-primary fl-btn fl-retry",
 						disabled: busy,
-						title: ask === "memory" ? "Try to start the check again" : "You've done it — the agent checks these behaviors again",
+						title: ask === "memory" ? "Try to start the check again" : "Its agent verifies its work again",
 						onClick: () => {
 							setBusy(true);
-							stepDone(flight.id, step.id).finally(() => setBusy(false));
+							stepRetry(flight.id, step.id).finally(() => setBusy(false));
 						},
-						children: ask === "memory" ? "Retry" : "I did it — check again"
+						children: "Retry"
 					}), skip]
 				})
 			]
 		});
 	}
+	const signOff = confirming && !(verify.human_steps || []).length && !(Number(verify.steps?.human) || 0);
+	if (confirming && !compact && !plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-you fl-you-verify fl-you-needs",
+		onClick: stop,
+		"data-no-drag": true,
+		children: [
+			!signOff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-you-text",
+				children: verifyLine(verify)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, {
+				verify,
+				session: row?.title
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fl-you-acts",
+				children: skip
+			})
+		]
+	});
 	if (compact || !plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you fl-you-verify" + (compact ? " fl-you-compact" : ""),
 		onClick: stop,
 		"data-no-drag": true,
 		children: [!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "fl-you-text",
-			children: "Writing the behaviors… they show here to answer once they are written."
+			children: VERIFY_WRITING
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "fl-you-acts",
 			children: [plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "btn-primary fl-btn fl-behaviors",
-				title: "Answer the behaviors that wait on you, on the session's frame in the Sky",
+				title: "Its verify steps and their results, on the session's frame in the Sky",
 				onClick: () => openBehaviors({ planId: plan.id }),
-				children: "Behaviors"
+				children: "Verify"
 			}), skip]
 		})]
 	});
@@ -94248,6 +94959,13 @@ function VerifyStopActions({ flight, compact = false }) {
 		})
 	});
 }
+var VERIFY_WALK_HERE = "Its agent is verifying its work — open the session to talk to it";
+var VERIFY_WRITING = "Its agent is writing its verify steps… they show here once they are written.";
+function verifyStopWhy(note, ask) {
+	const n = String(note ?? "").trim();
+	if (n) return n[0].toUpperCase() + n.slice(1);
+	return ask === "memory" ? "Couldn't start the check: memory is low" : "The check couldn't finish";
+}
 function verifyWalkSession(flight) {
 	if (!flight || flight.state === "waiting_you" || flight.state === "halted") return "";
 	const step = flight.steps[flight.cursor];
@@ -94261,12 +94979,12 @@ function VerifyWalkHint({ session, here, onOpen }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "test-btn fl-btn fl-walk-hint",
-		title: "The behaviors are " + session + "'s tasks now — open its agent to follow them and talk to it",
+		title: here ? "Opens its Agent tab, where it verifies its work and you can talk to it" : "Opens " + windowName(session) + ", where its agent verifies the work and you can talk to it",
 		onClick: (e) => {
 			e.stopPropagation();
 			onOpen();
 		},
-		children: here ? "Walking here — talk to it" : "Walking in " + session + " — talk to it there"
+		children: here ? VERIFY_WALK_HERE : windowName(session) + "'s agent is verifying the work — open it to talk to it"
 	});
 }
 function canFixStep(flight) {
@@ -94292,8 +95010,11 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 	const [ticked, setTicked] = (0, import_react.useState)({});
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const haltPoint = atHaltPoint(flight);
-	if (!step || flight.state !== "waiting_you" && flight.state !== "halted" && !haltPoint) return null;
-	if (step.kind === "verify" && flight.state === "waiting_you") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopActions, {
+	const paused = haltPoint || flight.state === "paused";
+	const failedReason = step ? String(flight.step_states?.[step.id]?.detail?.failed_reason ?? "").trim() : "";
+	const handed = flight.state === "waiting_you" && !!failedReason;
+	if (!step || flight.state !== "waiting_you" && flight.state !== "halted" && !paused) return null;
+	if (step.kind === "verify" && flight.state === "waiting_you" && !handed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopActions, {
 		flight,
 		compact
 	});
@@ -94307,15 +95028,15 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 	};
 	const key = (i) => flight.id + ":" + step.id + ":" + i;
 	const allTicked = items.every((_, i) => ticked[key(i)]);
-	const halted = flight.state === "halted" || haltPoint;
-	const fix = !haltPoint && canFixStep(flight);
-	const text = youText(flight);
+	const halted = flight.state === "halted" || paused || handed;
+	const fix = !paused && canFixStep(flight);
+	const text = handed ? /^failed\b/i.test(failedReason) ? failedReason : "Failed: " + failedReason : youText(flight);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you" + (compact ? " fl-you-compact" : "") + (inTile ? " fl-you-tile" : ""),
 		onClick: stop,
 		"data-no-drag": true,
 		children: [
-			!compact && !inTile && text && !halted && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			!compact && !inTile && text && (!halted || handed) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-you-text",
 				children: text
 			}),
@@ -94336,18 +95057,18 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-you-acts",
 				children: [
-					haltPoint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					paused ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary fl-btn fl-carry",
 						disabled: busy,
-						title: "Carry on past the halt point — “" + step.title + "” runs, and the route goes on",
+						title: haltPoint ? "Carry on past the halt point — “" + step.title + "” runs, and the route goes on" : "Carry on — the route goes on from “" + step.title + "”",
 						onClick: () => void run(() => controlFlight(flight.id, "resume")),
 						children: "Carry on"
 					}) : halted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "btn-primary fl-btn",
 						disabled: busy,
-						title: "Run this stop again",
+						title: handed ? "Run “" + step.title + "” again" : "Run this stop again",
 						onClick: () => void run(() => stepRetry(flight.id, step.id)),
 						children: "Retry"
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -94362,7 +95083,7 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 						type: "button",
 						className: "test-btn fl-btn fl-fix",
 						disabled: busy,
-						title: step.kind === "verify" ? "Hand the failure to the agent — the behaviors are checked again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix",
+						title: step.kind === "verify" ? "Hand the failure to the agent — Verify runs again after its fix" : "Hand the failure to the agent — “" + step.title + "” runs again after its fix",
 						onClick: () => void run(() => stepFix(flight.id, step.id)),
 						children: "Let the agent fix it"
 					}),
@@ -94371,7 +95092,7 @@ function YouStepActions({ flight, compact = false, inTile = false }) {
 						className: "test-btn fl-btn fl-skip",
 						disabled: busy,
 						title: "Skip “" + step.title + "” — the route goes on without it",
-						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && haltPoint && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume")),
+						onClick: () => void run(async () => await stepSkip(flight.id, step.id) && flight.state === "paused" && !nextIsHaltPoint(flight) && controlFlight(flight.id, "resume")),
 						children: "Skip"
 					})
 				]
@@ -94395,8 +95116,8 @@ function FlightMenu({ flight, onCancelAsk, openSession = true }) {
 			onSelect: () => void controlFlight(flight.id, "resume")
 		} : {
 			key: "pause",
-			label: "Halt now",
-			title: "Halt the route at its current stop — Carry on picks it up again",
+			label: "Pause",
+			title: "Pause the route at its current stop — Carry on picks it up again",
 			onSelect: () => void controlFlight(flight.id, "pause")
 		});
 		items.push({
@@ -94442,8 +95163,8 @@ function stopMenuItems(flight, n, onCancelAsk) {
 		onSelect: () => void controlFlight(flight.id, "resume")
 	} : {
 		key: "pause",
-		label: "Halt now",
-		title: "Halt the route at this stop — Carry on picks it up again",
+		label: "Pause",
+		title: "Pause the route at this stop — Carry on picks it up again",
 		onSelect: () => void controlFlight(flight.id, "pause")
 	});
 	items.push({
@@ -94484,8 +95205,8 @@ function useCancelAsk(flight) {
 }
 function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 	const cur = flight ? flight.steps[flight.cursor] : null;
-	const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you";
-	const expanded = (n) => !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted" || n.state === "paused" && atHaltPoint(flight)) && !(opts.verifyInPlace && verifyHere);
+	const verifyHere = !!flight && cur?.kind === "verify" && flight.state === "waiting_you" && !flight.step_states?.[cur.id]?.detail?.failed_reason;
+	const expanded = (n) => !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted" || n.state === "paused") && !(opts.verifyInPlace && verifyHere);
 	const renderInBox = (n) => {
 		if (!flight || n.kind !== "stop") return null;
 		const items = stopMenuItems(flight, n, onCancelAsk);
@@ -94509,7 +95230,7 @@ function liveBoxParts(flight, expand, onCancelAsk, opts = {}) {
 			h: base.h + 220
 		};
 		const items = n.state === "perched" ? youItems(cur).length : 0;
-		const text = n.state === "perched" && youText(flight) ? 24 : 0;
+		const text = n.state === "perched" && (youText(flight) || n.reason) ? 24 : 0;
 		return {
 			w: Math.max(base.w, 250),
 			h: base.h + text + items * 23 + 38
@@ -94605,8 +95326,8 @@ function FlightCard({ flight, kinds, expand = false }) {
 						}),
 						flight.state === "paused" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-now-paused",
-							title: flight.reason === "halt point" ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Halted by you — Carry on to go on",
-							children: flight.reason === "halt point" ? "Paused at a halt point" : "Paused"
+							title: flight.reason === HALT_POINT_REASON ? "The route reached a halt point and stopped before this stop — Carry on to go on" : "Paused by you — Carry on to go on",
+							children: flight.reason === HALT_POINT_REASON ? "Paused at a halt point" : "Paused"
 						}),
 						flight.state === "halted" && flight.reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-now-reason",
@@ -94648,6 +95369,7 @@ function PaneFlightStrip({ inst }) {
 	if (!row || !live) return null;
 	const line = full ? stripLabel(full, now) : stripLabel(row);
 	const waiting = row.state === "waiting_you" || row.state === "halted";
+	const parked = waiting || row.state === "paused";
 	const walking = verifyWalkSession(full);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-strip fl-state-" + row.state + (waiting || rowWaitsOnYou(row) ? " fl-needs" : ""),
@@ -94666,7 +95388,7 @@ function PaneFlightStrip({ inst }) {
 						children: line
 					})]
 				}),
-				full && waiting && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
+				full && parked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
 					flight: full,
 					compact: true
 				}),
@@ -95401,7 +96123,7 @@ function wireIntent(src, dst, ctx = {}) {
 //#endregion
 //#region src/components/flights/ReadyHead.tsx
 function startWord(f) {
-	return f.start_on === "run" ? "starts on ▶ Run" : "starts on next prompt";
+	return f.start_on === "run" ? "runs when you press Run" : "runs on your next prompt";
 }
 function startTitle(f) {
 	return f.start_on === "run" ? "Starts only when you press ▶ Run. Click to start it on this session's next prompt too." : "Starts on this session's next prompt (or ▶ Run). Click to start it only on ▶ Run.";
@@ -95700,6 +96422,7 @@ function tileSub(n) {
 	return n.sub;
 }
 var HALT_POINT_LINE = "Your halt point";
+var PAUSED_LINE = "Paused by you";
 function stopWhy(n) {
 	if (n.state === "halted") {
 		const r = String(n.reason || "").trim();
@@ -95710,18 +96433,23 @@ function stopWhy(n) {
 		}
 		return r;
 	}
-	if (n.state === "perched") return String(n.step?.config?.text ?? "").trim();
-	if (n.state === "paused" && n.step?.halt) return HALT_POINT_LINE;
+	if (n.state === "perched") {
+		const r = String(n.reason || "").trim();
+		if (r) return /^failed\b/i.test(r) ? r[0].toUpperCase() + r.slice(1) : "Failed: " + r;
+		return String(n.step?.config?.text ?? "").trim();
+	}
+	if (n.state === "paused") return n.step?.halt ? HALT_POINT_LINE : PAUSED_LINE;
 	return "";
 }
 var STOP_TILE_W = 156;
 function stopTileBoxes(d, flight) {
 	const out = {};
 	const haltPoint = !!flight?.steps && atHaltPoint(flight);
-	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you" && !haltPoint) return out;
+	if (!flight || flight.state !== "halted" && flight.state !== "waiting_you" && flight.state !== "paused" && !haltPoint) return out;
 	for (const n of d.nodes) {
 		if (n.kind !== "stop" || n.index !== flight.cursor) continue;
-		if (n.state === "halted" || n.state === "paused" && haltPoint) out[n.id] = {
+		const handed = n.state === "perched" && !!(n.step && flight.step_states?.[n.step.id]?.detail?.failed_reason);
+		if (n.state === "halted" || n.state === "paused" || handed) out[n.id] = {
 			w: STOP_TILE_W,
 			h: NODE_H + 40
 		};
@@ -95739,7 +96467,7 @@ function tileLabel(n, head = false) {
 	return n.title + (word ? " — " + word : "") + (n.by === "agent" ? " by the agent" : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
 }
 function behaviorsLabel(n, bh) {
-	return (n.kind === "behaviors" ? "Behaviors" : n.title + ", the behaviors") + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
+	return (n.kind === "behaviors" ? "Verify" : n.title) + " — " + bh.status + (bh.short !== bh.status ? ", " + bh.short : "");
 }
 function SkyChain(p) {
 	const [drag, setDrag] = (0, import_react.useState)(null);
@@ -95928,7 +96656,7 @@ function SkyChain(p) {
 			"data-diagram-node": dn.id,
 			"aria-label": said,
 			"aria-current": isSel(n) ? "true" : void 0,
-			title: isHead ? void 0 : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub ? dn.title + " — " + sub : dn.title,
+			title: isHead ? void 0 : bh ? dn.title + " — " + bh.status + (bh.short !== bh.status ? " · " + bh.short : "") + " — click to open them here" : sub_ ? dn.title + " — click its agent to open it here" : dn.reason ? dn.title + " — " + dn.reason : why ? dn.title + " — " + why : sub || dn.summary ? dn.title + " — " + [sub, dn.summary !== sub ? dn.summary : ""].filter(Boolean).join(" · ") : dn.title,
 			style: {
 				transform: `translate(${n.x}px, ${n.y}px)`,
 				width: n.w,
@@ -96369,8 +97097,22 @@ function behaviorsCardBox(plan) {
 		h: Math.max(BH_CARD_MIN_H, Math.min(BH_CARD_MAX_H, BH_CARD_CHROME_H + rows * BH_ROW_H))
 	};
 }
-function behaviorsMarkOf(plan) {
+var VERIFY_TONE = {
+	verifying: "busy",
+	needs_you: "you",
+	failed: "bad",
+	blocked: "bad",
+	passed: "ok"
+};
+function behaviorsMarkOf(plan, verify) {
 	if (!plan) return null;
+	const word = verify ? verifyWord(String(verify.state || "")) : "";
+	if (word && (!verify?.plan || verify.plan === plan.id)) return {
+		planId: plan.id,
+		short: word,
+		status: word,
+		tone: VERIFY_TONE[String(verify.state)] || "quiet"
+	};
 	const s = behaviorSummary(plan);
 	return {
 		planId: plan.id,
@@ -96389,7 +97131,8 @@ function requestNamesPlan(plans, req, plan, title) {
 function useBehaviorsTile(title, row, opts = {}) {
 	const plans = useTestPlans().data?.plans;
 	const plan = (0, import_react.useMemo)(() => row ? planForSession(plans || [], row) : null, [plans, row]);
-	const mark = (0, import_react.useMemo)(() => behaviorsMarkOf(plan), [plan]);
+	const verify = row ? verifyOf(row) : null;
+	const mark = (0, import_react.useMemo)(() => behaviorsMarkOf(plan, verify), [plan, verify]);
 	const [mode, setMode] = (0, import_react.useState)(null);
 	const [menuAt, setMenuAt] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
@@ -97066,8 +97809,9 @@ function sourcePlanId(steps, plans) {
 	if (!steps.every((s) => s.group?.plan_id === id)) return "";
 	return plans.some((p) => p.id === id) ? id : "";
 }
-function planToSave(name, steps, plans) {
-	const id = sourcePlanId(steps, plans);
+function planToSave(name, steps, plans, opts = {}) {
+	const into = opts.into && plans.some((p) => p.id === opts.into) ? opts.into : "";
+	const id = opts.fresh ? "" : into || sourcePlanId(steps, plans);
 	const base = id ? plans.find((p) => p.id === id) : null;
 	const fresh = planFromSteps(base ? base.name : name || "New route", steps, base?.trigger);
 	if (!base) return {
@@ -97220,6 +97964,82 @@ function lastRunWords(last, now) {
 		title: label + (last.at ? " · " + relTime(last.at, now === void 0 ? {} : { now }) : "") + (last.reason ? " — " + last.reason : "")
 	};
 }
+function runChip(f) {
+	const step = f.steps[f.cursor];
+	if (atHaltPoint(f)) return {
+		label: "At your halt point",
+		tone: "attention",
+		title: "Paused at your halt point before “" + (step?.title || "the next stop") + "” — Carry on to go on"
+	};
+	if (f.state === "halted") {
+		const why = haltedWhy(step?.title, f.reason);
+		return {
+			label: "Halted",
+			tone: "broken",
+			title: "Halted" + (step ? " at “" + step.title + "”" : "") + (why ? " — " + why : "") + ". Retry or Skip it on the stop."
+		};
+	}
+	if (f.state === "waiting_you") return {
+		label: "Needs you",
+		tone: "attention",
+		title: (perchWhy(f) || "Waiting on you") + (step ? " — at “" + step.title + "”" : "")
+	};
+	if (f.state === "paused") return {
+		label: "Paused",
+		tone: "muted",
+		title: "A person paused it: Carry on (in ⋯, or on its stop) to go on"
+	};
+	if (f.state === "running") return {
+		label: "Running",
+		tone: "working",
+		title: "Running" + (step ? " “" + step.title + "”" : "")
+	};
+	return {
+		label: f.state === "ready" ? "Ready" : f.state === "done" ? "Done" : f.state === "cancelled" ? "Stopped" : "Not started",
+		tone: "muted",
+		title: ""
+	};
+}
+function freeRunNeedsYou(f) {
+	if (!isFreeRun(f)) return false;
+	return f.state === "halted" || f.state === "waiting_you" || atHaltPoint(f);
+}
+function groundedShown(flights, mode, query, nameOf) {
+	if (mode === "one") return [];
+	const q = query.trim().toLowerCase();
+	const all = groundedFlights(flights);
+	return (mode === "perched" ? all.filter(freeRunNeedsYou) : all).filter((f) => !q || nameOf(f).toLowerCase().includes(q));
+}
+function perchWhy(f) {
+	const step = f.steps[f.cursor];
+	if (atHaltPoint(f)) return "Paused at your halt point — Carry on when you're ready";
+	const rec = step ? f.step_states?.[step.id] : void 0;
+	const failed = String((rec?.detail)?.failed_reason ?? "").trim();
+	if (f.state === "halted") return haltedWhy(step?.title, f.reason || failed);
+	if (f.state !== "waiting_you" && f.state !== "paused") return "";
+	const words = [
+		String(rec?.note || "").trim(),
+		failed,
+		String(f.reason || "").trim()
+	].find((w) => w && !/^needs you\.?$/i.test(w)) || "";
+	return words ? haltedWhy(step?.title, words) : "";
+}
+var ROUTE_EDITS_KEY = "mf_sky_route_edits";
+function readRouteEdits(raw) {
+	if (!raw) return {};
+	try {
+		const v = JSON.parse(raw);
+		if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+		return Object.fromEntries(Object.entries(v).filter((e) => typeof e[1] === "string" && !!e[1]));
+	} catch {
+		return {};
+	}
+}
+function editedPlanOf(flightId, edits, plans) {
+	const id = edits[flightId];
+	return id && plans.find((p) => p.id === id) || null;
+}
+var savedWords$1 = (name, updated) => (updated ? "Updated “" : "Saved “") + name + "” — routes already running keep their own copy";
 //#endregion
 //#region src/components/flights/useSkyWiring.ts
 var HEAD = "head";
@@ -98512,17 +99332,20 @@ var VERIFY_OWN_FIELDS = [
 	"wait_live"
 ];
 var isVerifyEditor = (kind, def) => kind === "verify" && !!def?.fields?.some((f) => f.name === "where");
-var OTHER = "\0other";
-function verifySteps(v) {
-	const on = v.where === WHERE_BRANCH ? "this branch's code" : v.where;
+function verifySteps(v, envs) {
+	const when = verifyWhenWords({
+		where: v.where,
+		ready: v.ready || "now",
+		ready_minutes: v.ready_minutes || 0
+	}, envs);
 	return [
-		"behaviors are written from the branch's changes",
-		v.who === "you" ? "you check every one on " + on : v.who === "agent" ? "the agent walks every one on " + on + ", yours too" : "the agent checks its ones on " + on,
-		v.who === "agent" ? "it asks you only for what it can't do — the route goes on" : v.who === "you" ? "they park the route here until you answer" : "yours park the route here (a perch)"
+		"Its agent comes up with its own steps from what it built, runs them, and shows evidence for each.",
+		v.where === WHERE_BRANCH ? "It runs on this branch's code — a fresh checkout, nothing deployed — " + when + "." : "It runs against " + v.where + " — the deployed environment of that name in this repo's Verify settings — " + when + ".",
+		v.who === "agent" ? "The route goes on by itself when every step passes; it waits on you only if something ends blocked or failed." : v.who === "you" ? "The route always waits for you to confirm, even when every step passes." : "The route waits on you for the steps only a person can do; when every step passes it goes on."
 	];
 }
-function VerifyExplainer({ v }) {
-	const lines = verifySteps(v);
+function VerifyExplainer({ v, envs }) {
+	const lines = verifySteps(v, envs);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 		className: "vf-explain fl-fld-wide",
 		"aria-label": "What this stop does",
@@ -98541,12 +99364,16 @@ function VerifyStopFields({ config, def, readOnly, onChange, renderField }) {
 	const label = (name, d) => fieldOf(name)?.label || d;
 	const extra = (def?.fields || []).filter((f) => !VERIFY_OWN_FIELDS.includes(f.name));
 	const minutes = showsReadyMinutes(v.ready);
+	const envList = envs.isError ? null : envs.data || null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyExplainer, { v }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyExplainer, {
+			v,
+			envs: envList
+		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WherePicker, {
 			label: label("where", "Where"),
 			value: v.where,
-			envs: envs.isError ? null : envs.data || null,
+			envs: envList,
 			failed: envs.isError,
 			readOnly,
 			onChange: (where) => set({ where })
@@ -98566,12 +99393,12 @@ function VerifyStopFields({ config, def, readOnly, onChange, renderField }) {
 		}),
 		minutes && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 			label: label("ready_minutes", "Minutes"),
-			hint: v.where === WHERE_BRANCH ? "0 = right after it" : READY_MINUTES_HINT,
+			hint: (v.where === WHERE_BRANCH ? "0 = right after it" : READY_MINUTES_HINT) + " · 0 to " + READY_MINUTES_MAX + " min (24 h)",
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, {
 				label: label("ready_minutes", "Minutes"),
 				unit: "min",
 				value: v.ready_minutes,
-				onChange: (x) => set({ ready_minutes: x === "" ? 0 : Math.min(1440, x) })
+				onChange: (x) => set({ ready_minutes: x === "" ? 0 : Math.min(READY_MINUTES_MAX, x) })
 			})
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
@@ -98588,7 +99415,7 @@ function VerifyStopFields({ config, def, readOnly, onChange, renderField }) {
 					className: "vf-who-opt" + (v.who === c.value ? " on" : ""),
 					"data-value": c.value,
 					onClick: () => set({ who: c.value }),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: optionLabel$1(fieldOf("who"), c.value, c.label) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: c.label }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "muted",
 						children: c.explain
 					})]
@@ -98607,24 +99434,26 @@ function VerifyStopFields({ config, def, readOnly, onChange, renderField }) {
 				onChange: (t) => set({ notes: t.slice(0, VERIFY_NOTES_MAX) })
 			})
 		}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "fl-fld",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
 				on: v.post_to_pr,
 				label: label("post_to_pr", "Post the results to the PR"),
 				title: "When the stop finishes, its results go on the session's PR as a comment",
 				onChange: (x) => set({ post_to_pr: x })
-			})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-fld-hint",
+				children: "Off: the results stay in MindFlock. On: when the stop finishes they also go on the session's PR as a comment (needs a PR)."
+			})]
 		}),
 		extra.map((f) => renderField(f))
 	] });
 }
 function WherePicker({ label, value, envs, failed, readOnly, onChange }) {
-	const [typing, setTyping] = (0, import_react.useState)(false);
 	if (failed) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
 		wide: true,
-		hint: "“branch” = this branch's own code, or an environment's name",
+		hint: WHERE_TYPED_HINT,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
 			label,
 			value,
@@ -98633,87 +99462,80 @@ function WherePicker({ label, value, envs, failed, readOnly, onChange }) {
 		})
 	});
 	const opts = whereOptions(envs, value);
-	const shown = typing ? OTHER : value;
-	const hint = value === WHERE_BRANCH ? "A fresh checkout of this branch — nothing deployed." : envTitle(value, envs) || (envs ? "No watched repo has this environment yet — add it on the repo's Verify card (Intake)." : "");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
+	const unknown = !!envs && opts.some((o) => o.custom && o.value === value);
+	const hint = whereHint(value, envs, unknown);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
 		wide: true,
 		hint: hint ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "vf-where-hint",
+			className: "vf-where-hint" + (unknown ? " vf-where-unknown" : ""),
 			children: hint
 		}) : void 0,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
 			label,
-			value: shown,
-			options: [...opts.map((o) => ({
+			value,
+			options: opts.map((o) => ({
 				value: o.value,
-				label: o.label,
+				label: o.custom ? o.label + " (unknown)" : o.label,
 				title: o.title
-			})), {
-				value: OTHER,
-				label: "Other…",
-				title: "Type an environment's name"
-			}],
-			onChange: (x) => {
-				if (readOnly) return;
-				if (x === OTHER) return setTyping(true);
-				setTyping(false);
-				onChange(x);
-			}
-		}), typing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-			label: label + " — another environment",
-			value: value === WHERE_BRANCH ? "" : value,
-			placeholder: "an environment's name",
-			onChange: (x) => !readOnly && onChange(x.trim() || WHERE_BRANCH)
-		})]
+			})),
+			onChange: (x) => !readOnly && onChange(x)
+		})
 	});
 }
-function VerifyStopBehaviors({ planId }) {
-	const q = useQuery({
-		queryKey: ["test-plans"],
-		queryFn: () => api("/api/test-plans"),
-		enabled: false
-	}, queryClient);
-	const plan = planId ? (q.data?.plans || []).find((p) => p.id === planId) : void 0;
-	if (!plan || !(plan.steps || []).length) return null;
-	const steps = plan.steps;
-	const yours = steps.filter((s) => whoOf(plan, s).you).length;
+var WHERE_TYPED_HINT = "“branch” = this branch's own code; any other name must match an environment in this repo's Verify settings";
+function whereHint(value, envs, unknown) {
+	if (value === WHERE_BRANCH) return "A fresh checkout of this branch — nothing deployed. Pick an environment to check a deployed copy instead.";
+	if (unknown) return "“" + value + "” is not an environment of any watched repo — pick one above, or add it on the repo's Verify card (Intake). The stop fails while it is unknown.";
+	const t = envTitle(value, envs);
+	return t ? "The deployed copy: " + t : "";
+}
+function stopVerifyOf(v, stopPlan, here) {
+	if (!v || typeof v.state !== "string") return null;
+	if (stopPlan) return v.plan === stopPlan ? v : null;
+	return here ? v : null;
+}
+function VerifyStopLive({ verify, session }) {
+	if (!verify) return null;
+	const word = verifyWord(verify.state);
+	if (!word) return null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "vf-behaviors",
-		"aria-label": "This stop's behaviors",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "vf-live",
+		"aria-label": "This stop's Verify",
+		"data-verify": verify.state,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			className: "fl-fld-label",
+			children: "Verify"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "vf-live-row",
 			children: [
-				"Behaviors — ",
-				steps.length,
-				" · ",
-				yours ? yours + " yours" : "none yours"
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", {
+					className: "vf-live-word is-" + verify.state,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							"aria-hidden": "true",
+							children: verifyGlyph(verify.state)
+						}),
+						" ",
+						word
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "muted",
+					children: verifyProgress(verify)
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					title: "The steps and their evidence",
+					onClick: () => openBehaviors({
+						planId: verify.plan,
+						title: session
+					}),
+					children: "Steps"
+				})
 			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: steps.map((s) => {
-			const who = whoOf(plan, s);
-			const chip = rowChip(plan, s.id);
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-				className: "vf-behavior" + (who.you ? " vf-yours" : ""),
-				"data-check": chip.state,
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "vf-behavior-mark",
-						title: chip.label,
-						"aria-label": chip.label,
-						children: chip.glyph
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "vf-behavior-text",
-						children: s.text
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "vf-behavior-who",
-						title: who.title,
-						children: who.label
-					})
-				]
-			}, s.id);
-		}) })]
+		})]
 	});
 }
 //#endregion
@@ -98932,7 +99754,23 @@ function StopPalette({ kinds, onPick, onClose, title = "Add a stop", saved = [],
 		]
 	});
 }
-function choiceLabel(field, value, label) {
+var CHOICE_WORDS = {
+	"join.of": {
+		all: "All workers",
+		spawned: "Its Split's workers"
+	},
+	"join.on_failed": {
+		halt: "Fail this stop",
+		continue: "Go on"
+	},
+	"budget.scope": {
+		flight: "Whole route",
+		here: "Here only"
+	}
+};
+function choiceLabel(field, value, label, kind = "") {
+	const words = CHOICE_WORDS[kind + "." + field]?.[value];
+	if (words) return words;
 	if (field === "lane") {
 		const lane = normalizeLane(value);
 		return lane ? LANE_LABEL[lane] : label;
@@ -98979,15 +99817,19 @@ function boardChoices(d) {
 	if (d === "chains") return chainChoices(queryClient.getQueryData(["flights"]), queryClient.getQueryData(["flight-plans"]));
 	return sessionChoices(queryClient.getQueryData(["instances"]), windowName);
 }
-function StopField({ f, value, onChange, readOnly, choices }) {
+function StopField({ f, value, onChange, readOnly, choices, kind = "", hint: hintIn, dim }) {
 	const v = value === void 0 ? f.default : value;
 	const label = cleanLabel(f);
+	const hint = hintIn ?? (kind ? fieldHint(kind, f.name) : "") ?? "";
+	const range = kind ? FIELD_RANGE[kind + "." + f.name] : void 0;
+	const num = (x) => kind ? clampField(kind, f.name, x) : x;
 	if (f.type === "select" && f.dynamic === "stops_before") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopsBeforeField, {
 		label,
 		value: String(v ?? ""),
 		choices: choices || stopsBefore([], { id: "" }),
 		readOnly,
-		onChange
+		onChange,
+		hint: hint || void 0
 	});
 	const board = f.type === "select" ? boardDynamic(f) : "";
 	if (board) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BoardChoiceField, {
@@ -98998,22 +99840,26 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 		readOnly,
 		onChange
 	});
-	if (f.type === "bool") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+	if (f.type === "bool") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-fld",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
 			on: !!v,
 			onChange: (x) => !readOnly && onChange(x),
 			label: f.label
-		})
+		}), hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-fld-hint",
+			children: hint
+		})]
 	});
 	if (f.type === "select") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
+		hint: hint || void 0,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
 			label,
 			value: String(v ?? ""),
 			options: fieldOptions(f).map((o) => ({
 				v: o.value,
-				label: choiceLabel(f.name, o.value, o.label),
+				label: choiceLabel(f.name, o.value, o.label, kind),
 				disabled: readOnly
 			})),
 			onChange: (x) => onChange(x)
@@ -99021,19 +99867,27 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 	});
 	if (f.type === "duration") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DurationField, {
-			label,
-			value: v,
-			onChange: (x) => !readOnly && onChange(x)
+		hint: hint || void 0,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-dim-wrap" + (dim ? " fl-dim" : ""),
+			style: dim ? { opacity: .45 } : void 0,
+			"aria-disabled": dim || void 0,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DurationField, {
+				label,
+				value: v,
+				onChange: (x) => !readOnly && onChange(num(x))
+			})
 		})
 	});
 	if (f.type === "int") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
+		hint: hint || void 0,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NumberField, {
 			label,
 			unit: unitOf(f),
 			value: v,
-			onChange: (x) => !readOnly && onChange(x)
+			min: range ? range[0] : 0,
+			onChange: (x) => !readOnly && onChange(num(x))
 		})
 	});
 	if (f.type === "textarea") {
@@ -99042,7 +99896,7 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 			label,
 			wide: true,
-			hint: items ? "One item per line — each becomes a tick box." : void 0,
+			hint: hint || (items ? "One item per line — each becomes a tick box." : void 0),
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptBox, {
 				label,
 				value: text,
@@ -99055,6 +99909,7 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
+		hint: hint || void 0,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
 			label,
 			value: String(v ?? ""),
@@ -99063,7 +99918,7 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 		})
 	});
 }
-function StopsBeforeField({ label, value, choices, onChange, readOnly }) {
+function StopsBeforeField({ label, value, choices, onChange, readOnly, hint = "The route goes back to this stop for each new run." }) {
 	const runs = [];
 	for (const c of choices) {
 		const g = c.group || "";
@@ -99085,7 +99940,7 @@ function StopsBeforeField({ label, value, choices, onChange, readOnly }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 		label,
 		wide: true,
-		hint: "The route goes back to this stop for each new run.",
+		hint,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "fl-stops-before",
 			"data-dynamic": "stops_before",
@@ -99155,32 +100010,71 @@ function BoardChoiceField({ label, kind, value, choices, onChange, readOnly }) {
 		})
 	});
 }
-function StopForm({ step, def, onChange, readOnly, lineSteps }) {
+function fieldState(step, f) {
+	const c = step.config || {};
+	if (step.kind === "agent" && (f.name === "program" || f.name === "model")) return c.fresh ? {} : { hidden: true };
+	if (step.kind === "wait" && f.name === "seconds" && String(c.until ?? "").trim()) return {
+		dim: true,
+		hint: "Not used: a time is set below, and a time wins over How long. Clear the time to wait this long instead."
+	};
+	return {};
+}
+function formFieldNames(step, def) {
+	const names = /* @__PURE__ */ new Set([
+		"title",
+		"when",
+		"on_fail"
+	]);
+	const verify = isVerifyEditor(step.kind, def);
+	for (const f of def?.fields || []) if (!fieldState(step, f).hidden && !(verify && VERIFY_OWN_FIELDS.includes(f.name))) names.add(f.name);
+	return names;
+}
+function StopForm({ step, def, onChange, readOnly, lineSteps, errors }) {
+	const errHint = (name) => errors?.[name] ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "fl-fld-error",
+		role: "alert",
+		children: errors[name]
+	}) : void 0;
 	const fallback = defaultOnFail(def);
+	const onFail = step.on_fail || fallback;
 	const setField = (name, v) => onChange({ config: {
 		...step.config,
 		[name]: v
 	} });
-	const field = (f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopField, {
-		f,
-		value: step.config?.[f.name],
-		readOnly,
-		choices: f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : void 0,
-		onChange: (v) => setField(f.name, v)
-	}, f.name);
+	const verify = isVerifyEditor(step.kind, def);
+	const field = (f) => {
+		const extra = fieldState(step, f);
+		return extra.hidden ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopField, {
+			f,
+			kind: step.kind,
+			value: step.config?.[f.name],
+			readOnly,
+			hint: errHint(f.name) ?? extra.hint,
+			dim: extra.dim,
+			choices: f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : void 0,
+			onChange: (v) => setField(f.name, v)
+		}, f.name);
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-form",
 		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-form-note fl-stop-sentence fl-fld-wide" + (verify ? " vf-sentence" : " muted"),
+				role: "status",
+				"aria-label": "What the route does here",
+				children: verify ? stopSentence(step, fallback, verifySentence(step.config, onFail)) : stopSentence(step, fallback)
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 				label: "Title",
 				wide: false,
+				hint: errHint("title"),
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
 					label: "Stop title",
 					value: step.title,
 					onChange: (t) => !readOnly && onChange({ title: t })
 				})
 			}),
-			isVerifyEditor(step.kind, def) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopFields, {
+			verify ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopFields, {
 				config: step.config,
 				def,
 				readOnly,
@@ -99189,28 +100083,33 @@ function StopForm({ step, def, onChange, readOnly, lineSteps }) {
 			}) : (def?.fields || []).map((f) => step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhenField, {
 				label: cleanLabel(f),
 				placeholder: f.placeholder,
-				hint: "Empty: only the count stops it. ⓘ lists the conditions.",
+				hint: fieldHint("loop", "until") || "Empty: only the count stops it. ⓘ lists the conditions.",
 				value: String(step.config?.[f.name] ?? ""),
 				readOnly,
+				error: errors?.[f.name],
 				onChange: (w) => setField(f.name, w)
 			}, f.name) : field(f)),
-			step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "fl-form-note muted",
-				role: "note",
-				children: "The CLI and model apply only with “Start a new session for this stop”."
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhenField, {
 				value: step.when || "",
 				readOnly,
-				onChange: (w) => onChange({ when: w || void 0 })
+				error: errors?.when,
+				onChange: (w) => onChange({ when: w || void 0 }),
+				hint: "Empty: always runs. When false, the stop is skipped and the route goes on. ⓘ lists the conditions."
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
 				label: "If it fails",
 				wide: true,
-				hint: def?.default_on_fail ? "Default for " + kindName(def) + ": " + ON_FAIL_LABEL[fallback] : void 0,
+				hint: errHint("on_fail") ?? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "fl-onfail-hint",
+					"data-on-fail": onFail,
+					children: [onFailHint(onFail, step.kind), (onFail !== fallback || !!def?.default_on_fail) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: " Default for " + kindName(def, step.kind) + ": " + ON_FAIL_LABEL[fallback] + "."
+					})]
+				}),
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
 					label: "If it fails",
-					value: step.on_fail || fallback,
+					value: onFail,
 					options: Object.keys(ON_FAIL_LABEL).map((k) => ({
 						v: k,
 						label: ON_FAIL_LABEL[k],
@@ -99223,7 +100122,7 @@ function StopForm({ step, def, onChange, readOnly, lineSteps }) {
 		]
 	});
 }
-function WhenField({ value, onChange, readOnly, label = "Only when", placeholder = "e.g. diff touches frontend/** and weekday", hint = "Empty: always. ⓘ lists the conditions." }) {
+function WhenField({ value, onChange, readOnly, label = "Only when", placeholder = "e.g. diff touches frontend/** and weekday", hint = "Empty: always. ⓘ lists the conditions.", error }) {
 	const [help, setHelp] = (0, import_react.useState)(false);
 	const [answer, setAnswer] = (0, import_react.useState)(null);
 	const change = (0, import_react.useRef)(onChange);
@@ -99238,7 +100137,7 @@ function WhenField({ value, onChange, readOnly, label = "Only when", placeholder
 		onCanonical: (c) => change.current(c)
 	});
 	(0, import_react.useEffect)(() => () => checker.current?.cancel(), []);
-	const err = whenError(value, answer?.text === value ? answer.res : null);
+	const err = whenError(value, answer?.text === value ? answer.res : null) || error || "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
 		label,
 		wide: true,
@@ -99769,6 +100668,7 @@ var STOP_STATE_WORD = {
 	pending: "Still to come",
 	edit: "Not run yet"
 };
+var HALT_LABEL = "Halt point — the route pauses before this stop until you press Carry on";
 var copyStep = (s) => ({
 	...s,
 	config: { ...s.config }
@@ -99785,11 +100685,12 @@ var LOOP_PROMPT_HINT = "Empty = send the same prompt again";
 function StopDialog(p) {
 	return p.node.kind === "group" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GroupDialog, { ...p }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepDialog, { ...p });
 }
-function Shell({ p, title, children }) {
+function Shell({ p, title, children, onClose, onEscape }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "stop-dialog",
 		className: "stop-dialog-modal",
-		onClose: p.onClose,
+		onClose: onClose || p.onClose,
+		onEscape,
 		portal: p.portal !== false,
 		role: "dialog",
 		"aria-modal": "true",
@@ -99801,17 +100702,104 @@ function Shell({ p, title, children }) {
 		})
 	});
 }
+var REMEDY_ORDER = [
+	"retry",
+	"resume",
+	"done",
+	"fix",
+	"skip"
+];
+function remedies(p) {
+	const has = {
+		done: !!p.onDone,
+		retry: !!p.onRetry,
+		resume: !!p.onResume,
+		fix: !!p.onFix,
+		skip: !!p.onSkip
+	};
+	const words = {
+		retry: ["Retry", "Run this stop again"],
+		resume: ["Carry on", "The route goes on from here"],
+		done: [p.doneLabel || "Done", p.doneTitle || "You've done it — the route goes on"],
+		fix: ["Let the agent fix it", "The agent gets the failure, then the stop runs again"],
+		skip: ["Skip", "Skip this stop — the route goes on without it"]
+	};
+	const lead = p.primary && has[p.primary] ? p.primary : null;
+	return [...lead ? [lead] : [], ...REMEDY_ORDER.filter((k) => k !== lead)].filter((k) => has[k]).map((k) => ({
+		key: k,
+		label: words[k][0],
+		title: words[k][1],
+		primary: k === lead
+	}));
+}
+function fieldNameOf(path) {
+	const last = (path || "").split(".").pop() || "";
+	return /^(steps?)(\[\d+\])?$/.test(last) ? "" : last.replace(/\[\d+\]$/, "");
+}
+var FORM_LABELS = {
+	title: "Title",
+	on_fail: "If it fails",
+	when: "Only when",
+	halt: "Halt point"
+};
+function fieldLabelOf(path, def) {
+	const name = fieldNameOf(path);
+	if (!name) return "";
+	return def?.fields.find((f) => f.name === name)?.label || FORM_LABELS[name] || "";
+}
+function clientCheck(step) {
+	if (step?.kind === "command" && !String(step.config?.command ?? "").trim()) return {
+		field: "command",
+		detail: "Needs a command"
+	};
+	return null;
+}
+var AGENT_EMPTY_HINT = "Empty = the agent carries on with its task";
+function agentPromptEmpty(step) {
+	return step?.kind === "agent" && !String(step.config?.prompt ?? "").trim();
+}
+var SAVE_LOST = "The route reached this stop — your changes can't be saved now";
+function Problem({ problem, def }) {
+	const label = fieldLabelOf(problem.field, def);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "fl-note stop-dialog-error",
+		role: "alert",
+		"data-field": fieldNameOf(problem.field) || void 0,
+		children: [label && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [label, ": "] }), problem.detail]
+	});
+}
 function StepDialog(p) {
 	const n = p.node;
-	const [draft, setDraft] = (0, import_react.useState)(() => n.step ? copyStep(n.step) : null);
-	const editable = !!p.onSave && !!draft;
+	const [draft, setDraft] = (0, import_react.useState)(null);
+	const [refused, setRefused] = (0, import_react.useState)(null);
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [hadSave] = (0, import_react.useState)(() => !!p.onSave);
+	const shown = draft || n.step || null;
+	const editable = !!p.onSave && !!shown;
 	const dirty = !!draft && !!n.step && JSON.stringify(draft) !== JSON.stringify(n.step);
+	const lost = hadSave && !p.onSave && dirty;
+	const change = (f) => {
+		if (!editable) return;
+		setRefused(null);
+		setDraft((d) => d || n.step ? f(d || copyStep(n.step)) : d);
+	};
 	const perch = (p.def?.actor || (n.step?.kind === "you" ? "you" : "robot")) === "you";
 	const kind = n.step?.kind || n.icon;
 	const title = (editable ? "Edit “" : "“") + (n.step?.title || n.title) + "”";
 	const state = STOP_STATE_WORD[n.state];
+	const acts = remedies(p);
+	const parked = acts.length > 0 && (n.state === "halted" || n.state === "perched" || n.state === "paused");
+	const check = editable ? clientCheck(shown) : null;
+	const problem = refused || check;
+	const formDef = shown ? loopFormDef(p.def, shown) : p.def;
+	const problemName = problem ? fieldNameOf(problem.field) : "";
+	const inForm = !!problem && !!shown && !!problemName && formFieldNames(shown, formDef).has(problemName);
 	const save = async () => {
-		if (!draft || !p.onSave) return;
+		if (!draft || !p.onSave) return true;
+		if (check) {
+			setRefused(check);
+			return false;
+		}
 		const patch = {
 			title: draft.title,
 			config: draft.config,
@@ -99819,17 +100807,156 @@ function StepDialog(p) {
 		};
 		if (!!draft.halt !== !!n.step?.halt) patch.halt = !!draft.halt;
 		if ((draft.when || "") !== (n.step?.when || "")) patch.when = draft.when || "";
-		await p.onSave(patch);
+		const r = await p.onSave(patch);
+		if (isSaveResult(r)) {
+			if (!r.ok) {
+				setRefused({
+					field: r.field,
+					detail: r.detail || "The server didn't take it"
+				});
+				return false;
+			}
+			setDraft(null);
+			setRefused(null);
+		}
+		return true;
 	};
+	const run = (k) => {
+		const go = {
+			done: p.onDone,
+			retry: p.onRetry,
+			resume: p.onResume,
+			fix: p.onFix,
+			skip: p.onSkip
+		}[k];
+		if (!go) return;
+		if (editable && dirty && (k === "retry" || k === "resume" || k === "fix")) save().then((ok) => ok && go());
+		else go();
+	};
+	const close = () => dirty ? setAsking(true) : p.onClose();
+	const remedyButtons = acts.map((a) => a.primary ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "btn-primary",
+		"data-remedy": a.key,
+		disabled: p.busy,
+		title: a.title,
+		onClick: () => run(a.key),
+		children: a.label
+	}, a.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn",
+		"data-remedy": a.key,
+		disabled: p.busy,
+		title: a.title,
+		onClick: () => run(a.key),
+		children: a.label
+	}, a.key));
+	const settings = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		shown && loopsToAgent(shown) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			label: "Back to",
+			wide: true,
+			hint: "After this stop the agent is prompted again; once its turn is done the route runs again from its first stop.",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-chiprow stop-dialog-loop-agent",
+				"data-loop-agent": "",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "the agent" }), editable && (p.lineSteps?.length || 0) > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					onClick: () => change((d) => ({
+						...d,
+						config: {
+							...d.config,
+							back_to: ""
+						}
+					})),
+					children: "Go back to a stop instead"
+				})]
+			})
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+			label: "Prompt",
+			wide: true,
+			hint: LOOP_PROMPT_HINT,
+			children: editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptBox, {
+				label: "Prompt for the agent each run",
+				rows: 3,
+				value: String(shown.config?.prompt ?? ""),
+				placeholder: "The prompt that started the agent's turn",
+				onChange: (t) => change((d) => ({
+					...d,
+					config: {
+						...d.config,
+						prompt: t
+					}
+				}))
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: String(shown.config?.prompt ?? "").trim() || "the same prompt again"
+			})
+		})] }),
+		shown && editable && p.loopAgent && shown.kind === "loop" && !loopsToAgent(shown) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fl-chiprow",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn",
+				title: "The agent is prompted again after this stop, then the route runs again",
+				onClick: () => change((d) => ({
+					...d,
+					config: {
+						...d.config,
+						back_to: LOOP_AGENT
+					}
+				})),
+				children: "↺ Loop back to the agent instead"
+			})
+		}),
+		shown ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopForm, {
+			step: shown,
+			def: formDef,
+			lineSteps: p.lineSteps,
+			readOnly: !editable,
+			errors: inForm ? { [problemName]: problem.detail } : null,
+			onChange: (patch) => change((d) => ({
+				...d,
+				...patch
+			}))
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "fl-note muted",
+			children: "This stop's details haven't loaded yet."
+		}),
+		editable && agentPromptEmpty(shown) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "fl-form-note muted stop-dialog-hint",
+			role: "note",
+			children: ["Prompt: ", AGENT_EMPTY_HINT]
+		}),
+		kind === "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopLive, {
+			verify: p.verify,
+			session: p.verifySession || ""
+		}),
+		shown && (editable || p.onToggleHalt) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "stop-dialog-halt",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+				on: !!(editable ? shown.halt : n.step?.halt),
+				label: HALT_LABEL,
+				title: "Like a breakpoint: Carry on goes on through it",
+				onChange: (v) => editable ? change((d) => ({
+					...d,
+					halt: v || void 0
+				})) : p.onToggleHalt?.()
+			})
+		})
+	] });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shell, {
 		p,
 		title,
+		onClose: close,
+		onEscape: () => asking ? (setAsking(false), true) : false,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
 			className: "stop-dialog-form",
 			onSubmit: (e) => {
 				e.preventDefault();
 				if (!editable || p.busy) return;
-				if (dirty) save();
+				if (check) setRefused(check);
+				else if (dirty) save();
 				else p.onClose();
 			},
 			children: [
@@ -99847,7 +100974,7 @@ function StepDialog(p) {
 						})]
 					})]
 				}),
-				!editable && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				(!editable || parked) && (state || p.note) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 					className: "stop-dialog-state",
 					role: "status",
 					children: [state && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", {
@@ -99855,90 +100982,47 @@ function StepDialog(p) {
 						children: state
 					}), p.note && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: p.note })]
 				}),
-				draft && loopsToAgent(draft) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Back to",
-					wide: true,
-					hint: "After this stop the agent is prompted again; once its turn is done the route runs again from its first stop.",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "fl-chiprow stop-dialog-loop-agent",
-						"data-loop-agent": "",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "the agent" }), editable && (p.lineSteps?.length || 0) > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => setDraft((d) => d ? {
-								...d,
-								config: {
-									...d.config,
-									back_to: ""
-								}
-							} : d),
-							children: "Go back to a stop instead"
-						})]
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-					label: "Prompt",
-					wide: true,
-					hint: LOOP_PROMPT_HINT,
-					children: editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptBox, {
-						label: "Prompt for the agent each run",
-						rows: 3,
-						value: String(draft.config?.prompt ?? ""),
-						placeholder: "The prompt that started the agent's turn",
-						onChange: (t) => setDraft((d) => d ? {
-							...d,
-							config: {
-								...d.config,
-								prompt: t
-							}
-						} : d)
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: String(draft.config?.prompt ?? "").trim() || "the same prompt again"
-					})
-				})] }),
-				draft && editable && p.loopAgent && draft.kind === "loop" && !loopsToAgent(draft) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "fl-chiprow",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						title: "The agent is prompted again after this stop, then the route runs again",
-						onClick: () => setDraft((d) => d ? {
-							...d,
-							config: {
-								...d.config,
-								back_to: LOOP_AGENT
-							}
-						} : d),
-						children: "↺ Loop back to the agent instead"
-					})
+				parked && !!p.asks?.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "stop-dialog-asks",
+					children: p.asks.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: t }, i))
 				}),
-				draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopForm, {
-					step: draft,
-					def: loopFormDef(p.def, draft),
-					lineSteps: p.lineSteps,
-					readOnly: !editable,
-					onChange: (patch) => setDraft((d) => d ? {
-						...d,
-						...patch
-					} : d)
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "fl-note muted",
-					children: "This stop's details haven't loaded yet."
+				parked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "stop-dialog-remedies fl-chiprow",
+					children: remedyButtons
 				}),
-				kind === "verify" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyStopBehaviors, { planId: p.behaviorsPlanId || n.behaviors?.planId || "" }),
-				draft && (editable || p.onToggleHalt) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "stop-dialog-halt",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
-						on: !!(editable ? draft.halt : n.step?.halt),
-						label: "Halt point — the route stops here, before doing this stop",
-						title: "Like a breakpoint: Carry on goes on through it",
-						onChange: (v) => editable ? setDraft((d) => d ? {
-							...d,
-							halt: v || void 0
-						} : d) : p.onToggleHalt?.()
-					})
+				lost && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note stop-dialog-lost",
+					role: "alert",
+					children: SAVE_LOST
 				}),
+				problem && !inForm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Problem, {
+					problem,
+					def: p.def
+				}),
+				parked ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "stop-dialog-settings",
+					open: dirty || !!refused || inForm || lost || void 0,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Its settings" }),
+						editable && p.saveHint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "fl-note muted stop-dialog-save-hint",
+							children: p.saveHint
+						}),
+						settings
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [editable && p.saveHint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note muted stop-dialog-save-hint",
+					children: p.saveHint
+				}), settings] }),
 				p.extra,
+				asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					title: "Discard your changes?",
+					body: "What you changed in this stop is not saved.",
+					confirmLabel: "Discard",
+					cancelLabel: "Keep editing",
+					onConfirm: p.onClose,
+					onCancel: () => setAsking(false)
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "modal-actions stop-dialog-actions",
 					children: [
@@ -99958,48 +101042,26 @@ function StepDialog(p) {
 								children: "Duplicate"
 							})]
 						}),
-						p.onDone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: p.busy,
-							title: p.doneTitle,
-							onClick: p.onDone,
-							children: p.doneLabel || "Done"
-						}),
-						p.onRetry && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: p.busy,
-							onClick: p.onRetry,
-							children: "Retry"
-						}),
-						p.onFix && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: p.busy,
-							onClick: p.onFix,
-							children: "Let the agent fix it"
-						}),
-						p.onSkip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: p.busy,
-							onClick: p.onSkip,
-							children: "Skip"
-						}),
+						!parked && remedyButtons,
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "test-btn",
-							onClick: p.onClose,
+							onClick: close,
 							children: editable ? "Cancel" : "Close"
 						}),
-						editable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						editable && (parked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "submit",
+							className: "test-btn",
+							disabled: p.busy,
+							title: dirty ? "Save the changes" : "Keep it as it is",
+							children: "Save"
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "submit",
 							className: "btn-primary",
 							disabled: p.busy,
 							title: dirty ? "Save the changes" : "Keep it as it is",
 							children: "Save"
-						})
+						}))
 					]
 				})
 			]
@@ -100256,6 +101318,42 @@ function shelfPlanFor(name, steps, planId, plans) {
 		updated: 0
 	};
 }
+var cap = (t) => t ? t.charAt(0).toUpperCase() + t.slice(1) : t;
+function hereStop(flight, n) {
+	const out = {
+		here: false,
+		why: "",
+		asks: [],
+		editNow: "",
+		done: "",
+		retry: false,
+		resume: false
+	};
+	if (!flight || n.kind !== "stop" || !n.step) return out;
+	const haltPoint = atHaltPoint(flight);
+	out.resume = flight.state === "paused" || haltPoint;
+	if (n.index !== flight.cursor || n.editable) return out;
+	out.here = true;
+	const rec = flight.step_states?.[n.step.id];
+	const d = rec?.detail || {};
+	const failedReason = String(d.failed_reason || "");
+	const failed = n.state === "halted" && !haltPoint || n.state === "perched" && !!failedReason;
+	const ask = n.state === "perched" && n.step.kind === "verify" ? String(d.ask || "") : "";
+	const stuck = ask === "blocked" || ask === "memory";
+	out.retry = failed || stuck;
+	if (n.state === "perched" && !stuck) out.done = n.step.kind === "verify" ? failedReason ? "" : "confirm" : "done";
+	if (failed && (rec?.state === "failed" || !!failedReason)) out.editNow = "retry";
+	else if (haltPoint && (rec?.state || "pending") === "pending") out.editNow = "resume";
+	if (n.state === "perched" && Array.isArray(d.items)) out.asks = d.items.map(String).filter(Boolean);
+	out.primary = out.retry ? "retry" : out.resume ? "resume" : out.done ? "done" : void 0;
+	const reason = cap(String(n.reason || failedReason || rec?.note || "").trim());
+	if (haltPoint) out.why = "Paused at its halt point — nothing has run yet. Carry on runs it.";
+	else if (flight.state === "paused") out.why = "Paused" + (flight.reason ? ": " + flight.reason : "") + " — Carry on picks it up again.";
+	else if (failed) out.why = reason ? "It failed: " + reason : "It failed — the route waits here.";
+	else if (n.state === "perched") out.why = reason || (n.step.kind === "verify" ? "The check waits for you." : "It waits for you — press Done when you have done it.");
+	else out.why = "It is running — its settings can't change while it runs.";
+	return out;
+}
 function shotsOf(detail) {
 	const raw = detail?.shots;
 	if (!Array.isArray(raw)) return [];
@@ -100361,7 +101459,7 @@ function useSessionLine(title, src, opts) {
 	const [expandedGroups, setExpandedGroups] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
 	const row = rows.find((r) => r.title === title);
 	const flRow = row?.flight;
-	const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+	const flight = flRow && isShown$1(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
 	const line = (0, import_react.useMemo)(() => sessionDiagram(rows, title, {
 		flights,
 		kinds,
@@ -100680,7 +101778,7 @@ function useSessionLine(title, src, opts) {
 			}
 			const def = kindOf.get(drop.kind);
 			if (def) tackOne(def, at);
-			else toast("This route has no “" + drop.kind + "” stop to tack on");
+			else toast("This route has no “" + drop.kind + "” stop to add");
 		},
 		renderInBox: parts.renderInBox,
 		sizeOf: parts.sizeOf,
@@ -100694,24 +101792,25 @@ function useSessionLine(title, src, opts) {
 	}) : [];
 	const palette = paletteAt !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
 		kinds,
-		title: paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”",
+		title: paletteAt >= end ? "Add a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”",
 		onPick: (k) => void tackOne(k, paletteAt, true),
 		onClose: () => {
 			setPaletteAt(null);
 			setPaletteHang(null);
 		},
 		saved: savedStops(paletteAt >= end ? null : paletteAt),
-		savedHead: "Saved routes — tack one on as a group"
+		savedHead: "Saved routes — add one as a group"
 	}) : null;
 	const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
 	const act = async (f) => {
 		setBusy(true);
 		try {
-			await f();
+			return await f();
 		} finally {
 			setBusy(false);
 		}
 	};
+	const actClose = (f) => void act(async () => await f() && close());
 	let inspector = null;
 	if (open && open.kind === "group" && open.group) {
 		const g = open.group;
@@ -100750,29 +101849,36 @@ function useSessionLine(title, src, opts) {
 		}, open.id);
 	} else if (open && open.kind === "stop") {
 		const here = !!flight && open.index === flight.cursor && !open.editable;
-		const editable = !!flight && !!open.editable && !!open.step;
+		const h = hereStop(flight, open);
+		const ahead = !!flight && !!open.editable && !!open.step;
+		const editable = ahead || !!h.editNow && !!open.step;
 		const flown = open.state === "done" || open.state === "skipped" || open.state === "failed";
 		const rec = flight && open.step ? flight.step_states?.[open.step.id] : void 0;
-		const why = editable ? "" : flown ? "This stop has finished — it can't change now." : here ? "The route is at this stop — it can't change while it is here." : "It can't change here.";
+		const why = ahead ? "" : here ? h.why : flown ? "This stop has finished — it can't change now." : "It can't change here.";
 		const clears = !flight && landedId ? "Remove clears the finished route." : "";
 		const def = open.step ? inspectorDef(kindOf.get(open.step.kind), open.step) : void 0;
 		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
 			node: open,
 			def,
 			lineSteps: flight?.steps,
-			behaviorsPlanId: open.step?.kind === "verify" ? String(rec?.detail?.plan || "") : void 0,
+			verify: open.step?.kind === "verify" && row ? stopVerifyOf(verifyOf(row), String(rec?.detail?.plan || ""), here) : null,
+			verifySession: title,
 			loopAgent: true,
 			busy,
 			note: [
 				why,
 				clears,
-				open.reason || rec?.note || ""
+				here ? "" : open.reason || rec?.note || ""
 			].filter(Boolean).join(" "),
+			asks: h.asks,
 			onClose: close,
+			saveHint: h.editNow ? "Save, then " + (h.editNow === "retry" ? "Retry" : "Carry on") + " runs it with these settings" : void 0,
 			onSave: editable ? (patch) => act(async () => {
-				if (await patchStop(flight.id, open.step.id, patch)) close();
+				const r = await saveStop(flight.id, open.step.id, patch);
+				if (r.ok && !h.editNow) close();
+				return r;
 			}) : void 0,
-			onDuplicate: editable ? () => {
+			onDuplicate: ahead ? () => {
 				const at = open.index + 1;
 				tackOn(flight.id, open.step, at < end ? at : void 0);
 				close();
@@ -100781,15 +101887,14 @@ function useSessionLine(title, src, opts) {
 				if (await removeNode(open)) close();
 			}) : void 0,
 			onToggleHalt: here && open.step && !flown ? () => toggleHalt(open) : void 0,
-			onDone: here && open.state === "perched" ? open.step?.kind === "verify" ? () => {
-				close();
-				answerBehaviors(flight.id);
-			} : () => void act(() => stepDone(flight.id, open.step.id)) : void 0,
-			doneLabel: open.step?.kind === "verify" ? "Behaviors" : void 0,
-			doneTitle: open.step?.kind === "verify" ? "Answer its behaviors — the route goes on once each one has an answer" : void 0,
-			onRetry: here && open.state === "halted" ? () => void act(() => stepRetry(flight.id, open.step.id)) : void 0,
-			onFix: here && canFixStep(flight) ? () => void act(() => stepFix(flight.id, open.step.id)) : void 0,
-			onSkip: here ? () => void act(() => stepSkip(flight.id, open.step.id)) : void 0,
+			primary: h.primary,
+			onDone: h.done ? () => actClose(() => stepDone(flight.id, open.step.id)) : void 0,
+			doneLabel: h.done === "confirm" ? "Confirm verified" : void 0,
+			doneTitle: h.done === "confirm" ? "You checked it — the route goes on" : void 0,
+			onRetry: h.retry ? () => actClose(() => stepRetry(flight.id, open.step.id)) : void 0,
+			onResume: h.resume ? () => actClose(() => controlFlight(flight.id, "resume")) : void 0,
+			onFix: here && canFixStep(flight) ? () => actClose(() => stepFix(flight.id, open.step.id)) : void 0,
+			onSkip: here ? () => actClose(() => stepSkip(flight.id, open.step.id)) : void 0,
 			extra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 				!editable && stopLog(open, flight, rec, row),
 				open.step?.kind === "split" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -101380,7 +102485,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			setWsState(handle.state);
 			if (handle.booted) setBooted(true);
 		}
-		requestAnimationFrame(() => handle.doFit());
+		requestAnimationFrame(() => repaintTerm(handle.term, () => handle.doFit()));
 	}, [
 		title,
 		missing,
@@ -101405,9 +102510,27 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const fitSoon = (0, import_react.useCallback)(() => {
 		clearTimeout(fitTimer.current);
 		fitTimer.current = setTimeout(() => {
-			peekTerm(title, tab === "shell" ? "shell" : "agent")?.doFit();
+			const t = peekTerm(title, tab === "shell" ? "shell" : "agent");
+			if (t) repaintTerm(t.term, () => t.doFit());
 		}, 120);
 	}, [title, tab]);
+	(0, import_react.useEffect)(() => {
+		if (missing || loading) return;
+		const kind = tab === "shell" ? "shell" : tab === "agent" ? "agent" : null;
+		if (!kind) return;
+		return trackRepaint({
+			shown: () => isShown(peekTerm(title, kind)?.container),
+			repaint: () => {
+				const t = peekTerm(title, kind);
+				if (t) repaintTerm(t.term, () => t.doFit());
+			}
+		});
+	}, [
+		title,
+		tab,
+		missing,
+		loading
+	]);
 	(0, import_react.useEffect)(() => {
 		if (!bodyRef.current || missing || loading) return;
 		const obs = new ResizeObserver(fitSoon);
@@ -101804,12 +102927,12 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		kind: tab === "shell" ? "shell" : "agent",
 		dragSel: null
 	});
-	const menu = () => withVerifyVerdict(sessionMenu(inst, menuCtx, {
+	const menu = () => withVerifyItem(withVerifyVerdict(sessionMenu$1(inst, menuCtx, {
 		visibleTabs,
 		onHistory: shows("history") ? void 0 : openHistory,
 		onCopyHistory: termTab ? copyHistory : void 0,
 		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
-	}), inst);
+	}), inst), inst);
 	const menuSummary = [
 		!shows("cost") && usageHeadline(inst),
 		!shows("diffstat") && hasDiffStat && diffStatText(inst),
@@ -102241,6 +103364,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 				title
 			}),
 			inst.flight && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneFlightStrip, { inst }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneVerifyStrip, { inst }),
 			strip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here"),
 				role: "note",
@@ -102741,7 +103865,7 @@ function VerifyBody({ desc, headDrag }) {
 				className: "actions",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					className: "act verify-pane-back",
-					title: "Back to these behaviors on the route, in the Sky (Alt+V: the next that needs you)",
+					title: "Back to this Verify on the route, in the Sky (Alt+V: the next that needs you)",
 					onClick: (e) => {
 						e.stopPropagation();
 						openBehaviors(planId ? { planId } : { next: true });
@@ -139056,12 +140180,6 @@ function WatchedRepositories({ liveBranch }) {
 function writesOnPush(settings) {
 	return (settings?.repository || {}).verify_enabled !== false;
 }
-function emptyTargets(targets) {
-	return targets.filter((t) => !t.planId && (!t.reason || t.noCommits));
-}
-function targetLabel(t) {
-	return (t.branch || t.title) + (t.title !== t.branch ? " — " + t.title : "") + (t.closed ? " (closed)" : "");
-}
 function BehaviorsSettings({ onClose }) {
 	const model = useSettingsModel(true);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
@@ -139078,20 +140196,20 @@ function SettingsBody({ onClose }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "bh-settings",
 		role: "group",
-		"aria-label": "Behaviors settings",
+		"aria-label": "Verify settings",
 		"data-no-drag": true,
 		onKeyDown: (e) => e.stopPropagation(),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutomationSwitch, {
-				label: "Write behaviors on every push",
-				title: "Pause or resume writing behaviors on push — nothing is deleted",
+				label: "Write Verify steps on every push",
+				title: "Pause or resume writing steps on push — nothing is deleted",
 				rowId: "bh-push-row",
 				inputId: "bh-push",
 				statusId: "bh-push-status",
 				checked: on,
 				note: watched.length ? void 0 : "Covers your sessions' branches, and any repository you watch below.",
 				onChange: async (next) => {
-					if (await model.saveGroup("repository", { verify_enabled: next }, next ? "Writing behaviors on every push" : "No new behaviors on push — nothing is deleted")) {
+					if (await model.saveGroup("repository", { verify_enabled: next }, next ? "Writing Verify steps on every push" : "No new steps on push — nothing is deleted")) {
 						queryClient.invalidateQueries({ queryKey: ["verify-settings"] });
 						queryClient.invalidateQueries({ queryKey: ["test-plans"] });
 					}
@@ -139108,7 +140226,7 @@ function SettingsBody({ onClose }) {
 					}),
 					watched.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WatchedRepositories, { liveBranch }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "bh-hint",
-						children: "None yet — behaviors are written for your sessions' branches."
+						children: "None yet — steps are written for your sessions' branches."
 					}),
 					adding ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddRepoFlow, {
 						title: "Watch a GitHub repository",
@@ -139126,11 +140244,7 @@ function SettingsBody({ onClose }) {
 					})
 				]
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnotherBranch, { onClose }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(EmptyForSession, {
-				liveBranch,
-				onClose
-			})
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AnotherBranch, { onClose })
 		]
 	});
 }
@@ -139149,12 +140263,12 @@ function AnotherBranch({ onClose }) {
 			live = false;
 		};
 	}, [open, repos]);
-	const go = async (empty) => {
+	const go = async () => {
 		const b = branch.trim();
 		if (!repo || !b || busy) return;
-		setBusy(empty ? "empty" : "ask");
+		setBusy("ask");
 		try {
-			const id = await askBehaviorsForBranch(repo, b, { empty });
+			const id = await askBehaviorsForBranch(repo, b);
 			if (id) {
 				setBranch("");
 				onClose?.();
@@ -139204,102 +140318,23 @@ function AnotherBranch({ onClose }) {
 					disabled: !!busy,
 					onChange: (e) => setBranch(e.target.value),
 					onKeyDown: (e) => {
-						if (e.key === "Enter") go(false);
+						if (e.key === "Enter") go();
 					}
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-edit-actions",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "bh-branch-ask",
-						className: "btn-primary",
-						disabled: !!busy || !repo || !branch.trim(),
-						onClick: () => void go(false),
-						children: busy === "ask" ? "Asking…" : "Ask the agent"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "bh-branch-empty",
-						className: "test-btn",
-						disabled: !!busy || !repo || !branch.trim(),
-						onClick: () => void go(true),
-						children: busy === "empty" ? "Starting…" : "Start empty"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "bh-hint",
-					children: repos && !repos.length ? "No repositories yet — open a session in one first." : "For a branch no session has been on — the agent reads its changes and writes behaviors (about three minutes)."
-				})
-			]
-		})]
-	});
-}
-function EmptyForSession({ liveBranch, onClose }) {
-	const [open, setOpen] = (0, import_react.useState)(false);
-	const [picked, setPicked] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const instancesQ = useInstances();
-	const plansQ = useTestPlans();
-	const closedQ = useQuery({
-		queryKey: ["recently-closed"],
-		queryFn: () => api("/api/recently-closed"),
-		enabled: open,
-		staleTime: 3e4,
-		retry: false
-	});
-	const targets = emptyTargets(checklistTargets(instancesQ.data || [], plansQ.data?.plans || [], closedQ.data || [], liveBranch));
-	const target = targets.some((t) => t.title === picked) ? picked : targets[0]?.title || "";
-	const go = async () => {
-		if (!target || busy) return;
-		setBusy(true);
-		try {
-			const id = await startEmptyBehaviors(target);
-			if (id) {
-				onClose?.();
-				openBehaviors({ planId: id });
-			}
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "bh-set-section bh-set-fold",
-		open,
-		onToggle: (e) => setOpen(e.currentTarget.open),
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
-			className: "bh-set-head",
-			children: "Start empty behaviors for a session…"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "bh-set-form",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
-					id: "bh-empty-pick",
-					className: "fl-input",
-					"aria-label": "Session",
-					value: target,
-					disabled: busy || !targets.length,
-					onChange: (e) => setPicked(e.target.value),
-					children: targets.length ? targets.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: t.title,
-						children: targetLabel(t)
-					}, t.title)) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-						value: "",
-						children: "No session without behaviors"
-					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "bh-edit-actions",
 					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						id: "bh-empty-go",
-						className: "test-btn",
-						disabled: busy || !target,
+						id: "bh-branch-ask",
+						className: "btn-primary",
+						disabled: !!busy || !repo || !branch.trim(),
 						onClick: () => void go(),
-						children: busy ? "Starting…" : "Start empty behaviors"
+						children: busy === "ask" ? "Asking…" : "Ask the agent"
 					})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "bh-hint",
-					children: "No agent involved — you write what the work should do, then check it."
+					children: repos && !repos.length ? "No repositories yet — open a session in one first." : "For a branch no session has been on — the agent reads its changes and writes the steps to verify it (about three minutes)."
 				})
 			]
 		})]
@@ -141038,12 +142073,16 @@ function SessionChip({ onSession }) {
 		})
 	});
 }
-function savedMenuItems(plan) {
+function savedMenuItems(plan, opts = {}) {
 	return [
 		{
 			key: "rename",
 			label: "Rename"
 		},
+		...opts.edit ? [{
+			key: "edit",
+			label: "Edit its stops"
+		}] : [],
 		{
 			key: "takeoff",
 			label: "What starts it…"
@@ -141206,7 +142245,7 @@ function useShelfPick() {
 	};
 	return [shelf, change];
 }
-function useSavedActions(changeShelf) {
+function useSavedActions(changeShelf, opts = {}) {
 	const [menu, setMenu] = (0, import_react.useState)(null);
 	const [kindMenu, setKindMenu] = (0, import_react.useState)(null);
 	const [renaming, setRenaming] = (0, import_react.useState)("");
@@ -141218,6 +142257,7 @@ function useSavedActions(changeShelf) {
 		setMenu(null);
 		if (!plan) return;
 		if (key === "rename") setRenaming(plan.id);
+		else if (key === "edit") opts.onEdit?.(plan);
 		else if (key === "unshelve") changeShelf((p) => toggleShelf(p, { planId: plan.id }));
 		else if (key === "takeoff") setTakeoff(plan);
 		else if (key === "delete") setDeleting(plan);
@@ -141265,7 +142305,7 @@ function useSavedActions(changeShelf) {
 		overlays: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			menu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedMenu, {
 				label: menu.plan.name,
-				items: savedMenuItems(menu.plan),
+				items: savedMenuItems(menu.plan, { edit: !!opts.onEdit }),
 				x: menu.x,
 				y: menu.y,
 				onPick: (k) => void pick(k),
@@ -141292,14 +142332,70 @@ function useSavedActions(changeShelf) {
 		] })
 	};
 }
-function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog }) {
+function SaveRouteAsk({ initial, plans, busy, onSave, onCancel }) {
+	const [name, setName] = (0, import_react.useState)(initial);
+	const [err, setErr] = (0, import_react.useState)("");
+	const field = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		field.current?.focus();
+		field.current?.select();
+	}, []);
+	const go = () => {
+		const c = checkRename(name, plans, "");
+		if (!c.ok) return setErr(c.error);
+		onSave(c.name);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "skl-close-confirm skl-save-route",
+		"data-no-drag": true,
+		onPointerDown: (e) => e.stopPropagation(),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+			title: "Save as a route",
+			body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				ref: field,
+				className: "fl-input skl-save-name",
+				"aria-label": "The saved route's name",
+				"aria-invalid": !!err,
+				value: name,
+				maxLength: 140,
+				onChange: (e) => {
+					setName(e.target.value);
+					setErr("");
+				},
+				onKeyDown: (e) => {
+					e.stopPropagation();
+					if (e.key === "Enter") {
+						e.preventDefault();
+						go();
+					} else if (e.key === "Escape") {
+						e.preventDefault();
+						onCancel();
+					}
+				}
+			}), err ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "error",
+				role: "alert",
+				children: [" ", err]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "muted",
+				children: " It goes on the shelf; routes already running keep their own copy."
+			})] }),
+			confirmLabel: "Save",
+			busy,
+			onConfirm: go,
+			onCancel
+		})
+	});
+}
+var NO_SAVED_ROUTES = "No saved routes yet — a route is the row of stops a piece of work goes through; build one on the Sky, then ⋯ Save as a route.";
+function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog, onEditPlan }) {
 	const kinds = useFlightKinds().data;
 	const plans = useFlightPlans().data;
 	const [shelf, changeShelf] = useShelfPick();
 	const blocks = shelfKinds(shelf, kinds || []);
 	const allSaved = savedStopOrder(plans || []);
 	const saved = shelfPlans(shelf, allSaved);
-	const acts = useSavedActions(changeShelf);
+	const acts = useSavedActions(changeShelf, { onEdit: onEditPlan });
 	const [catalog, setCatalog] = (0, import_react.useState)(false);
 	const place = !!onPlace;
 	const clickKind = onPlace ? (kind) => onPlace({ kind }) : onTack;
@@ -141377,6 +142473,40 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 								}, k.kind))
 							]
 						}),
+						plans !== void 0 && allSaved.length === 0 && blocks.length > 0 && clickKind && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-stops-divider",
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "sky-stops-region sky-saved-none",
+							"data-region": "multi",
+							role: "list",
+							"aria-label": "Saved routes",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sky-stops-label",
+									"aria-hidden": "true",
+									children: "Saved routes"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									role: "listitem",
+									className: "sky-stop-item",
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "sky-stop-chip sky-start-route",
+										title: NO_SAVED_ROUTES,
+										onClick: () => clickKind(blocks[0].kind),
+										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sky-stop-name",
+											children: "Start a route"
+										})
+									})
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sky-stops-hint",
+									children: NO_SAVED_ROUTES
+								})
+							]
+						})] }),
 						saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-stops-divider",
 							"aria-hidden": "true"
@@ -143195,10 +144325,16 @@ var KIND_ORDER = [
 	"prs",
 	"issues"
 ];
-function PerchRow({ flight, kinds, onFocus }) {
+function perchLine(flight, kinds) {
 	const step = flight.steps[flight.cursor];
+	const what = step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "";
+	const why = perchWhy(flight);
+	return what && why ? what + " — " + why : what || why;
+}
+function PerchRow({ flight, kinds, onFocus, onFocusFlight }) {
 	const halted = flight.state === "halted";
 	const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
+	const go = () => flight.session ? onFocus(flight.session) : onFocusFlight?.(flight.id);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-perch" + (halted ? " is-halted" : ""),
 		"data-flight": flight.id,
@@ -143206,17 +144342,23 @@ function PerchRow({ flight, kinds, onFocus }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "sky-perch-name",
-				title: flight.session ? "Show " + windowName(flight.session) + "'s route" : void 0,
-				onClick: () => onFocus(flight.session),
+				title: flight.session ? "Show " + windowName(flight.session) + "'s route" : "Show this route on the Sky",
+				onClick: go,
 				children: head
 			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "sky-perch-step muted",
-				children: [step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "", halted && flight.reason ? " — " + haltedWhy(step?.title, flight.reason) : ""]
+				children: perchLine(flight, kinds)
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, { flight })
 		]
 	});
+}
+function needsNote(q, count) {
+	if (q.isError) return "error";
+	if (q.data === null) return count ? "" : "empty";
+	if (q.data === void 0 || q.isPending) return count ? "" : "loading";
+	return count ? "" : "empty";
 }
 function NeedsLine({ row, onFocus }) {
 	const { data: instances } = useInstances();
@@ -143264,7 +144406,7 @@ function NeedsLine({ row, onFocus }) {
 		]
 	});
 }
-function SkyDrawer({ open, onToggle, onFocus }) {
+function SkyDrawer({ open, onToggle, onFocus, onFocusFlight }) {
 	const openDialogFor = useUi((s) => s.openDialogFor);
 	const flightsQ = useFlights();
 	const plans = useFlightPlans().data || [];
@@ -143276,6 +144418,7 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 	const needs = useNeedsYou();
 	const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
 	const count = needs.length;
+	const note = needsNote(flightsQ, count);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
 		className: "sky-drawer" + (open ? " open" : ""),
 		"aria-label": "Needs you",
@@ -143305,27 +144448,41 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 					className: "fl-group fl-group-needs",
 					id: "fl-group-needs",
 					"aria-labelledby": "fl-group-needs-h",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-						id: "fl-group-needs-h",
-						className: "fl-group-head",
-						children: ["Needs you", count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-count",
-							children: count
-						})]
-					}), count === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "fl-empty muted",
-						children: "Nothing needs you."
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: needs.map((r) => r.flight ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerchRow, {
-						flight: r.flight,
-						kinds,
-						onFocus
-					}, r.key) : r.behaviors ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
-						plan: r.behaviors,
-						onOpen: (planId) => openBehaviors({ planId })
-					}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsLine, {
-						row: r,
-						onFocus
-					}, r.key)) })]
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+							id: "fl-group-needs-h",
+							className: "fl-group-head",
+							children: ["Needs you", count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-count",
+								children: count
+							})]
+						}),
+						note === "loading" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "fl-empty muted",
+							role: "status",
+							children: "Loading…"
+						}),
+						note === "error" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "fl-note error",
+							role: "status",
+							children: "Can't reach the server — this list may be out of date."
+						}),
+						count === 0 ? note === "empty" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "fl-empty muted",
+							children: "Nothing needs you."
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: needs.map((r) => r.flight ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerchRow, {
+							flight: r.flight,
+							kinds,
+							onFocus,
+							onFocusFlight
+						}, r.key) : r.behaviors ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
+							plan: r.behaviors,
+							onOpen: (planId) => openBehaviors({ planId })
+						}, r.key) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsLine, {
+							row: r,
+							onFocus
+						}, r.key)) })
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "fl-group fl-group-waiting",
@@ -144035,10 +145192,11 @@ async function closeLine(title) {
 }
 function frameState(s) {
 	const f = s.flight || null;
-	if (f === "halted") return "halted";
+	if (f === "halted" && !s.haltPoint) return "halted";
 	if (s.tone === "broken") return "broken";
-	if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou) return "you";
-	if (f === "running" || s.tone === "working") return "working";
+	if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou || (f === "paused" || f === "halted") && s.haltPoint) return "you";
+	if (f === "paused") return "paused";
+	if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
 	if (f === "done" || s.landed) return "done";
 	if (f === "ready") return "ready";
 	return "idle";
@@ -144255,7 +145413,8 @@ function SkyLine(p) {
 		flight: line.flight?.state || row.flight?.state,
 		landed: !!line.landedId,
 		tone: ss.tone,
-		behaviorsYou: line.behaviors.mark?.tone === "you"
+		behaviorsYou: line.behaviors.mark?.tone === "you",
+		haltPoint: atHaltPoint(line.flight)
 	}) : "idle";
 	const rowOf = (t) => t ? p.rows.find((r) => r.title === t) : void 0;
 	const where = row ? lineWhere(line.diagram) : "";
@@ -144432,6 +145591,21 @@ function SkyLine(p) {
 		}
 	};
 	const promote = usePromoteStops(line.flight);
+	const [savingAs, setSavingAs] = (0, import_react.useState)(null);
+	const [saveBusy, setSaveBusy] = (0, import_react.useState)(false);
+	const routeSteps = line.flight?.steps || [];
+	const saveRoute = async (asked) => {
+		setSaveBusy(true);
+		try {
+			const saved = await savePlan(planToSave(asked, routeSteps, p.plans, { fresh: true }));
+			setSavingAs(null);
+			toast(savedWords$1(saved?.name || asked, false));
+		} catch (err) {
+			toast("Saving the route failed: " + errMsg(err), { error: true });
+		} finally {
+			setSaveBusy(false);
+		}
+	};
 	const items = [
 		p.layout.open ? {
 			key: "open",
@@ -144494,6 +145668,12 @@ function SkyLine(p) {
 			title: promote.title,
 			className: "skl-mi-promote",
 			onSelect: () => void promote.run()
+		}] : [],
+		...routeSteps.length ? [{
+			key: "save-route",
+			label: "Save as a route…",
+			title: "Keep this route's stops on the shelf as a saved route — you name it",
+			onSelect: () => setSavingAs(line.flight?.plan_name && line.flight.plan_name !== "Stops" ? line.flight.plan_name : name)
 		}] : [],
 		{
 			key: "close",
@@ -144636,7 +145816,7 @@ function SkyLine(p) {
 					marginLeft: frameX,
 					transform: frameY ? `translateY(${frameY}px)` : void 0
 				} : void 0,
-				title: (p.draggable === false ? "Click to focus this session (drag mode moves it: V)" : "Drag to move this session") + " · double-click to rename",
+				title: (p.draggable === false ? "Click to focus this session (Select (V) moves it)" : "Drag to move this session") + " · double-click to rename",
 				onPointerDown: onBarDown,
 				onDoubleClick: (e) => {
 					if (e.target.closest("button, summary, a, input, [data-no-drag]")) return;
@@ -144717,6 +145897,13 @@ function SkyLine(p) {
 			}),
 			line.cancel.node,
 			line.removeAsk,
+			savingAs !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SaveRouteAsk, {
+				initial: savingAs,
+				plans: p.plans,
+				busy: saveBusy,
+				onSave: (n) => void saveRoute(n),
+				onCancel: () => setSavingAs(null)
+			}),
 			closing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "skl-close-confirm",
 				"data-no-drag": true,
@@ -145017,7 +146204,7 @@ function SkySelectionBar(p) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-selbar-hint",
 							title: "Drag the bar of any selected route: they all move together",
-							children: "✥ Drag a bar to move them"
+							children: "Drag a bar to move them (Select, V)"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
@@ -145120,6 +146307,26 @@ function SkySelectionBar(p) {
 //#region src/components/flights/useGroundedLine.tsx
 function readDrop(drop) {
 	return typeof drop === "string" ? { kind: drop } : drop;
+}
+function freeStopRemedies(flight, n) {
+	const here = n.index === flight.cursor && (flight.state === "halted" || flight.state === "waiting_you" || flight.state === "paused" || flight.state === "running");
+	const flown = n.state === "done" || n.state === "skipped" || n.state === "failed";
+	if (!here) return {
+		note: flown ? "This stop has finished — it can't change now." : "It can't change while the route runs.",
+		done: "",
+		retry: false,
+		fix: false,
+		skip: false
+	};
+	const halt = atHaltPoint(flight);
+	const halted = flight.state === "halted" && !halt;
+	return {
+		note: ["The route is at this stop — it can't change while it is here.", perchWhy(flight)].filter(Boolean).join(" "),
+		done: halt ? "carry" : flight.state === "waiting_you" && n.step?.kind !== "verify" ? "done" : "",
+		retry: halted,
+		fix: canFixStep(flight),
+		skip: halted || halt || flight.state === "waiting_you"
+	};
 }
 function useGroundedLine(flight, src) {
 	const { kinds, plans } = src;
@@ -145337,7 +146544,7 @@ function useGroundedLine(flight, src) {
 	const act = async (f) => {
 		setBusy(true);
 		try {
-			await f();
+			return await f();
 		} finally {
 			setBusy(false);
 		}
@@ -145374,6 +146581,26 @@ function useGroundedLine(flight, src) {
 				if (await removeGroup(open)) setDialog(null);
 			})
 		}, open.id);
+	} else if (open && open.kind === "stop" && open.step && isFreeRun(flight) && !open.editable) {
+		const step = open.step;
+		const r = freeStopRemedies(flight, open);
+		const run = (fn) => void act(async () => {
+			if (await fn()) close();
+		});
+		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
+			node: open,
+			def: inspectorDef(kindOf.get(step.kind), step),
+			lineSteps: flight.steps,
+			busy,
+			note: r.note,
+			onClose: close,
+			onDone: r.done ? () => run(() => r.done === "carry" ? controlFlight(flight.id, "resume") : stepDone(flight.id, step.id)) : void 0,
+			doneLabel: r.done === "carry" ? "Carry on" : void 0,
+			doneTitle: r.done === "carry" ? "Carry on past your halt point — “" + step.title + "” runs, and the route goes on" : void 0,
+			onRetry: r.retry ? () => run(() => stepRetry(flight.id, step.id)) : void 0,
+			onFix: r.fix ? () => run(() => stepFix(flight.id, step.id)) : void 0,
+			onSkip: r.skip ? () => run(() => stepSkip(flight.id, step.id)) : void 0
+		}, open.id);
 	} else if (open && open.kind === "stop" && open.step) {
 		const step = open.step;
 		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
@@ -145383,7 +146610,9 @@ function useGroundedLine(flight, src) {
 			busy,
 			onClose: close,
 			onSave: (patch) => act(async () => {
-				if (await patchStop(flight.id, step.id, patch)) close();
+				const r = await saveStop(flight.id, step.id, patch);
+				if (r.ok) close();
+				return r;
 			}),
 			onDuplicate: () => {
 				const at = open.index + 1;
@@ -145429,6 +146658,47 @@ var groundedName = (f) => {
 	if (!steps.length) return "Route";
 	return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
 };
+var ROUTE_EDITS_EVENT = "mf:sky-route-edits";
+function storedRouteEdits() {
+	try {
+		return readRouteEdits(localStorage.getItem(ROUTE_EDITS_KEY));
+	} catch {
+		return {};
+	}
+}
+function writeRouteEdits(next) {
+	try {
+		localStorage.setItem(ROUTE_EDITS_KEY, JSON.stringify(next));
+	} catch {}
+	memo$1 = next;
+	if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(ROUTE_EDITS_EVENT));
+}
+var memo$1 = null;
+var routeEdits = () => memo$1 ??= storedRouteEdits();
+function markRouteEdit(flightId, planId) {
+	const next = { ...routeEdits() };
+	if (planId) next[flightId] = planId;
+	else delete next[flightId];
+	writeRouteEdits(next);
+}
+function useRouteEdits() {
+	const [edits, setEdits] = (0, import_react.useState)(() => typeof window === "undefined" ? {} : routeEdits());
+	(0, import_react.useEffect)(() => {
+		const heard = () => setEdits(routeEdits());
+		const other = (e) => {
+			if (e.key !== ROUTE_EDITS_KEY) return;
+			memo$1 = null;
+			heard();
+		};
+		window.addEventListener(ROUTE_EDITS_EVENT, heard);
+		window.addEventListener("storage", other);
+		return () => {
+			window.removeEventListener(ROUTE_EDITS_EVENT, heard);
+			window.removeEventListener("storage", other);
+		};
+	}, []);
+	return edits;
+}
 function GroundedLine(p) {
 	const { flight } = p;
 	const line = useGroundedLine(flight, {
@@ -145447,6 +146717,12 @@ function GroundedLine(p) {
 	const edTitle = editorTitle(edLabel);
 	const edHint = "New items from " + (edTitle.name || "this source") + " run these stops";
 	const lod = lodFor(p.zoom || 1);
+	const running = isFreeRun(flight);
+	const cancel = useCancelAsk(running ? flight : null);
+	const parts = liveBoxParts(running ? flight : null, true, cancel.ask, {
+		verifyInPlace: true,
+		inTile: true
+	});
 	const [ownDefault, setOwnDefault] = (0, import_react.useState)(false);
 	const [baseSteps, setBaseSteps] = (0, import_react.useState)(null);
 	const edKind = ed?.kind;
@@ -145484,13 +146760,24 @@ function GroundedLine(p) {
 		read();
 		return () => ro.disconnect();
 	}, []);
-	const save = async () => {
-		const plan = planToSave(name, flight.steps, p.plans);
+	const edits = useRouteEdits();
+	const editing = ed ? null : editedPlanOf(flight.id, edits, p.plans);
+	const [asking, setAsking] = (0, import_react.useState)(null);
+	const save = async (asked) => {
+		const plan = planToSave(asked ?? name, flight.steps, p.plans, asked !== void 0 ? { fresh: true } : { into: editing?.id });
+		setBusy(true);
 		try {
 			const saved = await savePlan(plan);
-			toast((plan.id ? "Updated “" : "Saved “") + saved.name + "” on the shelf");
+			setAsking(null);
+			toast(savedWords$1(saved?.name || plan.name, !!plan.id));
+			if (editing) {
+				markRouteEdit(flight.id, "");
+				await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+			}
 		} catch (err) {
-			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+			toast("Saving the route failed: " + errMsg(err), { error: true });
+		} finally {
+			setBusy(false);
 		}
 	};
 	const writeDefault = async (reset) => {
@@ -145536,6 +146823,7 @@ function GroundedLine(p) {
 	const remove = async () => {
 		if (ed) return discard();
 		if (busy) return;
+		if (editing) markRouteEdit(flight.id, "");
 		setBusy(true);
 		try {
 			if (p.onRemove) await p.onRemove();
@@ -145554,7 +146842,26 @@ function GroundedLine(p) {
 			setBusy(false);
 		}
 	};
-	const updates = !!sourcePlanId(flight.steps, p.plans);
+	const fromId = sourcePlanId(flight.steps, p.plans);
+	const target = editing || (fromId ? p.plans.find((x) => x.id === fromId) || null : null);
+	const saveItems = target ? [{
+		key: "save",
+		label: "Save to “" + target.name + "”",
+		title: (editing ? "Write these stops back to the saved route you are editing" : "Update the saved route these came from") + " — routes already running keep their own copy",
+		className: "skl-mi-group",
+		onSelect: () => void save()
+	}, {
+		key: "save-new",
+		label: "Save as a new route…",
+		title: "Keep these stops on the shelf under a new name",
+		onSelect: () => setAsking(name)
+	}] : [{
+		key: "save",
+		label: "Save as a route…",
+		title: "Keep these stops on the shelf as a saved route — you name it",
+		className: "skl-mi-group",
+		onSelect: () => setAsking(name)
+	}];
 	const items = [
 		{
 			key: "add",
@@ -145568,13 +146875,7 @@ function GroundedLine(p) {
 			title: "Pick a session (or a new one): these stops run in it",
 			onSelect: p.onFlyOn
 		}],
-		{
-			key: "save",
-			label: "Save to the shelf",
-			title: updates ? "Update the saved route these came from" : "Keep these stops on the shelf as a saved route",
-			className: "skl-mi-group",
-			onSelect: () => void save()
-		},
+		...saveItems,
 		ed ? {
 			key: "remove",
 			label: "Discard",
@@ -145656,14 +146957,21 @@ function GroundedLine(p) {
 	const wrapRef = (0, import_react.useRef)(null);
 	const moves = useNodeMoves(flight.id, line.graphDiagram, "flight:" + flight.id);
 	const head = p.head || NO_HEAD;
+	const big = (0, import_react.useMemo)(() => running ? stopTileBoxes(moves.diagram, flight) : void 0, [
+		running,
+		moves.diagram,
+		flight
+	]);
 	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
 		head,
 		key: "flight:" + flight.id,
-		flightId: flight.id
+		flightId: flight.id,
+		big
 	}), [
 		moves.diagram,
 		head,
-		flight.id
+		flight.id,
+		big
 	]);
 	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
 	useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
@@ -145674,7 +146982,6 @@ function GroundedLine(p) {
 	});
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const shift = (0, import_react.useRef)(false);
-	const running = isFreeRun(flight);
 	const run = chainRunFor(flight, head.kind, () => ({
 		running,
 		label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
@@ -145706,7 +147013,7 @@ function GroundedLine(p) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "skl-bar skl-label",
 				"data-tour": "sky-grounded",
-				title: p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's route to give them to it",
+				title: p.draggable === false ? "Click to focus these stops (Select (V) moves them)" : "Drag to move these stops — onto a session's route to give them to it",
 				onPointerDown: onBarDown,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
@@ -145748,10 +147055,35 @@ function GroundedLine(p) {
 						title: head.title + " — " + head.sub,
 						children: "Started by a route"
 					}),
-					running && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused"),
-						title: flight.repo_root ? "Running in " + flight.repo_root : void 0,
-						children: flight.state === "waiting_you" ? "Needs you" : flight.state === "running" ? "Running" : "Paused"
+					running && (() => {
+						const c = runChip(flight);
+						const where = flight.repo_root ? " · in " + flight.repo_root : "";
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-box-chip skl-chip skl-free-chip tone-" + c.tone,
+							"data-run": flight.state,
+							title: c.title + where,
+							children: c.label
+						});
+					})(),
+					editing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "skl-default-acts",
+						"data-no-drag": true,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "fl-box-chip skl-chip skl-editing-tag",
+							title: "An editable copy of the saved route “" + editing.name + "” — Save writes these stops back to it",
+							children: [
+								"Editing “",
+								editing.name,
+								"”"
+							]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary fl-btn skl-edit-save",
+							disabled: busy || !flight.steps.length,
+							title: "Write these stops back to “" + editing.name + "” — routes already running keep their own copy",
+							onClick: () => void save(),
+							children: "Save"
+						})]
 					}),
 					!running && flight.last_run && (() => {
 						const w = lastRunWords(flight.last_run);
@@ -145806,6 +147138,22 @@ function GroundedLine(p) {
 				className: "skl-default-hint",
 				children: edHint
 			}),
+			editing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "skl-default-hint",
+				children: [
+					"Change the stops, then Save — “",
+					editing.name,
+					"” takes them; routes already running keep their own copy."
+				]
+			}),
+			asking !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SaveRouteAsk, {
+				initial: asking,
+				plans: p.plans,
+				busy,
+				onSave: (n) => void save(n),
+				onCancel: () => setAsking(null)
+			}),
+			cancel.node,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				ref: wrapRef,
 				className: "skl-chain-wrap",
@@ -145830,6 +147178,7 @@ function GroundedLine(p) {
 						onNodeMove: moves.move,
 						onPortDown: p.onPortDown,
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						renderInBox: running ? parts.renderInBox : void 0,
 						run
 					}),
 					chainMenu.menu,
@@ -146375,7 +147724,7 @@ var SKY_SHORTCUT_GROUPS = [
 			},
 			{
 				keys: ["H"],
-				what: "Click tool: a drag pans"
+				what: "Pan tool: a drag pans"
 			}
 		]
 	},
@@ -146384,7 +147733,7 @@ var SKY_SHORTCUT_GROUPS = [
 		items: [
 			{
 				keys: ["V"],
-				what: "Drag tool: a drag on empty sky selects"
+				what: "Select tool: a drag on empty sky selects"
 			},
 			{
 				keys: ["drag"],
@@ -147103,7 +148452,12 @@ function SkyEmpty({ blank, className, children, newSession = false }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: SKY_EMPTY_TITLE }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: SKY_LINE }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VisionPicture, { compact: true }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [VISION_BREATH[1], " Start one, or let work arrive by itself from your tracker."] }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+				VISION_BREATH[1],
+				" ",
+				VISION_BREATH[2],
+				" Start one, or let work arrive by itself from your tracker."
+			] }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "empty-actions",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -147132,12 +148486,12 @@ var MINIMAP_KEY = "mf_sky_minimap";
 var FINISHED_KEY = "mf_sky_finished";
 var TOOL_CHIPS = {
 	drag: {
-		label: "✥ Drag",
-		title: "Drag mode (V): a route moves by its bar, a drag on empty sky selects"
+		label: "Select (V)",
+		title: "Select (V): a drag on empty sky selects, a route moves by its bar — hold Space to pan"
 	},
 	click: {
-		label: "☝ Click",
-		title: "Click mode (H): a drag anywhere pans, a click focuses a route or selects a stop — Shift+drag selects"
+		label: "Pan (H)",
+		title: "Pan (H): a drag anywhere pans, a click focuses a route or selects a stop — Shift+drag selects"
 	}
 };
 var OBJECT_CONTROLS = "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new, .sky-palette-slot, .sky-block-ask, .sky-ground-menu";
@@ -147403,11 +148757,7 @@ function SkyView() {
 		titles,
 		allowed: !narrow && mode !== "one"
 	});
-	const grounded = (0, import_react.useMemo)(() => {
-		if (mode === "one" || mode === "perched") return [];
-		const q = query.trim().toLowerCase();
-		return groundedFlights(flights).filter((f) => !q || groundedName(f).toLowerCase().includes(q));
-	}, [
+	const grounded = (0, import_react.useMemo)(() => groundedShown(flights, mode, query, groundedName), [
 		flights,
 		mode,
 		query
@@ -148279,7 +149629,7 @@ function SkyView() {
 	};
 	const liveFlightOf = (title) => {
 		const fl = rows.find((r) => r.title === title)?.flight;
-		return fl && isShown(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+		return fl && isShown$1(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
 	};
 	const onFly = (plan, title) => {
 		const live = liveFlightOf(title);
@@ -148444,6 +149794,39 @@ function SkyView() {
 		placing.current.set(groundedKey(f.id), near);
 		groundedLanded(f);
 	};
+	const editPlan = async (plan) => {
+		const f = await startGrounded({ steps: plan.steps.map((st) => ({
+			...st,
+			group: void 0
+		})) });
+		if (!f) return;
+		markRouteEdit(f.id, plan.id);
+		renameFlight(f.id, plan.name);
+		if (!alive.current) return;
+		const at = spotRef.current(f, "shelf");
+		setLayout((l) => patchSkyLine(l, groundedKey(f.id), {
+			x: at.x,
+			y: at.y,
+			pinned: true
+		}));
+		placing.current.set(groundedKey(f.id), "shelf");
+		setGroundFocus(groundedKey(f.id));
+		groundedLanded(f);
+		toast("Editing “" + plan.name + "” — change its stops, then Save on its bar");
+	};
+	const pendingFly = (0, import_react.useRef)("");
+	const focusFlight = (id) => {
+		const key = groundedKey(id);
+		if (rectOf(key)) return jumpTo(key);
+		pendingFly.current = key;
+		setSkyMode("all");
+	};
+	(0, import_react.useEffect)(() => {
+		const key = pendingFly.current;
+		if (!key || !rectOf(key)) return;
+		pendingFly.current = "";
+		jumpTo(key);
+	}, [rectOf]);
 	const editDefault = (ref) => void openDefaultEditor(ref, flights, {
 		existing: (f) => {
 			const key = groundedKey(f.id);
@@ -149383,7 +150766,7 @@ function SkyView() {
 	}, [narrow]);
 	const noSessions = instQ.data !== void 0 && instQ.data.length === 0;
 	const groundedHidden = mode === "one" && groundedIds.size > 0;
-	const empty = lines.length > 0 ? "" : groundedHidden && noSessions && !focused && !query ? GROUNDED_HIDDEN_LINE : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+	const empty = lines.length > 0 ? "" : groundedHidden && noSessions && !focused && !query ? GROUNDED_HIDDEN_LINE : mode === "one" && focused ? "“" + windowName(focused) + "” isn't in the sky right now." : mode === "one" && !noSessions ? instQ.data === void 0 ? "" : narrow ? "Pick a session in the list to show its route here." : "Pick a session on the left to show its route here." : query ? "No route matches “" + query + "”." : mode === "perched" ? "Nothing needs you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — a route is the stops a session's work goes through, from the agent to the PR. Double-click anywhere, or press the Session chip in the shelf below, to start one.";
 	const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
@@ -149549,7 +150932,8 @@ function SkyView() {
 			setDrawerPref(v);
 			writePref(SKY_DRAWER_KEY, v);
 		},
-		onFocus: focusOn
+		onFocus: focusOn,
+		onFocusFlight: focusFlight
 	});
 	const openCatalog = () => {
 		const c = camRef.current;
@@ -149588,6 +150972,7 @@ function SkyView() {
 			onFloat: narrow ? void 0 : () => setPaletteMode("float"),
 			onCatalog: narrow ? void 0 : openCatalog,
 			onSession: newHere,
+			onEditPlan: (plan) => void editPlan(plan),
 			folded: shelfFolded,
 			onFold: foldShelf
 		}), takeoff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffDialog, {
@@ -150279,6 +151664,7 @@ publishToast();
 publishWindowName();
 installGlobalDropGuards();
 applyStoredAppearance();
+installRepaintTriggers(window, document);
 (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueryClientProvider, {
 	client: queryClient,
 	children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {})

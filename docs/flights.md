@@ -1828,8 +1828,7 @@ stop that failed (Retry / Skip / Let the agent fix it):
 - **Pause** stops the route where it is: the pause route
   (`POST /api/flights/{id}/pause`), on the current stop's menu and the bird
   (▶ **Carry on** while paused); the toast reads "Route paused — Carry on picks
-  it up again". (The pane strip's own ⋯ still labels it *Halt now* / Carry on
-  / Cancel — `FlightStrip.tsx`, not yet renamed.)
+  it up again". The pane strip's own ⋯ reads Pause / Carry on / Cancel.
 - **Add halt point** marks a stop not yet done as a **halt point** (`halt:
   true` on the step): the route pauses when it *reaches* it, before doing it,
   like a breakpoint (state `paused`, reason `"halt point"`). ⏸ **Add halt
@@ -1874,13 +1873,12 @@ and the flight's current stop, offers ⏸ Add halt point (Remove halt point on a
 halt point, `pressed: true`) on its toolbar and menu; the current stop's own
 toolbar (Pause / ▶ Carry on, then ⏸) shows only on such a line, so a line
 without it asks for no headroom. The current stop's right-click menu offers
-Pause / Carry on on any live line (`controlFlight`). (`FlywayCanvas`'s ⏸ tool
-still decides "pressed" from the old label, so it draws pressed on every
-stop until `HaltTool` reads `pressed`.) A halt point wears `.fl-halt-point` and a ⏸ badge
+Pause / Carry on on any live line (`controlFlight`). The ⏸ tool looks pressed
+only on a halt point (`HaltTool` reads `pressed`). A halt point wears `.fl-halt-point` and a ⏸ badge
 (`.fl-halt-mark`, top-left, the paused tone; `StopEditing.css`).
 `useSessionLine` wires `onToggleHalt` to `flightsApi.setHalt(flightId,
 stepId, !halt)`. The pane strip leads with "Paused · " for a paused route,
-and its ⋯ reads Halt now / Carry on / Cancel (see above).
+and its ⋯ reads Pause / Carry on / Cancel (see above).
 
 ## Editing stops on a line
 
@@ -1903,10 +1901,10 @@ through the same `FlywayCanvas` props. The rules are pure, in
 | ← / → (↑ / ↓ on a phone) on a selected stop | Moves it one place | `onMove` |
 | Drag a stop along the line | Moves it there (never before the flight's current stop) | `onMove` |
 | The + between two boxes (shows on hover of the whole line) | The stop palette, to put one in there | `onInsert` |
-| The trailing + | **Add a stop** (its menu item; palette and "Fly a flyway"). The box itself is still titled "Tack on a stop" (`flightDiagram.ts` `addNode`) | `onOpen` |
+| The trailing + | **Add a stop** (the box's title and its menu item; palette and "Fly a flyway") | `onOpen` |
 | ⏸ on a stop's toolbar or menu | Add halt point / Remove halt point ([Halt points](#halt-points)) | `onToggleHalt` |
 | Pause / ▶ on the current stop's toolbar or menu | Pause / Carry on (pause / resume the route) | — (`controlFlight`) |
-| Drag a stop chip from the shelf onto the line | The gap it would land in lights up ("+ Tack on here"), or the end + reads "Tack on <Kind>"; dropping tacks the stop on there | `onDropStop`, `dragStop` |
+| Drag a stop chip from the shelf onto the line | The gap it would land in lights up ("+ Add here"), or the end + reads "Add <Kind>"; dropping adds the stop there | `onDropStop`, `dragStop` |
 
 Only a stop that can change (`DiagramNode.editable`: in the editor every
 stop; in a live flight the pending stops after the current one) wears the
@@ -7978,9 +7976,3 @@ form opens on one sentence of what the route will do there (its halt point,
 "Start a new session for this stop"; a Wait stop greys How long once a time
 is set. The dialog's layout, remedies and discard confirm are in
 docs/web-ui.md.
-
-**Known leftovers.** The pane strip's ⋯ still says *Halt now*
-(`FlightStrip.tsx`); the trailing + box and the drop gap still read "Tack on a
-stop" / "Tack on here" (`flightDiagram.ts`, `FlywayCanvas.tsx`); and
-`FlywayCanvas`'s ⏸ tool draws pressed on every stop, because it still compares
-against the old "Halt here" label.
