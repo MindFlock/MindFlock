@@ -949,9 +949,12 @@ export function TopBarMic() {
     // ask being read drops the rest of its read-out — and the first moment
     // of audio (its voice dying away) is skipped.
     const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
-    // The start chime is not the person: skipped like the app's own voice
-    // (with the breath it waits when something is queued).
+    // The start chime is not the person: recorded, but no word starts under
+    // it (with the breath it waits when something is queued) — a word said
+    // over it keeps its start, and the pre-roll stays.
     const chimeSkip = prefsRef.current.sounds !== false ? queue.cueLead + CHIME_MS + 30 : 0;
+    // (The server recognizer's own start() takes chimeMs; Web Speech ignores it.)
+    const recOpts = { skipMs, chimeMs: chimeSkip };
     const continuous = opts.continuous !== false;
     idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
     const d = new LiveDictation(
@@ -1162,7 +1165,7 @@ export function TopBarMic() {
           void d.expire();
         },
       },
-      { skipMs: Math.max(skipMs, chimeSkip) }
+      recOpts
     );
     // Settings may have moved the engines since: the next round knows.
     void refreshCfg();
@@ -1584,15 +1587,15 @@ export function TopBarMic() {
       if (live.current === d && !d.heardAnything) d.drop();
     }, WAKE_LISTEN_MS);
   };
-  const latestWake = useRef(woken);
+  const latestWake = useRef<(soundEnd: number, rest?: string) => void>(woken);
   latestWake.current = woken;
   if (!standby.current)
     standby.current = new WakeStandby({
       mic: serverRec.mic,
       ctx: voiceAudioCtx,
-      speaking: () => queue.busy,
+      speaking: () => queue.audibleNow,
       recording: () => !!live.current,
-      onWake: (soundEnd) => latestWake.current(soundEnd),
+      onWake: (soundEnd, rest) => latestWake.current(soundEnd, rest),
       onLevel: (rms) => {
         if (!live.current) meterFeed(rms);
       },

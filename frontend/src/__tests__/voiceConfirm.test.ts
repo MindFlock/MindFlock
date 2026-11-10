@@ -679,8 +679,8 @@ describe("the mic's chimes: rising at every start, falling at every stop", () =>
     // The only chime() call is the helper's: no path plays its own.
     expect(MIC.match(/\bchime\(/g)).toHaveLength(1);
     expect(fnBody("const woken = ", "const latestWake")).not.toMatch(/chime|sound\(/);
-    // Its sound is skipped from the recording.
-    expect(start).toMatch(/\{ skipMs: Math\.max\(skipMs, chimeSkip\) \}/);
+    // Its sound is recorded, but no word starts in it (the recognizer's chimeMs).
+    expect(start).toMatch(/const recOpts = \{ skipMs, chimeMs: chimeSkip \};/);
   });
 
   it("every stop chimes: halt() — where over and out, a stop phrase, Esc, the button, letting go, the idle stop and a refused send all end — only after a start chimed", () => {

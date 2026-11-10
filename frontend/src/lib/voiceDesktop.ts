@@ -5016,6 +5016,7 @@ export class RecordingClock {
     return Number.isFinite(this.zero) ? Math.round(this.zero + s * 1000) : 0;
   }
 }
+import { CAPTURE_MUTE_HOLD_S, PRE_ROLL_RATE } from "./voiceMic";
 const CLIP_MAX_MS = 12_000; // the hard cap on one clip
 const UPLOAD_TIMEOUT_MS = 45_000;
 const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
@@ -5078,6 +5079,78 @@ export const MIC_LOST_LINE = "The microphone went away — listening on the defa
 /** …and when it goes away again this soon after, listening stops with this. */
 export const MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
 export const MIC_LOST_RETRY_MS = 3000;
+/** A stream open answered 409 for the server's stream cap ({@link
+ * streamFull}: a stream still ending, another window) is asked again this
+ * often… */
+export const STREAM_OPEN_RETRY_MS = 300;
+/** …this many times (≈1.5 s, the phone's VOICE_STREAM_FULL_MAX_MS); still
+ * full, that phrase goes as a clip and the next one streams again — never
+ * a downgrade that sticks for the rest of the dictation. */
+export const STREAM_OPEN_RETRIES = 5;
+/** A 409 on POST /api/voice/stream that is the server's stream CAP ("…
+ * already open: end one first") — passing — not "this backend does not
+ * stream" (clips for the rest of the dictation). mobile.js voiceStreamFull. */
+export const streamFull = (error: unknown) => /already open|end one first/i.test(String(error || ""));
+/** Before its first word a streamed phrase is sent this much of what came
+ * before its first loud block (the word's soft start: "stop", not "top") —
+ * a rolling window, the phone's VOICE_LEAD_MS. */
+export const LEAD_IN_MS = 300;
+/** Loud blocks in a row that are a voice, not a blip: a click, a knock, a
+ * key is one ~85 ms block; a syllable is two or more. A streamed phrase
+ * that never had this many, and of which the server heard no word, is
+ * dropped as noise instead of ending as an (empty) phrase. */
+export const ONSET_RUN = 2;
+/** A phrase's speech this long (ms) lets its noise floor learn again (a fan
+ * switched on is a new room) — lib/wakeWord's RELEARN_MS. */
+export const FLOOR_RELEARN_MS = 5000;
+
+/** The dictation's level detector for one phrase, fed each block's RMS: the
+ * noise floor (from the room's quiet, lib/voiceMic {@link noiseFloor}) and
+ * whether a block is loud ({@link isLoud}). As the standby's detector
+ * (lib/wakeWord LoneUtterance): the floor never creeps up while the phrase
+ * is in speech (for {@link FLOOR_RELEARN_MS}) — a steady voice would turn
+ * "quiet" and a sentence end early — and never under the start chime
+ * (`hush`: no word starts in it; the floor only goes down). `run` / `best`:
+ * loud blocks in a row now / at most ({@link ONSET_RUN}). Pure. */
+export class PhraseLevel {
+  run = 0;
+  best = 0;
+  private speechMs = 0;
+  constructor(public floor = 0) {}
+
+  /** One block (`blockMs` long): loud or not. `speech`: the phrase is in
+   * speech (its first word was heard). */
+  feed(rms: number, blockMs: number, o: { hush?: boolean; speech?: boolean } = {}): boolean {
+    if (o.speech) this.speechMs += Math.max(0, blockMs);
+    const learn = !o.hush && (!o.speech || this.speechMs > FLOOR_RELEARN_MS);
+    this.floor = learn || this.floor === 0 ? noiseFloor(this.floor, rms) : Math.min(this.floor, rms);
+    const loud = !o.hush && isLoud(rms, this.floor);
+    this.run = loud ? this.run + 1 : 0;
+    this.best = Math.max(this.best, this.run);
+    return loud;
+  }
+}
+
+/** Speech in `pcm` (at `rate`): cut in ~85 ms blocks through a
+ * {@link PhraseLevel} from `floor`, the first run of {@link ONSET_RUN} loud
+ * blocks — its start and the last loud block's end (s into `pcm`) — or null
+ * (quiet, or blips only). A wake's lead-in is read so ({@link MicKeeper.takeLead}). */
+export function leadSpeech(pcm: Float32Array, rate: number, floor = 0): { startS: number; endS: number } | null {
+  const n = Math.max(1, Math.round(rate * 0.085));
+  const lv = new PhraseLevel(floor);
+  let start = -1;
+  let end = -1;
+  let runAt = 0;
+  for (let at = 0; at + n / 2 <= pcm.length; at += n) {
+    const b = pcm.subarray(at, Math.min(pcm.length, at + n));
+    const loud = lv.feed(rmsOf(b), (b.length / rate) * 1000, { speech: start >= 0 });
+    if (!loud) continue;
+    if (lv.run === 1) runAt = at;
+    if (start < 0 && lv.run >= ONSET_RUN) start = runAt;
+    if (start >= 0) end = at + b.length;
+  }
+  return start < 0 ? null : { startS: start / rate, endS: end / rate };
+}
 
 /** Hears for the person while the app talks. What reaches the microphone
  * of the app's own voice — what the browser's echo cancellation leaves of
@@ -5145,8 +5218,11 @@ interface Phrase {
    * server): the quiet that ends it ({@link turnHoldMs}). */
   turn: TurnVerdict | null;
   /** The pre-roll (16 kHz) its speech began in — sent in front of its first
-   * audio ({@link PRE_ROLL_ONSET_S}); null once sent, or none. */
+   * audio ({@link PRE_ROLL_ONSET_S}), or its lead-in ({@link LEAD_IN_MS}, a
+   * wake's: what was said after the word); null once sent, or none. */
   pre: Float32Array | null;
+  /** The most loud blocks in a row it had ({@link ONSET_RUN}). */
+  run: number;
   /** Its committed words so far, and the latest unstable tail (streaming). */
   said: string;
   partial: string;
@@ -5203,8 +5279,9 @@ export const VOICE_CLIENT_ID = (() => {
  *    (unstable) go to onStream together (else onWords, onPartial). The same quiet ends the
  *    phrase: /end flushes its last words to onFlush, and the next phrase
  *    opens a new stream (a phrase that heard nothing DELETEs its). No cap. A
- *    409 on the open, or any failed request, falls back to clips for the rest
- *    of the dictation.
+ *    409 that says the server does not stream, or any failed request, falls
+ *    back to clips for the rest of the dictation; the stream cap's 409 is
+ *    asked again ({@link STREAM_OPEN_RETRIES}), then only that phrase is a clip.
  * While listening is wanted the next phrase starts recording as soon as one
  * ends, so phrases arrive one by one like Chrome's finals. The microphone is
  * `opts.mic`'s (lib/voiceMic): held while listening, kept warm a while after,
@@ -5212,6 +5289,9 @@ export const VOICE_CLIENT_ID = (() => {
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
 ): Recognizer & {
+  /** `chimeMs`: the start chime's span — recorded, but no word starts in it
+   * (`skipMs` drops audio: the app's own voice cut just before). */
+  start(h: RecognizerHandlers, opts?: { skipMs?: number; chimeMs?: number }): boolean;
   lastError: string;
   mic: MicKeeper;
   passMs: number | null;
@@ -5257,13 +5337,22 @@ export function serverRecognizer(
   /** Barge-in: audio before this (ms) is the app's own voice dying away. */
   let skipUntil = 0;
   /** start()'s skip, until the dictation's first recording takes it: on a
-   * cold AudioContext the chime it covers plays only once the context runs,
-   * so the skip is counted again from then. */
+   * cold AudioContext the line's tail it covers dies away only once the
+   * context runs, so the skip is counted again from then. */
   let firstSkipMs = 0;
-  /** `ctx` runs now: the skip start() asked for runs from now. */
+  /** The start chime: until then (ms) no word starts — its audio is
+   * recorded (a word said over it keeps its start, the pre-roll stays), the
+   * detector sits it out. Counted again from when a cold context runs. */
+  let hushUntil = 0;
+  let firstHushMs = 0;
+  /** `ctx` runs now: the skip and the chime start() asked for run from now. */
   const skipFromNow = () => {
     if (firstSkipMs) skipUntil = Math.max(skipUntil, Date.now() + firstSkipMs);
+    if (firstHushMs) hushUntil = Math.max(hushUntil, Date.now() + firstHushMs);
   };
+  /** A wake's lead-in (lib/voiceMic MicKeeper.takeLead: what was said after
+   * the word, before the chime), for the dictation's first recording. */
+  let wakeLead: Float32Array | null = null;
   /** The app says a line: its audio is not the person's — the recorder
    * drops it ({@link Recognizer.mute}) while an analyser on the microphone
    * listens for a voice over it ({@link BargeDetector} → onBarge). */
@@ -5272,6 +5361,11 @@ export function serverRecognizer(
   let bargeTimer: ReturnType<typeof setInterval> | undefined;
   let bargeTap: { src: MediaStreamAudioSourceNode; an: AnalyserNode; buf: Float32Array<ArrayBuffer>; stream: MediaStream } | null = null;
   let lastBargeAt = 0;
+  /** This mute's first barge-in (ms; 0: none) and the last loud read after
+   * it: a voice over a line that plays on (a confirmation) is rewound from
+   * its start when the mute lifts ({@link CAPTURE_MUTE_HOLD_S} at most). */
+  let bargeFrom = 0;
+  let loudOver = 0;
   /** When the microphone last went away mid-listen (ms). */
   let lostAt = 0;
   /** The microphone and the context the phrase records with. */
@@ -5298,8 +5392,11 @@ export function serverRecognizer(
       const t = bargeTap;
       if (!t || !muted || !h) return;
       t.an.getFloatTimeDomainData(t.buf);
-      if (!barge.block(rmsOf(t.buf))) return;
+      const hit = barge.block(rmsOf(t.buf));
+      if (bargeFrom && barge.loud) loudOver = Date.now();
+      if (!hit) return;
       lastBargeAt = Date.now();
+      if (!bargeFrom) bargeFrom = loudOver = lastBargeAt;
       h.onBarge?.();
     }, BARGE_POLL_MS);
   };
@@ -5463,11 +5560,20 @@ export function serverRecognizer(
         } catch {
           ctx = null;
         }
-        const r = await call("/api/voice/stream", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx)),
-        });
+        const ask = () =>
+          call("/api/voice/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(streamOpenBody(langTag(), VOICE_CLIENT_ID, ctx)),
+          });
+        let r = await ask();
+        // A 409 for the stream cap: passing — asked again (the phone's
+        // 300 ms × 1.5 s) before this phrase goes as a clip.
+        for (let n = 0; r.status === 409 && streamFull(r.j.error) && n < STREAM_OPEN_RETRIES; n++) {
+          await new Promise((res) => setTimeout(res, STREAM_OPEN_RETRY_MS));
+          if (h !== hh || !c.stream) return;
+          r = await ask();
+        }
         const id = String(r.j.id || "");
         if (h !== hh || !c.stream) {
           if (r.ok && id) void apiRaw(streamPath(id, ""), { method: "DELETE" }).catch(() => {});
@@ -5480,6 +5586,16 @@ export function serverRecognizer(
           voiceMark("stream");
           // Nobody was listening: the model loads now, the first words wait.
           if (r.j.loading === true) setLoading(true);
+        } else if (r.status === 409 && streamFull(r.j.error)) {
+          // Still full: this phrase is a clip; the next one streams again.
+          self.lastError = String(r.j.error);
+          c.stream = false;
+          if (cur === c) {
+            clearTimeout(capTimer);
+            capTimer = setTimeout(() => {
+              if (cur === c) endClip();
+            }, CLIP_MAX_MS);
+          }
         } else if (r.status === 409) {
           self.lastError = String(r.j.error || "the server can't stream");
           fallBack(c, "");
@@ -5534,7 +5650,9 @@ export function serverRecognizer(
    * is new: the first {@link FIRST_CHUNK_S} of speech, then {@link chunkMinS}. */
   const pump = (c: Phrase) => {
     if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
-    const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+    // (A lead-in taken from the ring at the first word holds that block:
+    // speechS before trimS, the first chunk goes that much sooner.)
+    const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS + FIRST_CHUNK_S);
     const takenAt = Date.now();
     const blob = c.rec.take(min);
     if (!blob) return;
@@ -5593,12 +5711,16 @@ export function serverRecognizer(
         return;
       }
       if (!c.sid) return; // its open failed (it fell back), or it was dropped
+      // A blip (a click, a knock, a key): never two loud blocks in a row,
+      // and the server, answered, heard no word in it — noise, not a phrase
+      // (never an empty one typed, nor its /end's pass).
+      if (c.heard && c.run < ONSET_RUN && c.passAt && !c.said && !c.partial) c.heard = false;
       if (!c.heard) {
         // Nothing said: the stream opened for it goes unused.
         discard(c);
         return;
       }
-      if (tail && tail.size > TAIL_MIN_BYTES && c.fresh) await sendChunk(c, tail, hh);
+      if (tail && c.fresh && (tail.size > TAIL_MIN_BYTES || (c.pre && tail.size > 44))) await sendChunk(c, tail, hh);
       heard(); // its words are all in: a next phrase's may go once it is flushed
       if (h !== hh || !c.stream || !c.sid) return;
       const sid = c.sid;
@@ -5725,6 +5847,7 @@ export function serverRecognizer(
       loudAt: 0,
       turn: null,
       pre: null,
+      run: 0,
       said: "",
       partial: "",
       passAt: 0,
@@ -5786,23 +5909,33 @@ export function serverRecognizer(
     }
     const skip = Math.max(0, skipUntil - Date.now());
     firstSkipMs = 0;
-    // Not after a barge-in or under the chime's skip (that audio is not the
-    // person's), nor while muted.
+    firstHushMs = 0;
+    // Not after a barge-in (that audio is the app's voice dying away), nor
+    // while muted. Under the start chime it is kept: no word starts there,
+    // but one said over it keeps its start.
     const pre = skip || muted ? null : mic.preRoll();
     // The silence detector: the recorder's RMS per block against a noise
     // floor that follows the quiet moments — from the room's quiet as the
-    // pre-roll heard it, when there is one.
-    let floor = mic.quietFloor();
+    // pre-roll heard it, when there is one ({@link PhraseLevel}).
+    const level = new PhraseLevel(mic.quietFloor());
+    // A wake's lead-in (the first recording only): a command said after the
+    // word while the server checked it — the phrase has begun already.
+    const lead = wakeLead;
+    wakeLead = null;
+    const said = lead && !skip && !muted ? leadSpeech(lead, PRE_ROLL_RATE, level.floor) : null;
     let blockAt = 0; // the recording's time before this block
     const onLevel = (rms: number) => {
       if (cur !== c) return;
       const at = blockAt;
       blockAt = c.rec?.seconds() ?? 0;
       h?.onLevel?.(rms);
-      floor = noiseFloor(floor, rms);
       const now = Date.now();
       c.clock.block(blockAt, now);
-      if (isLoud(rms, floor)) {
+      // The start chime: no word starts under it.
+      const hush = !c.heard && hushUntil > 0 && c.clock.at(at) < hushUntil;
+      const loud = level.feed(rms, (blockAt - at) * 1000, { hush, speech: c.heard });
+      c.run = Math.max(c.run, level.best);
+      if (loud) {
         if (!c.heard) {
           lastHeard = null; // a new phrase: the last one's `heard` is not its
           c.speechS = at;
@@ -5812,9 +5945,20 @@ export function serverRecognizer(
           // earliest it can have begun).
           c.spokeAt = c.clock.at(at);
           // Speech from its first moments: it began before the recording.
-          if (at < PRE_ROLL_ONSET_S) {
+          if (at < PRE_ROLL_ONSET_S && !c.trimS) {
             c.pre = pre;
             if (pre) c.spokeAt -= PRE_ROLL_MS;
+          } else if (c.stream && cap) {
+            // Later: its lead-in is the LEAD_IN_MS before this block and the
+            // block, from the capture's ring (the recording's own blocks,
+            // in step) — never the 0–255 ms the trims below happen to leave.
+            const blockS = blockAt - at;
+            const ring = mic.preRoll(LEAD_IN_MS + blockS * 1000);
+            if (ring && ring.length >= Math.floor(blockS * PRE_ROLL_RATE)) {
+              c.rec?.take(0);
+              c.pre = ring;
+              c.trimS = blockAt;
+            }
           }
           h?.onSpeech?.();
           // Opened so long ago the server may have forgotten it: a new one.
@@ -5850,8 +5994,21 @@ export function serverRecognizer(
     }
     if (muted) c.rec.mute?.(true);
     cur = c;
+    if (said && lead) {
+      // The wake's command, said before the recording: it goes in front of
+      // the first chunk, and the phrase ends on the quiet after it.
+      const t0 = Date.now() - (lead.length / PRE_ROLL_RATE) * 1000;
+      lastHeard = null;
+      c.pre = lead;
+      c.heard = true;
+      c.fresh = true;
+      c.run = ONSET_RUN;
+      c.spokeAt = Math.round(t0 + said.startS * 1000);
+      c.loudAt = Math.round(t0 + said.endS * 1000);
+    }
     voiceMark("mic");
     h?.onReady?.();
+    if (said && lead && cur === c) h?.onSpeech?.();
     if (!c.stream)
       capTimer = setTimeout(() => {
         if (cur === c) endClip();
@@ -5908,15 +6065,40 @@ export function serverRecognizer(
       return cur?.heard ? cur.spokeAt : 0;
     },
     mute(on: boolean) {
+      const was = muted;
       muted = on;
       if (on) listenOver();
       else unlistenOver();
-      // Lifted for a barge-in: the tail is the person's, kept — and so is
-      // the start of their word, heard while the detector was counting.
-      const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
-      cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? BARGE_REWIND_MS / 1000 : 0);
+      if (on && !was) bargeFrom = loudOver = 0;
+      const now = Date.now();
+      // A voice was heard over this line: it was cut for it (a barge-in), or
+      // it played on (a confirmation, "Sent."). Either way the tail is the
+      // person's, kept — and so is everything they said since their voice
+      // began, heard while the detector counted and the line went on
+      // (lib/voiceMic CAPTURE_MUTE_HOLD_S at most): a command said over
+      // "Sent." is not lost.
+      const over = !on && was && bargeFrom > 0;
+      const barged = over || (!on && now - lastBargeAt < BARGE_FRESH_MS);
+      const rewindMs = over ? Math.min(CAPTURE_MUTE_HOLD_S * 1000, now - bargeFrom + BARGE_REWIND_MS) : BARGE_REWIND_MS;
+      cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? rewindMs / 1000 : 0);
       // Muted, its blocks aren't counted: the count no longer follows time.
       cur?.clock.reset();
+      const c = cur;
+      if (over && c?.rec) {
+        // What was rewound is speech: the phrase has begun (it may be over
+        // by now — the quiet after it ends it, as any phrase).
+        if (!c.heard) {
+          lastHeard = null;
+          c.heard = true;
+          c.speechS = c.trimS;
+          c.spokeAt = Math.max(0, bargeFrom - BARGE_REWIND_MS);
+          h?.onSpeech?.();
+        }
+        c.fresh = true;
+        c.run = Math.max(c.run, ONSET_RUN);
+        c.loudAt = Math.max(c.loudAt, loudOver);
+      }
+      if (!on) bargeFrom = loudOver = 0;
     },
     endPhrase() {
       if (cur?.heard && want) {
@@ -5924,15 +6106,19 @@ export function serverRecognizer(
         endClip();
       }
     },
-    start(handlers: RecognizerHandlers, o: { skipMs?: number } = {}) {
+    start(handlers: RecognizerHandlers, o: { skipMs?: number; chimeMs?: number } = {}) {
       self.stop();
       if (!self.available()) return false;
+      // A wake's lead-in: taken now, before the start chime plays.
+      wakeLead = mic.takeLead();
       skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
       firstSkipMs = Math.max(0, o.skipMs || 0);
+      firstHushMs = Math.max(0, o.chimeMs || 0);
+      hushUntil = firstHushMs ? Date.now() + firstHushMs : 0;
       // A cold context (resuming since the press): the chime waits for it,
       // and so does the skip — even when the microphone opens later still.
       const cold = audioCtx && audioCtx.state !== "running" ? audioCtx : null;
-      if (cold && firstSkipMs) {
+      if (cold && (firstSkipMs || firstHushMs)) {
         const mine = handlers;
         void whenRunning(cold).then((ok) => {
           if (ok && h === mine) skipFromNow();
