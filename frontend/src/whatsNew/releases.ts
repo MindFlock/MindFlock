@@ -37,6 +37,24 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.7",
+    date: "2026-11-10",
+    big: false,
+    headline: "MindFlock leaves your git staging alone.",
+    features: [
+      {
+        title: "Your staged files stay yours",
+        body:
+          "Showing a session's changes no longer marks new files as added or stages deletions in your repo. What you stage is only what you staged.",
+      },
+      {
+        title: "Verify, said plainly",
+        body:
+          "Voice now says \"needs you to confirm it's verified\" and \"failed its verify\", and the desktop's \"what needs me\" includes sessions waiting on your confirm.",
+      },
+    ],
+  },
+  {
     version: "0.14.6",
     date: "2026-11-10",
     big: false,
