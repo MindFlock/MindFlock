@@ -191,7 +191,9 @@ describe("barge-in: answer before it is done speaking", () => {
     const barge = start.indexOf("const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : \"\"), opts.skipMs || 0)");
     expect(barge).toBeGreaterThan(-1);
     expect(start.indexOf("r.start(")).toBeGreaterThan(barge);
-    expect(start).toContain("{ skipMs: Math.max(skipMs, chimeSkip) }");
+    // The chime goes beside it: recorded, no word starts in it (chimeMs).
+    expect(start).toContain("const recOpts = { skipMs, chimeMs: chimeSkip };");
+    expect(start).toMatch(/r\.start\([\s\S]*\n\s*recOpts\n\s*\);/);
     // The old bare hold is gone (bargeIn holds).
     expect(start).not.toContain("queue.hold()");
   });

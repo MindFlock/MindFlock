@@ -71,8 +71,8 @@ function detect(levels: number[], blockMs = BLOCK): Array<WakeCandidate & { at: 
 }
 
 describe("the thresholds", () => {
-  it("are a word's: 350 ms of quiet before and 200 ms after 250 ms–1.6 s of speech, 100 ms lead-in, 0.4 s between checks, a kept word fresh 2.5 s, 500 ms after talking", () => {
-    expect([WAKE_QUIET_MS, WAKE_TAIL_MS, WAKE_MIN_MS, WAKE_MAX_MS, WAKE_LEAD_MS]).toEqual([350, 200, 250, 1600, 100]);
+  it("are a word's: 350 ms of quiet before and 200 ms after 250 ms–4 s of speech (the word and a command in one breath), 100 ms lead-in, 0.4 s between checks, a kept word fresh 2.5 s, 500 ms after talking", () => {
+    expect([WAKE_QUIET_MS, WAKE_TAIL_MS, WAKE_MIN_MS, WAKE_MAX_MS, WAKE_LEAD_MS]).toEqual([350, 200, 250, 4000, 100]);
     expect([WAKE_CHECK_GAP_MS, WAKE_PENDING_MS, WAKE_AFTER_SPEECH_MS]).toEqual([400, 2500, 500]);
     // The rolling window holds the longest clip there can be.
     expect(WAKE_KEEP_S * 1000).toBeGreaterThan(WAKE_LEAD_MS + WAKE_MAX_MS + WAKE_TAIL_MS + 2 * 100);
@@ -105,10 +105,10 @@ describe("LoneUtterance: level sequence → candidate windows", () => {
   });
 
   it("too long is a sentence: never a candidate — and a word after it, once quiet, is", () => {
-    expect(detect([...quiet(1000), ...talk(3000), ...quiet(1000)])).toEqual([]);
-    expect(detect([...quiet(1000), ...loud(1600), ...quiet(1000)])).toHaveLength(1);
-    expect(detect([...quiet(1000), ...loud(1700), ...quiet(1000)])).toEqual([]);
-    const after = detect([...quiet(1000), ...talk(3000), ...quiet(600), ...loud(500), ...quiet(600)]);
+    expect(detect([...quiet(1000), ...talk(5000), ...quiet(1000)])).toEqual([]);
+    expect(detect([...quiet(1000), ...loud(4000), ...quiet(1000)])).toHaveLength(1);
+    expect(detect([...quiet(1000), ...loud(4100), ...quiet(1000)])).toEqual([]);
+    const after = detect([...quiet(1000), ...talk(5000), ...quiet(600), ...loud(500), ...quiet(600)]);
     expect(after).toHaveLength(1);
     expect(after[0].loudMs).toBe(500);
   });
@@ -117,12 +117,12 @@ describe("LoneUtterance: level sequence → candidate windows", () => {
     // From the moment standby begins: no quiet before it.
     expect(detect([...loud(500), ...quiet(1000)])).toEqual([]);
     // The word a breath after a sentence ends (under the quiet a lone word needs).
-    expect(detect([...quiet(1000), ...talk(2000), ...quiet(200), ...loud(500), ...quiet(1000)])).toEqual([]);
+    expect(detect([...quiet(1000), ...talk(5000), ...quiet(200), ...loud(500), ...quiet(1000)])).toEqual([]);
   });
 
   it("a steady sound doesn't fool the floor into ending early; a new steady noise is learnt after 5 s", () => {
     // Without the freeze a constant level reads as quiet after ~0.9 s.
-    expect(detect([...quiet(1000), ...loud(3000), ...quiet(1000)])).toEqual([]);
+    expect(detect([...quiet(1000), ...loud(4500), ...quiet(1000)])).toEqual([]);
     // A fan switched on: one long stretch, then the floor is the fan, and a
     // word over it (twice as loud, three floors up) is a candidate again.
     const fan = Array<number>(200).fill(0.03);
@@ -150,10 +150,10 @@ describe("LoneUtterance: level sequence → candidate windows", () => {
     expect(quick).toHaveLength(1);
     expect(quick[0].loudMs).toBe(150 + 250 + 600);
     // Both parts together still under the sentence limit, or nothing.
-    expect(detect([...quiet(1000), ...loud(800), ...quiet(250), ...loud(800), ...quiet(1000)])).toHaveLength(1);
+    expect(detect([...quiet(1000), ...loud(2000), ...quiet(250), ...loud(2000), ...quiet(1000)])).toHaveLength(1);
     // A third part straight on: one stretch still (it outgrows the limit: a sentence).
-    const three = detect([...quiet(1000), ...loud(500), ...quiet(250), ...loud(500), ...quiet(250), ...loud(700), ...quiet(1000)]);
-    expect(three.map((c) => c.loudMs)).toEqual([500, 1250]);
+    const three = detect([...quiet(1000), ...loud(1500), ...quiet(250), ...loud(1500), ...quiet(250), ...loud(1500), ...quiet(1000)]);
+    expect(three.map((c) => c.loudMs)).toEqual([1500, 3250]);
     // Enough quiet in between: two lone words, each on its own.
     const two = detect([...quiet(1000), ...loud(400), ...quiet(500), ...loud(600), ...quiet(1000)]);
     expect(two.map((c) => c.loudMs)).toEqual([400, 600]);
@@ -335,7 +335,7 @@ describe("WakeStandby", () => {
     expect(r.onWake).not.toHaveBeenCalled();
     expect(r.sb.on).toBe(true);
     r.tick(2000);
-    r.feed([...quiet(500), ...talk(3000), ...quiet(500)]);
+    r.feed([...quiet(500), ...talk(5000), ...quiet(500)]);
     await flush();
     expect(r.check).toHaveBeenCalledTimes(1);
   });
@@ -502,12 +502,12 @@ describe("POST /api/voice/wake", () => {
     const [path, init] = apiRaw.mock.calls[0];
     expect(path).toBe("/api/voice/wake?lang=en-US");
     expect(init).toMatchObject({ method: "POST", headers: { "Content-Type": "audio/wav" }, body: WAV });
-    expect(v).toEqual({ status: 200, wake: true, text: "MindFlock.", error: "" });
+    expect(v).toEqual({ status: 200, wake: true, text: "MindFlock.", error: "", rest: "" });
   });
 
   it("409 is a status, a failure no answer — never a throw", async () => {
     apiRaw.mockResolvedValueOnce(resp(409, { error: "no recognizer" }));
-    expect(await postWake(WAV, "en")).toEqual({ status: 409, wake: false, text: "", error: "no recognizer" });
+    expect(await postWake(WAV, "en")).toEqual({ status: 409, wake: false, text: "", error: "no recognizer", rest: "" });
     apiRaw.mockRejectedValueOnce(new Error("offline"));
     expect(await postWake(WAV, "en")).toMatchObject({ status: 0, wake: false });
   });
@@ -569,7 +569,8 @@ describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   });
 
   it("standby reads the queue and the dictation, and follows the pref, a dictation and the page's visibility", () => {
-    expect(MIC).toMatch(/new WakeStandby\(\{\s*mic: serverRec\.mic,\s*ctx: voiceAudioCtx,\s*speaking: \(\) => queue\.busy,\s*recording: \(\) => !!live\.current,/);
+    // Deaf only while the app is HEARD (a reply being synthesised is silence).
+    expect(MIC).toMatch(/new WakeStandby\(\{\s*mic: serverRec\.mic,\s*ctx: voiceAudioCtx,\s*speaking: \(\) => queue\.audibleNow,\s*recording: \(\) => !!live\.current,/);
     expect(MIC).toMatch(/standby\.current\?\.set\(!!prefs\.wake\);\s*\}, \[prefs\.wake\]\);/);
     expect(MIC).toMatch(/standby\.current\?\.sync\(\);\s*\}, \[listening\]\);/);
     expect(MIC).toMatch(/document\.addEventListener\("visibilitychange", onVis\)/);
