@@ -770,11 +770,11 @@ While the level is `low` or `critical`:
   and review lookups serve their cached answer past its TTL instead of
   forking `gh` per branch per minute (a forced lookup — a person pressing
   something — still asks); Ctrl+F's background pre-indexing skips its pass
-  (Ctrl+F still indexes on demand); and the memory watch unloads the local
-  speech models unused for 2 minutes (`speech.shed_for_memory` — the resident
-  whisper models too, ~1 GB of the server's own memory, then `malloc_trim`).
-  Model loads are refused while the level is low, so nothing reloads until it
-  recovers.
+  (Ctrl+F still indexes on demand). Voice is **not** shed: the local speech
+  models stay loaded and still load on demand whatever the level reads
+  (`speech.shed_for_memory` drops nothing — [Voice is left
+  alone](#memory-voice-is-left-alone)); they go only by the time-based idle
+  unload.
 
 ### Launch gate
 
@@ -878,19 +878,20 @@ shield** (`core/memory_shield.py`, called by the server's memory watch every
 - `general.agent_memory.shed_idle: false` (or `MINDFLOCK_SHED_IDLE=0`)
   turns it off. `GET /api/memory/capacity` → `shield` shows the last shed.
 
-#### Memory: Voice Lab yields
+#### Memory: voice is left alone
 
-A local voice host (Voice Lab, or any OpenAI-compatible model server on this
-machine or network) is never woken or called while the level reads low or
-critical: `TtsChain.pick` hands the line to piper, else the OS voice (piper
-itself is held back while low), else the client's own voice; warms, prewarms
-and health probes are not sent; the host call itself refuses
-(`speech.host_held_back`). The log says why once per episode, and again when
-it may be used. When the level turns `critical` and Voice Lab's backend
-(`voicelab-backend.service`, `MINDFLOCK_VOICELAB_UNIT`; `0` = never) runs, it
-is stopped with `systemctl --user stop`. It is socket-activated, so the next
-voice request would start it again, and none reaches it until memory allows.
-No unit, no systemd, no Voice Lab: nothing to do.
+Voice is exempt from memory gating (the owner's rule, 2026-11-10: *"I don't
+want voice models off when memory gets low"*). Whatever the level reads —
+`low` or `critical` — local recognition (the Moonshine fast lane and the
+faster-whisper accurate pass) loads, warms (the boot warm-up included) and
+transcribes; Kokoro and piper load and speak; a local voice host (Voice Lab,
+or any OpenAI-compatible model server on this machine or network) is woken
+and called for lines, warms, prewarms and probes (`speech.host_held_back` is
+always `""`). The memory watch sheds no voice model
+(`speech.shed_for_memory` drops nothing) and the shield never stops Voice
+Lab's backend. A voice model still unloads after
+`speech.IDLE_SECONDS` without use — time-based, never memory-based. Room is
+made by shedding idle agents (above) instead.
 
 **Automatic starts wait in a FIFO queue.** That means an agent-spawned
 create, a queued prompt relaunching or waking its agent, a mailbox wake, a

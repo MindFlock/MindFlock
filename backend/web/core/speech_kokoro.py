@@ -28,8 +28,9 @@ MindFlock config dir's ``voice/models/kokoro/``), downloaded by
 (:data:`FILES`) before it is moved into place.
 
 The loaded model is one entry of ``speech``'s model cache
-(:data:`CACHE_KEY`), so the idle sweep, the memory shedding and the memory
-guard apply as they do to piper; :func:`warm_in_background` loads it ahead
+(:data:`CACHE_KEY`), so the time-based idle sweep applies as it does to
+piper (and, like every voice model, it is never refused or shed for
+memory); :func:`warm_in_background` loads it ahead
 of the first line (``GET /api/voice?assistant=1``, or the assistant itself).
 Calls are serialised on the model's lock (the phonemizer's espeak backend
 is not thread-safe).
@@ -383,11 +384,9 @@ def _load() -> KokoroEngine:
 
 def engine() -> KokoroEngine:
     """The loaded model (loading it once, through ``speech._cached``: the
-    idle sweep and memory shedding apply). Raises ``SpeechError`` when it
-    cannot load (not installed, files missing, memory low)."""
-    low = _speech._memory_block()
-    if low:
-        raise _speech.SpeechError("Kokoro held back: " + low)
+    idle sweep applies). Raises ``SpeechError`` when it cannot load (not
+    installed, files missing). Never held back by memory pressure: voice is
+    exempt from memory gating (``speech.host_held_back``)."""
     return _speech._cached(CACHE_KEY, _load)  # type: ignore[return-value]
 
 
@@ -430,7 +429,7 @@ def warm_in_background() -> Optional[threading.Thread]:
     yet and no warm is running → the thread, or None. Never raises."""
     global _WARMING
     try:
-        if loaded() or not available() or _speech._memory_block():
+        if loaded() or not available():
             return None
     except Exception:  # noqa: BLE001
         return None
@@ -484,9 +483,6 @@ class KokoroTTS(_speech.Backend):
             reason = str(err) or type(err).__name__
         if reason:
             return False, reason
-        low = _speech._memory_block()
-        if low:
-            return False, "Kokoro held back: " + low
         return True, "Kokoro voice %s on this computer" % self._voice_name()
 
     def warm_keys(self) -> List[str]:
