@@ -1193,6 +1193,13 @@ def _assistant_command(w: "_Words", words: Optional[dict]) -> Optional[dict]:
             return None
         start = w.at(m.start("rest"))
     rest = w.original(start)
+    if at is not None:
+        # A misheard word can carry the request's first word off with it
+        # ("Mindful, I've opened settings"): voice_words knows the request.
+        fixed = _voice_words.rest_after(" ".join(w.toks), at).split()
+        said = rest.split()
+        if fixed and len(fixed) == len(said) and norm(fixed[0]) != norm(said[0]):
+            rest = " ".join(fixed[:1] + said[1:])
     if not norm(rest):
         return None
     got = command(rest, words)

@@ -466,15 +466,34 @@
   [
    "stop that",
    "answer"
+  ],
+  [
+   "mindful, i'll open settings",
+   "assistant"
+  ],
+  [
+   "mindful i've opened settings",
+   "assistant"
+  ],
+  [
+   "mindfulout open intake",
+   "assistant"
+  ],
+  [
+   "mindful luck tell me what's going on",
+   "assistant"
+  ],
+  [
+   "line flock open settings",
+   "assistant"
+  ],
+  [
+   "mindful, i've opened settings",
+   "assistant"
   ]
  ],
  "want": [
-  "pause",
-  "mindful, i'll open settings",
-  "mindful i've opened settings",
-  "mindfulout open intake",
-  "mindful luck tell me what's going on",
-  "line flock open settings"
+  "pause"
  ],
  "text": [
   "open the settings file and check the port",
