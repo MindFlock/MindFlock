@@ -603,4 +603,4 @@ def test_confirm_items_prefer_verifys_own_reason(srv, monkeypatch):
     )
     f = fly({"kind": "verify"})
     v = D._verify_obs(f, {"detail": {"plan": "p"}}, {})
-    assert "Open billing — agent couldn't: no card" in v["confirm_items"]
+    assert "Open billing — the agent couldn't: no card" in v["confirm_items"]

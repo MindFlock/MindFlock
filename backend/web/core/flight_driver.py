@@ -575,7 +575,10 @@ def _confirm_line(step: dict, entry: dict, left: Optional[str] = None) -> str:
     line = step["text"]
     if step.get("expect"):
         line = "%s — look for: %s" % (line, step["expect"])
-    if left:
+    if left and not entry.get("why"):
+        # One wording on every surface: "the agent couldn't: …".
+        if left.startswith("agent couldn't"):
+            left = "the " + left
         return "%s — %s" % (line, left)
     if entry.get("result") == "blocked" and str(entry.get("by") or "") != "human":
         why = _one_line(entry.get("why") or entry.get("note"))
