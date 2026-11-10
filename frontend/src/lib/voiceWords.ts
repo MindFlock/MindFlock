@@ -81,6 +81,32 @@ export const PHRASE_KIN: Readonly<Partial<Record<PhraseKind, Readonly<Record<str
   },
 };
 
+/** The stop forms that are also ordinary English endings ("…so make sure
+ * that that's all"), so they stop only said on their own — the default
+ * phrases "that's all" and "done talking" with their kin and heard forms
+ * (core.voice_words STOP_ALONE; mobile.js VOICE_STOP_ALONE; the same list in
+ * all three, tests/unit/test_voice_stop_alone.py). Any one-word stop phrase
+ * is whole-only too ({@link stopAlone}). Matching only. */
+export const STOP_ALONE: readonly string[] = [
+  "stop",
+  "that's all", "that is all", "that's al", "that's hall",
+  "done talking", "i'm done talking", "i am done talking", "done talkin", "dun talking", "done torking", "then talking",
+];
+
+/** Said before a lone stop phrase and still only that phrase ("Okay,
+ * that's all."): core.voice_words STOP_FILLERS. */
+export const STOP_FILLERS: readonly string[] = [
+  "ok", "okay", "um", "umm", "uh", "uhm", "er", "erm", "ah", "hmm", "oh", "so", "well", "alright",
+];
+
+/** `phrase` (a stop phrase or form) stops only as the whole phrase: one
+ * word, or one of {@link STOP_ALONE}. The person's own phrases of two words
+ * or more ("halt listening") end any phrase, like "stop listening". */
+export function stopAlone(phrase: string): boolean {
+  const ws = phraseWords(phrase).map(wordKey);
+  return ws.length === 1 || STOP_ALONE.some((p) => phraseWords(p).map(wordKey).join(" ") === ws.join(" "));
+}
+
 /** `w`'s phrases of kind `k` with the kin of each ({@link PHRASE_KIN}). */
 export function withKin(w: VoiceWords, k: PhraseKind): string[] {
   return [...new Set(w[k].flatMap((p) => [p, ...(PHRASE_KIN[k]?.[p] || [])]))];

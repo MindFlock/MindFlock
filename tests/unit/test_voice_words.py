@@ -351,13 +351,15 @@ def test_control_kind_with_no_words_is_the_defaults():
 
 
 def test_control_kind_order_hush_then_stop_then_radio():
-    # The hush is the whole phrase; a stop phrase ends anything; the end
-    # phrase before a stop phrase is the stop's business (the clients send).
+    # The hush is the whole phrase; "stop listening" ends anything, "that's
+    # all" only on its own (test_voice_stop_alone.py); the end phrase before
+    # a stop phrase is the stop's business (the clients send).
     assert vw.control_kind("be quiet") == "hush"
     assert vw.control_kind("fix it, be quiet") is None
     assert vw.control_kind("over and out, that's all") == "stop"
     assert vw.control_kind("fix it stop") is None  # one word: the router's
     assert vw.control_kind("stop listening") == "stop"
+    assert vw.control_kind("fix it, that's all") is None
 
 
 # --- undo: "scratch that" ---------------------------------------------------------

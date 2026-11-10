@@ -48,6 +48,8 @@ __all__ = [
     "KINDS",
     "MAX_PHRASE",
     "MAX_PHRASES",
+    "STOP_ALONE",
+    "STOP_FILLERS",
     "control_kind",
     "effective",
     "heard",
@@ -56,6 +58,7 @@ __all__ = [
     "phrase_regex",
     "sound_key",
     "sound_tail",
+    "stop_alone",
     "sounds_like",
     "wake_at",
     "wake_rest",
@@ -537,6 +540,62 @@ def _ends_with(ws: List[str], phrase: str, tails: Sequence[str] = ()) -> bool:
     )
 
 
+#: The default stop phrases that are also ordinary English endings — "…so
+#: make sure that that's all", "…and then I'm done talking" — and so stop
+#: only as the WHOLE utterance (:func:`stop_alone`), with their kin
+#: (:data:`KIN`) and heard forms (:data:`HEARD`). The others ("stop
+#: listening", "mic off", "pause listening", "stop recording"…) say nothing
+#: but "stop the mic" and end any phrase: "fix the bug, stop listening".
+#: The clients keep the same list, forms and all (lib/voiceWords.ts
+#: ``STOP_ALONE``, mobile.js ``VOICE_STOP_ALONE``;
+#: tests/unit/test_voice_stop_alone.py pins all three).
+STOP_ALONE = ("stop", "that's all", "done talking")
+#: Said before a lone stop phrase and still only that phrase ("Okay, that's
+#: all."; "um, done talking").
+STOP_FILLERS = (
+    "ok",
+    "okay",
+    "um",
+    "umm",
+    "uh",
+    "uhm",
+    "er",
+    "erm",
+    "ah",
+    "hmm",
+    "oh",
+    "so",
+    "well",
+    "alright",
+)
+_STOP_ALONE_FORMS = frozenset(
+    " ".join(_words(f))
+    for p in STOP_ALONE
+    for f in (p, *KIN["stop"].get(p, ()), *HEARD.get(p, ()))
+)
+
+
+def stop_alone(phrase: Any) -> bool:
+    """``phrase`` (a stop phrase or form) stops only as the whole utterance:
+    one word (the defaults' "stop", the person's own "halt" — a single word
+    at the end of a sentence is dictation: "make it stop"), or a
+    conversational default (:data:`STOP_ALONE`) or a kin / heard form of one.
+    The person's own phrases of two words or more ("halt listening", "we're
+    done") end any phrase, like "stop listening"."""
+    ws = _words(phrase)
+    return len(ws) == 1 or " ".join(ws) in _STOP_ALONE_FORMS
+
+
+def _stop_before_ok(before: List[str], words: dict) -> bool:
+    """The words ``before`` a lone stop phrase leave it alone: none but
+    fillers (:data:`STOP_FILLERS`), or they end in an end phrase ("over and
+    out, that's all": the clients send, then stop)."""
+    rest = list(before)
+    while rest and rest[0] in STOP_FILLERS:
+        rest = rest[1:]
+    return not rest or any(_ends_with(rest, p) for p in _forms(words, "end"))
+
+
 def control_kind(text: Any, words: Any = None) -> Optional[str]:
     """The control phrase one finished utterance ends with — the rule the
     desktop (``Dictation.tail``: ``isHushPhrase``, ``stopTail``,
@@ -549,8 +608,12 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     - ``"stop"``: it ends in a stop phrase of two words or more, or a heard
       form of one, word for word — else, after the radio phrases' exact
       forms, its last words sound like one ("Dop recording", "stop
-      lisening": :func:`sound_tail`) (a one-word stop phrase is the
-      router's, said on its own: ``voice_router.command``);
+      lisening": :func:`sound_tail`). A conversational one ("that's all",
+      "done talking": :func:`stop_alone`) only as the WHOLE utterance, a
+      filler before it allowed ("okay, that's all") or an end phrase
+      ("over and out, that's all") — "so make sure that that's all" is
+      dictation. A one-word stop phrase is the router's, said on its own
+      (``voice_router.command``);
     - ``"end"`` / ``"send"`` / ``"clear"``: it ends in one of those phrases
       or heard forms (the longest first, a send or clear phrase followed by
       "that" / "it" / "all" / "everything" too), else its last words sound
@@ -583,8 +646,14 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     said = " ".join(whole)
     if any(sounds_like(said, p) for p in w["hush"]):
         return "hush"
-    for p in _forms(w, "stop"):
-        if len(_words(p)) > 1 and _ends_with(ws, p):
+    stop_forms = _forms(w, "stop")
+    for p in stop_forms:
+        n = len(_words(p))
+        # A one-word one is the router's (``voice_router.command``: "stop"
+        # said on its own); at the end of words it is a word: "make it stop".
+        if n < 2 or not _ends_with(ws, p):
+            continue
+        if not stop_alone(p) or _stop_before_ok(ws[:-n], w):
             return "stop"
     radio = [(p, "end", ()) for p in _forms(w, "end")]
     radio += [(p, "send", _RADIO_TAILS) for p in _forms(w, "send")]
@@ -594,8 +663,11 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     for p, kind, tails in radio:
         if _ends_with(ws, p, tails):
             return kind
-    stops = [p for p in _forms(w, "stop") if len(_words(p)) > 1]
-    if sound_tail(text, stops) is not None:
+    stops = [p for p in stop_forms if len(_words(p)) > 1]
+    if sound_tail(text, [p for p in stops if not stop_alone(p)]) is not None:
+        return "stop"
+    hit = sound_tail(text, [p for p in stops if stop_alone(p)])
+    if hit is not None and _stop_before_ok(_words(hit[0]), w):
         return "stop"
     for kind, tails, lead in (
         ("end", (), False),

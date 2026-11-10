@@ -193,6 +193,10 @@ _VARIANTS = {
 }
 #: The kinds whose words the person may change (``voice.words``).
 _WORD_KINDS = ("hush", "stop")
+#: The fillers said before a stop phrase that leave it the whole phrase
+#: ("Um, that's all."): ``voice_words.STOP_FILLERS``, the clients' rule for
+#: a stop phrase said on its own.
+_STOP_FILL_RE = re.compile(r"^(?:(?:%s) )+" % "|".join(_voice_words.STOP_FILLERS))
 
 
 @lru_cache(maxsize=32)
@@ -1173,6 +1177,11 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
                 "kind": kind,
                 "arg": (m.group(1) or "").strip() if m.groups() else "",
             }
+    # A stop phrase after a filler ("um, that's all", "okay, done talking"):
+    # still the whole phrase (voice_words.control_kind reads it so too).
+    lead = _STOP_FILL_RE.sub("", w.text)
+    if lead and lead != w.text and _kind_rx("stop", words).match(lead):
+        return {"kind": "stop", "arg": ""}
     # A stop or hush phrase heard a letter off ("pipe town", "hault
     # listening"): the whole phrase, within voice_words.sounds_like's margin.
     for kind in _WORD_KINDS:
