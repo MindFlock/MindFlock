@@ -83,7 +83,6 @@ from backend.web.core import speech, voice_words  # noqa: E402
 
 # The production memory guard reads PSI stalls, which a busy box (other
 # sessions' tests) trips; the bench's models are ~250 MB each.
-speech._memory_block = lambda: ""  # type: ignore[assignment]
 
 RATE = 16000
 MODELS = Path(

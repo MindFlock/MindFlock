@@ -794,7 +794,6 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `MINDFLOCK_SLOT` | on | `0` makes `mindflock slot` run its command straight away, no slot and no memory hold ([cli.md](cli.md#mindflock-slot---pool-name---max-n---timeout-secs---no-wait-memory----cmd-args)) |
 | `MINDFLOCK_HOST_MEMORY` | on (WSL only) | `0` stops reading Windows' own memory from inside WSL ([session-engine.md](session-engine.md#memory-guard)); the memory guard then sees only the WSL VM |
 | `MINDFLOCK_SHED_IDLE` | unset | `0` stops the memory shield putting idle agents to sleep when memory stays critical (`general.agent_memory.shed_idle`) |
-| `MINDFLOCK_VOICELAB_UNIT` | `voicelab-backend.service` | The systemd user unit the memory shield stops when memory turns critical (Voice Lab's backend); `0` = never stop one |
 | `MINDFLOCK_AGENT_SCOPE` | unset | `0` launches agents without their memory-limited systemd scope (`general.agent_memory`) |
 | `MINDFLOCK_GITNEXUS_GATE` | unset | `0` leaves the `gitnexus` shim off agents' `PATH` (and makes an existing shim pass `analyze` straight through) |
 | `MINDFLOCK_SERVER_OOM_PROTECT` | unset | `0` stops the server lowering its own `oom_score_adj` at boot |

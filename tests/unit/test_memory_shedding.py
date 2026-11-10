@@ -157,9 +157,3 @@ def test_shedding_never_drops_a_speech_model(monkeypatch):
     # The time-based idle unload still applies.
     clock[0] += speech.IDLE_SECONDS
     assert sorted(speech.sweep_idle()) == ["piper:amy", "piper:old", "whisper:small"]
-
-
-def test_the_memory_watch_sheds_what_the_server_holds(monkeypatch):
-    shed = []
-    monkeypatch.setattr(speech, "shed_for_memory", lambda: shed.append(1) or ["w"])
-    assert server._shed_for_memory() == ["w"] and shed == [1]

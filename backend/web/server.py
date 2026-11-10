@@ -3146,11 +3146,10 @@ async def _memory_watch_loop() -> None:
                     data={"message": msg, "memory": snap},
                 )
                 last = lvl
-            if lvl in ("low", "critical"):
-                await asyncio.to_thread(_shed_for_memory)
-            # The memory shield (core.memory_shield): stop Voice Lab at
-            # critical, put idle agents to sleep once critical has held a
-            # minute. Every pass, so its "critical since" clock resets.
+            # The memory shield (core.memory_shield): put idle agents to
+            # sleep once critical has held. Every pass, so its "critical
+            # since" clock resets. Voice is never shed for memory (owner,
+            # 2026-11-10).
             if lvl != "unknown":
                 await asyncio.to_thread(_memory_shield_tick, snap)
         except Exception:  # noqa: BLE001 — a watch must never die
@@ -3166,23 +3165,6 @@ def _memory_shield_tick(snap: dict) -> dict:
         return _shield.tick(sys.modules[__name__], snap)
     except Exception:  # noqa: BLE001
         return {}
-
-
-def _shed_for_memory() -> list:
-    """While memory reads low: give back what the server itself holds and
-    can rebuild — the local speech models (core.speech.shed_for_memory: the
-    resident whisper models are ~1 GB of this process), unused for 2 min.
-    Background work sheds itself on :func:`_memory_low`; idle agents are put
-    to sleep by core.sleep. → what was dropped. Never raises."""
-    try:
-        from backend.web.core import speech as _speech_shed
-
-        dropped = _speech_shed.shed_for_memory()
-    except Exception:  # noqa: BLE001
-        return []
-    if dropped and log.InfoLog is not None:
-        log.InfoLog.Printf("memory: unloaded %s", ", ".join(dropped))
-    return dropped
 
 
 # --------------------------------------------------------------------------- #

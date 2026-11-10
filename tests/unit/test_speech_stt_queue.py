@@ -479,7 +479,6 @@ class TestThreads:
             speech, "_import", lambda name: SimpleNamespace(WhisperModel=_Model)
         )
         monkeypatch.setattr(speech, "_shim_av_open", lambda: None)
-        monkeypatch.setattr(speech, "_memory_block", lambda: "")
         monkeypatch.setattr(speech.os, "cpu_count", lambda: 8)
 
         def voice(**kw):
