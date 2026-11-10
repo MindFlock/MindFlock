@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Voice says a Verify as a sentence, on the desktop too.** The phone's
+  "what needs me" said "X is confirm verified"; it now says "X needs you to
+  confirm it's verified" (and "failed its verify", "is verifying its work",
+  "is verified"). The server's voice router had no Verify handling at all,
+  so on the desktop a session waiting for you to confirm read as idle and
+  was left out of "what needs me"; it now follows the phone.
+- **The 0.14.4 and 0.14.6 notes below read as whole sentences again** (a
+  merge had put a blank line inside every wrapped bullet).
+
 - **MindFlock no longer writes your git index.** Its diff counts (the
   sidebar's change stat, the Diff tab, the Code Map's change set and commit
   message drafting) used `git add -N .` so new files would count, every few
@@ -26,39 +35,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Terminals and sessions work again on an install whose Python came from
-
   uv** (Debian bookworm, any system without Python 3.12). That CPython's
-
   `os.posix_spawn` has no `setsid=`, so since 0.14.4 every web terminal and
-
   login terminal there failed to open with `NotImplementedError: posix_spawn:
-
   setsid unavailable on this platform`; `mux.spawn_pty` now calls libc's
-
   `posix_spawn` with `POSIX_SPAWN_SETSID` itself in that case. With that, the
-
   engine's own PTY (`tmux new-session` at create, `attach-session` at
-
   restore) moves to `mux.spawn_pty` too, so nothing the server starts forks
-
   it. The bare-container quickstart now prints the server logs and a re-run
-
   of that spawn when it fails.
 
 - **Developer tooling: running the test suite from a git hook no longer
-
   corrupts the repo.** git exports `GIT_DIR` / `GIT_INDEX_FILE` to hooks,
-
   and one test module captured them at import. Its tmp-repo `git init` /
-
   `git add` then hit the real checkout, leaving `core.bare = true` in
-
   `.git/config` and an index holding only a tmp repo's file.
-
   `tests/conftest.py` now scrubs every repo-redirecting `GIT_*` variable at
-
   import, and a new test runs that module under hook-style variables to keep
-
   it fixed.
 
 ## [0.14.5] - 2026-11-10
@@ -80,63 +73,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A held worker starts its agent only when its turn comes.** An
-
   orchestrator's serial chain (`spawn_session` with `after=[…]`, overlapping
-
   fences, one or N at a time) used to start every worker's agent CLI at once,
-
   each then sitting at an empty prompt (~230 MB) until its turn. Now a held
-
   worker's session is made at once — worktree, branch, fence, queued task —
-
   but no agent runs (no tmux, no memory) until the order releases it. On
-
   release MindFlock fast-forwards its branch, starts its agent through the
-
   launch gate as an automatic start (it waits in the gate's queue while
-
   memory is short), and the queue types the task in once the agent is idle.
-
   Its row still reads *waiting · after …*; nothing revives it or holds it
-
   "offline after a crash", since it never ran. A person can still press
-
   Start to run it early; its task waits for its turn either way. The create
-
   answers `order.agent_deferred: true`.
 
 - **Verify is the session's own agent checking its own work.** Verify no
-
   longer has a model write steps after the work is done and hand them to the
-
   agent to walk. It sends the session's agent one prompt — "verify the work
-
   you just did" — and the agent comes up with its own concrete test steps
-
   (real usage, not the unit tests it already ran), writes them to its results
-
   file, puts them on its todo list and works through them, recording each
-
   pass / fail / blocked with its evidence. A step only a person can do, it
-
   tells the person in its reply: what to do and what to look for. The session
-
   row carries the result as a pill (`verify`: `verifying`, `needs_you`,
-
   `passed`, `failed`, `blocked`; a settled one shows for 10 minutes). When
-
   there are steps for a person, the check waits on them: **nothing passes
-
   until a person confirms** (`POST /api/test-plans/{id}/confirm`, verified
-
   or not). `POST /api/instances/{title}/verify` starts it on any session, no
-
   plan needed. A route's Verify stop does the same: it waits while the agent
-
   verifies, parks on you while the check needs you, moves on when it passes,
-
   and halts naming the failed steps. The written checklist (and its
-
   one-shot author) is now only for a checker run after the session is gone.
 
 ### Fixed
