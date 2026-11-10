@@ -252,6 +252,37 @@ Plan JSON sent through the MCP tools, the CLI or the API should use
 `where` / `ready`.
 
 
+#### Walked in the session that wrote the work
+
+When the session that wrote the work is still open (the plan's own session,
+or another window on the same repo + branch), the check runs **in that
+session**: once the steps are written, the run route hands them to its own
+agent as a prompt (it starts `MindFlock Verify: walk the behaviors of …`).
+The agent puts each step on its own todo list, walks them in order and
+records each answer in its worktree's git-excluded results file, exactly as a
+checker did — so the steps show up as that agent's tasks in its own terminal,
+and you can talk to it while it walks. Nothing is created and nothing is
+checked out: for `where: branch` the code under test is the session's branch
+as it stands (the commit the steps were written about or a descendant of it —
+a HEAD that no longer contains it has its passes downgraded); for an
+environment the deployment is under test and the tree is only read.
+
+A session mid-turn gets the walk on its prompt queue (never typed over a
+running turn); a sleeping one is woken; one whose agent is not running is
+relaunched by the queue's drain. The stop's stall and budget clocks start when
+the agent picks the walk up, not while it waits on the queue. A paused
+session refuses it (409 `reason: "send_failed"` → the stop fails with the
+sentence). The run record carries `in_session: true` and `session` = that
+session; the stop's detail carries `in_session` / `walk_session`, and the
+pane strip offers **Walking here — talk to it** (opens the Agent tab). A
+nudge goes to that agent; the stop closing the check (stall, budget) tells
+it the check is over, and nothing that ends a run — that close, Cancel,
+Delete — **ever closes the session**.
+
+Only when the plan's session is gone (closed or deleted) does a separate
+`verify-<plan>-<sha7>` checker session walk it, as before — the server
+prepares its checkout, and the memory guard can refuse it (below).
+
 #### The walkthrough (`walk`, `expect`, `needs`)
 
 The checklist is a **walkthrough**: ordered steps the checker (the *walker*)
@@ -292,7 +323,7 @@ moving, and comes to you when only you can move it:
 
 | What happened | What the stop does |
 |---|---|
-| The memory guard refused the checker's session (the run route answers 409 `reason: "memory"`) | waits — "waiting for memory to start the check (<why>)" — and retries every 30 s; after 30 min it parks on you: free memory then Retry, or Skip |
+| The memory guard refused the checker's session (the run route answers 409 `reason: "memory"`; only a separate checker — a walk in the session's own agent creates nothing, so it is never refused for memory) | waits — "waiting for memory to start the check (<why>)" — and retries every 30 s; after 30 min it parks on you: free memory then Retry, or Skip |
 | It believes a check started, but no run exists 60 s later | fails: "the check never started" |
 | A check is running | says progress: "the agent is checking the behaviors · 3 of 7 answered · quiet 6 min" (the checker rewrites its results file after every step) |
 | No new answer for 8 min and the checker's turn is over | nudges it once: write the file, mark the rest blocked, stop background jobs |

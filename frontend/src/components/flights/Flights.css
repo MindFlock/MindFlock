@@ -823,3 +823,9 @@ a.fl-waiting-ref:hover {
 .fl-you-needs-list li + li {
   margin-top: 2px;
 }
+
+/* "Walking here — talk to it": a Verify stop walked by the session's own
+   agent (FlightStrip's VerifyWalkHint). */
+.fl-walk-hint {
+  white-space: nowrap;
+}

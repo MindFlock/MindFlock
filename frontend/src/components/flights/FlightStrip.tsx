@@ -154,6 +154,39 @@ export function VerifyStopActions({ flight, compact = false }: { flight: Flight;
   );
 }
 
+/** The session walking the flight's current Verify stop IN PLACE — the
+ * server handed the steps to the flight's own session's agent
+ * (`detail.in_session`, `detail.walk_session`) — or "" (another stop, a
+ * separate checker, or the stop is parked on you / halted). */
+export function verifyWalkSession(flight: Pick<Flight, "steps" | "cursor" | "state" | "step_states" | "session"> | null | undefined): string {
+  if (!flight || flight.state === "waiting_you" || flight.state === "halted") return "";
+  const step = flight.steps[flight.cursor];
+  if (!step || step.kind !== "verify") return "";
+  const d = flight.step_states?.[step.id]?.detail;
+  if (!d || d.in_session !== true) return "";
+  return String(d.walk_session || flight.session || "");
+}
+
+/** "Walking here — talk to it": a Verify stop being walked by this session's
+ * own agent. One press opens its Agent tab (`onOpen`), where the steps are
+ * its tasks and the person can talk to it mid-walk. */
+export function VerifyWalkHint({ session, here, onOpen }: { session: string; here: boolean; onOpen(): void }) {
+  if (!session) return null;
+  return (
+    <button
+      type="button"
+      className="test-btn fl-btn fl-walk-hint"
+      title={"The behaviors are " + session + "'s tasks now — open its agent to follow them and talk to it"}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {here ? "Walking here — talk to it" : "Walking in " + session + " — talk to it there"}
+    </button>
+  );
+}
+
 /** Whether "Let the agent fix it" applies to the flight's current stop — the
  * server's `op_fix` rule (backend/web/core/flights.py): the stop FAILED (and
  * the route did not already move on past it), or its failure was handed to
@@ -526,6 +559,7 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
   if (!row || !live) return null;
   const line = full ? stripLabel(full, now) : stripLabel(row);
   const waiting = row.state === "waiting_you" || row.state === "halted";
+  const walking = verifyWalkSession(full);
   return (
     <div className={"fl-strip fl-state-" + row.state + (waiting || rowWaitsOnYou(row) ? " fl-needs" : "")} data-tour="flights-strip" onMouseDown={stop}>
       <div className="fl-strip-row">
@@ -539,6 +573,13 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
           <span className="fl-strip-text">{line}</span>
         </button>
         {full && waiting && <YouStepActions flight={full} compact />}
+        {walking && (
+          <VerifyWalkHint
+            session={walking}
+            here={walking === inst.title}
+            onOpen={() => (walking === inst.title ? useUi.getState().setLastTab(inst.title, "agent") : selectSession(walking))}
+          />
+        )}
         {full && <FlightMenu flight={full} onCancelAsk={cancel.ask} openSession={false} />}
       </div>
       {cancel.node}
