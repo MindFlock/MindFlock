@@ -335,7 +335,7 @@ def test_a_head_that_lost_the_commit_downgrades_its_passes(monkeypatch, repo):
     TPD._poll_running_test_plans(T.list_plans())
     run = T.get("sc-1")["runs"][-1]
     assert run["results"]["s1"]["result"] == "blocked"
-    assert "not checked on the live tree" in run["results"]["s1"]["note"]
+    assert "not checked on this branch's newest commit" in run["results"]["s1"]["note"]
 
 
 def test_progress_is_read_from_the_sessions_file(monkeypatch, repo):

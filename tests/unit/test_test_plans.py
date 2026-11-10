@@ -629,7 +629,7 @@ def test_a_deliberately_empty_answer_says_so():
     )
     with pytest.raises(tp.TestPlanError) as err:
         tp.parse_plan(raw)
-    assert "wrote no behaviors" in str(err.value)
+    assert "wrote no steps" in str(err.value)
     assert "Add one yourself" in str(err.value)
     with pytest.raises(tp.TestPlanError) as err:
         tp.parse_plan('<testplan>[{"text": "   "}]</testplan>')
@@ -6932,7 +6932,7 @@ def test_a_run_that_never_started_records_why_and_releases_the_plan(store):
 
     assert plan["state"] == "due"
     assert plan["run_session"] == ""
-    assert "verify session couldn't start" in plan["error"]
+    assert "Verify couldn't start" in plan["error"]
     assert "already used by worktree" in plan["error"]
     # The empty in-flight run goes with it: a run that never started is not a
     # run, and leaving one behind gives the row a "last checked by agent, 0m

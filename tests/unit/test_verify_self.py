@@ -89,7 +89,8 @@ def test_the_prompt_has_no_steps_and_asks_the_agent_to_write_and_walk_its_own():
     # It writes its own, to the results file, and walks them.
     assert T.RESULT_FILE in p
     assert "Come up with" in p and "NOT the unit tests" in p
-    assert "TODO LIST" in p
+    assert "track them however you track tasks" in p
+    assert "TODO LIST" not in p
     assert '"actor": "agent"' in p and '"actor": "human"' in p
     assert '"result": "pass", "fail" or "blocked"' in p
     # A person's step: it TELLS the person what to do and what to look for.
@@ -358,6 +359,8 @@ CONTRACT_KEYS = {
     "failed_steps",
     "detail",
     "at",
+    "progress_at",
+    "current",
 }
 
 
