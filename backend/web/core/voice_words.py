@@ -54,10 +54,18 @@ __all__ = [
     "heard_of",
     "normalize",
     "phrase_regex",
+    "rest_after",
     "sound_key",
     "sound_tail",
     "sounds_like",
+    "WAKE_ASKS",
+    "WAKE_MINE",
+    "WAKE_SOUND",
+    "WAKE_TAILS",
+    "wake_asks",
     "wake_at",
+    "wake_lead",
+    "wake_like",
     "wake_rest",
 ]
 
@@ -634,7 +642,192 @@ WAKE_PLAIN = (
     "mind flog",
     "minh flock",
 )
-_PAUSE_AFTER = re.compile(r"[,.:;!?\u2014\u2013-]$")
+_PAUSE_AFTER = re.compile(r"[,.:;!?—–-]$")
+
+#: The default wake word as it SOUNDS — the family ``core.wake``'s standby
+#: judge takes, and :func:`wake_at` takes at the start of a request:
+#: ``first`` + ``second`` as one word or two ("mindflap", "minh flock",
+#: "mind fog", "mindful", "mindfulout"): a "mind"-like first part, then an
+#: fl/cl/bl/pl/kl/gl/fr/ph onset and a vowel, or a bare f and o/u, and at
+#: most five letters more; or ``my`` + ``my_second`` ("my clock", "my
+#: fock" — never "my flag", "my phone", "my block"). Pattern sources that
+#: compile alike in Python and JavaScript (lib/voiceWords ``WAKE_SOUND``,
+#: mobile.js ``VOICE_WAKE_SOUND``; tests/unit/data/voice_sounds.json pins
+#: all three).
+WAKE_SOUND: Dict[str, str] = {
+    "first": r"(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)",
+    "second": r"(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}",
+    "my": r"(?:my|mi|mai)",
+    "my_second": r"(?:[fck]l|fr|f)[ou][a-z]{0,4}",
+}
+_WAKE_ONE = re.compile(r"^(?:%(first)s%(second)s|%(my)s%(my_second)s)$" % WAKE_SOUND)
+_WAKE_FIRST = re.compile(r"^%(first)s$" % WAKE_SOUND)
+_WAKE_SECOND = re.compile(r"^%(second)s$" % WAKE_SOUND)
+_WAKE_MY = re.compile(r"^%(my)s$" % WAKE_SOUND)
+_WAKE_MY_SECOND = re.compile(r"^%(my_second)s$" % WAKE_SOUND)
+#: A quick "MindFlock" heard as "Mindful" and its last sound as a word of
+#: its own: "Mindful, I'll …", "Mindful, I've …", "Mindful luck.",
+#: "mindful out" (the owner's trace, 2026-11-10). Matcher words: no
+#: apostrophes.
+WAKE_TAILS = ("ill", "ive", "luck", "lock", "look", "out")
+#: The letter slack of a near miss of the default word ("Line flock",
+#: "Windlock"): two edits.
+WAKE_NEAR = 2
+#: A first word that makes a two-word form possessive ("my flock open
+#: settings" is dictation about one's flock): such a form addresses
+#: MindFlock only with a pause mark after it, request or not.
+WAKE_MINE = ("my", "mi", "mai", "me")
+
+
+def wake_like(words: Sequence[str]) -> str:
+    """Whether ``words`` (one or two matcher words: lower case, no
+    apostrophes — :func:`_words`) are the DEFAULT wake word as the
+    recogniser hears it, and how: ``"word"`` (its letters), ``"form"`` (a
+    :data:`HEARD` form), ``"sound"`` (:data:`WAKE_SOUND`, or "mindful" and a
+    :data:`WAKE_TAILS` word) or ``"near"`` (:data:`WAKE_NEAR` letters off:
+    "line flock") — ``""`` when not. The standby judge (``core.wake``) and
+    :func:`wake_at` take the same family; whether it is the word ALONE, or
+    before a request, is theirs to say."""
+    ws = [w for w in words if w]
+    if not ws or len(ws) > 2:
+        return ""
+    heard = "".join(ws)
+    word = DEFAULTS["wake"]
+    if heard == word:
+        return "word"
+    if heard in {_letters(f) for f in HEARD[word]}:
+        return "form"
+    if len(ws) == 1 and _WAKE_ONE.match(heard):
+        return "sound"
+    if len(ws) == 2 and (
+        (_WAKE_FIRST.match(ws[0]) and _WAKE_SECOND.match(ws[1]))
+        or (_WAKE_MY.match(ws[0]) and _WAKE_MY_SECOND.match(ws[1]))
+        or (ws[0] == "mindful" and ws[1] in WAKE_TAILS)
+    ):
+        return "sound"
+    if abs(len(heard) - len(word)) <= WAKE_NEAR and _edits(heard, word) <= WAKE_NEAR:
+        return "near"
+    return ""
+
+
+#: What a request said to MindFlock starts with — the gate a misheard wake
+#: word (:func:`wake_like`, not the word itself nor :data:`WAKE_PLAIN`) must
+#: pass mid-dictation: "Mindful, I'll open settings" asks, "mindful of the
+#: deadline" does not. Navigation and questions only: nothing here answers
+#: a dialog or sends ("tell" only as "tell me"; "stop …" works without the
+#: wake word). One word, or two joined by a space.
+WAKE_ASKS = (
+    "open",
+    "opened",
+    "go",
+    "show",
+    "tell me",
+    "which",
+    "what",
+    "whats",
+    "where",
+    "who",
+    "how",
+    "list",
+    "start",
+    "new",
+    "create",
+    "spin",
+    "switch",
+    "next",
+    "previous",
+    "session",
+    "scroll",
+    "page",
+    "read",
+    "summarize",
+    "summarise",
+    "status",
+    "help",
+    "turn",
+    "focus",
+    "jump",
+)
+#: Said before the request and passed over, at most two ("Mindful, um,
+#: open intake"), then "can you" / "could you" … ("my flock, can you open
+#: settings").
+WAKE_ASK_FILLERS = ("please", "um", "uh", "so", "now", "ok", "okay")
+WAKE_ASK_YOU = ("can", "could", "would", "will")
+
+
+def wake_asks(text: Any) -> bool:
+    """Whether ``text`` — the words after a leading wake form — is a
+    request said to MindFlock (it starts, past "please"/"um"/"can you" …,
+    with one of :data:`WAKE_ASKS`), or nothing at all (the word alone)."""
+    ws = _words(text)
+    if not ws:
+        return True
+    i = 0
+    while i < len(ws) and i < 2 and ws[i] in WAKE_ASK_FILLERS:
+        i += 1
+    if i + 1 < len(ws) and ws[i] in WAKE_ASK_YOU and ws[i + 1] == "you":
+        i += 2
+    if i >= len(ws):
+        return False
+    return ws[i] in WAKE_ASKS or " ".join(ws[i : i + 2]) in WAKE_ASKS
+
+
+def _wake_names(words: Optional[dict]) -> Tuple[str, List[str]]:
+    """The person's wake word and every name a phrase may start with:
+    theirs and, always, the default."""
+    own = _clean((words or {}).get("wake")) or DEFAULTS["wake"]
+    return own, [own] if own == DEFAULTS["wake"] else [own, DEFAULTS["wake"]]
+
+
+def _wake_lead_start(toks: List[str]) -> int:
+    """1 when ``toks`` starts with a :data:`WAKE_LEADS` word, else 0."""
+    if len(toks) > 1 and _words(toks[0]) and " ".join(_words(toks[0])) in WAKE_LEADS:
+        return 1
+    return 0
+
+
+def _apos(span: Sequence[str]) -> bool:
+    return "'" in "".join(span).replace("’", "'")
+
+
+def _wake_span(span: List[str]) -> str:
+    """:func:`wake_like` of the whitespace tokens ``span`` — none with an
+    apostrophe ("MindFlock's" is about it, not to it) but the "I'll" /
+    "I've" after "Mindful"."""
+    ws = [w for t in span for w in _words(t)]
+    if _apos(span):
+        tail = len(span) == 2 and not _apos(span[:1]) and ws[:1] == ["mindful"]
+        if not tail or ws[-1:] not in (["ill"], ["ive"]):
+            return ""
+    return wake_like(ws)
+
+
+def wake_lead(text: Any, words: Optional[dict] = None) -> Optional[int]:
+    """The index of the whitespace token of ``text`` after a leading wake
+    form of ANY kind — the word, a :data:`HEARD` form or :data:`WAKE_PLAIN`
+    one, one or two words that :func:`sounds_like` a name, or the default
+    as it sounds (:func:`wake_like`) — with no pause and no request asked
+    for (the longer of two readings first); None when it does not start
+    with one. ``core.wake`` reads a whole clip by it; mid-dictation
+    :func:`wake_at` asks more."""
+    toks = str(text or "").split()
+    own, names = _wake_names(words)
+    forms = {_letters(f) for f in heard_of(names) + list(WAKE_PLAIN) + [own]}
+    start = _wake_lead_start(toks)
+    for k in (2, 1):
+        span = toks[start : start + k]
+        if len(span) < k:
+            continue
+        said = "".join("".join(_words(t)) for t in span)
+        if not said:
+            continue
+        if not _apos(span) and (
+            said in forms or any(sounds_like(said, n) for n in names)
+        ):
+            return start + k
+        if _wake_span(span):
+            return start + k
+    return None
 
 
 def wake_at(text: Any, words: Optional[dict] = None) -> Optional[int]:
@@ -644,38 +837,65 @@ def wake_at(text: Any, words: Optional[dict] = None) -> Optional[int]:
     person's (``words["wake"]``, default ``"mindflock"``) and, always, the
     default's, each as written, as the recogniser writes it (:data:`HEARD`)
     or one or two words that :func:`sounds_like` it — a form other than the
-    wake word itself or :data:`WAKE_PLAIN` only with a pause mark after it.
-    A possessive ("MindFlock's …") or the name mid-sentence never counts.
-    ``clients``: lib/voiceWords ``wakeAt`` is the same rule."""
+    wake word itself or :data:`WAKE_PLAIN` only with a pause mark after it —
+    or, pause or not, the default as it sounds (:func:`wake_like`:
+    "Mindful, I'll", "mindfulout", "Line flock") when what follows is a
+    request (:func:`wake_asks`) or nothing — a "my"-led one
+    (:data:`WAKE_MINE`) still only with the pause. A possessive ("MindFlock's …"),
+    the name mid-sentence or an ordinary sentence ("mindful of the
+    deadline", "my flag is not being read") never counts. lib/voiceWords
+    ``wakeAt`` and mobile.js ``voiceWakeAt`` are the same rule
+    (tests/unit/data/voice_sounds.json ``wake.at`` pins all three)."""
     toks = str(text or "").split()
-    own = _clean((words or {}).get("wake")) or DEFAULTS["wake"]
-    names = [own] if own == DEFAULTS["wake"] else [own, DEFAULTS["wake"]]
+    own, names = _wake_names(words)
     plain = {_letters(f) for f in WAKE_PLAIN} | {_letters(own)}
     heard_forms = {_letters(f) for f in heard_of(names)}
-    start = 0
-    if len(toks) > 1 and _words(toks[0]) and " ".join(_words(toks[0])) in WAKE_LEADS:
-        start = 1
+    start = _wake_lead_start(toks)
     for k in (1, 2):
         span = toks[start : start + k]
-        if len(span) < k or "'" in "".join(span).replace("\u2019", "'"):
+        if len(span) < k:
             continue
         said = "".join("".join(_words(t)) for t in span)
         if not said:
             continue
-        if said in plain:
-            return start + k
         paused = _PAUSE_AFTER.search(span[-1]) is not None
-        if paused and (said in heard_forms or any(sounds_like(said, n) for n in names)):
+        if not _apos(span):
+            if said in plain:
+                return start + k
+            if paused and (
+                said in heard_forms or any(sounds_like(said, n) for n in names)
+            ):
+                return start + k
+        # "my flock open settings" is about one's flock: a "my"-led form
+        # before a request still wants the pause ("My clock, show …").
+        mine = k == 2 and _words(span[0]) in [[m] for m in WAKE_MINE]
+        if (
+            _wake_span(span)
+            and (paused or not mine)
+            and wake_asks(" ".join(toks[start + k :]))
+        ):
             return start + k
     return None
 
 
+def rest_after(text: Any, at: int) -> str:
+    """The words of ``text`` from whitespace token ``at`` on (a
+    :func:`wake_at` / :func:`wake_lead` index), stray leading punctuation
+    dropped; a first "opened" right after "Mindful, I've" — the misheard
+    "MindFlock, open" — read as "open"."""
+    toks = str(text or "").split()
+    rest = " ".join(toks[at:]).strip().lstrip(":;,.!?—–-").strip()
+    if at >= 1 and _words(toks[at - 1]) == ["ive"]:
+        rest = re.sub(r"^opened\b", "open", rest, flags=re.I)
+    return rest
+
+
 def wake_rest(text: Any, words: Optional[dict] = None) -> Optional[str]:
-    """The words of ``text`` after its leading wake word (:func:`wake_at`),
-    stray leading punctuation dropped — ``""`` when nothing follows it — or
-    None when ``text`` does not start with it."""
+    """The words of ``text`` after its leading wake word (:func:`wake_at`,
+    :func:`rest_after`) — ``""`` when nothing follows it — or None when
+    ``text`` does not start with it ("Mindful, I've opened settings." →
+    "open settings.")."""
     at = wake_at(text, words)
     if at is None:
         return None
-    rest = " ".join(str(text or "").split()[at:])
-    return rest.strip().lstrip(":;,.!?\u2014\u2013-").strip()
+    return rest_after(text, at)

@@ -7367,6 +7367,115 @@
     }
     return null;
   }
+  // --- a phrase said TO MindFlock: it starts with the wake word (core.voice_words
+  // wake_at / wake_rest, kept identical; tests/unit/data/voice_sounds.json `wake`) ---
+  var VOICE_WAKE_LEADS = ["hey", "ok", "okay", "please", "ask"];
+  // The default's forms that address MindFlock with no pause after them.
+  var VOICE_WAKE_PLAIN = ["mindflock", "mind flock", "mine flock", "minflock", "min flock",
+                          "mindlock", "mind lock", "mindflog", "mind flog", "minh flock"];
+  // The default as it SOUNDS (the server's WAKE_SOUND, pattern for pattern):
+  // first+second ("mind fog", "mindful", "mindfulout") or my+my_second ("my clock").
+  var VOICE_WAKE_SOUND = {
+    first: "(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)",
+    second: "(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}",
+    my: "(?:my|mi|mai)",
+    my_second: "(?:[fck]l|fr|f)[ou][a-z]{0,4}",
+  };
+  var VOICE_WAKE_RX = (function (S) {
+    return {
+      one: new RegExp("^(?:" + S.first + S.second + "|" + S.my + S.my_second + ")$"),
+      first: new RegExp("^" + S.first + "$"), second: new RegExp("^" + S.second + "$"),
+      my: new RegExp("^" + S.my + "$"), mySecond: new RegExp("^" + S.my_second + "$"),
+    };
+  })(VOICE_WAKE_SOUND);
+  // "Mindful" and the word's last sound as a word ("Mindful, I'll", "Mindful luck").
+  var VOICE_WAKE_TAILS = ["ill", "ive", "luck", "lock", "look", "out"];
+  var VOICE_WAKE_NEAR = 2;
+  var VOICE_WAKE_MINE = ["my", "mi", "mai", "me"];   // a "my"-led two-word form wants a pause after it
+  // What a request to MindFlock starts with: the gate a misheard wake word
+  // must pass mid-dictation (navigation and questions; nothing that sends).
+  var VOICE_WAKE_ASKS = ["open", "opened", "go", "show", "tell me", "which", "what", "whats", "where", "who", "how",
+    "list", "start", "new", "create", "spin", "switch", "next", "previous", "session", "scroll",
+    "page", "read", "summarize", "summarise", "status", "help", "turn", "focus", "jump"];
+  var VOICE_WAKE_ASK_FILLERS = ["please", "um", "uh", "so", "now", "ok", "okay"];
+  var VOICE_WAKE_ASK_YOU = ["can", "could", "would", "will"];
+  var VOICE_WAKE_PAUSE = /[,.:;!?—–-]$/;
+  // A token's matcher words: lower case, apostrophes dropped, the rest a break.
+  function voiceWakeWords(t) {
+    return String(t || "").toLowerCase().replace(/['’]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+  }
+  function voiceWakeApos(toks) { return /['’]/.test(toks.join("")); }
+  // The words (cleaned, voiceWordsClean) the wake checks read: the page's.
+  function voiceWakeOf(w) { return w || (VOICE_W ? VOICE_W.words : voiceWordsClean(null)); }
+  // Whether `ws` (one or two matcher words) are the DEFAULT wake word as heard:
+  // "word" | "form" | "sound" | "near", else "" (core.voice_words.wake_like).
+  function voiceWakeLike(ws, w) {
+    ws = ws.filter(Boolean);
+    if (!ws.length || ws.length > 2) return "";
+    var heard = ws.join(""), word = VOICE_WORDS_DEFAULT.wake, R = VOICE_WAKE_RX;
+    if (heard === word) return "word";
+    if ((voiceWakeOf(w).heard.wake || []).map(voiceLetters).indexOf(heard) >= 0) return "form";
+    if (ws.length === 1 && R.one.test(heard)) return "sound";
+    if (ws.length === 2 && ((R.first.test(ws[0]) && R.second.test(ws[1])) || (R.my.test(ws[0]) && R.mySecond.test(ws[1])) ||
+        (ws[0] === "mindful" && VOICE_WAKE_TAILS.indexOf(ws[1]) >= 0))) return "sound";
+    if (Math.abs(heard.length - word.length) <= VOICE_WAKE_NEAR && voiceEdits(heard, word) <= VOICE_WAKE_NEAR) return "near";
+    return "";
+  }
+  // The words after a leading wake form are a request (or nothing).
+  function voiceWakeAsks(text) {
+    var ws = voiceWakeWords(text), i = 0;
+    if (!ws.length) return true;
+    while (i < ws.length && i < 2 && VOICE_WAKE_ASK_FILLERS.indexOf(ws[i]) >= 0) i++;
+    if (i + 1 < ws.length && VOICE_WAKE_ASK_YOU.indexOf(ws[i]) >= 0 && ws[i + 1] === "you") i += 2;
+    if (i >= ws.length) return false;
+    return VOICE_WAKE_ASKS.indexOf(ws[i]) >= 0 || VOICE_WAKE_ASKS.indexOf(ws.slice(i, i + 2).join(" ")) >= 0;
+  }
+  function voiceWakeSpan(span, w) {
+    var ws = [];
+    span.forEach(function (t) { ws = ws.concat(voiceWakeWords(t)); });
+    if (voiceWakeApos(span)) {
+      var tail = span.length === 2 && !voiceWakeApos(span.slice(0, 1)) && ws[0] === "mindful";
+      if (!tail || ["ill", "ive"].indexOf(ws[ws.length - 1]) < 0) return "";
+    }
+    return voiceWakeLike(ws, w);
+  }
+  // The index of the whitespace token after a LEADING wake word, else null
+  // (core.voice_words.wake_at): a lead word may come first; the word, a
+  // WAKE_PLAIN form, a heard form or a sound-alike with a pause after it, or
+  // the default as it sounds before a request ("Mindful, I'll open settings").
+  function voiceWakeAt(text, w) {
+    w = voiceWakeOf(w);
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var own = (w.wake || "").toLowerCase().replace(/\s+/g, " ").trim() || VOICE_WORDS_DEFAULT.wake;
+    var names = own === VOICE_WORDS_DEFAULT.wake ? [own] : [own, VOICE_WORDS_DEFAULT.wake];
+    var plain = VOICE_WAKE_PLAIN.concat([own]).map(voiceLetters), heard = (w.heard.wake || []).map(voiceLetters);
+    var start = toks.length > 1 && VOICE_WAKE_LEADS.indexOf(voiceWakeWords(toks[0]).join(" ")) >= 0 ? 1 : 0;
+    for (var k = 1; k <= 2; k++) {
+      var span = toks.slice(start, start + k);
+      if (span.length < k) continue;
+      var said = span.map(function (t) { return voiceWakeWords(t).join(""); }).join("");
+      if (!said) continue;
+      var paused = VOICE_WAKE_PAUSE.test(span[span.length - 1]);
+      if (!voiceWakeApos(span)) {
+        if (plain.indexOf(said) >= 0) return start + k;
+        if (paused && (heard.indexOf(said) >= 0 || names.some(function (n) { return voiceSoundsLike(said, n); }))) return start + k;
+      }
+      // "my flock open settings" is about one's flock: a "my"-led form wants the pause.
+      var mine = k === 2 && VOICE_WAKE_MINE.indexOf(voiceWakeWords(span[0]).join(" ")) >= 0;
+      if (voiceWakeSpan(span, w) && (paused || !mine) && voiceWakeAsks(toks.slice(start + k).join(" "))) return start + k;
+    }
+    return null;
+  }
+  // The words after the leading wake word ("" when none), else null; a first
+  // "opened" after "Mindful, I've" read as "open" (core.voice_words.wake_rest).
+  function voiceWakeRest(text, w) {
+    var at = voiceWakeAt(text, w);
+    if (at === null) return null;
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var rest = toks.slice(at).join(" ").replace(/^[\s:;,.!?—–-]+/, "").trim();
+    if (at >= 1 && voiceWakeWords(toks[at - 1]).join(" ") === "ive") rest = rest.replace(/^opened\b/i, "open");
+    return rest;
+  }
   // The phrases with their variants and (`heard`: the server's forms for
   // that kind) what is heard for them, normalized, each once.
   function voiceWordsWide(list, heard) {

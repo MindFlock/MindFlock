@@ -1,5 +1,5 @@
 {
- "_doc": "Pins the sound-alike tolerance of the voice words across Python (core.voice_words.control_kind, test_voice_words.py), the desktop (lib/voiceDesktop isHushPhrase / stopTail / parseRadio, voiceEars.test.ts) and the phone (mobile.js voiceIsHush / voiceTail / voiceDictParse, test_mobile_voice_words.py). `words` and `custom` are what GET /api/voice serves as `words` (core.voice_words.effective, `heard` included); `keys` pins sound_key, `alike` sounds_like, and each case is one finished utterance and the control kind it ends with (null: dictation).",
+ "_doc": "Pins the sound-alike tolerance of the voice words across Python (core.voice_words.control_kind, test_voice_words.py), the desktop (lib/voiceDesktop isHushPhrase / stopTail / parseRadio, voiceEars.test.ts) and the phone (mobile.js voiceIsHush / voiceTail / voiceDictParse, test_mobile_voice_words.py). `words` and `custom` are what GET /api/voice serves as `words` (core.voice_words.effective, `heard` included); `keys` pins sound_key, `alike` sounds_like, and each case is one finished utterance and the control kind it ends with (null: dictation). `kin` pins the older wordings each default phrase brings along (core.voice_words.KIN = lib/voiceWords PHRASE_KIN). `wake` pins the wake word said at the START of a phrase (core.voice_words.wake_at / wake_rest = lib/voiceWords wakeAt / wakeRest = mobile.js voiceWakeAt / voiceWakeRest, test_wake_rest.py, voiceWakeForms.test.ts): its tables, `like` [words, wake_like reason] and `at` [text, the rest after the wake word or null: not addressed], with `words`.",
  "words": {
   "send": [
    "over"
@@ -1005,5 +1005,421 @@
    "kind": null,
    "words": "default"
   }
- ]
+ ],
+ "kin": {
+  "stop": {
+   "stop listening": [
+    "stop recording",
+    "stop dictating",
+    "stop the mic",
+    "stop the microphone"
+   ],
+   "mic off": [
+    "microphone off",
+    "turn mic off",
+    "turn microphone off",
+    "turn off the mic",
+    "turn off the microphone",
+    "turn the mic off"
+   ],
+   "that's all": [
+    "that is all"
+   ],
+   "done talking": [
+    "i'm done talking",
+    "i am done talking"
+   ]
+  },
+  "hush": {
+   "stop talking": [
+    "stop speaking",
+    "stop reading",
+    "stop saying that",
+    "ok stop",
+    "okay stop"
+   ],
+   "enough": [
+    "that's enough",
+    "that is enough",
+    "enough talking",
+    "enough of that"
+   ]
+  }
+ },
+ "wake": {
+  "leads": [
+   "hey",
+   "ok",
+   "okay",
+   "please",
+   "ask"
+  ],
+  "plain": [
+   "mindflock",
+   "mind flock",
+   "mine flock",
+   "minflock",
+   "min flock",
+   "mindlock",
+   "mind lock",
+   "mindflog",
+   "mind flog",
+   "minh flock"
+  ],
+  "sound": {
+   "first": "(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)",
+   "second": "(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}",
+   "my": "(?:my|mi|mai)",
+   "my_second": "(?:[fck]l|fr|f)[ou][a-z]{0,4}"
+  },
+  "tails": [
+   "ill",
+   "ive",
+   "luck",
+   "lock",
+   "look",
+   "out"
+  ],
+  "near": 2,
+  "asks": [
+   "open",
+   "opened",
+   "go",
+   "show",
+   "tell me",
+   "which",
+   "what",
+   "whats",
+   "where",
+   "who",
+   "how",
+   "list",
+   "start",
+   "new",
+   "create",
+   "spin",
+   "switch",
+   "next",
+   "previous",
+   "session",
+   "scroll",
+   "page",
+   "read",
+   "summarize",
+   "summarise",
+   "status",
+   "help",
+   "turn",
+   "focus",
+   "jump"
+  ],
+  "ask_fillers": [
+   "please",
+   "um",
+   "uh",
+   "so",
+   "now",
+   "ok",
+   "okay"
+  ],
+  "ask_you": [
+   "can",
+   "could",
+   "would",
+   "will"
+  ],
+  "like": [
+   [
+    [
+     "mindflock"
+    ],
+    "word"
+   ],
+   [
+    [
+     "my",
+     "flock"
+    ],
+    "form"
+   ],
+   [
+    [
+     "mindful"
+    ],
+    "sound"
+   ],
+   [
+    [
+     "mindfulout"
+    ],
+    "sound"
+   ],
+   [
+    [
+     "mindful",
+     "luck"
+    ],
+    "sound"
+   ],
+   [
+    [
+     "mindful",
+     "ill"
+    ],
+    "sound"
+   ],
+   [
+    [
+     "my",
+     "clock"
+    ],
+    "sound"
+   ],
+   [
+    [
+     "line",
+     "flock"
+    ],
+    "near"
+   ],
+   [
+    [
+     "windlock"
+    ],
+    "near"
+   ],
+   [
+    [
+     "mind"
+    ],
+    ""
+   ],
+   [
+    [
+     "mine"
+    ],
+    ""
+   ],
+   [
+    [
+     "my",
+     "flag"
+    ],
+    ""
+   ],
+   [
+    [
+     "my",
+     "phone"
+    ],
+    ""
+   ],
+   [
+    [
+     "my",
+     "block"
+    ],
+    ""
+   ],
+   [
+    [
+     "mindset"
+    ],
+    ""
+   ],
+   [
+    [
+     "minefield"
+    ],
+    ""
+   ],
+   [
+    [
+     "mindful",
+     "of"
+    ],
+    ""
+   ]
+  ],
+  "at": [
+   [
+    "Mine flock, open intake.",
+    "open intake."
+   ],
+   [
+    "My flock, open settings.",
+    "open settings."
+   ],
+   [
+    "Mindful, I'll open settings.",
+    "open settings."
+   ],
+   [
+    "Mindful, I've opened settings.",
+    "open settings."
+   ],
+   [
+    "mindfulout open intake.",
+    "open intake."
+   ],
+   [
+    "Mindful luck. Tell me what's going on with,",
+    "Tell me what's going on with,"
+   ],
+   [
+    "Line flock.",
+    ""
+   ],
+   [
+    "line flock open settings",
+    "open settings"
+   ],
+   [
+    "my flock open settings",
+    null
+   ],
+   [
+    "my clock open settings",
+    null
+   ],
+   [
+    "Mindful, um, open intake",
+    "um, open intake"
+   ],
+   [
+    "My clock, can you show me the sessions",
+    "can you show me the sessions"
+   ],
+   [
+    "Hey mind fog, next session",
+    "next session"
+   ],
+   [
+    "Windlock, switch to docs",
+    "switch to docs"
+   ],
+   [
+    "mindful out, what needs me?",
+    "what needs me?"
+   ],
+   [
+    "Mindful.",
+    ""
+   ],
+   [
+    "MindFlock, open intake",
+    "open intake"
+   ],
+   [
+    "mine flock open intake",
+    "open intake"
+   ],
+   [
+    "Me flock: open settings",
+    "open settings"
+   ],
+   [
+    "Mind block, open intake.",
+    "open intake."
+   ],
+   [
+    "MindFlocks, open intake",
+    "open intake"
+   ],
+   [
+    "ok mind flock, turn on the bell",
+    "turn on the bell"
+   ],
+   [
+    "MindFlock.",
+    ""
+   ],
+   [
+    "mindful of the deadline we should ship",
+    null
+   ],
+   [
+    "my flag is not being read",
+    null
+   ],
+   [
+    "i mind that the flock test is slow",
+    null
+   ],
+   [
+    "mine is the second one",
+    null
+   ],
+   [
+    "My clock shows the wrong time",
+    null
+   ],
+   [
+    "mindful, this is important",
+    null
+   ],
+   [
+    "MindFlock's settings page is slow",
+    null
+   ],
+   [
+    "Mindful's open house is today",
+    null
+   ],
+   [
+    "tell mindflock to open intake",
+    null
+   ],
+   [
+    "mind the gap, please",
+    null
+   ],
+   [
+    "Mine, open it",
+    null
+   ],
+   [
+    "mindset matters",
+    null
+   ],
+   [
+    "my phone, open the app",
+    null
+   ],
+   [
+    "My block, open settings",
+    null
+   ],
+   [
+    "Mindful, I'll do it later",
+    null
+   ],
+   [
+    "Mindful, tell the agent to stop",
+    null
+   ],
+   [
+    "Mindful, approve it",
+    null
+   ],
+   [
+    "Line flock, send it",
+    null
+   ],
+   [
+    "my clock yes",
+    null
+   ],
+   [
+    "",
+    null
+   ]
+  ],
+  "mine": [
+   "my",
+   "mi",
+   "mai",
+   "me"
+  ]
+ }
 }

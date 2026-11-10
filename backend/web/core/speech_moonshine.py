@@ -128,7 +128,10 @@ MODEL_FILES = (
 #: hears as one of them is acted on at once, without the whisper pass
 #: (:func:`control_only`; the router's own ``voice_router.NO_TEXT_KINDS`` —
 #: scroll, interrupt, go back, where, the command list — count too). ``new``, ``answer``, ``question`` and ``help``
-#: carry the person's words, so they wait for whisper's.
+#: carry the person's words, so they wait for whisper's — and so does any
+#: of these that names a session ("switch to sitecheck bot seven",
+#: "interrupt docs", "how is docs doing": :func:`_names_one`); "next
+#: session", "session three", "status", "stop" stay instant.
 NO_TEXT_KINDS = frozenset(
     {
         "cancel",
@@ -414,10 +417,24 @@ def _control_tail(text: str, words: Optional[dict]) -> Tuple[str, int]:
 
 
 def _unwake(toks: List[str], words: Optional[dict]) -> List[str]:
-    """``toks`` without a leading wake word ("Mindflock, stop." → "stop.")."""
+    """``toks`` without a leading wake word as it is heard
+    (``voice_words.wake_lead``: "Mindflock, stop." → "stop.", and "Mind
+    flock, stop.", "Mindful, scroll up.", "Hey MindFlock, next one.")."""
+    from backend.web.core import voice_words as _voice_words
+
     if toks and _letters(toks[0]) == _letters(_wake_of(words)):
         return toks[1:]
-    return toks
+    at = _voice_words.wake_lead(" ".join(toks), words)
+    return toks[at:] if at else toks
+
+
+def _names_one(cmd: dict) -> bool:
+    """Whether router command ``cmd`` carries words that name a session —
+    a switch's ``arg`` ("switch to sitecheck bot seven"), an interrupt's
+    ``name``, a status / read / question ``target`` — which whisper hears
+    far better than Moonshine (the bench: 14/16 vs 0/16 on "switch to
+    sitecheck bot seven")."""
+    return bool(cmd.get("arg") or cmd.get("name") or cmd.get("target"))
 
 
 def control_only(heard: str, words: Optional[dict] = None) -> bool:
@@ -425,8 +442,10 @@ def control_only(heard: str, words: Optional[dict] = None) -> bool:
     with nothing to type or send: a hush phrase, a clear or undo phrase (the
     words before it are thrown away), a send / end / stop phrase with no words
     before it, or — ending in none of those — a ``voice_router.command`` of
-    a kind in :data:`NO_TEXT_KINDS` (a switch, "stop", "cancel", "what needs
-    me"…); a leading wake word aside. Words before a send, end or stop
+    a kind in :data:`NO_TEXT_KINDS` that names no session ("next session",
+    "session three", "stop", "cancel", "what needs me"… — a switch to a
+    name waits for whisper's words: :func:`_names_one`); a leading wake
+    word, as it is heard, aside. Words before a send, end or stop
     phrase are text ("Open a pull request for this branch, over" is no
     switch). Such a phrase is acted on at once: no whisper pass is waited
     for. ``words``: the effective voice words (None: the defaults)."""
@@ -446,7 +465,9 @@ def control_only(heard: str, words: Optional[dict] = None) -> bool:
     except Exception:  # noqa: BLE001 — a hint: whisper's text then
         _logger.debug("voice: control_only failed on %r", text, exc_info=True)
         return False
-    kind = cmd.get("kind") if cmd is not None else None
+    if cmd is None or _names_one(cmd):
+        return False
+    kind = cmd.get("kind")
     return kind in NO_TEXT_KINDS or kind in _voice_router.NO_TEXT_KINDS
 
 

@@ -250,7 +250,7 @@ def test_the_decode_options():
     """A lone word on a short window, greedy, ONCE (no temperature
     fallback), no no-speech filter, a token cap — wake_stream_bench's
     "fast" (docs/voice-wake.md); the hint only on the hinted pass."""
-    assert wake.PAD_SECONDS == 10.0 and wake.MAX_TOKENS == 12
+    assert wake.PAD_SECONDS == 10.0 and wake.MAX_TOKENS == 32
     plain = wake.decode_options()
     assert plain == {
         "beam_size": 1,
@@ -258,7 +258,7 @@ def test_the_decode_options():
         "temperature": 0.0,
         "no_speech_threshold": None,
         "condition_on_previous_text": False,
-        "max_new_tokens": 12,
+        "max_new_tokens": 32,
     }
     hinted = wake.decode_options("MindFlock")
     assert hinted == dict(plain, initial_prompt="MindFlock")

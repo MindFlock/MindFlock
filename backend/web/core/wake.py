@@ -16,7 +16,7 @@ How close counts depends on the word (docs/voice-wake.md has the bench):
   rule, 2026-11-05: the strict rule turned down his own "MindFlock" heard as
   "MindFock", "Mind Fuck", "Mindful"): one of the forms the recogniser is
   known to write for it (``core.voice_words.HEARD``: "mind flock", "my
-  flock", "mindfock"), its sound shape (:data:`_SOUND_ONE`: a "mind"-like
+  flock", "mindfock"), its sound shape (``voice_words.WAKE_SOUND``: a "mind"-like
   first part, then an fl/cl/bl/pl/fr/ph onset and a short rest, or a bare
   f and o/u — "Mind Flap", "Minh Flock", "Mind fog"; or a "my"-like one with
   a flock-like vowel after the onset: "My clock", "My fock" — never "My
@@ -51,10 +51,13 @@ __all__ = [
     "WAKE_WORD",
     "decode_options",
     "hint",
+    "REST_MAX",
     "is_wake",
     "judge",
+    "judge_rest",
     "normalize",
     "veto",
+    "veto_rest",
 ]
 
 #: The word, as the hint and the target. Lower case, no spaces.
@@ -74,23 +77,10 @@ LEADS = frozenset({"hey", "hi", "ok", "okay", "yo", "hello"})
 _NON_LETTERS = re.compile(r"[^a-z]+")
 _TOKEN_SPLIT = re.compile(r"[^A-Za-z]+")
 
-#: Ours as it sounds: a "mind"-like first part, an fl/cl/bl/pl/kl/gl/fr/ph
-#: onset and a vowel (or a bare f and o/u: "mindfock", "mind fog") and at
-#: most five letters more ("mindflap", "minhflock", "mendclock"). Matched against one token whole, or two tokens with the
-#: first the "mind" part ("mind" + "flunk"), so "mindflock now" never fits.
-_FIRST = r"(?:mind|mined|mine|mynd|min|minh|mint|mend|men|myn)"
-_SECOND = r"(?:(?:[fcbpkg]l|fr|ph)[aeiouy]|f[aou])[a-z]{0,5}"
-_SOUND_ONE = re.compile(r"^%s%s$" % (_FIRST, _SECOND))
-_SOUND_FIRST = re.compile(r"^%s$" % _FIRST)
-_SOUND_SECOND = re.compile(r"^%s$" % _SECOND)
-#: A "my"-like first part ("My clock.", "Mai flock", "My fock") takes only
-#: an fl/cl/kl/fr/f onset and a flock-like vowel — "My flag.", "My plan." and "my block"
-#: stay out.
-_MY = r"(?:my|mi|mai)"
-_SECOND_OU = r"(?:[fck]l|fr|f)[ou][a-z]{0,4}"
-_MY_ONE = re.compile(r"^%s%s$" % (_MY, _SECOND_OU))
-_MY_FIRST = re.compile(r"^%s$" % _MY)
-_MY_SECOND = re.compile(r"^%s$" % _SECOND_OU)
+#: Ours as it sounds — "mind"/"my"-like first part and a flock-like rest,
+#: one token or two ("mind" + "flunk"), so "mindflock now" never fits:
+#: ``core.voice_words.wake_like`` (:data:`voice_words.WAKE_SOUND`), the
+#: family a request said mid-dictation starts with too.
 
 #: What the un-prompted decode writes when the clip was another word that
 #: the hint turned into "MindFlock" (:func:`veto`): the word with nothing
@@ -110,9 +100,14 @@ _VETO_WORDS = 3
 #: threads (1.5–8 s on the owner's loaded box); 10 s takes it to ~90 ms at
 #: the same recall. Under 10 s whisper invents ("Mind Mind", "M M M M").
 PAD_SECONDS = 10.0
-#: Tokens a wake pass decodes at most: the word, a greeting and their
-#: punctuation — a looping decoder ("MindFlock MindFlock …") stops there.
-MAX_TOKENS = 12
+#: Tokens a wake pass decodes at most: the word, a greeting, a request
+#: said in the same breath ("MindFlock, switch to sitecheck bot seven" —
+#: the clients send up to 4 s) and their punctuation; a looping decoder
+#: ("MindFlock MindFlock …") stops there.
+MAX_TOKENS = 32
+#: Most words a request said with the word in one breath may have
+#: (:func:`judge_rest`): more is a sentence.
+REST_MAX = 8
 
 
 def decode_options(prompt: str = "") -> dict:
@@ -195,38 +190,23 @@ def _tokens(text: str, word: str = WAKE_WORD) -> List[str]:
 
 
 def _strict(toks: List[str]) -> str:
-    """Ours, strictly: the reason it matched ("form", "sound") or ""."""
+    """Ours, strictly: the reason it matched ("word", "form", "sound",
+    "near") or "" — ``core.voice_words.wake_like``, the family the
+    mid-dictation wake (``voice_words.wake_at``) takes too: the letters, a
+    known form, the sound shape ("Mind Flap", "My clock", "Mindful luck"),
+    or two letters off ("Windlock", "Minflog"): the owner's rule is that
+    whatever sounds next to the word wakes; the veto still turns down a
+    plain "Mind." / "Mine."."""
     if len(toks) > 1 + _EXTRA_WORDS:
         return ""
-    heard = "".join(toks)
-    if heard == WAKE_WORD:
-        return "word"
-    forms = {normalize(f) for f in _voice_words.heard_of([WAKE_WORD])}
-    if heard in forms:
-        return "form"
-    if len(toks) == 1 and (_SOUND_ONE.match(heard) or _MY_ONE.match(heard)):
-        return "sound"
-    if len(toks) == 2 and (
-        (_SOUND_FIRST.match(toks[0]) and _SOUND_SECOND.match(toks[1]))
-        or (_MY_FIRST.match(toks[0]) and _MY_SECOND.match(toks[1]))
-    ):
-        return "sound"
-    # Anything within the letter slack ("Windlock", "Mindlock", "Minflog"):
-    # the owner's rule is that whatever sounds next to the word wakes; the
-    # veto still turns down a plain "Mind." / "Mine.".
-    if (
-        abs(len(heard) - len(WAKE_WORD)) <= _MAX_EDITS
-        and _edits(heard, WAKE_WORD) <= _MAX_EDITS
-    ):
-        return "near"
-    return ""
+    return _voice_words.wake_like(toks)
 
 
 def judge(text: str, word: str = WAKE_WORD) -> Tuple[bool, str]:
     """``(wake, reason)`` for ``text`` (a recognised short clip). A wake's
     reason says how it matched: ``"word"`` (the letters exactly), ``"form"``
     (a known form, ``voice_words.HEARD``), ``"sound"`` (ours' sound shape,
-    :data:`_SOUND_ONE`) or ``"near"`` (a custom word within its letter
+    ``voice_words.WAKE_SOUND``) or ``"near"`` (a custom word within its letter
     slack); a no's: ``"empty"``, ``"long"`` (more words than the word
     alone) or ``"other"``."""
     toks = _tokens(text, word)
@@ -283,3 +263,55 @@ def veto(plain: str) -> str:
     if _strict(toks) or _FLOCKISH.match(rest) or _FLOCKISH.match(rest[1:]):
         return ""
     return "plain:" + heard
+
+
+def judge_rest(text: str, word: str = WAKE_WORD) -> Tuple[bool, str, str]:
+    """:func:`judge`, and for a clip that is the word with a request after
+    it in one breath ("MindFlock, next session"; the clients send up to
+    4 s): ``(True, "rest", rest)`` — ``rest`` the words after the word
+    (``voice_words.wake_lead`` / ``rest_after``: its heard forms and sound
+    shape, a greeting in front, leading punctuation dropped), 1 to
+    :data:`REST_MAX` of them, a request (``voice_words.wake_asks``: open,
+    switch, next, what … — never an answer or a send). A sentence that
+    merely starts like the word ("My clock is broken", "mindful of the
+    time") stays ``"long"``. ``rest`` is ``""`` for any other outcome.
+    The hint writes "MindFlock" for "Mind …" too: the route checks a rest
+    with :func:`veto_rest`."""
+    wake, reason = judge(text, word)
+    if wake or reason != "long":
+        return wake, reason, ""
+    words = {"wake": _word(word)}
+    at = _voice_words.wake_lead(text, words)
+    if at is None:
+        return False, reason, ""
+    rest = _voice_words.rest_after(text, at)
+    n = len(_tokens(rest))
+    if n == 0 and normalize(word) == WAKE_WORD:
+        # "Mindful, I'll." — the word heard as "Mindful" and a tail, alone.
+        return True, "sound", ""
+    if not 1 <= n <= REST_MAX or not _voice_words.wake_asks(rest):
+        return False, reason, ""
+    return True, "rest", rest
+
+
+def veto_rest(plain: str, rest: str) -> str:
+    """Why the un-prompted decode turns down a :func:`judge_rest` yes with a
+    ``rest`` — ``""`` to keep it. It keeps it when the plain text also
+    starts like the word (``voice_words.wake_lead``: "Mind flock, open
+    intake.", "Mindful, open intake.") or ends with the same words as the
+    rest after up to three words of its own that :func:`veto` does not
+    turn down ("Line flock open intake"); it turns it down when those
+    words are plainly another ("Mind, open settings." — "mind"), when
+    nothing comes before the rest (the hint put a "MindFlock" in front of
+    "open settings"), and when the plain text is something else
+    altogether. A failed or empty plain pass is the caller's (it keeps the
+    yes, as for a lone word)."""
+    if _voice_words.wake_lead(plain) is not None:
+        return ""
+    said = _tokens(plain, "")
+    want = _tokens(rest, "")
+    if want and len(said) > len(want) and said[-len(want) :] == want:
+        lead = said[: -len(want)]
+        if len(lead) <= _VETO_WORDS and not veto(" ".join(lead)):
+            return ""
+    return "plain:" + normalize(plain)[:40]
