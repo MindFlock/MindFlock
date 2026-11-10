@@ -1029,12 +1029,10 @@ class Stream:
             return ""
         if "error" in early.box:
             self.final_outcome = "error"
-            _logger.warning(
-                "voice stream: the accurate pass failed (%s); the fast text stands",
-                early.box["error"],
-            )
+            _held_back(str(early.box["error"]))
             return ""
         self.final_outcome = "ok"
+        _held_back("")
         return str(early.box.get("text") or "").strip()
 
     def _agreed(self, hyp: List[Word]) -> int:
@@ -1290,6 +1288,48 @@ _WAITS: "collections.deque[int]" = collections.deque(maxlen=STATS_KEEP)
 _TIMEOUTS: "collections.deque[bool]" = collections.deque(maxlen=STATS_KEEP)
 
 
+#: A memory hold-back of the accurate pass under way (``core.speech``'s
+#: "… held back: <why>"): the phrases it failed since it was logged.
+_HELD: Dict[str, int] = {}
+_HELD_LOCK = threading.Lock()
+
+
+def _held_back(error: str) -> None:
+    """Log one accurate pass's failure (``error``; ``""``: it ran). A memory
+    hold-back ("held back" in the error) is logged once per episode — memory
+    stays low for minutes, and every phrase's pass is refused meanwhile —
+    and its end (the next pass that runs) once, with how many phrases it
+    cost; any other failure is logged every time."""
+    if error and "held back" not in error:
+        _logger.warning(
+            "voice stream: the accurate pass failed (%s); the fast text stands", error
+        )
+        return
+    with _HELD_LOCK:
+        if error:
+            first = not _HELD
+            _HELD["phrases"] = _HELD.get("phrases", 0) + 1
+            if not first:
+                return
+        elif _HELD:
+            n = _HELD.pop("phrases", 0)
+            _HELD.clear()
+            _logger.warning(
+                "voice stream: the accurate pass runs again (it was held back"
+                " on %d phrase%s; their fast text stood)",
+                n,
+                "" if n == 1 else "s",
+            )
+            return
+        else:
+            return
+    _logger.warning(
+        "voice stream: the accurate pass failed (%s); the fast text stands"
+        " (logged once until a pass runs again)",
+        error,
+    )
+
+
 def _record(wait_ms: int, outcome: str = "ok") -> None:
     """Note one finish's accurate pass: its wait when it returned (``ok``,
     ``error``: a failure is quick), a timeout only as a count — recording
@@ -1441,6 +1481,8 @@ def clear() -> None:
         _STREAMS.clear()
         _WAITS.clear()
         _TIMEOUTS.clear()
+        with _HELD_LOCK:
+            _HELD.clear()
         if _TIMER is not None:
             _TIMER.cancel()
             _TIMER = None
