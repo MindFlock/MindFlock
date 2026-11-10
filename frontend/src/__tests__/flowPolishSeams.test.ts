@@ -96,3 +96,45 @@ describe("the bell's row for a route paused at a halt point", () => {
     expect(src).toMatch(/>\s*Verify\s*<\/button>/);
   });
 });
+
+describe("a refusal under its own field (StopForm errors)", () => {
+  const COMMAND: StepKindDef = {
+    kind: "command",
+    label: "Command",
+    actor: "robot",
+    summary: "Run a command",
+    fields: [
+      { name: "command", type: "textarea", label: "Command" },
+      { name: "timeout_minutes", type: "int", label: "Timeout (minutes)" },
+    ],
+    default_title: "Run",
+  };
+  const cmd = step("s1", "command", "Tests", { config: { command: "make", timeout_minutes: 30 } });
+
+  it("draws each field's error as its hint, in red", async () => {
+    const { StopForm } = await import("../components/flights/StopParts");
+    for (const name of ["title", "timeout_minutes", "when", "on_fail"]) {
+      const html = renderToStaticMarkup(createElement(StopForm, { step: cmd, def: COMMAND, onChange: () => {}, errors: { [name]: "Not that — " + name } }));
+      expect(html, name).toContain(name === "when" ? '<span class="fl-when-error" role="alert">Not that — when</span>' : '<span class="fl-fld-error" role="alert">Not that — ' + name + "</span>");
+      expect(html.match(/role="alert"/g), name).toHaveLength(1);
+    }
+    expect(renderToStaticMarkup(createElement(StopForm, { step: cmd, def: COMMAND, onChange: () => {} }))).not.toContain('role="alert"');
+  });
+
+  it("formFieldNames: the form's own and its kind's fields; a Verify stop's own choices are drawn by its editor", async () => {
+    const { formFieldNames } = await import("../components/flights/StopParts");
+    expect([...formFieldNames(cmd, COMMAND)].sort()).toEqual(["command", "on_fail", "timeout_minutes", "title", "when"]);
+    const VERIFY: StepKindDef = { kind: "verify", label: "Verify", actor: "robot", summary: "", fields: [{ name: "where", type: "text", label: "Where" }, { name: "who", type: "select", label: "Who" }], default_title: "Verify" };
+    expect(formFieldNames(step("v", "verify", "Verify"), VERIFY).has("who")).toBe(false);
+  });
+
+  it("the stop dialog keeps the top-of-form line for a field the form doesn't draw", async () => {
+    const SD = await import("../components/flights/StopDialog");
+    const node = { id: "stop:s1", kind: "stop", row: "main", title: "Tests", sub: "", state: "pending", icon: "command", index: 0, editable: true } as never;
+    const bare: StepKindDef = { ...COMMAND, fields: [] };
+    const html = renderToStaticMarkup(
+      createElement(SD.StopDialog, { node: { ...(node as object), step: step("s1", "command", "Tests", { config: { command: "" } }) }, def: bare, onSave: () => {}, onClose: () => {}, portal: false } as never),
+    );
+    expect(html).toMatch(/class="fl-note stop-dialog-error" role="alert" data-field="command"/);
+  });
+});

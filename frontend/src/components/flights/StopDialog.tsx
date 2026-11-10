@@ -35,7 +35,7 @@ import { InlineConfirm } from "../InlineConfirm";
 import { Modal } from "../Modal";
 import { StopIcon } from "./Bird";
 import { FlField, PromptBox, TextField, Toggle } from "./controls";
-import { StopForm, kindName } from "./StopParts";
+import { StopForm, formFieldNames, kindName } from "./StopParts";
 import { VerifyStopBehaviors } from "./VerifyStopFields";
 import "./StopDialog.css";
 
@@ -258,6 +258,11 @@ function StepDialog(p: StopDialogProps) {
   const parked = acts.length > 0 && (n.state === "halted" || n.state === "perched" || n.state === "paused");
   const check = editable ? clientCheck(shown) : null;
   const problem = refused || check;
+  // A refusal for a field the form draws goes under that field, in red; any
+  // other (a whole-stop refusal, a field drawn elsewhere) above the form.
+  const formDef = shown ? loopFormDef(p.def, shown) : p.def;
+  const problemName = problem ? fieldNameOf(problem.field) : "";
+  const inForm = !!problem && !!shown && !!problemName && formFieldNames(shown, formDef).has(problemName);
   /** Save; true when it went through (a caller that resolves to nothing
    * closes the dialog itself). */
   const save = async (): Promise<boolean> => {
@@ -337,7 +342,14 @@ function StepDialog(p: StopDialogProps) {
         </div>
       )}
       {shown ? (
-        <StopForm step={shown} def={loopFormDef(p.def, shown)} lineSteps={p.lineSteps} readOnly={!editable} onChange={(patch) => change((d) => ({ ...d, ...patch }))} />
+        <StopForm
+          step={shown}
+          def={formDef}
+          lineSteps={p.lineSteps}
+          readOnly={!editable}
+          errors={inForm ? { [problemName]: problem!.detail } : null}
+          onChange={(patch) => change((d) => ({ ...d, ...patch }))}
+        />
       ) : (
         <p className="fl-note muted">This stop's details haven't loaded yet.</p>
       )}
@@ -402,9 +414,9 @@ function StepDialog(p: StopDialogProps) {
             {SAVE_LOST}
           </p>
         )}
-        {problem && <Problem problem={problem} def={p.def} />}
+        {problem && !inForm && <Problem problem={problem} def={p.def} />}
         {parked ? (
-          <details className="stop-dialog-settings" open={dirty || !!refused || lost || undefined}>
+          <details className="stop-dialog-settings" open={dirty || !!refused || inForm || lost || undefined}>
             <summary>Its settings</summary>
             {editable && p.saveHint && <p className="fl-note muted stop-dialog-save-hint">{p.saveHint}</p>}
             {settings}

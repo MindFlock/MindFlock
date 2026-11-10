@@ -486,3 +486,10 @@
   color: var(--fl-ink-accent, var(--accent));
   font-weight: 600;
 }
+
+/* A refusal under its own field (StopForm's `errors`): the field's hint,
+   in red. */
+.fl-fld-hint .fl-fld-error,
+.fl-fld-error {
+  color: var(--red);
+}

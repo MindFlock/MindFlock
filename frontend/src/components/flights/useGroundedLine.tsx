@@ -15,7 +15,7 @@ import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
-import { controlFlight, dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, stepDone, stepFix, stepRetry, stepSkip, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
+import { controlFlight, dropGroup, dropStop, moveStop, patchStop, patchStopGroup, saveStop, savePlan, setHalt, stepDone, stepFix, stepRetry, stepSkip, tackOn, tackOnParallel, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
 import { groundedDiagram, isFreeRun, perchWhy } from "../../lib/groundedLines";
 import { atHaltPoint } from "../../lib/flightDiagram";
@@ -294,10 +294,10 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     ) : null;
 
   const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
-  const act = async (f: () => Promise<unknown>) => {
+  const act = async <T,>(f: () => Promise<T>): Promise<T> => {
     setBusy(true);
     try {
-      await f();
+      return await f();
     } finally {
       setBusy(false);
     }
@@ -380,8 +380,12 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         busy={busy}
         onClose={close}
         onSave={(patch) =>
+          // saveStop, not patchStop: a refusal comes back to the dialog,
+          // which draws it under the field it names.
           act(async () => {
-            if (await patchStop(flight.id, step.id, patch)) close();
+            const r = await saveStop(flight.id, step.id, patch);
+            if (r.ok) close();
+            return r;
           })
         }
         onDuplicate={() => {

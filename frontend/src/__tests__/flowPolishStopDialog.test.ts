@@ -237,7 +237,9 @@ describe("validation as you type", () => {
     expect(SD.clientCheck({ kind: "command", config: { command: "  " } })).toEqual({ field: "command", detail: "Needs a command" });
     expect(SD.clientCheck({ kind: "command", config: { command: "make" } })).toBeNull();
     const html = render({ node: node({ state: "pending", editable: true }, { ...test, config: { command: "" } }), def: COMMAND, onSave: noop });
-    expect(html).toMatch(/role="alert" data-field="command"[^>]*><strong>Command: <\/strong>Needs a command<\/p>/);
+    // Under the Command field itself (StopForm's errors), not above the form.
+    expect(html).toContain('<span class="fl-fld-error" role="alert">Needs a command</span>');
+    expect(html).not.toContain("stop-dialog-error");
     expect(code("components/flights/StopDialog.tsx")).toContain("if (check) setRefused(check);\n          else if (dirty) void save();\n          else p.onClose();");
   });
 
