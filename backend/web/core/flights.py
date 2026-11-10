@@ -154,7 +154,8 @@ VERIFY_WRITE_DEADLINE_S = 3600.0
 #: A check the memory guard refused is retried this often…
 VERIFY_START_RETRY_S = 30.0
 #: …for this long, then the stop parks on you with the reason.
-VERIFY_MEMORY_WAIT_S = 30 * 60.0
+#: (5 min: the same as the driver's own memory park.)
+VERIFY_MEMORY_WAIT_S = 5 * 60.0
 #: A check marked started with no run record this long after → it never started.
 VERIFY_START_CHECK_S = 60.0
 #: No new answer for this long and the checker's turn over → one nudge.
@@ -3636,7 +3637,10 @@ def _verify_guard(ss: dict, v: dict, now: float, up: dict) -> Optional[dict]:
                 "note": "trying again to start the check",
                 "detail": dict(up),
             }
-        return _wait("waiting for memory to start the check (%s)" % why, **up)
+        note = "waiting for memory to start the check (%s)" % why
+        if now - since >= 60:
+            note += " · waited %s" % _mins(now - since)
+        return _wait(note, **up)
     state = v.get("state") or ""
     if d.get("run_started") and state != "running" and "latest_run_at" in v:
         started = float(d.get("run_started_at") or ss["since"] or 0.0)
@@ -3776,6 +3780,8 @@ def _verify_failed_reason(failed: list, notes=None) -> str:
             note = str(item.get("note") or "")
         else:
             text, note = str(item), str(notes[k] if k < len(notes) else "")
+        if "— saw:" in text:
+            note = ""  # the driver's text carries its evidence already
         note = re.sub(r"\s+", " ", note).strip()
         if len(note) > VERIFY_EVIDENCE_CLIP:
             note = note[: VERIFY_EVIDENCE_CLIP - 1].rstrip() + "…"
