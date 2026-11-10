@@ -46071,6 +46071,26 @@ function popupTurn(q) {
 //#region src/whatsNew/releases.ts
 var RELEASES = [
 	{
+		version: "0.14.4",
+		date: "2026-11-10",
+		big: false,
+		headline: "Verify is the session's own agent checking its work.",
+		features: [
+			{
+				title: "Verifying, in the session",
+				body: "Verify asks the session's own agent to write real test steps for what it built and work through them while you watch. A Verifying pill shows it is at work, and anything only you can do, it tells you."
+			},
+			{
+				title: "You confirm when a step is yours",
+				body: "If any step needs a person, Verify waits for you: Confirm verified or Not verified, right on the pane, the bell or the route's stop."
+			},
+			{
+				title: "No more white panes",
+				body: "Terminals repaint when the window comes back, so a pane no longer stays blank until you scroll. New agents also stop waiting on a memory reading that was never short."
+			}
+		]
+	},
+	{
 		version: "0.14.3",
 		date: "2026-11-10",
 		big: false,
