@@ -17,6 +17,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Instance, SessionVerify, TestPlan } from "../api/types";
+import { code } from "./sourceText";
 
 const api = vi.fn();
 const toast = vi.fn();
@@ -283,6 +284,14 @@ describe("the bell and the ⋯ menu", () => {
     ]);
     expect(attentionItems([row({ verify: verify({ state: "failed", failed_steps: FAILED }) }) as Instance])[0]).toMatchObject({ reason: "Verify failed", snippet: "GET /api/thing" });
     expect(attentionItems([row({ verify: verify() }) as Instance])).toEqual([]);
+  });
+
+  it("the bell's row carries the steps with Confirm verified / Not verified…, its name opening the session", () => {
+    const bell = code("components/NotificationsBell.tsx");
+    expect(bell).toContain('if (v?.state === "needs_you")');
+    expect(bell).toContain("<VerifyConfirm verify={v} />");
+    // Not a role="button" row (its buttons would also jump): the name does.
+    expect(bell).toMatch(/className="attn-title linklike" title="Open the session" onClick=\{\(\) => jump\(it\.title\)\}/);
   });
 
   it("Verify sits before Behaviors… in Ship — only while nothing is verifying or waiting", () => {

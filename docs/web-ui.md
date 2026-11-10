@@ -2508,9 +2508,10 @@ two lists: **Needs you** on top, then the history feed.
 **Needs you** merges two sources into one list, one row per session: the
 sessions whose [one state](#one-session-state) is "in the bell" — **Question**,
 **Pre-commit failed** (with the hook), **Setup failed**, **Offline**, **Checks
-failing**, **Confirm verified** / **Verify failed** / **Verify blocked** (the
-line under the row lists the person's steps, what failed, or why; the row
-opens the session, whose [verify row](#verify) has the buttons), and an **Idle**
+failing**, **Confirm verified** / **Verify failed** / **Verify blocked** (a
+Confirm verified row carries the person's steps with **Confirm verified** /
+**Not verified…** right there, its name opening the session; a failed or
+blocked one lists what failed, or why), and an **Idle**
 session 20 minutes into uncommitted work — plus a
 branch ready for its PR, and the `waiting` group of `GET /api/outbox`
 (ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR),
@@ -5584,13 +5585,16 @@ The session row carries it as `verify` (`null`, or `{state, plan, steps:
 **Confirm verified / Not verified…** (`VerifyConfirm`, components/behaviors)
 sit under the person's steps — each step's text and what should happen — on
 the pane's **verify row** (under its head, beside the route strip;
-`grid/PaneVerifyStrip.tsx`), on the **Behaviors card**, and on a **Verify stop**
-parked on you. Both post `POST /api/test-plans/{plan}/confirm` with
+`grid/PaneVerifyStrip.tsx`), on the bell's row, on the **Behaviors card**, and
+on a **Verify stop** parked on you. The phone (`/m`) shows the same pills
+(`mobile.js` mirrors the words and the ranking, in its existing working and
+neutral tones); it has no confirm buttons yet — its tooltip says to confirm on
+the desktop. Both post `POST /api/test-plans/{plan}/confirm` with
 `{verified: true}` or `{verified: false, note}`; **Not verified…** opens an
 inline note (*What did you see? The agent gets this*) — never
 `window.prompt()`, which Electron doesn't have. A 409 means it stopped waiting
-(someone else answered); the error card says so. The bell's row opens the
-session, where the verify row has the buttons.
+(someone else answered); the error card says so. The bell's **Confirm
+verified** row carries the same steps and buttons.
 
 **The pane's verify row** sits directly under the route's strip
 (`PaneFlightStrip`; under the head when there is no route) and is
