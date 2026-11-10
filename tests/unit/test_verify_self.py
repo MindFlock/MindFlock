@@ -380,7 +380,8 @@ def test_the_row_carries_verify_in_the_contracts_shape(monkeypatch, tmp_path):
     row = server._session_snapshot_cheap(inst, {})
     v = row["verify"]
     assert snapshot_mod._row_verify("sc-1") == v
-    assert set(v) == CONTRACT_KEYS
+    # Additive fields (``queued``, the store's progress fields) may follow.
+    assert CONTRACT_KEYS <= set(v) and v.get("queued") is False
     assert v["state"] == "needs_you" and v["plan"] == "sc-1"
     assert v["steps"] == {"total": 2, "agent_done": 1, "human": 1}
     assert v["human_steps"] == [

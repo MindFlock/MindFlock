@@ -11558,9 +11558,7 @@ async def run_test_plan(
         return _no_git_response()
     plan = _test_plans.get(plan_id)
     if plan is None:
-        return JSONResponse(
-            {"error": "behaviors not found: %s" % plan_id}, status_code=404
-        )
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
     # A RECORD IS NOT A SESSION, here as much as below: a run whose workspace has
     # gone (cleared by hand, a disk that went away) keeps its record and its
     # agent window, so `_verify_window_gone` never fires and the two-hour clock
@@ -11582,13 +11580,31 @@ async def run_test_plan(
     # so no steps are needed here and none are checked.
     owner = await asyncio.to_thread(_verify_owner_session, plan)
     if owner:
+        # ``steps`` on the self path = "re-check only these" (the per-step
+        # Run): any step of the plan, a person's too — the agent settles its
+        # own and tells the person about theirs.
+        only = payload.get("steps")
+        if only is not None:
+            if not isinstance(only, list) or not only:
+                return JSONResponse(
+                    {"error": "steps must be a non-empty list of step ids"},
+                    status_code=400,
+                )
+            ids = {s["id"] for s in plan["steps"]}
+            unknown = [str(s) for s in only if str(s) not in ids]
+            if unknown:
+                return JSONResponse(
+                    {"error": "no such step: %s" % ", ".join(unknown)},
+                    status_code=400,
+                )
+            only = [str(s) for s in only]
         run_target, checkout, checkout_branch, bad = await _run_where(plan, where)
         if bad is not None:
             return bad
         return await _run_test_plan_in_session(
             plan,
             owner,
-            None,
+            only,
             live=plan["state"] in ("due", "running", "done"),
             where=where,
             run_target=run_target,
@@ -11605,7 +11621,8 @@ async def run_test_plan(
         # ready, and the regenerate button is the fix.
         return JSONResponse(
             {
-                "error": "this plan has no steps yet — regenerate it first",
+                "error": "the session that did this work is closed and it has no "
+                "Verify steps yet — regenerate them first",
                 "reason": "no_steps",
             },
             status_code=409,
@@ -11621,7 +11638,7 @@ async def run_test_plan(
         # as above — the request is fine, the plan is not one an agent can work.
         return JSONResponse(
             {
-                "error": "every behavior here is for a person to check — "
+                "error": "every step here is for a person to check — "
                 "there is nothing here an agent can settle",
                 "reason": "human_only",
             },
@@ -11638,7 +11655,7 @@ async def run_test_plan(
     if not await asyncio.to_thread(_is_verify_repo_usable, repo_root):
         return JSONResponse(
             {
-                "error": "the repo these behaviors were written from is gone (%s) — "
+                "error": "the repo this work was done in is gone (%s) — "
                 "a run needs it to check out the live branch"
                 % (repo_root or "no path recorded"),
                 "reason": "repo_gone",
@@ -11814,7 +11831,7 @@ async def run_test_plan(
                     _pending.drop(title)
             return JSONResponse(
                 {
-                    "error": "memory is low — the verify session is waiting to start",
+                    "error": "memory is low — Verify is waiting to start",
                     "reason": "memory",
                     "detail": str(body.get("reason") or body.get("message") or ""),
                 },
@@ -11838,9 +11855,7 @@ async def run_test_plan(
         # exists — and one nothing would ever collect, since the sweep's grace
         # window measures from the session and the poller only looks at plans.
         await _end_verify_session(title)
-        return JSONResponse(
-            {"error": "behaviors not found: %s" % plan_id}, status_code=404
-        )
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
     # The plan comes back with it. The row needs the run record `start_run` just
     # opened (the "last checked" line, the give-up clock, the carried human
     # answers), and the client was hand-synthesising a state without it.
@@ -11901,7 +11916,8 @@ async def _run_test_plan_in_session(
     (``test_plans.build_self_verify_prompt``) — with no pre-written steps;
     the agent writes its own into the results file and walks them, and tells
     the person about any only they can do. ``only`` and ``live`` are not
-    used (the agent picks its own steps; its tree is its own branch).
+    used to pick a tree (its tree is its own branch); ``only`` (a re-run's
+    ``steps``) asks the agent to re-check just those steps.
 
     The run is opened FIRST and the prompt handed over second: a session that
     is idle starts answering at once, and its answers need a running plan to
@@ -11909,7 +11925,7 @@ async def _run_test_plan_in_session(
     says why — nothing was created, so there is nothing to close."""
     plan_id = str(plan["id"])
     repo_root = str(plan.get("repo_root") or "")
-    prompt = _test_plans.build_self_verify_prompt(
+    prompt = _self_verify_prompt(
         plan,
         repo_notes=_test_plans.repo_notes(repo_root),
         target=(
@@ -11917,8 +11933,9 @@ async def _run_test_plan_in_session(
         ),
         where=where,
         checkout_branch=checkout_branch,
-        notes=notes,
+        notes=_only_these_notes(plan, only, notes),
         confirm=confirm,
+        walk=walk,
     )
     # The session's HEAD now: what the tree check holds the walk to.
     tip = ""
@@ -11945,9 +11962,7 @@ async def _run_test_plan_in_session(
         tip_sha=str(tip or ""),
     )
     if started is None:
-        return JSONResponse(
-            {"error": "behaviors not found: %s" % plan_id}, status_code=404
-        )
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
     told, reason = await asyncio.to_thread(_deliver_walk, owner, prompt)
     if not told:
         await asyncio.to_thread(_test_plans.cancel_run, plan_id)
@@ -11975,6 +11990,43 @@ async def _run_test_plan_in_session(
     )
 
 
+def _self_verify_prompt(plan: dict, *, walk: str, **kwargs) -> str:
+    """``test_plans.build_self_verify_prompt`` with the run's ``walk`` and the
+    previous run's answers (``test_plans.previous_for_prompt``), when the store
+    takes them — a re-run is told what it found last time instead of starting
+    blind. Falls back to the plain prompt on a store without them."""
+    extra: dict = {"walk": walk}
+    previous = getattr(_test_plans, "previous_for_prompt", None)
+    if previous is not None:
+        try:
+            extra["previous"] = previous(plan)
+        except Exception:  # noqa: BLE001 — a re-run without history still runs
+            pass
+    try:
+        return _test_plans.build_self_verify_prompt(plan, **kwargs, **extra)
+    except TypeError:
+        return _test_plans.build_self_verify_prompt(plan, **kwargs)
+
+
+def _only_these_notes(plan: dict, only: Optional[list], notes: str) -> str:
+    """``notes`` plus "re-check only these steps" for a re-run of named steps
+    (the per-step Run on a self-verify)."""
+    if not only:
+        return notes
+    by_id = {s["id"]: s for s in plan.get("steps") or []}
+    named = "; ".join(
+        "%s (%s)" % (sid, str(by_id[sid].get("text") or "")[:160])
+        for sid in only
+        if sid in by_id
+    )
+    ask = (
+        "Re-check ONLY these steps: %s. Write the results file again with "
+        "every step — these with their new answers, the others with the "
+        "answers you gave last time." % named
+    )
+    return ("%s\n\n%s" % (notes, ask)) if notes else ask
+
+
 def _json_body(resp) -> dict:
     """A JSONResponse's body as a dict ({} when it is not one)."""
     try:
@@ -11996,14 +12048,14 @@ def _run_launch_refusal(resp) -> JSONResponse:
     if body.get("memory_confirm"):
         return JSONResponse(
             {
-                "error": "memory is low — the verify session can't start yet",
+                "error": "memory is low — Verify can't start yet",
                 "reason": "memory",
                 "detail": str(body.get("message") or body.get("error") or ""),
             },
             status_code=409,
         )
     out = dict(body)
-    out.setdefault("error", "the verify session could not start")
+    out.setdefault("error", "Verify couldn't start")
     out["reason"] = "launch_failed"
     return JSONResponse(out, status_code=resp.status_code)
 
@@ -12050,12 +12102,16 @@ async def confirm_test_plan(
 ) -> JSONResponse:
     """A PERSON confirms a verify waiting on them (``needs_you``).
 
-    Body ``{"verified": true|false, "note"?: str}``. ``verified`` true → the
-    steps still waiting are answered pass and the verify is ``passed``; false
-    → they are answered fail with the note and it is ``failed``
-    (``test_plans.confirm_verify``) → 200 ``{"ok": true, "plan": <plan>}``.
-    409 ``{"error"}`` when the plan's verify is not in ``needs_you``; 404 for
-    no such plan; 400 for a body without a boolean ``verified``."""
+    Body ``{"verified": true|false, "note"?: str, "steps"?: {id: "pass" |
+    "fail"}}``. ``verified`` true → the steps still waiting are answered pass
+    and the verify is ``passed``; false → they are answered fail with the
+    note and it is ``failed`` (``test_plans.confirm_verify``; ``steps``
+    answers named steps one by one, passed through only when given) → 200
+    ``{"ok": true, "plan": <plan>, "delivered": bool}``. ``verified`` false
+    also TELLS the session's own agent ("A person checked and says it does
+    not work: <note>") when that session is open — ``delivered`` says whether
+    it was. 409 ``{"error"}`` when the plan's verify is not in ``needs_you``;
+    404 for no such plan; 400 for a body without a boolean ``verified``."""
     payload = payload if isinstance(payload, dict) else {}
     verified = payload.get("verified")
     if not isinstance(verified, bool):
@@ -12065,16 +12121,37 @@ async def confirm_test_plan(
     note = payload.get("note")
     if note is not None and not isinstance(note, str):
         return JSONResponse({"error": "note must be a string"}, status_code=400)
+    note = str(note or "").strip()
+    steps = payload.get("steps")
+    if steps is not None:
+        if not isinstance(steps, dict) or not all(
+            isinstance(k, str) and v in ("pass", "fail") for k, v in steps.items()
+        ):
+            return JSONResponse(
+                {"error": 'steps must map step ids to "pass" or "fail"'},
+                status_code=400,
+            )
     try:
-        plan = await asyncio.to_thread(
-            _test_plans.confirm_verify, plan_id, verified, str(note or "").strip()
-        )
+        if steps:
+            try:
+                plan = await asyncio.to_thread(
+                    _test_plans.confirm_verify, plan_id, verified, note, steps=steps
+                )
+            except TypeError:  # a store without per-step answers
+                plan = await asyncio.to_thread(
+                    _test_plans.confirm_verify, plan_id, verified, note
+                )
+        else:
+            plan = await asyncio.to_thread(
+                _test_plans.confirm_verify, plan_id, verified, note
+            )
     except _test_plans.NotNeedsYou as err:
         return JSONResponse({"error": str(err)}, status_code=409)
     if plan is None:
-        return JSONResponse(
-            {"error": "behaviors not found: %s" % plan_id}, status_code=404
-        )
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
+    delivered = False
+    if not verified:
+        delivered = await asyncio.to_thread(_tell_not_verified, plan, note)
     try:
         _events.BUS.emit(
             "session.test_plan_checked",
@@ -12088,11 +12165,35 @@ async def confirm_test_plan(
                 "outcome": (plan["runs"][-1] if plan["runs"] else {}).get(
                     "outcome", ""
                 ),
+                "detail": (
+                    ""
+                    if verified
+                    else "A person checked and says it does not work"
+                    + (": %s" % note[:200] if note else ".")
+                ),
             },
         )
     except Exception:  # noqa: BLE001 — an announcement never fails a confirm
         pass
-    return JSONResponse({"ok": True, "plan": _test_plan_row(plan)})
+    return JSONResponse(
+        {"ok": True, "plan": _test_plan_row(plan), "delivered": bool(delivered)}
+    )
+
+
+def _tell_not_verified(plan: dict, note: str) -> bool:
+    """A person said "Not verified": tell the session that did the work, when
+    it is still open, so its agent can act on it → whether it was told.
+    Queued behind its turn, never typed over it. Never raises."""
+    try:
+        owner = _verify_owner_session(plan)
+        if not owner:
+            return False
+        text = "MindFlock — a person checked your work and says it does not work"
+        text += (": %s" % note) if note else "."
+        told, _why = _deliver_walk(owner, text)
+        return bool(told)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @app.post("/api/instances/{title}/verify")
@@ -12100,13 +12201,23 @@ async def instance_verify(title: str, request: Request, payload: Optional[dict] 
     """Verify this session's work NOW: find or create its plan (an empty one —
     nothing is generated; the agent writes its own steps) and start the
     self-verify in the session (``run_test_plan``) → 202 ``{"started": true,
-    "plan": "<id>"}``. Body ``{"notes"?: str}``. A refusal is the run route's
-    own answer (409 busy / send_failed, …); 404 for no such session, 409 for
-    one with no workspace or not on a branch."""
+    "plan": "<id>", "session", "queued"}`` (``queued``: the check waits behind
+    the agent's current turn). Body ``{"notes"?: str, "environment"?: str}``.
+
+    WHERE: an ``environment`` names a deployment to check (or ``"branch"``);
+    without one, work that has NOT SHIPPED yet is checked on its own branch —
+    never against the repo's deployed target, which does not have it yet —
+    and shipped work against the repo's own target, as before. A refusal is
+    the run route's own answer (409 busy / send_failed, 400 unknown
+    environment, …); 404 for no such session, 409 for one with no workspace
+    or not on a branch."""
     payload = payload if isinstance(payload, dict) else {}
     notes = payload.get("notes")
     if notes is not None and not isinstance(notes, str):
         return JSONResponse({"error": "notes must be a string"}, status_code=400)
+    environment = payload.get("environment")
+    if environment is not None and not isinstance(environment, str):
+        return JSONResponse({"error": "environment must be a string"}, status_code=400)
     if not git_available():
         return _no_git_response()
     inst, err = _inst_or_404(title)
@@ -12117,8 +12228,20 @@ async def instance_verify(title: str, request: Request, payload: Optional[dict] 
         return peer_err
     pid, why = await asyncio.to_thread(_ensure_verify_plan, title)
     if not pid:
-        return JSONResponse({"error": why or "couldn't start a check"}, status_code=409)
-    resp = await run_test_plan(pid, request, {"notes": str(notes or "")})
+        return JSONResponse({"error": why or "couldn't start Verify"}, status_code=409)
+    body = {"notes": str(notes or "")}
+    where = str(environment or "").strip()
+    if not where:
+        plan = _test_plans.get(pid) or {}
+        try:
+            unshipped = bool(plan) and _test_plans._unshipped(plan)
+        except Exception:  # noqa: BLE001 — unknown: the repo's own target
+            unshipped = False
+        if unshipped:
+            where = _test_plans.BRANCH_WHERE
+    if where:
+        body["environment"] = where
+    resp = await run_test_plan(pid, request, body)
     if resp.status_code >= 400:
         return resp
     body = _json_body(resp)
@@ -12137,7 +12260,8 @@ async def instance_verify(title: str, request: Request, payload: Optional[dict] 
 async def fix_failed_test_plan_steps(
     plan_id: str, request: Request, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """Open a session to fix what a check found → **202** ``{session}``.
+    """Have an agent fix what a check found → **202** ``{session, in_session,
+    queued}``.
 
     Every refusal carries ``detail``: one plain sentence the dialog shows
     verbatim (round 5 — the toast used to print the raw API path of a 500).
@@ -12157,7 +12281,17 @@ async def fix_failed_test_plan_steps(
 async def _fix_failed_test_plan_steps(
     plan_id: str, request: Request, payload: Optional[dict]
 ) -> JSONResponse:
-    """Open a session to fix what a check found → **202** ``{session}``.
+    """Have an agent fix what a check found → **202** ``{session, in_session,
+    queued}``.
+
+    IN THE SESSION THAT DID THE WORK when it is still open
+    (:func:`_verify_owner_session`), or when the body says ``"in_session":
+    true``: its own agent gets the failed steps — each step's text, what was
+    expected and the evidence note — queued behind its turn like the check,
+    and Verify runs again once that turn ends (``_tpd.expect_fix``, the
+    on-demand twin of a route's fix round). ``"in_session": false``, or a
+    session that is gone, opens a separate ``fix-<plan>`` session as below
+    (``in_session: false``).
 
     THE LOOP THIS CLOSES. A red checklist is the most valuable thing this feature
     produces — the work shipped, it does not do what it was for, and somebody
@@ -12179,8 +12313,15 @@ async def _fix_failed_test_plan_steps(
     if plan is None:
         return _fix_refusal(
             404,
-            "behaviors not found: %s" % plan_id,
-            "Those behaviors no longer exist.",
+            "no Verify for %s" % plan_id,
+            "That Verify no longer exists.",
+        )
+    in_flag = (payload or {}).get("in_session")
+    if in_flag is not None and not isinstance(in_flag, bool):
+        return _fix_refusal(
+            400,
+            "in_session must be true or false",
+            "Choose whether to fix it in the same session or a new one.",
         )
     if not git_available():
         return _fix_refusal(
@@ -12195,7 +12336,7 @@ async def _fix_failed_test_plan_steps(
         # wrong in the direction that wastes a session. A non-list (``"s3"``)
         # failed the isinstance test and silently widened the request to every
         # failure on the checklist; an id that does not exist, or one that
-        # exists and did not fail, answered "no behavior here failed"
+        # exists and did not fail, answered "nothing failed"
         # on a checklist with three red steps — which reads as the feature being
         # broken rather than the request being wrong.
         if not isinstance(only, list) or not only:
@@ -12211,7 +12352,7 @@ async def _fix_failed_test_plan_steps(
             return _fix_refusal(
                 400,
                 "no such step: %s" % ", ".join(unknown),
-                "That behavior isn't on the list any more — refresh and try again.",
+                "That step isn't on the list any more — refresh and try again.",
                 unknown_steps=unknown,
             )
         chosen = {f["step"]["id"] for f in failures if f["step"]["id"] in wanted}
@@ -12227,13 +12368,18 @@ async def _fix_failed_test_plan_steps(
         return _fix_refusal(
             409,
             "no behavior here failed",
-            "No behavior here failed, so there is nothing to fix.",
+            "No step here failed, so there is nothing to fix.",
         )
+    owner = (
+        "" if in_flag is False else await asyncio.to_thread(_verify_owner_session, plan)
+    )
+    if owner or in_flag is True:
+        return await _fix_in_session(plan, owner, failures)
     if not plan.get("repo_root"):
         return _fix_refusal(
             409,
-            "these behaviors have no repository to work in",
-            "These behaviors aren't tied to a repo, so a fix session has nowhere to work.",
+            "this Verify has no repository to work in",
+            "This Verify isn't tied to a repo, so a fix session has nowhere to work.",
         )
     title = "fix-%s" % plan_id
     prompt = _test_plans.build_fix_prompt(plan, failures)
@@ -12262,10 +12408,10 @@ async def _fix_failed_test_plan_steps(
         ):
             return _fix_refusal(
                 409,
-                "the repo these behaviors were written from is gone "
+                "the repo this work was done in is gone "
                 "(%s) — a fix session needs it to work in"
                 % (plan.get("repo_root") or "no path recorded"),
-                "The repo these behaviors were written from is gone — "
+                "The repo this work was done in is gone — "
                 "a fix session needs it to work in.",
                 repo_root=plan.get("repo_root") or "",
             )
@@ -12315,7 +12461,83 @@ async def _fix_failed_test_plan_steps(
     if resp.status_code >= 400:
         return resp
     return JSONResponse(
-        {"ok": True, "session": title, "reclaimed": bool(reclaimed)}, status_code=202
+        {
+            "ok": True,
+            "session": title,
+            "reclaimed": bool(reclaimed),
+            "in_session": False,
+            "queued": False,
+        },
+        status_code=202,
+    )
+
+
+def _fix_in_session_prompt(plan: dict, failures: list) -> str:
+    """The fix handed to the session that did the work: every failed step's
+    text, what was expected, and the evidence note that says what happened."""
+    parts = [
+        "MindFlock — Verify found %s in the work you just did. Fix %s, then "
+        "say what you changed. Verify runs again when you finish."
+        % (
+            "a problem" if len(failures) == 1 else "%d problems" % len(failures),
+            "it" if len(failures) == 1 else "them",
+        ),
+        "",
+    ]
+    for n, failure in enumerate(failures, 1):
+        step = failure.get("step") or {}
+        parts += [
+            "%d. %s" % (n, str(step.get("text") or "").strip()),
+            "   Expected: %s"
+            % (str(step.get("expect") or "").strip() or "(not stated)"),
+            "   What happened: %s"
+            % (str(failure.get("note") or "").strip() or "(no evidence was recorded)"),
+            "",
+        ]
+    parts.append(
+        "Reproduce each one first. If a step itself is wrong, say so instead "
+        "of changing the code to satisfy it."
+    )
+    return "\n".join(parts)
+
+
+async def _fix_in_session(plan: dict, owner: str, failures: list) -> JSONResponse:
+    """``_fix_failed_test_plan_steps`` in the session that did the work: the
+    fix prompt to ``owner``'s own agent (queued behind its turn), and Verify
+    again once that turn ends → 202 ``{session, in_session: true, queued}``.
+    No ``owner`` (the body asked for the same session and it is closed) → 409
+    ``reason: "session_gone"``."""
+    plan_id = str(plan.get("id") or "")
+    if not owner:
+        return _fix_refusal(
+            409,
+            "the session that did this work is closed",
+            "The session that did this work is closed — fix it in a new "
+            "session instead.",
+            reason="session_gone",
+        )
+    told, why = await asyncio.to_thread(
+        _deliver_walk, owner, _fix_in_session_prompt(plan, failures)
+    )
+    if not told:
+        return _fix_refusal(
+            409,
+            "couldn't hand the fix to %s: %s" % (owner, why),
+            "Couldn't hand the fix to %s — %s." % (owner, str(why).rstrip(".")),
+            reason="send_failed",
+            owner=owner,
+        )
+    from backend.web.core import test_plans_driver as _tpd
+
+    _tpd.expect_fix(plan_id, owner)
+    return JSONResponse(
+        {
+            "ok": True,
+            "session": owner,
+            "in_session": True,
+            "queued": told == "queued",
+        },
+        status_code=202,
     )
 
 
@@ -12610,39 +12832,57 @@ def mark_test_plan_deployed(plan_id: str) -> JSONResponse:
 
 @app.post("/api/test-plans/{plan_id:path}/cancel")
 async def cancel_test_plan_run(plan_id: str) -> JSONResponse:
-    """Stop the verify session working this plan and put the plan back.
+    """Stop this Verify and put the plan back → ``{"ok", "verify_stopped":
+    true, "session", "closed", "told", "plan"}``.
+
+    STOPS THE CHECK, NOT THE SESSION. A check in the session that did the
+    work leaves that session running: a check still waiting on its prompt
+    queue is withdrawn (so it never runs), and one its agent already picked
+    up gets "this check was closed" (``told``). Only a separate checker
+    session is closed (``closed``). ``verify_stopped`` is what the client
+    reads — ``session`` names where the check was, not something stopped.
 
     Without this, a run you started by mistake — on the wrong commit, or one
-    that has wedged — could only be stopped by hunting down its session in the
-    sidebar, and the plan itself stayed ``running`` until the due loop's
-    two-hour give-up clock expired. Both halves happen here: the session ends
-    and the plan returns to the state it was in before the run.
-
-    Idempotent on purpose: a plan whose session has already gone (the user
-    ended it themselves) still gets its bookkeeping cleared, which is precisely
-    the wedge this is meant to be able to clear.
+    that has wedged — could only be stopped by hunting down its session, and
+    the plan itself stayed ``running`` until the due loop's give-up clock
+    expired. Idempotent on purpose: a plan whose session has already gone
+    still gets its bookkeeping cleared.
     """
     plan = _test_plans.get(plan_id)
     if plan is None:
-        return JSONResponse(
-            {"error": "behaviors not found: %s" % plan_id}, status_code=404
-        )
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
     session_title = plan["run_session"]
-    # A walk in the session that wrote the work: the session stays (it is the
-    # person's own; _end_verify_session never closes it), but its agent is
-    # told to stop walking.
+    told = False
     if _run_is_in_session(plan) and session_title:
-        await asyncio.to_thread(_tell_walk_closed, session_title, "cancelled")
+        told = await asyncio.to_thread(_tell_walk_closed, session_title, "cancelled")
     closed = await _end_verify_session(session_title)
     updated = await asyncio.to_thread(_test_plans.cancel_run, plan_id)
     return JSONResponse(
         {
             "ok": True,
+            "verify_stopped": True,
             "session": session_title,
             "closed": closed,
+            "told": bool(told),
             "plan": updated,
         }
     )
+
+
+@app.post("/api/test-plans/{plan_id:path}/dismiss")
+async def dismiss_test_plan_verify(plan_id: str) -> JSONResponse:
+    """Take a settled Verify off the session's row (``test_plans.dismiss_verify``)
+    → ``{"ok": true}``; 404 for no such plan (or a store without dismiss)."""
+    dismiss = getattr(_test_plans, "dismiss_verify", None)
+    if dismiss is None:
+        return JSONResponse({"error": "dismiss isn't available"}, status_code=404)
+    try:
+        out = await asyncio.to_thread(dismiss, plan_id)
+    except ValueError as err:
+        return JSONResponse({"error": str(err)}, status_code=409)
+    if out is None or out is False:
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
+    return JSONResponse({"ok": True})
 
 
 @app.delete("/api/test-plans/{plan_id:path}")
@@ -12652,18 +12892,27 @@ async def delete_test_plan(plan_id: str) -> JSONResponse:
     outlive their sessions, so deleting the session does not take the plan with
     it).
 
-    A plan being verified right now takes its verify session with it. Nothing
-    would be left to write the results into, so an agent left running would be
-    burning minutes to answer a checklist that no longer exists — and the
-    session would linger in the grid with a name pointing at a deleted plan.
+    A plan being verified right now ends that check first: in the session
+    that did the work, a check still queued is withdrawn and one already
+    picked up is told it was closed (``told``) — the session itself stays; a
+    separate checker session is closed. Nothing would be left to write the
+    results into, so an agent left checking would be burning minutes on a
+    plan that no longer exists.
     """
     plan = _test_plans.get(plan_id)
-    if plan is None or not _test_plans.delete(plan_id):
-        return JSONResponse(
-            {"error": "behaviors not found: %s" % plan_id}, status_code=404
+    if plan is None:
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
+    told = False
+    in_session = _run_is_in_session(plan)
+    if plan.get("state") == "running" and in_session and plan["run_session"]:
+        told = await asyncio.to_thread(
+            _tell_walk_closed, plan["run_session"], "it was deleted"
         )
-    closed = await _end_verify_session(plan["run_session"])
-    return JSONResponse({"ok": True, "closed": closed})
+    if not _test_plans.delete(plan_id):
+        return JSONResponse({"error": "no Verify for %s" % plan_id}, status_code=404)
+    # The person's own session is never closed with its plan.
+    closed = False if in_session else await _end_verify_session(plan["run_session"])
+    return JSONResponse({"ok": True, "closed": closed, "told": bool(told)})
 
 
 # --- Workspace disk management ------------------------------------------------

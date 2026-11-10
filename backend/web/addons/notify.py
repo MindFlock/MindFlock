@@ -325,13 +325,13 @@ NOTIFY_RULES: List[dict] = [
         # pushes all day writes one of these per session per branch, which is
         # ambient rather than actionable.
         "id": "verify_plan_ready",
-        "label": "Behaviors are written",
-        "description": "Verify finished writing the behaviors for a push.",
+        "label": "Verify steps are written",
+        "description": "Verify finished writing the steps for a push.",
         "event": "session.test_plan_ready",
         "old": None,
         "new": None,
-        "title": "{session}: behaviors written",
-        "body": "The agent finished writing the behaviors for this work.",
+        "title": "{session}: Verify steps written",
+        "body": "The steps to verify this work are written.",
         "default_enabled": False,
         "priority": 2,
         "tags": ["clipboard"],
@@ -348,13 +348,13 @@ NOTIFY_RULES: List[dict] = [
         # silently failed was the one Verify outcome nobody heard about. Anyone
         # who already saved a rule choice keeps it (``was_opt_in``).
         "id": "verify_plan_failed",
-        "label": "Behaviors couldn't be written",
-        "description": "The Verify stop on its route says why.",
+        "label": "Verify steps couldn't be written",
+        "description": "Verify couldn't write the steps for a push.",
         "event": "session.test_plan_failed",
         "old": None,
         "new": None,
-        "title": "{session}: couldn't write the behaviors",
-        "body": "No behaviors were written — the Verify stop on its route says why.",
+        "title": "{session}: couldn't write the Verify steps",
+        "body": "No steps were written — open Verify on the session to see why.",
         "default_enabled": True,
         "was_opt_in": True,
         "priority": 3,
@@ -371,13 +371,13 @@ NOTIFY_RULES: List[dict] = [
         # once per checklist and says how many steps are yours; this rule's
         # switch gates that push too, so one toggle governs both channels.
         "id": "verify_plan_due",
-        "label": "Behaviors are ready to check",
-        "description": "The work shipped and its behaviors are ready to check.",
+        "label": "Shipped work is ready to verify",
+        "description": "The work shipped and its Verify steps are ready to check.",
         "event": "session.test_plan_due",
         "old": None,
         "new": None,
-        "title": "{session} shipped — ready to check",
-        "body": "Its behaviors are ready to check on its route.",
+        "title": "{session} shipped — ready to verify",
+        "body": "Its Verify steps are ready to check.",
         "default_enabled": True,
         "ntfy": False,
         "priority": 3,
@@ -390,16 +390,35 @@ NOTIFY_RULES: List[dict] = [
         # any step failed, so this matches only those; the opt-in rule below
         # still hears every finished run.
         "id": "verify_run_failed",
-        "label": "A behavior fails",
-        "description": "A behavior didn't do what was expected.",
+        "label": "Verify fails",
+        "description": "A Verify step didn't do what was expected.",
         "event": "session.test_plan_checked",
         "old": None,
         "new": "failed",
-        "title": "{session}: a behavior failed",
-        "body": "A behavior didn't do what was expected — the Verify stop on its route shows which.",
+        "title": "{session}: Verify failed",
+        # The emitter's sentence names the step ("1 step failed: …") — never
+        # "the Verify stop on its route", which an on-demand Verify has none of.
+        "body": "{detail}",
         "default_enabled": True,
         "priority": 4,
         "tags": ["x"],
+    },
+    {
+        # A check that NEEDS THE PERSON: steps only they can do, or a sign-off
+        # (``needs_you``). It waits on them until they confirm, so it is the
+        # one Verify moment that must ring — the emitter stamps ``new =
+        # "needs_you"`` and writes what to do into ``detail``.
+        "id": "verify_needs_you",
+        "label": "Verify needs you",
+        "description": "Verify is waiting for you to check something and confirm.",
+        "event": "session.test_plan_checked",
+        "old": None,
+        "new": "needs_you",
+        "title": "{session}: Verify needs you",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["eyes"],
     },
     {
         # Verify, opt-in: an agent finished WORKING a checklist — the far end of
@@ -413,13 +432,13 @@ NOTIFY_RULES: List[dict] = [
         # no ``detail``. So the body says where the numbers are rather than
         # inventing them.
         "id": "verify_run_finished",
-        "label": "An agent finishes checking behaviors",
-        "description": "The Verify stop on its route shows what it found.",
+        "label": "Verify finishes",
+        "description": "The agent finished verifying its work.",
         "event": "session.test_plan_checked",
         "old": None,
         "new": None,
-        "title": "{session}: behaviors checked",
-        "body": "The agent checked the behaviors — the Verify stop on its route shows what it found.",
+        "title": "{session}: Verify finished",
+        "body": "The agent finished verifying — open the session to see what it found.",
         "default_enabled": False,
         "priority": 3,
         "tags": ["ballot_box_with_check"],
@@ -432,13 +451,13 @@ NOTIFY_RULES: List[dict] = [
         # yet", making a run that was started, billed and abandoned
         # indistinguishable from a button nobody ever pressed.
         "id": "verify_run_gave_up",
-        "label": "A behaviors check stops without answers",
-        "description": "The behaviors go back to Not checked.",
+        "label": "Verify stops without answers",
+        "description": "Verify stopped before the agent recorded anything.",
         "event": "session.test_plan_gave_up",
         "old": None,
         "new": None,
-        "title": "{session}: behaviors check gave up",
-        "body": "The check recorded no answers — the behaviors are back to Not checked.",
+        "title": "{session}: Verify gave up",
+        "body": "{detail}",
         "default_enabled": False,
         "priority": 3,
         "tags": ["warning"],

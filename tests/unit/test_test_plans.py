@@ -3390,7 +3390,8 @@ def test_cancel_route_404s_on_an_unknown_plan(client):
 def test_delete_route_forgets_the_plan(client):
     tp.upsert(_plan("sc-1"))
     r = client.delete("/api/test-plans/sc-1")
-    assert r.status_code == 200 and r.json() == {"ok": True, "closed": False}
+    assert r.status_code == 200
+    assert r.json()["ok"] is True and r.json()["closed"] is False
     assert tp.get("sc-1") is None
 
 
@@ -3512,8 +3513,10 @@ def test_sweep_keeps_the_session_a_running_plan_owns(sweeper):
 
 def test_sweep_keeps_a_finished_runs_session(sweeper):
     """After finish_run, ``run_session`` clears but the run record keeps its
-    session — deliberately open for the user to read. The sweep must honour
-    the record, not just the in-flight field."""
+    session — open for the user to read for a while after the run ended
+    (flow-polish: then it is closed, not kept for days)."""
+    import time as _time
+
     closed, register = sweeper
     tp.upsert(
         _plan(
@@ -3521,7 +3524,12 @@ def test_sweep_keeps_a_finished_runs_session(sweeper):
             state="done",
             run_session="",
             runs=[
-                {"at": 100.0, "by": "agent", "session": "verify-sc-1", "results": {}}
+                {
+                    "at": _time.time() - 60.0,
+                    "by": "agent",
+                    "session": "verify-sc-1",
+                    "results": {},
+                }
             ],
         )
     )
@@ -6348,9 +6356,7 @@ def test_the_fix_route_refuses_when_nothing_failed(client):
     r = client.post("/api/test-plans/sc-1/fix", json={})
     assert r.status_code == 409
     assert "no behavior here failed" in r.json()["error"]
-    assert r.json()["detail"] == (
-        "No behavior here failed, so there is nothing to fix."
-    )
+    assert r.json()["detail"] == ("No step here failed, so there is nothing to fix.")
 
 
 def test_the_fix_route_reaches_the_REAL_create_instance(client, monkeypatch):
@@ -7212,7 +7218,7 @@ def test_giving_up_on_a_wedged_run_says_so_on_the_plan(store, monkeypatch):
     # sweeper keeps any session a run record names, so a run that never wrote an
     # answer would otherwise leave its agent alive and unreachable forever.
     assert plan["runs"] == []
-    assert "given up on" in plan["error"] and "verify-sc-1" in plan["error"]
+    assert "gave up" in plan["error"] and "verify-sc-1" in plan["error"]
     # And said where somebody who is not looking at the dialog will hear it.
     assert [k for k, _ in emitted] == ["session.test_plan_gave_up"]
     assert emitted[0][1]["run_session"] == "verify-sc-1"
@@ -7371,7 +7377,7 @@ def test_a_run_whose_window_died_is_released_in_minutes_not_hours(store, monkeyp
 
     plan = tp.get("sc-1")
     assert plan["state"] == "due"
-    assert "agent window is gone" in plan["error"]
+    assert "stopped before Verify finished" in plan["error"]
     assert emitted == ["session.test_plan_gave_up"]
 
 
