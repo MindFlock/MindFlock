@@ -79,11 +79,7 @@ import { pronounce, setPronounce, shapeForSpeech } from "./spokenText";
  * not send" can be read off the log instead of guessed. Fire and forget. */
 export function voiceTrace(event: string, data: Record<string, unknown> = {}): void {
   try {
-    void fetch("/api/voice/trace", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ event, ...data }),
-    }).catch(() => {});
+    void api("/api/voice/trace", { json: { event, ...data } }).catch(() => {});
   } catch {
     /* no fetch (tests) */
   }

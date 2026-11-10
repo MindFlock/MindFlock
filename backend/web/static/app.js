@@ -48613,14 +48613,10 @@ function shapeForSpeech(text, overrides) {
 //#region src/lib/voiceDesktop.ts
 function voiceTrace(event, data = {}) {
 	try {
-		fetch("/api/voice/trace", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				event,
-				...data
-			})
-		}).catch(() => {});
+		api("/api/voice/trace", { json: {
+			event,
+			...data
+		} }).catch(() => {});
 	} catch {}
 }
 function parseRadio(text) {
