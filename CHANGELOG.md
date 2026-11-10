@@ -7,7 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Verify asks what it should prove, right in the pane.** Verify on a
+  session's ⋯ menu (or **Verify again** on its pane row) opens a small form in
+  the pane: *What should it prove? (optional)* and, when the repo has Verify
+  environments, a **Where** pick. Enter starts it, even empty. Work that has
+  not shipped is checked on its own branch, not on a deployment.
+  `POST /api/instances/{title}/verify` takes `{notes?, environment?}` and
+  answers `session` and `queued` (the check waits for the agent's turn to end).
+- **Dry run a route against the server's own check.** `POST
+  /api/flights/check` takes the body of a start and creates nothing. It answers
+  the stops as they will run (with the ids the server gives them), where the
+  route starts, which stops it skips and why, the session's current route, and
+  every problem with the field to change. `start_flight` with `dry_run` uses
+  it. A real start runs the same pre-check first and refuses before anything
+  is created: a mistyped Verify environment (the answer lists the repo's), a
+  branch another live session holds, a Ship stop on a session that shares its
+  folder or is a copy window.
+- **Route commands in the CLI.** `mindflock flight retry ROUTE`, `resume`
+  (Carry on), `pause`, and `mindflock flight jump ROUTE STOP` (the stop's id,
+  number or title). `mindflock flights` prints, under the table, why each
+  route that is waiting on you, halted or paused stopped, and the commands that
+  work from there.
+- **Agents can start and answer Verify.** Two new MCP tools, `verify_session`
+  (`title?`, `notes?`, `environment?`) and `confirm_verify` (`title?`,
+  `verified`, `note?`), act on the caller itself or a session it manages (36
+  tools now). `edit_flight` takes `edit: [{step, title?, config?, on_fail?,
+  when?, halt?}]` and a session `title`, and checks the whole request before
+  writing anything; `save_flight_plan` takes `id` to replace a saved route,
+  keeping its trigger and description unless new ones are given.
+- **Answer Verify and routes from the phone.** The phone page's session sheet
+  (⋯ or a long press) shows what the session's Verify or route waits on, in
+  the server's words, with your steps and what to look for. It offers Confirm
+  verified, Not verified… (with a note for the agent), Verify / Verify again,
+  Let its agent fix it and Stop verifying; Retry and Skip on a halted stop,
+  Carry on on a paused route, and Done on a Wait for me stop.
+- **A "Verify needs you" notification**, on by default, says what to check
+  and confirm.
+- **Save and edit routes on the Sky.** A session's route menu has **Save as a
+  route…**; a route with no session asks for its name before saving; a line
+  that came from a saved route offers **Save to “<name>”** and **Save as a new
+  route…**; a saved route's menu has **Edit its stops**, which puts an editable
+  copy on the Sky with a Save button. Every save says that routes already
+  running keep their own copy.
+
 ### Changed
+
+- **Verify uses one set of words and opens one place.** The session's pill,
+  the Verify card (now titled "Verify", with a one-line tally such as "4 passed
+  · 1 failed · 1 needs you"), the verdict chip, the Ship menu's single
+  **Verify** entry and the bell use the same words, and each opens the
+  session's Verify steps. Progress reads "3 of 5 steps done". Bell rows are
+  titled "Verify failed — <session>", "Verify needs you — <session>" or "Verify
+  blocked — <session>". Each step on the card shows its result, who answered
+  it, the full evidence and why it is blocked.
+- **The pane shows where Verify is.** While it runs, its row reads "Step 4 of
+  5: <step>", adds "· quiet 3 min" after two quiet minutes, reads "Waiting for
+  <session>'s turn to end" while the check is queued, and says when the
+  agent's results file can't be read. **Steps** and **Stop verifying** ("the
+  session keeps running") are on the row. A passed Verify reads "All N steps
+  passed".
+- **Confirm step by step.** With more than one step for you, mark each ✓ or ✗
+  (a ✗ needs a note). A person's answer keeps the agent's note beside it, and
+  one failed step fails the check. A sign-off with no steps for you reads
+  **Sign off** with the agent's own line. A step the agent left for you says
+  why ("the agent couldn't: …"). **Not verified…** tells the session's agent
+  what you found.
+- **"Let its agent fix it".** A failed Verify hands the failed steps, with what
+  was expected and what was seen, to the session's own agent, which fixes them
+  and verifies again when its turn ends. **Fix in a new session** is under ⋯.
+- **A failed or blocked Verify stays** on the session until you verify again
+  or press **Dismiss** (`POST /api/test-plans/{id}/dismiss`); only a pass fades
+  after 10 minutes.
+- **Verifying again starts where it failed.** A new check re-checks the last
+  check's failed and blocked steps first, under their ids, and keeps a
+  person's earlier passes. An agent's "pass" with no evidence counts as
+  blocked; the prompt says what counts (the command and its output, the URL and
+  what was on it, the log line).
+- **Verify stops on a route say what they do and never stick.** Who reads
+  "Agent, then me" (the route waits on you only for steps a person must do),
+  "Agent only" (the agent attempts every step itself with evidence; the route
+  waits only if something ends blocked or failed) or "Agent, then my sign-off"
+  (the route always waits for your confirm). Where is picked from the repo's
+  environments. A check that couldn't finish, can't be read, or couldn't start
+  for memory parks on you with the reason and **Retry** / **Skip**; Retry no
+  longer answers "nothing to retry", and Done there checks again. A memory wait
+  says how long it has waited and asks you after 5 minutes (was 30). A check
+  whose record is gone fails ("Retry starts a new one"). A failure names each
+  failed step with "— saw: <evidence>". Done on a Verify stop is **Confirm
+  verified** on a check waiting for your confirm, and never passes open steps.
+- **A route that waits says why and offers an action that works.** A stop
+  waiting on you keeps its own reason ("2 steps for you to check, then
+  confirm") instead of turning into "needs you". A failure handed to you reads
+  "Failed: …" with Retry, Let the agent fix it and Skip. A paused route offers
+  Carry on and Skip on its stop and in the pane strip; one paused at a halt
+  point shows in Needs you as "Paused at <stop> — Carry on" (a pause you made
+  yourself does not). The pane's route strip leads with "Halted · <why>",
+  "Needs you · <what>" or "Paused". A running stop's tile on the Sky says what
+  it is doing now ("3 new review comments for the agent"); its settings are in
+  its tooltip. Waits and reasons use one duration style ("1 h 30 min").
+- **The stop dialog leads with why.** It shows the stop's state, the reason in
+  plain words and what the stop asks of you, then the remedies with the one
+  that usually works first: Retry, Carry on or Confirm verified. The settings
+  fold under **Its settings**. The dialog closes once you act, and offers Carry
+  on whenever the route is paused. Closing it with unsaved changes asks
+  "Discard your changes?"; if the route reaches the stop while you edit, your
+  text stays on screen to copy. A value the server refuses shows its sentence
+  in the form instead of a pop-up, and a Command stop with no command says so
+  as you type.
+- **Edit the stop the route is on** when it failed, or when the route is
+  paused before it (at its halt point or by you) with nothing run yet. The next
+  Retry or Carry on runs your edit.
+- **Stop options explain themselves.** Every option says what it does, its
+  default and its range, and number fields stay inside what the server
+  accepts. "If it fails" explains each choice ("Let the agent fix it" tries up
+  to 2 rounds before the route halts). A stop's form opens with one sentence
+  saying what the route will do there. An Agent stop's CLI and Model show only
+  when "Start a new session for this stop" is on; a Wait stop greys out How
+  long once a time of day is set.
+- **One name per action:** Pause, Carry on, Add halt point, Remove halt point,
+  Add a stop, Jump here. Reaching a halt point pauses the route; **Halted**
+  (red) means a stop failed.
+- **The Sky follows routes that run with no session.** Their chip says Halted
+  (with the reason), At your halt point, Paused or Needs you; their stops carry
+  Retry, Skip, Done or Carry on; the Needs you view lists them, and pressing
+  one in the drawer flies to it. The drawer says why each route waits, shows
+  Loading… while it loads, and warns "Can't reach the server — this list may be
+  out of date." instead of claiming nothing needs you. A paused route's frame
+  is a calm dashed outline. The Sky's tools are **Select (V)** and **Pan (H)**.
+- **Saving or starting a route refuses what it would have changed silently:**
+  an option the stop doesn't have ("unknown option 'timeout' on a CI checks
+  stop — it has: timeout_minutes"), a number out of range, a value that isn't
+  true or false, or a choice not in its list. Call stops accept 2xx and ranges
+  like 200-299 for the expected status; Budget refuses a limit it can't read;
+  Ask someone needs a peer or a webhook. Every flights refusal names its
+  `field`.
+- **Starting a route on an existing session sends its Agent stops' prompts.**
+  Only leading Agent stops with no prompt count as the work already done (one
+  "skipped" line each in the route's history).
+- **Notify stops say where the notification went** ("sent to your phone",
+  "shown in the bell — phone notifications are off", or "not sent: <why>"), and
+  the bell lists the notification (`flight.notified`).
 
 - **A held worker starts its agent only when its turn comes.** An
 
@@ -53,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   row carries the result as a pill (`verify`: `verifying`, `needs_you`,
 
-  `passed`, `failed`, `blocked`; a settled one shows for 10 minutes). When
+  `passed`, `failed`, `blocked`; a pass shows for 10 minutes). When
 
   there are steps for a person, the check waits on them: **nothing passes
 
@@ -70,6 +211,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-shot author) is now only for a checker run after the session is gone.
 
 ### Fixed
+
+- **A Verify whose agent's window closed shows "Verify blocked"** with the
+  reason, instead of losing the check or showing the previous result, and no
+  longer marks unshipped work as shipped.
+- **Verify reads results files more forgivingly** ("passed", "ok", "failed",
+  "skipped", steps without an id or actor) and says when the file can't be
+  read. Only `"finished": true` ends a check.
+- **An on-demand Verify that stalls** gets one nudge and is then closed as
+  "Verify blocked" with the reason, instead of reading "Verifying" for hours.
+  Cancelling, closing or deleting a Verify takes a check still waiting behind
+  the agent's turn off its queue.
+- **A Verify whose agent writes no steps** reads "Verify blocked — its agent
+  wrote no steps" with Verify again, instead of an empty plan that sat in
+  Needs you.
+- **A push from an open session no longer spends a model call writing Verify
+  steps**, and a finished Verify checker session is closed 15 minutes after its
+  run ends.
+- **One Verify is one Needs-you row**, not two or three.
+- **A route stop that hits an unexpected error halts and says what went
+  wrong** ("<stop> hit an error: …") instead of "carrying out" for 10 minutes
+  and repeating.
+- **A CI checks stop that can't read the checks fails after 5 minutes saying
+  why**, instead of waiting an hour.
+- **A stop whose "Only when" can't be read halts** ("edit or remove it")
+  instead of running anyway.
+- **Ad-hoc routes keep a Loop pointed at the stop its author meant**, and a
+  start at the author's stop id.
+- **A stop that needs you again after Retry, Jump or Loop notifies you
+  again**, and a reviewer that never started says so ("couldn't start the
+  reviewer: <why>").
 
 - **"That's all" at the end of a sentence no longer stops dictation.**
   Conversational stop phrases ("that's all", "done talking") stop listening
