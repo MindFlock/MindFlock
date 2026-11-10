@@ -2681,6 +2681,7 @@ default**; the ambient ones are opt-in:
 | `verify_plan_failed` | `session.test_plan_failed` | on | The generation or rewrite produced no checklist at all |
 | `verify_plan_due` | `session.test_plan_due` | on | The work shipped and its checklist is ready to check |
 | `verify_run_failed` | `session.test_plan_checked` with `new: "failed"` | on | An agent's check found a failed step |
+| `verify_needs_you` | `session.test_plan_checked` with `new: "needs_you"` | on | Verify is waiting for a person to check something and confirm; the body (`detail`) says what (2026-11-10) |
 | `verify_plan_ready` | `session.test_plan_ready` | off | A checklist got written — there are steps worth showing |
 | `verify_run_finished` | `session.test_plan_checked` | off | An agent finished working a checklist |
 | `verify_run_gave_up` | `session.test_plan_gave_up` | off | A run was released without ever writing its answers |
