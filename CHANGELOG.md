@@ -71,6 +71,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Terminals no longer stay white until you scroll.** Nothing repainted a
+  terminal without new output, so after the window was restored, uncovered,
+  moved to another display or the GPU restarted, a pane could stay blank (white
+  in the light theme). Every visible terminal now repaints when the window
+  comes back (focus, visibility, `pageshow`), and the desktop shell
+  invalidates the page on restore/show/focus/display changes and wake, and
+  logs a GPU process restart ("GPU process gone") to main.log.
+
 - **"That's all" at the end of a sentence no longer stops dictation.**
   Conversational stop phrases ("that's all", "done talking") stop listening
   only when said on their own; "make sure that that's all" is typed. Clear

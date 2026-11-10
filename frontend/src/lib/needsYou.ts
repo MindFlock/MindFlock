@@ -196,8 +196,18 @@ export function needsYouRows(src: NeedsYouSources): NeedsYouRow[] {
     const flight = fid ? fullById.get(fid) : undefined;
     return flight ? { ...r, kind, flight } : { ...r, kind };
   });
+  // A plan whose session row already carries its verify (the row's `verify`:
+  // Confirm verified / Verify failed, lib/sessionState) is that session's bell
+  // row; a second "Behaviors" row for it would say the same thing twice.
+  const verifyPlans = new Set(
+    (src.instances || [])
+      .map((i) => (i as { verify?: { state?: string; plan?: string } | null }).verify)
+      .filter((v) => v && v.plan && v.state && v.state !== "passed")
+      .map((v) => v!.plan as string)
+  );
   for (const p of src.testPlans || []) {
     if (!isFailing(p) && !isWaitingOnYou(p)) continue;
+    if (verifyPlans.has(p.id)) continue;
     rows.push({ key: "behaviors:" + p.id, title: "", rank: 3, kind: "behaviors", behaviors: p });
   }
   // Stable: within a kind, the order the parts came in.

@@ -24342,7 +24342,7 @@ function isParallelSafe(kind, kinds) {
 function isLive(f) {
 	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
 }
-function isShown(f) {
+function isShown$1(f) {
 	return isLive(f) || f.state === "ready";
 }
 function flightDrives(f) {
@@ -25305,8 +25305,13 @@ var REASON_LABEL = {
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
 	setup_failed: "Setup failed",
-	stuck: "Idle"
+	stuck: "Idle",
+	verify_confirm: "Confirm verified",
+	verify_failed: "Verify failed",
+	verify_blocked: "Verify blocked"
 };
+var VERIFYING_LABEL = "Verifying";
+var VERIFIED_LABEL = "Verified";
 var NOTIFY_RULE = {
 	question: "needs_input",
 	flight_you: "flight_needs_you",
@@ -25315,6 +25320,9 @@ var NOTIFY_RULE = {
 	setup_failed: "setup_failed",
 	checks_failing: "checks_failing",
 	stuck: "",
+	verify_confirm: "verify_needs_you",
+	verify_failed: "verify_failed",
+	verify_blocked: "verify_failed",
 	offline: "session_offline"
 };
 function notifyRuleFor(ss) {
@@ -25412,6 +25420,68 @@ function sleepingState(info, now) {
 		hint
 	};
 }
+function verifyOf(inst) {
+	const v = inst.verify;
+	return v && typeof v === "object" && typeof v.state === "string" ? v : null;
+}
+function verifyProgress(v) {
+	const total = Number(v.steps?.total) || 0;
+	const human = Number(v.steps?.human) || 0;
+	const done = Number(v.steps?.agent_done) || 0;
+	const mine = Math.max(0, total - human);
+	if (!total) return "writing its steps";
+	if (!mine) return "every step needs a person";
+	return Math.min(done, mine) + " of " + mine + (mine === 1 ? " step" : " steps") + " done";
+}
+function verifyStepLines(steps) {
+	return steps.map((s) => {
+		const tail = String(s.expect || s.note || "").trim();
+		return "• " + String(s.text || "").trim() + (tail ? " — " + tail : "");
+	}).join("\n");
+}
+function verifyHint(v) {
+	const human = Number(v.steps?.human) || 0;
+	switch (v.state) {
+		case "verifying": return "Checking its work: " + verifyProgress(v) + (human ? " · " + human + (human === 1 ? " step needs" : " steps need") + " a person after" : "");
+		case "needs_you": {
+			const list = verifyStepLines(v.human_steps || []);
+			return "The agent checked what it can. Do " + (((v.human_steps || []).length || human) === 1 ? "this step" : "these steps") + ", then press Confirm verified (or Not verified…):" + (list ? "\n" + list : "");
+		}
+		case "failed": {
+			const list = verifyStepLines(v.failed_steps || []);
+			return "Verify failed" + (list ? ":\n" + list : v.detail ? " — " + v.detail : "");
+		}
+		case "blocked": return "Verify couldn't go on" + (v.detail ? " — " + v.detail : "") + ". Open the session to see why";
+		case "passed": return "Verified" + (v.detail ? " — " + v.detail : "");
+	}
+	return "";
+}
+function verifyLine(v) {
+	const detail = String(v.detail || "").trim();
+	switch (v.state) {
+		case "verifying": return "Verifying — " + verifyProgress(v);
+		case "needs_you": return REASON_LABEL.verify_confirm + " — the agent did its steps; do yours, then confirm";
+		case "failed": {
+			const n = (v.failed_steps || []).length;
+			return REASON_LABEL.verify_failed + (n ? " — " + n + (n === 1 ? " step" : " steps") : detail ? " — " + detail : "");
+		}
+		case "blocked": return REASON_LABEL.verify_blocked + (detail ? " — " + detail : "");
+		case "passed": return VERIFIED_LABEL + (detail ? " — " + detail : "");
+	}
+	return "";
+}
+function verifyNeedsYou(v) {
+	if (v.state === "needs_you") return needsYou("verify_confirm", verifyHint(v));
+	if (v.state === "failed") return {
+		...needsYou("verify_failed", verifyHint(v)),
+		tone: "broken"
+	};
+	if (v.state === "blocked") return {
+		...needsYou("verify_blocked", verifyHint(v)),
+		tone: "broken"
+	};
+	return null;
+}
 function deriveSessionState(inst, extras) {
 	const now = extras?.now ?? Date.now();
 	if (inst.workspace_missing) return {
@@ -25475,6 +25545,15 @@ function deriveSessionState(inst, extras) {
 	};
 	if (fl && fl.id && fl.state === "halted" && !askedInWords(inst)) return haltedState(fl);
 	const bgHint = backgroundHint(inst);
+	const verify = verifyOf(inst);
+	if (verify?.state === "verifying" && act !== "limit" && act !== "offline") return {
+		state: "working",
+		label: VERIFYING_LABEL,
+		tone: "verifying",
+		inBell: false,
+		restartable: false,
+		hint: verifyHint(verify)
+	};
 	if (act === "working") return {
 		state: "working",
 		label: STATE_LABEL.working,
@@ -25515,6 +25594,8 @@ function deriveSessionState(inst, extras) {
 			hint: revive?.reason || "The agent's terminal is gone — Restart relaunches it (resuming the conversation)"
 		};
 	}
+	const verifyYou = verify && verifyNeedsYou(verify);
+	if (verifyYou) return verifyYou;
 	if (askedInWords(inst)) return needsYou("question", "The agent asked you a question in its reply — answer it from the pop-up, the bell or its pane");
 	if (inst.stage === "interrupt") {
 		const step = (inst.failed_step || "").trim();
@@ -25528,6 +25609,14 @@ function deriveSessionState(inst, extras) {
 		inBell: false,
 		restartable: false,
 		hint: "Route “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current stop") + " — Resume it from its strip's ⋯"
+	};
+	if (verify?.state === "passed") return {
+		state: "idle",
+		label: VERIFIED_LABEL,
+		tone: "verified",
+		inBell: false,
+		restartable: false,
+		hint: verifyHint(verify)
 	};
 	const since = Number(inst.activity_since) || 0;
 	const idleFor = since > 0 ? now / 1e3 - since : 0;
@@ -25571,6 +25660,18 @@ function needsYouAction(ss, prUrl) {
 		case "setup_failed": return {
 			act: "setup",
 			aria: "Setup failed — re-run worktree setup"
+		};
+		case "verify_confirm": return {
+			act: "verify",
+			aria: "Confirm verified — open the session to confirm"
+		};
+		case "verify_failed": return {
+			act: "verify",
+			aria: "Verify failed — open the session to see what failed"
+		};
+		case "verify_blocked": return {
+			act: "verify",
+			aria: "Verify blocked — open the session to see why"
 		};
 		case "checks_failing": return prUrl ? {
 			act: "pr",
@@ -26230,6 +26331,13 @@ function askedQuestion(inst) {
 	if (!a || a.kind !== "question" || effectiveActivity(inst) === "clarify") return void 0;
 	return String(a.text || "");
 }
+function verifySnippet(inst) {
+	const v = verifyOf(inst);
+	if (!v) return void 0;
+	if (v.state === "needs_you") return (v.human_steps || []).map((s) => s.text).join(" · ") || void 0;
+	if (v.state === "failed") return (v.failed_steps || []).map((s) => s.text).join(" · ") || v.detail || void 0;
+	if (v.state === "blocked") return v.detail || void 0;
+}
 function attentionItems(instances) {
 	const items = [];
 	for (const inst of instances || []) {
@@ -26241,7 +26349,7 @@ function attentionItems(instances) {
 				p: attentionPriority(ss),
 				title: inst.title,
 				reason: attentionReason(ss) + (step ? " at " + step : ""),
-				snippet: ss.reason === "question" || ss.reason === "stuck" ? askedQuestion(inst) ?? (inst.last_turn || "") : void 0,
+				snippet: ss.reason === "question" || ss.reason === "stuck" ? askedQuestion(inst) ?? (inst.last_turn || "") : verifySnippet(inst),
 				question: ss.reason === "question" ? askedQuestion(inst) : void 0
 			});
 		} else if (ss.state === "idle" && inst.stage === "pushed") {
@@ -29199,6 +29307,78 @@ function controlNotice(frame) {
 	if (j.type === "driver") return { notice: null };
 	return null;
 }
+function repaintTerm(term, fit) {
+	if (!term) return false;
+	try {
+		fit?.();
+	} catch {}
+	try {
+		const rows = term.rows;
+		if (!(rows > 0)) return false;
+		term.refresh(0, rows - 1);
+		return true;
+	} catch {
+		return false;
+	}
+}
+function isShown(el) {
+	return !!el && el.clientWidth > 0 && el.clientHeight > 0 && el.offsetParent !== null;
+}
+var tracked = /* @__PURE__ */ new Set();
+function trackRepaint(r) {
+	tracked.add(r);
+	return () => {
+		tracked.delete(r);
+	};
+}
+function repaintShown(items = tracked) {
+	let n = 0;
+	for (const r of items) try {
+		if (!r.shown()) continue;
+		r.repaint();
+		n++;
+	} catch {}
+	return n;
+}
+var REPAINT_EVENT = "mindflock:repaint";
+var REPAINT_SETTLE_MS = 300;
+function installRepaintTriggers(win, doc, run = () => {
+	repaintShown();
+}, schedule = {
+	frame: (fn) => requestAnimationFrame(() => fn()),
+	later: (fn, ms) => setTimeout(fn, ms),
+	cancel: (t) => clearTimeout(t)
+}) {
+	let queued = false;
+	let settle;
+	const trigger = () => {
+		if (doc.hidden) return;
+		if (!queued) {
+			queued = true;
+			schedule.frame(() => {
+				queued = false;
+				run();
+			});
+		}
+		if (settle !== void 0) schedule.cancel(settle);
+		settle = schedule.later(() => {
+			settle = void 0;
+			run();
+		}, REPAINT_SETTLE_MS);
+	};
+	const winEvents = [
+		"focus",
+		"pageshow",
+		REPAINT_EVENT
+	];
+	for (const e of winEvents) win.addEventListener(e, trigger);
+	doc.addEventListener("visibilitychange", trigger);
+	return () => {
+		for (const e of winEvents) win.removeEventListener(e, trigger);
+		doc.removeEventListener("visibilitychange", trigger);
+		if (settle !== void 0) schedule.cancel(settle);
+	};
+}
 function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 	const [state, setState] = (0, import_react.useState)("connecting");
 	(0, import_react.useEffect)(() => {
@@ -29285,12 +29465,20 @@ function useWsTerm(hostRef, wsPath, interactive, reconnect = false) {
 		if (interactive) term.onData((d) => {
 			if (ws && ws.readyState === WebSocket.OPEN) ws.send(d);
 		});
-		const obs = new ResizeObserver(() => doFit(true));
+		const obs = new ResizeObserver(() => {
+			doFit(true);
+			repaintTerm(term);
+		});
 		obs.observe(host);
 		const t = setTimeout(() => doFit(true), 50);
+		const untrack = trackRepaint({
+			shown: () => isShown(host),
+			repaint: () => repaintTerm(term, () => doFit(true))
+		});
 		connect();
 		return () => {
 			dead = true;
+			untrack();
 			clearTimeout(t);
 			if (timer) clearTimeout(timer);
 			obs.disconnect();
@@ -31771,54 +31959,6 @@ var CHECK_MARK = {
 	yours: "●",
 	pending: "○"
 };
-function stepKeyAction(key) {
-	switch (key) {
-		case "1":
-		case "p":
-		case "P": return "pass";
-		case "2":
-		case "f":
-		case "F": return "fail";
-		case "3":
-		case "b":
-		case "B": return "blocked";
-		case "u":
-		case "U": return "";
-		case "n":
-		case "N": return "note";
-		default: return "";
-	}
-}
-function noteDraftAfter(result, noteOpen, note) {
-	if (result === "") return {
-		open: false,
-		text: ""
-	};
-	if ((result === "fail" || result === "blocked") && !noteOpen) return {
-		open: true,
-		text: ""
-	};
-	if (noteOpen && note.trim()) return {
-		open: false,
-		text: ""
-	};
-	return {
-		open: noteOpen,
-		text: note
-	};
-}
-function stepKeyIsUndo(key) {
-	return key === "u" || key === "U";
-}
-function rewriteWarning(plan) {
-	if (!latestRun(plan)) return "";
-	return "Answers on steps that change are lost. Steps you added or edited yourself are kept.";
-}
-function rewriteBlockedReason(plan) {
-	if (plan.state === "running") return "An agent is checking this right now — cancel the run first.";
-	if (plan.state === "generating") return "It is already being written.";
-	return "";
-}
 //#endregion
 //#region src/lib/stage.ts
 var STAGE_META = {
@@ -34198,8 +34338,10 @@ function needsYouRows(src) {
 			kind
 		};
 	});
+	const verifyPlans = new Set((src.instances || []).map((i) => i.verify).filter((v) => v && v.plan && v.state && v.state !== "passed").map((v) => v.plan));
 	for (const p of src.testPlans || []) {
 		if (!isFailing(p) && !isWaitingOnYou(p)) continue;
+		if (verifyPlans.has(p.id)) continue;
 		rows.push({
 			key: "behaviors:" + p.id,
 			title: "",
@@ -36978,7 +37120,7 @@ function withLiveFlights(rows, flights, kinds) {
 	if (!flights?.length) return rows;
 	const newest = /* @__PURE__ */ new Map();
 	for (const f of flights) {
-		if (!f.session || f.free || !isShown(f)) continue;
+		if (!f.session || f.free || !isShown$1(f)) continue;
 		const had = newest.get(f.session);
 		if (!had || (f.started || 0) > (had.started || 0)) newest.set(f.session, f);
 	}
@@ -39474,6 +39616,307 @@ function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRe
 	});
 }
 //#endregion
+//#region src/lib/verifyActions.ts
+function planPath$1(id) {
+	return "/api/test-plans/" + encodeURIComponent(id);
+}
+function patchPlan(id, apply) {
+	queryClient.cancelQueries({ queryKey: ["test-plans"] });
+	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+		...prev,
+		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
+	} : prev);
+}
+function requestPlanRun(planId, only, walk) {
+	const json = only ? { steps: only } : {};
+	if (walk === "all") json.walk = walk;
+	return api(planPath$1(planId) + "/run", {
+		method: "POST",
+		json
+	});
+}
+function runStartedMessage(plan, r, walk) {
+	const all = walk === "all";
+	if (r?.in_session && r.session) return "Handed the steps to " + r.session + "'s agent" + (r.queued ? " — it takes them once its current turn ends" : "") + (all ? ". It walks every behavior, yours too" : "") + ". Talk to it there";
+	return "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") + (all ? " — it walks every behavior, yours too" : "");
+}
+function openWalkingSession(title) {
+	if (!title) return;
+	const ui = useUi.getState();
+	ui.closeDialog();
+	selectSession(title, { noKeyboard: true });
+	ui.setLastTab(title, "agent");
+}
+function requestSessionVerify(title, notes = "") {
+	const n = notes.trim();
+	return api("/api/instances/" + encodeURIComponent(title) + "/verify", {
+		method: "POST",
+		json: n ? { notes: n } : {}
+	});
+}
+async function startSessionVerify(title, opts = {}) {
+	try {
+		await requestSessionVerify(title, opts.notes || "");
+		toast("Verifying " + title + " — its agent writes its steps and works them in its terminal");
+		await refreshInstances();
+		refreshTestPlans();
+		if (opts.open !== false) openWalkingSession(title);
+		return true;
+	} catch (err) {
+		errorPop("Couldn't start verifying " + title, errMsg(err));
+		return false;
+	}
+}
+function requestVerifyConfirm(planId, verified, note = "") {
+	const n = note.trim();
+	return api(planPath$1(planId) + "/confirm", {
+		method: "POST",
+		json: n ? {
+			verified,
+			note: n
+		} : { verified }
+	});
+}
+async function confirmVerified(planId, verified, note = "") {
+	try {
+		await requestVerifyConfirm(planId, verified, note);
+		toast(verified ? "Confirmed verified" : "Marked not verified — the agent gets your note");
+		await refreshInstances();
+		refreshTestPlans();
+		return true;
+	} catch (err) {
+		errorPop(verified ? "Couldn't confirm verified" : "Couldn't mark it not verified", errMsg(err));
+		refreshInstances();
+		return false;
+	}
+}
+function requestPlanDelete(planId) {
+	return api(planPath$1(planId), { method: "DELETE" });
+}
+async function startChecklistRun(plan, opts = {}) {
+	try {
+		const r = await requestPlanRun(plan.id, opts.only, opts.walk);
+		await refreshInstances();
+		const started = r?.plan;
+		patchPlan(plan.id, (p) => started || {
+			...p,
+			state: "running",
+			run_session: r?.session || ""
+		});
+		opts.onStarted?.();
+		await refreshTestPlans();
+		toast(runStartedMessage(plan, r, opts.walk));
+		if (r?.in_session && r.session) openWalkingSession(r.session);
+	} catch (err) {
+		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function cancelChecklistRun(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
+		await refreshInstances();
+		await refreshTestPlans();
+		toast(r?.session ? "Stopped " + r.session : "Check cancelled");
+	} catch (err) {
+		errorPop("Couldn't cancel the check", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function fixPlanFailures(plan, only) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/fix", {
+			method: "POST",
+			json: only ? { steps: only } : {}
+		});
+		await refreshInstances();
+		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
+	} catch (err) {
+		errorPop("Fix didn't start", errMsg(err));
+	}
+}
+async function markPlanDeployed(plan) {
+	try {
+		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
+		if (r?.plan) patchPlan(plan.id, () => r.plan);
+		await refreshTestPlans();
+		toast(planName(plan) + " is ready to check");
+	} catch (err) {
+		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function removePlan(plan, opts = {}) {
+	try {
+		await requestPlanDelete(plan.id);
+		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
+		opts.onGone?.();
+		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
+			...prev,
+			plans: prev.plans.filter((p) => p.id !== plan.id)
+		} : prev);
+		await refreshTestPlans();
+	} catch (err) {
+		errorPop("Couldn't delete " + planName(plan), errMsg(err));
+		refreshTestPlans();
+	}
+}
+async function fetchVerifyRepos() {
+	const r = await api("/api/test-plans/repos");
+	return Array.isArray(r?.repos) ? r.repos : [];
+}
+async function askBehaviorsForBranch(repo, branch, opts = {}) {
+	try {
+		const r = await api("/api/test-plans/branch", { json: opts.empty ? {
+			repo: repo.root,
+			branch,
+			empty: true
+		} : {
+			repo: repo.root,
+			branch
+		} });
+		toast(r.existing ? branch + " already has behaviors — they're on the Behaviors board" : opts.empty ? "Started empty behaviors for " + branch + " — add what it should do" : "Asked the agent to write behaviors for " + branch + " — up to three minutes");
+		refreshTestPlans();
+		return r.plan || "";
+	} catch (err) {
+		errorPop("Couldn't start behaviors for " + branch, errMsg(err));
+		return "";
+	}
+}
+async function startEmptyBehaviors(session) {
+	try {
+		const r = await api("/api/instances/" + encodeURIComponent(session) + "/test-plan", {
+			method: "POST",
+			json: { empty: true }
+		});
+		await refreshTestPlans();
+		toast(r.existing ? session + " already has behaviors — add yours to them" : "Started empty behaviors for " + session + " — add what it should do");
+		return r.plan || "";
+	} catch (err) {
+		errorPop("Couldn't start behaviors for " + session, errMsg(err));
+		return "";
+	}
+}
+//#endregion
+//#region src/components/behaviors/VerifyConfirm.tsx
+function HumanSteps({ steps }) {
+	if (!steps.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "vc-steps",
+		"aria-label": "Steps for you",
+		children: steps.map((st) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: "vc-step",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vc-step-text",
+				children: st.text
+			}), st.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "vc-step-expect",
+				children: ["Expect: ", st.expect]
+			}) : null]
+		}, st.id))
+	});
+}
+function FailedSteps({ steps }) {
+	if (!steps.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "vc-steps vc-failed",
+		"aria-label": "What failed",
+		children: steps.map((st) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+			className: "vc-step",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vc-step-text",
+				children: st.text
+			}), st.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vc-step-expect",
+				children: st.note
+			}) : null]
+		}, st.id))
+	});
+}
+function VerifyConfirm({ verify, hideSteps }) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [note, setNote] = (0, import_react.useState)("");
+	const send = async (verified) => {
+		if (busy) return;
+		setBusy(verified ? "yes" : "no");
+		try {
+			if (await confirmVerified(verify.plan, verified, verified ? "" : note)) {
+				setAsking(false);
+				setNote("");
+			}
+		} finally {
+			setBusy("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "vc-confirm",
+		role: "group",
+		"aria-label": "Confirm verified",
+		"data-no-drag": true,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [hideSteps ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(HumanSteps, { steps: verify.human_steps || [] }), asking ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "vc-note-row",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					className: "fl-input vc-note",
+					placeholder: "What did you see? The agent gets this",
+					"aria-label": "What wasn't verified",
+					autoComplete: "off",
+					autoFocus: true,
+					value: note,
+					disabled: !!busy,
+					onChange: (e) => setNote(e.target.value),
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") {
+							e.preventDefault();
+							send(false);
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							setAsking(false);
+						}
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary vc-send",
+					disabled: !!busy,
+					onClick: () => void send(false),
+					children: busy === "no" ? "…" : "Not verified"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					disabled: !!busy,
+					onClick: () => setAsking(false),
+					children: "Cancel"
+				})
+			]
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "vc-acts",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary vc-yes",
+				title: "You did the steps above and they behaved as expected — verification is complete",
+				disabled: !!busy,
+				onClick: () => void send(true),
+				children: busy === "yes" ? "…" : "Confirm verified"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn vc-no",
+				title: "Something didn't behave — say what, and the agent gets it",
+				disabled: !!busy,
+				onClick: () => setAsking(true),
+				children: "Not verified…"
+			})]
+		})]
+	});
+}
+//#endregion
 //#region src/lib/flightsApi.ts
 var enc$1 = encodeURIComponent;
 var flightPath = (id, rest = "") => "/api/flights/" + enc$1(id) + rest;
@@ -41568,7 +42011,7 @@ function bellLabel(needs, unread) {
 	if (unread > 0) return "Notifications, " + unread + " new";
 	return "Notifications";
 }
-function rowKey$1(e) {
+function rowKey(e) {
 	if (e.target !== e.currentTarget || e.key !== "Enter" && e.key !== " ") return;
 	e.preventDefault();
 	e.currentTarget.click();
@@ -41776,7 +42219,7 @@ function NotificationsBell() {
 								"data-needs": it.key,
 								role: "button",
 								tabIndex: 0,
-								onKeyDown: rowKey$1,
+								onKeyDown: rowKey,
 								onClick: () => {
 									setOpen(false);
 									openBehaviors({ planId: plan.id });
@@ -41824,13 +42267,43 @@ function NotificationsBell() {
 						}, "plan:" + it.key);
 						const a = it.attn;
 						const fam = a.p === 0 ? familyOf(it.title) : null;
+						const v = verifyOf(byTitle.get(it.title) || {});
+						if (v?.state === "needs_you") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "attn-item p" + a.p + (flashing ? " flash" : ""),
+							"data-attn": it.title,
+							"data-needs": it.key,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "attn-title linklike",
+									title: "Open the session",
+									onClick: () => jump(it.title),
+									children: windowName(it.title)
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "attn-reason",
+									children: a.reason
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "attn-verify",
+									style: {
+										flexBasis: "100%",
+										margin: "2px 0 2px 13px",
+										cursor: "default",
+										fontSize: 12
+									},
+									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, { verify: v })
+								})
+							]
+						}, it.key + a.reason);
 						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 							className: "attn-item p" + a.p + (flashing ? " flash" : ""),
 							"data-attn": it.title,
 							"data-needs": it.key,
 							role: a.p === 0 ? void 0 : "button",
 							tabIndex: a.p === 0 ? void 0 : 0,
-							onKeyDown: a.p === 0 ? void 0 : rowKey$1,
+							onKeyDown: a.p === 0 ? void 0 : rowKey,
 							onClick: () => jump(it.title),
 							children: [
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "attn-dot" }),
@@ -41890,7 +42363,7 @@ function NotificationsBell() {
 					"data-session": n.session,
 					role: "button",
 					tabIndex: 0,
-					onKeyDown: rowKey$1,
+					onKeyDown: rowKey,
 					onClick: () => {
 						if (n.lead) {
 							setOpen(false);
@@ -60090,7 +60563,7 @@ function call(name, fn) {
 		refreshInstances();
 	}).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
 }
-function sessionMenu(inst, ctx, opts = {}) {
+function sessionMenu$1(inst, ctx, opts = {}) {
 	const title = inst.title;
 	const name = displayName(title);
 	const peer = !!inst.peer_share;
@@ -60370,6 +60843,47 @@ function workersModes(inst, ctx) {
 			run: () => void toggleFlock(title)
 		}
 	];
+}
+//#endregion
+//#region src/components/sidebar/verifyMenu.ts
+function canStartVerify(inst) {
+	if (!inst.title || inst.workspace_missing || inst.peer_share || inst.device || inst.pending) return false;
+	if (inst.status === "paused") return false;
+	const v = verifyOf(inst);
+	return !v || v.state === "passed" || v.state === "failed" || v.state === "blocked";
+}
+function verifyMenuItem(inst) {
+	if (!canStartVerify(inst)) return null;
+	const again = !!verifyOf(inst);
+	const title = inst.title;
+	return {
+		key: "verify",
+		label: again ? "Verify again" : "Verify",
+		note: "its agent checks its own work",
+		title: "The agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do, and you confirm once you have",
+		run: () => void startSessionVerify(title)
+	};
+}
+function withVerifyItem(model, inst) {
+	const item = verifyMenuItem(inst);
+	if (!item || !model.groups.length) return model;
+	const at = Math.max(0, model.groups.findIndex((g) => g.id === "ship"));
+	return {
+		...model,
+		groups: model.groups.map((g, i) => {
+			if (i !== at) return g;
+			const before = g.items.findIndex((it) => it.key === "checklist");
+			const items = [...g.items];
+			items.splice(before >= 0 ? before : items.length, 0, item);
+			return {
+				...g,
+				items
+			};
+		})
+	};
+}
+function sessionMenu(...args) {
+	return withVerifyItem(sessionMenu$1(...args), args[0]);
 }
 //#endregion
 //#region src/components/presence/Presence.tsx
@@ -61000,7 +61514,7 @@ var RESULT_TEXT = {
 	blocked: "Can't check",
 	"": "Not yet"
 };
-var ANSWERS$1 = [
+var ANSWERS = [
 	["pass", "Pass"],
 	["fail", "Fail"],
 	["blocked", "Can't check"]
@@ -61058,7 +61572,7 @@ function JointCheck({ check: given, peerName, linkId: linkIdProp }) {
 		const result = r?.result || "";
 		const mineHuman = !!linkId && s.side === "mine" && s.actor === "human";
 		const takeOver = !!linkId && s.side === "mine" && s.actor === "agent" && result === "blocked" && r?.by !== "human";
-		const answers = takeOver ? ANSWERS$1.filter(([v]) => v !== "blocked") : ANSWERS$1;
+		const answers = takeOver ? ANSWERS.filter(([v]) => v !== "blocked") : ANSWERS;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
 			className: "peer-joint-step peer-joint-step-" + (result || "blank"),
 			"data-step": s.id,
@@ -61444,6 +61958,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 			if (url) window.open(url, "_blank");
 			return;
 		}
+		if (what === "verify") return openWalkingSession(title);
 		selectSession(title, { noKeyboard: true });
 		useUi.getState().setLastTab(title, "shell");
 	};
@@ -88945,6 +89460,54 @@ function PaneMoreMenu({ children, btnRef }) {
 	}), document.body)] });
 }
 //#endregion
+//#region src/components/grid/PaneVerifyStrip.tsx
+function PaneVerifyStrip({ inst }) {
+	const v = verifyOf(inst);
+	if (!v || v.state === "passed") return null;
+	const title = inst.title;
+	const done = v.state === "failed" || v.state === "blocked";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pv-strip is-" + v.state,
+		role: "group",
+		"aria-label": "Verify",
+		"data-no-drag": true,
+		onMouseDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "pv-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pv-shield",
+						"aria-hidden": "true",
+						children: "✓"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "pv-text",
+						title: verifyLine(v),
+						children: verifyLine(v)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "tb-item pv-open",
+						title: "The agent's terminal — where it works the steps and says what it did",
+						onClick: () => openWalkingSession(title),
+						children: "Open its agent"
+					}),
+					done ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn pv-again",
+						title: "Its agent checks its work again",
+						onClick: () => void startSessionVerify(title),
+						children: "Verify again"
+					}) : null
+				]
+			}),
+			v.state === "needs_you" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, { verify: v }) : null,
+			v.state === "failed" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailedSteps, { steps: v.failed_steps || [] }) : null
+		]
+	});
+}
+//#endregion
 //#region src/lib/behaviors.ts
 var CHECK = {
 	key: "check",
@@ -89176,207 +89739,6 @@ function verifyStopFace(short, stopState) {
 	return stopState === "halted" ? short + " — halted" : short;
 }
 //#endregion
-//#region src/lib/verifyActions.ts
-function planPath$1(id) {
-	return "/api/test-plans/" + encodeURIComponent(id);
-}
-function patchPlan(id, apply) {
-	queryClient.cancelQueries({ queryKey: ["test-plans"] });
-	queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-		...prev,
-		plans: prev.plans.map((p) => p.id === id ? apply(p) : p)
-	} : prev);
-}
-function requestPlanRun(planId, only, walk) {
-	const json = only ? { steps: only } : {};
-	if (walk === "all") json.walk = walk;
-	return api(planPath$1(planId) + "/run", {
-		method: "POST",
-		json
-	});
-}
-function runStartedMessage(plan, r, walk) {
-	const all = walk === "all";
-	if (r?.in_session && r.session) return "Handed the steps to " + r.session + "'s agent" + (r.queued ? " — it takes them once its current turn ends" : "") + (all ? ". It walks every behavior, yours too" : "") + ". Talk to it there";
-	return "Starting an agent on " + planName(plan) + " in " + (r?.session || "a new session") + (all ? " — it walks every behavior, yours too" : "");
-}
-function openWalkingSession(title) {
-	if (!title) return;
-	const ui = useUi.getState();
-	ui.closeDialog();
-	selectSession(title, { noKeyboard: true });
-	ui.setLastTab(title, "agent");
-}
-function requestPlanDelete(planId) {
-	return api(planPath$1(planId), { method: "DELETE" });
-}
-async function startChecklistRun(plan, opts = {}) {
-	try {
-		const r = await requestPlanRun(plan.id, opts.only, opts.walk);
-		await refreshInstances();
-		const started = r?.plan;
-		patchPlan(plan.id, (p) => started || {
-			...p,
-			state: "running",
-			run_session: r?.session || ""
-		});
-		opts.onStarted?.();
-		await refreshTestPlans();
-		toast(runStartedMessage(plan, r, opts.walk));
-		if (r?.in_session && r.session) openWalkingSession(r.session);
-	} catch (err) {
-		errorPop("Couldn't start the check for " + planName(plan), errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function regeneratePlan(plan, focus = "") {
-	try {
-		await api(planPath$1(plan.id) + "/regenerate", {
-			method: "POST",
-			json: { focus: focus.trim() }
-		});
-		patchPlan(plan.id, (p) => ({
-			...p,
-			state: "generating",
-			error: "",
-			gen_started: Date.now() / 1e3
-		}));
-		toast("Rewriting the behaviors for " + planName(plan) + " — up to three minutes");
-		return true;
-	} catch (err) {
-		errorPop("Couldn't rewrite " + planName(plan), errMsg(err));
-		refreshTestPlans();
-		return false;
-	}
-}
-async function cancelChecklistRun(plan) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
-		await refreshInstances();
-		await refreshTestPlans();
-		toast(r?.session ? "Stopped " + r.session : "Check cancelled");
-	} catch (err) {
-		errorPop("Couldn't cancel the check", errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function fixPlanFailures(plan, only) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/fix", {
-			method: "POST",
-			json: only ? { steps: only } : {}
-		});
-		await refreshInstances();
-		toast("Opened " + (r?.session || "a session") + " to fix what failed" + (r?.reclaimed ? " (cleared the last one's empty workspace)" : ""));
-	} catch (err) {
-		errorPop("Fix didn't start", errMsg(err));
-	}
-}
-async function markPlanDeployed(plan) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		await refreshTestPlans();
-		toast(planName(plan) + " is ready to check");
-	} catch (err) {
-		errorPop("Couldn't release " + planName(plan) + " for checking", errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function removePlan(plan, opts = {}) {
-	try {
-		await requestPlanDelete(plan.id);
-		if (opts.watchSession) useUi.getState().closeVerifyPane(opts.watchSession);
-		opts.onGone?.();
-		queryClient.setQueryData(["test-plans"], (prev) => prev ? {
-			...prev,
-			plans: prev.plans.filter((p) => p.id !== plan.id)
-		} : prev);
-		await refreshTestPlans();
-	} catch (err) {
-		errorPop("Couldn't delete " + planName(plan), errMsg(err));
-		refreshTestPlans();
-	}
-}
-async function recordStepAnswer(plan, step, result, note) {
-	const wasAsking = isWaitingOnYou(plan);
-	const next = (await api(planPath$1(plan.id) + "/result", { json: {
-		step_id: step.id,
-		result,
-		note
-	} }))?.plan;
-	if (next) patchPlan(plan.id, () => next);
-	if (next && wasAsking && !isWaitingOnYou(next)) toast("All yours are answered — " + planName(plan) + ": " + behaviorSummary(next).status);
-	refreshTestPlans();
-}
-async function editPlanStep(plan, step, fields) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), {
-			method: "PATCH",
-			json: fields
-		});
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		refreshTestPlans();
-		return true;
-	} catch (err) {
-		errorPop("Couldn't change that behavior", errMsg(err));
-		return false;
-	}
-}
-async function removePlanStep(plan, step) {
-	try {
-		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
-		if (r?.plan) patchPlan(plan.id, () => r.plan);
-		refreshTestPlans();
-	} catch (err) {
-		errorPop("Couldn't remove that behavior", errMsg(err));
-	}
-}
-async function addPlanStep(plan, fields) {
-	return (await api(planPath$1(plan.id) + "/steps", {
-		method: "POST",
-		json: fields
-	}))?.plan;
-}
-async function fetchVerifyRepos() {
-	const r = await api("/api/test-plans/repos");
-	return Array.isArray(r?.repos) ? r.repos : [];
-}
-async function askBehaviorsForBranch(repo, branch, opts = {}) {
-	try {
-		const r = await api("/api/test-plans/branch", { json: opts.empty ? {
-			repo: repo.root,
-			branch,
-			empty: true
-		} : {
-			repo: repo.root,
-			branch
-		} });
-		toast(r.existing ? branch + " already has behaviors — they're on the Behaviors board" : opts.empty ? "Started empty behaviors for " + branch + " — add what it should do" : "Asked the agent to write behaviors for " + branch + " — up to three minutes");
-		refreshTestPlans();
-		return r.plan || "";
-	} catch (err) {
-		errorPop("Couldn't start behaviors for " + branch, errMsg(err));
-		return "";
-	}
-}
-async function startEmptyBehaviors(session) {
-	try {
-		const r = await api("/api/instances/" + encodeURIComponent(session) + "/test-plan", {
-			method: "POST",
-			json: { empty: true }
-		});
-		await refreshTestPlans();
-		toast(r.existing ? session + " already has behaviors — add yours to them" : "Started empty behaviors for " + session + " — add what it should do");
-		return r.plan || "";
-	} catch (err) {
-		errorPop("Couldn't start behaviors for " + session, errMsg(err));
-		return "";
-	}
-}
-//#endregion
 //#region src/components/flights/StopMenu.tsx
 function StopMenu(p) {
 	const ref = (0, import_react.useRef)(null);
@@ -89452,39 +89814,32 @@ function StopMenu(p) {
 function watchSessionOf(plan) {
 	return plan.run_session || latestRun(plan)?.session || "";
 }
+function canVerify(plan, verify) {
+	if (plan.state === "running" || plan.state === "generating") return false;
+	return !verify || verify.state === "passed" || verify.state === "failed" || verify.state === "blocked";
+}
 function cardMenuItems(plan, ctx) {
 	const items = [];
-	const steps = plan.steps || [];
 	const running = plan.state === "running";
 	const primary = ctx.summary.action?.key || "";
-	const agentCan = steps.some((s) => s.actor !== "human");
-	if (plan.state !== "generating" && primary !== "write") {
-		const blocked = rewriteBlockedReason(plan);
-		items.push({
-			key: "rewrite",
-			label: "Rewrite behaviors",
-			title: blocked || "Ask the agent to write them again — you can say what to focus on",
-			disabled: !!blocked
-		});
-	}
+	const verify = ctx.session?.verify || null;
+	if (primary !== "verify" && canVerify(plan, verify) && (ctx.session || (plan.steps || []).length)) items.push({
+		key: "verify",
+		label: "Verify again",
+		title: VERIFY_TITLE
+	});
 	if (plan.state === "generated" && plan.merged_at && !plan.live_at) items.push({
 		key: "deployed",
 		label: "It's deployed — check now",
 		title: "Don't wait out the deploy timer"
 	});
-	if (isFailing(plan)) items.push({
+	if (isFailing(plan) || verify?.state === "failed") items.push({
 		key: "fix",
 		label: "Fix in a new session",
 		title: "Starts a new session with what failed attached"
 	});
-	if (!running && steps.length && plan.state !== "generating" && agentCan && primary !== "check" && primary !== "rerun") items.push({
-		key: "run",
-		label: latestRun(plan) ? "Rerun" : "Check now",
-		title: "The session's own agent walks the behaviors it can — talk to it in its Agent tab"
-	});
-	if (offersWalkAll(plan) && !walkAllBesidePrimary(plan, primary)) items.push(WALK_ALL_ITEM);
 	const watch = watchSessionOf(plan);
-	if (watch) items.push({
+	if (watch && watch !== ctx.session?.title) items.push({
 		key: "watch",
 		label: "Open the checking run",
 		title: "Open " + watch + " as a pane — closing it doesn't stop the check"
@@ -89519,16 +89874,17 @@ function cardMenuItems(plan, ctx) {
 	items.push({
 		key: "delete",
 		label: "Delete these behaviors",
-		title: "Delete these behaviors and their answers",
+		title: "Delete these behaviors and their results",
 		danger: true
 	});
 	return items;
 }
+var VERIFY_TITLE = "The session's own agent writes the steps to check its work and works them in its terminal — it tells you anything only a person can do";
 var CHIP_WORDS = {
 	pass: "Passed",
 	fail: "Failed",
 	cant: "Couldn't check",
-	yours: "Needs you",
+	yours: "A person's",
 	pending: "Not checked"
 };
 function rowChip(plan, stepId) {
@@ -89546,30 +89902,91 @@ function whoOf(plan, step) {
 		you,
 		handed,
 		label: you ? "🙋 you" : "🤖 agent",
-		title: handed ? "The agent couldn't check this one — it's yours now" : you ? "Checked by you — press to let the agent check it" : "Checked by the agent — press to check it yourself"
+		title: handed ? "The agent couldn't do this one — it's a person's now" : you ? "Only a person can do this step — the agent says so in its reply" : "The agent does this step in its terminal"
 	};
 }
 function byWords(by) {
 	return by === "human" ? "you" : "the agent";
 }
-function showsAnswers(plan, step, entry = stepResult(plan, step.id)) {
-	return stepIsYours(plan, step) || entry?.by === "human";
-}
-function rowKey(key, opts) {
-	if (opts.mods || opts.repeat || opts.busy) return "";
-	if (stepKeyIsUndo(key)) return opts.answered ? "undo" : "";
-	const a = stepKeyAction(key);
-	return a === "" ? "" : a;
-}
-function rowAnswered(entry) {
-	return !!entry && isYourAnswer(entry.result, entry.by);
-}
-function primaryTarget(plan, key) {
-	const run = latestRun(plan);
-	const steps = plan.steps || [];
-	if (key === "failed") return steps.find((s) => run?.results?.[s.id]?.result === "fail")?.id || "";
-	if (key === "answer") return openHumanSteps(plan)[0]?.id || steps.find((s) => stepCheck(plan, s.id) === "yours")?.id || steps[0]?.id || "";
-	return "";
+function verifyCardView(plan, summary, verify, session) {
+	const base = {
+		tone: summary.tone,
+		status: summary.status,
+		sentence: summary.sentence,
+		action: null,
+		failed: summary.failed,
+		humanSteps: [],
+		failedSteps: [],
+		confirm: false
+	};
+	const again = {
+		key: "verify",
+		label: "Verify again",
+		title: VERIFY_TITLE
+	};
+	const open = {
+		key: "open",
+		label: "Open its agent",
+		title: "Follow the agent's steps in its terminal, and talk to it there"
+	};
+	if (verify) {
+		const detail = String(verify.detail || "").trim();
+		switch (verify.state) {
+			case "verifying": return {
+				...base,
+				tone: "busy",
+				status: VERIFYING_LABEL,
+				sentence: "Its agent is checking its work in its terminal: " + verifyProgress(verify) + ".",
+				action: session ? open : null
+			};
+			case "needs_you": {
+				const steps = verify.human_steps || [];
+				const n = steps.length || Number(verify.steps?.human) || 0;
+				return {
+					...base,
+					tone: "you",
+					status: REASON_LABEL.verify_confirm,
+					sentence: "The agent did its steps. " + (n === 1 ? "One step needs a person" : (n || "Some") + " steps need a person") + " — do " + (n === 1 ? "it" : "them") + ", then confirm.",
+					action: null,
+					humanSteps: steps,
+					confirm: true
+				};
+			}
+			case "failed": return {
+				...base,
+				tone: "bad",
+				status: REASON_LABEL.verify_failed,
+				sentence: detail || "Some of its steps failed.",
+				action: session ? again : null,
+				failed: Math.max(base.failed, (verify.failed_steps || []).length),
+				failedSteps: verify.failed_steps || []
+			};
+			case "blocked": return {
+				...base,
+				tone: "bad",
+				status: REASON_LABEL.verify_blocked,
+				sentence: detail || "The agent couldn't finish verifying — open it to see why.",
+				action: session ? again : null
+			};
+			case "passed": return {
+				...base,
+				tone: "ok",
+				status: VERIFIED_LABEL,
+				sentence: detail || "The agent's steps passed" + (verify.steps?.human ? ", and a person confirmed theirs." : "."),
+				action: null
+			};
+		}
+	}
+	if (plan.state === "running" || plan.state === "generating") return base;
+	const before = !!latestRun(plan) || !!verify;
+	return {
+		...base,
+		action: session || (plan.steps || []).length ? {
+			key: "verify",
+			label: before ? "Verify again" : "Verify",
+			title: VERIFY_TITLE
+		} : null
+	};
 }
 function verifyStopStand(flight, stepId) {
 	if (!flight) return "";
@@ -89584,200 +90001,20 @@ function verifyStopStand(flight, stepId) {
 function haltedLine(failed) {
 	return (failed > 0 ? "Failed · " + failed + " — halted" : "Halted") + ". The route waits here until you Retry, Skip or let the agent fix it.";
 }
-var WALK_ALL_ITEM = {
-	key: "walk",
-	label: "Let the agent walk every behavior",
-	title: "It tries yours too, with its tools — it answers one only with evidence, and asks you only for what it can't do"
-};
-function offersWalkAll(plan) {
-	if (plan.state === "running" || plan.state === "generating") return false;
-	return (plan.steps || []).some((s) => s.actor === "human");
-}
-function walkAllBesidePrimary(plan, primary) {
-	return offersWalkAll(plan) && (primary === "check" || primary === "rerun");
-}
-function walkedWords(entry) {
-	if (!entry?.walked || entry.by === "human" || !entry.result) return "";
-	return entry.result === "blocked" ? "the agent tried — needs you" : "walked by the agent";
-}
-function needsChips(plan, step) {
-	const steps = plan.steps || [];
-	const at = steps.findIndex((s) => s.id === step.id);
-	const out = [];
-	for (const id of step.needs || []) {
-		const i = steps.findIndex((s) => s.id === id);
-		if (i < 0 || at >= 0 && i >= at || out.some((c) => c.id === id)) continue;
-		out.push({
-			id,
-			label: "after #" + (i + 1),
-			title: "Relies on behavior " + (i + 1) + ": " + steps[i].text
-		});
-	}
-	return out;
-}
-function earlierSteps(plan, stepId) {
-	const steps = plan.steps || [];
-	const at = stepId ? steps.findIndex((s) => s.id === stepId) : -1;
-	const end = at >= 0 ? at : stepId ? 0 : steps.length;
-	return steps.slice(0, end).map((step, i) => ({
-		step,
-		n: i + 1
-	}));
-}
-//#endregion
-//#region src/components/behaviors/NeedsPicker.tsx
-function NeedsPicker({ earlier, value, disabled, onChange }) {
-	if (!earlier.length) return null;
-	const on = new Set(value);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "bh-needs-pick",
-		role: "group",
-		"aria-label": "Relies on (done first)",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "bh-hint",
-			children: "after"
-		}), earlier.map(({ step, n }) => {
-			const pressed = on.has(step.id);
-			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "bh-need" + (pressed ? " is-on" : ""),
-				"aria-pressed": pressed,
-				disabled,
-				title: "Relies on behavior " + n + ": " + step.text,
-				onClick: () => onChange(earlier.map((e) => e.step.id).filter((id) => id === step.id ? !pressed : on.has(id))),
-				children: ["#", n]
-			}, step.id);
-		})]
-	});
-}
 //#endregion
 //#region src/components/behaviors/BehaviorRow.tsx
-var NOTES$1 = /* @__PURE__ */ new Map();
-var noteKey$1 = (plan, step) => plan + "\0" + step;
-var ANSWERS = [
-	{
-		value: "pass",
-		label: "Pass",
-		key: "1"
-	},
-	{
-		value: "fail",
-		label: "Fail",
-		key: "2"
-	},
-	{
-		value: "blocked",
-		label: "Can't check",
-		key: "3"
-	}
-];
-function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, focusNonce, allOpen }) {
-	const ref = (0, import_react.useRef)(null);
-	const key = noteKey$1(plan.id, step.id);
-	const draft = NOTES$1.get(key);
-	const [pending, setPending] = (0, import_react.useState)(null);
-	const [noteOpen, setNoteOpenRaw] = (0, import_react.useState)(!!draft?.open);
-	const [note, setNoteRaw] = (0, import_react.useState)(draft?.text || "");
-	const [editing, setEditing] = (0, import_react.useState)(false);
-	const [confirmRemove, setConfirmRemove] = (0, import_react.useState)(false);
-	const [busy, setBusy] = (0, import_react.useState)(false);
+function BehaviorRow({ plan, step, index, onFix, allOpen }) {
 	const [open, setOpen] = (0, import_react.useState)(!!allOpen?.open);
 	(0, import_react.useEffect)(() => {
 		if (allOpen && allOpen.n) setOpen(allOpen.open);
 	}, [allOpen?.n]);
-	const setNoteOpen = (open, text = note) => {
-		setNoteOpenRaw(open);
-		if (open) NOTES$1.set(key, {
-			open,
-			text
-		});
-		else NOTES$1.delete(key);
-	};
-	const setNote = (text) => {
-		setNoteRaw(text);
-		NOTES$1.set(key, {
-			open: true,
-			text
-		});
-	};
-	(0, import_react.useEffect)(() => {
-		if (!focusNonce) return;
-		setOpen(true);
-		const el = ref.current;
-		el?.scrollIntoView?.({
-			block: "nearest",
-			behavior: "smooth"
-		});
-		el?.focus({ preventScroll: true });
-	}, [focusNonce]);
 	const entry = stepResult(plan, step.id);
 	const chip = rowChip(plan, step.id);
 	const who = whoOf(plan, step);
-	const answered = rowAnswered(entry);
-	const answers = showsAnswers(plan, step, entry);
-	const shown = pending ?? entry?.result ?? "";
-	const yourEntry = entry?.by === "human";
-	const walked = walkedWords(entry);
-	const needs = needsChips(plan, step);
-	const locked = pending !== null || busy;
-	const isOpen = open || editing || noteOpen || confirmRemove;
-	const record = async (result) => {
-		setPending(result);
-		try {
-			await onRecord(step, result, result === "" ? "" : note.trim());
-			const next = noteDraftAfter(result, noteOpen, note);
-			setNoteRaw(next.text);
-			setNoteOpen(next.open, next.text);
-		} catch (err) {
-			errorPop("Couldn't record that answer", errMsg(err));
-		} finally {
-			setPending(null);
-		}
-	};
-	const saveNote = async () => {
-		if (!answered || !yourEntry) return;
-		setBusy(true);
-		try {
-			await onRecord(step, entry.result, note.trim());
-			setNoteOpen(false);
-		} catch (err) {
-			errorPop("Couldn't save that note", errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const toggleWho = async () => {
-		if (!onEdit || busy) return;
-		setBusy(true);
-		try {
-			await onEdit(step, { actor: who.you ? "agent" : "human" });
-		} finally {
-			setBusy(false);
-		}
-	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		ref,
-		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : "") + (walked ? " is-walked" : ""),
+		className: "bh-row is-" + chip.state + (who.you ? " is-yours" : ""),
 		"data-step-id": step.id,
-		"data-manual": step.manual ? "1" : void 0,
-		tabIndex: 0,
-		"aria-label": "Behavior " + (index + 1) + ": " + step.text + " — " + chip.label,
-		onKeyDown: (e) => {
-			const from = e.target;
-			if (from !== e.currentTarget && from.closest("input, textarea, select")) return;
-			const act = rowKey(e.key, {
-				answered,
-				mods: e.metaKey || e.ctrlKey || e.altKey,
-				repeat: e.repeat,
-				busy: locked
-			});
-			if (!act) return;
-			e.preventDefault();
-			e.stopPropagation();
-			if (act === "note") setNoteOpen(true);
-			else if (act === "undo") record("");
-			else record(act);
-		},
+		"aria-label": "Step " + (index + 1) + ": " + step.text + " — " + chip.label,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: "bh-chip",
 			"data-check": chip.state,
@@ -89793,300 +90030,62 @@ function BehaviorRow({ plan, step, index, onRecord, onEdit, onRemove, onFix, foc
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "bh-row-body",
 			children: [
-				editing && onEdit ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BehaviorEditor, {
-					plan,
-					step,
-					onCancel: () => setEditing(false),
-					onSave: async (fields) => {
-						if (await onEdit(step, fields)) setEditing(false);
-					}
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bh-text-line",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "bh-text bh-text-toggle" + (isOpen ? "" : " is-clamped"),
-							"aria-expanded": isOpen,
-							title: isOpen ? "Show less" : "Show the whole behavior and its answers",
-							onClick: () => setOpen(!isOpen),
-							children: step.text
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "bh-caret",
-							"aria-label": isOpen ? "Collapse" : "Expand",
-							onClick: () => setOpen(!isOpen),
-							children: isOpen ? "▾" : "▸"
-						})]
-					}),
-					isOpen && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "bh-expect",
-						children: ["Expect: ", step.expect]
-					}) : null,
-					isOpen && needs.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "bh-needs",
-						"aria-label": "Relies on",
-						children: needs.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-need-chip",
-							title: c.title,
-							children: c.label
-						}, c.id))
-					}) : null
-				] }),
-				walked ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "bh-walked",
-					title: "The agent answered this behavior of yours with its own tools — open it for its evidence; your own answer replaces it",
-					children: walked
-				}) : null,
-				!isOpen ? null : entry?.note && !yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-evidence" + (walked ? " is-walked" : ""),
-					title: walked ? "What the agent observed, and how" : "What the agent recorded",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-evidence-by",
-							children: walked ? "The agent walked it:" : "The agent:"
-						}),
-						" ",
-						entry.note
-					]
-				}) : entry?.note && yourEntry && !noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-evidence",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-evidence-by",
-							children: "Your note:"
-						}),
-						" ",
-						entry.note
-					]
-				}) : null,
-				isOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-row-actions",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-text-line",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "bh-text bh-text-toggle" + (open ? "" : " is-clamped"),
+							"aria-expanded": open,
+							title: open ? "Show less" : "Show the whole step and its result",
+							onClick: () => setOpen(!open),
+							children: step.text
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "bh-who" + (who.you ? " is-you" : ""),
 							title: who.title,
-							"aria-label": "Who checks behavior " + (index + 1) + ": " + (who.you ? "you" : "the agent"),
-							"aria-pressed": who.you,
-							disabled: !onEdit || busy,
-							onClick: () => void toggleWho(),
 							children: who.label
 						}),
-						answers ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "bh-answers",
-							role: "group",
-							"aria-label": "Answer behavior " + (index + 1),
-							children: ANSWERS.map((a) => {
-								const on = shown === a.value && (answered || pending === a.value);
-								return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn bh-answer bh-answer-" + a.value,
-									"data-on": on ? "1" : void 0,
-									"aria-pressed": on,
-									disabled: locked,
-									title: on && yourEntry ? "Recorded — press again to take it back" : a.label + " (" + a.key + ")",
-									onClick: () => void record(on && yourEntry ? "" : a.value),
-									children: pending === a.value ? "…" : a.label
-								}, a.value);
-							})
-						}) : null,
-						entry?.result && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "bh-receipt",
-							children: [byWords(entry.by), entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""]
-						}) : null,
-						answered && !pending ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							className: "tb-item bh-quiet",
-							disabled: locked,
-							title: "Take this answer back (u)",
-							onClick: () => void record(""),
-							children: "Undo"
-						}) : null,
-						(!entry || yourEntry || !answered) && !noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Add a note (n)",
-							onClick: () => {
-								setNote(yourEntry ? entry?.note || "" : "");
-								setNoteOpen(true);
-							},
-							children: "+ note"
-						}) : null,
-						shown === "fail" && onFix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Starts a new session with this failure attached",
-							onClick: () => onFix(step),
-							children: "Fix"
-						}) : null,
-						onEdit && !editing ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Change the wording — clears any answer on it",
-							onClick: () => setEditing(true),
-							children: "Edit"
-						}) : null,
-						step.manual && onRemove ? confirmRemove ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "bh-confirm",
-							role: "alertdialog",
-							"aria-label": "Remove this behavior?",
-							children: [
-								"Remove it?",
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn bh-danger",
-									disabled: busy,
-									onClick: async () => {
-										setBusy(true);
-										try {
-											await onRemove(step);
-										} finally {
-											setBusy(false);
-											setConfirmRemove(false);
-										}
-									},
-									children: "Remove"
-								}),
-								" ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "test-btn",
-									autoFocus: true,
-									onClick: () => setConfirmRemove(false),
-									children: "Keep it"
-								})
-							]
-						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "tb-item bh-quiet",
-							title: "Delete this behavior you added",
-							onClick: () => setConfirmRemove(true),
-							children: "Remove"
-						}) : null
+							className: "bh-caret",
+							"aria-label": open ? "Collapse" : "Expand",
+							onClick: () => setOpen(!open),
+							children: open ? "▾" : "▸"
+						})
+					]
+				}),
+				open && step.expect ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-expect",
+					children: ["Expect: ", step.expect]
+				}) : null,
+				open && entry?.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-evidence",
+					title: entry.by === "human" ? "What a person recorded" : "What the agent recorded",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "bh-evidence-by",
+							children: entry.by === "human" ? "Your note:" : "The agent:"
+						}),
+						" ",
+						entry.note
 					]
 				}) : null,
-				noteOpen ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "bh-note-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						className: "fl-input bh-note",
-						placeholder: shown === "pass" ? "anything worth recording?" : "what happened?",
-						"aria-label": "Note for behavior " + (index + 1),
-						autoComplete: "off",
-						autoFocus: true,
-						value: note,
-						disabled: busy,
-						onChange: (e) => setNote(e.target.value),
-						onKeyDown: (e) => {
-							e.stopPropagation();
-							if (e.key === "Enter") {
-								e.preventDefault();
-								saveNote();
-							} else if (e.key === "Escape") {
-								e.preventDefault();
-								setNoteOpen(false);
-								ref.current?.focus();
-							}
-						}
-					}), answered && yourEntry ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				open && (entry?.result || chip.state === "fail" && onFix) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "bh-row-actions",
+					children: [entry?.result ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "bh-receipt",
+						children: [byWords(entry.by), entry.at ? " · " + relTime(entry.at, { suffix: " old" }) : ""]
+					}) : null, chip.state === "fail" && onFix ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: () => void saveNote(),
-						children: busy ? "Saving…" : "Save"
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "bh-hint",
-						children: "Pick Pass, Fail or Can't check to save it"
-					})]
+						className: "tb-item bh-quiet",
+						title: "Starts a new session with this failure attached",
+						onClick: () => onFix(step),
+						children: "Fix"
+					}) : null]
 				}) : null
 			]
 		})]
-	});
-}
-function BehaviorEditor({ plan, step, onCancel, onSave }) {
-	const [text, setText] = (0, import_react.useState)(step.text);
-	const [expect, setExpect] = (0, import_react.useState)(step.expect || "");
-	const earlier = earlierSteps(plan, step.id);
-	const [needs, setNeeds] = (0, import_react.useState)(() => (step.needs || []).filter((id) => earlier.some((e) => e.step.id === id)));
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const save = async () => {
-		if (!text.trim()) return;
-		setBusy(true);
-		try {
-			const was = (step.needs || []).join("\0");
-			await onSave({
-				text: text.trim(),
-				expect: expect.trim(),
-				...needs.join("\0") !== was ? { needs } : {}
-			});
-		} finally {
-			setBusy(false);
-		}
-	};
-	const keys = (e) => {
-		e.stopPropagation();
-		if (e.key === "Escape") {
-			e.preventDefault();
-			onCancel();
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bh-edit",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				className: "fl-input",
-				rows: 2,
-				"aria-label": "What the work should do",
-				autoFocus: true,
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: keys
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "fl-input",
-				"aria-label": "What should happen",
-				placeholder: "what should happen",
-				autoComplete: "off",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: (e) => {
-					keys(e);
-					if (e.key === "Enter") {
-						e.preventDefault();
-						save();
-					}
-				}
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bh-edit-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsPicker, {
-						earlier,
-						value: needs,
-						disabled: busy,
-						onChange: setNeeds
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: busy || !text.trim(),
-						onClick: () => void save(),
-						children: busy ? "Saving…" : "Save"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: onCancel,
-						children: "Cancel"
-					})
-				]
-			})
-		]
 	});
 }
 //#endregion
@@ -90116,9 +90115,10 @@ function ShieldIcon() {
 	});
 }
 function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
-	const s = behaviorSummary(plan);
 	const { data: instances } = useInstances();
 	const session = (instances || []).find((i) => planForSession([plan], i) === plan) || null;
+	const verify = session ? verifyOf(session) : null;
+	const s = verifyCardView(plan, behaviorSummary(plan), verify, session?.title || "");
 	const steps = plan.steps || [];
 	const running = plan.state === "running";
 	const watch = watchSessionOf(plan);
@@ -90126,13 +90126,7 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 	const flight = flightStep ? (flights || []).find((f) => f.id === flightStep.flightId) || null : null;
 	const stand = flightStep ? verifyStopStand(flight, flightStep.stepId) : "";
 	const [busy, setBusy] = (0, import_react.useState)("");
-	const [rewriting, setRewriting] = (0, import_react.useState)(false);
 	const [confirmDelete, setConfirmDelete] = (0, import_react.useState)(false);
-	const [adding, setAdding] = (0, import_react.useState)(false);
-	const [focus, setFocus] = (0, import_react.useState)({
-		id: "",
-		n: 0
-	});
 	const [menu, setMenu] = (0, import_react.useState)(null);
 	const [allOpen, setAllOpen] = (0, import_react.useState)({
 		open: !!expanded,
@@ -90147,37 +90141,24 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 			setBusy("");
 		}
 	};
-	const focusRow = (id) => id && setFocus((f) => ({
-		id,
-		n: f.n + 1
-	}));
+	const verifyNow = () => void withBusy("primary", () => session ? startSessionVerify(session.title) : startChecklistRun(plan));
 	const primary = () => {
 		const a = s.action;
 		if (!a) return;
-		if (a.key === "check" || a.key === "rerun") withBusy("primary", () => startChecklistRun(plan));
-		else if (a.key === "failed" || a.key === "answer") focusRow(primaryTarget(plan, a.key));
-		else if (a.key === "write") {
-			if (plan.origin === "manual") setAdding(true);
-			else withBusy("primary", () => regeneratePlan(plan));
-		}
+		if (a.key === "open" && session) openWalkingSession(session.title);
+		else if (a.key === "verify") verifyNow();
 	};
 	const pick = (key) => {
 		const ui = useUi.getState();
 		switch (key) {
-			case "rewrite":
-				setRewriting(true);
+			case "verify":
+				verifyNow();
 				break;
 			case "deployed":
 				withBusy("deployed", () => markPlanDeployed(plan));
 				break;
 			case "fix":
 				withBusy("fix", () => fixPlanFailures(plan));
-				break;
-			case "run":
-				withBusy("primary", () => startChecklistRun(plan));
-				break;
-			case "walk":
-				withBusy("walk", () => startChecklistRun(plan, { walk: "all" }));
 				break;
 			case "watch":
 				ui.openVerifyPane(watch);
@@ -90209,11 +90190,12 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 	};
 	const items = cardMenuItems(plan, {
 		summary: s,
-		session
+		session: session ? {
+			title: session.title,
+			pr_url: session.pr_url,
+			verify
+		} : null
 	});
-	const record = (step, result, note) => recordStepAnswer(plan, step, result, note);
-	const edit = running ? void 0 : (step, fields) => editPlanStep(plan, step, fields);
-	const remove = running ? void 0 : (step) => removePlanStep(plan, step);
 	const fixOne = running || busy ? void 0 : (step) => void withBusy("fix", () => fixPlanFailures(plan, [step.id]));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "bh-card is-" + s.tone + (compact ? " is-compact" : ""),
@@ -90246,14 +90228,14 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 								"data-tone": s.tone,
 								children: s.status
 							}),
-							s.total ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							steps.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "bh-count",
-								children: behaviorsCount(s.total)
+								children: behaviorsCount(steps.length)
 							}) : null,
 							steps.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "tb-item bh-quiet bh-expand-all",
-								title: allOpen.open ? "Collapse every behavior to one line" : "Show every behavior in full",
+								title: allOpen.open ? "Collapse every step to one line" : "Show every step in full",
 								onClick: () => setAllOpen((a) => ({
 									open: !a.open,
 									n: a.n + 1
@@ -90322,43 +90304,30 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 						]
 					}) : s.action || flightStep ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						className: "bh-head-actions",
-						children: [
-							s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "btn-primary bh-primary",
-								"data-action": s.action.key,
-								disabled: !!busy,
-								onClick: primary,
-								children: busy === "primary" ? "…" : s.action.label
-							}) : null,
-							walkAllBesidePrimary(plan, s.action?.key || "") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "test-btn bh-walk-all",
-								"data-action": "walk",
-								title: WALK_ALL_ITEM.title,
-								disabled: !!busy,
-								onClick: () => void withBusy("walk", () => startChecklistRun(plan, { walk: "all" })),
-								children: busy === "walk" ? "…" : WALK_ALL_ITEM.label
-							}) : null,
-							flightStep && stand !== "fixing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "test-btn bh-skip",
-								title: "The route moves on without these answers",
-								disabled: !!busy,
-								onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
-								children: busy === "skip" ? "…" : "Skip this stop"
-							}) : null
-						]
+						children: [s.action ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary bh-primary",
+							"data-action": s.action.key,
+							title: s.action.title,
+							disabled: !!busy,
+							onClick: primary,
+							children: busy === "primary" ? "…" : s.action.label
+						}) : null, flightStep && stand !== "fixing" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn bh-skip",
+							title: "The route moves on without this check",
+							disabled: !!busy,
+							onClick: () => void withBusy("skip", () => stepSkip(flightStep.flightId, flightStep.stepId)),
+							children: busy === "skip" ? "…" : "Skip this stop"
+						}) : null]
 					}) : null
 				]
 			}),
-			rewriting ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RewriteBehaviors, {
-				plan,
-				onDone: () => setRewriting(false)
-			}) : null,
+			s.confirm && verify ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, { verify }) : null,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FailedSteps, { steps: s.failedSteps }),
 			confirmDelete ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 				title: "Delete these behaviors?",
-				body: "Their answers go too" + (running ? ", and the check running now stops." : "."),
+				body: "Their results go too" + (running ? ", and the check running now stops." : "."),
 				confirmLabel: "Delete",
 				cancelLabel: "Keep them",
 				busy: busy === "delete",
@@ -90375,27 +90344,10 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 					plan,
 					step: st,
 					index: i,
-					onRecord: record,
-					onEdit: edit,
-					onRemove: remove,
 					onFix: fixOne,
-					focusNonce: focus.id === st.id ? focus.n : 0,
 					allOpen
 				}, st.id))
 			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("footer", {
-				className: "bh-foot",
-				children: adding ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AddBehavior, {
-					plan,
-					onDone: () => setAdding(false)
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "tb-item bh-add",
-					disabled: plan.state === "generating",
-					onClick: () => setAdding(true),
-					children: "+ Add a behavior"
-				})
-			}),
 			menu && typeof document !== "undefined" ? (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "sky-chain-menu",
 				style: {
@@ -90427,176 +90379,6 @@ function BehaviorsCard({ plan, onClose, compact, flightStep, expanded }) {
 			}), document.body) : null
 		]
 	});
-}
-function RewriteBehaviors({ plan, onDone }) {
-	const [focus, setFocus] = (0, import_react.useState)(plan.focus || "");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const blocked = rewriteBlockedReason(plan);
-	const warning = blocked ? "" : rewriteWarning(plan).replace(/Steps/g, "Behaviors").replace(/steps/g, "behaviors");
-	const go = async () => {
-		setBusy(true);
-		try {
-			if (await regeneratePlan(plan, focus)) onDone();
-		} finally {
-			setBusy(false);
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bh-rewrite",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-				className: "bh-rewrite-title",
-				htmlFor: "bh-rewrite-" + plan.id,
-				children: "Rewrite behaviors"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-				id: "bh-rewrite-" + plan.id,
-				className: "fl-input",
-				rows: 2,
-				autoFocus: true,
-				placeholder: "What should they check instead? (optional) — e.g. “focus on the coupon flow at checkout”",
-				value: focus,
-				disabled: busy || !!blocked,
-				onChange: (e) => setFocus(e.target.value),
-				onKeyDown: (e) => {
-					e.stopPropagation();
-					if (e.key === "Escape") {
-						e.preventDefault();
-						onDone();
-					}
-				}
-			}),
-			blocked || warning ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "bh-hint",
-				children: blocked || warning
-			}) : null,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bh-edit-actions",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "btn-primary",
-					disabled: busy || !!blocked,
-					onClick: () => void go(),
-					children: busy ? "Asking…" : "Rewrite"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					disabled: busy,
-					onClick: onDone,
-					children: "Cancel"
-				})]
-			})
-		]
-	});
-}
-function AddBehavior({ plan, onDone }) {
-	const [text, setText] = (0, import_react.useState)("");
-	const [expect, setExpect] = (0, import_react.useState)("");
-	const [actor, setActor] = (0, import_react.useState)("agent");
-	const [needs, setNeeds] = (0, import_react.useState)([]);
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const textRef = (0, import_react.useRef)(null);
-	const add = async () => {
-		const body = text.trim();
-		if (!body || busy) return;
-		setBusy(true);
-		try {
-			await addBehavior(plan, {
-				text: body,
-				expect: expect.trim(),
-				actor,
-				...needs.length ? { needs } : {}
-			});
-			setText("");
-			setExpect("");
-			setNeeds([]);
-			textRef.current?.focus();
-		} catch (err) {
-			errorPop("Couldn't add that behavior", errMsg(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const keys = (e) => {
-		e.stopPropagation();
-		if (e.key === "Enter") {
-			e.preventDefault();
-			add();
-		} else if (e.key === "Escape") {
-			e.preventDefault();
-			onDone();
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "bh-addform",
-		role: "group",
-		"aria-label": "Add a behavior",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				ref: textRef,
-				type: "text",
-				className: "fl-input",
-				autoFocus: true,
-				autoComplete: "off",
-				placeholder: "what the work should do",
-				"aria-label": "New behavior",
-				value: text,
-				disabled: busy,
-				onChange: (e) => setText(e.target.value),
-				onKeyDown: keys
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-				type: "text",
-				className: "fl-input",
-				autoComplete: "off",
-				placeholder: "what should happen (optional)",
-				"aria-label": "What should happen",
-				value: expect,
-				disabled: busy,
-				onChange: (e) => setExpect(e.target.value),
-				onKeyDown: keys
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "bh-edit-actions",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "bh-who" + (actor === "human" ? " is-you" : ""),
-						"aria-pressed": actor === "human",
-						title: "Who checks it — press to switch",
-						disabled: busy,
-						onClick: () => setActor(actor === "human" ? "agent" : "human"),
-						children: actor === "human" ? "🙋 you" : "🤖 agent"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NeedsPicker, {
-						earlier: earlierSteps(plan),
-						value: needs,
-						disabled: busy,
-						onChange: setNeeds
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "btn-primary",
-						disabled: busy || !text.trim(),
-						onClick: () => void add(),
-						children: busy ? "Adding…" : "Add"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn",
-						disabled: busy,
-						onClick: onDone,
-						children: "Done adding"
-					})
-				]
-			})
-		]
-	});
-}
-async function addBehavior(plan, fields) {
-	const next = await addPlanStep(plan, fields);
-	if (next) patchPlan(plan.id, () => next);
-	refreshTestPlans();
 }
 //#endregion
 //#region src/components/OverflowMenu.tsx
@@ -91197,7 +90979,7 @@ function receiptOf(detail) {
 function flightDiagram(f, kinds) {
 	const { line, loops } = liftLoops(flightStops(f, kinds));
 	const rets = returnEdges(line);
-	if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
+	if (isShown$1(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
@@ -91250,7 +91032,7 @@ function ladderRungs(row) {
 }
 function miniDots(row) {
 	const fl = row.flight;
-	if (fl && isShown(fl)) return stripDots(fl);
+	if (fl && isShown$1(fl)) return stripDots(fl);
 	return ladderRungs(row).map((r) => r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○").join("");
 }
 function sessionBox(row, kind, rowAt) {
@@ -91313,7 +91095,7 @@ function sessionDiagram(rows, title, opts = {}) {
 	let insertFrom = 0;
 	let loops = [];
 	const fl = row.flight;
-	if (fl && isShown(fl)) {
+	if (fl && isShown$1(fl)) {
 		mode = "flight";
 		flightId = fl.id;
 		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
@@ -91815,7 +91597,7 @@ var BRANCH_NODE_STATE = {
 };
 function innerSummary(row) {
 	const fl = row.flight;
-	if (fl && isShown(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+	if (fl && isShown$1(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
 	const rungs = ladderRungs(row);
 	if (!rungs.length) return "";
 	const done = rungs.filter((r) => r.state === "done").length;
@@ -91891,7 +91673,7 @@ function hasSessionDiagram(rows, title) {
 	const row = rows.find((r) => r.title === title);
 	if (!row) return false;
 	const fl = row.flight;
-	return !!(fl && isShown(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+	return !!(fl && isShown$1(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
 }
 var STOP_TONE = {
 	current: "working",
@@ -94183,7 +93965,9 @@ function VerifyStopActions({ flight, compact = false }) {
 		children: "Skip"
 	});
 	const ss = flight.step_states?.[step.id];
-	const ask = String(ss?.detail?.ask || "");
+	const verify = verifyOf(row);
+	const confirming = verify?.state === "needs_you";
+	const ask = confirming ? "" : String(ss?.detail?.ask || "");
 	if (ask === "needs_you" || ask === "memory") {
 		const items = Array.isArray(ss?.detail?.items) ? (ss?.detail?.items).map(String) : [];
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -94216,19 +94000,35 @@ function VerifyStopActions({ flight, compact = false }) {
 			]
 		});
 	}
+	if (confirming && !compact && !plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-you fl-you-verify fl-you-needs",
+		onClick: stop,
+		"data-no-drag": true,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-you-text",
+				children: "The agent did its steps — do yours, then confirm."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyConfirm, { verify }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fl-you-acts",
+				children: skip
+			})
+		]
+	});
 	if (compact || !plan) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-you fl-you-verify" + (compact ? " fl-you-compact" : ""),
 		onClick: stop,
 		"data-no-drag": true,
 		children: [!compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 			className: "fl-you-text",
-			children: "Writing the behaviors… they show here to answer once they are written."
+			children: "Writing the behaviors… they show here once they are written."
 		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "fl-you-acts",
 			children: [plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "btn-primary fl-btn fl-behaviors",
-				title: "Answer the behaviors that wait on you, on the session's frame in the Sky",
+				title: "The behaviors and their results, on the session's frame in the Sky",
 				onClick: () => openBehaviors({ planId: plan.id }),
 				children: "Behaviors"
 			}), skip]
@@ -100361,7 +100161,7 @@ function useSessionLine(title, src, opts) {
 	const [expandedGroups, setExpandedGroups] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
 	const row = rows.find((r) => r.title === title);
 	const flRow = row?.flight;
-	const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+	const flight = flRow && isShown$1(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
 	const line = (0, import_react.useMemo)(() => sessionDiagram(rows, title, {
 		flights,
 		kinds,
@@ -101380,7 +101180,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 			setWsState(handle.state);
 			if (handle.booted) setBooted(true);
 		}
-		requestAnimationFrame(() => handle.doFit());
+		requestAnimationFrame(() => repaintTerm(handle.term, () => handle.doFit()));
 	}, [
 		title,
 		missing,
@@ -101405,9 +101205,27 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const fitSoon = (0, import_react.useCallback)(() => {
 		clearTimeout(fitTimer.current);
 		fitTimer.current = setTimeout(() => {
-			peekTerm(title, tab === "shell" ? "shell" : "agent")?.doFit();
+			const t = peekTerm(title, tab === "shell" ? "shell" : "agent");
+			if (t) repaintTerm(t.term, () => t.doFit());
 		}, 120);
 	}, [title, tab]);
+	(0, import_react.useEffect)(() => {
+		if (missing || loading) return;
+		const kind = tab === "shell" ? "shell" : tab === "agent" ? "agent" : null;
+		if (!kind) return;
+		return trackRepaint({
+			shown: () => isShown(peekTerm(title, kind)?.container),
+			repaint: () => {
+				const t = peekTerm(title, kind);
+				if (t) repaintTerm(t.term, () => t.doFit());
+			}
+		});
+	}, [
+		title,
+		tab,
+		missing,
+		loading
+	]);
 	(0, import_react.useEffect)(() => {
 		if (!bodyRef.current || missing || loading) return;
 		const obs = new ResizeObserver(fitSoon);
@@ -101804,12 +101622,12 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		kind: tab === "shell" ? "shell" : "agent",
 		dragSel: null
 	});
-	const menu = () => withVerifyVerdict(sessionMenu(inst, menuCtx, {
+	const menu = () => withVerifyItem(withVerifyVerdict(sessionMenu$1(inst, menuCtx, {
 		visibleTabs,
 		onHistory: shows("history") ? void 0 : openHistory,
 		onCopyHistory: termTab ? copyHistory : void 0,
 		onNextStep: shows("next") ? void 0 : shownStep ?? void 0
-	}), inst);
+	}), inst), inst);
 	const menuSummary = [
 		!shows("cost") && usageHeadline(inst),
 		!shows("diffstat") && hasDiffStat && diffStatText(inst),
@@ -102241,6 +102059,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 				title
 			}),
 			inst.flight && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneFlightStrip, { inst }),
+			inst.verify && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneVerifyStrip, { inst }),
 			strip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here"),
 				role: "note",
@@ -144038,7 +143857,7 @@ function frameState(s) {
 	if (f === "halted") return "halted";
 	if (s.tone === "broken") return "broken";
 	if (f === "waiting_you" || s.tone === "attention" || s.behaviorsYou) return "you";
-	if (f === "running" || s.tone === "working") return "working";
+	if (f === "running" || s.tone === "working" || s.tone === "verifying") return "working";
 	if (f === "done" || s.landed) return "done";
 	if (f === "ready") return "ready";
 	return "idle";
@@ -148279,7 +148098,7 @@ function SkyView() {
 	};
 	const liveFlightOf = (title) => {
 		const fl = rows.find((r) => r.title === title)?.flight;
-		return fl && isShown(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+		return fl && isShown$1(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
 	};
 	const onFly = (plan, title) => {
 		const live = liveFlightOf(title);
@@ -150279,6 +150098,7 @@ publishToast();
 publishWindowName();
 installGlobalDropGuards();
 applyStoredAppearance();
+installRepaintTriggers(window, document);
 (0, import_client.createRoot)(document.getElementById("root")).render(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_react.StrictMode, { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QueryClientProvider, {
 	client: queryClient,
 	children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(App, {})
