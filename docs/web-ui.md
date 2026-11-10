@@ -1119,16 +1119,24 @@ painted red.
 | Idle, stuck | gold | you | yes — 20 min idle on uncommitted work | **Idle 25m** — how long, in the gold the bell's rows wear |
 | Waiting on limit | blue | nobody | no | **Waiting on limit, resumes HH:MM** when the window is known |
 | Offline | red | you | yes | **Offline** — the chip is a **↻ Restart** button |
+| Verifying | violet, pulsing | the agent | no | **Verifying** — its own agent is checking its work; the tooltip says how far (*Checking its work: 3 of 5 steps done*) |
+| Needs you (verify) | gold | you | yes | **Confirm verified** — the agent did its steps and a person's are left; the tooltip lists them. **Verify failed** / **Verify blocked** in red, the tooltip listing what failed or why. The chip opens the session's Agent tab, whose [verify row](#verify) has the buttons |
+| Verified | green tint | nobody | no | **Verified** — for the ten minutes the server keeps a passed verify on the row |
 
 Precedence: a missing folder (**Missing**) and a paused session (**Paused**)
 first, then a provisioning one (**Starting**), then a sleeping one
 (**Sleeping**, grey: its agent was stopped on purpose to free memory, so its
 `offline` reading is not Offline) — none waits on anyone; then a
 failed setup (prompts are held whatever the agent is doing); then the live
-activity (`clarify` → Question, `working`, `limit`, `offline`); then the git
-facts a resting agent leaves behind (a blocked commit, failing checks); then
-idle. So an agent that is *working* on its failed pre-commit is **Working**,
-not in the bell — the bell lists what waits on *you*.
+activity (`clarify` → Question, then **Verifying** in place of `working` or
+idle while a verify runs, `working`, `limit`, `offline`); then a verify that
+waits on you or failed (ahead of a Question in the agent's reply — that reply
+*is* the person's steps); then the git facts a resting agent leaves behind (a
+blocked commit, failing checks); then **Verified**; then idle. A row with no
+`verify` (an older server) reads exactly as it did.
+
+So an agent that is *working* on its failed pre-commit is **Working**, not in
+the bell — the bell lists what waits on *you*.
 
 **Background jobs.** Claude Code calls a session busy while any job the agent
 backgrounded is still alive, even after its turn ended. The server classifies
@@ -1371,9 +1379,10 @@ newest thing you actually asked.
   files, untracked included); until then the header has no lead button and
   the state chip says what the agent is doing. On hover: *Commit this
   session's changes — you check the message first. Next: Push, then Open PR.*
-- **⋯ → Verify checklist…** (any header, when the session has a branch) opens
-  Verify on that branch's checklist — also on the row's ⋮ menu (still
-  *Checklist…* there). In the pane's ⋯ the checklist's verdict rides under
+- **⋯ → Verify** (Ship, just before **Behaviors…**; also on the row's ⋮ menu)
+  has the session's own agent check its work — see [Verify](#verify). It is
+  offered while no verify is running or waiting on you (**Verify again**
+  after one finished). **Behaviors…** opens the branch's behaviors in the Sky. In the pane's ⋯ the checklist's verdict rides under
   **Open PR** / **Merge PR** (*Checklist ✗ Failed*), and on a failed checklist
   they ask first: *Checklist failed — open the PR anyway?* with **Show the
   checklist** and **Open PR anyway** (`withVerifyVerdict`, lib/stage.ts). When a checklist
@@ -2524,7 +2533,11 @@ two lists: **Needs you** on top, then the history feed.
 **Needs you** merges two sources into one list, one row per session: the
 sessions whose [one state](#one-session-state) is "in the bell" — **Question**,
 **Pre-commit failed** (with the hook), **Setup failed**, **Offline**, **Checks
-failing**, and an **Idle** session 20 minutes into uncommitted work — plus a
+failing**, **Confirm verified** / **Verify failed** / **Verify blocked** (a
+Confirm verified row carries the person's steps with **Confirm verified** /
+**Not verified…** right there, its name opening the session; a failed or
+blocked one lists what failed, or why), and an **Idle**
+session 20 minutes into uncommitted work — plus a
 branch ready for its PR, and the `waiting` group of `GET /api/outbox`
 (ask-first approvals, stuck team run lines, budget pauses, a lead's plan or PR),
 and a session whose agent waits on Go for its plan (**Plan ready — review &
@@ -5571,6 +5584,75 @@ and a prompt is never announced twice (the session's own "Needs you" row
 covers it). At most one team run toast per 30 seconds.
 
 ## Verify
+
+### Verify is the session's own agent
+
+**Since 2026-11-10 (owner request).** Verify is done by the session that did the
+work: **Verify** (a session's ⋯ / ⋮ menu, or the Behaviors card's one action —
+`POST /api/instances/{title}/verify`, optional `{notes}`) has its agent write
+its own actionable test steps and work them **in its own terminal**; its Agent
+tab opens so you can follow it and talk to it. Whatever only a person can do,
+the agent says in its reply. When there are such steps, **a person must
+confirm that verification is complete.**
+
+The session row carries it as `verify` (`null`, or `{state, plan, steps:
+{total, agent_done, human}, human_steps, failed_steps, detail, at}`), and the
+[one session state](#one-session-state) reads it:
+
+| `verify.state` | The pill | Where you act |
+|---|---|---|
+| `verifying` | **Verifying** (its own violet tone, out of the bell) — *Checking its work: 3 of 5 steps done* | nothing to do; **Open its agent** to follow along |
+| `needs_you` | **Confirm verified** (in the bell, its line listing your steps) | do the listed steps, then **Confirm verified** or **Not verified…** |
+| `failed` | **Verify failed** (red, in the bell) — the tooltip lists what failed | **Verify again**, or ⋯ → **Fix in a new session** |
+| `blocked` | **Verify blocked** (red, in the bell) — why | open the agent, then **Verify again** |
+| `passed` | **Verified**, calm, for ten minutes | — |
+
+**Confirm verified / Not verified…** (`VerifyConfirm`, components/behaviors)
+sit under the person's steps — each step's text and what should happen — on
+the pane's **verify row** (under its head, beside the route strip;
+`grid/PaneVerifyStrip.tsx`), on the bell's row, on the **Behaviors card**, and
+on a **Verify stop** parked on you. The phone (`/m`) shows the same pills
+(`mobile.js` mirrors the words and the ranking, in its existing working and
+neutral tones); it has no confirm buttons yet — its tooltip says to confirm on
+the desktop. Both post `POST /api/test-plans/{plan}/confirm` with
+`{verified: true}` or `{verified: false, note}`; **Not verified…** opens an
+inline note (*What did you see? The agent gets this*) — never
+`window.prompt()`, which Electron doesn't have. A 409 means it stopped waiting
+(someone else answered); the error card says so. The bell's **Confirm
+verified** row carries the same steps and buttons.
+
+**The pane's verify row** sits directly under the route's strip
+(`PaneFlightStrip`; under the head when there is no route) and is
+drawn only while the row's `verify` is set — never for `null`, and never for
+`passed` (the pill says that). By state: `verifying` — one line, *Verifying
+— 3 of 5 steps done*, and **Open its agent**; `needs_you` — the same line,
+then the person's steps and **Confirm verified** / **Not verified…**;
+`failed` — what failed, step by step, with **Open its agent** and **Verify
+again**; `blocked` — why, with the same two buttons. Because this row carries
+the confirm, a Verify stop's compact one-line strip in the pane shows only
+**Skip** and a way to the Behaviors card.
+
+**Without the session.** With the work session closed, the Behaviors card's
+**Verify** falls back to `POST /api/test-plans/{plan}/run` (the older
+checker described below). **Verify** on the menus is offered only while no
+verify runs or waits on you, and not for a paused, remote, provisioning or
+workspace-missing session (`canStartVerify`, sidebar/verifyMenu.ts). Until the
+server emits `verify` and answers the two routes, those calls fail and every
+pill reads as it did.
+
+**The Behaviors card is small now.** Its head says where the verify stands with
+ONE action — **Verify** (or **Verify again**), **Open its agent** while it
+works, nothing while it waits on you (the confirm is right there). The steps
+are the agent's own and **read-only**: each shows who does it (🤖 agent /
+🙋 you), its result and the agent's evidence, and a failed one offers **Fix**.
+Gone: Rewrite behaviors, + Add a behavior, Edit / Remove, the per-step
+Pass · Fail · Can't check, the "after #n" needs picker and *Let the agent walk
+every behavior*. A Verify stop that halted its route keeps **Retry · Skip ·
+Let the agent fix it**. With the session gone, the card's Verify falls back to
+the older `POST /api/test-plans/{plan}/run`.
+
+The rest of this section describes the older behaviors store and dialog that
+still back it.
 
 **What shipped, and does it work?** Intake is the front of the pipeline; Verify
 is the back of it. The pipeline's last honest checkpoint is "the PR merged", and

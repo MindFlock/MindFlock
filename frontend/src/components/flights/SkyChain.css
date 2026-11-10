@@ -585,6 +585,11 @@
   color: var(--tone-attention-ink, #1a1a1a);
 }
 
+.sky-head-chip.tone-verifying {
+  background: color-mix(in srgb, var(--tone-verifying, #8b6cf0) 18%, transparent);
+  color: var(--tone-verifying, #8b6cf0);
+}
+
 .sky-head-chip.tone-broken {
   background: color-mix(in srgb, var(--tone-broken) 18%, transparent);
   color: var(--tone-broken);

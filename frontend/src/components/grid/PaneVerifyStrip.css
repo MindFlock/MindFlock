@@ -1,0 +1,59 @@
+/* The pane's verify row (PaneVerifyStrip): the route strip's shape
+   (flights/Flights.css .fl-strip), in the verify tone while the agent checks,
+   the needs-you tint when a person's steps are left, red when it failed. */
+.pv-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--tone-verifying, #8b6cf0) 10%, var(--panel-2));
+  font-size: 12px;
+  min-width: 0;
+}
+
+.pv-strip.is-needs_you {
+  background: color-mix(in srgb, var(--tone-attention) 14%, var(--panel-2));
+  padding-bottom: 8px;
+}
+
+.pv-strip.is-failed,
+.pv-strip.is-blocked {
+  background: color-mix(in srgb, var(--tone-broken) 12%, var(--panel-2));
+}
+
+.pv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pv-shield {
+  flex: none;
+  color: var(--tone-verifying, #8b6cf0);
+  font-weight: 700;
+}
+
+.pv-strip.is-needs_you .pv-shield {
+  color: var(--text);
+}
+
+.pv-strip.is-failed .pv-shield,
+.pv-strip.is-blocked .pv-shield {
+  color: var(--tone-broken);
+}
+
+.pv-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-open,
+.pv-again {
+  flex: none;
+  font-size: 11.5px;
+}

@@ -2,7 +2,7 @@
  * sections 9's ordered()/_matchesFilter()/attentionItems()). */
 
 import type { Instance } from "../../api/types";
-import { attentionPriority, attentionReason, deriveSessionState, effectiveActivity } from "../../lib/sessionState";
+import { attentionPriority, attentionReason, deriveSessionState, effectiveActivity, verifyOf } from "../../lib/sessionState";
 import { laneOf } from "../../lib/agentMessages";
 
 /** Arrange `keys` by the saved drag order: known keys in saved order first,
@@ -365,6 +365,19 @@ export function askedQuestion(inst: Partial<Instance>): string | undefined {
   return String(a.text || "");
 }
 
+/** A verify waiting on a person, said in the bell under its row: the steps
+ * only a person can do (Confirm verified), what failed, or why it is
+ * blocked. Undefined for every other state. Clicking the row opens the
+ * session, whose verify row has the confirm buttons. */
+export function verifySnippet(inst: Partial<Instance>): string | undefined {
+  const v = verifyOf(inst);
+  if (!v) return undefined;
+  if (v.state === "needs_you") return (v.human_steps || []).map((s) => s.text).join(" · ") || undefined;
+  if (v.state === "failed") return (v.failed_steps || []).map((s) => s.text).join(" · ") || v.detail || undefined;
+  if (v.state === "blocked") return v.detail || undefined;
+  return undefined;
+}
+
 /** O1: the prioritized "which session needs me" list (bell popover + mobile).
  * 0 waiting on your answer · 1 broken (pre-commit / setup failed, offline,
  * stuck) · 2 checks failing · 3 ready to move.
@@ -387,7 +400,7 @@ export function attentionItems(instances: Instance[]): AttentionItem[] {
         snippet:
           ss.reason === "question" || ss.reason === "stuck"
             ? (askedQuestion(inst) ?? (inst.last_turn || ""))
-            : undefined,
+            : verifySnippet(inst),
         question: ss.reason === "question" ? askedQuestion(inst) : undefined,
       });
     } else if (ss.state === "idle" && inst.stage === "pushed") {

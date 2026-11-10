@@ -69,7 +69,9 @@ import { SessionMenu } from "./SessionMenu";
 import { RowMenu, type RowMenuOpen } from "./RowMenu";
 import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
-import { sessionMenu } from "../../lib/sessionMenu";
+import { openWalkingSession } from "../../lib/verifyActions";
+// lib/sessionMenu's model, with Verify in it.
+import { sessionMenu } from "./verifyMenu";
 import { PresenceDots } from "../presence/Presence";
 import { GuestPills } from "../presence/GuestPill";
 import { useMe } from "../../lib/presence";
@@ -376,6 +378,9 @@ export const SidebarRow = memo(function SidebarRow({
       if (url) window.open(url, "_blank");
       return;
     }
+    // Verify: its pane's verify row has the person's steps and Confirm
+    // verified; the Agent tab is where the agent said what it did.
+    if (what === "verify") return openWalkingSession(title);
     selectSession(title, { noKeyboard: true });
     useUi.getState().setLastTab(title, "shell");
   };
