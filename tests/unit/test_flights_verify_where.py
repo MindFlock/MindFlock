@@ -854,7 +854,7 @@ def test_verify_env_unreadable_environments_are_unknown_not_missing(monkeypatch)
 
     monkeypatch.setattr(_tp, "environment", boom, raising=False)
     monkeypatch.setattr(D, "_repo_root", lambda title: "/repo")
-    monkeypatch.setattr(D, "_log", lambda fmt, *a: logged.append((fmt, a)))
+    monkeypatch.setattr(D, "_warn", lambda fmt, *a: logged.append((fmt, a)))
     assert D._verify_env({"id": "f1", "session": "s"}, "sandbox") == (None, False)
     assert len(logged) == 1
     fmt, args = logged[0]

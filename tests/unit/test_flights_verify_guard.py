@@ -239,7 +239,10 @@ def test_a_needs_you_check_parks_until_a_person_confirms():
     assert _next(f, ok, NOW + 200)["action"] == "done"
 
 
-def test_done_is_still_refused_on_a_plain_behaviors_perch():
+def test_done_on_a_blocked_perch_is_verify_again():
+    # flow-polish: a check that stopped before it finished parks "blocked",
+    # saying "press Retry to verify again, or Skip" — Done there is that
+    # retry (it used to answer 409 "answer its behaviors").
     f = _started(_fly(_step(who="agent")))
     done = _facts(
         state="generated",
@@ -248,9 +251,8 @@ def test_done_is_still_refused_on_a_plain_behaviors_perch():
         blocked_steps=[{"step": "s1", "text": "x", "why": "y"}],
     )
     f = F.apply(f, _next(f, done, NOW + 100), NOW + 100)
-    assert D._needs_you_perch(f, "s1") is False
-    with pytest.raises(F.FlightError):
-        D._no_blanket_done(f, "s1")
+    assert f["step_states"]["s1"]["detail"]["ask"] == "blocked"
+    assert D._needs_you_perch(f, "s1") is True
 
 
 def test_all_passed_is_still_done():
