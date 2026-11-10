@@ -127,6 +127,9 @@ import {
   builtinCommands,
   previousSession,
   routePhrase,
+  routeMissLine,
+  voiceTrace,
+  WAKE_MISS_LINE,
   runVoiceCommand,
   dialogSeen,
   dialogUp,
@@ -990,11 +993,26 @@ export function TopBarMic() {
             return true;
           }
           const reply = await routePhrase(text, session, undefined, spokeAt, undefined, r === serverRec ? serverRec.takeHeard() : "");
+          // What the router made of it, in the server's log beside the
+          // dictation's own lines: a phrase "typed instead of acted on" reads
+          // off the trace (a near miss, a timeout, an unknown kind).
+          voiceTrace("route", {
+            phrase: text,
+            kind: reply.kind,
+            ...(reply.failed ? { failed: reply.failed } : {}),
+            ...(reply.unknown !== undefined ? { unknown: reply.unknown } : {}),
+            ...(reply.near ? { near: reply.near } : {}),
+          });
           // "MindFlock, …": the rest is the assistant's.
           if (reply.kind === "assistant") {
             askAssistant(reply.text || addressed(text) || text);
             return true;
           }
+          // Words for a session — typed, and the caption says why when there
+          // is a why (a near miss, the router not answering, a kind this page
+          // does not know); never aloud.
+          const missed = reply.kind === "prompt" && !answering && (into || session) ? routeMissLine(reply) : "";
+          if (missed) return { note: missed };
           // Words for a session — but the assistant asked, or no session is
           // there to take them (no text box either): the assistant's.
           if (reply.kind === "prompt") {
@@ -1573,15 +1591,24 @@ export function TopBarMic() {
   /** A lone "MindFlock": listening at once, as a click starts it (a text box
    * with the keyboard gets the words) — the microphone is already open, so
    * the recognizer's stream opens now — and start()'s chime in the same
-   * moment (its sound skipped from the recording). Nothing heard within
-   * WAKE_LISTEN_MS is a quiet miss. `soundEnd`: the word's end (latency). */
-  const woken = (soundEnd: number) => {
+   * moment (its sound skipped from the recording). The listen is addressed:
+   * its first phrase is said TO MindFlock (lib/voiceDesktop addressedRoute:
+   * a command, or a request for the assistant — else dictation, typed).
+   * `rest`: the words said after the wake word in the same breath
+   * ("MindFlock, next session" — POST /api/voice/wake's `rest`): that first
+   * phrase, handled now, never said again. Nothing heard within
+   * WAKE_LISTEN_MS is a miss, captioned. `soundEnd`: the word's end
+   * (latency). */
+  const woken = (soundEnd: number, rest?: string) => {
     if (live.current) return;
     const d = start(textField(document.activeElement), { hint: WAKE_HINT, idle: false });
     if (!d) return;
     wakeFrom = { d, at: soundEnd };
+    d.address(WAKE_LISTEN_MS);
+    const said = typeof rest === "string" ? rest.trim() : "";
+    if (said) void d.heard(said, soundEnd || undefined);
     setTimeout(() => {
-      if (live.current === d && !d.heardAnything) d.drop();
+      if (live.current === d && !d.heardAnything) d.drop(WAKE_MISS_LINE);
     }, WAKE_LISTEN_MS);
   };
   const latestWake = useRef(woken);
@@ -1592,7 +1619,7 @@ export function TopBarMic() {
       ctx: voiceAudioCtx,
       speaking: () => queue.busy,
       recording: () => !!live.current,
-      onWake: (soundEnd) => latestWake.current(soundEnd),
+      onWake: (soundEnd: number, rest?: string) => latestWake.current(soundEnd, rest),
       onLevel: (rms) => {
         if (!live.current) meterFeed(rms);
       },

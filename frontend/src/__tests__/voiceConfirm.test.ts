@@ -632,16 +632,28 @@ describe("snappy control words: acted on from the guess after a moment's quiet",
     expect(mocks.instApi).toHaveBeenCalledTimes(1);
   });
 
-  it("a switch command as a message's first phrase goes to the router from the guess", async () => {
+  it("a switch without a name goes to the router from the guess; one by NAME waits for the accurate final", async () => {
     const routed: string[] = [];
     const k = fast({ route: async (t) => (routed.push(t), true) });
     const d = new LiveDictation(session(), k.h, { continuous: true });
-    await d.stream("", "switch to billing");
+    await d.stream("", "next session");
     expect(routed).toEqual([]);
     quiet = 300;
     await vi.advanceTimersByTimeAsync(50);
-    expect(routed).toEqual(["switch to billing"]);
+    expect(routed).toEqual(["next session"]);
     expect(d.active).toBe(true);
+    // The fast guess mishears names: "switch to billing" waits for its final
+    // (and is never typed meanwhile — the router may take it).
+    const t = session();
+    const d2 = new LiveDictation(t, k.h, { continuous: true });
+    quiet = 0;
+    await d2.stream("", "switch to billing");
+    quiet = 300;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(routed).toEqual(["next session"]);
+    expect(t.keys).toEqual([]);
+    await d2.flush("", "switch to Billing.");
+    expect(routed).toEqual(["next session", "switch to Billing."]);
     expect(isSwitchCommand("switch to the login fix")).toBe(true);
     expect(isSwitchCommand("focus 3")).toBe(true);
     expect(isSwitchCommand("next session")).toBe(true);
