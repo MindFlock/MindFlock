@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   budget), OOM kills, and an available floor that is genuinely small (the
   `general.memory_low_pct` / `memory_critical_pct` defaults drop from 15 / 7
   to 8 / 4, with 1.5 GB / 1 GB floors). Inside WSL, Windows reads on its
-  commit charge (low at 85 %, critical at 90 % of its limit) and on sustained
-  hard paging; its raw "available" no longer counts except under 256 MB, and
+  commit charge (low at 85 %, critical at 90 % of its limit; hard paging is
+  shown but never blocks on its own); its raw "available" no longer counts except under 256 MB, and
   its headroom is only a floor. A step up must hold 30 s before it counts, so
   one bad sample moves nothing, and the memory shield acts only on that
   sustained critical. Every memory message now names the signal: *memory is

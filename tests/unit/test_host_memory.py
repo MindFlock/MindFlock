@@ -531,25 +531,16 @@ def test_the_commit_charge_is_the_hosts_real_danger(box):
     assert box(10, 16, commit=0.79) == "ok"
 
 
-def test_hard_paging_counts_when_sustained_and_windows_is_short(box):
-    """One burst of page-ins (an app starting) is nothing; a minute of them
-    with Windows short of memory is distress."""
+def test_hard_paging_alone_is_reported_not_a_level(box):
+    """A minute of page-ins with Windows short is reported in the snapshot,
+    but only stalls, swap-in, OOM kills, the commit charge or the floors set
+    the level (owner, 2026-11-10: "pretty arbitrary")."""
     kw = dict(free_gib=1.0, commit=0.5)
-    assert box(10, 1.5, pages_in=20000, **kw) == "ok"  # one reading
-    assert box(10, 1.5, pages_in=0, **kw) == "ok"  # 2 readings: too few
-    assert box(10, 1.5, pages_in=9000, **kw) == "critical"  # median 9000 of 3
-    assert "Windows is paging" in mp.describe()
-    mp._reset_for_tests()
-    hm._reset_for_tests()
-    for _ in range(3):
-        level = box(10, 1.5, pages_in=4000, **kw)
-    assert level == "low"
-    mp._reset_for_tests()
-    hm._reset_for_tests()
-    for _ in range(4):  # plenty available: page-ins are cold file reads
-        level = box(10, 6.0, pages_in=20000, **kw)
+    for _ in range(4):
+        level = box(10, 1.5, pages_in=20000, **kw)
     assert level == "ok"
     assert mp.snapshot()["host"]["pages_in_median"] == 20000
+    assert "Windows is paging" not in mp.describe()
 
 
 def test_one_paging_spike_in_a_quiet_minute_is_not_distress(box):
