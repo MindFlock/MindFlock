@@ -37,6 +37,19 @@ export interface WhatsNewRelease {
 
 export const RELEASES: WhatsNewRelease[] = [
   {
+    version: "0.14.6",
+    date: "2026-11-10",
+    big: false,
+    headline: "Terminals work on every Linux install.",
+    features: [
+      {
+        title: "Terminals on fresh Linux installs",
+        body:
+          "On a Linux machine whose Python was set up by the installer, session terminals and sign-in terminals failed to open since 0.14.4. They open again, and starting a session never copies the whole server anymore.",
+      },
+    ],
+  },
+  {
     version: "0.14.5",
     date: "2026-11-10",
     big: false,
