@@ -12,23 +12,129 @@ Diff line counting and numstat parsing match the Go source byte-for-byte:
 
 from __future__ import annotations
 
+import contextlib
+import os
+import shutil
+import subprocess
+import tempfile
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterator, Optional, Tuple
+
+from backend.session.git.util import _exit_error
 
 __all__ = [
     "DiffStats",
     "parse_numstat",
     "parseNumstat",
     "GitWorktreeDiffMixin",
+    "scratch_index_env",
 ]
+
+
+# --------------------------------------------------------------------------- #
+# Read-only "untracked files count" diffs.
+#
+# ``git diff`` only sees an untracked file once it is in the index, so the
+# classic trick is ``git add -N .`` (intent-to-add) before diffing. Run on the
+# person's own checkout that WRITES their index: every new file turns from
+# ``??`` into `` A``, a deleted tracked file is staged as ``D `` (``add -N``
+# with a pathspec records removals too), and the probe races their own git
+# commands for ``index.lock``. MindFlock polls this every few seconds, and
+# several sessions can run in place in one shared checkout, so the diff paths
+# below do the ``add -N`` against a private COPY of the index instead
+# (``GIT_INDEX_FILE``). Same diff output, and the real index is never written.
+# --------------------------------------------------------------------------- #
+_SCRATCH_TIMEOUT = 60.0
+
+
+@contextlib.contextmanager
+def scratch_index_env(
+    worktree_path: str, timeout: float = _SCRATCH_TIMEOUT
+) -> Iterator[Dict[str, str]]:
+    """Yield a ``subprocess`` env whose ``GIT_INDEX_FILE`` is a throwaway copy
+    of ``worktree_path``'s index with untracked files intent-to-added.
+
+    Run ``git diff …`` with ``env=`` this to get the classic ``add -N .``
+    output (new files included) without touching the real index. The copy
+    lives in a private temp dir removed on exit. Raises ``RuntimeError`` when
+    the index cannot be located (not a repo, git trouble): falling back to an
+    empty index would report every tracked file as changed. The ``add -N``
+    itself is best-effort: if it fails, the diff simply leaves untracked files
+    out, as the old in-place probe did.
+    """
+    env = dict(os.environ)
+    env.pop("GIT_INDEX_FILE", None)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    cp = subprocess.run(
+        ["git", "-C", worktree_path, "rev-parse", "--git-path", "index"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        env=env,
+        timeout=timeout,
+    )
+    if cp.returncode != 0:
+        raise RuntimeError(
+            "git command failed: {} ({})".format(
+                cp.stdout.decode("utf-8", "replace"), _exit_error(cp.returncode)
+            )
+        )
+    real = os.path.join(worktree_path, cp.stdout.decode("utf-8", "replace").strip())
+    tmpdir = tempfile.mkdtemp(prefix="mindflock-index-")
+    try:
+        scratch = os.path.join(os.path.abspath(tmpdir), "index")
+        try:
+            shutil.copyfile(real, scratch)
+        except FileNotFoundError:
+            pass  # no index yet (fresh repo): an empty one is the truth
+        env["GIT_INDEX_FILE"] = scratch
+        subprocess.run(
+            ["git", "-C", worktree_path, "add", "-N", "."],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            env=env,
+            timeout=timeout,
+        )
+        yield env
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _scratch_git(worktree_path: str, *args: str) -> str:
+    """``git -C <wt> <args…>`` against a scratch intent-to-add index; errors
+    in ``run_git_command``'s Go format (``git command failed: <out> (<err>)``).
+    """
+    with scratch_index_env(worktree_path) as env:
+        try:
+            cp = subprocess.run(
+                ["git", "-C", worktree_path, *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                env=env,
+                timeout=_SCRATCH_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired as err:
+            raise RuntimeError(
+                "git command failed: {} (timed out after {:g}s)".format(
+                    (err.output or b"").decode("utf-8", "replace"), _SCRATCH_TIMEOUT
+                )
+            ) from err
+    out = cp.stdout.decode("utf-8", "replace")
+    if cp.returncode != 0:
+        raise RuntimeError(
+            "git command failed: {} ({})".format(out, _exit_error(cp.returncode))
+        )
+    return out
 
 
 # --------------------------------------------------------------------------- #
 # Short-TTL diff cache.
 #
-# ``Diff()`` / ``DiffNumstat()`` each run ``git add -N .`` plus a full
-# ``git diff HEAD`` — and the web UI's per-tick pollers call them once per
+# ``Diff()`` / ``DiffNumstat()`` each run an untracked-file listing plus a
+# full ``git diff HEAD`` — and the web UI's per-tick pollers call them once per
 # instance per ~4s tick, so idle sessions re-diff forever. Results are
 # memoized ~_DIFF_TTL seconds per worktree path (full diff and numstat cached
 # INDEPENDENTLY: they answer different questions and the numstat one is much
@@ -149,10 +255,11 @@ class GitWorktreeDiffMixin:
     def Diff(self) -> DiffStats:
         """Return the git diff of uncommitted changes (working tree vs HEAD).
 
-        Stages untracked files with ``git -C <wt> add -N .`` (intent-to-add so
-        they appear in the diff), runs ``git -C <wt> --no-pager diff HEAD``,
-        then counts added/removed lines. On any git failure, returns a
-        ``DiffStats`` carrying the error and no content.
+        Runs ``git -C <wt> --no-pager diff HEAD`` and counts added/removed
+        lines. Untracked files are included: when there are any, the diff runs
+        against a scratch intent-to-add index (:func:`scratch_index_env`), so
+        the person's own index is never written. On any git failure, returns
+        a ``DiffStats`` carrying the error and no content.
 
         Memoized ~``_DIFF_TTL`` seconds per worktree path (see the cache note
         at the top of this module); results may be that slightly stale.
@@ -169,22 +276,9 @@ class GitWorktreeDiffMixin:
 
     def _diff_uncached(self) -> DiffStats:
         stats = DiffStats()
-
-        # -N stages untracked files (intent to add), including them in the diff.
         try:
-            # Never in a peer shared folder: staging could let an agent-made
-            # nested repo into the trusted index (see worktree_git).
-            if not _is_peer_share(self.worktreePath):
-                self.run_git_command(self.worktreePath, "add", "-N", ".")
+            content = self._diff_with_untracked("--no-pager", "diff", "HEAD")
         except Exception as err:  # noqa: BLE001 - propagate like Go's stats.Error
-            stats.Error = err
-            return stats
-
-        try:
-            content = self.run_git_command(
-                self.worktreePath, "--no-pager", "diff", "HEAD"
-            )
-        except Exception as err:  # noqa: BLE001
             stats.Error = err
             return stats
 
@@ -198,12 +292,31 @@ class GitWorktreeDiffMixin:
 
         return stats
 
+    def _diff_with_untracked(self, *args: str) -> str:
+        """``git <args>`` (a ``diff … HEAD``) with untracked files counted,
+        never writing the worktree's index.
+
+        No untracked files (the common idle case): a plain diff through
+        ``run_git_command``. Otherwise the diff runs against a scratch
+        intent-to-add index. Never in a peer shared folder: intent-to-add
+        there could let an agent-made nested repo into the trusted index
+        (see worktree_git), so a share's diff is tracked files only.
+        """
+        wt = self.worktreePath
+        if not _is_peer_share(wt):
+            untracked = self.run_git_command(
+                wt, "ls-files", "-z", "--others", "--exclude-standard"
+            )
+            if untracked.strip("\0\n"):
+                return _scratch_git(wt, *args)
+        return self.run_git_command(wt, *args)
+
     def DiffNumstat(self) -> DiffStats:
         """Return only the added/removed line counts without loading the full
         diff content into memory.
 
-        Stages untracked files (``add -N .``), runs
-        ``git -C <wt> --no-pager diff --numstat HEAD``, and sums the columns.
+        Runs ``git -C <wt> --no-pager diff --numstat HEAD`` (untracked files
+        included, read-only — see :meth:`Diff`) and sums the columns.
         Use this when only the summary counts are needed (e.g. for unselected
         instances in the list).
 
@@ -222,25 +335,8 @@ class GitWorktreeDiffMixin:
 
     def _diff_numstat_uncached(self) -> DiffStats:
         stats = DiffStats()
-
-        # -N stages untracked files (intent to add), including them in the diff.
         try:
-            # Never in a peer shared folder: staging could let an agent-made
-            # nested repo into the trusted index (see worktree_git).
-            if not _is_peer_share(self.worktreePath):
-                self.run_git_command(self.worktreePath, "add", "-N", ".")
-        except Exception as err:  # noqa: BLE001
-            stats.Error = err
-            return stats
-
-        try:
-            out = self.run_git_command(
-                self.worktreePath,
-                "--no-pager",
-                "diff",
-                "--numstat",
-                "HEAD",
-            )
+            out = self._diff_with_untracked("--no-pager", "diff", "--numstat", "HEAD")
         except Exception as err:  # noqa: BLE001
             stats.Error = err
             return stats

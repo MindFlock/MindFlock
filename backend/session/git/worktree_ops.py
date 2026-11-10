@@ -143,8 +143,8 @@ class GitWorktreeOpsMixin:
         """Best-effort perf knob after a successful worktree add (a Python-side
         addition — not in the Go source): ``core.untrackedCache=true`` caches
         untracked-dir scans by directory mtime, speeding up the ``git status``
-        / ``add -N`` calls the diff-stat probe runs against every session
-        every ~10s. Repo-level config (worktrees share it), pure performance
+        / ``ls-files --others`` / scratch-index ``add -N`` calls the diff-stat
+        probe runs against every session every ~10s. Repo-level config (worktrees share it), pure performance
         setting, never raises. ``core.fsmonitor`` would help more but git's
         builtin daemon does not support Linux (as of git 2.43)."""
         try:
