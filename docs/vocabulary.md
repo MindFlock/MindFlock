@@ -39,13 +39,17 @@ the work, check the work, or ask a person**.
 | **Run** / **Run now** | start a route (or a template) now | Fly, Fly now, Fly these stops, Take off (as a button) |
 | **Starts:** By hand / Ticket / Schedule / … | what starts a saved route | Takes off… (as a dialog/menu name; "takes off" may stay as a verb in a sentence) |
 | **Stop the route** | cancel a running route | Stop the chain, Cancel flight |
-| **Halt** / **Halted** / **Halt here** | the route pauses at a stop and waits for you — a failed stop halts by default (Retry, Skip or Let the agent fix it, on the stop), and you can set a halt point on any stop ("Halt here"; Carry on moves past it) | Pause here, perch, recovery |
+| **Paused** (**Pause** / **Carry on**) | a person holds the route where it is; **Carry on** picks it up | Halt now, Halt (for a pause) |
+| **Halted** | a stop failed and the route waits (red): **Retry**, **Skip** or **Let the agent fix it**, on the stop | Paused (for a failure), perch, recovery |
+| **halt point** (**Add halt point** / **Remove halt point**) | a breakpoint a person sets on a stop: the route **pauses** before it until you press Carry on | Halt here, Carry on past here, Pause here |
+| **Add a stop** · **Jump here** · **Retry** · **Skip** · **Let the agent fix it** | the stop actions | Tack on, Fly here |
 | **If it fails:** Halt · Let the agent fix it · Skip · Ask me | a stop's failure option | on_fail, recovery ladder |
 | **Wait for me** | the stop kind that waits for your OK | Perch, You (as the kind's name) |
 | **Needs you** | everything waiting on a person (the bell's word) | Perched on you, Waiting on you, Needs attention |
-| **behaviors** / **behavior** | what the work should do in real use, each checked by the agent or by you (US spelling) | checklist, test plan, check items, test steps |
-| **Verify** | the stop on a route that checks a session's behaviors, and the verb | Verify dialog/tab/menu (it is not a place any more — it lives on the route) |
-| **Verified** · **Failed** · **Needs you** · **Checking…** · **Not checked** · **Writing…** | behavior statuses | In progress, Not verified, partial |
+| **Verify** | the session's own agent checking its own work — on demand from the session, or as a stop on its route — and the verb (2026-11-10: replaces "behaviors") | behaviors, checker, checklist, verify session, test plan; Verify dialog/tab (it is not a place) |
+| **steps** | what Verify's agent checks, each with its result and evidence; a step only a person can do is **yours** | behaviors, check items, test steps |
+| **Verifying** · **Needs you** · **Verified** · **Verify failed** · **Verify blocked** | Verify's states; Needs you's actions are **Confirm verified** / **Not verified…**; progress reads "3 of 5 steps done" | Checking…, Not checked, Writing…, partial |
+| **Agent, then me** · **Agent only** · **Agent, then my sign-off** | a Verify stop's Who (`both` · `agent` · `you`): the agent does its steps then waits on you for yours · the agent attempts every step with evidence, waiting only if something ends blocked or failed · the agent verifies, then always waits for your confirm | Only me |
 | **Goes as far as** | how far a session's work goes by itself: Agent only · Commit · Push · Open PR · Merge when green — it IS the last ship stop of the route | Fast-track (as a noun/control name), autopilot, depth |
 | **Merge when green** | the top rung of Goes as far as | Merge (as the rung) |
 | **CI checks** | the stop that waits for CI | Checks (as that stop's name) |

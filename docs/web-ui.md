@@ -44,9 +44,11 @@ JSON and settings keys, event names and MCP tool names keep their older names
 | One box on a route, every kind | **stop** (a stop with stops inside is a **group**) |
 | A route kept on the shelf to reuse | **saved route** (what starts it: **Starts:** By hand / Ticket / Schedule / …) |
 | Start a route or a template now | **Run** / **Run now** |
-| The route pauses at a stop until you Retry / Skip / Continue | **Halt** / **Halted** / **Halt here** |
+| A person holds the route where it is | **Pause** / **Paused** / **Carry on** |
+| A stop failed and the route waits for Retry / Skip / Let the agent fix it | **Halted** |
+| A stop the route pauses before, set by a person | **halt point** (**Add halt point** / **Remove halt point**) |
 | How far a session's work goes by itself (Agent only / Commit / Push / Open PR / Merge when green) | **Goes as far as** |
-| What the work should do in real use, each checked by the agent or by you | **behaviors** (the stop that checks them is **Verify**) |
+| The session's agent checking its own work, step by step | **Verify** (its **steps**; Verifying · Needs you · Verified · Verify failed · Verify blocked) |
 | Several sessions started together and shipped by MindFlock | **team run** |
 | The git steps | **Commit**, **Push**, **Open PR**, **Merge** (an existing PR's link is **View PR ↗**) |
 | Leaving a session | **Close** (keeps the worktree), **Delete** (removes it) |
@@ -75,7 +77,7 @@ which carries only the daily loop — **New**, the **Grid · Sky** toggle
 (`Ctrl+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
 on a phone-narrow window; its home is the sidebar, and a desktop with the
 sidebar hidden switches with `Ctrl+Y` or the palette), **Intake**
-(`Alt+I`; see [Intake](#intake)), **Verify** (`Alt+V`), **Schedule**
+(`Alt+I`; see [Intake](#intake)), **Schedule**
 (`Alt+S`; see [Schedule](#schedule)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
 ⌘P*) that opens the command palette (below). **Intake** sits beside **New**
@@ -103,7 +105,13 @@ tooltips (↑/↓ move, Esc closes). A folded item keeps its id (`#verify-btn`
 &c., hidden), its shortcut and its palette entry; the calm rule below still
 decides which items are on the bar at all.
 
-**Verify** is always on the bar once the [calm first hour](#layout) is over
+**Verify has no top-bar button any more** (docs/behaviors.md §4; `TopBar.tsx`
+keeps only its poll): Verify is a session's own agent checking its work,
+started from the session's ⋯ menu and answered in its pane, the bell and the
+Sky ([Verify](#verify)). `Alt+V` flies the Sky to the next Verify that needs
+you, else the next failed one. What follows describes the button as it was.
+
+**Verify** was always on the bar once the [calm first hour](#layout) was over
 (or its first checklist exists — before that it waits, and so does
 **Schedule** until its first template; Alt+V / Alt+S and the palette work
 throughout; `lib/calm.ts` `topBarShows`). Its badge counts the checklists
@@ -4637,6 +4645,67 @@ Verify's due or failing checklists (a row that opens it in Verify);
 kind badges, the flyway chip row and **Fly** (empty: *Intake ›* opens
 Intake); **Landed** (folded).
 
+**Flow polish (2026-11-10).** What the Sky does now, on top of the rounds
+above (details in docs/flights.md "Flow polish"):
+
+- **Tools.** The toolbar's two tools are **Select (V)** (a drag on empty sky
+  selects; a route moves by its bar; hold Space to pan) and **Pan (H)** (a drag
+  anywhere pans; a click focuses a route or selects a stop; Shift+drag
+  selects), remembered as `mf_sky_tool`.
+- **Every stop says what it is doing or why it waits.** A running stop's tile
+  shows the server's note ("3 new review comments for the agent"), its
+  settings in the tooltip. A failed stop handed to you reads "Failed: …" with
+  Retry, Let the agent fix it and Skip; a paused route's stop reads "Paused
+  by you" or "Your halt point" with **Carry on** and Skip; a Verify stop that
+  couldn't finish shows its reason with Retry and Skip, and its tile uses the
+  pill's words (Verifying, Confirm verified, Verify failed, Verify blocked,
+  Verified). A paused route's frame is a calm dashed outline.
+- **Routes with no session** (free runs) are followed and un-stuck like any
+  other: a chip (Halted with the reason, At your halt point, Paused, Needs
+  you, Running), the remedies on their tiles, a read-only stop dialog with
+  the same remedies, and a place in the Needs you view.
+- **The Needs you drawer** says why each route waits, shows *Loading…* on its
+  first read and *Can't reach the server — this list may be out of date.* on
+  an error (*Nothing needs you.* only after a read that worked); pressing a
+  route flies the camera to it (switching to All when the view doesn't draw
+  it). One Verify is one row.
+- **Saving routes.** A session's route menu has **Save as a route…**; a route
+  with no session asks for its name in an inline field (checked like a rename,
+  never `window.prompt`); a line from a saved route offers **Save to “<name>”**
+  and **Save as a new route…**; a saved route's menu has **Edit its stops**,
+  which places an editable copy on the Sky under a bar *Editing “<name>”* with
+  **Save** (it writes back, then takes the copy off). Every save's toast ends
+  *— routes already running keep their own copy*. With no saved routes the
+  shelf says what a route is and offers **Start a route**.
+- **The stop dialog** (`StopDialog.tsx`) of a stop that is halted, waiting on
+  you or on a paused route leads with the state chip, the reason in plain
+  words and what the stop asks of you, then the **remedies**, the one that
+  usually works as the primary button (Retry for a failure, Carry on for a
+  pause, Confirm verified for a Verify sign-off; Retry and Skip for a Verify
+  check that couldn't finish); its settings fold under **Its settings**.
+  Retry, Skip, Fix, Done and Carry on close it once the server accepts them.
+  The current stop is editable when it failed or the route is paused before it
+  with nothing run ("Save, then Retry/Carry on runs it with these settings";
+  it stays open after Save, and unsaved edits are saved before Retry, Carry on
+  or Fix). A refused value shows the server's sentence at the top of the form,
+  labelled with the field; a Command stop with an empty command says *Needs a
+  command* as you type, and an empty Agent prompt hints *Empty = the agent
+  carries on with its task*. Esc, the backdrop and Cancel ask *Discard your
+  changes?* (**Keep editing**) when the draft changed; if the route reaches
+  the stop while you edit, the dialog says *The route reached this stop — your
+  changes can't be saved now* and keeps your text on screen, read-only.
+- **Stop options** carry a hint each — what it does, its default and its
+  range (number fields are clamped to it) — and "If it fails" explains the
+  pick under it ("Let the agent fix it" tries up to 2 rounds). The form opens
+  on one **read-back sentence** of what the route will do at the stop (its
+  halt point, "Only when", "If it fails"; a Verify stop's own sentence, e.g.
+  *Its agent verifies on this branch as soon as the route gets here; you
+  confirm the steps only a person can do*), which follows your edits. A Verify
+  stop's Who reads Agent, then me / Agent only / Agent, then my sign-off, and
+  Where is a pick from the repo's environments. Menus use one name per action:
+  Pause, Carry on, Add halt point, Remove halt point, Add a stop, Jump here,
+  and the Verify stop's **Open Verify**.
+
 **The phone.** Below 600px wide there is no pan or zoom: the toolbar, the
 drawer, then the lines as a plain list, each line's canvas running top to
 bottom, and the flyway shelf under them (a flyway's card opens above the
@@ -5587,69 +5656,105 @@ covers it). At most one team run toast per 30 seconds.
 
 ### Verify is the session's own agent
 
-**Since 2026-11-10 (owner request).** Verify is done by the session that did the
-work: **Verify** (a session's ⋯ / ⋮ menu, or the Behaviors card's one action —
-`POST /api/instances/{title}/verify`, optional `{notes}`) has its agent write
-its own actionable test steps and work them **in its own terminal**; its Agent
-tab opens so you can follow it and talk to it. Whatever only a person can do,
-the agent says in its reply. When there are such steps, **a person must
-confirm that verification is complete.**
+**Since 2026-11-10 (owner request; polished the same day).** Verify is done
+by the session that did the work: its agent writes its own actionable test
+steps and works them **in its own terminal**, and tells the person in its
+reply whatever only a person can do. When there are such steps, **a person
+must confirm that verification is complete.**
+
+**Starting it.** **Verify** on a session's ⋯ menu (or **Verify again** on its
+pane row) opens a small form **in the pane's verify row**
+(`components/behaviors/VerifyStartForm.tsx`): a box *What should it prove?
+(optional)* and, only when the session's repo has Verify environments, a
+**Where** pick (*This branch* + the environments). Enter starts it, even
+empty; Shift+Enter is a new line; Escape closes it and gives focus back to
+what opened it. It posts `POST /api/instances/{title}/verify` `{notes?,
+environment?}` (no `environment` for *This branch*); work that has not
+shipped is checked on its own branch. When the agent is mid-turn the toast
+says "Verify starts when <session>'s current turn ends". (On a session that
+was never verified the pane has no verify row yet, so the menu item opens the
+pane, waits 600 ms for the row, then starts at once without the form —
+`Pane.tsx` still draws the row only when `inst.verify` is set.)
 
 The session row carries it as `verify` (`null`, or `{state, plan, steps:
-{total, agent_done, human}, human_steps, failed_steps, detail, at}`), and the
-[one session state](#one-session-state) reads it:
+{total, agent_done, human}, human_steps, failed_steps, detail, at,
+progress_at, current, queued, file_error?}` — docs/web-api.md), and the
+[one session state](#one-session-state) reads it. Every surface — the pill,
+the Verify card, the verdict chip, the Ship menu and the bell — uses the same
+words:
 
 | `verify.state` | The pill | Where you act |
 |---|---|---|
-| `verifying` | **Verifying** (its own violet tone, out of the bell) — *Checking its work: 3 of 5 steps done* | nothing to do; **Open its agent** to follow along |
+| `verifying` | **Verifying** (its own violet tone, out of the bell) — *3 of 5 steps done* | nothing to do; **Steps**, **Stop verifying** |
 | `needs_you` | **Confirm verified** (in the bell, its line listing your steps) | do the listed steps, then **Confirm verified** or **Not verified…** |
-| `failed` | **Verify failed** (red, in the bell) — the tooltip lists what failed | **Verify again**, or ⋯ → **Fix in a new session** |
-| `blocked` | **Verify blocked** (red, in the bell) — why | open the agent, then **Verify again** |
+| `failed` | **Verify failed** (red, in the bell) — what failed | **Let its agent fix it**, **Verify again**, **Dismiss** |
+| `blocked` | **Verify blocked** (red, in the bell) — why | **Verify again**, **Dismiss** |
 | `passed` | **Verified**, calm, for ten minutes | — |
 
+Only a pass fades; a failed or blocked Verify stays on the row until you
+verify again or press **Dismiss** (`POST /api/test-plans/{id}/dismiss`).
+
+**The pane's verify row** (`grid/PaneVerifyStrip.tsx`) sits directly under
+the route's strip (under the head when there is no route). Its first line is
+a fixed height with a glyph per state, so the terminal never jumps. By state:
+
+- `verifying` — "Step 4 of 5: <the step>", with "· quiet 3 min" once the
+  agent has been quiet for two minutes; "Waiting for <session>'s turn to end"
+  while the check is queued; the results-file sentence under it when the file
+  can't be read. **Steps** (the card) and **Stop verifying** — toast "Stopped
+  verifying <session> — the session keeps running" (`POST
+  /api/test-plans/{id}/cancel`).
+- `needs_you` — "Needs you — the agent did its steps; do yours, then confirm"
+  (or "Needs you — sign off on what the agent verified"), your steps, and the
+  confirm below.
+- `failed` — what failed, step by step, with **Let its agent fix it**
+  (primary: `POST /api/test-plans/{id}/fix {in_session: true}` — the
+  session's own agent gets the failed steps with what was expected and seen,
+  fixes them and verifies again when its turn ends), **Verify again**,
+  **Steps** and **Dismiss**.
+- `blocked` — why, with **Verify again**, **Steps** and **Dismiss**.
+- `passed` — "All N steps passed" with **Steps**, for its ten minutes.
+
 **Confirm verified / Not verified…** (`VerifyConfirm`, components/behaviors)
-sit under the person's steps — each step's text and what should happen — on
-the pane's **verify row** (under its head, beside the route strip;
-`grid/PaneVerifyStrip.tsx`), on the bell's row, on the **Behaviors card**, and
-on a **Verify stop** parked on you. The phone (`/m`) shows the same pills
-(`mobile.js` mirrors the words and the ranking, in its existing working and
-neutral tones); it has no confirm buttons yet — its tooltip says to confirm on
-the desktop. Both post `POST /api/test-plans/{plan}/confirm` with
-`{verified: true}` or `{verified: false, note}`; **Not verified…** opens an
-inline note (*What did you see? The agent gets this*) — never
-`window.prompt()`, which Electron doesn't have. A 409 means it stopped waiting
-(someone else answered); the error card says so. The bell's **Confirm
-verified** row carries the same steps and buttons.
+sit under the person's steps — each step's text, what should happen, and,
+for a step the agent left for you, why ("the agent couldn't: …") — on the
+pane's verify row, the bell's row, the Verify card and a **Verify stop**
+parked on you. With more than one step for you, each gets ✓ / ✗ (all ✓ to
+start; a ✗ needs a note) and the confirm sends `steps: {id: "pass"|"fail"}`.
+With no steps for you the heading is the agent's own line and the button
+reads **Sign off**. **Not verified…** opens an inline note (*What did you
+see? The agent gets this*) — never `window.prompt()`, which Electron doesn't
+have — and the note is delivered to the session's agent: the toast reads
+"Sent to <session>'s agent", else "Saved on the check". A 409 means it
+stopped waiting (someone else answered); the error card says so.
 
-**The pane's verify row** sits directly under the route's strip
-(`PaneFlightStrip`; under the head when there is no route) and is
-drawn only while the row's `verify` is set — never for `null`, and never for
-`passed` (the pill says that). By state: `verifying` — one line, *Verifying
-— 3 of 5 steps done*, and **Open its agent**; `needs_you` — the same line,
-then the person's steps and **Confirm verified** / **Not verified…**;
-`failed` — what failed, step by step, with **Open its agent** and **Verify
-again**; `blocked` — why, with the same two buttons. Because this row carries
-the confirm, a Verify stop's compact one-line strip in the pane shows only
-**Skip** and a way to the Behaviors card.
+**The Verify card** (the Sky's Behaviors card, `BehaviorsCard.tsx`) is titled
+**Verify**, with a one-line tally in its head ("4 passed · 1 failed · 1 needs
+you") and ONE action. A failed Verify's primary is **Let its agent fix it**
+(the same same-session fix); **Fix in a new session** is under its ⋯. Each
+step shows its result and who answered it ("Failed · by the agent"), the
+full evidence, a person's override beside the agent's own note, and a
+blocked step's *Why:* even when folded. A Verify whose agent wrote no steps
+reads "Verify blocked — its agent wrote no steps" with **Verify again**, and
+never counts as waiting on you.
 
-**Without the session.** With the work session closed, the Behaviors card's
-**Verify** falls back to `POST /api/test-plans/{plan}/run` (the older
-checker described below). **Verify** on the menus is offered only while no
-verify runs or waits on you, and not for a paused, remote, provisioning or
-workspace-missing session (`canStartVerify`, sidebar/verifyMenu.ts). Until the
-server emits `verify` and answers the two routes, those calls fail and every
-pill reads as it did.
+**One place to go.** The verdict chip, the Ship menu's single **Verify** item
+(it shows the steps once a verify exists) and the bell's Verify rows all open
+the session's Verify steps (`openBehaviors({planId, title})`). Bell rows are
+titled "Verify failed — <session>", "Verify needs you — <session>" or "Verify
+blocked — <session>", and one Verify is one row (a route parked on that
+Verify adds none). The ⋯ menu's item is **Verify** / **Verify again**, or
+**Stop verifying** while it runs (the pane's ⋯ can still show the Ship
+group's **Verify** beside it).
 
-**The Behaviors card is small now.** Its head says where the verify stands with
-ONE action — **Verify** (or **Verify again**), **Open its agent** while it
-works, nothing while it waits on you (the confirm is right there). The steps
-are the agent's own and **read-only**: each shows who does it (🤖 agent /
-🙋 you), its result and the agent's evidence, and a failed one offers **Fix**.
-Gone: Rewrite behaviors, + Add a behavior, Edit / Remove, the per-step
-Pass · Fail · Can't check, the "after #n" needs picker and *Let the agent walk
-every behavior*. A Verify stop that halted its route keeps **Retry · Skip ·
-Let the agent fix it**. With the session gone, the card's Verify falls back to
-the older `POST /api/test-plans/{plan}/run`.
+**The phone** (`/m`) answers it from the session sheet — see
+[Mobile UI](#mobile-ui-m).
+
+**Without the session.** With the work session closed, the card's **Verify**
+falls back to `POST /api/test-plans/{plan}/run` (the older checker described
+below). **Verify** on the menus is offered only while no verify runs or waits
+on you, and not for a paused, remote, provisioning or workspace-missing
+session (`canStartVerify`, sidebar/verifyMenu.ts).
 
 The rest of this section describes the older behaviors store and dialog that
 still back it.
@@ -5659,7 +5764,8 @@ is the back of it. The pipeline's last honest checkpoint is "the PR merged", and
 merged is not verified — nobody has opened the thing and looked at it. So work
 that reaches the branch you actually ship from comes back here as a **checklist**,
 an agent works the steps it can from a shell, and whatever needs a pair of eyes
-is handed to you as a short list. Top-bar entry **Verify** (`Alt+V`, or the
+is handed to you as a short list. *(As it was: the top-bar Verify button is
+retired, see the top bar.)* Top-bar entry **Verify** (`Alt+V`, or the
 palette's **Verify — check what was pushed**) — the button is always on the bar,
 with its due badge. Dialog `#verify-dialog` / panel
 `#verify-panel`, from
@@ -7766,6 +7872,27 @@ pause), **Close**
 Recently closed*) and **Delete…**, which
 asks on an inline strip (*Removes the worktree and branch*, focus on Cancel) and
 answers a 409 with *Folder in use by &lt;names&gt;. Close those first.*
+
+**Verify and routes from the phone (2026-11-10).** The same sheet shows what
+the session's route or Verify waits on, the reason in the server's words, and
+the person's steps (each with *Look for: <expect>* and *Why it's yours:
+<why>*; a failed Verify shows *What failed* instead). A Verify that is running
+or waiting on you sits at the top of the sheet; a plain **Verify** sits after
+Restart / Wake / Resume and is hidden while the session is offline or
+starting. By Verify state: needs you — **Confirm verified**, **Not
+verified…** (the note is typed in the sheet, `#ask-field`); verifying —
+**Stop verifying**; failed — **Verify again**, **Let its agent fix it**;
+blocked — **Verify again**; nothing running or passed — **Verify** / **Verify
+again** (`POST /api/instances/{t}/verify`, `/api/test-plans/{plan}/confirm`,
+`/fix {in_session: true}`, `/cancel`). A route reads *Route “<name>” · <stop
+state>* with its reason (`flight.step.note`, else `failed_reason`, else the
+route's reason): a halted stop offers **Retry** / **Skip**, a paused route
+**Carry on** (a halt point reads *Paused before <stop>*), a Wait for me stop
+**Done** / **Skip**, and a Verify stop waiting on you **Skip** only, pointing
+to its Verify. A refusal stays in the sheet with the server's sentence. The
+hints name the button under ⋯ (Confirm verified / Not verified…, Verify
+again, Retry or Skip, Carry on), never "on the desktop".
+
 **Recently closed** (from the actions sheet or the Sessions sheet) lists
 `GET /api/recently-closed` with **Reopen**. No `confirm()`/`prompt()`/`alert()`
 anywhere on the page — every question is a sheet.
