@@ -128,7 +128,7 @@ describe("the stops row", () => {
     );
     expect(html).not.toContain("aria-haspopup");
     const src = code("components/flights/StopShelf.tsx");
-    expect(src).toContain("export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog }: StopShelfProps)");
+    expect(src).toContain("export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog, onEditPlan }: StopShelfProps)");
     expect(src).toContain('aria-haspopup={onCatalog ? undefined : "dialog"}');
   });
 

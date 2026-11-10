@@ -13,8 +13,10 @@
  *     name and a row of dots, one per step (a perch's gold, "+N" past ten).
  *     Each carries its id under `FLYWAY_MIME` and its name as plain text.
  *     Right-click (or the context-menu key): Rename (a field in the chip),
- *     Takes off… (the TakeoffDialog), Reset to default (a built-in), Delete
- *     (yours; confirmed inline).
+ *     Edit its stops (`onEditPlan`: an editable copy on the Sky whose Save
+ *     writes back), Takes off… (the TakeoffDialog), Reset to default (a
+ *     built-in), Delete (yours; confirmed inline). With no saved route at
+ *     all the region says what a route is and offers Start a route.
  *  3. **All blocks…**: `onCatalog` — the host floats the palette large over
  *     the board (round 14: every kind, every saved stop, each card dragged
  *     like its chip). Without `onCatalog`, `StopCatalog` opens as a dialog.
@@ -39,7 +41,7 @@ import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { deletePlan, resetPlan } from "../../lib/flightsApi";
 import { useClickOrDouble } from "../../lib/clickOrDouble";
 import { NEW_SESSION_MIME } from "../../lib/skyLayout";
-import { planDots, savedStopOrder } from "../../lib/groundedLines";
+import { checkRename, planDots, savedStopOrder } from "../../lib/groundedLines";
 import { SHELF_KEY, onShelf, readShelf, savedChainLabel, savedDragData, shelfKinds, shelfPlans, stopDragData, toggleShelf, type CatalogDrop, type ShelfPick } from "../../lib/stopCatalog";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -153,12 +155,14 @@ export function SessionChip({ onSession }: { onSession?(): void }) {
   );
 }
 
-type MenuKey = "rename" | "takeoff" | "reset" | "delete" | "unshelve";
+type MenuKey = "rename" | "edit" | "takeoff" | "reset" | "delete" | "unshelve";
 
-/** A saved stop's menu: what it offers, by whether it is a built-in. */
-export function savedMenuItems(plan: Pick<FlightPlan, "builtin">): Array<{ key: MenuKey; label: string; danger?: boolean }> {
+/** A saved stop's menu: what it offers, by whether it is a built-in, and
+ * "Edit its stops" when the host can put an editable copy on the Sky. */
+export function savedMenuItems(plan: Pick<FlightPlan, "builtin">, opts: { edit?: boolean } = {}): Array<{ key: MenuKey; label: string; danger?: boolean }> {
   return [
     { key: "rename", label: "Rename" },
+    ...(opts.edit ? [{ key: "edit" as const, label: "Edit its stops" }] : []),
     { key: "takeoff", label: "What starts it…" },
     { key: "unshelve", label: "Take off the shelf" },
     plan.builtin ? { key: "reset", label: "Reset to default" } : { key: "delete", label: "Delete", danger: true },
@@ -341,7 +345,7 @@ export function useShelfPick(): [ShelfPick, (next: (p: ShelfPick) => ShelfPick) 
  * in the chip, Takes off…, Reset, and Delete confirmed inline — the state and
  * what they draw (`confirm` goes where the surface wants the question,
  * `overlays` anywhere). */
-export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick) => void) {
+export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick) => void, opts: { onEdit?(plan: FlightPlan): void } = {}) {
   const [menu, setMenu] = useState<{ plan: FlightPlan; x: number; y: number } | null>(null);
   const [kindMenu, setKindMenu] = useState<{ def: StepKindDef; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState("");
@@ -354,6 +358,7 @@ export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick)
     setMenu(null);
     if (!plan) return;
     if (key === "rename") setRenaming(plan.id);
+    else if (key === "edit") opts.onEdit?.(plan);
     else if (key === "unshelve") changeShelf((p) => toggleShelf(p, { planId: plan.id }));
     else if (key === "takeoff") setTakeoff(plan);
     else if (key === "delete") setDeleting(plan);
@@ -394,7 +399,7 @@ export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick)
 
   const overlays = (
     <>
-      {menu && <SavedMenu label={menu.plan.name} items={savedMenuItems(menu.plan)} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
+      {menu && <SavedMenu label={menu.plan.name} items={savedMenuItems(menu.plan, { edit: !!opts.onEdit })} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
       {kindMenu && (
         <SavedMenu
           label={kindName(kindMenu.def)}
@@ -422,6 +427,70 @@ export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick)
   };
 }
 
+/** "Save as a route": the name asked inline (never window.prompt) — the
+ * app's InlineConfirm with a field in it. Enter saves, Esc cancels; a name
+ * that is empty, too long or another saved route's is refused in place. */
+export function SaveRouteAsk({ initial, plans, busy, onSave, onCancel }: { initial: string; plans: readonly FlightPlan[]; busy?: boolean; onSave(name: string): void; onCancel(): void }) {
+  const [name, setName] = useState(initial);
+  const [err, setErr] = useState("");
+  const field = useRef<HTMLInputElement>(null);
+  // After InlineConfirm's own autoFocus (on Cancel): the name is what is typed.
+  useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+  const go = () => {
+    const c = checkRename(name, plans, "");
+    if (!c.ok) return setErr(c.error);
+    onSave(c.name);
+  };
+  return (
+    <div className="skl-close-confirm skl-save-route" data-no-drag onPointerDown={(e) => e.stopPropagation()}>
+      <InlineConfirm
+        title="Save as a route"
+        body={
+          <>
+            <input
+              ref={field}
+              className="fl-input skl-save-name"
+              aria-label="The saved route's name"
+              aria-invalid={!!err}
+              value={name}
+              maxLength={140}
+              onChange={(e) => {
+                setName(e.target.value);
+                setErr("");
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  go();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  onCancel();
+                }
+              }}
+            />
+            {err ? (
+              <span className="error" role="alert">
+                {" "}
+                {err}
+              </span>
+            ) : (
+              <span className="muted"> It goes on the shelf; routes already running keep their own copy.</span>
+            )}
+          </>
+        }
+        confirmLabel="Save"
+        busy={busy}
+        onConfirm={go}
+        onCancel={onCancel}
+      />
+    </div>
+  );
+}
+
 export interface StopShelfProps {
   onTack?(kind: string): void;
   onTackPlan?(plan: FlightPlan): void;
@@ -441,16 +510,23 @@ export interface StopShelfProps {
    * board — every block, the board around it. Without it, the catalog opens
    * as a dialog (`StopCatalog`). */
   onCatalog?(): void;
+  /** A saved route's "Edit its stops": the host puts an editable copy of its
+   * stops on the Sky whose Save writes back to it. */
+  onEditPlan?(plan: FlightPlan): void;
 }
 
-export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog }: StopShelfProps): JSX.Element {
+/** The shelf with no saved route at all: what one is, in one sentence, and
+ * the one button that starts one (a first stop on the Sky to build from). */
+export const NO_SAVED_ROUTES = "No saved routes yet — a route is the row of stops a piece of work goes through; build one on the Sky, then ⋯ Save as a route.";
+
+export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog, onEditPlan }: StopShelfProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const plans = useFlightPlans().data;
   const [shelf, changeShelf] = useShelfPick();
   const blocks = shelfKinds(shelf, kinds || []);
   const allSaved = savedStopOrder(plans || []);
   const saved = shelfPlans(shelf, allSaved);
-  const acts = useSavedActions(changeShelf);
+  const acts = useSavedActions(changeShelf, { onEdit: onEditPlan });
   const [catalog, setCatalog] = useState(false);
   // A click: onto the board when the host places (round 13), else tacked
   // onto the focused line (the pane's Flight tab, and round 12's sky).
@@ -505,6 +581,27 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                   <StopChip key={k.kind} def={k} onClick={clickKind} place={place} onMenu={acts.openKindMenu} />
                 ))}
               </div>
+              {plans !== undefined && allSaved.length === 0 && blocks.length > 0 && clickKind && (
+                <>
+                  <span className="sky-stops-divider" aria-hidden="true" />
+                  <div className="sky-stops-region sky-saved-none" data-region="multi" role="list" aria-label="Saved routes">
+                    <span className="sky-stops-label" aria-hidden="true">
+                      Saved routes
+                    </span>
+                    <span role="listitem" className="sky-stop-item">
+                      <button
+                        type="button"
+                        className="sky-stop-chip sky-start-route"
+                        title={NO_SAVED_ROUTES}
+                        onClick={() => clickKind(blocks[0].kind)}
+                      >
+                        <span className="sky-stop-name">Start a route</span>
+                      </button>
+                    </span>
+                    <span className="sky-stops-hint">{NO_SAVED_ROUTES}</span>
+                  </div>
+                </>
+              )}
               {saved.length > 0 && (
                 <>
                   <span className="sky-stops-divider" aria-hidden="true" />

@@ -24,7 +24,7 @@ import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { openBehaviors } from "../../lib/behaviorsFocus";
 import { windowName } from "../../lib/windowName";
-import { haltedWhy } from "../../lib/sessionState";
+import { perchWhy } from "../../lib/groundedLines";
 import { isFailing, planName } from "../dialogs/verify";
 import { useNeedsYou, type NeedsYouRow } from "../../lib/needsYou";
 import { openAsk } from "../../lib/ask";
@@ -169,26 +169,46 @@ export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPl
 
 export const KIND_ORDER: readonly WaitingKind[] = ["tickets", "prs", "issues"];
 
-/** One flight perched on you (or halted): its headline (a press flies the
- * sky to its line), where it stopped, and the perch block — the checklist
- * with Done / Skip, or Retry / Skip. */
-function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly StepKindDef[] | null; onFocus(title: string): void }) {
+/** A perch row's stop line: the stop, then WHY it waits — for a halted
+ * route its failure, for a waiting one the stop's note or failure reason,
+ * at a halt point "Paused at your halt point" (lib/groundedLines `perchWhy`). */
+export function perchLine(flight: Flight, kinds?: readonly StepKindDef[] | null): string {
   const step = flight.steps[flight.cursor];
+  const what = step ? (stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title) : "";
+  const why = perchWhy(flight);
+  return what && why ? what + " — " + why : what || why;
+}
+
+/** One flight perched on you (or halted): its headline (a press flies the
+ * sky to its line — a session's, or the route itself when it runs on its
+ * own), where it stopped and why, and the perch block — the checklist with
+ * Done / Skip, Retry / Skip when it halted, Carry on at a halt point. */
+function PerchRow({ flight, kinds, onFocus, onFocusFlight }: { flight: Flight; kinds?: readonly StepKindDef[] | null; onFocus(title: string): void; onFocusFlight?(id: string): void }) {
   const halted = flight.state === "halted";
   // The subject's headline, else the session's shown name (never its raw title).
   const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
+  const go = () => (flight.session ? onFocus(flight.session) : onFocusFlight?.(flight.id));
   return (
     <div className={"sky-perch" + (halted ? " is-halted" : "")} data-flight={flight.id}>
-      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s route" : undefined} onClick={() => onFocus(flight.session)}>
+      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s route" : "Show this route on the Sky"} onClick={go}>
         {head}
       </button>
-      <div className="sky-perch-step muted">
-        {step ? (stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title) : ""}
-        {halted && flight.reason ? " — " + haltedWhy(step?.title, flight.reason) : ""}
-      </div>
+      <div className="sky-perch-step muted">{perchLine(flight, kinds)}</div>
       <YouStepActions flight={flight} />
     </div>
   );
+}
+
+/** What the Needs-you list says instead of its rows: "loading" while the
+ * routes are first read, "error" when the server can't be reached (shown
+ * ABOVE whatever rows are cached — they may be out of date), "empty" only
+ * when the read worked and nothing needs you, "" = just the rows. */
+export function needsNote(q: { data: unknown; isPending?: boolean; isError?: boolean }, count: number): "" | "loading" | "error" | "empty" {
+  if (q.isError) return "error";
+  // An old server (no routes): its other rows still read — the note above says why.
+  if (q.data === null) return count ? "" : "empty";
+  if (q.data === undefined || q.isPending) return count ? "" : "loading";
+  return count ? "" : "empty";
 }
 
 /** Any other row of the one Needs-you list (lib/needsYou): a session asking
@@ -239,9 +259,11 @@ export interface SkyDrawerProps {
   onToggle(): void;
   /** Fly the sky to a session's line. */
   onFocus(title: string): void;
+  /** Fly the sky to a route with no session (one running on its own). */
+  onFocusFlight?(id: string): void;
 }
 
-export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
+export function SkyDrawer({ open, onToggle, onFocus, onFocusFlight }: SkyDrawerProps) {
   // Its links: behaviors fly the sky (openBehaviors), sources open Intake.
   const openDialogFor = useUi((s) => s.openDialogFor);
   const flightsQ = useFlights();
@@ -257,6 +279,7 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
   const needs = useNeedsYou();
   const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
   const count = needs.length;
+  const note = needsNote(flightsQ, count);
 
   return (
     <aside className={"sky-drawer" + (open ? " open" : "")} aria-label="Needs you" data-tour="flights-drawer">
@@ -282,13 +305,23 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
               Needs you
               {count > 0 && <span className="fl-count">{count}</span>}
             </h3>
+            {note === "loading" && (
+              <p className="fl-empty muted" role="status">
+                Loading…
+              </p>
+            )}
+            {note === "error" && (
+              <p className="fl-note error" role="status">
+                Can't reach the server — this list may be out of date.
+              </p>
+            )}
             {count === 0 ? (
-              <p className="fl-empty muted">Nothing needs you.</p>
+              note === "empty" && <p className="fl-empty muted">Nothing needs you.</p>
             ) : (
               <>
                 {needs.map((r) =>
                   r.flight ? (
-                    <PerchRow key={r.key} flight={r.flight} kinds={kinds} onFocus={onFocus} />
+                    <PerchRow key={r.key} flight={r.flight} kinds={kinds} onFocus={onFocus} onFocusFlight={onFocusFlight} />
                   ) : r.behaviors ? (
                     <ChecklistRow key={r.key} plan={r.behaviors} onOpen={(planId) => openBehaviors({ planId })} />
                   ) : (

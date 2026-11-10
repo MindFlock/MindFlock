@@ -55,7 +55,7 @@
  * sky object like a line — layout key "intake", placed first by
  * `assignSpots`, dragged by its head on the line drag's own path, pinned where
  * dropped, forgotten by Tidy, expanded (`open`) from its head. Two TOOLS
- * (`mf_sky_tool`, the toolbar's ✥ Drag · ☝ Click, V / H, Space held = click):
+ * (`mf_sky_tool`, the toolbar's Select (V) · Pan (H), Space held = pan):
  * `gestureFor` (lib/skySelect) decides what a press becomes. Delete / Backspace
  * goes where the keyboard is (`deleteFor`): the selection, a box (a stop
  * leaves its line, a session's box asks to close it), a line (its close or
@@ -153,7 +153,7 @@ import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
 import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type IntakeSourceRef, type StepKindDef } from "../../lib/flights";
-import { attachGrounded, DEFAULT_SESSION, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
+import { attachGrounded, DEFAULT_SESSION, deleteFlight, renameFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
 import { toast } from "../../lib/toast";
@@ -161,7 +161,7 @@ import { onSessionRenamed } from "../../lib/renameSession";
 import { popRedo, popUndo, pushUndo, undoAction } from "../../lib/skyUndo";
 import { snapBox, snapThreshold, type SnapGuide } from "../../lib/skySnap";
 import { deriveSessionState } from "../../lib/sessionState";
-import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, handoffLinks, isGroundedKey, triggerHeadFor } from "../../lib/groundedLines";
+import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, groundedShown, handoffLinks, isGroundedKey, triggerHeadFor } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
 import {
@@ -266,7 +266,7 @@ import { useBehaviorsBoard, useBehaviorsRequest } from "./BehaviorsBoard";
 import { SkyFlock, WeatherWord } from "./SkyFlock";
 import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
-import { GroundedLine, groundedName } from "./GroundedLine";
+import { GroundedLine, groundedName, markRouteEdit } from "./GroundedLine";
 import { SkyWires, handoffWires } from "./SkyWires";
 import { runWireIntent, useChainRegistry, useSkyWiring, type PlacedChain } from "./useSkyWiring";
 import { StopShelf } from "./StopShelf";
@@ -305,10 +305,11 @@ const TIDY_MS = 350;
 const MINIMAP_KEY = "mf_sky_minimap";
 /** The Finished strip shown ("1"); hidden unless turned on, per device. */
 const FINISHED_KEY = "mf_sky_finished";
-/** The toolbar's two tools, in words. */
-const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
-  drag: { label: "✥ Drag", title: "Drag mode (V): a route moves by its bar, a drag on empty sky selects" },
-  click: { label: "☝ Click", title: "Click mode (H): a drag anywhere pans, a click focuses a route or selects a stop — Shift+drag selects" },
+/** The toolbar's two tools, in words — named for what a drag does, with the
+ * key that picks each (V / H, SkyView's keydown). */
+export const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
+  drag: { label: "Select (V)", title: "Select (V): a drag on empty sky selects, a route moves by its bar — hold Space to pan" },
+  click: { label: "Pan (H)", title: "Pan (H): a drag anywhere pans, a click focuses a route or selects a stop — Shift+drag selects" },
 };
 /** What on the sky takes a press itself, whatever the tool: a control, a
  * field, an open card, a line's editor, a menu, the selection's bar, the
@@ -668,11 +669,9 @@ export function SkyView() {
   useTourOnFirstSight("verify", useMemo(() => behaviorsOnARoute(testPlans, rows, titles), [testPlans, rows, titles]));
   // The Behaviors board (docs/behaviors.md §3): the behaviors with no frame here.
   const behaviors = useBehaviorsBoard({ rows, titles, allowed: !narrow && mode !== "one" });
-  const grounded = useMemo(() => {
-    if (mode === "one" || mode === "perched") return [];
-    const q = query.trim().toLowerCase();
-    return groundedFlights(flights).filter((f) => !q || groundedName(f).toLowerCase().includes(q));
-  }, [flights, mode, query]);
+  // Routes with no session: none in This session; in Needs you the ones
+  // running on their own that wait on you (halted, waiting, at a halt point).
+  const grounded = useMemo(() => groundedShown(flights, mode, query, groundedName), [flights, mode, query]);
   const groundedIds = useMemo(() => new Set(groundedFlights(flights).map((f) => f.id)), [flights]);
   const lines = useMemo(
     () => [
@@ -1546,6 +1545,40 @@ export function SkyView() {
     // This session and Needs you draw no grounded line: say where it went.
     groundedLanded(f);
   };
+  /** A saved route's "Edit its stops": an editable copy of its stops on the
+   * board (placed as a shelf click places, its name the route's), marked so
+   * its Save writes back to that saved route (GroundedLine `markRouteEdit`). */
+  const editPlan = async (plan: FlightPlan) => {
+    // Its stops one by one (no name on the start: that would fold them into
+    // one group box), then the route's name.
+    const f = await startGrounded({ steps: plan.steps.map((st) => ({ ...st, group: undefined })) });
+    if (!f) return;
+    markRouteEdit(f.id, plan.id);
+    void renameFlight(f.id, plan.name);
+    if (!alive.current) return;
+    const at = spotRef.current(f, "shelf");
+    setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
+    placing.current.set(groundedKey(f.id), "shelf");
+    setGroundFocus(groundedKey(f.id));
+    groundedLanded(f);
+    toast("Editing “" + plan.name + "” — change its stops, then Save on its bar");
+  };
+  /** The drawer's press on a route with no session: the camera flies to it
+   * (switching to All first when this view doesn't draw it). */
+  const pendingFly = useRef("");
+  const focusFlight = (id: string) => {
+    const key = groundedKey(id);
+    if (rectOf(key)) return jumpTo(key);
+    pendingFly.current = key;
+    setSkyMode("all");
+  };
+  useEffect(() => {
+    const key = pendingFly.current;
+    if (!key || !rectOf(key)) return;
+    pendingFly.current = "";
+    jumpTo(key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once the line is drawn
+  }, [rectOf]);
   /** The intake lane's stops chip: that source's default stops as an editor
    * chain on the board (IntakeLane `openDefaultEditor`) — placed right of the
    * lane and focused; the one already there (one per source) is jumped to
@@ -2503,7 +2536,7 @@ export function SkyView() {
               ? "Nothing needs you."
               : instQ.data === undefined
                 ? ""
-                : "No sessions in the sky yet — double-click anywhere, or press the Session chip in the shelf below, to start one.";
+                : "No sessions in the sky yet — a route is the stops a session's work goes through, from the agent to the PR. Double-click anywhere, or press the Session chip in the shelf below, to start one.";
 
   // Nothing at all on an unfiltered sky: SkyEmpty's calm card instead of the line.
   const blank = lines.length === 0 && !query && mode !== "perched" && noSessions && !(mode === "one" && focused) && !groundedHidden;
@@ -2518,7 +2551,7 @@ export function SkyView() {
         onChange={setMode}
       />
       {!narrow && (
-        // The tool: ✥ Drag (a line moves by its bar) · ☝ Click (a drag pans).
+        // The tool: Select (a line moves by its bar) · Pan (a drag pans).
         <ChipRow<SkyTool>
           className="sky-modes sky-tools"
           field={{ "data-tour": "sky-tool" }}
@@ -2629,6 +2662,7 @@ export function SkyView() {
         writePref(SKY_DRAWER_KEY, v);
       }}
       onFocus={focusOn}
+      onFocusFlight={focusFlight}
     />
   );
 
@@ -2661,6 +2695,7 @@ export function SkyView() {
           onFloat={narrow ? undefined : () => setPaletteMode("float")}
           onCatalog={narrow ? undefined : openCatalog}
           onSession={newHere}
+          onEditPlan={(plan) => void editPlan(plan)}
           folded={shelfFolded}
           onFold={foldShelf}
         />
