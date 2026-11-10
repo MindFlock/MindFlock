@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Saying "over" presses Enter again.** An Enter-only send (the voice
+  "over", `/send {"enter": true}`) ran a bare `tmux` for its empty text,
+  which failed, so nothing was pressed and the mic stopped with "Couldn't
+  submit: failed to send to agent session". Broken since the trailing-`;`
+  fix of 2026-11-01.
 - **"Over and out" sends what is in the box.** With nothing dictated since
   the last "over" (words left by an earlier listen, or typed or pasted
   text), it stopped the mic without pressing Enter. It now sends; it only

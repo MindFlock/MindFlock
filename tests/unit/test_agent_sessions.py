@@ -174,6 +174,18 @@ def test_send_to_agent_submit_sends_enter_after_pause(rec, monkeypatch):
     assert slept == [0.15]  # ended the paste burst before Enter
 
 
+def test_send_to_agent_enter_only_presses_enter(rec, monkeypatch):
+    """An empty text is an Enter-only send (the voice "over", /send
+    {"enter": true}): nothing is typed, Enter is pressed. A bare `tmux` for
+    the empty text failed and made every "over" a 502 with nothing pressed."""
+    monkeypatch.setattr(agent_sessions.time, "sleep", lambda s: None)
+    rec.responses = {"has-session": FakeProc(0), "send-keys": FakeProc(0)}
+    assert agent_sessions._send_to_agent("s", "", submit=True) is True
+    assert all(argv != ["tmux"] for argv in rec.calls)
+    sends = rec.argvs("send-keys")
+    assert sends == [["tmux", "send-keys", "-t", "s", "Enter"]]
+
+
 def test_multi_line_text_goes_in_as_one_bracketed_paste(rec, monkeypatch):
     """``send-keys -l`` sends each LF as a raw byte, and a prompt_toolkit CLI
     (aider, …) submits on it: a held initial prompt decorated with the red-zone
