@@ -62,7 +62,7 @@ describe("a stop that can change", () => {
     expect(html).toContain(">Lane<");
     expect(html).toContain(">If it fails<");
     expect(html).toMatch(/class="fl-toggle"[^>]*aria-pressed="false"/);
-    expect(html).toContain("Halt point — the route stops here, before doing this stop");
+    expect(html).toContain("Halt point — the route pauses before this stop until you press Carry on");
     // No inline inspector panel.
     expect(html).not.toContain('class="fl-inspector');
   });
@@ -96,8 +96,10 @@ describe("a stop that can't change", () => {
     expect(html).toContain("<strong>Wait for me</strong>");
     expect(html).toContain("stop-dialog-perch");
     expect(html).toContain(">Needs you<");
-    expect(buttons(html.replace(/<div class="rt-seg" role="group" aria-label="If it fails">.*?<\/div>/, "")).filter((b) => ["Remove", "Done", "Retry", "Skip", "Close"].includes(b))).toEqual(["Remove", "Done", "Skip", "Close"]);
-    expect(html).toContain("Halt point — the route stops here");
+    // Flow polish: a stop waiting on you leads with its remedies (under the
+    // chip), then Remove · Close at the foot.
+    expect(buttons(html.replace(/<div class="rt-seg" role="group" aria-label="If it fails">.*?<\/div>/, "")).filter((b) => ["Remove", "Done", "Retry", "Skip", "Close"].includes(b))).toEqual(["Done", "Skip", "Remove", "Close"]);
+    expect(html).toContain("Halt point — the route pauses before this stop");
     const halted = render({ node: stop({ state: "halted", editable: false }), def: SHIP, onRetry: () => {}, onSkip: () => {} });
     expect(buttons(halted)).toContain("Retry");
   });
