@@ -7,7 +7,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { TestPlan } from "../api/types";
 import type { FlightStep, StepKindDef } from "../lib/flights";
 
 vi.mock("../api/client", () => ({ api: vi.fn(async () => ({})), ApiError: class extends Error {} }));
@@ -17,7 +16,7 @@ vi.mock("../lib/errorPop", () => ({ errorPop: vi.fn() }));
 const V = await import("../lib/verifyStop");
 const { stopSummary } = await import("../lib/flightDiagram");
 const { StopForm } = await import("../components/flights/StopParts");
-const { VerifyStopBehaviors, verifySteps, isVerifyEditor } = await import("../components/flights/VerifyStopFields");
+const { VerifyStopLive, stopVerifyOf, verifySteps, isVerifyEditor } = await import("../components/flights/VerifyStopFields");
 const { RepoEnvironments } = await import("../components/intake/RepoEnvironments");
 const { fieldPatch } = await import("../components/intake/repoUses");
 const { queryClient } = await import("../state/queries");
@@ -275,27 +274,23 @@ describe("the Verify stop's editor", () => {
   });
 });
 
-describe("the stop's behaviors inside it", () => {
-  const plan = {
-    id: "p9",
-    steps: [
-      { id: "a", text: "the export downloads", expect: "", actor: "agent" },
-      { id: "b", text: "the chart looks right", expect: "", actor: "human" },
-    ],
-    runs: [],
-  } as unknown as TestPlan;
+describe("the stop's live Verify inside it (fp-seams: no pre-written list)", () => {
+  const v = { state: "verifying", plan: "p9", steps: { total: 5, agent_done: 3, human: 0 }, human_steps: [], failed_steps: [], detail: "", at: 0 } as const;
 
-  it("each one marked agent or you, with the count of yours", () => {
-    queryClient.setQueryData(["test-plans"], { plans: [plan], live_branch: "main" });
-    try {
-      const html = renderToStaticMarkup(createElement(VerifyStopBehaviors, { planId: "p9" }));
-      expect(html).toContain("Behaviors — 2 · 1 yours");
-      expect(html).toMatch(/the export downloads<\/span><span class="vf-behavior-who"[^>]*>🤖 agent</);
-      expect(html).toMatch(/class="vf-behavior vf-yours"[^>]*>.*the chart looks right<\/span><span class="vf-behavior-who"[^>]*>🙋 you</);
-      expect(renderToStaticMarkup(createElement(VerifyStopBehaviors, { planId: "nope" }))).toBe("");
-    } finally {
-      queryClient.removeQueries({ queryKey: ["test-plans"] });
-    }
+  it("the state word, how far the agent got, and Steps", () => {
+    const html = renderToStaticMarkup(createElement(VerifyStopLive, { verify: v as never, session: "s1" }));
+    expect(html).toContain("Verifying");
+    expect(html).toContain("3 of 5 steps done");
+    expect(html).toMatch(/<button[^>]*>Steps<\/button>/);
+    expect(renderToStaticMarkup(createElement(VerifyStopLive, { verify: null, session: "s1" }))).toBe("");
+  });
+
+  it("only this stop's: the plan it recorded, or — none yet — the stop the route is at", () => {
+    expect(stopVerifyOf(v as never, "p9", false)).toBe(v);
+    expect(stopVerifyOf(v as never, "p1", true)).toBeNull();
+    expect(stopVerifyOf(v as never, "", true)).toBe(v);
+    expect(stopVerifyOf(v as never, "", false)).toBeNull();
+    expect(stopVerifyOf(null, "p9", true)).toBeNull();
   });
 });
 

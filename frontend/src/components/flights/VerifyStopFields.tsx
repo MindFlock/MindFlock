@@ -8,17 +8,15 @@
  * generic fields when the kind serves `where`, with the stop's sentence
  * (`verifySentence`) above its title; the logic is lib/verifyStop.ts.
  *
- * `VerifyStopBehaviors` shows the stop's checklist, when it has one, each
- * behavior marked agent or you (the Behaviors card's own rules: cardModel's
- * `whoOf` / `rowChip`) — so the person sees which ones will need them. It
- * answers nothing: the card does (the dialog's "Behaviors" button). */
+ * `VerifyStopLive` shows the stop's live Verify, when it has one: its state,
+ * how far the agent got, and Steps to the session's Verify. */
 
 import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../../api/client";
-import type { TestPlansResponse } from "../../api/types";
+import type { SessionVerify } from "../../api/types";
+import { openBehaviors } from "../../lib/behaviorsFocus";
 import { optionLabel, type StepKindDef, type StepKindField } from "../../lib/flights";
-import { queryClient, useVerifyEnvironments } from "../../state/queries";
+import { verifyGlyph, verifyProgress, verifyWord } from "../../lib/sessionState";
+import { useVerifyEnvironments } from "../../state/queries";
 import {
   READY_MINUTES_HINT,
   READY_MINUTES_MAX,
@@ -35,7 +33,6 @@ import {
   type VerifyConfig,
   type VerifyEnvsResponse,
 } from "../../lib/verifyStop";
-import { rowChip, whoOf } from "../behaviors/cardModel";
 import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
 
 /** The fields this editor draws itself; any other field the kind serves is
@@ -194,36 +191,36 @@ export function whereHint(value: string, envs: VerifyEnvsResponse | null, unknow
   return t ? "The deployed copy: " + t : "";
 }
 
-/** The stop's checklist, when it has one: each behavior with who checks it
- * and where it stands. Read from the Behaviors list the top bar keeps warm. */
-export function VerifyStopBehaviors({ planId }: { planId: string }) {
-  const q = useQuery({ queryKey: ["test-plans"], queryFn: () => api<TestPlansResponse>("/api/test-plans"), enabled: false }, queryClient);
-  const plan = planId ? (q.data?.plans || []).find((p) => p.id === planId) : undefined;
-  if (!plan || !(plan.steps || []).length) return null;
-  const steps = plan.steps;
-  const yours = steps.filter((s) => whoOf(plan, s).you).length;
+/** The session's live Verify, when it is this stop's: the plan the stop
+ * recorded (its step detail's `plan`) is the session's, or — nothing
+ * recorded yet — the stop is the one the route is at. Null otherwise (a
+ * Verify stop still ahead, or one whose run was another). */
+export function stopVerifyOf(v: SessionVerify | null | undefined, stopPlan: string, here: boolean): SessionVerify | null {
+  if (!v || typeof v.state !== "string") return null;
+  if (stopPlan) return v.plan === stopPlan ? v : null;
+  return here ? v : null;
+}
+
+/** A Verify stop's live Verify inside its dialog (self-verify has no
+ * pre-written list): the state word, how far its agent got ("3 of 5 steps
+ * done"), and Steps — the session's Verify, its steps and their evidence.
+ * Nothing when the stop has no Verify yet. */
+export function VerifyStopLive({ verify, session }: { verify: SessionVerify | null | undefined; session: string }) {
+  if (!verify) return null;
+  const word = verifyWord(verify.state);
+  if (!word) return null;
   return (
-    <section className="vf-behaviors" aria-label="This stop's behaviors">
-      <span className="fl-fld-label">
-        Behaviors — {steps.length} · {yours ? yours + " yours" : "none yours"}
-      </span>
-      <ul>
-        {steps.map((s) => {
-          const who = whoOf(plan, s);
-          const chip = rowChip(plan, s.id);
-          return (
-            <li key={s.id} className={"vf-behavior" + (who.you ? " vf-yours" : "")} data-check={chip.state}>
-              <span className="vf-behavior-mark" title={chip.label} aria-label={chip.label}>
-                {chip.glyph}
-              </span>
-              <span className="vf-behavior-text">{s.text}</span>
-              <span className="vf-behavior-who" title={who.title}>
-                {who.label}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+    <section className="vf-live" aria-label="This stop's Verify" data-verify={verify.state}>
+      <span className="fl-fld-label">Verify</span>
+      <p className="vf-live-row">
+        <strong className={"vf-live-word is-" + verify.state}>
+          <span aria-hidden="true">{verifyGlyph(verify.state)}</span> {word}
+        </strong>
+        <span className="muted">{verifyProgress(verify)}</span>
+        <button type="button" className="test-btn" title="The steps and their evidence" onClick={() => openBehaviors({ planId: verify.plan, title: session })}>
+          Steps
+        </button>
+      </p>
     </section>
   );
 }

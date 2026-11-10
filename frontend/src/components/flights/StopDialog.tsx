@@ -30,13 +30,14 @@
 import { useState, type ReactNode } from "react";
 import { isSaveResult } from "../../lib/flightsApi";
 import { LOOP_AGENT, loopsToAgent, type DiagramNode } from "../../lib/flightDiagram";
+import type { SessionVerify } from "../../api/types";
 import type { FlightStep, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
 import { Modal } from "../Modal";
 import { StopIcon } from "./Bird";
 import { FlField, PromptBox, TextField, Toggle } from "./controls";
 import { StopForm, formFieldNames, kindName } from "./StopParts";
-import { VerifyStopBehaviors } from "./VerifyStopFields";
+import { VerifyStopLive } from "./VerifyStopFields";
 import "./StopDialog.css";
 
 /** A box's state in words, for the dialog's read-only line and its rows. */
@@ -69,10 +70,12 @@ export interface StopDialogProps {
   busy?: boolean;
   /** Why it can't change, and what the flight noted on it (read-only). */
   note?: string;
-  /** A Verify stop's checklist (its step detail's `plan`): its behaviors
-   * show inside the stop, each marked agent or you. Falls back to the
-   * behaviors the node wears (`node.behaviors.planId`). */
-  behaviorsPlanId?: string;
+  /** A Verify stop's live Verify (the session row's `verify`, when it is
+   * this stop's — VerifyStopFields `stopVerifyOf`): its state, how far the
+   * agent got, and Steps. Nothing shows without one. */
+  verify?: SessionVerify | null;
+  /** The session the Verify runs in (Steps opens its Verify). */
+  verifySession?: string;
   /** More under the form (a Split's hint, its "+ Join"). */
   extra?: ReactNode;
   /** The line's steps in flight order: a `dynamic: "stops_before"` field
@@ -358,7 +361,7 @@ function StepDialog(p: StopDialogProps) {
           Prompt: {AGENT_EMPTY_HINT}
         </p>
       )}
-      {kind === "verify" && <VerifyStopBehaviors planId={p.behaviorsPlanId || n.behaviors?.planId || ""} />}
+      {kind === "verify" && <VerifyStopLive verify={p.verify} session={p.verifySession || ""} />}
       {shown && (editable || p.onToggleHalt) && (
         <div className="stop-dialog-halt">
           <Toggle

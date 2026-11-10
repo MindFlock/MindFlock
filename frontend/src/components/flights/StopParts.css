@@ -437,54 +437,34 @@
   outline-offset: 1px;
 }
 
-/* The stop's checklist inside its dialog: who checks each one. */
-.vf-behaviors {
+/* A Verify stop's live Verify inside its dialog (VerifyStopLive): the state
+   word, how far its agent got, Steps. */
+.vf-live {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-top: 4px;
 }
 
-.vf-behaviors ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.vf-live-row {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 180px;
-  overflow-y: auto;
-}
-
-.vf-behavior {
-  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  align-items: baseline;
-  font-size: 12.5px;
-  padding: 2px 0;
+  margin: 0;
+  font-size: 13px;
 }
 
-.vf-behavior-mark {
-  flex: none;
-  width: 1.2em;
-  text-align: center;
-  color: var(--muted);
+.vf-live-word.is-passed {
+  color: var(--tone-working);
 }
 
-.vf-behavior-text {
-  flex: 1;
-  min-width: 0;
+.vf-live-word.is-needs_you {
+  color: var(--tone-attention);
 }
 
-.vf-behavior-who {
-  flex: none;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.vf-yours .vf-behavior-who {
-  color: var(--fl-ink-accent, var(--accent));
-  font-weight: 600;
+.vf-live-word:is(.is-failed, .is-blocked) {
+  color: var(--tone-broken);
 }
 
 /* A refusal under its own field (StopForm's `errors`): the field's hint,
